@@ -1476,6 +1476,150 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('supports onboarding setup actions for keep starter and identity edits', async () => {
+    const current = cardVersionStore.getCurrent().card;
+    cardVersionStore.update({
+      ...current,
+      data: {
+        ...current.data,
+        creator: 'system',
+        tags: ['bootstrap'],
+        name: 'Companion',
+        personality: 'Starter personality',
+      },
+    }, 'test:seed', 'Seed onboarding starter state');
+
+    const keepStarterRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/onboarding',
+      JSON.stringify({ action: 'keep_starter' }),
+      authHeaders,
+    );
+    expect(keepStarterRes.status).toBe(200);
+    const keepStarterPayload = JSON.parse(keepStarterRes.body) as {
+      ok: boolean;
+      action?: string;
+      onboardingRequired: boolean;
+    };
+    expect(keepStarterPayload.ok).toBe(true);
+    expect(keepStarterPayload.action).toBe('keep_starter');
+    expect(keepStarterPayload.onboardingRequired).toBe(false);
+    const keepStarterBootstrapRes = await request(port, 'GET', '/api/chat/bootstrap', undefined, authHeaders);
+    expect(keepStarterBootstrapRes.status).toBe(200);
+    expect((JSON.parse(keepStarterBootstrapRes.body) as {
+      onboarding: { required: boolean };
+    }).onboarding.required).toBe(false);
+
+    const afterKeepStarter = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
+    expect(afterKeepStarter.status).toBe(200);
+    expect((JSON.parse(afterKeepStarter.body) as { card: { data: { tags?: string[] } } }).card.data.tags ?? [])
+      .not.toContain('bootstrap');
+
+    const reset = cardVersionStore.getCurrent().card;
+    cardVersionStore.update({
+      ...reset,
+      data: {
+        ...reset.data,
+        creator: 'system',
+        tags: ['bootstrap'],
+        name: 'Companion',
+        personality: 'Starter personality',
+      },
+    }, 'test:seed', 'Reset onboarding starter state');
+
+    const editRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/onboarding',
+      JSON.stringify({
+        action: 'edit_identity',
+        fields: {
+          name: 'Canopy Guide',
+          personality: 'Grounded and practical.',
+          description: 'Garden onboarding identity',
+        },
+      }),
+      authHeaders,
+    );
+    expect(editRes.status).toBe(200);
+    const editPayload = JSON.parse(editRes.body) as {
+      ok: boolean;
+      action?: string;
+      onboardingRequired: boolean;
+      updatedFields?: string[];
+    };
+    expect(editPayload.ok).toBe(true);
+    expect(editPayload.action).toBe('edit_identity');
+    expect(editPayload.onboardingRequired).toBe(false);
+    expect(editPayload.updatedFields).toEqual(expect.arrayContaining(['name', 'personality', 'description']));
+    const editBootstrapRes = await request(port, 'GET', '/api/chat/bootstrap', undefined, authHeaders);
+    expect(editBootstrapRes.status).toBe(200);
+    expect((JSON.parse(editBootstrapRes.body) as {
+      onboarding: { required: boolean };
+    }).onboarding.required).toBe(false);
+
+    const identityAfterEditRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
+    expect(identityAfterEditRes.status).toBe(200);
+    const identityAfterEdit = JSON.parse(identityAfterEditRes.body) as {
+      card: {
+        data: {
+          name: string;
+          personality: string;
+          description: string;
+          tags?: string[];
+        };
+      };
+    };
+    expect(identityAfterEdit.card.data.name).toBe('Canopy Guide');
+    expect(identityAfterEdit.card.data.personality).toBe('Grounded and practical.');
+    expect(identityAfterEdit.card.data.description).toBe('Garden onboarding identity');
+    expect(identityAfterEdit.card.data.tags ?? []).not.toContain('bootstrap');
+  });
+
+  it('fails closed on invalid onboarding setup payloads', async () => {
+    const current = cardVersionStore.getCurrent().card;
+    cardVersionStore.update({
+      ...current,
+      data: {
+        ...current.data,
+        creator: 'system',
+        tags: ['bootstrap'],
+      },
+    }, 'test:seed', 'Seed onboarding starter state for validation test');
+
+    const invalidFieldRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/onboarding',
+      JSON.stringify({
+        action: 'edit_identity',
+        fields: {
+          tags: 'bootstrap',
+        },
+      }),
+      authHeaders,
+    );
+    expect(invalidFieldRes.status).toBe(400);
+    const invalidFieldPayload = JSON.parse(invalidFieldRes.body) as { error: string; onboardingRequired?: boolean };
+    expect(invalidFieldPayload.error).toContain('Unsupported onboarding identity field');
+    expect(invalidFieldPayload.onboardingRequired).toBe(true);
+
+    const extraFieldRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/onboarding',
+      JSON.stringify({
+        action: 'keep_starter',
+        reason: 'extra-key-not-allowed',
+      }),
+      authHeaders,
+    );
+    expect(extraFieldRes.status).toBe(400);
+    const extraFieldPayload = JSON.parse(extraFieldRes.body) as { error: string };
+    expect(extraFieldPayload.error).toContain('keep_starter does not accept additional fields');
+  });
+
   it('round-trips runtime settings PATCH/GET without drifting subsystem-owned editors', async () => {
     const beforeRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(beforeRes.status).toBe(200);

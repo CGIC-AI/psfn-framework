@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { getChatBootstrap, updateChatBootstrap } from '$lib/api/endpoints/chat';
+  import { applyIdentityOnboardingAction } from '$lib/api/endpoints/identity';
   import { getSessionMessages } from '$lib/api/endpoints/sessions';
   import { getToken } from '$lib/stores/auth.svelte';
   import type { AdminChatBootstrapResponse, SessionEntry } from '$lib/types';
@@ -35,6 +36,13 @@
   let selectedPrivacyLevel = $state('');
   let selectedChannelIdentity = $state(''); // "channel:userId" composite key
   let showIdentityDetails = $state(false);
+  let onboardingSaving = $state(false);
+  let onboardingError = $state('');
+  let onboardingDraft = $state({
+    name: '',
+    description: '',
+    personality: '',
+  });
 
   // Computed channel options for the identity selector
   const GARDEN_CHAT_CHANNEL = 'api';
@@ -78,6 +86,91 @@
     }
 
     return opts;
+  }
+
+  function initializeOnboardingDraft(bs: AdminChatBootstrapResponse) {
+    if (!bs.onboarding.required) {
+      onboardingDraft = {
+        name: '',
+        description: '',
+        personality: '',
+      };
+      onboardingError = '';
+      return;
+    }
+    const assistantName = bs.assistantName?.trim() || 'Companion';
+    onboardingDraft = {
+      name: onboardingDraft.name.trim().length > 0 ? onboardingDraft.name : assistantName,
+      description: onboardingDraft.description,
+      personality: onboardingDraft.personality,
+    };
+  }
+
+  async function refreshBootstrapFromServer(options: { reloadSession?: boolean } = {}) {
+    const previousSessionId = bootstrap?.defaultSessionId ?? '';
+    bootstrap = await getChatBootstrap();
+    selectedContactId = bootstrap.canonicalContactId;
+    selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+    selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+    initializeOnboardingDraft(bootstrap);
+    if (options.reloadSession || bootstrap.defaultSessionId !== previousSessionId) {
+      messages = [];
+      await loadSessionHistory(bootstrap.defaultSessionId);
+    }
+  }
+
+  function buildOnboardingEditFieldsPayload() {
+    const fields: Record<string, string> = {};
+    if (onboardingDraft.name.trim().length > 0) fields.name = onboardingDraft.name;
+    if (onboardingDraft.description.trim().length > 0) fields.description = onboardingDraft.description;
+    if (onboardingDraft.personality.trim().length > 0) fields.personality = onboardingDraft.personality;
+    return fields;
+  }
+
+  async function submitOnboardingIdentityEdits() {
+    if (!bootstrap || onboardingSaving) return;
+    onboardingError = '';
+    onboardingSaving = true;
+    const fields = buildOnboardingEditFieldsPayload();
+    if (Object.keys(fields).length === 0) {
+      onboardingError = 'Add at least one onboarding field before saving.';
+      onboardingSaving = false;
+      return;
+    }
+    try {
+      await applyIdentityOnboardingAction({
+        action: 'edit_identity',
+        fields,
+      });
+      await refreshBootstrapFromServer();
+      statusDetail = 'Identity onboarding updated.';
+    } catch (e) {
+      onboardingError = e instanceof Error ? e.message : 'Failed to apply onboarding edits';
+    } finally {
+      onboardingSaving = false;
+    }
+  }
+
+  async function keepStarterIdentity() {
+    if (!bootstrap || onboardingSaving) return;
+    onboardingError = '';
+    onboardingSaving = true;
+    try {
+      await applyIdentityOnboardingAction({
+        action: 'keep_starter',
+      });
+      await refreshBootstrapFromServer();
+      statusDetail = 'Starter identity confirmed.';
+    } catch (e) {
+      onboardingError = e instanceof Error ? e.message : 'Failed to keep starter identity';
+    } finally {
+      onboardingSaving = false;
+    }
+  }
+
+  function onOnboardingEditSubmit(event: SubmitEvent) {
+    event.preventDefault();
+    void submitOnboardingIdentityEdits();
   }
 
   // Message area refs
@@ -135,6 +228,7 @@
       bootstrap = await getChatBootstrap();
       selectedContactId = bootstrap.canonicalContactId;
       selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      initializeOnboardingDraft(bootstrap);
 
       // Default to Garden Chat (api:admin-user) instead of whatever channel the contact has
       const currentIdentityKey = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
@@ -147,6 +241,7 @@
           userId: GARDEN_CHAT_USER_ID,
         });
         bootstrap = await getChatBootstrap();
+        initializeOnboardingDraft(bootstrap);
       }
       selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
 
@@ -408,13 +503,7 @@
         channel: GARDEN_CHAT_CHANNEL,
         userId: GARDEN_CHAT_USER_ID,
       });
-      bootstrap = await getChatBootstrap();
-      selectedContactId = bootstrap.canonicalContactId;
-      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
-      selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
-      // Reload session history for the new identity
-      messages = [];
-      await loadSessionHistory(bootstrap.defaultSessionId);
+      await refreshBootstrapFromServer({ reloadSession: true });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update chat settings';
     } finally {
@@ -430,9 +519,7 @@
         canonicalContactId: selectedContactId,
         privacyLevel: selectedPrivacyLevel,
       });
-      bootstrap = await getChatBootstrap();
-      selectedContactId = bootstrap.canonicalContactId;
-      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      await refreshBootstrapFromServer();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update privacy level';
     } finally {
@@ -454,13 +541,7 @@
         channel,
         userId,
       });
-      bootstrap = await getChatBootstrap();
-      selectedContactId = bootstrap.canonicalContactId;
-      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
-      selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
-      // Reload session history for the new channel
-      messages = [];
-      await loadSessionHistory(bootstrap.defaultSessionId);
+      await refreshBootstrapFromServer({ reloadSession: true });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to switch channel identity';
     } finally {
@@ -546,12 +627,69 @@
         <p class="text-sm text-shadow-700 mt-1">
           {bootstrap.onboarding.message ?? 'Import a character card or edit identity details to personalize this companion.'}
         </p>
-        <a
-          href="/garden/identity"
-          class="inline-flex mt-2 text-sm font-medium text-shadow-800 hover:text-shadow-900 underline"
-        >
-          Open Identity Settings
-        </a>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <a
+            href="/garden/identity"
+            class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-bark-100"
+          >
+            Import Character Card
+          </a>
+          <button
+            onclick={() => void keepStarterIdentity()}
+            disabled={onboardingSaving}
+            class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-100 px-3 py-1.5 text-sm font-medium text-shadow-900 hover:bg-gold-200 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            Keep Starter
+          </button>
+        </div>
+
+        <form class="mt-3 space-y-2" onsubmit={onOnboardingEditSubmit}>
+          <p class="text-sm font-semibold text-shadow-900">Quick Identity Edit</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <label class="flex flex-col gap-1 text-sm text-shadow-800">
+              Name
+              <input
+                type="text"
+                bind:value={onboardingDraft.name}
+                disabled={onboardingSaving}
+                class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder="Companion name"
+              />
+            </label>
+            <label class="flex flex-col gap-1 text-sm text-shadow-800">
+              Description
+              <input
+                type="text"
+                bind:value={onboardingDraft.description}
+                disabled={onboardingSaving}
+                class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder="Short description"
+              />
+            </label>
+          </div>
+          <label class="flex flex-col gap-1 text-sm text-shadow-800">
+            Personality
+            <textarea
+              bind:value={onboardingDraft.personality}
+              disabled={onboardingSaving}
+              rows={2}
+              class="rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 resize-y focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+              placeholder="Core personality traits"
+            ></textarea>
+          </label>
+          <div class="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={onboardingSaving}
+              class="rounded-lg bg-gold-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-gold-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {onboardingSaving ? 'Saving...' : 'Save Identity and Continue'}
+            </button>
+          </div>
+        </form>
+        {#if onboardingError}
+          <p class="text-sm text-wilt-600 mt-2">{onboardingError}</p>
+        {/if}
       </div>
     {/if}
 

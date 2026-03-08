@@ -163,6 +163,48 @@ describe('AdminIdentityDataService', () => {
     expect(foundation.updatedBy).toBe('admin:upload');
   });
 
+  it('clears bootstrap onboarding marker when importing card payload data', async () => {
+    const root = makeTempDir();
+    const characterCardPath = writeCard(root);
+
+    const cardVersionStore = new CharacterCardVersionStore(
+      characterCardPath,
+      join(root, 'character-card-history.jsonl'),
+    );
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('You are {{char}}.');
+
+    const service = new AdminIdentityDataService({
+      characterCard: loadCharacterCard(characterCardPath),
+      config: {} as SubstrateConfig,
+      cardVersionStore,
+      promptStore,
+    });
+
+    const result = await service.importIdentityCard(JSON.stringify({
+      cardData: {
+        data: {
+          name: 'Imported Starter',
+          description: 'Imported starter profile',
+          personality: 'Ready for setup',
+          scenario: '',
+          first_mes: '',
+          mes_example: '',
+          system_prompt: '',
+          post_history_instructions: '',
+          tags: ['bootstrap'],
+          creator: 'system',
+        },
+      },
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(service.getIdentityData().card.data.tags).not.toContain('bootstrap');
+  });
+
   it('surfaces Character Foundation sync warnings on rollback', () => {
     const root = makeTempDir();
     const characterCardPath = writeCard(root);
@@ -230,5 +272,110 @@ describe('AdminIdentityDataService', () => {
     const rollback = service.rollbackIdentityCard(JSON.stringify({ version: invalidSnapshot.version - 1 }));
     expect(rollback.ok).toBe(false);
     expect(rollback.message).toContain('Rollback blocked');
+  });
+
+  it('completes onboarding when keeping starter identity', async () => {
+    const root = makeTempDir();
+    const characterCardPath = writeCard(root);
+
+    const cardVersionStore = new CharacterCardVersionStore(
+      characterCardPath,
+      join(root, 'character-card-history.jsonl'),
+    );
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('You are {{char}}.');
+
+    const service = new AdminIdentityDataService({
+      characterCard: loadCharacterCard(characterCardPath),
+      config: {} as SubstrateConfig,
+      cardVersionStore,
+      promptStore,
+    });
+
+    const result = await service.applyOnboardingAction(JSON.stringify({
+      action: 'keep_starter',
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('keep_starter');
+    expect(result.onboardingRequired).toBe(false);
+    expect(service.getIdentityData().card.data.tags).not.toContain('bootstrap');
+  });
+
+  it('completes onboarding when editing identity fields from chat setup', async () => {
+    const root = makeTempDir();
+    const characterCardPath = writeCard(root);
+
+    const cardVersionStore = new CharacterCardVersionStore(
+      characterCardPath,
+      join(root, 'character-card-history.jsonl'),
+    );
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('You are {{char}}.');
+
+    const service = new AdminIdentityDataService({
+      characterCard: loadCharacterCard(characterCardPath),
+      config: {} as SubstrateConfig,
+      cardVersionStore,
+      promptStore,
+    });
+
+    const result = await service.applyOnboardingAction(JSON.stringify({
+      action: 'edit_identity',
+      fields: {
+        name: 'Canopy Guide',
+        personality: 'Grounded, curious, and kind.',
+      },
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(result.action).toBe('edit_identity');
+    expect(result.updatedFields).toEqual(expect.arrayContaining(['name', 'personality']));
+    expect(result.onboardingRequired).toBe(false);
+
+    const identity = service.getIdentityData().card.data;
+    expect(identity.name).toBe('Canopy Guide');
+    expect(identity.personality).toBe('Grounded, curious, and kind.');
+    expect(identity.tags).not.toContain('bootstrap');
+  });
+
+  it('fails closed for onboarding edits that include unsupported fields', async () => {
+    const root = makeTempDir();
+    const characterCardPath = writeCard(root);
+
+    const cardVersionStore = new CharacterCardVersionStore(
+      characterCardPath,
+      join(root, 'character-card-history.jsonl'),
+    );
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('You are {{char}}.');
+
+    const service = new AdminIdentityDataService({
+      characterCard: loadCharacterCard(characterCardPath),
+      config: {} as SubstrateConfig,
+      cardVersionStore,
+      promptStore,
+    });
+
+    const result = await service.applyOnboardingAction(JSON.stringify({
+      action: 'edit_identity',
+      fields: {
+        tags: 'bootstrap',
+      },
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('Unsupported onboarding identity field');
+    expect(result.onboardingRequired).toBe(true);
+    expect(service.getIdentityData().card.data.tags).toContain('bootstrap');
   });
 });

@@ -887,6 +887,57 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'POST',
+      match: exactPath('/api/admin/identity/onboarding'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            appendIdentityMutationAudit(
+              'denied',
+              'Operator onboarding setup via /api/admin/identity/onboarding failed: invalid JSON payload.',
+            );
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const action = typeof payload.action === 'string' ? payload.action.trim() : '';
+          identityService.applyOnboardingAction(JSON.stringify(parsed.value)).then(
+            result => {
+              const safeMessage = toSanitizedMessage(result.message, 'Identity onboarding action failed');
+              if (!result.ok) {
+                appendIdentityMutationAudit(
+                  'denied',
+                  `Operator onboarding setup via /api/admin/identity/onboarding failed: ${safeMessage}`,
+                  [action ? `action=${action}` : null],
+                );
+                sendJson(res, 400, { error: safeMessage, onboardingRequired: result.onboardingRequired });
+                return;
+              }
+              appendIdentityMutationAudit(
+                'allowed',
+                'Operator completed identity onboarding action via /api/admin/identity/onboarding.',
+                [
+                  action ? `action=${action}` : null,
+                  safeMessage,
+                ],
+              );
+              sendJson(res, 200, { ...result, message: safeMessage });
+            },
+            error => {
+              const safeError = toSanitizedMessage(error, 'Identity onboarding action failed unexpectedly');
+              appendIdentityMutationAudit(
+                'denied',
+                `Operator onboarding setup via /api/admin/identity/onboarding failed: ${safeError}`,
+                [action ? `action=${action}` : null],
+              );
+              sendJson(res, 500, { error: safeError });
+            },
+          );
+        });
+      },
+    },
+    {
+      method: 'POST',
       match: exactPath('/api/admin/identity/diff'),
       handle: (req, res) => {
         withBody(req, res, (body) => {

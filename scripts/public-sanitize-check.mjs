@@ -6,9 +6,11 @@ import path from 'node:path';
 export const SELF_PATH = 'scripts/public-sanitize-check.mjs';
 export const DEFAULT_LOCAL_BLOCKLIST_PATH = 'workspace/sanitize/local-blocklist.json';
 
-// Historical issue text is intentionally preserved in this tracking log.
-const EXCLUDED_TRACKED_PATHS = new Set([
-  '.beads/issues.jsonl',
+// Beads history logs are machine-managed workspace artifacts, not public source/docs.
+const MACHINE_MANAGED_BEADS_HISTORY_FILES = new Set([
+  'issues.jsonl',
+  'beads.left.jsonl',
+  'interactions.jsonl',
 ]);
 
 const BINARY_EXTENSIONS = new Set([
@@ -88,7 +90,9 @@ export function loadLocalBlocklist() {
 export function shouldSkipTrackedFile(file) {
   const normalized = toPosixRelativePath(file);
   if (normalized === SELF_PATH) return true;
-  return EXCLUDED_TRACKED_PATHS.has(normalized);
+  if (!normalized.startsWith('.beads/')) return false;
+  const basename = path.posix.basename(normalized);
+  return MACHINE_MANAGED_BEADS_HISTORY_FILES.has(basename);
 }
 
 /** @param {string} file */

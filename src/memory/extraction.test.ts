@@ -385,7 +385,7 @@ describe('MemoryExtractor telemetry payloads', () => {
       { extractionInterval: 5, telemetryEnabled: true },
     );
 
-    await extractor.maybeExtract('api:malformed-turn');
+    await expect(extractor.maybeExtract('api:malformed-turn')).rejects.toThrow('Extraction orchestration failed');
 
     expect(llmClient.complete).not.toHaveBeenCalled();
     const emittedEventNames = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls.map(([name]) => name);
@@ -1544,6 +1544,7 @@ describe('MemoryExtractor emotional state persistence', () => {
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       searchByEmbedding: vi.fn().mockReturnValue([]),
       insertMemory: vi.fn(),
+      runInTransaction: vi.fn(async (operation: () => Promise<unknown>) => operation()),
     } as any;
 
     const embeddingService = {

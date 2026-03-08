@@ -207,6 +207,12 @@ describe('ModelDiscovery', () => {
     expect(String(litellmCall![0])).not.toContain('/v1/v1');
   });
 
+  it('fails closed when openRouterModelsApiUrl is missing', () => {
+    expect(() => new ModelDiscovery('http://localhost:4000', undefined, {
+      openRouterModelsApiUrl: '   ',
+    })).toThrow('Model discovery requires openRouterModelsApiUrl');
+  });
+
   it('rejects direct egress when direct network is disabled', async () => {
     mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
 

@@ -875,7 +875,7 @@ async function main(): Promise<void> {
   const litellmBaseUrl = process.env.LITELLM_BASE_URL;
   const modelDiscovery = litellmBaseUrl
     ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY, {
-      openRouterModelsApiUrl: config.openRouterModelsApiUrl!,
+      openRouterModelsApiUrl: config.openRouterModelsApiUrl ?? '',
     })
     : null;
 

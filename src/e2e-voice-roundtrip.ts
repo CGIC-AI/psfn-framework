@@ -350,16 +350,16 @@ async function main(): Promise<void> {
 
   // Provider clients used for baseline and final audio verification
   const ttsClient = new ElevenLabsTtsClient({
-    apiKey: config.elevenLabsApiKey!,
-    voiceId: config.elevenLabsVoiceId!,
-    modelId: config.elevenLabsModelId!,
-    endpointBase: config.elevenLabsEndpointBase!,
+    apiKey: config.elevenLabsApiKey ?? '',
+    voiceId: config.elevenLabsVoiceId ?? '',
+    modelId: config.elevenLabsModelId ?? '',
+    endpointBase: config.elevenLabsEndpointBase ?? '',
   });
 
   const sttClient = new DeepgramSttClient({
-    apiKey: config.deepgramApiKey!,
-    model: config.deepgramModel!,
-    endpoint: config.deepgramListenEndpoint!,
+    apiKey: config.deepgramApiKey ?? '',
+    model: config.deepgramModel ?? '',
+    endpoint: config.deepgramListenEndpoint ?? '',
   });
 
   // Step 1: seed text -> elevenlabs audio

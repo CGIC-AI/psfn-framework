@@ -1145,7 +1145,7 @@ export class SubstrateRuntime implements Lifecycle {
     const litellmBaseUrl = process.env.LITELLM_BASE_URL;
     const modelDiscovery = litellmBaseUrl
       ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY, {
-        openRouterModelsApiUrl: this.config.openRouterModelsApiUrl!,
+        openRouterModelsApiUrl: this.config.openRouterModelsApiUrl ?? '',
       })
       : null;
 

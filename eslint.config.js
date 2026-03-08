@@ -4,13 +4,17 @@ import tsPlugin from '@typescript-eslint/eslint-plugin';
 export default [
   {
     ignores: [
-      'dist/**',
       'node_modules/**',
+      '**/node_modules/**',
+      'dist/**',
+      '**/dist/**',
+      'admin-ui/.svelte-kit/**',
+      '**/.svelte-kit/**',
+      'admin-ui/build/**',
+      '**/build/**',
       'data/**',
       'logs/**',
       'import/**',
-      'admin-ui/.svelte-kit/**',
-      'admin-ui/build/**',
     ],
     linterOptions: {
       reportUnusedDisableDirectives: 'off',

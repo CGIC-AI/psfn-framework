@@ -180,7 +180,7 @@ describe('loadConfig path defaults', () => {
     expect(config.transformersModel).toBe('Xenova/all-MiniLM-L6-v2');
     expect(config.transformersCacheDir).toBeUndefined();
     expect(config.textEmotionModel).toBe('cirimus/modernbert-base-go-emotions');
-    expect(config.textEmotionCacheDir).toBeUndefined();
+    expect(config.textEmotionCacheDir).toBe('models/transformers');
     expect(config.textEmotionDtype).toBe('fp32');
     expect(config.embeddingApiUrl).toBeUndefined();
     expect(config.embeddingApiModel).toBe('snowflake-arctic-embed2');

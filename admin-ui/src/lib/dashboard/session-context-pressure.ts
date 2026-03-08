@@ -6,12 +6,20 @@ export interface SessionContextPressureView {
   isOverLimit: boolean;
 }
 
+type SessionContextPressureInput = Partial<Record<keyof DashboardSessionContextPressure, unknown>> | null | undefined;
+
+function asNonNegativeFiniteNumber(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return value;
+}
+
 export function resolveSessionContextPressureView(
-  pressure: DashboardSessionContextPressure | null | undefined,
+  pressure: SessionContextPressureInput,
 ): SessionContextPressureView {
-  const hasValidTelemetry = pressure?.hasTelemetry === true
-    && Number.isFinite(pressure.utilizationPct)
-    && pressure.utilizationPct >= 0;
+  const utilizationPct = asNonNegativeFiniteNumber(pressure?.utilizationPct);
+  const hasValidTelemetry = pressure?.hasTelemetry === true && utilizationPct !== null;
   if (!hasValidTelemetry) {
     return {
       utilizationPct: 0,
@@ -20,8 +28,8 @@ export function resolveSessionContextPressureView(
     };
   }
   return {
-    utilizationPct: pressure.utilizationPct,
+    utilizationPct,
     hasTelemetry: true,
-    isOverLimit: pressure.utilizationPct > 100,
+    isOverLimit: utilizationPct > 100,
   };
 }

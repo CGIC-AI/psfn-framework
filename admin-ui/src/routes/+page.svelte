@@ -4,6 +4,7 @@
   import {
     DASHBOARD_COST_WINDOW_OPTIONS,
     resolveDashboardCostWindow,
+    resolveSelectedDashboardCostWindowUsage,
     type DashboardCostWindow,
   } from '$lib/dashboard/cost-window';
   import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
@@ -39,7 +40,9 @@
       const payload = await getDashboard(costWindow);
       if (requestId !== latestDashboardRequestId) return;
       data = payload;
-      selectedCostWindow = resolveDashboardCostWindow(payload.stats.sessionUsage.costWindows.selected);
+      selectedCostWindow = resolveDashboardCostWindow(
+        payload.stats?.sessionUsage?.costWindows?.selected ?? costWindow,
+      );
     } catch (e) {
       if (requestId !== latestDashboardRequestId) return;
       const message = e instanceof Error ? e.message : 'Failed to load dashboard';
@@ -119,8 +122,11 @@
     </div>
   {:else if data}
     {@const stats = data.stats}
-    {@const selectedCostWindowUsage = stats.sessionUsage.costWindows.byWindow[selectedCostWindow]}
-    {@const sessionContextPressure = resolveSessionContextPressureView(stats.sessionUsage.activeSessionContextPressure)}
+    {@const selectedCostWindowUsage = resolveSelectedDashboardCostWindowUsage(
+      stats.sessionUsage?.costWindows?.byWindow,
+      selectedCostWindow,
+    )}
+    {@const sessionContextPressure = resolveSessionContextPressureView(stats.sessionUsage?.activeSessionContextPressure)}
     <!-- Stat cards -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <a href="/memory" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">

@@ -61,6 +61,7 @@ import {
 } from '../../lifecycle/turn-contention.js';
 import {
   clampHttpHeader as clampHeaderValue,
+  corsAllowlistIsEmpty,
   evaluateCorsPolicy,
   isLoopbackHost,
   normalizeCorsAllowedOrigins,
@@ -201,7 +202,7 @@ export class ApiServer implements ChannelAdapter {
   private contactStore: ContactStore | null;
   private apiKey?: string;
   private allowInsecureWithoutAuth: boolean;
-  private corsAllowedOrigins: Set<string>;
+  private corsAllowedOrigins: ReturnType<typeof normalizeCorsAllowedOrigins>;
   private modelName: string;
   private requestTimeoutMs: number;
   private seenTelemetryNonces = new Map<string, number>();
@@ -310,7 +311,7 @@ export class ApiServer implements ChannelAdapter {
         if (!this.apiKey) {
           log.warn('API authentication disabled by explicit ALLOW_INSECURE_LOCAL_API=true');
         }
-        if (this.corsAllowedOrigins.size === 0) {
+        if (corsAllowlistIsEmpty(this.corsAllowedOrigins)) {
           log.warn('API CORS allowlist is empty; cross-origin browser requests are denied by default');
         }
         resolve();

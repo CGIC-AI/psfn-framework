@@ -1250,6 +1250,50 @@ describe('ApiServer', () => {
       expect(res.headers['access-control-allow-headers']).toContain('X-Session-ID');
       expect(res.headers.vary).toContain('Origin');
     });
+
+    it('allows wildcard LAN preflight when configured origin host matches', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: ['http://*.local:3201'],
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Origin: 'http://garden.local:3201',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('http://garden.local:3201');
+      expect(res.headers['access-control-allow-methods']).toContain('POST');
+      expect(res.headers.vary).toContain('Origin');
+    });
+
+    it('rejects wildcard LAN preflight when origin does not match configured port', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: ['http://*.local:3201'],
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Origin: 'http://garden.local:3202',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.body).error.type).toBe('cors_origin_not_allowed');
+    });
   });
 
   describe('GET /v1/voice/ws (websocket upgrade)', () => {

@@ -34,7 +34,6 @@ import type {
 } from '../types.js';
 import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
-import type { Contact } from '../contacts/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
 import {
@@ -131,26 +130,18 @@ import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
 import type { ContextManifestMemorySeed } from '../session/context-manifest.js';
 import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
-import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from '../emotion/state.js';
-import { EmotionObserver, type EmotionObserverResult } from '../emotion/observer.js';
+import { EmotionState, type EmotionStateSnapshot } from '../emotion/state.js';
+import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
-import {
-  type ActiveConcern,
-  type ActiveConcernContextProvider,
-} from '../intention/concerns.js';
+import type { ActiveConcernContextProvider } from '../intention/concerns.js';
 import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
-import { parseSessionEmotionState } from '../emotion/session-metadata.js';
-import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import {
   cloneMetacognitiveFlags,
-  MetacognitiveMonitor,
   type MetacognitiveFlag,
 } from '../self-model/metacognition.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
-  INTERNAL_STATE_NEUTRAL_EMOTION,
-  InternalStateComputer,
   type InternalState,
 } from '../self-model/state.js';
 import {
@@ -196,6 +187,7 @@ import {
   resolveMoaSettings,
   runMoaTurn,
 } from './substrate-agent/moa-turn.js';
+import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -280,8 +272,6 @@ export interface PromotedToolMutationResult {
 }
 
 type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
-const TOP_EMOTION_COUNT = 3;
-const MIN_TOP_EMOTION_SCORE = 0.05;
 const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
   autoload: 1,
   extended_loaded: 2,
@@ -413,15 +403,8 @@ export class SubstrateAgent {
     PendingBackgroundContinuationDelivery
   >();
   private backgroundContinuationTasks = new Map<string, BackgroundContinuationTaskRecord>();
-  private emotionState: EmotionState | null = null;
-  private emotionObserver: EmotionObserver | null = null;
-  private emotionAppraisal: EmotionAppraisal | null = null;
-  private emotionRuntimeRequired = false;
-  private emotionStateSessionId: string | null = null;
-  private emotionStateUpdatedAtMs: number | null = null;
   private selfModelRuntimeRequired = false;
-  private readonly internalStateComputer = new InternalStateComputer();
-  private readonly metacognitiveMonitor = new MetacognitiveMonitor();
+  private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
@@ -461,15 +444,17 @@ export class SubstrateAgent {
       ?? (() => fallbackPromptVariables);
     this.config = config;
     this.runtimeMode = options?.runtimeMode ?? inferRuntimeModeFromProvider(llmClient);
-    this.emotionState = options?.emotionRuntime?.state ?? null;
-    this.emotionObserver = options?.emotionRuntime?.observer ?? null;
-    this.emotionAppraisal = options?.emotionRuntime?.appraisal
-      ?? ((this.emotionState && this.emotionObserver)
-        ? new EmotionAppraisal({ llmProvider: this.llmClient })
-        : null);
-    this.emotionRuntimeRequired = options?.emotionRuntime?.requireWiring ?? false;
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
-    this.assertEmotionRuntimeConfigured();
+    this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
+      sessionManager: this.sessionManager,
+      llmProvider: this.llmClient,
+      emotionRuntime: options?.emotionRuntime,
+      getActiveConcernProvider: () => this.activeConcernProvider,
+      getContactStore: () => this.contactStore,
+      getSelfModelRuntimeRequired: () => this.selfModelRuntimeRequired,
+      logger: log,
+    });
+    this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 
     const emitBudgetBlocked = (event: ModelBudgetBlockedEvent) => {
       this.eventBus.emit('model.budget.blocked', event).catch((error) => {
@@ -1992,7 +1977,7 @@ export class SubstrateAgent {
       canonicalContactKey: authorContext.canonicalContactKey ?? null,
     });
 
-    this.assertSelfModelRuntimeConfigured();
+    this.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
 
     // Record user message in session (JSONL append = L0 archival)
     const userSessionEntryId = this.recordUserMessage(
@@ -2005,11 +1990,11 @@ export class SubstrateAgent {
     const emotionSessionId = this.resolveSessionChannelId(message.channelId);
 
     try {
-      const emotionSnapshot = await this.observeEmotionState(
+      const emotionSnapshot = await this.emotionSelfModelRuntime.observeEmotionState(
         message.content,
         emotionSessionId,
       );
-      const emotionAppraisalChain = this.getEmotionAppraisalChain(emotionSessionId);
+      const emotionAppraisalChain = this.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
       const trustLevel = authorContext.trustLevel;
       const channelType = this.resolveChannelType(message);
       const memoryProvider = this.memoryProvider as ProactiveMemoryProvider | null;
@@ -2131,7 +2116,7 @@ export class SubstrateAgent {
         authorContext.canonicalContactKey,
         runtimeNow,
       );
-      const preTurnInternalState = this.computeInternalStateForTurn({
+      const preTurnInternalState = this.emotionSelfModelRuntime.computeInternalStateForTurn({
         message,
         responseText: '',
         trustLevel,
@@ -2141,7 +2126,7 @@ export class SubstrateAgent {
         sessionChannelId: emotionSessionId,
       });
       const preTurnInternalStateSnapshotRef = buildInternalStateSnapshotRef(preTurnInternalState);
-      const preTurnMetacognitiveFlags = this.computeMetacognitiveFlagsForTurn({
+      const preTurnMetacognitiveFlags = this.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
         internalState: preTurnInternalState,
         responseText: '',
         toolCallCount: 0,
@@ -2533,7 +2518,7 @@ export class SubstrateAgent {
         log.info('Broadcast provenance', provenancePayload);
       }
 
-      const internalState = this.computeInternalStateForTurn({
+      const internalState = this.emotionSelfModelRuntime.computeInternalStateForTurn({
         message,
         responseText,
         trustLevel: authorContext.trustLevel,
@@ -2545,7 +2530,7 @@ export class SubstrateAgent {
       this.currentInternalState = internalState;
       const internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
       this.currentInternalStateSnapshotRef = internalStateSnapshotRef;
-      const metacognitiveFlags = this.computeMetacognitiveFlagsForTurn({
+      const metacognitiveFlags = this.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
         internalState,
         responseText,
         toolCallCount: turnUsage.toolCalls,
@@ -2729,7 +2714,7 @@ export class SubstrateAgent {
         });
       });
 
-      void this.triggerEmotionAppraisal({
+      void this.emotionSelfModelRuntime.triggerEmotionAppraisal({
         sessionChannelId: emotionSessionId,
         turnId,
         internalState,
@@ -2801,364 +2786,6 @@ export class SubstrateAgent {
     const resolved = manager.resolveSessionChannelId(channelId);
     const trimmed = resolved.trim();
     return trimmed.length > 0 ? trimmed : channelId;
-  }
-
-  private assertEmotionRuntimeConfigured(): void {
-    const partialWiring = (!!this.emotionState && !this.emotionObserver)
-      || (!this.emotionState && !!this.emotionObserver);
-    if (partialWiring) {
-      throw new Error('Emotion runtime wiring must provide both EmotionState and EmotionObserver');
-    }
-    if (this.emotionAppraisal && (!this.emotionState || !this.emotionObserver)) {
-      throw new Error('Emotion appraisal wiring requires EmotionState and EmotionObserver');
-    }
-    if (!this.emotionRuntimeRequired) return;
-    if (!this.emotionState || !this.emotionObserver) {
-      throw new Error('Emotion runtime wiring is required but EmotionState/EmotionObserver are not configured');
-    }
-  }
-
-  private assertSelfModelRuntimeConfigured(): void {
-    if (!this.selfModelRuntimeRequired) {
-      return;
-    }
-    if (!this.activeConcernProvider) {
-      throw new Error('Self-model runtime wiring is required but ActiveConcernProvider is not configured');
-    }
-    if (!this.contactStore) {
-      throw new Error('Self-model runtime wiring is required but ContactStore is not configured');
-    }
-    const manager = this.sessionManager as SessionManager & {
-      getRecentMessages?: (channelId: string, limit?: number) => Array<unknown>;
-    };
-    if (typeof manager.getRecentMessages !== 'function') {
-      throw new Error('Self-model runtime wiring requires SessionManager.getRecentMessages');
-    }
-  }
-
-  private hydrateEmotionStateForSession(sessionChannelId: string): void {
-    if (!this.emotionState) return;
-    if (this.emotionStateSessionId === sessionChannelId) return;
-
-    const manager = this.sessionManager as SessionManager & {
-      getRecentMessages?: (channelId: string, limit?: number) => Array<{
-        metadata?: string;
-        timestamp: number;
-      }>;
-    };
-    if (typeof manager.getRecentMessages !== 'function') {
-      if (this.emotionRuntimeRequired) {
-        throw new Error('Emotion runtime wiring requires SessionManager.getRecentMessages for metadata recovery');
-      }
-      this.emotionState = new EmotionState();
-      this.emotionStateSessionId = sessionChannelId;
-      this.emotionStateUpdatedAtMs = null;
-      return;
-    }
-
-    const recentEntries = manager.getRecentMessages(sessionChannelId, 64);
-    for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
-      const entry = recentEntries[index];
-      if (!entry.metadata || !entry.metadata.includes('"emotionState"')) {
-        continue;
-      }
-      let snapshot: EmotionStateSnapshot | null;
-      try {
-        snapshot = parseSessionEmotionState(entry.metadata);
-      } catch (error) {
-        throw new Error(
-          `Failed to parse emotion metadata for session "${sessionChannelId}": ${toErrorMessage(error)}`,
-        );
-      }
-      if (!snapshot) continue;
-      this.emotionState = EmotionState.deserialize(snapshot);
-      this.emotionStateSessionId = sessionChannelId;
-      this.emotionStateUpdatedAtMs = entry.timestamp;
-      return;
-    }
-
-    this.emotionState = new EmotionState();
-    this.emotionStateSessionId = sessionChannelId;
-    this.emotionStateUpdatedAtMs = null;
-  }
-
-  private async observeEmotionState(
-    text: string,
-    sessionChannelId: string,
-  ): Promise<EmotionStateSnapshot | null> {
-    this.assertEmotionRuntimeConfigured();
-    if (!this.emotionState || !this.emotionObserver) {
-      return null;
-    }
-    this.hydrateEmotionStateForSession(sessionChannelId);
-
-    const now = Date.now();
-    const elapsedSeconds = this.emotionStateUpdatedAtMs === null
-      ? 0
-      : Math.max(0, (now - this.emotionStateUpdatedAtMs) / 1000);
-    const rawObservation = await this.emotionObserver.observe(text, elapsedSeconds) as EmotionObserverResult | EmotionObservation;
-    const observation = this.normalizeEmotionObservation(rawObservation);
-    const snapshot = this.emotionState.update(observation, elapsedSeconds);
-    this.emotionStateUpdatedAtMs = now;
-    return snapshot;
-  }
-
-  private computeInternalStateForTurn(input: {
-    message: SubstrateMessage;
-    responseText: string;
-    trustLevel: TrustLevel;
-    canonicalContactKey?: string;
-    emotionSnapshot: EmotionStateSnapshot | null;
-    toolCallCount: number;
-    sessionChannelId: string;
-  }): InternalState {
-    const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
-    const contactEmotionalSnapshot = this.resolveContactEmotionalSnapshot(input.canonicalContactKey);
-    const recentTurnCount = this.resolveRecentTurnCount(input.sessionChannelId);
-    const lastSeenDeltaSeconds = this.resolveContactLastSeenDeltaSeconds(
-      input.canonicalContactKey,
-      Date.now(),
-    );
-    const emotionState = input.emotionSnapshot ?? INTERNAL_STATE_NEUTRAL_EMOTION;
-
-    return this.internalStateComputer.computeState({
-      emotionState,
-      activeConcerns,
-      trustLevel: input.trustLevel,
-      ...(input.canonicalContactKey ? { contactId: input.canonicalContactKey } : {}),
-      contactEmotionalSnapshot,
-      sessionMetrics: {
-        userMessageText: input.message.content,
-        responseText: input.responseText,
-        toolCallCount: input.toolCallCount,
-        recentTurnCount,
-        ...(lastSeenDeltaSeconds === null ? {} : { lastSeenDeltaSeconds }),
-      },
-    });
-  }
-
-  private computeMetacognitiveFlagsForTurn(input: {
-    internalState: InternalState;
-    responseText: string;
-    toolCallCount: number;
-    sessionChannelId: string;
-    retrievalProvenanceRefs: readonly string[];
-  }): MetacognitiveFlag[] {
-    const recentResponses = this.resolveRecentAssistantResponses(input.sessionChannelId);
-    return this.metacognitiveMonitor.detectFlags({
-      internalState: input.internalState,
-      recentResponses,
-      latestResponse: input.responseText,
-      toolCallCount: input.toolCallCount,
-      contradictoryMemorySignalCount: this.countContradictoryMemorySignals(input.retrievalProvenanceRefs),
-      supportingMemoryCount: this.countSupportingMemoryEvidenceRefs(input.retrievalProvenanceRefs),
-    });
-  }
-
-  private resolveInternalStateActiveConcerns(canonicalContactKey?: string): ActiveConcern[] {
-    if (!this.activeConcernProvider) return [];
-    const concerns = this.activeConcernProvider.getActiveConcerns(canonicalContactKey);
-    if (!Array.isArray(concerns)) {
-      throw new Error('Active concern provider returned an invalid payload for InternalState computation');
-    }
-    return concerns;
-  }
-
-  private resolveContactEmotionalSnapshot(canonicalContactKey?: string): EmotionalSnapshot | null {
-    if (!canonicalContactKey || !this.contactStore) return null;
-    const contactStore = this.contactStore as ContactStore & {
-      getEmotionalSnapshot?: (id: string) => EmotionalSnapshot | undefined;
-    };
-    if (typeof contactStore.getEmotionalSnapshot !== 'function') {
-      return null;
-    }
-    return contactStore.getEmotionalSnapshot(canonicalContactKey) ?? null;
-  }
-
-  private resolveContactLastSeenDeltaSeconds(
-    canonicalContactKey: string | undefined,
-    nowMs: number,
-  ): number | null {
-    if (!canonicalContactKey || !this.contactStore) return null;
-    const contactStore = this.contactStore as ContactStore & {
-      getById?: (id: string) => Contact | undefined;
-    };
-    if (typeof contactStore.getById !== 'function') {
-      return null;
-    }
-    const contact = contactStore.getById(canonicalContactKey);
-    if (!contact?.lastSeen) return null;
-    const lastSeenMs = Date.parse(contact.lastSeen);
-    if (!Number.isFinite(lastSeenMs)) {
-      throw new Error(`Contact "${canonicalContactKey}" has invalid lastSeen timestamp`);
-    }
-    return Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000));
-  }
-
-  private resolveRecentTurnCount(sessionChannelId: string): number {
-    const manager = this.sessionManager as SessionManager & {
-      getRecentMessages?: (channelId: string, limit?: number) => Array<unknown>;
-    };
-    if (typeof manager.getRecentMessages !== 'function') {
-      return 0;
-    }
-    const recentMessages = manager.getRecentMessages(sessionChannelId, 12);
-    if (!Array.isArray(recentMessages)) {
-      throw new Error('SessionManager.getRecentMessages returned an invalid payload for InternalState computation');
-    }
-    return recentMessages.length;
-  }
-
-  private resolveRecentAssistantResponses(sessionChannelId: string): string[] {
-    const manager = this.sessionManager as SessionManager & {
-      getRecentMessages?: (channelId: string, limit?: number) => Array<{
-        role: 'user' | 'assistant' | 'system' | 'tool';
-        content: string;
-        timestamp: number;
-      }>;
-    };
-    if (typeof manager.getRecentMessages !== 'function') {
-      return [];
-    }
-    const recentMessages = manager.getRecentMessages(sessionChannelId, 6);
-    if (!Array.isArray(recentMessages)) {
-      throw new Error('SessionManager.getRecentMessages returned an invalid payload for metacognitive monitoring');
-    }
-    const responses: string[] = [];
-    for (const entry of recentMessages) {
-      if (entry.role !== 'assistant') continue;
-      const normalized = entry.content.replace(/\s+/g, ' ').trim();
-      if (!normalized) continue;
-      responses.push(normalized);
-    }
-    return responses;
-  }
-
-  private countSupportingMemoryEvidenceRefs(retrievalProvenanceRefs: readonly string[]): number {
-    let count = 0;
-    for (const ref of retrievalProvenanceRefs) {
-      if (ref.startsWith('memory:')) {
-        count += 1;
-      }
-    }
-    return count;
-  }
-
-  private countContradictoryMemorySignals(retrievalProvenanceRefs: readonly string[]): number {
-    let count = 0;
-    for (const ref of retrievalProvenanceRefs) {
-      if (!ref.startsWith('memory:')) continue;
-      const lower = ref.toLowerCase();
-      if (lower.includes('contradict') || lower.includes('conflict')) {
-        count += 1;
-      }
-    }
-    return count;
-  }
-
-  private normalizeEmotionObservation(
-    rawObservation: unknown,
-  ): EmotionObservation {
-    if (!rawObservation || typeof rawObservation !== 'object') {
-      throw new Error('Emotion observer returned an invalid observation payload');
-    }
-    if ('observation' in rawObservation) {
-      const nested = rawObservation.observation;
-      if (!nested || typeof nested !== 'object') {
-        throw new Error('Emotion observer returned an invalid nested observation payload');
-      }
-      return nested;
-    }
-    return rawObservation;
-  }
-
-  private formatTopEmotions(discrete: Record<string, number>): string {
-    const top = Object.entries(discrete)
-      .map(([label, score]) => [label.trim().toLowerCase(), score] as const)
-      .filter(([label, score]) => label.length > 0 && Number.isFinite(score) && score >= MIN_TOP_EMOTION_SCORE)
-      .sort((left, right) => {
-        if (right[1] !== left[1]) {
-          return right[1] - left[1];
-        }
-        return left[0].localeCompare(right[0]);
-      })
-      .slice(0, TOP_EMOTION_COUNT)
-      .map(([label, score]) => `${label}=${score.toFixed(3)}`);
-    if (top.length === 0) {
-      return 'none';
-    }
-    return top.join(', ');
-  }
-
-  private getEmotionAppraisalChain(sessionChannelId: string): EmotionAppraisalEntry[] {
-    if (!this.emotionAppraisal) return [];
-    return this.emotionAppraisal.getChain(sessionChannelId);
-  }
-
-  private resolveEmotionPersonalityTraits(
-    templateVariables: Record<string, string> | undefined,
-  ): Record<string, string> {
-    if (!templateVariables) return {};
-    const traits: Record<string, string> = {};
-    for (const [key, rawValue] of Object.entries(templateVariables)) {
-      const value = rawValue.replace(/\s+/g, ' ').trim();
-      if (!value) continue;
-      if (
-        key === 'personality'
-        || key === 'character.personality'
-        || key.startsWith('hexaco.')
-        || key.startsWith('hexaco_')
-        || key.startsWith('character.hexaco.')
-        || key.startsWith('character.hexaco_')
-      ) {
-        traits[key] = value;
-      }
-    }
-    return traits;
-  }
-
-  private async triggerEmotionAppraisal(params: {
-    sessionChannelId: string;
-    turnId: TurnID;
-    internalState: InternalState;
-    templateVariables: Record<string, string> | undefined;
-  }): Promise<void> {
-    if (!this.emotionAppraisal) return;
-
-    const manager = this.sessionManager as SessionManager & {
-      getRecentMessages?: (channelId: string, limit?: number) => Array<{
-        role: 'user' | 'assistant' | 'system' | 'tool';
-        content: string;
-        timestamp: number;
-      }>;
-    };
-    if (typeof manager.getRecentMessages !== 'function') {
-      if (this.emotionRuntimeRequired) {
-        throw new Error('Emotion appraisal runtime requires SessionManager.getRecentMessages');
-      }
-      return;
-    }
-
-    const recentMessages = manager.getRecentMessages(params.sessionChannelId, 10).map((entry) => ({
-      role: entry.role,
-      content: entry.content,
-      timestamp: entry.timestamp,
-    }));
-
-    const result = await this.emotionAppraisal.maybeAppraise({
-      sessionId: params.sessionChannelId,
-      turnId: params.turnId,
-      internalState: params.internalState,
-      recentMessages,
-      personalityTraits: this.resolveEmotionPersonalityTraits(params.templateVariables),
-    });
-    if (result.appraised) {
-      log.debug('Post-turn emotion appraisal completed', {
-        sessionChannelId: params.sessionChannelId,
-        trigger: result.trigger,
-        delta: result.delta,
-      });
-    }
   }
 
   private queueBackgroundContinuationCompletion(
@@ -3680,7 +3307,7 @@ export class SubstrateAgent {
       skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
       activeConcernsBlock: this.buildActiveConcernsContextBlock(canonicalContactKey),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
-      formatTopEmotions: (discrete) => this.formatTopEmotions(discrete),
+      formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
     });
   }
 

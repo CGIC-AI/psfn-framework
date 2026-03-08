@@ -572,6 +572,124 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
   });
 
+  it('returns period-bounded dashboard cost windows and honors costWindow selection', async () => {
+    type UsageSample = {
+      timestampMs: number;
+      llmCalls: number;
+      toolCalls: number;
+      estimatedCostUsd?: number;
+    };
+
+    const nowMs = Date.now();
+    const samples: UsageSample[] = [
+      { timestampMs: nowMs - (1 * 60 * 60 * 1000), llmCalls: 2, toolCalls: 1, estimatedCostUsd: 0.1111 },
+      { timestampMs: nowMs - (3 * 24 * 60 * 60 * 1000), llmCalls: 1, toolCalls: 2, estimatedCostUsd: 0.2222 },
+      { timestampMs: nowMs - (15 * 24 * 60 * 60 * 1000), llmCalls: 4, toolCalls: 3, estimatedCostUsd: 0.3333 },
+      { timestampMs: nowMs - (45 * 24 * 60 * 60 * 1000), llmCalls: 9, toolCalls: 9, estimatedCostUsd: 0.9999 },
+      { timestampMs: Number.NaN, llmCalls: 8, toolCalls: 8, estimatedCostUsd: 0.7777 },
+      { timestampMs: nowMs - (2 * 60 * 60 * 1000), llmCalls: 3, toolCalls: 0 },
+    ];
+
+    for (const [index, sample] of samples.entries()) {
+      await eventBus.emit('agent.turn.usage', {
+        message: {
+          id: `dashboard-cost-${index}`,
+          channelId: 'api-session',
+          channelType: 'api',
+          authorId: 'operator',
+          authorName: 'Operator',
+          content: 'dashboard cost sample',
+          timestamp: new Date(sample.timestampMs),
+        },
+        usage: {
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: 10,
+          llmCalls: sample.llmCalls,
+          toolCalls: sample.toolCalls,
+          contextUtilization: 10,
+          estimatedCostUsd: sample.estimatedCostUsd,
+        },
+      });
+    }
+
+    const now = new Date(nowMs);
+    const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const weekOffsetDays = (now.getUTCDay() + 6) % 7;
+    const weekStartMs = dayStartMs - (weekOffsetDays * 86_400_000);
+    const monthStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+
+    const expected = {
+      today: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
+      week: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
+      month: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
+    };
+
+    for (const sample of samples) {
+      if (!Number.isFinite(sample.timestampMs) || sample.timestampMs < monthStartMs) {
+        continue;
+      }
+      expected.month.turns += 1;
+      expected.month.llmCalls += sample.llmCalls;
+      expected.month.toolCalls += sample.toolCalls;
+      expected.month.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
+
+      if (sample.timestampMs >= weekStartMs) {
+        expected.week.turns += 1;
+        expected.week.llmCalls += sample.llmCalls;
+        expected.week.toolCalls += sample.toolCalls;
+        expected.week.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
+      }
+
+      if (sample.timestampMs >= dayStartMs) {
+        expected.today.turns += 1;
+        expected.today.llmCalls += sample.llmCalls;
+        expected.today.toolCalls += sample.toolCalls;
+        expected.today.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
+      }
+    }
+
+    const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=week', undefined, authHeaders);
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as {
+      stats: {
+        sessionUsage: {
+          costWindows: {
+            selected: string;
+            byWindow: {
+              today: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
+              week: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
+              month: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
+            };
+          };
+        };
+      };
+    };
+
+    expect(payload.stats.sessionUsage.costWindows.selected).toBe('week');
+    expect(payload.stats.sessionUsage.costWindows.byWindow.today.turns).toBe(expected.today.turns);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.today.llmCalls).toBe(expected.today.llmCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.today.toolCalls).toBe(expected.today.toolCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.today.estimatedCostUsd).toBeCloseTo(expected.today.estimatedCostUsd, 8);
+
+    expect(payload.stats.sessionUsage.costWindows.byWindow.week.turns).toBe(expected.week.turns);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.week.llmCalls).toBe(expected.week.llmCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.week.toolCalls).toBe(expected.week.toolCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.week.estimatedCostUsd).toBeCloseTo(expected.week.estimatedCostUsd, 8);
+
+    expect(payload.stats.sessionUsage.costWindows.byWindow.month.turns).toBe(expected.month.turns);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.month.llmCalls).toBe(expected.month.llmCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.month.toolCalls).toBe(expected.month.toolCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.month.estimatedCostUsd).toBeCloseTo(expected.month.estimatedCostUsd, 8);
+  });
+
+  it('rejects invalid dashboard costWindow query values', async () => {
+    const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=all-time', undefined, authHeaders);
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as { error: string };
+    expect(payload.error).toContain('Invalid costWindow query parameter');
+  });
+
   it('includes cadence fields for recurring tasks in /api/admin/scheduler', async () => {
     scheduler.register({
       id: 'cadence-hourly',

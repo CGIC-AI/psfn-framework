@@ -22,6 +22,10 @@ import type {
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
+import {
+  isDashboardCostWindow,
+  resolveDashboardCostWindow,
+} from './services/dashboard-cost-windows.js';
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../scheduler/types.js';
 import type { SkillSnapshot } from '../../skills/types.js';
 import type {
@@ -252,8 +256,15 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/dashboard'),
-      handle: (_req, res) => {
-        sendJson(res, 200, dashboardService.getDashboardData());
+      handle: (req, res) => {
+        const url = parseRequestUrl(req, '/api/admin/dashboard');
+        const costWindowParam = url.searchParams.get('costWindow');
+        if (costWindowParam !== null && !isDashboardCostWindow(costWindowParam)) {
+          sendJson(res, 400, { error: 'Invalid costWindow query parameter. Expected today, week, or month.' });
+          return;
+        }
+        const costWindow = resolveDashboardCostWindow(costWindowParam);
+        sendJson(res, 200, dashboardService.getDashboardData({ costWindow }));
       },
     },
     {

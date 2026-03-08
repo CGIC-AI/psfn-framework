@@ -231,6 +231,7 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
   ['sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES],
   ['capabilityTier', CAPABILITY_TIER_VALUES],
   ['embeddingProvider', ['ollama', 'transformers', 'api']],
+  ['textEmotionDtype', ['auto', 'fp32', 'fp16', 'q8', 'int8', 'uint8', 'q4', 'bnb4', 'q4f16']],
 ]);
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([

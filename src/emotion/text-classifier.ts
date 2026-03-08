@@ -3,19 +3,22 @@ export interface TextEmotionClassification {
   score: number;
 }
 
-export type TextEmotionDType =
-  | 'auto'
-  | 'fp32'
-  | 'fp16'
-  | 'q8'
-  | 'int8'
-  | 'uint8'
-  | 'q4'
-  | 'bnb4'
-  | 'q4f16';
+export const TEXT_EMOTION_DTYPE_VALUES = [
+  'auto',
+  'fp32',
+  'fp16',
+  'q8',
+  'int8',
+  'uint8',
+  'q4',
+  'bnb4',
+  'q4f16',
+] as const;
+
+export type TextEmotionDType = typeof TEXT_EMOTION_DTYPE_VALUES[number];
 
 export interface TextEmotionClassifierConfig {
-  model?: string;
+  model: string;
   cacheDir?: string;
   dtype?: TextEmotionDType;
   pipelineFactory?: TextEmotionPipelineFactory;
@@ -36,10 +39,10 @@ export type TextEmotionPipelineFactory = (
   config: TextEmotionPipelineFactoryConfig,
 ) => Promise<TextEmotionPipeline>;
 
-export const TEXT_EMOTION_MODEL_ID = 'boltuix/bert-emotion';
 export const TEXT_EMOTION_LABEL_COUNT = 13;
 
 const DEFAULT_DTYPE: TextEmotionDType = 'fp32';
+const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
 
 export class TextEmotionClassifier {
   private readonly model: string;
@@ -49,8 +52,8 @@ export class TextEmotionClassifier {
   private pipeline: TextEmotionPipeline | null = null;
   private initPromise: Promise<TextEmotionPipeline> | null = null;
 
-  constructor(config: TextEmotionClassifierConfig = {}) {
-    this.model = normalizeModel(config.model);
+  constructor(config: TextEmotionClassifierConfig) {
+    this.model = normalizeRequiredModel(config.model);
     this.cacheDir = normalizeOptionalString(config.cacheDir);
     this.dtype = normalizeDtype(config.dtype);
     this.pipelineFactory = config.pipelineFactory ?? defaultTextEmotionPipelineFactory;
@@ -86,19 +89,6 @@ export class TextEmotionClassifier {
       throw error;
     }
   }
-}
-
-let sharedTextEmotionClassifier: TextEmotionClassifier | null = null;
-
-export function getSharedTextEmotionClassifier(): TextEmotionClassifier {
-  if (!sharedTextEmotionClassifier) {
-    sharedTextEmotionClassifier = new TextEmotionClassifier();
-  }
-  return sharedTextEmotionClassifier;
-}
-
-export function resetSharedTextEmotionClassifierForTests(): void {
-  sharedTextEmotionClassifier = null;
 }
 
 export async function defaultTextEmotionPipelineFactory(
@@ -198,28 +188,24 @@ function normalizeScore(score: unknown, index: number): number {
   return score;
 }
 
-function normalizeModel(model: string | undefined): string {
-  const normalized = model?.trim();
-  return normalized && normalized.length > 0 ? normalized : TEXT_EMOTION_MODEL_ID;
+function normalizeRequiredModel(model: unknown): string {
+  if (typeof model !== 'string') {
+    throw new Error('text emotion classifier model must be a string');
+  }
+  const normalized = model.trim();
+  if (!normalized) {
+    throw new Error('text emotion classifier model must be a non-empty string');
+  }
+  return normalized;
 }
 
 function normalizeDtype(dtype: TextEmotionDType | undefined): TextEmotionDType {
   const normalized = dtype?.trim();
   if (!normalized) return DEFAULT_DTYPE;
-  switch (normalized) {
-    case 'auto':
-    case 'fp32':
-    case 'fp16':
-    case 'q8':
-    case 'int8':
-    case 'uint8':
-    case 'q4':
-    case 'bnb4':
-    case 'q4f16':
-      return normalized;
-    default:
-      return DEFAULT_DTYPE;
+  if (!TEXT_EMOTION_DTYPE_SET.has(normalized)) {
+    throw new Error(`unsupported text emotion classifier dtype: ${normalized}`);
   }
+  return normalized as TextEmotionDType;
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {

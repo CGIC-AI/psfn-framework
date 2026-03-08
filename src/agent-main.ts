@@ -13,6 +13,7 @@ import { MemoryStore } from './memory/store.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
 import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
+import { TextEmotionClassifier } from './emotion/text-classifier.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
@@ -427,7 +428,16 @@ async function main(): Promise<void> {
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
+  const textEmotionModel = config.textEmotionModel?.trim();
+  if (!textEmotionModel) {
+    throw new Error('textEmotionModel runtime setting is required');
+  }
   const emotionObserver = new EmotionObserver({
+    textClassifier: new TextEmotionClassifier({
+      model: textEmotionModel,
+      cacheDir: config.textEmotionCacheDir,
+      dtype: config.textEmotionDtype,
+    }),
     audioClassifier: getSharedAudioEmotionClassifier(),
   });
   const emotionState = new EmotionState();

@@ -106,6 +106,9 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     embeddingOllamaUrl: config.embeddingOllamaUrl ?? null,
     transformersModel: config.transformersModel ?? null,
     transformersCacheDir: config.transformersCacheDir ?? null,
+    textEmotionModel: config.textEmotionModel ?? null,
+    textEmotionCacheDir: config.textEmotionCacheDir ?? null,
+    textEmotionDtype: config.textEmotionDtype ?? null,
     embeddingApiUrl: config.embeddingApiUrl ?? null,
     embeddingApiModel: config.embeddingApiModel ?? null,
     embeddingApiDims: config.embeddingApiDims ?? null,
@@ -285,6 +288,17 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if ('transformersCacheDir' in settings) {
     const trimmed = settings.transformersCacheDir?.trim() ?? '';
     config.transformersCacheDir = trimmed || undefined;
+  }
+  if ('textEmotionModel' in settings) {
+    const trimmed = settings.textEmotionModel?.trim() ?? '';
+    config.textEmotionModel = trimmed || undefined;
+  }
+  if ('textEmotionCacheDir' in settings) {
+    const trimmed = settings.textEmotionCacheDir?.trim() ?? '';
+    config.textEmotionCacheDir = trimmed || undefined;
+  }
+  if ('textEmotionDtype' in settings) {
+    config.textEmotionDtype = settings.textEmotionDtype ?? undefined;
   }
   if ('embeddingApiUrl' in settings) {
     const trimmed = settings.embeddingApiUrl?.trim() ?? '';

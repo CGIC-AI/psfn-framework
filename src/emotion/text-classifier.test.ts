@@ -1,14 +1,14 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
-  getSharedTextEmotionClassifier,
-  resetSharedTextEmotionClassifierForTests,
   TEXT_EMOTION_LABEL_COUNT,
-  TEXT_EMOTION_MODEL_ID,
+  TEXT_EMOTION_DTYPE_VALUES,
   TextEmotionClassifier,
   type TextEmotionClassification,
   type TextEmotionPipeline,
   type TextEmotionPipelineFactory,
 } from './text-classifier.js';
+
+const TEST_MODEL = 'cirimus/modernbert-base-go-emotions';
 
 function sampleScores(): TextEmotionClassification[] {
   return [
@@ -38,16 +38,12 @@ function sorted(scores: TextEmotionClassification[]): TextEmotionClassification[
 }
 
 describe('TextEmotionClassifier', () => {
-  afterEach(() => {
-    resetSharedTextEmotionClassifierForTests();
-  });
-
   it('lazily loads the model pipeline and returns sorted label scores', async () => {
     const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue([
       ...sampleScores(),
     ]);
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
 
     expect(pipelineFactory).not.toHaveBeenCalled();
 
@@ -55,7 +51,7 @@ describe('TextEmotionClassifier', () => {
 
     expect(pipelineFactory).toHaveBeenCalledTimes(1);
     expect(pipelineFactory).toHaveBeenCalledWith({
-      model: TEXT_EMOTION_MODEL_ID,
+      model: TEST_MODEL,
       cacheDir: undefined,
       dtype: 'fp32',
     });
@@ -71,7 +67,7 @@ describe('TextEmotionClassifier', () => {
   it('reuses one initialized model pipeline across classify calls', async () => {
     const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(sampleScores());
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
 
     await classifier.classify('first');
     await classifier.classify('second');
@@ -85,7 +81,7 @@ describe('TextEmotionClassifier', () => {
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn()
       .mockRejectedValueOnce(new Error('load failed'))
       .mockResolvedValueOnce(pipeline);
-    const classifier = new TextEmotionClassifier({ pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
 
     await expect(classifier.classify('first')).rejects.toThrow('load failed');
     await expect(classifier.classify('second')).resolves.toEqual(sorted(sampleScores()));
@@ -98,7 +94,7 @@ describe('TextEmotionClassifier', () => {
     const malformedOutput = [{ label: 'joy', score: 0.9 }];
     const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(malformedOutput);
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
 
     await expect(classifier.classify('message')).rejects.toThrow(
       `text emotion classifier expected ${TEXT_EMOTION_LABEL_COUNT} labels, received 1`,
@@ -108,16 +104,28 @@ describe('TextEmotionClassifier', () => {
   it('throws for empty input text', async () => {
     const pipeline: TextEmotionPipeline = vi.fn();
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
 
     await expect(classifier.classify('   ')).rejects.toThrow('text must be a non-empty string');
     expect(pipelineFactory).not.toHaveBeenCalled();
   });
 
-  it('provides a singleton shared classifier accessor', () => {
-    const first = getSharedTextEmotionClassifier();
-    const second = getSharedTextEmotionClassifier();
+  it('fails closed when model is missing', () => {
+    expect(() => new TextEmotionClassifier({
+      model: '   ',
+      pipelineFactory: vi.fn(),
+    })).toThrow('text emotion classifier model must be a non-empty string');
+  });
 
-    expect(first).toBe(second);
+  it('fails closed when dtype is unsupported', () => {
+    const unsupportedDtype = 'not-a-dtype';
+    expect(TEXT_EMOTION_DTYPE_VALUES).not.toContain(
+      unsupportedDtype as unknown as typeof TEXT_EMOTION_DTYPE_VALUES[number],
+    );
+    expect(() => new TextEmotionClassifier({
+      model: TEST_MODEL,
+      dtype: unsupportedDtype as unknown as typeof TEXT_EMOTION_DTYPE_VALUES[number],
+      pipelineFactory: vi.fn(),
+    })).toThrow('unsupported text emotion classifier dtype');
   });
 });

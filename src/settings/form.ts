@@ -55,6 +55,19 @@ export const SETTINGS_VALIDATION = {
   moaTimeoutMs: { min: 5000, max: 600_000 },
 } as const;
 
+const TEXT_EMOTION_DTYPE_VALUES = [
+  'auto',
+  'fp32',
+  'fp16',
+  'q8',
+  'int8',
+  'uint8',
+  'q4',
+  'bnb4',
+  'q4f16',
+] as const;
+const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
+
 /** Validate and parse form data into EditableSettings. Returns [settings, errors]. */
 export function parseSettingsForm(params: URLSearchParams): [EditableSettings, string[]] {
   const settings: EditableSettings = {};
@@ -197,6 +210,31 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
   const transformersCacheDirRaw = params.get('transformersCacheDir');
   if (transformersCacheDirRaw !== null) {
     settings.transformersCacheDir = transformersCacheDirRaw.trim();
+  }
+
+  const textEmotionModelRaw = params.get('textEmotionModel');
+  if (textEmotionModelRaw !== null) {
+    const model = textEmotionModelRaw.trim();
+    if (!model) {
+      errors.push('textEmotionModel must be a non-empty string');
+    } else {
+      settings.textEmotionModel = model;
+    }
+  }
+
+  const textEmotionCacheDirRaw = params.get('textEmotionCacheDir');
+  if (textEmotionCacheDirRaw !== null) {
+    settings.textEmotionCacheDir = textEmotionCacheDirRaw.trim();
+  }
+
+  const textEmotionDtypeRaw = params.get('textEmotionDtype');
+  if (textEmotionDtypeRaw !== null) {
+    const dtype = textEmotionDtypeRaw.trim();
+    if (!TEXT_EMOTION_DTYPE_SET.has(dtype)) {
+      errors.push(`textEmotionDtype must be one of: ${TEXT_EMOTION_DTYPE_VALUES.join(', ')}`);
+    } else {
+      settings.textEmotionDtype = dtype as EditableSettings['textEmotionDtype'];
+    }
   }
 
   const embeddingApiUrlRaw = params.get('embeddingApiUrl');

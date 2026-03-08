@@ -36,13 +36,11 @@ import type { ContactStore } from '../contacts/store.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
 import {
-  classifyChannel,
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
 import {
-  enforceUntrustedCompactionGuard,
   type PromptComposer,
 } from '../identity/prompt-composer.js';
 import type { ComposeContext } from '../identity/prompt-types.js';
@@ -59,7 +57,6 @@ import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
-import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
 import { ReflectionNudgeTracker, type TurnToolSummary } from '../skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';
@@ -86,12 +83,6 @@ import {
   type WirableTool,
 } from './tool-wiring-validator.js';
 import {
-  classifyBroadcastDraft,
-  resolveBroadcastVisibilityScope,
-} from '../broadcast/safety.js';
-import { runWithRequestContext } from '../llm/request-context.js';
-import {
-  parseDeferredToolHandoffActionId,
   isDeferredToolHandoffMessageId,
 } from './deferred-tool-handoff.js';
 import {
@@ -110,10 +101,8 @@ import type {
   AdaptiveToolSnapshotTelemetry,
   AdaptiveToolSnapshotTool,
 } from './adaptive-tools-telemetry.js';
-import { contextMessagesToPiMessages } from '../llm/message-conversion.js';
 import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../turns/snapshot.js';
-import type { ContextManifestMemorySeed } from '../session/context-manifest.js';
 import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
 import { EmotionState, type EmotionStateSnapshot } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
@@ -125,7 +114,6 @@ import {
   type MetacognitiveFlag,
 } from '../self-model/metacognition.js';
 import {
-  buildInternalStateSnapshotRef,
   cloneInternalState,
   type InternalState,
 } from '../self-model/state.js';
@@ -165,13 +153,8 @@ import {
   type ResolvedAuthorContext,
 } from './substrate-agent/runtime-context.js';
 import {
-  buildTurnUserContent,
   hasVisionAttachments,
 } from './substrate-agent/vision-attachments.js';
-import {
-  resolveMoaSettings,
-  runMoaTurn,
-} from './substrate-agent/moa-turn.js';
 import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-runtime.js';
 import {
   activateExtendedToolsForTurn,
@@ -199,6 +182,9 @@ import {
   withCorrelationPurpose as withCorrelationPurposeForTurn,
   type TurnStageName,
 } from './substrate-agent/turn-observability.js';
+import {
+  handleMessageForTurn,
+} from './substrate-agent/turn-execution-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -218,17 +204,6 @@ export type {
   ExtendedToolActivationOptions,
   ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
-
-interface ProactiveMemoryProvider extends MemoryProvider {
-  retrieveProactiveRecall?: (
-    channelId: string,
-    trustLevel?: TrustLevel,
-    channelMeta?: ChannelMeta,
-    canonicalContactId?: string,
-    turnSnapshot?: import('../turns/snapshot.js').TurnMemorySnapshot,
-    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
-  ) => Promise<string>;
-}
 
 export interface EmotionRuntimeWiring {
   state?: EmotionState;
@@ -1464,834 +1439,193 @@ export class SubstrateAgent {
   }
 
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
-    const startTime = Date.now();
-    const requestId = message.id;
-    const turnId = createTurnId();
-    const deferredContinuationId = parseDeferredToolHandoffActionId(message.id);
-    const restorePinnedSessionContext = this.pinDeferredContinuationSessionContext(
-      deferredContinuationId,
-      message.channelId,
-    );
-    const taskKind = this.resolveTaskKind(message);
-    const turnBudgetCharacteristics = this.buildTurnBudgetCharacteristics(message, taskKind);
-    const turnCallType = this.resolveTurnCallType(message, taskKind);
-    const turnCorrelationBase = this.buildTurnCorrelation(message, turnCallType, turnId, requestId);
-    const channelMeta: ChannelMeta = {
-      isDirectMessage: message.isDirectMessage,
-      ...(message.routing?.broadcast?.approvalToken
-        ? { broadcastApprovalToken: message.routing.broadcast.approvalToken }
-        : {}),
-    };
-    const channelVisibility = classifyChannel(message.channelId, channelMeta);
-    const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
-    let retrievalProvenanceRefs: string[] = [];
-    let memoryManifestSeed: ContextManifestMemorySeed | undefined;
-    const unsubscribeRetrieval = this.eventBus.on('memory.retrieval', (telemetry) => {
-      if (telemetry.channelId !== message.channelId) return;
-      if (telemetry.requestId && telemetry.requestId !== requestId) return;
-      memoryManifestSeed = {
-        ...(telemetry.reason ? { reason: telemetry.reason } : {}),
-        ...(telemetry.retrievalSource ? { retrievalSource: telemetry.retrievalSource } : {}),
-        ...(telemetry.candidateCount !== undefined ? { candidateCount: telemetry.candidateCount } : {}),
-        ...(telemetry.policyAllowedCount !== undefined ? { policyAllowedCount: telemetry.policyAllowedCount } : {}),
-        ...(telemetry.rankedCount !== undefined ? { rankedCount: telemetry.rankedCount } : {}),
-        ...(telemetry.returnedCount !== undefined ? { returnedCount: telemetry.returnedCount } : {}),
-        ...(telemetry.retrievalLimit !== undefined ? { retrievalLimit: telemetry.retrievalLimit } : {}),
-        ...(telemetry.retrievalBudgetPct !== undefined ? { retrievalBudgetPct: telemetry.retrievalBudgetPct } : {}),
-        ...(telemetry.retrievalTokenBudget !== undefined ? { retrievalTokenBudget: telemetry.retrievalTokenBudget } : {}),
-        ...(telemetry.retrievalLimitMode ? { retrievalLimitMode: telemetry.retrievalLimitMode } : {}),
-        ...(telemetry.sensitivityRejectedCount !== undefined
-          ? { sensitivityRejectedCount: telemetry.sensitivityRejectedCount }
-          : {}),
-        ...(telemetry.policyRejectedCount !== undefined ? { policyRejectedCount: telemetry.policyRejectedCount } : {}),
-        ...(telemetry.policyRejectedReasonTags
-          ? { policyRejectedReasonTags: { ...telemetry.policyRejectedReasonTags } }
-          : {}),
-        ...(telemetry.scoreRejectedCount !== undefined ? { scoreRejectedCount: telemetry.scoreRejectedCount } : {}),
-        ...(telemetry.budgetCappedCount !== undefined ? { budgetCappedCount: telemetry.budgetCappedCount } : {}),
-        ...(telemetry.selectedTypes ? { selectedTypes: { ...telemetry.selectedTypes } } : {}),
-        ...(telemetry.compositionalMode ? { compositionalMode: telemetry.compositionalMode } : {}),
-      };
-      const refs = telemetry.provenanceRefs ?? [];
-      if (refs.length === 0) return;
-      retrievalProvenanceRefs = [...new Set(refs.map(ref => ref.trim()).filter(Boolean))];
-    });
-
-    await this.eventBus.emit('agent.turn.start', {
-      message,
-      ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
-    });
-
-    const trustStageStart = Date.now();
-    const authorContext = this.resolveAuthorContext(message);
-    this.emitTurnStage(message, startTime, turnId, requestId, 'trust', turnCallType, {
-      durationMs: Date.now() - trustStageStart,
-      trustLevel: authorContext.trustLevel,
-      canonicalContactKey: authorContext.canonicalContactKey ?? null,
-    });
-
-    this.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
-
-    // Record user message in session (JSONL append = L0 archival)
-    const userSessionEntryId = this.recordUserMessage(
-      message,
-      turnId,
-      requestId,
-      authorContext.trustLevel,
-      authorContext.canonicalContactKey,
-    );
-    const emotionSessionId = this.resolveSessionChannelId(message.channelId);
-
-    try {
-      const emotionSnapshot = await this.emotionSelfModelRuntime.observeEmotionState(
-        message.content,
-        emotionSessionId,
-      );
-      const emotionAppraisalChain = this.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
-      const trustLevel = authorContext.trustLevel;
-      const channelType = this.resolveChannelType(message);
-      const memoryProvider = this.memoryProvider as ProactiveMemoryProvider | null;
-      this.ensureModel(message);
-      const promptSnapshot = this.captureTurnPromptSnapshot({ channelType, taskKind });
-      const sessionContextSnapshot = typeof (this.sessionManager as SessionManager & {
-        captureTurnContextSnapshot?: SessionManager['captureTurnContextSnapshot'];
-      }).captureTurnContextSnapshot === 'function'
-        ? this.sessionManager.captureTurnContextSnapshot(
-          message.channelId,
-          authorContext.canonicalContactKey ?? message.authorId,
-          channelMeta,
-          authorContext.continuityFallbackKeys,
-          turnBudgetCharacteristics,
-        )
-        : undefined;
-      const memorySnapshot = memoryProvider && typeof memoryProvider.captureTurnMemorySnapshot === 'function'
-        ? await memoryProvider.captureTurnMemorySnapshot(
-          message.content,
-          message.channelId,
-          trustLevel,
-          channelMeta,
-          authorContext.canonicalContactKey,
-          turnBudgetCharacteristics,
-        )
-        : undefined;
-      const turnSnapshot: TurnSnapshot = {
+    return handleMessageForTurn({
+      eventBus: this.eventBus,
+      llmClient: this.llmClient,
+      sessionManager: this.sessionManager,
+      config: this.config,
+      runtimeMode: this.runtimeMode,
+      agent: this.agent,
+      bridge: this.bridge,
+      systemPrompt: this.systemPrompt,
+      memoryProvider: this.memoryProvider,
+      memoryExtractor: this.memoryExtractor,
+      skillsRuntime: this.skillsRuntime,
+      evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
+      emotionSelfModelRuntime: this.emotionSelfModelRuntime,
+      pinDeferredContinuationSessionContext: (deferredContinuationId, channelId) => this.pinDeferredContinuationSessionContext(
+        deferredContinuationId,
+        channelId,
+      ),
+      resolveTaskKind: (turnMessage) => this.resolveTaskKind(turnMessage),
+      buildTurnBudgetCharacteristics: (turnMessage, taskKind) => this.buildTurnBudgetCharacteristics(turnMessage, taskKind),
+      resolveTurnCallType: (turnMessage, taskKind) => this.resolveTurnCallType(turnMessage, taskKind),
+      buildTurnCorrelation: (turnMessage, callType, turnId, requestId) => this.buildTurnCorrelation(
+        turnMessage,
+        callType,
         turnId,
         requestId,
-        channelId: message.channelId,
-        capturedAt: Date.now(),
+      ),
+      withCorrelationPurpose: (correlation, purpose) => this.withCorrelationPurpose(correlation, purpose),
+      resolveAuthorContext: (turnMessage) => this.resolveAuthorContext(turnMessage),
+      emitTurnStage: (
+        turnMessage,
+        turnStartMs,
+        turnId,
+        requestId,
+        stage,
+        callType,
+        payload,
+      ) => this.emitTurnStage(turnMessage, turnStartMs, turnId, requestId, stage, callType, payload),
+      recordUserMessage: (turnMessage, turnId, requestId, trustLevel, canonicalContactKey) => this.recordUserMessage(
+        turnMessage,
+        turnId,
+        requestId,
         trustLevel,
-        ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
-        prompt: promptSnapshot,
-        ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
-        ...(memorySnapshot ? { memory: memorySnapshot } : {}),
-      };
-
-      // Retrieve relevant memories (empty string if no memory provider)
-      const memoryStageStart = Date.now();
-      const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
-        this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.memory'),
-        async () => {
-          const memoriesBlock = memoryProvider
-            ? memorySnapshot
-              ? await memoryProvider.retrieve(
-                message.content,
-                message.channelId,
-                trustLevel,
-                channelMeta,
-                authorContext.canonicalContactKey,
-                memorySnapshot,
-                turnBudgetCharacteristics,
-              )
-              : await memoryProvider.retrieve(
-                message.content,
-                message.channelId,
-                trustLevel,
-                channelMeta,
-                authorContext.canonicalContactKey,
-                undefined,
-                turnBudgetCharacteristics,
-              )
-            : '';
-          let proactiveRecallBlock = '';
-          if (memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function') {
-            try {
-              proactiveRecallBlock = memorySnapshot
-                ? await memoryProvider.retrieveProactiveRecall(
-                  message.channelId,
-                  trustLevel,
-                  channelMeta,
-                  authorContext.canonicalContactKey,
-                  memorySnapshot,
-                  turnBudgetCharacteristics,
-                )
-                : await memoryProvider.retrieveProactiveRecall(
-                  message.channelId,
-                  trustLevel,
-                  channelMeta,
-                  authorContext.canonicalContactKey,
-                  undefined,
-                  turnBudgetCharacteristics,
-                );
-            } catch (error) {
-              log.debug('Proactive recall skipped due to provider error', {
-                channelId: message.channelId,
-                error: toErrorMessage(error),
-              });
-            }
-          }
-          return { memoriesBlock, proactiveRecallBlock };
-        },
-      );
-      const memoryContextBlock = [memoriesBlock, proactiveRecallBlock]
-        .map(section => section.trim())
-        .filter(section => section.length > 0)
-        .join('\n\n');
-      const scratchpadBlock = this.buildScratchpadContextBlock();
-      this.emitTurnStage(message, startTime, turnId, requestId, 'memory', turnCallType, {
-        durationMs: Date.now() - memoryStageStart,
-        hasMemoryProvider: memoryProvider != null,
-        memoryChars: memoryContextBlock.length,
-        proactiveRecallChars: proactiveRecallBlock.length,
-        proactiveRecallIncluded: proactiveRecallBlock.length > 0,
-        scratchpadChars: scratchpadBlock.length,
-        scratchpadIncluded: scratchpadBlock.length > 0,
-      });
-
-      // Compose prompt context (default system prompt pipeline or per-turn override).
-      const runtimeNow = new Date();
-      const promptOverride = this.normalizeTurnPromptOverride(message);
-      const responseStyle = this.resolveResponseStyle(message, channelType, channelMeta);
-      const templateVariables = this.buildPromptTemplateVariables(
-        message,
-        authorContext.resolvedUserName,
+        canonicalContactKey,
+      ),
+      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
+      resolveChannelType: (turnMessage) => this.resolveChannelType(turnMessage),
+      ensureModel: (turnMessage) => this.ensureModel(turnMessage),
+      captureTurnPromptSnapshot: (ctx) => this.captureTurnPromptSnapshot(ctx),
+      buildScratchpadContextBlock: () => this.buildScratchpadContextBlock(),
+      normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
+      resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(
+        turnMessage,
+        channelType,
+        channelMeta,
+      ),
+      buildPromptTemplateVariables: (
+        turnMessage,
+        resolvedUserName,
         trustLevel,
         channelType,
-        authorContext.canonicalContactKey,
-        runtimeNow,
-      );
-      const preTurnInternalState = this.emotionSelfModelRuntime.computeInternalStateForTurn({
-        message,
-        responseText: '',
-        trustLevel,
-        canonicalContactKey: authorContext.canonicalContactKey,
-        emotionSnapshot,
-        toolCallCount: 0,
-        sessionChannelId: emotionSessionId,
-      });
-      const preTurnInternalStateSnapshotRef = buildInternalStateSnapshotRef(preTurnInternalState);
-      const preTurnMetacognitiveFlags = this.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
-        internalState: preTurnInternalState,
-        responseText: '',
-        toolCallCount: 0,
-        sessionChannelId: emotionSessionId,
-        retrievalProvenanceRefs,
-      });
-      this.currentInternalState = preTurnInternalState;
-      this.currentInternalStateSnapshotRef = preTurnInternalStateSnapshotRef;
-      this.currentMetacognitiveFlags = preTurnMetacognitiveFlags;
-      const runtimeContext = this.buildRuntimeContext(
-        message,
-        authorContext.resolvedUserName,
+        canonicalContactKey,
+        now,
+      ) => this.buildPromptTemplateVariables(
+        turnMessage,
+        resolvedUserName,
         trustLevel,
         channelType,
-        authorContext.canonicalContactKey,
+        canonicalContactKey,
+        now,
+      ),
+      setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
+        this.currentInternalState = state;
+        this.currentInternalStateSnapshotRef = snapshotRef;
+        this.currentMetacognitiveFlags = cloneMetacognitiveFlags(metacognitiveFlags);
+      },
+      buildRuntimeContext: (
+        turnMessage,
+        resolvedUserName,
+        trustLevel,
+        channelType,
+        canonicalContactKey,
         responseStyle,
-        runtimeNow,
+        now,
         taskKind,
         templateVariables,
-        preTurnInternalState,
-        preTurnMetacognitiveFlags,
-        emotionAppraisalChain,
-      );
-      let fullPrompt = '';
-
-      if (promptOverride.mode === 'default') {
-        const staticCacheKey = this.buildPromptPrefixCacheKey(
-          message,
-          channelType,
-          authorContext.canonicalContactKey,
-        );
-        const staticSettingsHash = this.buildStaticPromptSettingsHash(templateVariables);
-        const staticPrefix = this.resolveStaticPromptPrefix({
-          cacheKey: staticCacheKey,
-          staticPrefixTemplate: turnSnapshot.prompt?.staticPrefixTemplate ?? this.systemPrompt,
-          staticHash: turnSnapshot.prompt?.staticHash ?? this.hashPromptText(this.systemPrompt),
-          settingsHash: staticSettingsHash,
-          now: runtimeNow,
-          variables: templateVariables,
-        });
-        const personaHint = this.getPersonaAdaptation(
-          trustLevel,
-          preTurnInternalState,
-          preTurnMetacognitiveFlags,
-          templateVariables,
-        );
-        const dynamicSuffixTemplate = [turnSnapshot.prompt?.dynamicSuffixTemplate ?? '', personaHint]
-          .map(section => section?.trim() ?? '')
-          .filter(section => section.length > 0)
-          .join('\n\n');
-        const dynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
-          now: runtimeNow,
-          variables: templateVariables,
-        });
-        fullPrompt = [staticPrefix, dynamicSuffix, runtimeContext, scratchpadBlock]
-          .map(section => section.trim())
-          .filter(section => section.length > 0)
-          .join('\n\n');
-      } else {
-        const customPrompt = promptOverride.mode === 'custom'
-          ? (promptOverride.systemPrompt ?? '')
-          : '';
-        fullPrompt = [customPrompt, runtimeContext, scratchpadBlock]
-          .map(section => section.trim())
-          .filter(section => section.length > 0)
-          .join('\n\n');
-      }
-
-      // Build context (with auto-compaction + cross-channel continuity)
-      const contextStageStart = Date.now();
-      const context = await runWithRequestContext(
-        this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.context'),
-        async () => this.sessionManager.buildContext(
-          message.channelId,
-          fullPrompt,
-          memoryContextBlock,
-          this.llmClient,
-          authorContext.canonicalContactKey ?? message.authorId,
-          channelMeta,
-          authorContext.continuityFallbackKeys,
-          turnSnapshot.sessionContext,
-          memoryManifestSeed,
-          turnBudgetCharacteristics,
-        ),
-      );
-      this.emitTurnStage(message, startTime, turnId, requestId, 'context', turnCallType, {
-        durationMs: Date.now() - contextStageStart,
-        contextMessages: context.messages.length,
-        systemPromptChars: context.systemPrompt.length,
-        promptMode: promptOverride.mode,
-      });
-
-      const promptStageStart = Date.now();
-      let firstTokenAt: number;
-      let turnMessages: AgentMessage[] = [];
-      let turnUsage: TurnUsage;
-      let responseModel: string;
-      let responseText: string;
-      let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
-      let turnIntent: string | null = null;
-
-      const moaSettings = resolveMoaSettings(this.config, log);
-      if (moaSettings) {
-        const moaResult = await runMoaTurn({
-          llmClient: this.llmClient,
-          context,
-          message,
-          settings: moaSettings,
-          turnId,
-          requestId,
-          callType: turnCallType,
-          contextWindow: this.resolveContextWindow(),
-          emitTelemetry: (eventName, payload) => this.emitTelemetry(eventName, payload),
-        });
-        firstTokenAt = Date.now();
-        this.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
-          ttftMs: firstTokenAt - startTime,
-          source: 'fallback',
-        });
-        this.emitTurnStage(message, startTime, turnId, requestId, 'prompt', turnCallType, {
-          durationMs: Date.now() - promptStageStart,
-          ttftMs: firstTokenAt - startTime,
-          mode: 'moa',
-          rounds: moaResult.rounds,
-          stopReason: moaResult.stopReason,
-        });
-        turnUsage = moaResult.turnUsage;
-        responseModel = moaResult.model;
-        responseText = moaResult.output;
-      } else {
-        // Configure pi-agent-core Agent for this turn
-        this.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
-        const autoloadOutcome = this.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
-        turnIntent = autoloadOutcome.intent;
-        this.applyActiveToolsToAgentForTurn(
-          message,
-          taskKind,
-          turnCallType,
-          turnCorrelationBase,
-          autoloadOutcome,
-        );
-
-        // Convert ContextMessage[] to AgentMessage[] for the Agent.
-        // Exclude the last message (the user message we just recorded) —
-        // agent.prompt() will re-add it, avoiding duplication.
-        const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
-        const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
-        this.agent.replaceMessages(historyMessages);
-        const turnStartMessageIndex = this.agent.state.messages.length;
-
-        let streamFirstTokenAt: number | null = null;
-        const streamTelemetryBus = this.eventBus as unknown as {
-          on: (event: string, handler: (data: { channelId: string; text: string }) => void) => () => void;
-        };
-        const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
-          if (channelId !== message.channelId || streamFirstTokenAt != null) return;
-          streamFirstTokenAt = Date.now();
-          this.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
-            ttftMs: streamFirstTokenAt - startTime,
-            source: 'stream',
-          });
-        });
-
-        // Activate event bridge for this channel (streams deltas + tool events to EventBus)
-        const bridgeToken = this.bridge.setChannel(message.channelId, {
-          turnId,
-          requestId,
-          callType: turnCallType,
-          originType: turnCallType,
-          originStage: 'agent.turn.prompt',
-          purpose: 'agent.turn.prompt',
-        });
-        this.activeTurnCorrelation = turnCorrelationBase;
-        this.activeTurnTaskKind = taskKind ?? null;
-        this.activeTurnIntent = autoloadOutcome.intent;
-        const turnUserContent = await buildTurnUserContent({
-          message,
-          llmClient: this.llmClient,
-          runtimeMode: this.runtimeMode,
-          logger: log,
-        });
-        try {
-          // Run the agent — pi-agent-core handles tool loop internally
-          await runWithRequestContext(
-            this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
-            async () => this.agent.prompt({
-              role: 'user',
-              content: turnUserContent,
-              timestamp: Date.now(),
-            } satisfies UserMessage),
-          );
-        } finally {
-          unsubscribeFirstToken();
-          this.bridge.clearChannel(bridgeToken);
-          this.activeTurnCorrelation = null;
-          this.activeTurnTaskKind = null;
-          this.activeTurnIntent = null;
-        }
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
-        if (streamFirstTokenAt == null) {
-          streamFirstTokenAt = Date.now();
-          this.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
-            ttftMs: streamFirstTokenAt - startTime,
-            source: 'fallback',
-          });
-        }
-        this.emitTurnStage(message, startTime, turnId, requestId, 'prompt', turnCallType, {
-          durationMs: Date.now() - promptStageStart,
-          ttftMs: streamFirstTokenAt - startTime,
-        });
-
-        turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
-        turnUsage = this.accumulateTurnUsage(turnMessages);
-        responseModel = this.agent.state.model.id;
-        firstTokenAt = streamFirstTokenAt;
-
-        // Extract response from agent state (last assistant message)
-        responseText = this.extractResponseText();
-        if (hasVisionAttachments(message) && responseText.trim().length === 0) {
-          const assistantMessage = this.getLatestAssistantMessage();
-          log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
-            channelId: message.channelId,
-            model: this.agent.state.model.id,
-            stopReason: assistantMessage?.stopReason ?? null,
-            errorMessage: assistantMessage?.errorMessage ?? null,
-          });
-
-          // Recovery falls back to the chat slot, but replays transport-normalized
-          // user content instead of injecting synthetic assistant/user wording.
-          try {
-            const recoveryModel = resolveModel(this.config, 'chat');
-            this.agent.setModel(recoveryModel);
-            responseModel = recoveryModel.id;
-          } catch (error) {
-            log.warn('Vision recovery model resolution failed; keeping current model', {
-              channelId: message.channelId,
-              error: toErrorMessage(error),
-            });
-          }
-
-          const replayTransportContent = message.content.trim();
-          let recoveryAttempts = 0;
-          const runVisionRecoveryPrompt = async (
-            content: UserMessage['content'],
-            requestSuffix: string,
-            originStage: string,
-          ): Promise<void> => {
-            const bridgeToken = this.bridge.setChannel(message.channelId, {
-              turnId,
-              requestId: `${requestId}:${requestSuffix}`,
-              callType: turnCallType,
-              originType: turnCallType,
-              originStage,
-              purpose: originStage,
-            });
-            this.activeTurnCorrelation = turnCorrelationBase;
-            try {
-              await runWithRequestContext(
-                this.withCorrelationPurpose(turnCorrelationBase, originStage),
-                async () => this.agent.prompt({
-                  role: 'user',
-                  content,
-                  timestamp: Date.now(),
-                } satisfies UserMessage),
-              );
-            } finally {
-              this.bridge.clearChannel(bridgeToken);
-              this.activeTurnCorrelation = null;
-            }
-          };
-
-          if (replayTransportContent.length > 0) {
-            await runVisionRecoveryPrompt(
-              replayTransportContent,
-              'vision-recovery',
-              'agent.turn.vision_recovery',
-            );
-            recoveryAttempts += 1;
-
-            turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
-            turnUsage = this.accumulateTurnUsage(turnMessages);
-            responseModel = this.agent.state.model.id;
-            responseText = this.extractResponseText();
-
-            if (responseText.trim().length === 0) {
-              log.warn('Vision recovery replay remained empty; retrying once with same transport content', {
-                channelId: message.channelId,
-                model: this.agent.state.model.id,
-              });
-              await runVisionRecoveryPrompt(
-                replayTransportContent,
-                'vision-recovery-retry',
-                'agent.turn.vision_recovery_retry',
-              );
-              recoveryAttempts += 1;
-
-              turnMessages = this.agent.state.messages.slice(turnStartMessageIndex);
-              turnUsage = this.accumulateTurnUsage(turnMessages);
-              responseModel = this.agent.state.model.id;
-              responseText = this.extractResponseText();
-            }
-          } else {
-            log.warn('Vision recovery replay skipped because transport-normalized content was empty', {
-              channelId: message.channelId,
-            });
-          }
-
-          const finalContentEmpty = responseText.trim().length === 0;
-          fallbackDiagnostics = {
-            fallback: {
-              code: 'vision_empty_response',
-              strategy: 'replay_transport_content',
-              attempts: recoveryAttempts,
-              finalContentEmpty,
-              ...(assistantMessage?.stopReason ? { previousStopReason: assistantMessage.stopReason } : {}),
-              ...(assistantMessage?.errorMessage ? { previousErrorMessage: assistantMessage.errorMessage } : {}),
-            },
-          };
-          this.emitTelemetry('agent.turn.fallback', {
-            channelId: message.channelId,
-            channelType: message.channelType,
-            ...fallbackDiagnostics.fallback,
-            ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.fallback'),
-          });
-
-          if (finalContentEmpty) {
-            log.warn('Vision turn remained empty after non-fabricating recovery replay', {
-              channelId: message.channelId,
-              model: this.agent.state.model.id,
-            });
-          }
-        }
-      }
-      let safeResponseText = responseText;
-      let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
-      let assistantSessionEntryId: number | null = null;
-
-      if (channelVisibility === 'broadcast') {
-        const visibilityScope = broadcastVisibilityScope ?? 'public_only';
-        const classification = classifyBroadcastDraft(responseText);
-        const operatorApproval = visibilityScope === 'approved_private_context';
-        const approvalRequired = classification.risky && !operatorApproval;
-        const provenanceRefs = [...new Set(retrievalProvenanceRefs)];
-
-        broadcastSafetyMeta = {
-          visibilityScope,
-          operatorApproval,
-          risky: classification.risky,
-          signals: classification.signals,
-          approvalRequired,
-          provenanceRefs,
-        };
-
-        this.emitTelemetry('broadcast.pre_send.classified', {
-          channelId: message.channelId,
-          risky: classification.risky,
-          signals: classification.signals,
-          visibilityScope,
-          ...this.withCorrelationPurpose(turnCorrelationBase, 'broadcast.pre_send.classified'),
-        });
-
-        if (approvalRequired) {
-          this.emitTelemetry('broadcast.approval.required', {
-            channelId: message.channelId,
-            signals: classification.signals,
-            visibilityScope,
-            draftLength: responseText.length,
-            ...this.withCorrelationPurpose(turnCorrelationBase, 'broadcast.approval.required'),
-          });
-          this.sessionManager.appendSystemNote(
-            message.channelId,
-            `Broadcast draft held for approval (${classification.signals.join(', ') || 'risk'} risk).`,
-          );
-          safeResponseText = '';
-        }
-
-        const provenancePayload = {
-          channelId: message.channelId,
-          visibilityScope,
-          operatorApproval,
-          risky: classification.risky,
-          signals: classification.signals,
-          provenanceRefs,
-          contextMessageCount: context.messages.length,
-          memoryContextChars: memoryContextBlock.length,
-          ...this.withCorrelationPurpose(turnCorrelationBase, 'broadcast.provenance'),
-        };
-        this.emitTelemetry('broadcast.provenance', provenancePayload);
-        log.info('Broadcast provenance', provenancePayload);
-      }
-
-      const internalState = this.emotionSelfModelRuntime.computeInternalStateForTurn({
-        message,
-        responseText,
-        trustLevel: authorContext.trustLevel,
-        canonicalContactKey: authorContext.canonicalContactKey,
-        emotionSnapshot,
-        toolCallCount: turnUsage.toolCalls,
-        sessionChannelId: emotionSessionId,
-      });
-      this.currentInternalState = internalState;
-      const internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
-      this.currentInternalStateSnapshotRef = internalStateSnapshotRef;
-      const metacognitiveFlags = this.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
         internalState,
-        responseText,
-        toolCallCount: turnUsage.toolCalls,
-        sessionChannelId: emotionSessionId,
-        retrievalProvenanceRefs,
-      });
-      this.currentMetacognitiveFlags = metacognitiveFlags;
-
-      this.recordToolObservations(
-        message,
+        metacognitiveFlags,
+        emotionAppraisalChain,
+      ) => this.buildRuntimeContext(
+        turnMessage,
+        resolvedUserName,
+        trustLevel,
+        channelType,
+        canonicalContactKey,
+        responseStyle,
+        now,
+        taskKind,
+        templateVariables,
+        internalState,
+        metacognitiveFlags,
+        emotionAppraisalChain,
+      ),
+      buildPromptPrefixCacheKey: (turnMessage, channelType, canonicalContactKey) => this.buildPromptPrefixCacheKey(
+        turnMessage,
+        channelType,
+        canonicalContactKey,
+      ),
+      buildStaticPromptSettingsHash: (templateVariables) => this.buildStaticPromptSettingsHash(templateVariables),
+      resolveStaticPromptPrefix: (params) => this.resolveStaticPromptPrefix(params),
+      hashPromptText: (text) => this.hashPromptText(text),
+      getPersonaAdaptation: (trustLevel, internalState, metacognitiveFlags, templateVariables) => this.getPersonaAdaptation(
+        trustLevel,
+        internalState,
+        metacognitiveFlags,
+        templateVariables,
+      ),
+      resolveContextWindow: () => this.resolveContextWindow(),
+      preloadExtendedToolsForTurn: (turnMessage, taskKind, correlation) => this.preloadExtendedToolsForTurn(
+        turnMessage,
+        taskKind,
+        correlation,
+      ),
+      applyActiveToolsToAgentForTurn: (
+        turnMessage,
+        taskKind,
+        callType,
+        correlation,
+        autoloadOutcome,
+      ) => this.applyActiveToolsToAgentForTurn(turnMessage, taskKind, callType, correlation, autoloadOutcome),
+      setActiveTurnContext: (correlation, taskKind, intent) => {
+        this.activeTurnCorrelation = correlation;
+        this.activeTurnTaskKind = taskKind;
+        this.activeTurnIntent = intent;
+      },
+      clearActiveTurnContext: () => {
+        this.activeTurnCorrelation = null;
+        this.activeTurnTaskKind = null;
+        this.activeTurnIntent = null;
+      },
+      setActiveTurnCorrelation: (correlation) => {
+        this.activeTurnCorrelation = correlation;
+      },
+      extractResponseText: () => this.extractResponseText(),
+      getLatestAssistantMessage: () => this.getLatestAssistantMessage(),
+      accumulateTurnUsage: (messages) => this.accumulateTurnUsage(messages),
+      recordToolObservations: (turnMessage, turnId, requestId, turnMessages, trustLevel) => this.recordToolObservations(
+        turnMessage,
         turnId,
         requestId,
         turnMessages,
-        authorContext.trustLevel,
-      );
-
-      // Record assistant message (JSONL append = L0 archival)
-      if (!broadcastSafetyMeta?.approvalRequired) {
-        assistantSessionEntryId = this.recordAssistantMessage(
-          message,
-          turnId,
-          requestId,
-          safeResponseText,
-          authorContext.trustLevel,
-          authorContext.canonicalContactKey,
-          emotionSnapshot,
-        );
-      }
-
-      // Self-reflection nudge: after complex multi-tool turns, suggest saving as a skill
-      if (this.skillsRuntime) {
-        const toolSummary = this.buildTurnToolSummary(turnMessages);
-        const nudge = this.reflectionNudge.evaluate(toolSummary);
-        if (nudge) {
-          this.sessionManager.appendSystemNote(message.channelId, nudge);
-        }
-      }
-
-      const completedAt = Date.now();
-      const agentResponse: AgentResponse = {
-        content: safeResponseText,
-        channelId: message.channelId,
-        metadata: {
-          model: responseModel,
-          inputTokens: turnUsage.inputTokens,
-          outputTokens: turnUsage.outputTokens,
-          durationMs: completedAt - startTime,
-          internalState: cloneInternalState(internalState),
-          internalStateSnapshotRef,
-          metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
-          ...(fallbackDiagnostics ? { diagnostics: fallbackDiagnostics } : {}),
-          ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
-        },
-      };
-      const inferredPostTurnActions = await this.inferPostTurnActions({
-        message,
-        response: agentResponse,
-        turnMessages,
+        trustLevel,
+      ),
+      recordAssistantMessage: (
+        turnMessage,
         turnId,
-        completedAt,
-        contextManifest: context.manifest,
-        ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
-      });
-      this.sessionManager.recordTurn(
-        this.buildTurnRecord({
-          message,
-          turnId,
-          requestId,
-          startedAt: startTime,
-          completedAt,
-          userSessionEntryId,
-          assistantSessionEntryId,
-          response: agentResponse,
-          turnMessages,
-          promptMode: promptOverride.mode,
-          promptText: fullPrompt,
-          contextMessageCount: context.messages.length,
-          memoryContextChars: memoryContextBlock.length,
-          trustLevel: authorContext.trustLevel,
-          canonicalContactKey: authorContext.canonicalContactKey,
-          retrievalProvenanceRefs,
-          turnSnapshot,
-          internalStateSnapshotRef,
-        }),
-      );
-
-      await this.eventBus.emit('agent.turn.end', {
-        message,
-        response: agentResponse,
-        ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
-      });
-      if (inferredPostTurnActions.length > 0) {
-        await this.eventBus.emit('agent.post_turn.actions.inferred', {
-          message,
-          response: agentResponse,
-          actions: inferredPostTurnActions,
-          ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.post_turn.actions.inferred'),
-        });
-      }
-      if (deferredContinuationId && turnCallType === 'background') {
-        const completionSignal = this.queueBackgroundContinuationCompletion(
-          deferredContinuationId,
-          message,
-          agentResponse,
-          taskKind ?? null,
-          turnIntent,
-        );
-        await this.emitBackgroundContinuationEvent(
-          'agent.background.continuation.completed',
-          {
-            channelId: message.channelId,
-            continuationId: completionSignal.continuationId,
-            sourceMessageId: completionSignal.sourceMessageId,
-            deliverySessionId: completionSignal.deliverySessionId,
-            queuedForPostTurnDelivery: completionSignal.queuedForPostTurnDelivery,
-            hasDeliverableContent: completionSignal.hasDeliverableContent,
-            notifyUser: completionSignal.notifyUser,
-            notificationReason: completionSignal.notificationReason,
-            origin: completionSignal.origin,
-            urgency: completionSignal.urgency,
-            channelContext: completionSignal.channelContext,
-            completionAgeMs: completionSignal.completionAgeMs,
-            stale: completionSignal.stale,
-            taskKind: completionSignal.taskKind,
-            intent: completionSignal.intent,
-            completedAt: completionSignal.completedAt,
-            queueDepth: completionSignal.queueDepth,
-            ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.completed'),
-          },
-        );
-      } else if (turnCallType === 'chat') {
-        const postTurnDeliveries = this.dequeueBackgroundContinuationDeliveries(
-          this.resolveSessionChannelId(message.channelId),
-        );
-        if (postTurnDeliveries.length > 0) {
-          await this.emitBackgroundContinuationEvent(
-            'agent.background.continuation.post_turn_delivery',
-            {
-              channelId: message.channelId,
-              deliverySessionId: this.resolveSessionChannelId(message.channelId),
-              deliveries: postTurnDeliveries,
-              ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.post_turn_delivery'),
-            },
-          );
-        }
-      }
-      await this.eventBus.emit('agent.turn.usage', {
-        message,
-        usage: turnUsage,
-        ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
-      });
-      this.emitTurnStage(message, startTime, turnId, requestId, 'end', turnCallType, {
-        durationMs: completedAt - startTime,
-        ttftMs: firstTokenAt - startTime,
-        inputTokens: turnUsage.inputTokens,
-        outputTokens: turnUsage.outputTokens,
-      });
-
-      // Trigger memory extraction (fire-and-forget)
-      this.memoryExtractor?.maybeExtract(
-        message.channelId,
-        authorContext.canonicalContactKey,
+        requestId,
+        responseText,
+        trustLevel,
+        canonicalContactKey,
+        emotionSnapshot,
+      ) => this.recordAssistantMessage(
+        turnMessage,
         turnId,
-      ).catch(err => {
-        log.error('Memory extraction error', { error: String(err) });
-      });
-
-      void this.runIntentionPostTurnHooks({
-        message,
-        response: agentResponse,
-        turnMessages,
-        turnId,
-        completedAt,
-        ...(authorContext.canonicalContactKey
-          ? { canonicalContactKey: authorContext.canonicalContactKey }
-          : {}),
-      }).catch((error) => {
-        log.error('Intention post-turn hook dispatch error', {
-          channelId: message.channelId,
-          error: toErrorMessage(error),
-        });
-      });
-
-      void this.emotionSelfModelRuntime.triggerEmotionAppraisal({
-        sessionChannelId: emotionSessionId,
-        turnId,
-        internalState,
-        templateVariables,
-      }).catch((error) => {
-        log.error('Emotion appraisal error', {
-          channelId: message.channelId,
-          error: toErrorMessage(error),
-        });
-      });
-
-      return agentResponse;
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      await this.eventBus.emit('agent.error', {
-        message,
-        error: err,
-        ...this.withCorrelationPurpose(turnCorrelationBase, 'agent.error'),
-      });
-      throw err;
-    } finally {
-      unsubscribeRetrieval();
-      restorePinnedSessionContext();
-    }
+        requestId,
+        responseText,
+        trustLevel,
+        canonicalContactKey,
+        emotionSnapshot,
+      ),
+      buildTurnToolSummary: (turnMessages) => this.buildTurnToolSummary(turnMessages),
+      inferPostTurnActions: (context) => this.inferPostTurnActions(context),
+      buildTurnRecord: (input) => this.buildTurnRecord(input),
+      queueBackgroundContinuationCompletion: (
+        deferredContinuationId,
+        turnMessage,
+        response,
+        taskKind,
+        intent,
+      ) => this.queueBackgroundContinuationCompletion(deferredContinuationId, turnMessage, response, taskKind, intent),
+      emitBackgroundContinuationEvent: (eventName, payload) => this.emitBackgroundContinuationEvent(eventName, payload),
+      dequeueBackgroundContinuationDeliveries: (deliverySessionId) => this.dequeueBackgroundContinuationDeliveries(
+        deliverySessionId,
+      ),
+      emitTelemetry: (eventName, payload) => this.emitTelemetry(eventName, payload),
+      runIntentionPostTurnHooks: (context) => this.runIntentionPostTurnHooks(context),
+    }, message);
   }
 
   // ── Private helpers ──

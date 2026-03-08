@@ -82,6 +82,7 @@ import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
 } from './runtime/channel-lifecycle.js';
+import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -92,6 +93,7 @@ const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;
 const DEFAULT_SHELL_EXEC_OUTPUT_CHARS = 20_000;
 const DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP = 100_000;
+const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 const ALL_BEADS_ACTIONS: readonly BeadsAction[] = [
   'ready',
   'show',
@@ -893,28 +895,15 @@ async function main(): Promise<void> {
     await stopPromise;
   };
 
-  let shutdownPromise: Promise<void> | null = null;
-  const shutdown = async (signal: string) => {
-    if (shutdownPromise) {
-      log.warn('Shutdown already in progress; ignoring additional signal', { signal });
-      await shutdownPromise;
-      return;
-    }
-
-    shutdownPromise = (async () => {
-      log.info(`Received ${signal}, shutting down...`);
-      await stop();
-      process.exit(0);
-    })().catch((error) => {
-      log.error('Graceful shutdown failed; forcing exit', {
-        signal,
-        error: String(error),
-      });
-      process.exit(1);
-    });
-
-    await shutdownPromise;
-  };
+  const shutdown = createSignalShutdownHandler({
+    logger: log,
+    runGracefulShutdown: stop,
+    exit: (code) => { process.exit(code); },
+    forceExitTimeoutMs: parsePositiveIntEnv(
+      process.env.SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+      DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+    ),
+  });
 
   process.on('SIGINT', () => {
     void shutdown('SIGINT').catch((error) => {

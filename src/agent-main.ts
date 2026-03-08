@@ -139,11 +139,13 @@ import { wireContextFeedbackRuntime } from './context-feedback/runtime.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from './runtime/env-parsing.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
 import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
+import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
+const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
@@ -1096,28 +1098,15 @@ async function main(): Promise<void> {
 
   // ── Graceful shutdown ──
 
-  let shutdownPromise: Promise<void> | null = null;
-  const shutdown = async (signal: string) => {
-    if (shutdownPromise) {
-      log.warn('Shutdown already in progress; ignoring additional signal', { signal });
-      await shutdownPromise;
-      return;
-    }
-
-    shutdownPromise = (async () => {
-      log.info(`Received ${signal}, shutting down...`);
-      await stopFn();
-      process.exit(0);
-    })().catch((error) => {
-      log.error('Graceful shutdown failed; forcing exit', {
-        signal,
-        error: String(error),
-      });
-      process.exit(1);
-    });
-
-    await shutdownPromise;
-  };
+  const shutdown = createSignalShutdownHandler({
+    logger: log,
+    runGracefulShutdown: stopFn,
+    exit: (code) => { process.exit(code); },
+    forceExitTimeoutMs: parsePositiveIntEnv(
+      process.env.SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+      DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+    ),
+  });
 
   process.on('SIGINT', () => {
     void shutdown('SIGINT').catch((error) => {

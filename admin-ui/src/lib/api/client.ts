@@ -1,4 +1,7 @@
 import { getToken } from '$lib/stores/auth.svelte';
+import { ApiError } from './errors';
+
+export { ApiError } from './errors';
 
 const API_BASE = '';  // Relative — Vite proxy handles /api/*
 
@@ -7,16 +10,6 @@ function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
   return headers;
-}
-
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public statusText: string,
-    public body?: string
-  ) {
-    super(`${status} ${statusText}`);
-  }
 }
 
 export async function apiGet<T>(path: string): Promise<T> {

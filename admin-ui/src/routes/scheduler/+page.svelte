@@ -8,6 +8,7 @@
     updateReflectionTemplate,
   } from '$lib/api/endpoints/scheduler';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
+  import { schedulerLoadErrorMessage, shouldUseSchedulerFallback } from '$lib/scheduler/fallback';
   import type {
     RecurringCadence,
     ReflectionTemplate,
@@ -256,7 +257,14 @@
         }
       }
       return;
-    } catch {
+    } catch (schedulerError) {
+      if (!shouldUseSchedulerFallback(schedulerError)) {
+        useFallback = false;
+        error = schedulerLoadErrorMessage(schedulerError);
+        loading = false;
+        return;
+      }
+
       // Endpoint may not exist yet -- fall back to dashboard stats
     }
 
@@ -264,8 +272,8 @@
       const dashData = await getDashboard();
       dashboardTaskCount = dashData.stats.schedulerTasks;
       useFallback = true;
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load scheduler data';
+    } catch (dashboardError) {
+      error = schedulerLoadErrorMessage(dashboardError);
     } finally {
       loading = false;
     }

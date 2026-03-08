@@ -3,25 +3,26 @@ import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-const tracked = execSync('git ls-files -z', { encoding: 'utf8' })
-  .split('\0')
-  .filter(Boolean);
+export const SELF_PATH = 'scripts/public-sanitize-check.mjs';
+export const DEFAULT_LOCAL_BLOCKLIST_PATH = 'workspace/sanitize/local-blocklist.json';
 
-const SELF_PATH = 'scripts/public-sanitize-check.mjs';
-const DEFAULT_LOCAL_BLOCKLIST_PATH = 'workspace/sanitize/local-blocklist.json';
+// Historical issue text is intentionally preserved in this tracking log.
+const EXCLUDED_TRACKED_PATHS = new Set([
+  '.beads/issues.jsonl',
+]);
 
-const binaryExt = new Set([
+const BINARY_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.zip', '.gz', '.tar', '.woff', '.woff2',
 ]);
 
-const forbiddenPathRules = [
+const FORBIDDEN_PATH_RULES = [
   {
     name: 'character-card-artifact',
     test: (file) => /(^|\/)(character\.json|.*\.charx)$/i.test(file),
   },
 ];
 
-const textRules = [
+const TEXT_RULES = [
   { name: 'token-telegram', regex: /\b\d{8,}:[A-Za-z0-9_-]{20,}\b/g },
   { name: 'token-openai-like', regex: /\bsk-[A-Za-z0-9]{20,}\b/g },
   { name: 'token-github-pat', regex: /\bghp_[A-Za-z0-9]{20,}\b/g },
@@ -32,13 +33,18 @@ const textRules = [
   },
 ];
 
+/** @param {string} maybePath */
+function toPosixRelativePath(maybePath) {
+  return maybePath.split(path.sep).join('/');
+}
+
 function resolveLocalBlocklistPath() {
   const configured = process.env.PUBLIC_SANITIZE_LOCAL_BLOCKLIST?.trim();
   if (!configured) return DEFAULT_LOCAL_BLOCKLIST_PATH;
   return path.isAbsolute(configured) ? configured : path.resolve(configured);
 }
 
-function loadLocalBlocklist() {
+export function loadLocalBlocklist() {
   const localPath = resolveLocalBlocklistPath();
   if (!existsSync(localPath)) {
     return {
@@ -78,7 +84,20 @@ function loadLocalBlocklist() {
   };
 }
 
-const localBlocklist = loadLocalBlocklist();
+/** @param {string} file */
+export function shouldSkipTrackedFile(file) {
+  const normalized = toPosixRelativePath(file);
+  if (normalized === SELF_PATH) return true;
+  return EXCLUDED_TRACKED_PATHS.has(normalized);
+}
+
+/** @param {string} file */
+export function shouldScanTextContent(file) {
+  const normalized = toPosixRelativePath(file);
+  if (shouldSkipTrackedFile(normalized)) return false;
+  const ext = path.extname(normalized).toLowerCase();
+  return !BINARY_EXTENSIONS.has(ext);
+}
 
 /** @param {string} text @param {number} idx */
 function lineForIndex(text, idx) {
@@ -90,66 +109,113 @@ function lineForIndex(text, idx) {
 }
 
 /** @type {Array<{file:string, line:number, rule:string, snippet:string}>} */
-const violations = [];
-
-for (const file of tracked) {
-  // Avoid matching this scanner's own regex literals.
-  if (file === SELF_PATH) continue;
-
-  for (const rule of forbiddenPathRules) {
-    if (rule.test(file)) {
-      violations.push({ file, line: 1, rule: rule.name, snippet: file });
+function collectTextViolations(file, text, rules) {
+  /** @type {Array<{file:string, line:number, rule:string, snippet:string}>} */
+  const violations = [];
+  for (const rule of rules) {
+    const regex = new RegExp(rule.regex.source, rule.regex.flags);
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const line = lineForIndex(text, match.index);
+      const snippet = match[0].slice(0, 80);
+      violations.push({ file, line, rule: rule.name, snippet });
+      if (regex.lastIndex === match.index) regex.lastIndex += 1;
     }
   }
-  for (const localRule of localBlocklist.forbiddenPathRegex) {
-    if (localRule.regex.test(file)) {
-      violations.push({ file, line: 1, rule: localRule.name, snippet: file });
+  return violations;
+}
+
+/** @returns {string[]} */
+function listTrackedFiles() {
+  return execSync('git ls-files -z', { encoding: 'utf8' })
+    .split('\0')
+    .filter(Boolean)
+    .map((file) => toPosixRelativePath(file));
+}
+
+/**
+ * @param {string[]} trackedFiles
+ * @param {{
+ *   localBlocklist?: {
+ *     localPath: string;
+ *     forbiddenPathRegex: Array<{name:string, regex:RegExp}>;
+ *     textRuleRegex: Array<{name:string, regex:RegExp}>;
+ *     loaded: boolean;
+ *   };
+ *   readTextFile?: (file: string) => string;
+ * }} [options]
+ */
+export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
+  const localBlocklist = options.localBlocklist ?? loadLocalBlocklist();
+  const readTextFile = options.readTextFile ?? ((file) => readFileSync(file, 'utf8'));
+
+  /** @type {Array<{file:string, line:number, rule:string, snippet:string}>} */
+  const violations = [];
+
+  for (const trackedFile of trackedFiles.map((file) => toPosixRelativePath(file))) {
+    if (shouldSkipTrackedFile(trackedFile)) {
+      continue;
     }
+
+    for (const rule of FORBIDDEN_PATH_RULES) {
+      if (rule.test(trackedFile)) {
+        violations.push({ file: trackedFile, line: 1, rule: rule.name, snippet: trackedFile });
+      }
+    }
+    for (const localRule of localBlocklist.forbiddenPathRegex) {
+      if (localRule.regex.test(trackedFile)) {
+        violations.push({ file: trackedFile, line: 1, rule: localRule.name, snippet: trackedFile });
+      }
+    }
+
+    if (!shouldScanTextContent(trackedFile)) {
+      continue;
+    }
+
+    const text = readTextFile(trackedFile);
+    violations.push(...collectTextViolations(trackedFile, text, TEXT_RULES));
+    violations.push(...collectTextViolations(trackedFile, text, localBlocklist.textRuleRegex));
   }
 
-  const ext = path.extname(file).toLowerCase();
-  if (binaryExt.has(ext)) continue;
+  return {
+    violations,
+    localBlocklist,
+  };
+}
 
-  let text;
+export function scanRepositoryPublicSanitize() {
+  const trackedFiles = listTrackedFiles();
+  const result = scanPublicSanitizeTrackedFiles(trackedFiles);
+  return {
+    ...result,
+    trackedFileCount: trackedFiles.length,
+  };
+}
+
+function main() {
   try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    continue;
-  }
+    const result = scanRepositoryPublicSanitize();
+    if (result.violations.length > 0) {
+      console.error('Public-sanitize check failed. Violations found:');
+      for (const violation of result.violations) {
+        console.error(`- ${violation.file}:${violation.line} [${violation.rule}] ${violation.snippet}`);
+      }
+      process.exit(1);
+    }
 
-  for (const rule of textRules) {
-    const regex = new RegExp(rule.regex.source, rule.regex.flags);
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-      const line = lineForIndex(text, match.index);
-      const snippet = match[0].slice(0, 80);
-      violations.push({ file, line, rule: rule.name, snippet });
-      if (regex.lastIndex === match.index) regex.lastIndex += 1;
+    console.log('Public-sanitize check passed. No blocked PII/story/token patterns found.');
+    if (result.localBlocklist.loaded) {
+      console.log(`Local blocklist loaded from ${result.localBlocklist.localPath}`);
+    } else {
+      console.log(`No local blocklist found at ${result.localBlocklist.localPath} (generic checks only).`);
     }
-  }
-  for (const rule of localBlocklist.textRuleRegex) {
-    const regex = new RegExp(rule.regex.source, rule.regex.flags);
-    let match;
-    while ((match = regex.exec(text)) !== null) {
-      const line = lineForIndex(text, match.index);
-      const snippet = match[0].slice(0, 80);
-      violations.push({ file, line, rule: rule.name, snippet });
-      if (regex.lastIndex === match.index) regex.lastIndex += 1;
-    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Public-sanitize check failed to complete: ${message}`);
+    process.exit(1);
   }
 }
 
-if (violations.length > 0) {
-  console.error('Public-sanitize check failed. Violations found:');
-  for (const v of violations) {
-    console.error(`- ${v.file}:${v.line} [${v.rule}] ${v.snippet}`);
-  }
-  process.exit(1);
-}
-
-console.log('Public-sanitize check passed. No blocked PII/story/token patterns found.');
-if (localBlocklist.loaded) {
-  console.log(`Local blocklist loaded from ${localBlocklist.localPath}`);
-} else {
-  console.log(`No local blocklist found at ${localBlocklist.localPath} (generic checks only).`);
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
 }

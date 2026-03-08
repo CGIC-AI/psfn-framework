@@ -10,6 +10,7 @@ import {
   evaluateCorsPolicy,
   isLoopbackHost,
   normalizeCorsAllowedOrigins,
+  resolveApiCorsAllowedOrigins,
   resolveApiRequestPrincipal,
 } from './http-policy.js';
 
@@ -37,6 +38,44 @@ describe('normalizeCorsAllowedOrigins', () => {
         port: '3201',
       },
     ]);
+  });
+});
+
+describe('resolveApiCorsAllowedOrigins', () => {
+  it('derives admin host origin when explicit allowlist is empty', () => {
+    const origins = resolveApiCorsAllowedOrigins({
+      explicitAllowlist: [],
+      adminHost: 'purrsephone.local',
+      adminPort: 3001,
+    });
+
+    expect(origins).toEqual(['http://purrsephone.local:3001']);
+  });
+
+  it('merges explicit allowlist entries with derived admin origins', () => {
+    const origins = resolveApiCorsAllowedOrigins({
+      explicitAllowlist: [
+        'https://console.example',
+        'http://purrsephone.local:3001',
+      ],
+      adminHost: 'purrsephone.local',
+      adminPort: 3001,
+    });
+
+    expect(origins).toEqual([
+      'https://console.example',
+      'http://purrsephone.local:3001',
+    ]);
+  });
+
+  it('does not derive wildcard bind hosts and keeps explicit entries', () => {
+    const origins = resolveApiCorsAllowedOrigins({
+      explicitAllowlist: ['https://console.example', '*'],
+      adminHost: '0.0.0.0',
+      adminPort: 3001,
+    });
+
+    expect(origins).toEqual(['https://console.example']);
   });
 });
 

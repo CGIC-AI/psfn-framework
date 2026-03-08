@@ -142,6 +142,7 @@ import {
   parseCommaSeparatedEnv,
   parseExtractionDrainTimeoutMs,
 } from './runtime/env-parsing.js';
+import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
@@ -953,9 +954,15 @@ export class SubstrateRuntime implements Lifecycle {
     // API server — OpenAI-compatible endpoints
     const apiHost = process.env.API_HOST || undefined;
     const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
+    const adminHost = process.env.ADMIN_HOST || undefined;
+    const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
     if (apiPort) {
       const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
-      const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
+      const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
+        explicitAllowlist: parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST),
+        adminHost,
+        adminPort,
+      });
       const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
         agentLoop: this.agentLoop,
         eventBus: this.eventBus,
@@ -1150,11 +1157,10 @@ export class SubstrateRuntime implements Lifecycle {
       : null;
 
     // Admin GUI — Garden management surfaces
-    const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
     if (adminPort) {
       this.adminServer = new AdminServer({
         port: adminPort,
-        host: process.env.ADMIN_HOST || undefined,
+        host: adminHost,
         token: process.env.ADMIN_TOKEN || undefined,
         apiBaseUrl: process.env.API_BASE_URL,
         apiHost,

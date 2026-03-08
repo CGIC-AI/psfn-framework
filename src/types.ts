@@ -570,6 +570,7 @@ export interface SubstrateConfig {
   discordTriggerReactions?: string[];
   discordTriggerListenWindowMs?: number;
   characterName?: string;
+  uiThemeId?: string;
   voiceTargetGuildId?: string;
   voiceTargetUserId?: string;
   voiceReadyCueText?: string;
@@ -685,6 +686,7 @@ const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
 const DEFAULT_DEEPGRAM_MODEL = 'nova-3';
 const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
 const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
+export const DEFAULT_UI_THEME_ID = 'garden';
 
 export function loadConfig(): SubstrateConfig {
   const primaryModel = DEFAULT_PRIMARY_MODEL;
@@ -875,6 +877,7 @@ export function loadConfig(): SubstrateConfig {
     discordTriggerReactions: [...DEFAULT_DISCORD_TRIGGER_REACTIONS],
     discordTriggerListenWindowMs: DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS,
     characterName: '',
+    uiThemeId: DEFAULT_UI_THEME_ID,
     voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
     voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',

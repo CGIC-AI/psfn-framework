@@ -1786,6 +1786,7 @@ describe('AdminServer JSON API routes', () => {
       webFetchDomainAllowlist: ['example.com', 'internal.local'],
       promotedExtendedTools: ['memory.search', 'contacts.lookup'],
       chatApiBaseUrl: 'https://admin.example.test/api',
+      uiThemeId: 'generic-light',
       ttsProvider: 'disabled',
       sttProvider: 'disabled',
       moaEnabled: true,
@@ -1918,6 +1919,7 @@ describe('AdminServer JSON API routes', () => {
       thinkMaxWallTimeMs: 120000,
       thinkMaxSubQueries: 8,
       openRouterProviderOrder: ['parasail', 'openai'],
+      uiThemeId: 'generic-dark',
     };
 
     const patchRes = await request(

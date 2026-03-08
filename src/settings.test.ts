@@ -1686,6 +1686,19 @@ describe('settings', () => {
       expect(config.sessionRestartBehavior).toBe('new_session');
     });
 
+    it('round-trip save -> load -> apply preserves uiThemeId', () => {
+      saveSettings(tempDir, {
+        uiThemeId: 'generic-dark',
+      });
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.uiThemeId).toBe('generic-dark');
+
+      const config = makeConfig();
+      applySettings(config, loaded);
+      expect(config.uiThemeId).toBe('generic-dark');
+    });
+
     it('round-trip save -> load -> apply keeps existing custom capabilityTier when only settings.json is used', () => {
       saveSettings(tempDir, {
         capabilityTier: 'custom',

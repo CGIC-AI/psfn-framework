@@ -100,13 +100,6 @@ import {
   type ExtendedToolAutoloadPolicy,
   type ExtendedToolTurnClass,
 } from './extended-tool-autoload-policy.js';
-import {
-  decideBackgroundCompletionNotification,
-  type BackgroundCompletionChannelContext,
-  type BackgroundCompletionNotificationReason,
-  type BackgroundCompletionOrigin,
-  type BackgroundCompletionUrgency,
-} from './background-completion-policy.js';
 import { BackgroundCompletionDeliveryQueue } from './background-completion-delivery-queue.js';
 import type {
   AdaptiveLoadedExtendedToolState,
@@ -188,6 +181,24 @@ import {
   type ExtendedToolActivationOptions,
   type ExtendedToolActivationResult,
 } from './substrate-agent/adaptive-tools-runtime.js';
+import {
+  pinDeferredContinuationSessionContext as pinDeferredContinuationSessionContextForTurn,
+  queueBackgroundContinuationCompletion as queueBackgroundContinuationCompletionForTurn,
+  resolveSessionChannelId as resolveSessionChannelIdForTurn,
+  dequeueBackgroundContinuationDeliveries as dequeueBackgroundContinuationDeliveriesForTurn,
+  emitBackgroundContinuationEvent as emitBackgroundContinuationEventForTurn,
+  type BackgroundContinuationTaskRecord,
+  type BackgroundContinuationCompletionSignal,
+  type PendingBackgroundContinuationDelivery,
+} from './substrate-agent/background-continuation-runtime.js';
+import {
+  buildTurnCorrelation as buildTurnCorrelationForTurn,
+  buildTurnStageTelemetry as buildTurnStageTelemetryForTurn,
+  resolveTurnCallType as resolveTurnCallTypeForTurn,
+  withAdaptiveCorrelation as withAdaptiveCorrelationForTurn,
+  withCorrelationPurpose as withCorrelationPurposeForTurn,
+  type TurnStageName,
+} from './substrate-agent/turn-observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -261,7 +272,6 @@ export interface PromotedToolMutationResult {
   missingTokens?: CapabilityToken[];
 }
 
-type TurnStageName = 'trust' | 'memory' | 'context' | 'prompt' | 'first-token' | 'end';
 const LOADED_TOOL_SOURCE_PRIORITY: Record<Extract<AdaptiveToolActivationSource, 'extended_loaded' | 'autoload' | 'deferred'>, number> = {
   autoload: 1,
   extended_loaded: 2,
@@ -297,62 +307,6 @@ interface ActiveToolResolution {
 interface PromotedToolResolution {
   activeNames: Set<string>;
   skipped: AdaptiveToolSnapshotSkip[];
-}
-
-interface BackgroundContinuationCompletionSignal {
-  continuationId: string;
-  sourceMessageId: string;
-  deliverySessionId: string;
-  queuedForPostTurnDelivery: boolean;
-  hasDeliverableContent: boolean;
-  notifyUser: boolean;
-  notificationReason: BackgroundCompletionNotificationReason;
-  origin: BackgroundCompletionOrigin;
-  urgency: BackgroundCompletionUrgency;
-  channelContext: BackgroundCompletionChannelContext;
-  completionAgeMs: number | null;
-  stale: boolean;
-  taskKind: string | null;
-  intent: string | null;
-  completedAt: number;
-  queueDepth: number;
-}
-
-interface PendingBackgroundContinuationDelivery {
-  continuationId: string;
-  sourceMessageId: string;
-  deliverySessionId: string;
-  content: string;
-  completedAt: number;
-  origin: BackgroundCompletionOrigin;
-  urgency: BackgroundCompletionUrgency;
-  channelContext: BackgroundCompletionChannelContext;
-  completionAgeMs: number | null;
-  stale: boolean;
-  taskKind: string | null;
-  intent: string | null;
-  notificationReason: BackgroundCompletionNotificationReason;
-}
-
-interface BackgroundContinuationTaskRecord {
-  continuationId: string;
-  sourceMessageId: string;
-  sourceTimestampMs: number | null;
-  channelId: string;
-  channelType: SubstrateMessage['channelType'];
-  deliverySessionId: string;
-  origin: BackgroundCompletionOrigin;
-  urgency: BackgroundCompletionUrgency;
-  channelContext: BackgroundCompletionChannelContext;
-  completionAgeMs: number | null;
-  stale: boolean;
-  taskKind: string | null;
-  intent: string | null;
-  completedAt: number;
-  responseChars: number;
-  hasDeliverableContent: boolean;
-  notifyUser: boolean;
-  notificationReason: BackgroundCompletionNotificationReason;
 }
 
 // ── SubstrateAgent ──
@@ -2346,45 +2300,15 @@ export class SubstrateAgent {
     deferredContinuationId: string | null,
     channelId: string,
   ): () => void {
-    if (!deferredContinuationId) {
-      return () => {};
-    }
-    const manager = this.sessionManager as unknown as {
-      getActiveContextSession?: () => string | null;
-      setActiveContextSession?: (sessionId: string | null) => void;
-    };
-    if (
-      typeof manager.getActiveContextSession !== 'function'
-      || typeof manager.setActiveContextSession !== 'function'
-    ) {
-      throw new Error(
-        'Deferred continuation session isolation failed: active-context session controls are unavailable',
-      );
-    }
-    const pinnedSessionId = channelId.trim();
-    if (!pinnedSessionId) {
-      throw new Error(
-        `Deferred continuation session isolation failed: invalid channel/session id for "${deferredContinuationId}"`,
-      );
-    }
-    const previousSessionId = manager.getActiveContextSession();
-    const setActiveContextSession = manager.setActiveContextSession;
-    setActiveContextSession(pinnedSessionId);
-    return () => {
-      setActiveContextSession(previousSessionId ?? null);
-    };
+    return pinDeferredContinuationSessionContextForTurn(
+      deferredContinuationId,
+      channelId,
+      this.sessionManager,
+    );
   }
 
   private resolveSessionChannelId(channelId: string): string {
-    const manager = this.sessionManager as unknown as {
-      resolveSessionChannelId?: (sourceChannelId: string) => string;
-    };
-    if (typeof manager.resolveSessionChannelId !== 'function') {
-      return channelId;
-    }
-    const resolved = manager.resolveSessionChannelId(channelId);
-    const trimmed = resolved.trim();
-    return trimmed.length > 0 ? trimmed : channelId;
+    return resolveSessionChannelIdForTurn(this.sessionManager, channelId);
   }
 
   private queueBackgroundContinuationCompletion(
@@ -2394,121 +2318,32 @@ export class SubstrateAgent {
     taskKind: string | null,
     intent: string | null,
   ): BackgroundContinuationCompletionSignal {
-    const completedAt = Date.now();
-    const deliverySessionId = this.resolveSessionChannelId(message.channelId);
-    const hasDeliverableContent = response.content.trim().length > 0;
-    const sourceTimestampMs = Number.isFinite(message.timestamp.getTime())
-      ? Math.trunc(message.timestamp.getTime())
-      : null;
-    const decision = decideBackgroundCompletionNotification({
-      continuationId: deferredContinuationId,
-      sourceMessageId: message.id,
-      deliverySessionId,
-      channelId: message.channelId,
-      channelType: message.channelType,
-      sourceTimestampMs,
-      taskKind,
-      intent,
-      responseContent: response.content,
-      completedAt,
-    });
-
-    this.backgroundContinuationTasks.set(deferredContinuationId, {
-      continuationId: deferredContinuationId,
-      sourceMessageId: message.id,
-      sourceTimestampMs,
-      channelId: message.channelId,
-      channelType: message.channelType,
-      deliverySessionId,
-      origin: decision.context.origin,
-      urgency: decision.context.urgency,
-      channelContext: decision.context.channelContext,
-      completionAgeMs: decision.context.completionAgeMs,
-      stale: decision.context.stale,
-      taskKind,
-      intent,
-      completedAt,
-      responseChars: response.content.length,
-      hasDeliverableContent,
-      notifyUser: decision.shouldNotify,
-      notificationReason: decision.reason,
-    });
-
-    if (decision.shouldNotify) {
-      const enqueueResult = this.pendingBackgroundContinuationDeliveries.enqueue({
-        continuationId: deferredContinuationId,
-        sourceMessageId: message.id,
-        deliverySessionId,
-        content: response.content,
-        completedAt,
-        origin: decision.context.origin,
-        urgency: decision.context.urgency,
-        channelContext: decision.context.channelContext,
-        completionAgeMs: decision.context.completionAgeMs,
-        stale: decision.context.stale,
-        taskKind,
-        intent,
-        notificationReason: decision.reason,
-      } satisfies PendingBackgroundContinuationDelivery);
-      return {
-        continuationId: deferredContinuationId,
-        sourceMessageId: message.id,
-        deliverySessionId,
-        queuedForPostTurnDelivery: true,
-        hasDeliverableContent,
-        notifyUser: true,
-        notificationReason: decision.reason,
-        origin: decision.context.origin,
-        urgency: decision.context.urgency,
-        channelContext: decision.context.channelContext,
-        completionAgeMs: decision.context.completionAgeMs,
-        stale: decision.context.stale,
-        taskKind,
-        intent,
-        completedAt,
-        queueDepth: enqueueResult.queueDepth,
-      };
-    }
-
-    const cancelled = this.pendingBackgroundContinuationDeliveries.cancel(
+    return queueBackgroundContinuationCompletionForTurn({
       deferredContinuationId,
-      deliverySessionId,
-    );
-
-    return {
-      continuationId: deferredContinuationId,
-      sourceMessageId: message.id,
-      deliverySessionId,
-      queuedForPostTurnDelivery: false,
-      hasDeliverableContent,
-      notifyUser: false,
-      notificationReason: decision.reason,
-      origin: decision.context.origin,
-      urgency: decision.context.urgency,
-      channelContext: decision.context.channelContext,
-      completionAgeMs: decision.context.completionAgeMs,
-      stale: decision.context.stale,
+      message,
+      response,
       taskKind,
       intent,
-      completedAt,
-      queueDepth: cancelled.queueDepth,
-    };
+      resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
+      backgroundContinuationTasks: this.backgroundContinuationTasks,
+      pendingBackgroundContinuationDeliveries: this.pendingBackgroundContinuationDeliveries,
+    });
   }
 
   private dequeueBackgroundContinuationDeliveries(
     deliverySessionId: string,
   ): PendingBackgroundContinuationDelivery[] {
-    return this.pendingBackgroundContinuationDeliveries.dequeue(deliverySessionId);
+    return dequeueBackgroundContinuationDeliveriesForTurn(
+      this.pendingBackgroundContinuationDeliveries,
+      deliverySessionId,
+    );
   }
 
   private async emitBackgroundContinuationEvent(
     eventName: 'agent.background.continuation.completed' | 'agent.background.continuation.post_turn_delivery',
     payload: Record<string, unknown>,
   ): Promise<void> {
-    const telemetryBus = this.eventBus as unknown as {
-      emit: (event: string, payload: Record<string, unknown>) => Promise<void>;
-    };
-    await telemetryBus.emit(eventName, payload);
+    await emitBackgroundContinuationEventForTurn(this.eventBus, eventName, payload);
   }
 
   private emitTurnStage(
@@ -2520,16 +2355,15 @@ export class SubstrateAgent {
     callType: ObservabilityCallType,
     payload: Record<string, unknown>,
   ): void {
-    const telemetry = {
+    const telemetry = buildTurnStageTelemetryForTurn({
+      message,
+      turnStartMs,
       turnId,
       requestId,
-      channelId: message.channelId,
-      callType,
-      purpose: `agent.turn.stage.${stage}`,
       stage,
-      elapsedMs: Math.max(0, Date.now() - turnStartMs),
-      ...payload,
-    };
+      callType,
+      payload,
+    });
     log.debug('Turn stage telemetry', telemetry);
     this.emitTelemetry('agent.turn.stage', telemetry);
   }
@@ -2538,16 +2372,7 @@ export class SubstrateAgent {
     message: SubstrateMessage,
     taskKind: string | undefined,
   ): ObservabilityCallType {
-    if (isDeferredToolHandoffMessageId(message.id)) {
-      return 'background';
-    }
-    if (taskKind === 'heartbeat' || taskKind === 'reflection') {
-      return 'scheduled';
-    }
-    if (message.channelId.startsWith('internal:')) {
-      return 'scheduled';
-    }
-    return 'chat';
+    return resolveTurnCallTypeForTurn(message, taskKind);
   }
 
   private buildTurnCorrelation(
@@ -2556,39 +2381,21 @@ export class SubstrateAgent {
     turnId: TurnID,
     requestId: string,
   ): CorrelationMetadata {
-    return {
-      turnId,
-      requestId,
-      channelId: message.channelId,
-      callType,
-      purpose: 'agent.turn',
-      originType: callType,
-      originStage: 'agent.turn',
-    };
+    return buildTurnCorrelationForTurn(message, callType, turnId, requestId);
   }
 
   private withCorrelationPurpose(
     correlation: CorrelationMetadata,
     purpose: string,
   ): CorrelationMetadata {
-    return {
-      ...correlation,
-      purpose,
-      originStage: purpose,
-    };
+    return withCorrelationPurposeForTurn(correlation, purpose);
   }
 
   private withAdaptiveCorrelation(
     correlation: CorrelationMetadata | undefined,
     purpose: string,
   ): Partial<CorrelationMetadata> {
-    if (correlation) {
-      return this.withCorrelationPurpose(correlation, purpose);
-    }
-    if (this.activeTurnCorrelation) {
-      return this.withCorrelationPurpose(this.activeTurnCorrelation, purpose);
-    }
-    return { purpose };
+    return withAdaptiveCorrelationForTurn(correlation, this.activeTurnCorrelation, purpose);
   }
 
   private emitAdaptiveToolDecision(

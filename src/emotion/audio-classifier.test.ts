@@ -10,11 +10,13 @@ function createRuntimeHarness(result: { emotion?: string; event?: string }) {
   const createStream = vi.fn().mockReturnValue({ acceptWaveform });
   const decode = vi.fn();
   const getResult = vi.fn().mockReturnValue(result);
-  const OfflineRecognizer = vi.fn().mockImplementation(() => ({
-    createStream,
-    decode,
-    getResult,
-  }));
+  const OfflineRecognizer = vi.fn().mockImplementation(function OfflineRecognizerMock() {
+    return {
+      createStream,
+      decode,
+      getResult,
+    };
+  });
   const runtimeLoader = vi.fn().mockResolvedValue({
     OfflineRecognizer,
   });

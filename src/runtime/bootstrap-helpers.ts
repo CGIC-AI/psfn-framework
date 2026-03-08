@@ -377,13 +377,18 @@ export function hydrateCanonicalStartupConfig(
   const env = options.env ?? process.env;
   const systemDataDir = resolveConfiguredSystemDataDir(config);
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const usesLegacySharedDataDir = systemDataDir === companionDataDir;
   const runtimePathLayout = resolveRuntimePathLayout({
     mode: env.PSFN_RUNTIME_LAYOUT_MODE,
     nodeEnv: env.NODE_ENV,
     runtimeRootDir: env.PSFN_RUNTIME_ROOT,
-    systemDataDir,
-    companionDataDir,
-    legacyDataDir: env.DATA_DIR,
+    ...(usesLegacySharedDataDir
+      ? { legacyDataDir: systemDataDir }
+      : {
+        systemDataDir,
+        companionDataDir,
+        legacyDataDir: env.DATA_DIR,
+      }),
     workspacePath: env.WORKSPACE_PATH,
     logsDir: env.PSFN_LOGS_DIR,
     tempDir: env.PSFN_TEMP_DIR,

@@ -18,7 +18,9 @@ export function resolveCompanionNameFromConfig(
   fallback = DEFAULT_COMPANION_NAME,
 ): string {
   const configuredName = normalizeCompanionName(config?.characterName, fallback);
-  const cardPath = config?.characterCardPath.trim();
+  const cardPath = typeof config?.characterCardPath === 'string'
+    ? config.characterCardPath.trim()
+    : '';
   if (!cardPath) return configuredName;
 
   try {

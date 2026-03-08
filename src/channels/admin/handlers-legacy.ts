@@ -19,6 +19,7 @@ import type {
   AdminAuditActor,
   AdminAuditDecision,
   CompactionAuditView,
+  DashboardSessionContextPressure,
 } from './types.js';
 import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { ContactStore } from '../../contacts/store.js';
@@ -69,9 +70,10 @@ export class LegacyAdminHandlers {
     cacheReadTokens: 0,
     llmCalls: 0,
     toolCalls: 0,
-    contextUtilizationSum: 0,
     estimatedCostUsd: 0,
   };
+  private readonly sessionContextUtilizationBySession = new Map<string, number>();
+  private latestUsageSessionId: string | null = null;
   private thinkTraces: ThinkTraceView[] = [];
   private auditTimeline = new AdminAuditTimelineStore();
   private valuesJournal: ValuesJournalStore;
@@ -116,15 +118,24 @@ export class LegacyAdminHandlers {
       legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
     });
 
-    this.eventBus.on('agent.turn.usage', ({ usage }) => {
+    this.eventBus.on('agent.turn.usage', ({ message, usage }) => {
       this.usageTotals.turns += 1;
       this.usageTotals.inputTokens += usage.inputTokens;
       this.usageTotals.outputTokens += usage.outputTokens;
       this.usageTotals.cacheReadTokens += usage.cacheReadTokens;
       this.usageTotals.llmCalls += usage.llmCalls;
       this.usageTotals.toolCalls += usage.toolCalls;
-      this.usageTotals.contextUtilizationSum += usage.contextUtilization;
       this.usageTotals.estimatedCostUsd += usage.estimatedCostUsd ?? 0;
+
+      const usageSessionId = this.resolveUsageSessionId(message.channelId);
+      if (!usageSessionId) {
+        return;
+      }
+      this.latestUsageSessionId = usageSessionId;
+      this.sessionContextUtilizationBySession.set(
+        usageSessionId,
+        LegacyAdminHandlers.normalizeContextUtilization(usage.contextUtilization),
+      );
     });
 
     this.eventBus.on('agent.think.trace', ({ timestamp, task, result }) => {
@@ -169,6 +180,46 @@ export class LegacyAdminHandlers {
 
   resolveCompanionName(): string {
     return resolveCompanionNameFromConfig(this.config);
+  }
+
+  private static normalizeSessionId(value: string | null | undefined): string | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : null;
+  }
+
+  private static normalizeContextUtilization(value: number): number {
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  private resolveUsageSessionId(channelId: string): string | null {
+    return LegacyAdminHandlers.normalizeSessionId(this.sessionManager.resolveSessionChannelId(channelId));
+  }
+
+  private resolveActiveSessionId(): string | null {
+    const activeContextSessionId = LegacyAdminHandlers.normalizeSessionId(this.sessionManager.getActiveContextSession());
+    if (activeContextSessionId) {
+      return activeContextSessionId;
+    }
+    const latestSession = this.sessionStore.getLatestSessionByTimestamp();
+    const latestSessionId = LegacyAdminHandlers.normalizeSessionId(latestSession?.sessionId);
+    if (latestSessionId) {
+      return latestSessionId;
+    }
+    return this.latestUsageSessionId;
+  }
+
+  getActiveSessionContextPressure(): DashboardSessionContextPressure {
+    const sessionId = this.resolveActiveSessionId();
+    if (!sessionId) {
+      return { sessionId: null, utilizationPct: 0, hasTelemetry: false };
+    }
+
+    const utilizationPct = this.sessionContextUtilizationBySession.get(sessionId);
+    if (typeof utilizationPct !== 'number' || !Number.isFinite(utilizationPct) || utilizationPct < 0) {
+      return { sessionId, utilizationPct: 0, hasTelemetry: false };
+    }
+    return { sessionId, utilizationPct, hasTelemetry: true };
   }
 
   appendAuditTimelineEntry(

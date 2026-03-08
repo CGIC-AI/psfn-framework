@@ -9,6 +9,11 @@ export function dashboardPage(stats: DashboardStats): string {
     ).join('');
   const usage = stats.sessionUsage;
   const cost = usage.estimatedCostUsd > 0 ? `$${usage.estimatedCostUsd.toFixed(4)}` : 'n/a';
+  const activeSessionContextPressure = usage.activeSessionContextPressure;
+  const activeSessionContextPressureValue = `${activeSessionContextPressure.utilizationPct.toFixed(1)}%`;
+  const activeSessionContextPressureEmptyNote = activeSessionContextPressure.hasTelemetry
+    ? ''
+    : '<div class="label">No active-session telemetry yet</div>';
   const traces = stats.recentThinkTraces;
   const traceHtml = traces.length === 0
     ? '<div class="empty">No think traces captured yet</div>'
@@ -63,7 +68,7 @@ export function dashboardPage(stats: DashboardStats): string {
         <div class="stat-card"><div class="value">${formatTokens(usage.cacheReadTokens)}</div><div class="label">Cache Read</div></div>
         <div class="stat-card"><div class="value">${usage.llmCalls}</div><div class="label">LLM Calls</div></div>
         <div class="stat-card"><div class="value">${usage.toolCalls}</div><div class="label">Tool Calls</div></div>
-        <div class="stat-card"><div class="value">${usage.avgContextUtilization.toFixed(1)}%</div><div class="label">Avg Context Use</div></div>
+        <div class="stat-card"><div class="value">${activeSessionContextPressureValue}</div><div class="label">Active Session Context Pressure</div>${activeSessionContextPressureEmptyNote}</div>
         <div class="stat-card"><div class="value">${cost}</div><div class="label">Estimated Cost</div></div>
       </div>
     </div>

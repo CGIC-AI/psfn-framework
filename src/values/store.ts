@@ -3,11 +3,16 @@ import { dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
+import {
+  normalizeNarrativeMetacognitiveFlags,
+  normalizeNarrativeSnapshotRef,
+} from './narrative-context-normalization.js';
 
 const log = createComponentLogger('ValuesJournal');
 const COMPANION_VALUES_TEMPLATE_ID = 'values-reflection';
 const DEFAULT_COMPANION_LAYER_HISTORY_LIMIT = 6;
 const MAX_COMPANION_LAYER_HISTORY_LIMIT = 24;
+const VALUES_JOURNAL_ERROR_PREFIX = 'values journal';
 
 export interface ValuesJournalEntry {
   id: string;
@@ -138,51 +143,9 @@ function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata
   };
 }
 
-function normalizeSnapshotRef(raw: unknown): string | undefined {
-  if (raw === undefined || raw === null) return undefined;
-  if (typeof raw !== 'string' || raw.trim().length === 0) {
-    throw new Error('values journal internalStateSnapshotRef must be a non-empty string when provided');
-  }
-  return raw.trim();
-}
-
 function normalizeInternalStateSnapshot(raw: unknown): InternalState | undefined {
   if (raw === undefined || raw === null) return undefined;
   return cloneInternalState(raw as InternalState);
-}
-
-function normalizeMetacognitiveFlags(raw: unknown): ValuesMetacognitiveFlag[] | undefined {
-  if (raw === undefined || raw === null) return undefined;
-  if (!Array.isArray(raw)) {
-    throw new Error('values journal metacognitiveFlags must be an array when provided');
-  }
-  return raw.map((entry, index) => {
-    if (!entry || typeof entry !== 'object') {
-      throw new Error(`values journal metacognitiveFlags[${String(index)}] must be an object`);
-    }
-    const flagRaw = (entry as { flag?: unknown }).flag;
-    if (typeof flagRaw !== 'string' || flagRaw.trim().length === 0) {
-      throw new Error(`values journal metacognitiveFlags[${String(index)}].flag must be a non-empty string`);
-    }
-    const confidenceRaw = (entry as { confidence?: unknown }).confidence;
-    if (
-      typeof confidenceRaw !== 'number'
-      || !Number.isFinite(confidenceRaw)
-      || confidenceRaw < 0
-      || confidenceRaw > 1
-    ) {
-      throw new Error(`values journal metacognitiveFlags[${String(index)}].confidence must be in [0, 1]`);
-    }
-    const evidenceRaw = (entry as { evidence?: unknown }).evidence;
-    if (evidenceRaw !== undefined && (typeof evidenceRaw !== 'string' || evidenceRaw.trim().length === 0)) {
-      throw new Error(`values journal metacognitiveFlags[${String(index)}].evidence must be a non-empty string`);
-    }
-    return {
-      flag: flagRaw.trim(),
-      confidence: Number(confidenceRaw.toFixed(4)),
-      ...(typeof evidenceRaw === 'string' ? { evidence: evidenceRaw.trim() } : {}),
-    };
-  });
 }
 
 function normalizeOptionalNonEmptyString(value: unknown): string | undefined {
@@ -321,9 +284,15 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
     : `values-${entry.version}`;
   try {
     const deliberation = normalizeDeliberationMetadata(entry.deliberation);
-    const internalStateSnapshotRef = normalizeSnapshotRef((entry as { internalStateSnapshotRef?: unknown }).internalStateSnapshotRef);
+    const internalStateSnapshotRef = normalizeNarrativeSnapshotRef(
+      (entry as { internalStateSnapshotRef?: unknown }).internalStateSnapshotRef,
+      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
+    );
     const internalState = normalizeInternalStateSnapshot((entry as { internalState?: unknown }).internalState);
-    const metacognitiveFlags = normalizeMetacognitiveFlags((entry as { metacognitiveFlags?: unknown }).metacognitiveFlags);
+    const metacognitiveFlags = normalizeNarrativeMetacognitiveFlags(
+      (entry as { metacognitiveFlags?: unknown }).metacognitiveFlags,
+      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
+    );
     const provenance = normalizeProvenance((entry as { provenance?: unknown }).provenance);
     if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
       return null;
@@ -373,9 +342,15 @@ export class ValuesJournalStore {
 
     const entries = this.readAll();
     const nextVersion = entries.length > 0 ? entries[entries.length - 1]!.version + 1 : 1;
-    const internalStateSnapshotRef = normalizeSnapshotRef(input.internalStateSnapshotRef);
+    const internalStateSnapshotRef = normalizeNarrativeSnapshotRef(
+      input.internalStateSnapshotRef,
+      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
+    );
     const internalState = normalizeInternalStateSnapshot(input.internalState);
-    const metacognitiveFlags = normalizeMetacognitiveFlags(input.metacognitiveFlags);
+    const metacognitiveFlags = normalizeNarrativeMetacognitiveFlags(
+      input.metacognitiveFlags,
+      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
+    );
     const provenance = normalizeProvenance(input.provenance, { strict: true });
     if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
       throw new Error(

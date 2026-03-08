@@ -105,4 +105,31 @@ describe('ReflectionJournalStore', () => {
       internalStateSnapshotRef: 'internal-state-v1:abc',
     })).toThrow('internalStateSnapshotRef and internalState');
   });
+
+  it('preserves reflection-journal normalization error prefixes', () => {
+    const sample = buildInternalStateSample();
+
+    expect(() => store.append({
+      templateId: 'experiential-review',
+      templateName: 'Experiential Review',
+      prompt: 'Describe your recent experience.',
+      reflection: 'I noticed a focused processing pattern.',
+      channelId: 'internal:reflection:experiential-review',
+      mode: 'agent',
+      internalStateSnapshotRef: '   ',
+      internalState: sample.state,
+    })).toThrow('Reflection journal internalStateSnapshotRef must be a non-empty string when provided');
+
+    expect(() => store.append({
+      templateId: 'experiential-review',
+      templateName: 'Experiential Review',
+      prompt: 'Describe your recent experience.',
+      reflection: 'I noticed a focused processing pattern.',
+      channelId: 'internal:reflection:experiential-review',
+      mode: 'agent',
+      internalStateSnapshotRef: sample.snapshotRef,
+      internalState: sample.state,
+      metacognitiveFlags: [{ flag: '', confidence: 0.5 }],
+    })).toThrow('Reflection journal metacognitiveFlags[0].flag must be a non-empty string');
+  });
 });

@@ -1,13 +1,6 @@
 import type { SessionEntry } from '../session/types.js';
+import { BOUNDARY_LOG_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../security/refusal-patterns.js';
 import type { ExtractedFact, PurrMemory } from './types.js';
-
-const REFUSAL_PATTERNS = [
-  /\b(i|we)\s+(can(?:not|'t)|won't|will not|must not)\s+(help|assist|provide|share|guide|support|do)\b/i,
-  /\b(i|we)\s+(refuse|decline)\b/i,
-  /\b(i|we)\s+(am|are|'m)\s+unable\s+to\b/i,
-  /\b(can(?:not|'t)|won't)\s+help\s+with\b/i,
-  /\bagainst\s+(policy|safety|my boundaries|our boundaries)\b/i,
-];
 
 const BOUNDARY_HINT_PATTERNS = [
   /\bboundar(?:y|ies)\b/i,
@@ -92,7 +85,7 @@ function isLikelyRefusal(content: string): boolean {
   if (!normalized) return false;
   if (/\b(can(?:not|'t)|won't)\s+wait\b/i.test(normalized)) return false;
 
-  const hasRefusalSignal = REFUSAL_PATTERNS.some(pattern => pattern.test(normalized));
+  const hasRefusalSignal = matchesRefusalPatterns(normalized, BOUNDARY_LOG_REFUSAL_PATTERNS);
   if (!hasRefusalSignal) return false;
 
   return BOUNDARY_HINT_PATTERNS.some(pattern => pattern.test(normalized))

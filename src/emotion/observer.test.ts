@@ -41,7 +41,7 @@ function createAudioClassifier(
 }
 
 describe('EmotionObserver', () => {
-  it('fuses categorical and lexicon VAD signals with confidence weighting', async () => {
+  it('uses classifier-only text signal without lexicon blending', async () => {
     const { classifier } = createClassifier([
       { label: 'joy', score: 0.8 },
       { label: 'anger', score: 0.2 },
@@ -59,19 +59,12 @@ describe('EmotionObserver', () => {
     expect(result.observation.confidence).toBeCloseTo(0.8, 6);
 
     const joyVad = TEXT_EMOTION_LABEL_VAD_MAP.joy;
-    const lexiconSignedVad = { valence: 0.1, arousal: 0.1, dominance: 0.1 };
-    const expected = {
-      valence: ((joyVad.valence * 0.8) + (lexiconSignedVad.valence * 0.1)) / 0.9,
-      arousal: ((joyVad.arousal * 0.8) + (lexiconSignedVad.arousal * 0.1)) / 0.9,
-      dominance: ((joyVad.dominance * 0.8) + (lexiconSignedVad.dominance * 0.1)) / 0.9,
-    };
-
-    expect(result.observation.vad?.valence).toBeCloseTo(expected.valence, 6);
-    expect(result.observation.vad?.arousal).toBeCloseTo(expected.arousal, 6);
-    expect(result.observation.vad?.dominance).toBeCloseTo(expected.dominance, 6);
+    expect(result.observation.vad?.valence).toBeCloseTo(joyVad.valence, 6);
+    expect(result.observation.vad?.arousal).toBeCloseTo(joyVad.arousal, 6);
+    expect(result.observation.vad?.dominance).toBeCloseTo(joyVad.dominance, 6);
   });
 
-  it('can promote lexicon-driven categorical labels when classifier confidence is weaker', async () => {
+  it('does not allow lexicon content to override classifier label or confidence', async () => {
     const { classifier } = createClassifier([
       { label: 'joy', score: 0.2 },
       { label: 'neutral', score: 0.1 },
@@ -83,15 +76,14 @@ describe('EmotionObserver', () => {
     const observer = new EmotionObserver({ textClassifier: classifier, vadLexicon: lexicon });
     const result = await observer.observe('rage', 0);
 
-    const lexiconConfidence = (0.9 + 0.9 + 0.7) / 3;
-    expect(result.fusedLabel).toBe('anger');
-    expect(result.observation.discrete).toEqual({ anger: 1 });
-    expect(result.observation.confidence).toBeCloseTo(lexiconConfidence, 6);
+    expect(result.fusedLabel).toBe('joy');
+    expect(result.observation.discrete).toEqual({ joy: 1 });
+    expect(result.observation.confidence).toBeCloseTo(0.2, 6);
 
-    const angerVad = TEXT_EMOTION_LABEL_VAD_MAP.anger;
-    expect(result.observation.vad?.valence).toBeCloseTo((angerVad.valence - 0.9) / 2, 6);
-    expect(result.observation.vad?.arousal).toBeCloseTo((angerVad.arousal + 0.9) / 2, 6);
-    expect(result.observation.vad?.dominance).toBeCloseTo((angerVad.dominance + 0.7) / 2, 6);
+    const joyVad = TEXT_EMOTION_LABEL_VAD_MAP.joy;
+    expect(result.observation.vad?.valence).toBeCloseTo(joyVad.valence, 6);
+    expect(result.observation.vad?.arousal).toBeCloseTo(joyVad.arousal, 6);
+    expect(result.observation.vad?.dominance).toBeCloseTo(joyVad.dominance, 6);
   });
 
   it('breaks classifier confidence ties by label for deterministic fused categorical output', async () => {

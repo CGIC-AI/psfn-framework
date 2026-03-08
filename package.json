@@ -70,6 +70,12 @@
     "opusscript": "^0.0.8"
   },
   "overrides": {
+    "@discordjs/rest": {
+      "undici": "^6.23.0"
+    },
+    "discord.js": {
+      "undici": "^6.23.0"
+    },
     "basic-ftp": "^5.2.0",
     "fast-xml-parser": "^5.3.8",
     "minimatch": "^9.0.7",

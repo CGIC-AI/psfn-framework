@@ -2285,7 +2285,7 @@ describe('AdminServer JSON API routes', () => {
       uiThemeId: 'generic-light',
       ttsProvider: 'disabled',
       sttProvider: 'disabled',
-      textEmotionModel: 'cirimus/modernbert-base-go-emotions',
+      textEmotionModel: 'SamLowe/roberta-base-go_emotions-onnx',
       textEmotionCacheDir: '/tmp/admin-text-emotion-cache',
       textEmotionDtype: 'q8',
       moaEnabled: true,

@@ -74,6 +74,26 @@ export const TEXT_EMOTION_LABEL_VAD_MAP: Readonly<Record<string, Readonly<VADVec
   ),
 );
 const TEXT_EMOTION_LABEL_SET = new Set(Object.keys(RAW_TEXT_EMOTION_LABEL_VAD_MAP));
+const TEXT_EMOTION_LABEL_ALIAS_MAP: Readonly<Record<string, string>> = Object.freeze({
+  admiration: 'trust',
+  amusement: 'joy',
+  annoyance: 'anger',
+  approval: 'trust',
+  caring: 'love',
+  curiosity: 'anticipation',
+  desire: 'anticipation',
+  disappointment: 'sadness',
+  disapproval: 'pessimism',
+  embarrassment: 'confusion',
+  excitement: 'joy',
+  gratitude: 'trust',
+  grief: 'sadness',
+  nervousness: 'fear',
+  pride: 'optimism',
+  realization: 'surprise',
+  relief: 'optimism',
+  remorse: 'pessimism',
+});
 
 export const DEFAULT_EMOTION_OBSERVER_MAX_TEXT_LENGTH = 2_000;
 
@@ -420,10 +440,11 @@ function normalizeEmotionLabel(label: unknown, fieldName: string): string {
   if (!normalized) {
     throw new RangeError(`${fieldName} must be non-empty`);
   }
-  if (!TEXT_EMOTION_LABEL_SET.has(normalized)) {
+  const canonical = TEXT_EMOTION_LABEL_ALIAS_MAP[normalized] ?? normalized;
+  if (!TEXT_EMOTION_LABEL_SET.has(canonical)) {
     throw new Error(`unsupported text emotion label: ${normalized}`);
   }
-  return normalized;
+  return canonical;
 }
 
 function normalizeConfidence(value: unknown, fieldName: string): number {

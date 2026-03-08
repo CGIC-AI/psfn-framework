@@ -39,7 +39,7 @@ export type TextEmotionPipelineFactory = (
   config: TextEmotionPipelineFactoryConfig,
 ) => Promise<TextEmotionPipeline>;
 
-export const TEXT_EMOTION_LABEL_COUNT = 13;
+export const TEXT_EMOTION_TOP_K = 28;
 
 const DEFAULT_DTYPE: TextEmotionDType = 'fp32';
 const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
@@ -62,7 +62,7 @@ export class TextEmotionClassifier {
   async classify(text: string): Promise<TextEmotionClassification[]> {
     const normalizedText = normalizeInputText(text);
     const pipeline = await this.getPipeline();
-    const rawOutput = await pipeline(normalizedText, { top_k: TEXT_EMOTION_LABEL_COUNT });
+    const rawOutput = await pipeline(normalizedText, { top_k: TEXT_EMOTION_TOP_K });
     return normalizeClassificationOutput(rawOutput);
   }
 
@@ -109,11 +109,6 @@ export async function defaultTextEmotionPipelineFactory(
 
 function normalizeClassificationOutput(output: unknown): TextEmotionClassification[] {
   const rows = unwrapRows(output);
-  if (rows.length !== TEXT_EMOTION_LABEL_COUNT) {
-    throw new Error(
-      `text emotion classifier expected ${TEXT_EMOTION_LABEL_COUNT} labels, received ${rows.length}`,
-    );
-  }
 
   return rows
     .map((row, index) => normalizeClassificationRow(row, index))

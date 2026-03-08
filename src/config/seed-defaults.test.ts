@@ -46,7 +46,7 @@ describe('seed defaults', () => {
     expect(defaults.embeddingProvider).toBe('ollama');
     expect(defaults.embeddingModel).toBe('snowflake-arctic-embed2');
     expect(defaults.embeddingDims).toBe(1024);
-    expect(defaults.textEmotionModel).toBe('cirimus/modernbert-base-go-emotions');
+    expect(defaults.textEmotionModel).toBe('SamLowe/roberta-base-go_emotions-onnx');
     expect(defaults.textEmotionDtype).toBe('fp32');
     expect(defaults.textEmotionCacheDir).toBe('models/transformers');
     expect(defaults.embeddingApiModel).toBe('snowflake-arctic-embed2');

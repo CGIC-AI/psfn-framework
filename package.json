@@ -79,7 +79,14 @@
     "basic-ftp": "^5.2.0",
     "fast-xml-parser": "^5.3.8",
     "minimatch": "^9.0.7",
-    "tar": "^7.5.10"
+    "tar": "^7.5.10",
+    "rollup": "^4.59.0",
+    "eslint": {
+      "minimatch": "^10.2.3"
+    },
+    "@eslint/config-array": {
+      "minimatch": "^10.2.3"
+    }
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
@@ -92,7 +99,7 @@
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=22.0.0"

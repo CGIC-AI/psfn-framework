@@ -1,4 +1,5 @@
 import type { EmbeddingService } from '../agent/contracts.js';
+import path from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import type { SubstrateConfig } from '../types.js';
 import { loadRuntimeSettingsSeedDefaults } from '../config/seed-defaults.js';
@@ -40,6 +41,7 @@ export interface TransformersEmbeddingConfig {
   model: string;
   dims: number;
   cacheDir?: string;
+  hfToken?: string;
 }
 
 export interface ApiEmbeddingConfig {
@@ -51,6 +53,12 @@ export interface ApiEmbeddingConfig {
 
 const RUNTIME_SEED_DEFAULTS = loadRuntimeSettingsSeedDefaults();
 
+export function resolveProjectTransformersCacheDir(projectRoot: string = process.cwd()): string {
+  return path.resolve(projectRoot, 'models', 'transformers');
+}
+
+export const DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR = resolveProjectTransformersCacheDir();
+
 export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
   ollamaUrl: RUNTIME_SEED_DEFAULTS.embeddingOllamaUrl,
   model: RUNTIME_SEED_DEFAULTS.embeddingModel,
@@ -60,6 +68,7 @@ export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
 export const DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG: TransformersEmbeddingConfig = {
   model: RUNTIME_SEED_DEFAULTS.transformersModel,
   dims: 384,
+  cacheDir: DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR,
 };
 
 export const DEFAULT_API_EMBEDDING_CONFIG: ApiEmbeddingConfig = {
@@ -102,6 +111,28 @@ function parsePositiveInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeTransformersCacheDir(cacheDir: string | undefined): string {
+  const normalized = normalizeOptionalString(cacheDir);
+  if (!normalized) {
+    return DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR;
+  }
+  return path.isAbsolute(normalized)
+    ? normalized
+    : path.resolve(process.cwd(), normalized);
+}
+
+function resolveOptionalHfToken(env: NodeJS.ProcessEnv): string | undefined {
+  return normalizeOptionalString(env.HF_TOKEN)
+    ?? normalizeOptionalString(env.HF_ACCESS_TOKEN)
+    ?? normalizeOptionalString(env.HUGGINGFACE_HUB_TOKEN)
+    ?? normalizeOptionalString(env.TRANSFORMERS_HF_TOKEN);
 }
 
 function toPositiveInteger(value: unknown): number | undefined {
@@ -243,7 +274,8 @@ export class TransformersEmbeddingProvider implements EmbeddingRuntimeProvider {
     this.config = {
       model: model.length > 0 ? model : DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.model,
       dims: merged.dims,
-      cacheDir: merged.cacheDir?.trim() || undefined,
+      cacheDir: normalizeTransformersCacheDir(merged.cacheDir),
+      hfToken: normalizeOptionalString(merged.hfToken),
     };
   }
 
@@ -258,9 +290,10 @@ export class TransformersEmbeddingProvider implements EmbeddingRuntimeProvider {
     this.initPromise = (async () => {
       this.log.info(`Loading transformers.js model: ${this.config.model}`);
       const { pipeline, env } = await import('@huggingface/transformers');
+      env.cacheDir = this.config.cacheDir ?? DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR;
 
-      if (this.config.cacheDir) {
-        env.cacheDir = this.config.cacheDir;
+      if (this.config.hfToken) {
+        process.env.HF_TOKEN = this.config.hfToken;
       }
 
       const extractor = await pipeline('feature-extraction', this.config.model, {
@@ -409,11 +442,13 @@ function resolveTransformersProvider(env: NodeJS.ProcessEnv): TransformersEmbedd
   const model = env.TRANSFORMERS_MODEL
     ?? env.TRANSFORMERS_EMBEDDING_MODEL
     ?? env.EMBEDDING_MODEL;
+  const hfToken = resolveOptionalHfToken(env);
 
   return new TransformersEmbeddingProvider({
     ...(model ? { model } : {}),
     ...(dims ? { dims } : {}),
     ...(env.TRANSFORMERS_CACHE_DIR ? { cacheDir: env.TRANSFORMERS_CACHE_DIR } : {}),
+    ...(hfToken ? { hfToken } : {}),
   });
 }
 
@@ -452,9 +487,11 @@ function resolveOllamaProviderFromRuntimeConfig(
 
 function resolveTransformersProviderFromRuntimeConfig(
   config: EmbeddingProviderRuntimeConfig,
+  env: NodeJS.ProcessEnv,
 ): TransformersEmbeddingProvider {
   const model = (config.transformersModel ?? config.embeddingModel)?.trim();
   const dims = toPositiveInteger(config.embeddingDims);
+  const hfToken = resolveOptionalHfToken(env);
   if (!model || !dims) {
     throw new Error(
       'Transformers embeddings require transformersModel (or embeddingModel) and embeddingDims in settings.json',
@@ -467,6 +504,7 @@ function resolveTransformersProviderFromRuntimeConfig(
     ...(config.transformersCacheDir?.trim()
       ? { cacheDir: config.transformersCacheDir.trim() }
       : {}),
+    ...(hfToken ? { hfToken } : {}),
   });
 }
 
@@ -499,7 +537,7 @@ export function createEmbeddingProviderFromConfig(
     case 'ollama':
       return resolveOllamaProviderFromRuntimeConfig(config);
     case 'transformers':
-      return resolveTransformersProviderFromRuntimeConfig(config);
+      return resolveTransformersProviderFromRuntimeConfig(config, env);
     case 'api':
       return resolveApiProviderFromRuntimeConfig(config, env);
   }

@@ -143,12 +143,17 @@ export class EmotionObserver {
 
   async buildObservation(text: string): Promise<EmotionObservation> {
     const normalizedText = normalizeObserverText(text, this.maxTextLength);
-    const [classifications, lexiconSignal] = await Promise.all([
-      this.textClassifier.classify(normalizedText),
+    const [classifierResult, lexiconSignal] = await Promise.all([
+      this.textClassifier
+        .classify(normalizedText)
+        .then((classifications) => ({ classifications }))
+        .catch(() => null),
       Promise.resolve(this.scoreLexiconSignal(normalizedText)),
     ]);
 
-    const classifierSignal = resolveClassifierSignal(classifications);
+    const classifierSignal = classifierResult
+      ? resolveClassifierSignal(classifierResult.classifications)
+      : null;
     const lexiconCategoricalSignal = resolveLexiconCategoricalSignal(lexiconSignal);
     const fusedCategorical = chooseStrongestCategoricalSignal([
       classifierSignal,

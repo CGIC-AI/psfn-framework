@@ -1493,6 +1493,21 @@ describe('ApiServer with auth', () => {
     expect(res.status).toBe(200);
   });
 
+  it('requires authentication for health probes and accepts valid bearer auth', async () => {
+    const unauthenticated = await request(port, 'GET', '/health');
+    expect(unauthenticated.status).toBe(401);
+    const unauthenticatedBody = JSON.parse(unauthenticated.body);
+    expect(unauthenticatedBody.error.type).toBe('invalid_api_key');
+
+    const authenticated = await request(port, 'GET', '/health', undefined, {
+      Authorization: 'Bearer test-secret-key',
+    });
+    expect(authenticated.status).not.toBe(401);
+    const authenticatedBody = JSON.parse(authenticated.body);
+    expect(['healthy', 'degraded']).toContain(authenticatedBody.status);
+    expect(authenticatedBody.continuity).toBeDefined();
+  });
+
   it('binds message identity to authenticated principal and ignores spoofed user headers', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);

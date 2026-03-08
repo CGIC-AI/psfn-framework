@@ -78,72 +78,118 @@ function runWatchdog(env) {
   });
 }
 
-const tempDir = await mkdtemp(join(tmpdir(), 'psfn-watchdog-smoke-'));
-const stateFile = join(tempDir, 'watchdog-state.json');
-
-let mode = 'healthy';
-const server = createServer((req, res) => {
-  if (req.url !== '/health') {
-    res.writeHead(404).end();
-    return;
-  }
-
-  const payload = mode === 'healthy' ? makeHealthyPayload() : makeDegradedPayload();
-  res.setHeader('content-type', 'application/json');
-  res.writeHead(mode === 'healthy' ? 200 : 503);
-  res.end(JSON.stringify(payload));
-});
-
-await new Promise((resolve) => {
-  server.listen(0, '127.0.0.1', resolve);
-});
-
-const address = server.address();
-if (!address || typeof address === 'string') {
-  throw new Error('Failed to resolve smoke server port');
+function isExpectedAuthorization(headerValue, expectedApiKey) {
+  if (typeof headerValue !== 'string') return false;
+  return headerValue.trim() === `Bearer ${expectedApiKey}`;
 }
 
-const baseEnv = {
-  ...process.env,
-  CONTINUITY_WATCHDOG_ENDPOINT: `http://127.0.0.1:${address.port}/health`,
-  CONTINUITY_WATCHDOG_TIMEOUT_MS: '1500',
-  CONTINUITY_WATCHDOG_MAX_FAILURES: '2',
-  CONTINUITY_WATCHDOG_STATE_FILE: stateFile,
-  CONTINUITY_WATCHDOG_RESTART_PID: '',
-};
+async function runScenario(name, options = {}) {
+  const tempDir = await mkdtemp(join(tmpdir(), `psfn-watchdog-smoke-${name}-`));
+  const stateFile = join(tempDir, 'watchdog-state.json');
+  const expectedApiKey = options.expectedApiKey ?? '';
+  const watchdogApiKey = options.watchdogApiKey ?? '';
 
-const healthyRun = await runWatchdog(baseEnv);
-if (healthyRun.code !== 0) {
-  throw new Error(`Expected healthy watchdog run to pass, got ${healthyRun.code}: ${healthyRun.stderr}`);
-}
+  let mode = 'healthy';
+  const server = createServer((req, res) => {
+    if (req.url !== '/health') {
+      res.writeHead(404).end();
+      return;
+    }
 
-mode = 'degraded';
-const degradedRun1 = await runWatchdog(baseEnv);
-if (degradedRun1.code !== 1) {
-  throw new Error(`Expected first degraded watchdog run to fail, got ${degradedRun1.code}: ${degradedRun1.stderr}`);
-}
+    if (expectedApiKey && !isExpectedAuthorization(req.headers.authorization, expectedApiKey)) {
+      res.setHeader('content-type', 'application/json');
+      res.writeHead(401);
+      res.end(JSON.stringify({
+        error: {
+          type: 'invalid_api_key',
+          message: 'Invalid or missing API key',
+        },
+      }));
+      return;
+    }
 
-const degradedRun2 = await runWatchdog(baseEnv);
-if (degradedRun2.code !== 1) {
-  throw new Error(`Expected second degraded watchdog run to fail, got ${degradedRun2.code}: ${degradedRun2.stderr}`);
-}
-
-const state = JSON.parse(await readFile(stateFile, 'utf8'));
-if (state.consecutiveFailures !== 2) {
-  throw new Error(`Expected consecutiveFailures=2, got ${JSON.stringify(state)}`);
-}
-
-mode = 'healthy';
-const recoveryRun = await runWatchdog(baseEnv);
-if (recoveryRun.code !== 0) {
-  throw new Error(`Expected recovery watchdog run to pass, got ${recoveryRun.code}: ${recoveryRun.stderr}`);
-}
-
-await new Promise((resolve, reject) => {
-  server.close((error) => {
-    if (error) reject(error);
-    else resolve();
+    const payload = mode === 'healthy' ? makeHealthyPayload() : makeDegradedPayload();
+    res.setHeader('content-type', 'application/json');
+    res.writeHead(mode === 'healthy' ? 200 : 503);
+    res.end(JSON.stringify(payload));
   });
+
+  await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error(`Failed to resolve smoke server port for scenario "${name}"`);
+    }
+
+    const baseEnv = {
+      ...process.env,
+      CONTINUITY_WATCHDOG_ENDPOINT: `http://127.0.0.1:${address.port}/health`,
+      CONTINUITY_WATCHDOG_TIMEOUT_MS: '1500',
+      CONTINUITY_WATCHDOG_MAX_FAILURES: '2',
+      CONTINUITY_WATCHDOG_STATE_FILE: stateFile,
+      CONTINUITY_WATCHDOG_RESTART_PID: '',
+    };
+    delete baseEnv.API_KEY;
+    delete baseEnv.CONTINUITY_WATCHDOG_API_KEY;
+    if (watchdogApiKey) {
+      baseEnv.API_KEY = watchdogApiKey;
+    }
+
+    if (expectedApiKey) {
+      const unauthenticatedEnv = { ...baseEnv };
+      delete unauthenticatedEnv.API_KEY;
+      delete unauthenticatedEnv.CONTINUITY_WATCHDOG_API_KEY;
+      const unauthenticatedRun = await runWatchdog(unauthenticatedEnv);
+      if (unauthenticatedRun.code !== 1 || !unauthenticatedRun.stderr.includes('HTTP 401')) {
+        throw new Error(
+          `Expected unauthenticated watchdog run to fail with HTTP 401 in scenario "${name}", got ${unauthenticatedRun.code}: ${unauthenticatedRun.stderr}`,
+        );
+      }
+    }
+
+    const healthyRun = await runWatchdog(baseEnv);
+    if (healthyRun.code !== 0) {
+      throw new Error(`Expected healthy watchdog run to pass in scenario "${name}", got ${healthyRun.code}: ${healthyRun.stderr}`);
+    }
+
+    mode = 'degraded';
+    const degradedRun1 = await runWatchdog(baseEnv);
+    if (degradedRun1.code !== 1) {
+      throw new Error(`Expected first degraded watchdog run to fail in scenario "${name}", got ${degradedRun1.code}: ${degradedRun1.stderr}`);
+    }
+
+    const degradedRun2 = await runWatchdog(baseEnv);
+    if (degradedRun2.code !== 1) {
+      throw new Error(`Expected second degraded watchdog run to fail in scenario "${name}", got ${degradedRun2.code}: ${degradedRun2.stderr}`);
+    }
+
+    const state = JSON.parse(await readFile(stateFile, 'utf8'));
+    if (state.consecutiveFailures !== 2) {
+      throw new Error(`Expected consecutiveFailures=2 in scenario "${name}", got ${JSON.stringify(state)}`);
+    }
+
+    mode = 'healthy';
+    const recoveryRun = await runWatchdog(baseEnv);
+    if (recoveryRun.code !== 0) {
+      throw new Error(`Expected recovery watchdog run to pass in scenario "${name}", got ${recoveryRun.code}: ${recoveryRun.stderr}`);
+    }
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
+}
+
+await runScenario('insecure-local');
+await runScenario('authenticated', {
+  expectedApiKey: 'watchdog-auth-token',
+  watchdogApiKey: 'watchdog-auth-token',
 });
 
-console.log('continuity-watchdog smoke passed');
+console.log('continuity-watchdog smoke passed (insecure-local + authenticated)');

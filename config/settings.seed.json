@@ -36,6 +36,8 @@
   "embeddingDims": 1024,
   "embeddingOllamaUrl": "http://localhost:11434",
   "transformersModel": "Xenova/all-MiniLM-L6-v2",
+  "textEmotionModel": "cirimus/modernbert-base-go-emotions",
+  "textEmotionDtype": "fp32",
   "embeddingApiModel": "snowflake-arctic-embed2",
   "embeddingApiDims": 1024,
   "compositionalPolicy": {

@@ -15,6 +15,7 @@ import { SubstrateAgent } from './agent/substrate-agent.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
 import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
+import { TextEmotionClassifier } from './emotion/text-classifier.js';
 import type { DiscordAdapter } from './channels/discord/adapter.js';
 import { MemoryStore } from './memory/store.js';
 import { MemoryExtractor } from './memory/extraction.js';
@@ -557,7 +558,16 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Agent loop
+    const textEmotionModel = this.config.textEmotionModel?.trim();
+    if (!textEmotionModel) {
+      throw new Error('textEmotionModel runtime setting is required');
+    }
     const emotionObserver = new EmotionObserver({
+      textClassifier: new TextEmotionClassifier({
+        model: textEmotionModel,
+        cacheDir: this.config.textEmotionCacheDir,
+        dtype: this.config.textEmotionDtype,
+      }),
       audioClassifier: getSharedAudioEmotionClassifier(),
     });
     const emotionState = new EmotionState();

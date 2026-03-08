@@ -2218,6 +2218,9 @@ describe('AdminServer JSON API routes', () => {
       const compositionalPolicyField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'compositionalPolicy');
       const sttProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sttProvider');
       const ttsProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'ttsProvider');
+      const textEmotionModelField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'textEmotionModel');
+      const textEmotionCacheDirField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'textEmotionCacheDir');
+      const textEmotionDtypeField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'textEmotionDtype');
 
       expect(['number', 'integer']).toContain(
         readStringMetadata(sessionMessageLimitField, ['type', 'kind', 'valueType', 'inputType']),
@@ -2236,6 +2239,17 @@ describe('AdminServer JSON API routes', () => {
       expect(readOwnerFiles(capabilityTierField)).toContain('capability-tier.json');
       expect(readOwnerFiles(compositionalPolicyField)).toContain('settings.json');
       expect(readStringMetadata(compositionalPolicyField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
+      expect(readOwnerFiles(textEmotionModelField)).toContain('settings.json');
+      expect(readOwnerFiles(textEmotionCacheDirField)).toContain('settings.json');
+      expect(readOwnerFiles(textEmotionDtypeField)).toContain('settings.json');
+      expect(readStringMetadata(textEmotionModelField, ['type', 'kind', 'valueType', 'inputType'])).toBe('string');
+      expect(readStringMetadata(textEmotionCacheDirField, ['type', 'kind', 'valueType', 'inputType'])).toBe('string');
+      expect(readStringMetadata(textEmotionDtypeField, ['type', 'kind', 'valueType', 'inputType'])).toBe('enum');
+      expect(readEnumLikeValues(textEmotionDtypeField)).toEqual(expect.arrayContaining([
+        'auto',
+        'fp32',
+        'q8',
+      ]));
 
       expect(readEnumLikeValues(sttProviderField)).toEqual(expect.arrayContaining([
         'disabled',
@@ -2271,6 +2285,9 @@ describe('AdminServer JSON API routes', () => {
       uiThemeId: 'generic-light',
       ttsProvider: 'disabled',
       sttProvider: 'disabled',
+      textEmotionModel: 'cirimus/modernbert-base-go-emotions',
+      textEmotionCacheDir: '/tmp/admin-text-emotion-cache',
+      textEmotionDtype: 'q8',
       moaEnabled: true,
       moaReferenceModels: ['openai/gpt-4.1-mini', 'moonshotai/kimi-k2.5'],
       moaAggregatorModel: 'openai/gpt-4.1-mini',

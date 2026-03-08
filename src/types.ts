@@ -118,6 +118,17 @@ export interface MessagePromptOverride {
 
 export type ResponseStyle = 'concise' | 'expressive';
 
+export type TextEmotionDType =
+  | 'auto'
+  | 'fp32'
+  | 'fp16'
+  | 'q8'
+  | 'int8'
+  | 'uint8'
+  | 'q4'
+  | 'bnb4'
+  | 'q4f16';
+
 export interface ResponseStyleOverrides {
   exact?: Record<string, ResponseStyle>;
   prefix?: Record<string, ResponseStyle>;
@@ -608,6 +619,9 @@ export interface SubstrateConfig {
   embeddingOllamaUrl?: string;
   transformersModel?: string;
   transformersCacheDir?: string;
+  textEmotionModel?: string;
+  textEmotionCacheDir?: string;
+  textEmotionDtype?: TextEmotionDType;
   embeddingApiUrl?: string;
   embeddingApiModel?: string;
   embeddingApiDims?: number;
@@ -911,6 +925,9 @@ export function loadConfig(): SubstrateConfig {
     embeddingDims: runtimeSeedDefaults.embeddingDims,
     embeddingOllamaUrl: runtimeSeedDefaults.embeddingOllamaUrl,
     transformersModel: runtimeSeedDefaults.transformersModel,
+    textEmotionModel: runtimeSeedDefaults.textEmotionModel,
+    textEmotionCacheDir: runtimeSeedDefaults.textEmotionCacheDir,
+    textEmotionDtype: runtimeSeedDefaults.textEmotionDtype,
     embeddingApiModel: runtimeSeedDefaults.embeddingApiModel,
     embeddingApiDims: runtimeSeedDefaults.embeddingApiDims,
     compositionalPolicy: createDefaultCompositionalPolicyConfig(),

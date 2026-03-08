@@ -108,6 +108,9 @@ export interface EditableSettings {
   embeddingOllamaUrl?: string;
   transformersModel?: string;
   transformersCacheDir?: string;
+  textEmotionModel?: string;
+  textEmotionCacheDir?: string;
+  textEmotionDtype?: SubstrateConfig['textEmotionDtype'];
   embeddingApiUrl?: string;
   embeddingApiModel?: string;
   embeddingApiDims?: number;
@@ -225,6 +228,9 @@ export const RUNTIME_SETTINGS_KEYS = [
   'embeddingOllamaUrl',
   'transformersModel',
   'transformersCacheDir',
+  'textEmotionModel',
+  'textEmotionCacheDir',
+  'textEmotionDtype',
   'embeddingApiUrl',
   'embeddingApiModel',
   'embeddingApiDims',

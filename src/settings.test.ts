@@ -1355,6 +1355,32 @@ describe('settings', () => {
         expect(settings.capabilityTier).toBe(tier);
       }
     });
+
+    it('parses text emotion classifier settings', () => {
+      const params = new URLSearchParams({
+        textEmotionModel: 'cirimus/modernbert-base-go-emotions',
+        textEmotionCacheDir: '/tmp/text-emotion-cache',
+        textEmotionDtype: 'q8',
+      });
+
+      const [settings, errors] = parseSettingsForm(params);
+      expect(errors).toEqual([]);
+      expect(settings.textEmotionModel).toBe('cirimus/modernbert-base-go-emotions');
+      expect(settings.textEmotionCacheDir).toBe('/tmp/text-emotion-cache');
+      expect(settings.textEmotionDtype).toBe('q8');
+    });
+
+    it('rejects invalid textEmotionDtype values', () => {
+      const params = new URLSearchParams({
+        textEmotionModel: 'cirimus/modernbert-base-go-emotions',
+        textEmotionDtype: 'bad-dtype',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+      expect(errors).toContain(
+        'textEmotionDtype must be one of: auto, fp32, fp16, q8, int8, uint8, q4, bnb4, q4f16',
+      );
+    });
   });
 
   describe('runtime settings snapshot', () => {
@@ -1392,6 +1418,18 @@ describe('settings', () => {
       expect(snapshot.webFetchLocalCrawlerDomainAllowlist).toEqual([]);
       expect(snapshot.webFetchTlsCaCertPaths).toEqual([]);
       expect(snapshot.promotedExtendedTools).toEqual([]);
+    });
+
+    it('includes text emotion classifier settings in runtime snapshot', () => {
+      const config = makeConfig();
+      config.textEmotionModel = 'cirimus/modernbert-base-go-emotions';
+      config.textEmotionCacheDir = '/tmp/text-emotion-cache';
+      config.textEmotionDtype = 'q8';
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.textEmotionModel).toBe('cirimus/modernbert-base-go-emotions');
+      expect(snapshot.textEmotionCacheDir).toBe('/tmp/text-emotion-cache');
+      expect(snapshot.textEmotionDtype).toBe('q8');
     });
 
     it('resolves budget percentages and nullable hard overrides', () => {

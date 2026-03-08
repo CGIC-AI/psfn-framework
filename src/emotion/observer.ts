@@ -5,7 +5,6 @@ import {
   type AudioEmotionClassifierLike,
 } from './audio-classifier.js';
 import {
-  getSharedTextEmotionClassifier,
   type TextEmotionClassification,
 } from './text-classifier.js';
 import {
@@ -40,7 +39,7 @@ export interface EmotionObserverModalityObservations {
 
 export interface EmotionObserverConfig {
   state?: EmotionState;
-  textClassifier?: TextEmotionClassifierLike;
+  textClassifier: TextEmotionClassifierLike;
   audioClassifier?: AudioEmotionClassifierLike | null;
   vadLexicon?: VadLexicon;
   maxTextLength?: number;
@@ -118,9 +117,9 @@ export class EmotionObserver {
   private readonly vadLexicon: VadLexicon;
   private readonly maxTextLength: number;
 
-  constructor(config: EmotionObserverConfig = {}) {
+  constructor(config: EmotionObserverConfig) {
     this.state = config.state ?? new EmotionState();
-    this.textClassifier = config.textClassifier ?? getSharedTextEmotionClassifier();
+    this.textClassifier = config.textClassifier;
     this.audioClassifier = config.audioClassifier ?? null;
     this.vadLexicon = config.vadLexicon ?? loadVadLexicon();
     this.maxTextLength = normalizeMaxTextLength(config.maxTextLength);
@@ -143,17 +142,12 @@ export class EmotionObserver {
 
   async buildObservation(text: string): Promise<EmotionObservation> {
     const normalizedText = normalizeObserverText(text, this.maxTextLength);
-    const [classifierResult, lexiconSignal] = await Promise.all([
-      this.textClassifier
-        .classify(normalizedText)
-        .then((classifications) => ({ classifications }))
-        .catch(() => null),
-      Promise.resolve(this.scoreLexiconSignal(normalizedText)),
+    const [classifications, lexiconSignal] = await Promise.all([
+      this.textClassifier.classify(normalizedText),
+      this.scoreLexiconSignal(normalizedText),
     ]);
 
-    const classifierSignal = classifierResult
-      ? resolveClassifierSignal(classifierResult.classifications)
-      : null;
+    const classifierSignal = resolveClassifierSignal(classifications);
     const lexiconCategoricalSignal = resolveLexiconCategoricalSignal(lexiconSignal);
     const fusedCategorical = chooseStrongestCategoricalSignal([
       classifierSignal,

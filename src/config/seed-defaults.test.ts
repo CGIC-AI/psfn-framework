@@ -46,6 +46,9 @@ describe('seed defaults', () => {
     expect(defaults.embeddingProvider).toBe('ollama');
     expect(defaults.embeddingModel).toBe('snowflake-arctic-embed2');
     expect(defaults.embeddingDims).toBe(1024);
+    expect(defaults.textEmotionModel).toBe('cirimus/modernbert-base-go-emotions');
+    expect(defaults.textEmotionDtype).toBe('fp32');
+    expect(defaults.textEmotionCacheDir).toBeUndefined();
     expect(defaults.embeddingApiModel).toBe('snowflake-arctic-embed2');
   });
 

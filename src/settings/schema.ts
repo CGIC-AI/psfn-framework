@@ -95,6 +95,18 @@ const MODEL_REGISTRY_TOP_P_ALIASES = ['top_p'] as const;
 const MODEL_REGISTRY_TOP_K_ALIASES = ['top_k'] as const;
 const MODEL_REGISTRY_FREQUENCY_PENALTY_ALIASES = ['frequency_penalty'] as const;
 const MODEL_REGISTRY_REPETITION_PENALTY_ALIASES = ['repetition_penalty'] as const;
+const TEXT_EMOTION_DTYPE_VALUES = [
+  'auto',
+  'fp32',
+  'fp16',
+  'q8',
+  'int8',
+  'uint8',
+  'q4',
+  'bnb4',
+  'q4f16',
+] as const;
+const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
 const MODEL_REGISTRY_THINKING_ENABLED_ALIASES = [
   'thinking_enabled',
   'reasoningEnabled',
@@ -127,6 +139,17 @@ function resolveAliasedValue(
     if (target[alias] !== undefined) return target[alias];
   }
   return undefined;
+}
+
+function normalizeTextEmotionDtype(value: unknown): EditableSettings['textEmotionDtype'] | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!TEXT_EMOTION_DTYPE_SET.has(normalized)) {
+    return undefined;
+  }
+  return normalized as EditableSettings['textEmotionDtype'];
 }
 
 function removeAliases(
@@ -1101,6 +1124,30 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.transformersCacheDir = typeof settings.transformersCacheDir === 'string'
       ? settings.transformersCacheDir.trim()
       : '';
+  }
+
+  if ('textEmotionModel' in settings) {
+    const textEmotionModel = toNonEmptyString(settings.textEmotionModel);
+    if (textEmotionModel === undefined) {
+      throw new Error('textEmotionModel must be a non-empty string');
+    }
+    normalized.textEmotionModel = textEmotionModel;
+  }
+
+  if ('textEmotionCacheDir' in settings) {
+    normalized.textEmotionCacheDir = typeof settings.textEmotionCacheDir === 'string'
+      ? settings.textEmotionCacheDir.trim()
+      : '';
+  }
+
+  if ('textEmotionDtype' in settings) {
+    const textEmotionDtype = normalizeTextEmotionDtype(settings.textEmotionDtype);
+    if (textEmotionDtype === undefined) {
+      throw new Error(
+        `textEmotionDtype must be one of: ${TEXT_EMOTION_DTYPE_VALUES.join(', ')}`,
+      );
+    }
+    normalized.textEmotionDtype = textEmotionDtype;
   }
 
   if ('embeddingApiUrl' in settings) {

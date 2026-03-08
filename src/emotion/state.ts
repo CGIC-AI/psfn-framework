@@ -48,8 +48,6 @@ const RESEARCH_DISCRETE_HALF_LIFE_SECONDS: Record<string, number> = {
 
 const VAD_KEYS = ['valence', 'arousal', 'dominance'] as const;
 
-type VADKey = typeof VAD_KEYS[number];
-
 export class EmotionState {
   private vad: VADVector;
   private mood: VADVector;

@@ -575,9 +575,6 @@ export class MemoryWriter {
       tags,
       retentionClass,
     });
-    const normalizedConsentFlags = consentFlags === undefined
-      ? undefined
-      : normalizeConsentFlags(consentFlags);
     const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
     const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_upsert');
     const normalizedProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);

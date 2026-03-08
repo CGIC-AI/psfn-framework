@@ -20,7 +20,6 @@ import type {
   AgentResponse,
   CapabilityTier,
   CorrelationMetadata,
-  ContextMessage,
   InferredPostTurnAction,
   LLMContext,
   MessageModelOverride,

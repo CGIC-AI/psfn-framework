@@ -242,7 +242,7 @@ describe('PromptComposer', () => {
   describe('fallback to lastKnownGood', () => {
     it('returns lastKnownGood when all layers are disabled', () => {
       const base1 = store.create({ type: 'base', name: 'Base 1', content: 'BASE 1' });
-      const base2 = store.create({ type: 'base', name: 'Base 2', content: 'BASE 2' });
+      const _base2 = store.create({ type: 'base', name: 'Base 2', content: 'BASE 2' });
 
       // Compose once to set lastKnownGood
       const good = composer.compose();

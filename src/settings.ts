@@ -1008,7 +1008,7 @@ function cloneModelRouteConfig(value: ModelRouteConfig | undefined): ModelRouteC
   };
 }
 
-function sanitizeModelCatalog(value: unknown): Record<string, ModelCatalogEntry> {
+function _sanitizeModelCatalog(value: unknown): Record<string, ModelCatalogEntry> {
   if (!isRecord(value)) return {};
   const catalog: Record<string, ModelCatalogEntry> = {};
   for (const [rawSlotKey, rawEntry] of Object.entries(value)) {
@@ -1050,7 +1050,7 @@ function sanitizeModelCatalog(value: unknown): Record<string, ModelCatalogEntry>
   return catalog;
 }
 
-function sanitizeModelRoleAssignments(value: unknown): ModelRoleAssignments {
+function _sanitizeModelRoleAssignments(value: unknown): ModelRoleAssignments {
   if (!isRecord(value)) return {};
   const assignments: ModelRoleAssignments = {};
   for (const [rawPurpose, rawSlotKey] of Object.entries(value)) {
@@ -1062,7 +1062,7 @@ function sanitizeModelRoleAssignments(value: unknown): ModelRoleAssignments {
   return assignments;
 }
 
-function sanitizeModelRoster(value: unknown): Partial<Record<ModelPurpose, ModelSlot>> {
+function _sanitizeModelRoster(value: unknown): Partial<Record<ModelPurpose, ModelSlot>> {
   if (!isRecord(value)) return {};
   const roster: Partial<Record<ModelPurpose, ModelSlot>> = {};
 
@@ -1091,7 +1091,7 @@ function sanitizeModelRoster(value: unknown): Partial<Record<ModelPurpose, Model
   return roster;
 }
 
-function mergeCatalogSlot(
+function _mergeCatalogSlot(
   catalog: Record<string, ModelCatalogEntry>,
   slotKey: string,
   slot: {
@@ -1194,7 +1194,7 @@ function modelSlotFromCatalogEntry(
   };
 }
 
-function resolvePurposeSlot(
+function _resolvePurposeSlot(
   catalog: Record<string, ModelCatalogEntry>,
   assignments: ModelRoleAssignments,
   purpose: string,

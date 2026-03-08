@@ -89,8 +89,6 @@ const NEUTRAL_SIGNED_VAD: Readonly<VADVector> = Object.freeze({
   dominance: 0,
 });
 
-type VadKey = typeof VAD_KEYS[number];
-
 interface CategoricalSignal {
   label: string;
   confidence: number;

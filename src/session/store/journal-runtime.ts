@@ -252,7 +252,7 @@ export class SessionJournalRuntime {
     }
   }
 
-  readRecentEntriesFromTail(channelId: string, filePath: string, limit: number): SessionEntry[] {
+  readRecentEntriesFromTail(_channelId: string, filePath: string, limit: number): SessionEntry[] {
     const tail = readJournalTailEntries(filePath, {
       messageLimit: limit,
       includeBoundaryEntry: true,

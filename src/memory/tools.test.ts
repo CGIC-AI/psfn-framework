@@ -15,7 +15,6 @@ import type {
   MemoryRedactionResult,
 } from './writer.js';
 import type { PurrMemory } from './types.js';
-import { VALID_MEMORY_TYPES, VALID_SENSITIVITY_LEVELS } from './types.js';
 import type { MemoryStore, MemoryDeleteVersion } from './store.js';
 
 /** Extract text from AgentToolResult content array */

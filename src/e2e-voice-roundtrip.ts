@@ -221,7 +221,7 @@ function assertConfigured(name: string, value: string | undefined): void {
   }
 }
 
-function buildVoiceMessage(channelId: string, content: string): SubstrateMessage {
+function _buildVoiceMessage(channelId: string, content: string): SubstrateMessage {
   return {
     id: `voice-e2e-${randomUUID()}`,
     channelId,

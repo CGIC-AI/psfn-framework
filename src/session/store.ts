@@ -25,10 +25,8 @@ import {
   type LegacyChatImportManifest,
   type LegacyChatImportManifestFilter,
   type LegacyChatImportRequest,
-  type LegacyChatImportRange,
   type LegacyChatImportResult,
   type SessionFileSeed,
-  type SessionIntegrityProvider,
   type SessionStoreOptions,
 } from './store-primitives.js';
 import { inferSessionChannelType } from './session-id.js';

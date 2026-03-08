@@ -453,6 +453,46 @@ export interface AdminPromptListData {
   staticPrompts: PromptRegistryEntry[];
 }
 
+export interface ConstitutionImmutableBlock {
+  id: string;
+  title: string;
+  content: string;
+  editable: false;
+}
+
+export interface ConstitutionCompanionLayer {
+  id: string;
+  title: string;
+  content: string;
+  provenanceRefs: string[];
+  historyVersions: number[];
+  entryIds: string[];
+  editable: false;
+}
+
+export interface ConstitutionMutableLayer extends PromptLayer {
+  editable: boolean;
+  readOnlyReason?: string;
+}
+
+export interface ConstitutionSnapshotData {
+  immutableBlocks: ConstitutionImmutableBlock[];
+  companionLayer: ConstitutionCompanionLayer | null;
+  mutableLayers: ConstitutionMutableLayer[];
+  preview: {
+    text: string;
+    hash: string;
+    staticPrefix: string;
+    dynamicSuffix: string;
+  };
+}
+
+export interface ConstitutionUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: ConstitutionSnapshotData;
+}
+
 export interface PromptUpdateResult {
   ok: boolean;
   message: string;

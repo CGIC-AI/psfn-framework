@@ -1693,6 +1693,94 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('supports constitution snapshot and mutable-layer round-trip with immutable fail-closed edits', async () => {
+    const runtimeA = promptStore.create({
+      type: 'runtime',
+      name: 'Constitution Runtime A',
+      content: 'constitution-runtime-a',
+      updatedBy: 'admin',
+    });
+    const runtimeB = promptStore.create({
+      type: 'runtime',
+      name: 'Constitution Runtime B',
+      content: 'constitution-runtime-b',
+      updatedBy: 'admin',
+    });
+
+    const snapshotRes = await request(port, 'GET', '/api/admin/prompts/constitution', undefined, authHeaders);
+    expect(snapshotRes.status).toBe(200);
+    const snapshotPayload = JSON.parse(snapshotRes.body) as {
+      immutableBlocks: Array<{ id: string; editable: boolean }>;
+      mutableLayers: Array<{
+        id: string;
+        content: string;
+        enabled: boolean;
+        identifier?: string;
+        role?: string;
+        promptOrder?: number;
+      }>;
+      preview: { text: string };
+    };
+    expect(snapshotPayload.immutableBlocks).toHaveLength(3);
+    expect(snapshotPayload.immutableBlocks.every(block => block.editable === false)).toBe(true);
+    expect(snapshotPayload.preview.text).toContain('[Immutable Human-Safety Amendments]');
+
+    const mutableLayers = snapshotPayload.mutableLayers.map(layer => ({
+      id: layer.id,
+      content: layer.content,
+      enabled: layer.enabled,
+      identifier: layer.identifier ?? null,
+      role: layer.role ?? null,
+      promptOrder: layer.promptOrder ?? null,
+    }));
+    const aIndex = mutableLayers.findIndex(layer => layer.id === runtimeA.id);
+    const bIndex = mutableLayers.findIndex(layer => layer.id === runtimeB.id);
+    expect(aIndex).toBeGreaterThanOrEqual(0);
+    expect(bIndex).toBeGreaterThanOrEqual(0);
+    if (aIndex >= 0 && bIndex >= 0) {
+      const [moved] = mutableLayers.splice(bIndex, 1);
+      if (moved) mutableLayers.splice(aIndex, 0, moved);
+      const runtimeBPayload = mutableLayers.find(layer => layer.id === runtimeB.id);
+      if (runtimeBPayload) runtimeBPayload.content = 'constitution-runtime-b-updated';
+    }
+
+    const saveRes = await request(
+      port,
+      'PUT',
+      '/api/admin/prompts/constitution',
+      JSON.stringify({ mutableLayers }),
+      authHeaders,
+    );
+    expect(saveRes.status).toBe(200);
+    const savePayload = JSON.parse(saveRes.body) as {
+      ok: boolean;
+      snapshot?: { preview: { text: string } };
+    };
+    expect(savePayload.ok).toBe(true);
+    expect(promptStore.getById(runtimeB.id)?.content).toBe('constitution-runtime-b-updated');
+    expect(savePayload.snapshot?.preview.text).toContain('constitution-runtime-b-updated');
+    for (const [index, layer] of mutableLayers.entries()) {
+      expect(promptStore.getById(layer.id)?.priority).toBe(index);
+    }
+
+    const immutableAttemptPayload = mutableLayers.map((layer, index) => (
+      index === 0
+        ? { ...layer, id: 'constitution:immutable:1', content: 'forbidden immutable edit' }
+        : layer
+    ));
+    const immutableAttemptRes = await request(
+      port,
+      'PUT',
+      '/api/admin/prompts/constitution',
+      JSON.stringify({ mutableLayers: immutableAttemptPayload }),
+      authHeaders,
+    );
+    expect(immutableAttemptRes.status).toBe(400);
+    expect(JSON.parse(immutableAttemptRes.body)).toEqual({
+      error: 'Immutable constitution layers are read-only and cannot be edited',
+    });
+  });
+
   it('supports onboarding setup actions for keep starter and identity edits', async () => {
     const current = cardVersionStore.getCurrent().card;
     cardVersionStore.update({

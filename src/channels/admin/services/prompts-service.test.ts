@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from '../../../identity/prompt-store.js';
+import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../identity/prompt-composer.js';
 import { CARD_BACKED_FOUNDATION_PROMPT_MESSAGE } from '../../../identity/canonical-foundation.js';
 import { AdminPromptsDataService } from './prompts-service.js';
 
@@ -103,5 +104,127 @@ describe('AdminPromptsDataService', () => {
     }));
     expect(toggleResult.ok).toBe(true);
     expect(promptStore.getById(editableBase.id)?.enabled).toBe(false);
+  });
+
+  it('returns constitution snapshot with immutable and mutable boundaries plus preview output', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('seeded foundation');
+    const runtimeLayer = promptStore.create({
+      type: 'runtime',
+      name: 'Runtime Constitution Layer',
+      content: 'runtime constitution content',
+      updatedBy: 'admin',
+    });
+
+    const service = new AdminPromptsDataService({
+      promptStore,
+      companionValuesLayerProvider: () => ({
+        content: 'Companion values snapshot line',
+        provenanceRefs: ['values:1'],
+        historyVersions: [1],
+        entryIds: ['values-1'],
+      }),
+    });
+
+    const snapshot = service.getConstitutionSnapshot();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.immutableBlocks).toHaveLength(3);
+    expect(snapshot?.immutableBlocks.every(block => block.editable === false)).toBe(true);
+    expect(snapshot?.companionLayer?.editable).toBe(false);
+    expect(snapshot?.mutableLayers.some(layer => layer.id === runtimeLayer.id && layer.editable)).toBe(true);
+    expect(snapshot?.mutableLayers.some(layer => layer.type === 'base' && !layer.editable)).toBe(true);
+    expect(snapshot?.preview.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+    expect(snapshot?.preview.text).toContain('runtime constitution content');
+  });
+
+  it('fails closed when immutable constitution layer edits are attempted', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('seeded foundation');
+    const runtimeLayer = promptStore.create({
+      type: 'runtime',
+      name: 'Runtime Constitution Layer',
+      content: 'runtime constitution content',
+      updatedBy: 'admin',
+    });
+
+    const service = new AdminPromptsDataService({ promptStore });
+    const beforeContent = promptStore.getById(runtimeLayer.id)?.content;
+
+    const result = service.saveConstitutionMutableLayers(JSON.stringify({
+      mutableLayers: [
+        { id: 'constitution:immutable:1', content: 'forbidden edit' },
+        {
+          id: runtimeLayer.id,
+          content: 'updated runtime content',
+        },
+      ],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('read-only');
+    expect(promptStore.getById(runtimeLayer.id)?.content).toBe(beforeContent);
+  });
+
+  it('round-trips mutable constitution layer save with order and content updates', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('seeded foundation');
+    const runtimeA = promptStore.create({
+      type: 'runtime',
+      name: 'Runtime A',
+      content: 'runtime-a',
+      updatedBy: 'admin',
+    });
+    const runtimeB = promptStore.create({
+      type: 'runtime',
+      name: 'Runtime B',
+      content: 'runtime-b',
+      updatedBy: 'admin',
+    });
+
+    const service = new AdminPromptsDataService({ promptStore });
+    const snapshot = service.getConstitutionSnapshot();
+    expect(snapshot).not.toBeNull();
+    const payload = (snapshot?.mutableLayers ?? []).map(layer => ({
+      id: layer.id,
+      content: layer.content,
+      enabled: layer.enabled,
+      identifier: layer.identifier ?? null,
+      role: layer.role ?? null,
+      promptOrder: layer.promptOrder ?? null,
+    }));
+    const aIndex = payload.findIndex(layer => layer.id === runtimeA.id);
+    const bIndex = payload.findIndex(layer => layer.id === runtimeB.id);
+    expect(aIndex).toBeGreaterThanOrEqual(0);
+    expect(bIndex).toBeGreaterThanOrEqual(0);
+    if (aIndex >= 0 && bIndex >= 0) {
+      const [moved] = payload.splice(bIndex, 1);
+      if (moved) payload.splice(aIndex, 0, moved);
+      const runtimeBPayload = payload.find(layer => layer.id === runtimeB.id);
+      if (runtimeBPayload) runtimeBPayload.content = 'runtime-b-updated';
+    }
+
+    const result = service.saveConstitutionMutableLayers(JSON.stringify({
+      mutableLayers: payload,
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(promptStore.getById(runtimeB.id)?.content).toBe('runtime-b-updated');
+    expect(result.snapshot?.preview.text).toContain('runtime-b-updated');
+    const expectedOrder = payload.map(layer => layer.id);
+    for (const [index, layerId] of expectedOrder.entries()) {
+      expect(promptStore.getById(layerId)?.priority).toBe(index);
+    }
   });
 });

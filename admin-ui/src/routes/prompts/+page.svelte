@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import {
     listPrompts,
+    getConstitutionSnapshot,
+    saveConstitutionMutableLayers,
     createPromptLayer,
     getPromptDetail,
     updatePrompt,
@@ -17,6 +19,10 @@
     PromptHistoryEntry,
     PromptDiffResult,
     PromptUpdateResult,
+    ConstitutionSnapshotData,
+    ConstitutionCompanionLayer,
+    ConstitutionImmutableBlock,
+    ConstitutionMutableLayer,
   } from '$lib/types';
 
   // ── Structured prompt constants ──
@@ -99,6 +105,15 @@
   let staticPrompts = $state<PromptRegistryEntry[]>([]);
   let loading = $state(true);
   let error = $state('');
+  let constitutionLoading = $state(true);
+  let constitutionSaving = $state(false);
+  let constitutionError = $state('');
+  let constitutionSaveMessage = $state('');
+  let showConstitutionSection = $state(true);
+  let constitutionImmutableBlocks = $state<ConstitutionImmutableBlock[]>([]);
+  let constitutionCompanionLayer = $state<ConstitutionCompanionLayer | null>(null);
+  let constitutionMutableLayers = $state<ConstitutionMutableLayer[]>([]);
+  let constitutionServerPreview = $state('');
 
   // Inline expansion state — which layer/static is expanded
   let expandedLayerId = $state<string | null>(null);
@@ -158,6 +173,33 @@
       ? Object.values(editSections).reduce((sum, s) => sum + s.length, 0)
       : editRawContent.length
   );
+
+  let constitutionPreviewText = $derived.by(() => {
+    const sections: string[] = [];
+
+    for (const block of constitutionImmutableBlocks) {
+      const trimmed = block.content.trim();
+      if (!trimmed) continue;
+      sections.push(`[${block.title}]\n${trimmed}`);
+    }
+
+    if (constitutionCompanionLayer?.content) {
+      const companion = constitutionCompanionLayer.content.trim();
+      if (companion) sections.push(companion);
+    }
+
+    for (const layer of constitutionMutableLayers) {
+      if (!layer.enabled) continue;
+      const trimmed = layer.content.trim();
+      if (!trimmed) continue;
+      sections.push(trimmed);
+    }
+
+    if (sections.length === 0) {
+      return constitutionServerPreview;
+    }
+    return sections.join('\n\n');
+  });
 
   // Build interleaved list of layers + markers
   type StackEntry =
@@ -246,6 +288,82 @@
     return { label: role, cls: map[role] ?? 'bg-bark-400 text-white' };
   }
 
+  function applyConstitutionSnapshot(snapshot: ConstitutionSnapshotData) {
+    constitutionImmutableBlocks = snapshot.immutableBlocks ?? [];
+    constitutionCompanionLayer = snapshot.companionLayer ?? null;
+    constitutionMutableLayers = (snapshot.mutableLayers ?? []).map(layer => ({ ...layer }));
+    constitutionServerPreview = snapshot.preview?.text ?? '';
+    constitutionSaveMessage = '';
+  }
+
+  async function refreshConstitution() {
+    try {
+      const snapshot = await getConstitutionSnapshot();
+      applyConstitutionSnapshot(snapshot);
+      constitutionError = '';
+    } catch (e) {
+      constitutionError = e instanceof Error ? e.message : 'Failed to load constitution snapshot';
+    } finally {
+      constitutionLoading = false;
+    }
+  }
+
+  function updateConstitutionLayerContent(layerId: string, content: string) {
+    constitutionMutableLayers = constitutionMutableLayers.map(layer => (
+      layer.id === layerId ? { ...layer, content } : layer
+    ));
+  }
+
+  function updateConstitutionLayerEnabled(layerId: string, enabled: boolean) {
+    constitutionMutableLayers = constitutionMutableLayers.map(layer => (
+      layer.id === layerId ? { ...layer, enabled } : layer
+    ));
+  }
+
+  function moveConstitutionLayer(index: number, direction: 'up' | 'down') {
+    const target = direction === 'up' ? index - 1 : index + 1;
+    if (target < 0 || target >= constitutionMutableLayers.length) return;
+    const next = [...constitutionMutableLayers];
+    const [layer] = next.splice(index, 1);
+    if (!layer) return;
+    next.splice(target, 0, layer);
+    constitutionMutableLayers = next;
+  }
+
+  async function saveConstitution() {
+    constitutionSaving = true;
+    constitutionError = '';
+    constitutionSaveMessage = '';
+    try {
+      const result = await saveConstitutionMutableLayers({
+        mutableLayers: constitutionMutableLayers.map(layer => ({
+          id: layer.id,
+          content: layer.content,
+          enabled: layer.enabled,
+          identifier: layer.identifier ?? null,
+          role: layer.role ?? null,
+          promptOrder: layer.promptOrder ?? null,
+        })),
+      });
+      if (!result.ok) {
+        constitutionError = result.message || 'Failed to save constitution layers';
+        return;
+      }
+      if (result.snapshot) {
+        applyConstitutionSnapshot(result.snapshot);
+      } else {
+        await refreshConstitution();
+      }
+      await refreshList();
+      constitutionSaveMessage = result.message || 'Saved constitution layers';
+      showToast('Constitution updated');
+    } catch (e) {
+      constitutionError = e instanceof Error ? e.message : 'Failed to save constitution layers';
+    } finally {
+      constitutionSaving = false;
+    }
+  }
+
   // ── Structured content parsing ──
   function parseStructuredContent(content: string): { sections: Record<StructuredSectionKey, string>; isStructured: boolean } {
     const sections: Record<StructuredSectionKey, string> = {
@@ -323,21 +441,37 @@
 
   // ── Lifecycle ──
   onMount(async () => {
-    try {
-      const data = await listPrompts();
-      layers = data?.layers ?? [];
-      staticPrompts = data?.staticPrompts ?? [];
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load prompts';
-    } finally {
-      loading = false;
+    const [promptsResult, constitutionResult] = await Promise.allSettled([
+      listPrompts(),
+      getConstitutionSnapshot(),
+    ]);
+
+    if (promptsResult.status === 'fulfilled') {
+      layers = promptsResult.value?.layers ?? [];
+      staticPrompts = promptsResult.value?.staticPrompts ?? [];
+    } else {
+      const reason = promptsResult.reason;
+      error = reason instanceof Error ? reason.message : 'Failed to load prompts';
     }
+
+    if (constitutionResult.status === 'fulfilled') {
+      applyConstitutionSnapshot(constitutionResult.value);
+      constitutionError = '';
+    } else {
+      const reason = constitutionResult.reason;
+      constitutionError = reason instanceof Error
+        ? reason.message
+        : 'Failed to load constitution snapshot';
+    }
+    loading = false;
+    constitutionLoading = false;
   });
 
   async function refreshList() {
     const data = await listPrompts();
     layers = data?.layers ?? [];
     staticPrompts = data?.staticPrompts ?? [];
+    await refreshConstitution();
   }
 
   // ── Layer actions ──
@@ -630,6 +764,139 @@
       {/each}
     </div>
   {:else}
+    <!-- ─── Constitution Builder ─── -->
+    <div class="card-garden overflow-hidden">
+      <button
+        onclick={() => showConstitutionSection = !showConstitutionSection}
+        class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-bark-100 transition-colors"
+      >
+        <div>
+          <h2 class="text-base font-serif font-semibold text-shadow-800">Constitution Builder</h2>
+          <p class="text-sm text-shadow-600 mt-0.5">Immutable amendments are locked. Mutable layers can be reordered and edited.</p>
+        </div>
+        <svg class="w-4 h-4 text-shadow-600 transition-transform shrink-0 ml-4 {showConstitutionSection ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {#if showConstitutionSection}
+        <div class="border-t border-bark-300 p-5 space-y-4">
+          {#if constitutionLoading}
+            <div class="space-y-2">
+              {#each Array(3) as _}
+                <div class="h-16 rounded-lg bg-bark-200 animate-pulse"></div>
+              {/each}
+            </div>
+          {:else}
+            {#if constitutionError}
+              <div class="px-3 py-2 rounded-lg border border-wilt-400 bg-wilt-50 text-sm text-wilt-700">
+                {constitutionError}
+              </div>
+            {/if}
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div class="space-y-3">
+                <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Immutable Amendments</h3>
+                {#each constitutionImmutableBlocks as block (block.id)}
+                  <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
+                    <div class="flex items-center justify-between mb-1.5">
+                      <span class="text-sm font-medium text-shadow-800">{block.title}</span>
+                      <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Read only</span>
+                    </div>
+                    <p class="text-sm text-shadow-700 leading-relaxed whitespace-pre-wrap">{block.content}</p>
+                  </div>
+                {/each}
+
+                {#if constitutionCompanionLayer}
+                  <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
+                    <div class="flex items-center justify-between mb-1.5">
+                      <span class="text-sm font-medium text-shadow-800">{constitutionCompanionLayer.title}</span>
+                      <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Derived</span>
+                    </div>
+                    <pre class="text-sm font-mono text-shadow-700 whitespace-pre-wrap bg-white/60 p-2 rounded border border-bark-200 max-h-48 overflow-y-auto">{constitutionCompanionLayer.content}</pre>
+                  </div>
+                {/if}
+              </div>
+
+              <div class="space-y-3">
+                <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Mutable Layers</h3>
+                <div class="space-y-2">
+                  {#each constitutionMutableLayers as layer, idx (layer.id)}
+                    {@const layerLocked = !layer.editable}
+                    <div class="rounded-lg border border-bark-300 bg-white p-3 space-y-2">
+                      <div class="flex items-center gap-2">
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider {layerBadge(layer.type).bg} {layerBadge(layer.type).text}">
+                          {layerBadge(layer.type).label}
+                        </span>
+                        <span class="text-sm font-medium text-shadow-800 truncate">{layer.name}</span>
+                        <span class="ml-auto text-sm text-shadow-600">#{idx + 1}</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <button
+                          onclick={() => moveConstitutionLayer(idx, 'up')}
+                          disabled={idx === 0}
+                          class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
+                        >
+                          Up
+                        </button>
+                        <button
+                          onclick={() => moveConstitutionLayer(idx, 'down')}
+                          disabled={idx === constitutionMutableLayers.length - 1}
+                          class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
+                        >
+                          Down
+                        </button>
+                        <label class="ml-auto inline-flex items-center gap-1.5 text-sm text-shadow-700">
+                          <input
+                            type="checkbox"
+                            checked={layer.enabled}
+                            disabled={layerLocked}
+                            onchange={(e) => updateConstitutionLayerEnabled(layer.id, (e.target as HTMLInputElement).checked)}
+                          />
+                          enabled
+                        </label>
+                      </div>
+                      <textarea
+                        rows={4}
+                        value={layer.content}
+                        disabled={layerLocked}
+                        oninput={(e) => updateConstitutionLayerContent(layer.id, (e.target as HTMLTextAreaElement).value)}
+                        class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                      ></textarea>
+                      {#if layerLocked && layer.readOnlyReason}
+                        <p class="text-sm text-shadow-600">{layer.readOnlyReason}</p>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            </div>
+
+            <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Preview Output</h3>
+                <span class="text-sm text-shadow-600">~{formatTokenCount(estimateTokens(constitutionPreviewText))} tokens</span>
+              </div>
+              <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-white/60 p-3 rounded border border-bark-200 max-h-64 overflow-y-auto leading-relaxed">{constitutionPreviewText}</pre>
+            </div>
+
+            <div class="flex items-center gap-3">
+              <button
+                onclick={saveConstitution}
+                disabled={constitutionSaving}
+                class="px-4 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+              >
+                {constitutionSaving ? 'Saving...' : 'Save Constitution Layers'}
+              </button>
+              {#if constitutionSaveMessage}
+                <span class="text-sm text-moss-700">{constitutionSaveMessage}</span>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
     <!-- ─── Prompt Composition Stack ─── -->
     <div>
       <div class="flex items-center justify-between mb-3">

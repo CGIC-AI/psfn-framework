@@ -62,6 +62,11 @@ export interface PromptComposerOptions {
    * Optional provider for the secondary companion-derived values layer.
    */
   companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
+  /**
+   * Persist last-known-good composed prompt snapshots to disk.
+   * Defaults to true.
+   */
+  persistLastKnownGood?: boolean;
 }
 
 export interface ComposeResult {

@@ -1,5 +1,7 @@
-import { apiGet, apiPatch, apiPost } from '$lib/api/client';
+import { apiGet, apiPatch, apiPost, apiPut } from '$lib/api/client';
 import type {
+  ConstitutionUpdateResult,
+  ConstitutionSnapshotData,
   AdminPromptListData,
   AdminPromptDetailData,
   PromptUpdateResult,
@@ -20,6 +22,23 @@ export interface PromptCreateParams {
 
 export function listPrompts(): Promise<AdminPromptListData> {
   return apiGet<AdminPromptListData>('/api/admin/prompts');
+}
+
+export function getConstitutionSnapshot(): Promise<ConstitutionSnapshotData> {
+  return apiGet<ConstitutionSnapshotData>('/api/admin/prompts/constitution');
+}
+
+export function saveConstitutionMutableLayers(body: {
+  mutableLayers: Array<{
+    id: string;
+    content?: string;
+    enabled?: boolean;
+    identifier?: string | null;
+    role?: string | null;
+    promptOrder?: number | null;
+  }>;
+}): Promise<ConstitutionUpdateResult> {
+  return apiPut<ConstitutionUpdateResult>('/api/admin/prompts/constitution', body);
 }
 
 export function createPromptLayer(

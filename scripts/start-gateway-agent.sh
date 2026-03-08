@@ -37,25 +37,8 @@ if [ -z "${MODULE_REGISTRY_PATH:-}" ]; then
   done
 fi
 
-if [ -z "${GATEWAY_SESSION_HMAC_KEYS:-}" ] && [ -z "${GATEWAY_SESSION_HMAC_KEY:-}" ]; then
-  export GATEWAY_SESSION_HMAC_KEY="dev-local-gateway-hmac-key"
-  echo "[launcher] GATEWAY_SESSION_HMAC_KEY not set; defaulting local dev key"
-fi
-
 if [ -z "${NRC_VAD_LEXICON_PATH:-}" ]; then
-  default_lexicon_path="./companion/emotion/nrc-vad-lexicon-v2.tsv"
-  if [ ! -f "${default_lexicon_path}" ]; then
-    mkdir -p "$(dirname "${default_lexicon_path}")"
-    cat > "${default_lexicon_path}" <<'EOF'
-term	valence	arousal	dominance
-hello	0.50	0.50	0.50
-calm	0.64	0.28	0.58
-stressed	0.24	0.79	0.31
-joyful	0.86	0.72	0.68
-EOF
-    echo "[launcher] NRC_VAD_LEXICON_PATH not set; seeded local lexicon at ${default_lexicon_path}"
-  fi
-  export NRC_VAD_LEXICON_PATH="${default_lexicon_path}"
+  export NRC_VAD_LEXICON_PATH="./companion/emotion/nrc-vad-lexicon-v2.tsv"
   echo "[launcher] NRC_VAD_LEXICON_PATH not set; defaulting to ${NRC_VAD_LEXICON_PATH}"
 fi
 

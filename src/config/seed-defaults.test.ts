@@ -48,7 +48,7 @@ describe('seed defaults', () => {
     expect(defaults.embeddingDims).toBe(1024);
     expect(defaults.textEmotionModel).toBe('cirimus/modernbert-base-go-emotions');
     expect(defaults.textEmotionDtype).toBe('fp32');
-    expect(defaults.textEmotionCacheDir).toBeUndefined();
+    expect(defaults.textEmotionCacheDir).toBe('models/transformers');
     expect(defaults.embeddingApiModel).toBe('snowflake-arctic-embed2');
   });
 

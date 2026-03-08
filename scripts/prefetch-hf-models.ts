@@ -2,14 +2,13 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { config as loadDotenv } from 'dotenv';
 import {
-  DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG,
   resolveProjectTransformersCacheDir,
   TransformersEmbeddingProvider,
 } from '../src/memory/embedding.js';
 import {
   TextEmotionClassifier,
-  TEXT_EMOTION_MODEL_ID,
 } from '../src/emotion/text-classifier.js';
+import { loadRuntimeSettingsSeedDefaults } from '../src/config/seed-defaults.js';
 
 interface PrefetchCliOptions {
   dryRun: boolean;
@@ -18,16 +17,22 @@ interface PrefetchCliOptions {
   emotionModel: string | null;
 }
 
-function printUsage(): void {
+interface PrefetchRuntimeDefaults {
+  cacheDir: string;
+  embeddingModel: string;
+  emotionModel: string;
+}
+
+function printUsage(defaults: PrefetchRuntimeDefaults): void {
   console.log('Usage: npm run prefetch:hf-models -- [options]');
   console.log('');
   console.log('Prefetches configured Hugging Face models into the local project models directory.');
   console.log('');
   console.log('Options:');
   console.log('  --dry-run                 Print resolved settings without downloading');
-  console.log('  --cache-dir <path>        Override cache directory (default: ./models/transformers)');
-  console.log('  --embedding-model <id>    Override embedding model id');
-  console.log(`  --emotion-model <id>      Override emotion model id (default: ${TEXT_EMOTION_MODEL_ID})`);
+  console.log(`  --cache-dir <path>        Override cache directory (default: ${defaults.cacheDir})`);
+  console.log(`  --embedding-model <id>    Override embedding model id (default: ${defaults.embeddingModel})`);
+  console.log(`  --emotion-model <id>      Override emotion model id (default: ${defaults.emotionModel})`);
   console.log('  --skip-emotion            Skip text emotion model prefetch');
   console.log('  --help                    Show this help');
 }
@@ -37,21 +42,23 @@ function resolveOptionalString(value: string | undefined): string | undefined {
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
-function resolveConfiguredEmbeddingModel(env: NodeJS.ProcessEnv): string {
-  return resolveOptionalString(env.TRANSFORMERS_MODEL)
-    ?? resolveOptionalString(env.TRANSFORMERS_EMBEDDING_MODEL)
-    ?? resolveOptionalString(env.EMBEDDING_MODEL)
-    ?? DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG.model;
-}
-
-function resolveConfiguredCacheDir(env: NodeJS.ProcessEnv): string {
-  const configured = resolveOptionalString(env.TRANSFORMERS_CACHE_DIR);
+function resolveCacheDir(configuredCacheDir: string | undefined): string {
+  const configured = resolveOptionalString(configuredCacheDir);
   if (!configured) {
     return resolveProjectTransformersCacheDir();
   }
   return path.isAbsolute(configured)
     ? configured
     : path.resolve(process.cwd(), configured);
+}
+
+function resolvePrefetchRuntimeDefaults(env: NodeJS.ProcessEnv): PrefetchRuntimeDefaults {
+  const runtimeDefaults = loadRuntimeSettingsSeedDefaults(resolveOptionalString(env.CONFIG_DIR));
+  return {
+    cacheDir: resolveCacheDir(runtimeDefaults.textEmotionCacheDir),
+    embeddingModel: runtimeDefaults.transformersModel,
+    emotionModel: runtimeDefaults.textEmotionModel,
+  };
 }
 
 function resolveOptionalHfToken(env: NodeJS.ProcessEnv): string | undefined {
@@ -61,11 +68,14 @@ function resolveOptionalHfToken(env: NodeJS.ProcessEnv): string | undefined {
     ?? resolveOptionalString(env.TRANSFORMERS_HF_TOKEN);
 }
 
-function parseCliOptions(args: string[], env: NodeJS.ProcessEnv): PrefetchCliOptions {
+function parseCliOptions(
+  args: string[],
+  runtimeDefaults: PrefetchRuntimeDefaults,
+): PrefetchCliOptions {
   let dryRun = false;
-  let cacheDir = resolveConfiguredCacheDir(env);
-  let embeddingModel = resolveConfiguredEmbeddingModel(env);
-  let emotionModel: string | null = TEXT_EMOTION_MODEL_ID;
+  let cacheDir = runtimeDefaults.cacheDir;
+  let embeddingModel = runtimeDefaults.embeddingModel;
+  let emotionModel: string | null = runtimeDefaults.emotionModel;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -104,7 +114,7 @@ function parseCliOptions(args: string[], env: NodeJS.ProcessEnv): PrefetchCliOpt
         break;
       }
       case '--help':
-        printUsage();
+        printUsage(runtimeDefaults);
         process.exit(0);
       default:
         throw new Error(`Unsupported option: ${arg}`);
@@ -141,7 +151,8 @@ async function prefetchModels(options: PrefetchCliOptions, hfToken: string | und
 
 async function main(): Promise<void> {
   loadDotenv();
-  const options = parseCliOptions(process.argv.slice(2), process.env);
+  const runtimeDefaults = resolvePrefetchRuntimeDefaults(process.env);
+  const options = parseCliOptions(process.argv.slice(2), runtimeDefaults);
   const hfToken = resolveOptionalHfToken(process.env);
 
   if (hfToken) {

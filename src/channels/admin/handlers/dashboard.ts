@@ -1,6 +1,7 @@
 import type { LegacyAdminHandlers } from '../handlers-legacy.js';
 import type { DashboardStats } from '../types.js';
 import * as tpl from '../templates.js';
+import { createEmptyDashboardCostWindowTotals } from '../services/dashboard-cost-windows.js';
 
 export class AdminDashboardHandlers {
   constructor(private readonly legacy: LegacyAdminHandlers) {}
@@ -27,6 +28,10 @@ export class AdminDashboardHandlers {
           ? legacy.usageTotals.contextUtilizationSum / legacy.usageTotals.turns
           : 0,
         estimatedCostUsd: legacy.usageTotals.estimatedCostUsd,
+        costWindows: {
+          selected: 'today',
+          byWindow: createEmptyDashboardCostWindowTotals(),
+        },
       },
       recentThinkTraces: legacy.thinkTraces,
     };

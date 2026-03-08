@@ -1,20 +1,70 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
+  import {
+    DASHBOARD_COST_WINDOW_OPTIONS,
+    resolveDashboardCostWindow,
+    type DashboardCostWindow,
+  } from '$lib/dashboard/cost-window';
   import type { AdminDashboardData } from '$lib/types';
 
   let data = $state<AdminDashboardData | null>(null);
   let error = $state('');
   let loading = $state(true);
+  let selectedCostWindow = $state<DashboardCostWindow>('today');
+  let costWindowLoading = $state(false);
+  let costWindowRefreshError = $state('');
+  let latestDashboardRequestId = 0;
 
-  onMount(async () => {
-    try {
-      data = await getDashboard();
-    } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load dashboard';
-    } finally {
-      loading = false;
+  function costWindowHint(window: DashboardCostWindow): string {
+    const hints: Record<DashboardCostWindow, string> = {
+      today: 'today',
+      week: 'this week',
+      month: 'this month',
+    };
+    return hints[window];
+  }
+
+  async function loadDashboard(costWindow: DashboardCostWindow, mode: 'initial' | 'refresh'): Promise<void> {
+    const requestId = ++latestDashboardRequestId;
+    if (mode === 'initial') {
+      error = '';
+    } else {
+      costWindowLoading = true;
+      costWindowRefreshError = '';
     }
+
+    try {
+      const payload = await getDashboard(costWindow);
+      if (requestId !== latestDashboardRequestId) return;
+      data = payload;
+      selectedCostWindow = resolveDashboardCostWindow(payload.stats.sessionUsage.costWindows.selected);
+    } catch (e) {
+      if (requestId !== latestDashboardRequestId) return;
+      const message = e instanceof Error ? e.message : 'Failed to load dashboard';
+      if (mode === 'initial') {
+        error = message;
+      } else {
+        costWindowRefreshError = message;
+      }
+    } finally {
+      if (requestId !== latestDashboardRequestId) return;
+      if (mode === 'initial') {
+        loading = false;
+      } else {
+        costWindowLoading = false;
+      }
+    }
+  }
+
+  function selectCostWindow(window: DashboardCostWindow): void {
+    if (window === selectedCostWindow || costWindowLoading) return;
+    selectedCostWindow = window;
+    void loadDashboard(window, 'refresh');
+  }
+
+  onMount(() => {
+    void loadDashboard(selectedCostWindow, 'initial');
   });
 
   function formatTokens(n: number): string {
@@ -68,6 +118,7 @@
     </div>
   {:else if data}
     {@const stats = data.stats}
+    {@const selectedCostWindowUsage = stats.sessionUsage.costWindows.byWindow[selectedCostWindow]}
     <!-- Stat cards -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <a href="/memory" class="card-garden p-5 hover:border-gold-400 hover:shadow-md transition-all cursor-pointer block">
@@ -93,13 +144,37 @@
       </div>
 
       <div class="card-garden p-5">
-        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">Estimated Cost <span class="text-shadow-600 normal-case font-normal">(since restart)</span></p>
+        <p class="text-sm text-shadow-700 uppercase tracking-wide font-medium">
+          Estimated Cost <span class="text-shadow-600 normal-case font-normal">({costWindowHint(selectedCostWindow)})</span>
+        </p>
         <p class="text-2xl font-serif text-shadow-900 mt-1">
-          {formatCost(stats.sessionUsage.estimatedCostUsd)}
+          {formatCost(selectedCostWindowUsage.estimatedCostUsd)}
         </p>
-        <p class="text-sm text-shadow-600 mt-1">
-          {stats.sessionUsage.llmCalls} LLM calls, {stats.sessionUsage.toolCalls} tool calls
-        </p>
+        {#if selectedCostWindowUsage.turns > 0}
+          <p class="text-sm text-shadow-600 mt-1">
+            {selectedCostWindowUsage.llmCalls} LLM calls, {selectedCostWindowUsage.toolCalls} tool calls over {selectedCostWindowUsage.turns} turns
+          </p>
+        {:else}
+          <p class="text-sm text-shadow-600 mt-1">No telemetry in this window yet.</p>
+        {/if}
+        <div class="mt-3">
+          <div class="inline-flex rounded-lg border border-bark-300 bg-bark-100 p-1 gap-1">
+            {#each DASHBOARD_COST_WINDOW_OPTIONS as option (option.value)}
+              <button
+                type="button"
+                class="px-2.5 py-1 text-xs font-medium rounded-md transition-colors disabled:opacity-60 disabled:cursor-not-allowed {option.value === selectedCostWindow ? 'bg-gold-300 text-shadow-900' : 'text-shadow-700 hover:bg-bark-200'}"
+                aria-pressed={option.value === selectedCostWindow}
+                disabled={costWindowLoading}
+                onclick={() => selectCostWindow(option.value)}
+              >
+                {option.label}
+              </button>
+            {/each}
+          </div>
+          {#if costWindowRefreshError}
+            <p class="text-xs text-wilt-600 mt-2">{costWindowRefreshError}</p>
+          {/if}
+        </div>
       </div>
     </div>
 

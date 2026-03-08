@@ -1,4 +1,19 @@
 // Dashboard
+export type DashboardCostWindow = 'today' | 'week' | 'month';
+
+export interface DashboardCostWindowUsage {
+  turns: number;
+  llmCalls: number;
+  toolCalls: number;
+  estimatedCostUsd: number;
+}
+
+export interface DashboardCostWindowTotals {
+  today: DashboardCostWindowUsage;
+  week: DashboardCostWindowUsage;
+  month: DashboardCostWindowUsage;
+}
+
 export interface DashboardStats {
   memoryTotal: number;
   memoryByType: Record<string, number>;
@@ -15,6 +30,10 @@ export interface DashboardStats {
     toolCalls: number;
     avgContextUtilization: number;
     estimatedCostUsd: number;
+    costWindows: {
+      selected: DashboardCostWindow;
+      byWindow: DashboardCostWindowTotals;
+    };
   };
   recentThinkTraces: ThinkTraceView[];
 }

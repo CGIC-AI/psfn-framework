@@ -31,6 +31,7 @@ import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
 import type {
   ChannelInfo,
   CompactionAuditView,
+  DashboardCostWindow,
   DashboardStats,
   EnvInfo,
 } from '../types.js';
@@ -47,7 +48,7 @@ export interface AdminDashboardData {
 }
 
 export interface AdminDashboardService {
-  getDashboardData(): AdminDashboardData;
+  getDashboardData(options?: { costWindow?: DashboardCostWindow }): AdminDashboardData;
 }
 
 export type AdminAdaptiveToolTelemetryEvent =

@@ -2,8 +2,10 @@ import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
 } from './context-budget.js';
+import type { CapabilityTier } from './capabilities/tier-types.js';
 import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 import type { ContextManifest } from './session/context-manifest.js';
+import type { TurnID } from './turns/types.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
@@ -13,9 +15,7 @@ import { parseOptionalStringEnv } from './utils/env.js';
 
 export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];
-
-declare const turnIdBrand: unique symbol;
-export type TurnID = string & { readonly [turnIdBrand]: true };
+export type { TurnID } from './turns/types.js';
 
 export interface TurnRecordMessage {
   role: 'user' | 'assistant';
@@ -476,7 +476,7 @@ export interface RuntimeConfigHooks {
 
 // ── Configuration ──
 
-export type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous' | 'custom';
+export type { CapabilityTier } from './capabilities/tier-types.js';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
 export const PROMOTED_EXTENDED_TOOL_SLOTS_MAX = 4;

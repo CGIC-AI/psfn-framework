@@ -862,6 +862,65 @@ describe('GatewayClient beads RPC wrappers', () => {
   });
 });
 
+describe('GatewayClient keepalive', () => {
+  it('emits lightweight keepalive RPC frames while idle', async () => {
+    vi.useFakeTimers();
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { keepaliveIntervalMs: 1_000 });
+
+    try {
+      expect(conn.sent).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(conn.sent).toHaveLength(1);
+
+      const keepaliveReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+      expect(keepaliveReq.method).toBe('discord.typing');
+      expect(keepaliveReq.params).toEqual({ channelId: 'internal:gateway-keepalive' });
+
+      conn._emit({
+        jsonrpc: '2.0',
+        id: keepaliveReq.id,
+        result: { success: true },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(conn.sent).toHaveLength(2);
+      const secondKeepaliveReq = conn.sent[1] as { method: string };
+      expect(secondKeepaliveReq.method).toBe('discord.typing');
+    } finally {
+      client.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops keepalive emissions after destroy', async () => {
+    vi.useFakeTimers();
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { keepaliveIntervalMs: 500 });
+
+    try {
+      await vi.advanceTimersByTimeAsync(500);
+      expect(conn.sent).toHaveLength(1);
+
+      const keepaliveReq = conn.sent[0] as { id: number };
+      conn._emit({
+        jsonrpc: '2.0',
+        id: keepaliveReq.id,
+        result: { success: true },
+      });
+
+      client.destroy();
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(conn.sent).toHaveLength(1);
+    } finally {
+      client.destroy();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('GatewayClient connection lifecycle', () => {
   let conn: ReturnType<typeof createMockConnection>;
   let client: GatewayClient;

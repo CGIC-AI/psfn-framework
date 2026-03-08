@@ -1,3 +1,5 @@
+import type { DashboardCostWindowTotals, DashboardCostWindowUsage } from '$lib/types';
+
 export const DASHBOARD_COST_WINDOWS = ['today', 'week', 'month'] as const;
 export type DashboardCostWindow = typeof DASHBOARD_COST_WINDOWS[number];
 
@@ -25,4 +27,42 @@ export function resolveDashboardCostWindow(value: string | null | undefined): Da
 
 export function buildDashboardCostWindowPath(costWindow: DashboardCostWindow): string {
   return `/api/admin/dashboard?costWindow=${encodeURIComponent(costWindow)}`;
+}
+
+type DashboardCostWindowUsageInput = Partial<Record<keyof DashboardCostWindowUsage, unknown>> | null | undefined;
+type DashboardCostWindowTotalsInput = Partial<Record<DashboardCostWindow, DashboardCostWindowUsageInput>> | null | undefined;
+
+function asNonNegativeFiniteNumber(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return value;
+}
+
+export function normalizeDashboardCostWindowUsage(
+  usage: DashboardCostWindowUsageInput,
+): DashboardCostWindowUsage {
+  return {
+    turns: asNonNegativeFiniteNumber(usage?.turns),
+    llmCalls: asNonNegativeFiniteNumber(usage?.llmCalls),
+    toolCalls: asNonNegativeFiniteNumber(usage?.toolCalls),
+    estimatedCostUsd: asNonNegativeFiniteNumber(usage?.estimatedCostUsd),
+  };
+}
+
+export function normalizeDashboardCostWindowTotals(
+  byWindow: DashboardCostWindowTotalsInput,
+): DashboardCostWindowTotals {
+  return {
+    today: normalizeDashboardCostWindowUsage(byWindow?.today),
+    week: normalizeDashboardCostWindowUsage(byWindow?.week),
+    month: normalizeDashboardCostWindowUsage(byWindow?.month),
+  };
+}
+
+export function resolveSelectedDashboardCostWindowUsage(
+  byWindow: DashboardCostWindowTotalsInput,
+  selected: DashboardCostWindow,
+): DashboardCostWindowUsage {
+  return normalizeDashboardCostWindowTotals(byWindow)[selected];
 }

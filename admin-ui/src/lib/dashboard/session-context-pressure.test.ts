@@ -28,6 +28,26 @@ test('resolveSessionContextPressureView fails closed when telemetry is missing o
     hasTelemetry: false,
     isOverLimit: false,
   });
+
+  assert.deepEqual(resolveSessionContextPressureView({
+    sessionId: 'discord:gamma',
+    utilizationPct: '61',
+    hasTelemetry: true,
+  }), {
+    utilizationPct: 0,
+    hasTelemetry: false,
+    isOverLimit: false,
+  });
+
+  assert.deepEqual(resolveSessionContextPressureView({
+    sessionId: 'discord:delta',
+    utilizationPct: -1,
+    hasTelemetry: true,
+  }), {
+    utilizationPct: 0,
+    hasTelemetry: false,
+    isOverLimit: false,
+  });
 });
 
 test('resolveSessionContextPressureView preserves valid telemetry and marks over-limit pressure', () => {

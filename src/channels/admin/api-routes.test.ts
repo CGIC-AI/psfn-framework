@@ -1209,11 +1209,13 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsPayload.config.maintenanceIntervalMs).toBeUndefined();
     expect(settingsPayload.config.capabilityTier).toBeUndefined();
     const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
-      modelCatalog: Record<string, { model?: string }>;
+      schemaVersion: number;
+      models: Array<{ id: string; identity?: { model?: string } }>;
     };
-    expect(settingsPayload.editors.models.modelCatalog.primary.model).toBe(
-      persistedModels.modelCatalog.primary.model,
-    );
+    expect(persistedModels.schemaVersion).toBe(1);
+    const persistedPrimaryModel = persistedModels.models.find((entry) => entry.id === 'primary')?.identity?.model;
+    expect(typeof persistedPrimaryModel).toBe('string');
+    expect(settingsPayload.editors.models.modelCatalog.primary.model).toBe(persistedPrimaryModel);
     expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.maintenanceIntervalMs);
     expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
@@ -1807,29 +1809,44 @@ describe('AdminServer JSON API routes', () => {
     expect(runtimePatchRes.status).toBe(200);
 
     const expectedModels = saveModelsConfig(tempDir, {
-      modelCatalog: {
-        primary: {
-          model: 'openai/gpt-4.1-mini',
-          provider: 'openrouter',
-          defaults: { maxTokens: 4096, contextWindow: 128_000 },
-          routing: { providerOrder: ['parasail', 'openai'] },
+      schemaVersion: 1,
+      models: [
+        {
+          id: 'primary',
+          rank: 100,
+          identity: {
+            provider: 'openrouter',
+            model: 'openai/gpt-4.1-mini',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'chat', primary: true },
+            { purpose: 'summary', primary: true },
+            { purpose: 'reasoning', primary: true },
+            { purpose: 'longContext', primary: true },
+            { purpose: 'vision', primary: true },
+            { purpose: 'moa', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
         },
-        extraction: {
-          model: 'deepseek/deepseek-v3.2',
-          provider: 'openrouter',
-          defaults: { maxTokens: 2048 },
+        {
+          id: 'extraction',
+          rank: 80,
+          identity: {
+            provider: 'openrouter',
+            model: 'deepseek/deepseek-v3.2',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'background', primary: true },
+            { purpose: 'extraction', primary: true },
+            { purpose: 'import_processing', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2048 },
         },
-      },
-      modelRoleAssignments: {
-        chat: 'primary',
-        summary: 'primary',
-        reasoning: 'primary',
-        longContext: 'primary',
-        context: 'extraction',
-        extraction: 'extraction',
-        background: 'extraction',
-        import_processing: 'extraction',
-      },
+      ],
     }, {
       defaultContextWindow: testConfig.defaultContextWindow,
     });

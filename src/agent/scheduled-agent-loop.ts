@@ -1,4 +1,4 @@
-import { EventStream, streamSimple } from '@mariozechner/pi-ai';
+import { EventStream, streamSimple, type AssistantMessage } from '@mariozechner/pi-ai';
 import type { AgentContext, AgentLoopConfig, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { executeToolCallsWithScheduler, type ToolCallSchedulerOptions } from './tool-call-scheduler.js';
 
@@ -147,7 +147,7 @@ async function streamAssistantResponse(
   signal: AbortSignal,
   stream: ReturnType<typeof createAgentStream>,
   streamFn: StreamFn | undefined,
-) {
+): Promise<AssistantMessage> {
   let messages = context.messages;
   if (config.transformContext) {
     messages = await config.transformContext(messages, signal);
@@ -167,7 +167,7 @@ async function streamAssistantResponse(
     signal,
   });
 
-  let partialMessage: any = null;
+  let partialMessage: AssistantMessage | null = null;
   let addedPartial = false;
   for await (const event of response) {
     switch (event.type) {
@@ -198,7 +198,10 @@ async function streamAssistantResponse(
         break;
       case 'done':
       case 'error': {
-        const finalMessage = await resolveStreamResult(response);
+        const finalMessage = await resolveStreamResult(response, {
+          terminalEvent: event,
+          partialMessage,
+        });
         if (addedPartial) {
           context.messages[context.messages.length - 1] = finalMessage;
         } else {
@@ -214,16 +217,61 @@ async function streamAssistantResponse(
         break;
     }
   }
-  return resolveStreamResult(response);
+  return resolveStreamResult(response, { partialMessage });
 }
 
-async function resolveStreamResult(response: { result?: unknown }) {
+type StreamResolutionContext = {
+  terminalEvent?: unknown;
+  partialMessage?: AssistantMessage | null;
+};
+
+function isAssistantMessage(candidate: unknown): candidate is AssistantMessage {
+  return candidate !== null
+    && typeof candidate === 'object'
+    && (candidate as { role?: unknown }).role === 'assistant'
+    && Array.isArray((candidate as { content?: unknown }).content);
+}
+
+function resolveEventAssistantMessage(event: unknown): AssistantMessage | undefined {
+  if (event === null || typeof event !== 'object') {
+    return undefined;
+  }
+  const terminalEvent = event as { message?: unknown; error?: unknown; partial?: unknown };
+  if (isAssistantMessage(terminalEvent.message)) {
+    return terminalEvent.message;
+  }
+  if (isAssistantMessage(terminalEvent.error)) {
+    return terminalEvent.error;
+  }
+  if (isAssistantMessage(terminalEvent.partial)) {
+    return terminalEvent.partial;
+  }
+  return undefined;
+}
+
+export async function resolveStreamResult(
+  response: { result?: unknown },
+  resolutionContext: StreamResolutionContext = {},
+): Promise<AssistantMessage> {
   const resultValue = response.result;
   if (typeof resultValue === 'function') {
-    return resultValue.call(response);
+    const resolved = await resultValue.call(response);
+    if (isAssistantMessage(resolved)) {
+      return resolved;
+    }
   }
   if (resultValue !== undefined) {
-    return resultValue;
+    const resolved = await resultValue;
+    if (isAssistantMessage(resolved)) {
+      return resolved;
+    }
+  }
+  const eventMessage = resolveEventAssistantMessage(resolutionContext.terminalEvent);
+  if (eventMessage) {
+    return eventMessage;
+  }
+  if (isAssistantMessage(resolutionContext.partialMessage)) {
+    return resolutionContext.partialMessage;
   }
   throw new Error('Stream response missing result payload');
 }

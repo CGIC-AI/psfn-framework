@@ -13,6 +13,8 @@ import {
   type RouteParams,
 } from './route-matchers.js';
 import type { SubstrateConfig } from '../../types.js';
+import { formatPossessiveCompanionName } from '../../identity/companion-naming.js';
+import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
 import type {
   AdminAdaptiveToolsService,
   AdminContactsService,
@@ -62,19 +64,25 @@ function escapeHtml(value: string): string {
     .replaceAll('\'', '&#39;');
 }
 
-function loginPage(error?: string): string {
+function resolveGardenTitle(config: SubstrateConfig): string {
+  const companionName = resolveCompanionNameFromConfig(config);
+  return `${formatPossessiveCompanionName(companionName)} Garden`;
+}
+
+function loginPage(gardenTitle: string, error?: string): string {
   const errorBlock = error
     ? `<p style="color:#b42318;margin:0 0 12px 0">${escapeHtml(error)}</p>`
     : '';
+  const escapedGardenTitle = escapeHtml(gardenTitle);
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Login - admin UI</title>
+    <title>Login - ${escapedGardenTitle}</title>
   </head>
   <body style="font-family:system-ui,sans-serif;max-width:420px;margin:5rem auto;padding:0 1rem">
-    <h1 style="margin:0 0 0.5rem 0">admin UI</h1>
+    <h1 style="margin:0 0 0.5rem 0">${escapedGardenTitle}</h1>
     <p style="margin:0 0 1rem 0;color:#666">Enter your admin token to continue.</p>
     ${errorBlock}
     <form method="POST" action="/login">
@@ -86,11 +94,17 @@ function loginPage(error?: string): string {
 </html>`;
 }
 
-function sendLoginPage(res: ServerResponse, error?: string, status: number = 200): void {
+function sendLoginPage(
+  res: ServerResponse,
+  config: SubstrateConfig,
+  error?: string,
+  status: number = 200,
+): void {
+  const gardenTitle = resolveGardenTitle(config);
   sendText(
     res,
     status,
-    loginPage(error),
+    loginPage(gardenTitle, error),
     {
       'Cache-Control': 'no-store',
       'Content-Type': 'text/html; charset=utf-8',
@@ -122,7 +136,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       method: 'GET',
       match: exactPath('/login'),
       handle: (_req, res) => {
-        sendLoginPage(res);
+        sendLoginPage(res, deps.config);
       },
     },
     {
@@ -131,7 +145,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       handle: (req, res) => {
         deps.withBody(req, res, (body) => {
           if (!deps.token) {
-            sendLoginPage(res, 'Login is unavailable when ADMIN_TOKEN is unset.', 503);
+            sendLoginPage(res, deps.config, 'Login is unavailable when ADMIN_TOKEN is unset.', 503);
             return;
           }
           const params = new URLSearchParams(body);
@@ -143,7 +157,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
             });
             return;
           }
-          sendLoginPage(res, 'Invalid token');
+          sendLoginPage(res, deps.config, 'Invalid token');
         });
       },
     },

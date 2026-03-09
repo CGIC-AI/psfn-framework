@@ -18,6 +18,8 @@ import type { SessionEntry } from './types.js';
 import type { SessionSearchHit } from './search-index.js';
 import type { EventBus } from '../event-bus.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
+import { countTokens } from '../llm/tokens.js';
+import { createComponentLogger } from '../logger.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   getDefaultPromptText,
@@ -47,12 +49,15 @@ import {
 } from './manager/mirroring.js';
 import {
   buildSessionContext,
+  DEFAULT_OBSERVATION_MASKING_WINDOW,
+  applyObservationMasking,
 } from './manager/context-builder.js';
 import { buildSessionMetadataWithTurn } from './turn-provenance.js';
 import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
 } from './manager/contracts.js';
+import { runAutoCompaction } from './manager/compaction-service.js';
 import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
 import {
   buildSnapshotVersionPointer,
@@ -93,6 +98,7 @@ export type {
 };
 
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
+const log = createComponentLogger('SessionManager');
 
 function shouldPersistSessionChannel(channelId: string): boolean {
   return !channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
@@ -101,6 +107,30 @@ function shouldPersistSessionChannel(channelId: string): boolean {
 function createCompactionBoundaryStore(store: SessionStore): SessionStore {
   return new Proxy(store, {
     get(target, property, receiver) {
+      if (property === 'getRecent') {
+        return (channelId: string, limit: number): SessionEntry[] => {
+          const normalizedLimit = Math.max(0, Math.floor(limit));
+          if (normalizedLimit <= 0) return [];
+          const compactions = target.getCompactionSummaries(channelId);
+          const coveredUpTo = compactions.reduce(
+            (maxCoveredUpTo, summary) => Math.max(maxCoveredUpTo, summary.coveredUpTo),
+            0,
+          );
+          if (coveredUpTo <= 0) {
+            return target.getRecent(channelId, normalizedLimit);
+          }
+          const entries = target.getEntriesInRange(
+            channelId,
+            coveredUpTo + 1,
+            Number.MAX_SAFE_INTEGER,
+          );
+          if (entries.length <= normalizedLimit) {
+            return entries;
+          }
+          return entries.slice(-normalizedLimit);
+        };
+      }
+
       if (property === 'insertCompaction') {
         return (channelId: string, summary: string, coveredUpTo: number): void => {
           target.insertCompaction(
@@ -148,6 +178,17 @@ export interface StartupSessionMetadata {
 
 export interface SessionCoreMemoryProvider {
   formatForContext(): string;
+}
+
+export interface AutoCompactionBetweenTurnsParams {
+  channelId: string;
+  systemPrompt: string;
+  memoriesBlock: string;
+  llmProvider: LLMProvider;
+  userId?: string;
+  channelMeta?: ChannelMeta;
+  compactionPromptText?: string;
+  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
 }
 
 interface ActiveFocusSession {
@@ -198,6 +239,7 @@ export class SessionManager {
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
   private activeContextSessionId: string | null = null;
   private activeFocusSessions: Map<string, ActiveFocusSession> = new Map();
+  private pendingAutoCompactions = new Map<string, Promise<void>>();
   continuityStore: UserContinuityStore | null = null;
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
@@ -244,6 +286,13 @@ export class SessionManager {
 
   getActiveContextSession(): string | null {
     return this.activeContextSessionId;
+  }
+
+  async awaitPendingAutoCompaction(channelId: string): Promise<void> {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const pending = this.pendingAutoCompactions.get(resolvedChannelId);
+    if (!pending) return;
+    await pending;
   }
 
   listRecentSessions(limit?: number): SessionActivitySummary[] {
@@ -529,6 +578,83 @@ export class SessionManager {
     return entryId;
   }
 
+  scheduleAutoCompactionBetweenTurns(params: AutoCompactionBetweenTurnsParams): Promise<void> {
+    const resolvedChannelId = this.resolveSessionChannelId(params.channelId);
+    if (!shouldPersistSessionChannel(resolvedChannelId)) {
+      return Promise.resolve();
+    }
+
+    const previous = this.pendingAutoCompactions.get(resolvedChannelId) ?? Promise.resolve();
+    const next = previous
+      .catch((error) => {
+        log.error('Auto-compaction queue continuation failed', {
+          channelId: resolvedChannelId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .then(async () => {
+        const adaptiveProfile = resolveAdaptiveContextBudgetProfile(
+          this.config,
+          params.turnBudgetCharacteristics,
+        );
+        const historyBudget = resolveSessionHistoryBudget(this.config, {
+          adaptiveProfile,
+        });
+        let recent = this.compactionBoundaryStore.getRecent(
+          resolvedChannelId,
+          historyBudget.estimatedCount,
+        );
+        if (historyBudget.mode === 'budget') {
+          recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
+        }
+        recent = applyFocusCompactionRanges(
+          recent,
+          this.getFocusCompactionRanges(resolvedChannelId),
+        ).entries;
+        recent = applyObservationMasking(
+          recent,
+          this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
+        ).entries;
+        const coreMemoryBlock = this.coreMemoryProvider?.formatForContext().trim() ?? '';
+        const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
+          ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+        const systemTokens = countTokens(params.systemPrompt)
+          + countTokens(coreMemoryBlock)
+          + countTokens(params.memoriesBlock);
+        await runAutoCompaction({
+          channelId: resolvedChannelId,
+          recent,
+          channelVisibility: classifyChannel(resolvedChannelId, params.channelMeta),
+          systemTokens,
+          compactionPromptText: params.compactionPromptText
+            ?? this.resolveCompactionPromptText(baseCompactionPrompt),
+          llmProvider: params.llmProvider,
+          store: this.compactionBoundaryStore,
+          config: this.config,
+          eventBus: this.eventBus,
+          promptRegistry: this.promptRegistry,
+          preCompactionExtractionHandler: this.preCompactionExtractionHandler,
+          onCompactionComplete: ({ channelId, originalContext, compressedContext, capturedAt }) => {
+            this.compressionGuidelineRuntime.recordCompactionTrajectory({
+              channelId,
+              originalContext,
+              compressedContext,
+              capturedAt,
+            });
+          },
+          userId: params.userId,
+        });
+      })
+      .finally(() => {
+        if (this.pendingAutoCompactions.get(resolvedChannelId) === next) {
+          this.pendingAutoCompactions.delete(resolvedChannelId);
+        }
+      });
+
+    this.pendingAutoCompactions.set(resolvedChannelId, next);
+    return next;
+  }
+
   recordToolObservation(
     channelId: string,
     observation: ToolObservationInput,
@@ -603,6 +729,7 @@ export class SessionManager {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    await this.awaitPendingAutoCompaction(resolvedChannelId);
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext()
       : '';

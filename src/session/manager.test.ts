@@ -487,8 +487,8 @@ describe('SessionManager', () => {
     });
     const mgr = new SessionManager(store, config);
 
-    for (let i = 0; i < 60; i++) {
-      mgr.recordUserMessage('ch-adaptive', `Turn ${i} ` + 'x'.repeat(800), 'u1', 'User');
+    for (let i = 0; i < 40; i++) {
+      mgr.recordUserMessage('ch-adaptive', `Turn ${i} ` + 'x'.repeat(200), 'u1', 'User');
     }
 
     const recallTurn = { messageText: 'Can you remember what I told you last week?' };
@@ -858,6 +858,65 @@ describe('SessionManager', () => {
     expect(ctx.manifest?.compaction.totalTokensAfter).toBeLessThan(
       ctx.manifest?.compaction.totalTokensBefore ?? 0,
     );
+  });
+
+  it('waits for scheduled auto-compaction before building the next turn context', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const mgr = new SessionManager(store, config);
+    let releaseCompaction: (() => void) | null = null;
+    const mockLLM: LLMProvider = {
+      stream: async () => ({
+        content: '',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+      complete: vi.fn<LLMProvider['complete']>().mockImplementation(async () => {
+        await new Promise<void>((resolve) => {
+          releaseCompaction = resolve;
+        });
+        return {
+          content: 'Summary of old messages.',
+          model: 'test',
+          inputTokens: 0,
+          outputTokens: 0,
+          toolCalls: [],
+          stopReason: 'end_turn',
+        };
+      }),
+    };
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
+    }
+
+    const compactionPromise = mgr.scheduleAutoCompactionBetweenTurns({
+      channelId: 'ch1',
+      systemPrompt: 'Sys',
+      memoriesBlock: '',
+      llmProvider: mockLLM,
+      userId: 'u1',
+    });
+    const nextContextPromise = mgr.buildContext('ch1', 'Sys', '');
+    const timeoutSentinel = Symbol('timeout');
+
+    const blockedResult = await Promise.race([
+      nextContextPromise,
+      new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), 20)),
+    ]);
+    expect(blockedResult).toBe(timeoutSentinel);
+
+    releaseCompaction?.();
+    await compactionPromise;
+    const ctx = await nextContextPromise;
+
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
+    expect(ctx.messages.length).toBeLessThan(20);
+    expect(ctx.systemPrompt).toContain('Previous conversation summary');
+    expect(ctx.systemPrompt).toContain('Summary of old messages.');
   });
 
   it('marks compaction summaries as untrusted at generation and retrieval boundaries', async () => {

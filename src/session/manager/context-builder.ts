@@ -116,17 +116,17 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const compactionThresholdTokenBudget = Math.floor(
     historyBudget.contextWindow * (params.config.compactionThresholdPct / 100),
   );
-  const preCompactionMessageTokens = countMessageTokens(
+  const sessionMessageTokens = countMessageTokens(
     entriesToMessages(recent, channelVisibility, false),
   );
   let compactionManifest = {
     triggered: false,
     compactedEntryCount: 0,
-    totalTokensBefore: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + preCompactionMessageTokens,
-    totalTokensAfter: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + preCompactionMessageTokens,
+    totalTokensBefore: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + sessionMessageTokens,
+    totalTokensAfter: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + sessionMessageTokens,
   };
 
-  // Auto-compaction: when total context tokens exceed threshold, compact oldest half
+  // Explicit compaction remains available for callers that opt into it.
   if (params.llmProvider) {
     const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
     const preCompactionEntryCount = recent.length;
@@ -163,7 +163,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       compactedEntryCount: result.compacted
         ? Math.max(0, preCompactionEntryCount - recent.length)
         : 0,
-      totalTokensBefore: systemTokens + preCompactionMessageTokens,
+      totalTokensBefore: systemTokens + sessionMessageTokens,
       totalTokensAfter: systemTokens + postCompactionMessageTokens + newSummaryTokenCount,
     };
   }
@@ -333,9 +333,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   };
 }
 
-const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
+export const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
 
-function applyObservationMasking(
+export function applyObservationMasking(
   entries: SessionEntry[],
   window: number,
 ): { entries: SessionEntry[]; maskedCount: number } {

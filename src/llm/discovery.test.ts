@@ -44,6 +44,12 @@ describe('ModelDiscovery', () => {
     name?: string;
     description?: string;
     context_length?: number;
+    architecture?: {
+      modality?: string | null;
+      input_modalities?: string[];
+      output_modalities?: string[];
+    };
+    supported_parameters?: string[];
     top_provider?: { context_length?: number; max_completion_tokens?: number };
     pricing?: Record<string, string | undefined>;
   }>) {
@@ -124,6 +130,39 @@ describe('ModelDiscovery', () => {
     expect(models[0].pricing).toEqual({ prompt: '0.0000008', completion: '0.0000032' });
     expect(models[0].providerHints).toContain('openrouter');
     expect(models[0].providerHints).toContain('z-ai');
+  });
+
+  it('maps OpenRouter modality/reasoning metadata into discovery capability flags', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('openrouter.ai')) {
+        return Promise.resolve(openRouterResponse([
+          {
+            id: 'google/gemini-3.1-flash-lite-preview',
+            architecture: {
+              modality: 'text+image+file+audio+video->text',
+              input_modalities: ['text', 'image', 'video'],
+              output_modalities: ['text'],
+            },
+            supported_parameters: ['reasoning', 'max_tokens'],
+            top_provider: { context_length: 1_048_576, max_completion_tokens: 65_536 },
+            pricing: { prompt: '0.00000025', completion: '0.0000015' },
+          },
+        ]));
+      }
+      return Promise.resolve(litellmResponse([
+        {
+          id: 'openrouter/google/gemini-3.1-flash-lite-preview',
+          litellm_provider: 'openrouter',
+        },
+      ]));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000/v1');
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toHaveLength(1);
+    expect(models[0].supportsVision).toBe(true);
+    expect(models[0].supportsReasoning).toBe(true);
   });
 
   it('prefers top_provider context length and preserves pricing keys', async () => {

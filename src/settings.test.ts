@@ -1543,7 +1543,7 @@ describe('settings', () => {
       expect(snapshot.promotedExtendedTools).toEqual(['repo_status', 'session_list']);
     });
 
-    it('honors explicit sttProvider override before api-key fallback in snapshot', () => {
+    it('honors explicit sttProvider selection and defaults to disabled when unset in snapshot', () => {
       const config = makeConfig();
       const runtimeConfig = config as SubstrateConfig & { sttProvider?: string };
 

@@ -30,7 +30,6 @@ import {
   getStreamingTtsProviderMetadata,
   isStreamingTtsProvider,
   isStreamingTtsProviderConfigured,
-  listStreamingTtsProviders,
   resolveStreamingTtsRuntimeConfig,
   type StreamingTtsConnector,
   type StreamingTtsProvider,
@@ -280,26 +279,15 @@ export function createRuntimeVoiceTtsConnector(
 export function resolveRuntimeVoiceTtsProviderOrder(
   config: SubstrateConfig,
   preferredProvider?: StreamingTtsProvider,
-  options: RuntimeVoiceProviderGateOptions = {},
+  _options: RuntimeVoiceProviderGateOptions = {},
 ): StreamingTtsProvider[] {
+  void _options;
   const resolvedPreferred = preferredProvider
     ?? (() => {
       const provider = resolveRuntimeVoiceTtsProvider(config);
       return provider === 'disabled' ? null : provider;
     })();
-
-  const orderedProviders: StreamingTtsProvider[] = [];
-  if (resolvedPreferred) {
-    orderedProviders.push(resolvedPreferred);
-  }
-
-  for (const provider of listStreamingTtsProviders()) {
-    if (provider === resolvedPreferred) continue;
-    if (!isStreamingTtsProviderConfigured(provider, config, options)) continue;
-    orderedProviders.push(provider);
-  }
-
-  return orderedProviders;
+  return resolvedPreferred ? [resolvedPreferred] : [];
 }
 
 export function buildRuntimeChannelsConfigOverrides(

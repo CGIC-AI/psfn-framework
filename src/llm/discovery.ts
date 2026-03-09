@@ -47,10 +47,51 @@ interface OpenRouterModelEntry {
   pricing?: Record<string, string | undefined>;
 }
 
+const MODEL_ID_WRAPPER_PREFIXES = new Set(['openrouter', 'litellm', 'proxy']);
+
 function providerFromModelId(modelId: string): string | undefined {
   const [prefix] = modelId.split('/');
   const trimmed = prefix.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeLookupKey(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function expandModelLookupKeys(modelId: string | undefined): string[] {
+  const base = normalizeLookupKey(modelId);
+  if (!base) return [];
+  const queue = [base];
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const candidate = queue.shift();
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    keys.push(candidate);
+
+    const slashIndex = candidate.indexOf('/');
+    if (slashIndex > 0) {
+      const prefix = candidate.slice(0, slashIndex);
+      const rest = candidate.slice(slashIndex + 1).trim();
+      if (rest && MODEL_ID_WRAPPER_PREFIXES.has(prefix)) {
+        queue.push(rest);
+      }
+    }
+
+    const colonIndex = candidate.indexOf(':');
+    if (colonIndex > 0) {
+      const prefix = candidate.slice(0, colonIndex);
+      const rest = candidate.slice(colonIndex + 1).trim();
+      if (rest && MODEL_ID_WRAPPER_PREFIXES.has(prefix)) {
+        queue.push(rest);
+      }
+    }
+  }
+  return keys;
 }
 
 function normalizeProviderHints(values: Array<string | undefined>): string[] {
@@ -82,6 +123,32 @@ function normalizePricing(pricing: OpenRouterModelEntry['pricing']): Record<stri
     .filter(([, value]) => value.length > 0);
   if (entries.length === 0) return undefined;
   return Object.fromEntries(entries);
+}
+
+function buildOpenRouterMetaMap(openRouterMeta: OpenRouterModelEntry[]): Map<string, OpenRouterModelEntry> {
+  const metaMap = new Map<string, OpenRouterModelEntry>();
+  for (const meta of openRouterMeta) {
+    for (const key of [
+      ...expandModelLookupKeys(meta.id),
+      ...expandModelLookupKeys(meta.canonical_slug),
+    ]) {
+      if (!metaMap.has(key)) {
+        metaMap.set(key, meta);
+      }
+    }
+  }
+  return metaMap;
+}
+
+function findOpenRouterMeta(
+  litellmId: string,
+  metaMap: Map<string, OpenRouterModelEntry>,
+): OpenRouterModelEntry | undefined {
+  for (const key of expandModelLookupKeys(litellmId)) {
+    const matched = metaMap.get(key);
+    if (matched) return matched;
+  }
+  return undefined;
 }
 
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
@@ -130,18 +197,15 @@ export class ModelDiscovery {
     ]);
 
     // Build a metadata lookup from OpenRouter
-    const metaMap = new Map<string, OpenRouterModelEntry>();
-    for (const m of openRouterMeta) {
-      metaMap.set(m.id, m);
-    }
+    const metaMap = buildOpenRouterMetaMap(openRouterMeta);
 
     // Merge: LiteLLM provides the available model list, OpenRouter enriches it
     const models: DiscoveredModel[] = litellmModels.map(lm => {
-      const meta = metaMap.get(lm.id);
+      const meta = findOpenRouterMeta(lm.id, metaMap);
       const providerHints = normalizeProviderHints([
         ...providerHintsFromLiteLLM(lm),
         ...(meta ? ['openrouter'] : []),
-        providerFromModelId(meta?.canonical_slug ?? lm.id),
+        providerFromModelId(meta?.canonical_slug ?? meta?.id ?? lm.id),
       ]);
       return {
         id: lm.id,

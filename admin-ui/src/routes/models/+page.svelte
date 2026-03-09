@@ -7,7 +7,11 @@
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
   import type { DiscoveredModel } from '$lib/types';
-  import { buildUniqueModelId, deriveDiscoveryAutofill } from './discovery-autofill';
+  import {
+    buildUniqueModelId,
+    deriveDiscoveryAutofill,
+    resolveDiscoveredModelSelection,
+  } from './discovery-autofill';
 
   type CanonicalModelPurpose =
     | 'chat'
@@ -416,7 +420,7 @@
         if (key === 'model') {
           const normalizedModel = value.trim();
           if (normalizedModel.length > 0) {
-            const discovered = discoveredModels.find((candidate) => candidate.id === normalizedModel);
+            const discovered = resolveDiscoveredModelSelection(normalizedModel, discoveredModels);
             if (discovered) {
               applyDiscoveredMetadata(entry, discovered);
             }
@@ -1122,7 +1126,7 @@
                       type="text"
                       list="discovered-model-list"
                       value={entry.identity.model}
-                      onchange={(event) => setIdentityField(index, 'model', (event.target as HTMLInputElement).value)}
+                      oninput={(event) => setIdentityField(index, 'model', (event.target as HTMLInputElement).value)}
                       class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
                     />
                   </div>

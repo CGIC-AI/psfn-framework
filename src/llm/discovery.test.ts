@@ -92,6 +92,40 @@ describe('ModelDiscovery', () => {
     expect(models[1].description).toBeUndefined();
   });
 
+  it('matches OpenRouter metadata when LiteLLM ids include wrapper prefixes', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('openrouter.ai')) {
+        return Promise.resolve(openRouterResponse([
+          {
+            id: 'z-ai/glm-5',
+            canonical_slug: 'z-ai/glm-5',
+            description: 'GLM-5 via OpenRouter',
+            top_provider: { context_length: 262_144, max_completion_tokens: 32_768 },
+            pricing: { prompt: '0.0000008', completion: '0.0000032' },
+          },
+        ]));
+      }
+      return Promise.resolve(litellmResponse([
+        {
+          id: 'openrouter/z-ai/glm-5',
+          litellm_provider: 'openrouter',
+        },
+      ]));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000/v1');
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('openrouter/z-ai/glm-5');
+    expect(models[0].description).toBe('GLM-5 via OpenRouter');
+    expect(models[0].contextLength).toBe(262_144);
+    expect(models[0].maxCompletionTokens).toBe(32_768);
+    expect(models[0].pricing).toEqual({ prompt: '0.0000008', completion: '0.0000032' });
+    expect(models[0].providerHints).toContain('openrouter');
+    expect(models[0].providerHints).toContain('z-ai');
+  });
+
   it('prefers top_provider context length and preserves pricing keys', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('openrouter.ai')) {

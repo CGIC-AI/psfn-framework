@@ -136,7 +136,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     echoTtsVoice: config.echoTtsVoice ?? '',
     echoTtsPreset: config.echoTtsPreset ?? '',
     sttProvider: resolveRuntimeSttProvider(config),
-    deepgramModel: config.deepgramModel ?? 'nova-3',
+    deepgramModel: config.deepgramModel ?? null,
     deepgramSttEndpoint: config.deepgramSttEndpoint ?? null,
     deepgramListenEndpoint: config.deepgramListenEndpoint ?? null,
     elevenLabsModelId: config.elevenLabsModelId ?? null,

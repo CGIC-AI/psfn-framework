@@ -1460,6 +1460,7 @@ describe('settings', () => {
 
     it('normalizes optional values to null when unset', () => {
       const config = makeConfig();
+      config.deepgramModel = undefined;
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.adaptiveContextBudgetsEnabled).toBe(false);
       expect(snapshot.moodCongruenceWeight).toBe(0.15);
@@ -1484,6 +1485,7 @@ describe('settings', () => {
       expect(snapshot.webFetchLocalCrawlerDomainAllowlist).toEqual([]);
       expect(snapshot.webFetchTlsCaCertPaths).toEqual([]);
       expect(snapshot.promotedExtendedTools).toEqual([]);
+      expect(snapshot.deepgramModel).toBeNull();
     });
 
     it('includes text emotion classifier settings in runtime snapshot', () => {

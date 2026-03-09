@@ -9,7 +9,14 @@ describe('runtime ML warmup', () => {
   it('fails closed when textEmotionModel is blank', () => {
     expect(() => createStartupTextEmotionClassifier({
       model: '   ',
+      dtype: 'fp32',
     })).toThrow('textEmotionModel runtime setting is required');
+  });
+
+  it('fails closed when textEmotionDtype is missing', () => {
+    expect(() => createStartupTextEmotionClassifier({
+      model: 'SamLowe/roberta-base-go_emotions-onnx',
+    })).toThrow('textEmotionDtype runtime setting is required');
   });
 
   it('preloads both text emotion and embeddings before startup completes', async () => {

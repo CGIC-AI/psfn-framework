@@ -164,6 +164,7 @@ describe('evaluateCorsPolicy', () => {
     expect(decision.headers).toBeDefined();
     expect(decision.headers?.Vary).toBe('Accept-Encoding, Origin');
     expect(decision.headers?.['Access-Control-Allow-Origin']).toBe('https://console.example');
+    expect(decision.headers?.['Access-Control-Allow-Credentials']).toBe('true');
     expect(decision.headers?.['Access-Control-Allow-Methods']).toContain('POST');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Session-ID');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-User-ID');
@@ -267,6 +268,25 @@ describe('resolveApiRequestPrincipal', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) {
       throw new Error('Expected alternate auth token to pass');
+    }
+    expect(result.principal.mode).toBe('api_key');
+    expect(result.principal.id).toBe(deriveApiKeyPrincipalId('test-admin-token'));
+  });
+
+  it('accepts alternate admin token from auth cookie when configured', () => {
+    const result = resolveApiRequestPrincipal(
+      requestWithHeaders({ cookie: 'psfn_token=test-admin-token' }),
+      {
+        apiKey: 'test-secret-key',
+        alternateApiToken: 'test-admin-token',
+        alternateCookieTokenNames: ['psfn_token'],
+        allowInsecureWithoutAuth: false,
+        isTelemetryIngest: false,
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error('Expected alternate auth cookie token to pass');
     }
     expect(result.principal.mode).toBe('api_key');
     expect(result.principal.id).toBe(deriveApiKeyPrincipalId('test-admin-token'));

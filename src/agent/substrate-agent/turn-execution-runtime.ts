@@ -368,11 +368,6 @@ export async function handleMessageForTurn(
   const emotionSessionId = runtime.resolveSessionChannelId(message.channelId);
 
   try {
-    const emotionSnapshot = await runtime.emotionSelfModelRuntime.observeEmotionState(
-      message.content,
-      emotionSessionId,
-    );
-    const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
     const trustLevel = authorContext.trustLevel;
     const channelType = runtime.resolveChannelType(message);
     const memoryProvider = runtime.memoryProvider as ProactiveMemoryProvider | null;
@@ -389,16 +384,23 @@ export async function handleMessageForTurn(
         turnBudgetCharacteristics,
       )
       : undefined;
-    const memorySnapshot = memoryProvider && typeof memoryProvider.captureTurnMemorySnapshot === 'function'
-      ? await memoryProvider.captureTurnMemorySnapshot(
+    const [emotionSnapshot, memorySnapshot] = await Promise.all([
+      runtime.emotionSelfModelRuntime.observeEmotionState(
         message.content,
-        message.channelId,
-        trustLevel,
-        channelMeta,
-        authorContext.canonicalContactKey,
-        turnBudgetCharacteristics,
-      )
-      : undefined;
+        emotionSessionId,
+      ),
+      memoryProvider && typeof memoryProvider.captureTurnMemorySnapshot === 'function'
+        ? memoryProvider.captureTurnMemorySnapshot(
+          message.content,
+          message.channelId,
+          trustLevel,
+          channelMeta,
+          authorContext.canonicalContactKey,
+          turnBudgetCharacteristics,
+        )
+        : Promise.resolve(undefined),
+    ]);
+    const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
     const turnSnapshot: TurnSnapshot = {
       turnId,
       requestId,
@@ -415,54 +417,31 @@ export async function handleMessageForTurn(
     const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
       runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.memory'),
       async () => {
-        const memoriesBlock = memoryProvider
-          ? memorySnapshot
-            ? await memoryProvider.retrieve(
-              message.content,
-              message.channelId,
-              trustLevel,
-              channelMeta,
-              authorContext.canonicalContactKey,
-              memorySnapshot,
-              turnBudgetCharacteristics,
-            )
-            : await memoryProvider.retrieve(
-              message.content,
-              message.channelId,
-              trustLevel,
-              channelMeta,
-              authorContext.canonicalContactKey,
-              undefined,
-              turnBudgetCharacteristics,
-            )
-          : '';
-        let proactiveRecallBlock = '';
-        if (memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function') {
-          try {
-            proactiveRecallBlock = memorySnapshot
-              ? await memoryProvider.retrieveProactiveRecall(
-                message.channelId,
-                trustLevel,
-                channelMeta,
-                authorContext.canonicalContactKey,
-                memorySnapshot,
-                turnBudgetCharacteristics,
-              )
-              : await memoryProvider.retrieveProactiveRecall(
-                message.channelId,
-                trustLevel,
-                channelMeta,
-                authorContext.canonicalContactKey,
-                undefined,
-                turnBudgetCharacteristics,
-              );
-          } catch (error) {
-            log.debug('Proactive recall skipped due to provider error', {
-              channelId: message.channelId,
-              error: toErrorMessage(error),
-            });
-          }
-        }
+        const memoriesBlockPromise = memoryProvider
+          ? memoryProvider.retrieve(
+            message.content,
+            message.channelId,
+            trustLevel,
+            channelMeta,
+            authorContext.canonicalContactKey,
+            memorySnapshot,
+            turnBudgetCharacteristics,
+          )
+          : Promise.resolve('');
+        const proactiveRecallBlockPromise = memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function'
+          ? memoryProvider.retrieveProactiveRecall(
+            message.channelId,
+            trustLevel,
+            channelMeta,
+            authorContext.canonicalContactKey,
+            memorySnapshot,
+            turnBudgetCharacteristics,
+          )
+          : Promise.resolve('');
+        const [memoriesBlock, proactiveRecallBlock] = await Promise.all([
+          memoriesBlockPromise,
+          proactiveRecallBlockPromise,
+        ]);
         return { memoriesBlock, proactiveRecallBlock };
       },
     );

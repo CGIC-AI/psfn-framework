@@ -43,6 +43,7 @@ import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
+  type RuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProviderOrder,
 } from '../../runtime/bootstrap-helpers.js';
@@ -56,7 +57,6 @@ const UNKNOWN_VOICE_ERROR_CODE = 'VOICE_PIPELINE_ERROR';
 const DECRYPT_RECOVERY_COOLDOWN_MS = 1_500;
 const DECRYPT_RECOVERY_MAX_REJOINS = 3;
 const DECRYPT_RECOVERY_WINDOW_MS = 5 * 60_000;
-const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
 
 /**
  * Maximum number of consecutive stream errors per user before tearing down
@@ -264,7 +264,7 @@ export class DiscordVoiceRuntime {
   private readonly targetUserId: string;
   private readonly daveEncryption: boolean;
   private readonly decryptionFailureTolerance: number;
-  private readonly preferredTtsProviderId: StreamingTtsProvider;
+  private readonly preferredTtsProviderId: RuntimeVoiceTtsProvider;
   private readonly sttConnector?: StreamingSttConnector;
   private readonly ttsConnectors: StreamingTtsConnector[];
   private readonly reliabilityBudgets: VoiceReliabilityBudgets;
@@ -303,10 +303,7 @@ export class DiscordVoiceRuntime {
     this.targetUserId = config.voiceTargetUserId ?? '';
     this.daveEncryption = config.voiceDaveEncryption ?? true;
     const configuredTtsProvider = resolveRuntimeVoiceTtsProvider(config);
-    const ttsProviderDisabled = config.ttsProvider === 'disabled';
-    this.preferredTtsProviderId = configuredTtsProvider === 'disabled'
-      ? DEFAULT_TTS_PROVIDER
-      : configuredTtsProvider;
+    this.preferredTtsProviderId = configuredTtsProvider;
     const configuredDecryptionTolerance = config.voiceDecryptionFailureTolerance;
     this.decryptionFailureTolerance = (
       typeof configuredDecryptionTolerance === 'number'
@@ -342,12 +339,15 @@ export class DiscordVoiceRuntime {
     if (!this.targetGuildId || !this.targetUserId || !sttBinding) {
       this.enabled = false;
       this.ttsConnectors = [];
+      const hasSelectedTtsConfig = this.preferredTtsProviderId !== 'disabled'
+        ? hasTtsProviderConfig(this.preferredTtsProviderId, config)
+        : false;
       log.warn('Voice enabled but missing required config, disabling voice runtime', {
         hasGuild: !!this.targetGuildId,
         hasUser: !!this.targetUserId,
         hasSttConfig: Boolean(sttBinding),
         ttsProvider: this.preferredTtsProviderId,
-        hasSelectedTtsConfig: hasTtsProviderConfig(this.preferredTtsProviderId, config),
+        hasSelectedTtsConfig,
         hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', config),
         hasEchoConfig: hasTtsProviderConfig('echo', config),
       });
@@ -362,7 +362,7 @@ export class DiscordVoiceRuntime {
       );
     }
 
-    const ttsConnectors = ttsProviderDisabled
+    const ttsConnectors = this.preferredTtsProviderId === 'disabled'
       ? []
       : buildConfiguredTtsConnectors(config, this.preferredTtsProviderId, this.eligibilityGate);
     if (ttsConnectors.length === 0) {

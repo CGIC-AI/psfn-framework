@@ -282,6 +282,8 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
     voiceEnabled: true,
     voiceTargetGuildId: 'guild-1',
     voiceTargetUserId: 'user-1',
+    sttProvider: 'deepgram',
+    ttsProvider: 'elevenlabs',
     deepgramApiKey: 'deepgram-key',
     elevenLabsApiKey: 'elevenlabs-key',
     elevenLabsVoiceId: 'voice-id',
@@ -625,7 +627,7 @@ describe('DiscordVoiceRuntime', () => {
     }));
   });
 
-  it('builds both echo and elevenlabs TTS connectors when echo is configured', () => {
+  it('builds only the explicitly selected echo TTS connector when echo is configured', () => {
     const echoConnector = createMockTtsConnector('echo');
     const elevenLabsConnector = createMockTtsConnector('elevenlabs');
     connectorMocks.createStreamingTtsConnector.mockImplementation((provider: string) => {
@@ -648,12 +650,10 @@ describe('DiscordVoiceRuntime', () => {
       getHandler: () => null,
     });
 
-    // Both echo (preferred) and elevenlabs (fallback) connectors should be created
-    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledTimes(2);
+    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledTimes(1);
     const calls = connectorMocks.createStreamingTtsConnector.mock.calls;
     const providers = calls.map((call: unknown[]) => call[0]);
-    expect(providers[0]).toBe('echo');
-    expect(providers[1]).toBe('elevenlabs');
+    expect(providers).toEqual(['echo']);
   });
 
   it('uses echo TTS when echo is configured as provider', async () => {
@@ -685,7 +685,7 @@ describe('DiscordVoiceRuntime', () => {
     await (runtime as any).speakText('hello world');
 
     // Echo should be the preferred provider
-    expect(reliabilityMocks.buildFallbackOrder).toHaveBeenCalledWith('echo', ['echo', 'elevenlabs']);
+    expect(reliabilityMocks.buildFallbackOrder).toHaveBeenCalledWith('echo', ['echo']);
   });
 
   it('emits partial transcript events and uses streaming TTS playback', async () => {
@@ -1333,21 +1333,29 @@ describe('DiscordVoiceRuntime', () => {
       expect(providers[0]).toBe('echo');
     });
 
-    it('defaults to elevenlabs when no provider is configured', () => {
+    it('disables runtime when no TTS provider is explicitly configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       const runtime = new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
-        config: makeConfig(),
+        config: makeConfig({
+          ttsProvider: undefined,
+        }),
         eventBus: new EventBus(),
         getHandler: () => null,
       });
 
-      expect((runtime as any).preferredTtsProviderId).toBe('elevenlabs');
+      expect((runtime as any).preferredTtsProviderId).toBe('disabled');
+      expect((runtime as any).enabled).toBe(false);
     });
 
     it('skips elevenlabs connector when no voice ID is configured', () => {
-      connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
+      connectorMocks.createStreamingTtsConnector.mockImplementation((provider: string, runtimeConfig: Record<string, unknown>) => {
+        if (provider === 'elevenlabs' && !runtimeConfig.voiceId) {
+          throw new Error('missing elevenlabs voice id');
+        }
+        return connectorMocks.ttsConnector;
+      });
 
       const runtime = new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
@@ -1397,7 +1405,7 @@ describe('DiscordVoiceRuntime', () => {
       expect((runtime as any).enabled).toBe(false);
     });
 
-    it('builds both echo and elevenlabs connectors when both are configured', () => {
+    it('builds only the explicitly selected echo connector when both providers are configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       new DiscordVoiceRuntime({
@@ -1415,8 +1423,7 @@ describe('DiscordVoiceRuntime', () => {
 
       const calls = connectorMocks.createStreamingTtsConnector.mock.calls;
       const providers = calls.map((call) => call[0]);
-      expect(providers).toContain('echo');
-      expect(providers).toContain('elevenlabs');
+      expect(providers).toEqual(['echo']);
     });
   });
 

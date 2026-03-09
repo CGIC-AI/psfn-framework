@@ -1,5 +1,10 @@
 import { join } from 'node:path';
-import { loadOrSeedJson, writeJsonAtomic } from '../config/load-or-seed.js';
+import {
+  cacheJsonValue,
+  invalidateCachedJsonValue,
+  loadOrSeedJsonCached,
+  writeJsonAtomic,
+} from '../config/load-or-seed.js';
 import { createComponentLogger } from '../logger.js';
 import { isRecord } from '../utils/types.js';
 import { SETTINGS_FILE_NAME, type EditableSettings } from './contracts.js';
@@ -19,7 +24,7 @@ export function loadSettings(
   const seedDir = options?.seedDir ?? process.env.CONFIG_DIR ?? './config';
   const seedPath = join(seedDir, SETTINGS_SEED_FILE);
 
-  const loaded = loadOrSeedJson({
+  const loaded = loadOrSeedJsonCached({
     dataPath: path,
     seedPath,
     validate: (raw, sourcePath) => {
@@ -39,7 +44,9 @@ export function saveSettings(dataDir: string, settings: EditableSettings): void 
   const path = join(dataDir, SETTINGS_FILE);
   const normalized = normalizeEditableSettings(settings);
   const split = splitSettingsByDomain(normalized);
+  invalidateCachedJsonValue(path);
   writeJsonAtomic(path, split.runtime);
+  cacheJsonValue(path, normalizeEditableSettings(split.runtime));
   if (split.legacyKeys.length > 0) {
     log.warn('Dropped non-runtime keys while saving settings.json', {
       keys: split.legacyKeys,

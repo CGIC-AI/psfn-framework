@@ -30,6 +30,7 @@
     settingsSimpleSectionAnchorId,
     type SettingsSimpleSectionId,
   } from '$lib/components/settings/navigation';
+  import { resolveVoiceProviderSelection } from './voice-provider-selection';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -787,14 +788,13 @@
     thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 10);
 
     // Voice / TTS
-    const rawTts = String(config.ttsProvider ?? 'disabled').trim();
-    ttsProvider = rawTts || 'disabled';
+    const providerSelection = resolveVoiceProviderSelection(config);
+    ttsProvider = providerSelection.ttsProvider;
     voiceId = String(config.voiceId ?? config.elevenLabsVoiceId ?? '');
     echoTtsUrl = String(config.echoTtsUrl ?? '');
     echoTtsVoice = String(config.echoTtsVoice ?? '');
     echoTtsPreset = String(config.echoTtsPreset ?? '');
-    const rawStt = String(config.sttProvider ?? (config.deepgramApiKey ? 'deepgram' : 'disabled')).trim();
-    sttProvider = rawStt || 'disabled';
+    sttProvider = providerSelection.sttProvider;
     deepgramModel = String(config.deepgramModel ?? '');
 
     // Obsidian Vault

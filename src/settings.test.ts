@@ -1554,12 +1554,10 @@ describe('settings', () => {
       expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('deepgram');
 
       runtimeConfig.sttProvider = undefined;
-      expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('deepgram');
-      config.deepgramApiKey = '';
       expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('disabled');
     });
 
-    it('surfaces plugin STT providers in snapshot and default resolution', () => {
+    it('surfaces only explicit plugin STT provider selections in snapshot', () => {
       const restoreProvider = registerStreamingSttProvider('plugin-test', {
         createConnector: () => ({
           id: 'plugin-test',
@@ -1571,7 +1569,6 @@ describe('settings', () => {
           }),
         }),
         metadata: {
-          canAutoEnable: true,
           isConfigured: (config) => Boolean(config.pluginSttToken),
         },
       });
@@ -1586,13 +1583,13 @@ describe('settings', () => {
         runtimeConfig.sttProvider = undefined;
         runtimeConfig.pluginSttToken = 'plugin-key';
         config.deepgramApiKey = '';
-        expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('plugin-test');
+        expect(getRuntimeSettingsSnapshot(config).sttProvider).toBe('disabled');
       } finally {
         restoreProvider();
       }
     });
 
-    it('surfaces plugin TTS providers in snapshot and default resolution', () => {
+    it('surfaces only explicit plugin TTS provider selections in snapshot', () => {
       const restoreProvider = registerStreamingTtsProvider('plugin-test', {
         createConnector: () => ({
           id: 'plugin-test',
@@ -1603,7 +1600,6 @@ describe('settings', () => {
           synthesizeBuffer: async () => Buffer.alloc(0),
         }),
         metadata: {
-          canAutoEnable: true,
           isConfigured: (config) => Boolean(config.pluginTtsToken),
         },
       });
@@ -1618,7 +1614,7 @@ describe('settings', () => {
         runtimeConfig.ttsProvider = undefined;
         runtimeConfig.pluginTtsToken = 'plugin-key';
         config.elevenLabsApiKey = '';
-        expect(getRuntimeSettingsSnapshot(config).ttsProvider).toBe('plugin-test');
+        expect(getRuntimeSettingsSnapshot(config).ttsProvider).toBe('disabled');
       } finally {
         restoreProvider();
       }

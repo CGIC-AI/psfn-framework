@@ -2576,7 +2576,6 @@ describe('AdminServer JSON API routes', () => {
         throw new Error('not used in admin settings payload');
       }),
       metadata: {
-        canAutoEnable: true,
         isConfigured: (config) => Boolean(config.pluginSttToken),
         eligibility: { requiredTokens: ['external.web'] },
       },
@@ -2606,15 +2605,14 @@ describe('AdminServer JSON API routes', () => {
       expect(res.status).toBe(200);
       const payload = JSON.parse(res.body) as {
         voiceProviders?: {
-          stt?: Array<{ id: string; configured: boolean; canAutoEnable: boolean; requiredTokens: string[] }>;
-          tts?: Array<{ id: string; configured: boolean; canAutoEnable: boolean; requiredTokens: string[] }>;
+          stt?: Array<{ id: string; configured: boolean; requiredTokens: string[] }>;
+          tts?: Array<{ id: string; configured: boolean; requiredTokens: string[] }>;
         };
       };
       expect(payload.voiceProviders?.stt).toEqual(expect.arrayContaining([
         expect.objectContaining({
           id: 'plugin-stt',
           configured: true,
-          canAutoEnable: true,
           requiredTokens: ['external.web'],
         }),
       ]));
@@ -2622,7 +2620,6 @@ describe('AdminServer JSON API routes', () => {
         expect.objectContaining({
           id: 'plugin-tts',
           configured: true,
-          canAutoEnable: false,
           requiredTokens: ['external.web'],
         }),
       ]));

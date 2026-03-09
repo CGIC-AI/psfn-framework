@@ -7,7 +7,6 @@ import {
   getStreamingTtsProviderMetadata,
   registerStreamingTtsConnectorFactory,
   registerStreamingTtsProvider,
-  resolveDefaultStreamingTtsProvider,
   resolveStreamingTtsRuntimeConfig,
   type EchoStreamingTtsConfig,
 } from './index.js';
@@ -108,11 +107,10 @@ describe('createStreamingTtsConnector', () => {
     }
   });
 
-  it('exposes provider metadata for default provider selection', () => {
+  it('exposes provider metadata without runtime auto-selection', () => {
     const restoreProvider = registerStreamingTtsProvider('plugin-test', {
       createConnector: vi.fn(() => createStubConnector('plugin-test')),
       metadata: {
-        canAutoEnable: true,
         isConfigured: (config) => Boolean(config.pluginTtsToken),
         eligibility: {},
       },
@@ -125,7 +123,7 @@ describe('createStreamingTtsConnector', () => {
       expect(getStreamingTtsProviderEligibility('elevenlabs')).toEqual({
         requiredTokens: ['external.web'],
       });
-      expect(resolveDefaultStreamingTtsProvider({ pluginTtsToken: 'plugin-key', elevenLabsApiKey: '' })).toBe('plugin-test');
+      expect(getStreamingTtsProviderMetadata('plugin-test')?.isConfigured({ pluginTtsToken: 'plugin-key' })).toBe(true);
     } finally {
       restoreProvider();
     }

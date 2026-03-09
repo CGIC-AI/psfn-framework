@@ -116,11 +116,8 @@ describe('resolveRuntimeVoiceSttProvider', () => {
     expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'disabled' } as any)).toBe('disabled');
   });
 
-  it('falls back to deepgram when api key is present', () => {
-    expect(resolveRuntimeVoiceSttProvider({ deepgramApiKey: 'key' } as any)).toBe('deepgram');
-  });
-
-  it('falls back to disabled when not configured and no api key is set', () => {
+  it('defaults to disabled when provider is not explicitly configured', () => {
+    expect(resolveRuntimeVoiceSttProvider({ deepgramApiKey: 'key' } as any)).toBe('disabled');
     expect(resolveRuntimeVoiceSttProvider({} as any)).toBe('disabled');
   });
 
@@ -161,11 +158,8 @@ describe('resolveRuntimeVoiceTtsProvider', () => {
     expect(resolveRuntimeVoiceTtsProvider({ ttsProvider: 'disabled' } as any)).toBe('disabled');
   });
 
-  it('falls back to elevenlabs when api key is present', () => {
-    expect(resolveRuntimeVoiceTtsProvider({ elevenLabsApiKey: 'elevenlabs-key' } as any)).toBe('elevenlabs');
-  });
-
-  it('falls back to disabled when not configured and no TTS credentials are set', () => {
+  it('defaults to disabled when provider is not explicitly configured', () => {
+    expect(resolveRuntimeVoiceTtsProvider({ elevenLabsApiKey: 'elevenlabs-key' } as any)).toBe('disabled');
     expect(resolveRuntimeVoiceTtsProvider({} as any)).toBe('disabled');
   });
 
@@ -200,16 +194,16 @@ describe('resolveRuntimeVoiceTtsProvider', () => {
 });
 
 describe('resolveRuntimeVoiceProviderGate', () => {
-  it('enables deepgram + elevenlabs by default when credentials are present', () => {
+  it('keeps voice disabled until providers are explicitly selected', () => {
     const gate = resolveRuntimeVoiceProviderGate({
       deepgramApiKey: 'deepgram-key',
       elevenLabsApiKey: 'elevenlabs-key',
     } as any);
     expect(gate).toEqual({
-      sttProvider: 'deepgram',
-      ttsProvider: 'elevenlabs',
-      sttEnabled: true,
-      ttsEnabled: true,
+      sttProvider: 'disabled',
+      ttsProvider: 'disabled',
+      sttEnabled: false,
+      ttsEnabled: false,
     });
   });
 
@@ -221,9 +215,9 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       echoTtsVoice: '',
     } as any);
     expect(gate).toEqual({
-      sttProvider: 'deepgram',
+      sttProvider: 'disabled',
       ttsProvider: 'echo',
-      sttEnabled: true,
+      sttEnabled: false,
       ttsEnabled: false,
     });
   });
@@ -237,9 +231,9 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       { allowEchoDefaults: true },
     );
     expect(gate).toEqual({
-      sttProvider: 'deepgram',
+      sttProvider: 'disabled',
       ttsProvider: 'echo',
-      sttEnabled: true,
+      sttEnabled: false,
       ttsEnabled: true,
     });
   });
@@ -279,7 +273,6 @@ describe('resolveRuntimeVoiceProviderGate', () => {
         }),
       }),
       metadata: {
-        canAutoEnable: true,
         isConfigured: (config) => Boolean(config.pluginSttToken),
       },
     });
@@ -295,8 +288,8 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       const defaultGate = resolveRuntimeVoiceProviderGate({
         pluginSttToken: 'plugin-key',
       } as any);
-      expect(defaultGate.sttEnabled).toBe(true);
-      expect(defaultGate.sttProvider).toBe('plugin-test');
+      expect(defaultGate.sttEnabled).toBe(false);
+      expect(defaultGate.sttProvider).toBe('disabled');
 
       const disabledGate = resolveRuntimeVoiceProviderGate({
         sttProvider: 'plugin-test',
@@ -318,7 +311,6 @@ describe('resolveRuntimeVoiceProviderGate', () => {
         synthesizeBuffer: async () => Buffer.alloc(0),
       }),
       metadata: {
-        canAutoEnable: true,
         isConfigured: (config) => Boolean(config.pluginTtsToken),
       },
     });
@@ -335,8 +327,8 @@ describe('resolveRuntimeVoiceProviderGate', () => {
         pluginTtsToken: 'plugin-key',
         elevenLabsApiKey: '',
       } as any);
-      expect(defaultGate.ttsEnabled).toBe(true);
-      expect(defaultGate.ttsProvider).toBe('plugin-test');
+      expect(defaultGate.ttsEnabled).toBe(false);
+      expect(defaultGate.ttsProvider).toBe('disabled');
 
       const disabledGate = resolveRuntimeVoiceProviderGate({
         ttsProvider: 'plugin-test',
@@ -496,38 +488,6 @@ describe('createRuntimeVoiceSttConnector', () => {
         encoding: 'pcm_s16le',
       })).rejects.toThrow('Eligibility denied');
       expect(startStream).not.toHaveBeenCalled();
-    } finally {
-      restoreProvider();
-    }
-  });
-
-  it('returns null for auto-enabled providers denied by the eligibility gate', () => {
-    const restoreProvider = registerStreamingSttProvider('plugin-test', {
-      createConnector: vi.fn(() => ({
-        id: 'plugin-test',
-        startStream: async () => ({
-          transcripts: (async function* emptyTranscripts() {})(),
-          writeAudio: async () => {},
-          endInput: async () => {},
-          cancel: async () => {},
-        }),
-      })),
-      metadata: {
-        canAutoEnable: true,
-        isConfigured: (config) => Boolean(config.pluginSttToken),
-        eligibility: { requiredTokens: ['external.web'] },
-      },
-      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginSttEndpoint) }),
-    });
-
-    try {
-      const { gate } = createMutableEligibilityGate([]);
-      expect(createRuntimeVoiceSttConnector({
-        pluginSttToken: 'plugin-key',
-        pluginSttEndpoint: 'wss://plugin-stt.invalid',
-      } as any, {
-        eligibilityGate: gate,
-      })).toBeNull();
     } finally {
       restoreProvider();
     }
@@ -751,37 +711,6 @@ describe('createRuntimeVoiceTtsConnector', () => {
       allowExternalWeb = false;
       await expect(binding!.connector.synthesizeBuffer({ text: 'hello' })).rejects.toThrow('Eligibility denied');
       expect(synthesizeBuffer).not.toHaveBeenCalled();
-    } finally {
-      restoreProvider();
-    }
-  });
-
-  it('returns null for auto-enabled providers denied by the eligibility gate', () => {
-    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
-      createConnector: vi.fn(() => ({
-        id: 'plugin-test',
-        synthesizeStream: async () => ({
-          audio: (async function* emptyAudio() {})(),
-          cancel: async () => {},
-        }),
-        synthesizeBuffer: async () => Buffer.alloc(0),
-      })),
-      metadata: {
-        canAutoEnable: true,
-        isConfigured: (config) => Boolean(config.pluginTtsToken),
-        eligibility: { requiredTokens: ['external.web'] },
-      },
-      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginTtsEndpoint) }),
-    });
-
-    try {
-      const { gate } = createMutableEligibilityGate([]);
-      expect(createRuntimeVoiceTtsConnector({
-        pluginTtsToken: 'plugin-key',
-        pluginTtsEndpoint: 'https://plugin-tts.invalid',
-      } as any, {
-        eligibilityGate: gate,
-      })).toBeNull();
     } finally {
       restoreProvider();
     }

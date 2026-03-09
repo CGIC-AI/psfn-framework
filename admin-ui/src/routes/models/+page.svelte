@@ -6,6 +6,7 @@
     listDiscoveredModels,
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
+  import { ApiError } from '$lib/api/client';
   import type { DiscoveredModel } from '$lib/types';
   import {
     buildUniqueModelId,
@@ -219,6 +220,23 @@
     return fallback;
   }
 
+  function parseApiErrorDetail(error: ApiError): string | undefined {
+    const rawBody = typeof error.body === 'string' ? error.body.trim() : '';
+    if (rawBody.length === 0) return undefined;
+    try {
+      const parsed = JSON.parse(rawBody) as { error?: unknown; message?: unknown };
+      if (typeof parsed.error === 'string' && parsed.error.trim().length > 0) {
+        return parsed.error.trim();
+      }
+      if (typeof parsed.message === 'string' && parsed.message.trim().length > 0) {
+        return parsed.message.trim();
+      }
+    } catch {
+      // Non-JSON response body; fall back to raw text
+    }
+    return rawBody;
+  }
+
   function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
     if (!isRecord(value)) {
       return { ...DEFAULT_BUDGET_POLICY };
@@ -390,19 +408,44 @@
   }
 
   function cyclePurposeTag(index: number, purpose: CanonicalModelPurpose): void {
+    const target = models[index];
+    if (!target) return;
+
+    const currentTag = target.purposes.find((tag) => tag.purpose === purpose);
+    if (!currentTag) {
+      updateModelAt(index, (entry) => {
+        entry.purposes = [...entry.purposes, { purpose, primary: false }].sort(
+          (a, b) => CANONICAL_PURPOSES.indexOf(a.purpose) - CANONICAL_PURPOSES.indexOf(b.purpose),
+        );
+        return entry;
+      });
+      return;
+    }
+
+    if (currentTag.primary !== true) {
+      models = models.map((entry, entryIndex) => {
+        const cloned = cloneModelEntry(entry);
+        const nextPurposes = cloned.purposes.map((tag) => ({ ...tag }));
+        const purposeIndex = nextPurposes.findIndex((tag) => tag.purpose === purpose);
+        if (purposeIndex < 0) return cloned;
+
+        if (entryIndex === index) {
+          nextPurposes[purposeIndex].primary = true;
+        } else if (nextPurposes[purposeIndex].primary) {
+          nextPurposes[purposeIndex].primary = false;
+        }
+        cloned.purposes = nextPurposes.sort(
+          (a, b) => CANONICAL_PURPOSES.indexOf(a.purpose) - CANONICAL_PURPOSES.indexOf(b.purpose),
+        );
+        return cloned;
+      });
+      return;
+    }
+
     updateModelAt(index, (entry) => {
-      const purposes = entry.purposes.map((tag) => ({ ...tag }));
-      const existingIndex = purposes.findIndex((tag) => tag.purpose === purpose);
-      if (existingIndex < 0) {
-        purposes.push({ purpose, primary: false });
-      } else if (!purposes[existingIndex].primary) {
-        purposes[existingIndex].primary = true;
-      } else {
-        purposes.splice(existingIndex, 1);
-      }
-      entry.purposes = purposes.sort(
-        (a, b) => CANONICAL_PURPOSES.indexOf(a.purpose) - CANONICAL_PURPOSES.indexOf(b.purpose),
-      );
+      entry.purposes = entry.purposes
+        .filter((tag) => tag.purpose !== purpose)
+        .sort((a, b) => CANONICAL_PURPOSES.indexOf(a.purpose) - CANONICAL_PURPOSES.indexOf(b.purpose));
       return entry;
     });
   }
@@ -866,7 +909,8 @@
     if (issues.length > 0) {
       validationErrors = issues;
       flashOk = false;
-      flashMessage = 'Cannot save models until validation errors are fixed.';
+      const extra = issues.length > 1 ? ` (+${issues.length - 1} more)` : '';
+      flashMessage = `Cannot save: ${issues[0]}${extra}`;
       return;
     }
 
@@ -879,7 +923,15 @@
       flashMessage = 'models.json saved';
     } catch (saveError) {
       flashOk = false;
-      flashMessage = saveError instanceof Error ? saveError.message : 'Failed to save models';
+      if (saveError instanceof ApiError) {
+        const detail = parseApiErrorDetail(saveError);
+        flashMessage = detail ?? `Failed to save models (${saveError.status} ${saveError.statusText})`;
+        if (detail) {
+          validationErrors = [detail];
+        }
+      } else {
+        flashMessage = saveError instanceof Error ? saveError.message : 'Failed to save models';
+      }
     } finally {
       saving = false;
     }

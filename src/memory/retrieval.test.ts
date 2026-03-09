@@ -178,6 +178,36 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Confidential secret');
   });
 
+  it('excludes context_feedback artifacts from retrieval candidates', async () => {
+    const memories = [
+      makeMemory({
+        id: 'normal-memory',
+        text: 'V likes oolong tea.',
+        sensitivity: 'public',
+        similarity: 0.95,
+        sourceRef: 'api:test:normal',
+        tags: ['preference'],
+      }),
+      makeMemory({
+        id: 'context-feedback-memory',
+        text: 'Context feedback for turn abc. Score=0.88 bucket=high.',
+        type: 'procedural',
+        sensitivity: 'public',
+        similarity: 0.99,
+        sourceRef: 'source:context_feedback|turn:abc|score:0.88|model:test',
+        tags: ['context_feedback', 'procedural_learning'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('what does V like?', 'api:test', 'primary');
+
+    expect(result).toContain('V likes oolong tea.');
+    expect(result).not.toContain('Context feedback for turn abc');
+  });
+
   it('broadcast channels stay public_only unless explicit approval token is present', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);

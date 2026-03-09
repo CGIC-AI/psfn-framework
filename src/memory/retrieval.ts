@@ -54,6 +54,7 @@ import {
   RETRIEVAL_COMPOSITION_MAX_CANDIDATES,
   type RetrievalComposeCandidate,
 } from './retrieval-compose.js';
+import { isInternalMemoryArtifact } from './internal-artifacts.js';
 const log = createComponentLogger('Retrieval');
 
 /**
@@ -357,9 +358,14 @@ export class MemoryRetriever implements MemoryProvider {
         embedding,
         this.retrievalThreshold,
         candidateLimit,
-      ).map(cloneScoredMemory);
+      )
+        .filter(memory => !isInternalMemoryArtifact(memory))
+        .map(cloneScoredMemory);
       if (semanticCandidates.length === 0) {
-        lexicalCandidates = this.memoryStore.searchByText(contextText, candidateLimit).map(cloneScoredMemory);
+        lexicalCandidates = this.memoryStore
+          .searchByText(contextText, candidateLimit)
+          .filter(memory => !isInternalMemoryArtifact(memory))
+          .map(cloneScoredMemory);
       }
     }
 
@@ -470,7 +476,8 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     try {
-      let semanticMemories = turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [];
+      let semanticMemories = (turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [])
+        .filter(memory => !isInternalMemoryArtifact(memory));
       if (semanticMemories.length === 0 && !turnSnapshot) {
         const embedding = await this.embeddingService.embed(contextText);
         const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
@@ -478,17 +485,17 @@ export class MemoryRetriever implements MemoryProvider {
           embedding,
           this.retrievalThreshold,
           candidateLimit,
-        );
+        ).filter(memory => !isInternalMemoryArtifact(memory));
       }
       telemetry.semanticCandidateCount = semanticMemories.length;
 
       let memories = semanticMemories;
       if (semanticMemories.length === 0) {
-        const lexicalMemories = turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
+        const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
           ?? this.memoryStore.searchByText(
             contextText,
             Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4)),
-          );
+          )).filter(memory => !isInternalMemoryArtifact(memory));
         telemetry.lexicalCandidateCount = lexicalMemories.length;
         if (lexicalMemories.length > 0) {
           memories = lexicalMemories;
@@ -953,7 +960,8 @@ export class MemoryRetriever implements MemoryProvider {
     channelMeta?: ChannelMeta,
     sourceOverride?: readonly PurrMemory[],
   ): PurrMemory[] {
-    const source = sourceOverride?.map(cloneMemory) ?? this.collectContactEmotionalMemories(canonicalContactId);
+    const source = (sourceOverride?.map(cloneMemory) ?? this.collectContactEmotionalMemories(canonicalContactId))
+      .filter(memory => !isInternalMemoryArtifact(memory));
     if (source.length === 0) return [];
 
     const allowed = getAllowedSensitivities(trustLevel, channelVisibility);
@@ -979,7 +987,9 @@ export class MemoryRetriever implements MemoryProvider {
   }
 
   private collectContactEmotionalMemories(canonicalContactId: string): PurrMemory[] {
-    return this.memoryStore.getMemoriesByContact(canonicalContactId, 12);
+    return this.memoryStore
+      .getMemoriesByContact(canonicalContactId, 12)
+      .filter(memory => !isInternalMemoryArtifact(memory));
   }
 
   private collectProactiveRecallCandidates(
@@ -987,15 +997,20 @@ export class MemoryRetriever implements MemoryProvider {
     canonicalContactId?: string,
   ): PurrMemory[] {
     if (canonicalContactId) {
-      const byContact = this.memoryStore.getMemoriesByContact(canonicalContactId, 24);
+      const byContact = this.memoryStore
+        .getMemoriesByContact(canonicalContactId, 24)
+        .filter(memory => !isInternalMemoryArtifact(memory));
       if (byContact.length > 0) return byContact;
     }
 
-    const byChannel = this.memoryStore.getMemoriesByChannel(channelId, 24);
+    const byChannel = this.memoryStore
+      .getMemoriesByChannel(channelId, 24)
+      .filter(memory => !isInternalMemoryArtifact(memory));
     if (byChannel.length > 0) return byChannel;
 
     return this.memoryStore
       .getAllActiveMemories()
+      .filter(memory => !isInternalMemoryArtifact(memory))
       .sort((left, right) => right.lastAccessed - left.lastAccessed)
       .slice(0, 24);
   }

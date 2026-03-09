@@ -151,28 +151,20 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
   });
 
-  it('keeps existing behavior for elevenlabs when provider is unset', () => {
+  it('fails closed when TTS provider is unset even if elevenlabs credentials exist', () => {
     const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
       ttsProvider: undefined,
       elevenLabsModelId: 'eleven_turbo_v2_5',
     }));
 
-    expect(runtime).toBeDefined();
-    expect(createStreamingSttConnectorMock).toHaveBeenCalledWith('deepgram', {
-      apiKey: 'deepgram-key',
-      model: 'nova-3',
-      endpoint: 'wss://api.deepgram.com/v1/listen',
-    });
-    expect(createStreamingTtsConnectorMock).toHaveBeenCalledWith('elevenlabs', {
-      apiKey: 'elevenlabs-key',
-      voiceId: 'voice-id',
-      modelId: 'eleven_turbo_v2_5',
-      endpointBase: 'https://api.elevenlabs.io/v1',
-    });
+    expect(runtime).toBeUndefined();
+    expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
+    expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
   });
 
-  it('keeps existing behavior for elevenlabs when provider is explicitly set', () => {
+  it('builds runtime when elevenlabs and deepgram providers are explicitly set', () => {
     const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      sttProvider: 'deepgram',
       ttsProvider: 'elevenlabs',
       elevenLabsApiKey: 'elevenlabs-key',
       elevenLabsVoiceId: 'voice-id',
@@ -195,6 +187,7 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
 
   it('throws when echo provider selected without explicit Echo config', () => {
     expect(() => createApiVoiceWebSocketRuntime(createTestOptions({
+      sttProvider: 'deepgram',
       ttsProvider: 'echo',
       elevenLabsApiKey: undefined,
       elevenLabsVoiceId: undefined,
@@ -207,6 +200,7 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
 
   it('passes explicit echo provider overrides through to connector config', () => {
     const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+      sttProvider: 'deepgram',
       ttsProvider: 'echo',
       elevenLabsApiKey: '',
       elevenLabsVoiceId: '',

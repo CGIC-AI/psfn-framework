@@ -77,6 +77,30 @@ describe('resolveApiCorsAllowedOrigins', () => {
 
     expect(origins).toEqual(['https://console.example']);
   });
+
+  it('allows same-request-host admin origin fallback when admin host is wildcard-bound', () => {
+    const corsAllowedOrigins = normalizeCorsAllowedOrigins(resolveApiCorsAllowedOrigins({
+      explicitAllowlist: [],
+      adminHost: '0.0.0.0',
+      adminPort: 3201,
+    }));
+    const decision = evaluateCorsPolicy(
+      requestWithHeaders({
+        host: 'purrsephone.local.vega.nyc:3200',
+        origin: 'http://purrsephone.local.vega.nyc:3201',
+      }),
+      corsAllowedOrigins,
+      undefined,
+    );
+
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) {
+      throw new Error('Expected same-request-host fallback CORS decision to be allowed');
+    }
+    expect(decision.headers?.['Access-Control-Allow-Origin']).toBe(
+      'http://purrsephone.local.vega.nyc:3201',
+    );
+  });
 });
 
 describe('isLoopbackHost', () => {
@@ -168,6 +192,28 @@ describe('evaluateCorsPolicy', () => {
     expect(decision.ok).toBe(false);
     if (decision.ok) {
       throw new Error('Expected wildcard CORS decision to be denied');
+    }
+    expect(decision.error.type).toBe('cors_origin_not_allowed');
+  });
+
+  it('denies same-request-host fallback when origin host differs from request host', () => {
+    const corsAllowedOrigins = normalizeCorsAllowedOrigins(resolveApiCorsAllowedOrigins({
+      explicitAllowlist: [],
+      adminHost: '0.0.0.0',
+      adminPort: 3201,
+    }));
+    const decision = evaluateCorsPolicy(
+      requestWithHeaders({
+        host: 'purrsephone.local.vega.nyc:3200',
+        origin: 'http://evil.example:3201',
+      }),
+      corsAllowedOrigins,
+      undefined,
+    );
+
+    expect(decision.ok).toBe(false);
+    if (decision.ok) {
+      throw new Error('Expected mismatched same-request-host fallback CORS decision to be denied');
     }
     expect(decision.error.type).toBe('cors_origin_not_allowed');
   });

@@ -1278,6 +1278,59 @@ describe('ApiServer', () => {
       expect(res.headers.vary).toContain('Origin');
     });
 
+    it('allows preflight for split-mode admin origin when admin host is wildcard bind', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: resolveApiCorsAllowedOrigins({
+          explicitAllowlist: [],
+          adminHost: '0.0.0.0',
+          adminPort: 3201,
+        }),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Host: `purrsephone.local.vega.nyc:${port}`,
+        Origin: 'http://purrsephone.local.vega.nyc:3201',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('http://purrsephone.local.vega.nyc:3201');
+      expect(res.headers.vary).toContain('Origin');
+    });
+
+    it('rejects wildcard-bind split-mode preflight when origin host differs from request host', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: resolveApiCorsAllowedOrigins({
+          explicitAllowlist: [],
+          adminHost: '0.0.0.0',
+          adminPort: 3201,
+        }),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Host: `purrsephone.local.vega.nyc:${port}`,
+        Origin: 'http://evil.example:3201',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.body).error.type).toBe('cors_origin_not_allowed');
+    });
+
     it('allows wildcard LAN preflight when configured origin host matches', async () => {
       await server.stop();
       server = new ApiServer({

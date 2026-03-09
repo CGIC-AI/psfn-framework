@@ -859,7 +859,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     this.keepaliveTimer = setInterval(() => {
       void this.sendKeepalive();
     }, this.keepaliveIntervalMs);
-    this.keepaliveTimer.unref?.();
+    this.keepaliveTimer.unref();
   }
 
   private stopKeepalive(): void {
@@ -880,9 +880,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
         channelId: GATEWAY_KEEPALIVE_CHANNEL_ID,
       });
     } catch (error) {
-      if (!this.isDestroying) {
-        log.debug('Gateway keepalive RPC failed', { error: toErrorMessage(error) });
-      }
+      log.debug('Gateway keepalive RPC failed', { error: toErrorMessage(error) });
     } finally {
       this.keepaliveInFlight = false;
     }

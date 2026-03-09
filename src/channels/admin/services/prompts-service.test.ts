@@ -132,13 +132,14 @@ describe('AdminPromptsDataService', () => {
 
     const snapshot = service.getConstitutionSnapshot();
     expect(snapshot).not.toBeNull();
-    expect(snapshot?.immutableBlocks).toHaveLength(3);
-    expect(snapshot?.immutableBlocks.every(block => block.editable === false)).toBe(true);
-    expect(snapshot?.companionLayer?.editable).toBe(false);
-    expect(snapshot?.mutableLayers.some(layer => layer.id === runtimeLayer.id && layer.editable)).toBe(true);
-    expect(snapshot?.mutableLayers.some(layer => layer.type === 'base' && !layer.editable)).toBe(true);
-    expect(snapshot?.preview.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
-    expect(snapshot?.preview.text).toContain('runtime constitution content');
+    const nonNullSnapshot = snapshot!;
+    expect(nonNullSnapshot.immutableBlocks).toHaveLength(3);
+    expect(nonNullSnapshot.immutableBlocks.map(block => block.editable)).toEqual([false, false, false]);
+    expect(nonNullSnapshot.companionLayer?.editable).toBe(false);
+    expect(nonNullSnapshot.mutableLayers.some(layer => layer.id === runtimeLayer.id && layer.editable)).toBe(true);
+    expect(nonNullSnapshot.mutableLayers.some(layer => layer.type === 'base' && !layer.editable)).toBe(true);
+    expect(nonNullSnapshot.preview.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+    expect(nonNullSnapshot.preview.text).toContain('runtime constitution content');
   });
 
   it('fails closed when immutable constitution layer edits are attempted', () => {
@@ -210,7 +211,7 @@ describe('AdminPromptsDataService', () => {
     expect(bIndex).toBeGreaterThanOrEqual(0);
     if (aIndex >= 0 && bIndex >= 0) {
       const [moved] = payload.splice(bIndex, 1);
-      if (moved) payload.splice(aIndex, 0, moved);
+      payload.splice(aIndex, 0, moved);
       const runtimeBPayload = payload.find(layer => layer.id === runtimeB.id);
       if (runtimeBPayload) runtimeBPayload.content = 'runtime-b-updated';
     }

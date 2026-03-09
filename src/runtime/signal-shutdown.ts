@@ -35,7 +35,7 @@ export function createSignalShutdownHandler(
       });
       options.exit(1);
     }, forceExitTimeoutMs);
-    forceExitTimer.unref?.();
+    forceExitTimer.unref();
   };
 
   return async (signal: string): Promise<void> => {

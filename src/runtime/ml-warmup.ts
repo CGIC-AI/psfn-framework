@@ -33,6 +33,9 @@ export function createStartupTextEmotionClassifier(
   if (!textEmotionModel) {
     throw new Error('textEmotionModel runtime setting is required');
   }
+  if (config.dtype === undefined) {
+    throw new Error('textEmotionDtype runtime setting is required');
+  }
 
   return new TextEmotionClassifier({
     model: textEmotionModel,

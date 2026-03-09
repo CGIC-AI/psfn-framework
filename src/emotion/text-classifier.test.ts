@@ -10,6 +10,7 @@ import {
 } from './text-classifier.js';
 
 const TEST_MODEL = 'SamLowe/roberta-base-go_emotions-onnx';
+const TEST_DTYPE = 'fp32';
 
 function sampleScores(): TextEmotionClassification[] {
   return [
@@ -44,7 +45,7 @@ describe('TextEmotionClassifier', () => {
       ...sampleScores(),
     ]);
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, dtype: TEST_DTYPE, pipelineFactory });
 
     expect(pipelineFactory).not.toHaveBeenCalled();
 
@@ -54,7 +55,7 @@ describe('TextEmotionClassifier', () => {
     expect(pipelineFactory).toHaveBeenCalledWith({
       model: TEST_MODEL,
       cacheDir: undefined,
-      dtype: 'fp32',
+      dtype: TEST_DTYPE,
     });
     expect(pipeline).toHaveBeenCalledWith('hello there', { top_k: TEXT_EMOTION_TOP_K });
 
@@ -68,7 +69,7 @@ describe('TextEmotionClassifier', () => {
   it('reuses one initialized model pipeline across classify calls', async () => {
     const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(sampleScores());
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, dtype: TEST_DTYPE, pipelineFactory });
 
     await classifier.classify('first');
     await classifier.classify('second');
@@ -80,7 +81,7 @@ describe('TextEmotionClassifier', () => {
   it('preloads the model with the startup warmup input', async () => {
     const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(sampleScores());
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, dtype: TEST_DTYPE, pipelineFactory });
 
     await classifier.preload();
 
@@ -93,7 +94,7 @@ describe('TextEmotionClassifier', () => {
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn()
       .mockRejectedValueOnce(new Error('load failed'))
       .mockResolvedValueOnce(pipeline);
-    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, dtype: TEST_DTYPE, pipelineFactory });
 
     await expect(classifier.classify('first')).rejects.toThrow('load failed');
     await expect(classifier.classify('second')).resolves.toEqual(sorted(sampleScores()));
@@ -105,7 +106,7 @@ describe('TextEmotionClassifier', () => {
   it('surfaces startup warmup failures with explicit classifier context', async () => {
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn()
       .mockRejectedValue(new Error('load failed'));
-    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, dtype: TEST_DTYPE, pipelineFactory });
 
     await expect(classifier.preload()).rejects.toThrow(
       'text emotion classifier warmup failed: Error: load failed',
@@ -116,7 +117,7 @@ describe('TextEmotionClassifier', () => {
     const output = [{ label: 'joy', score: 0.9 }];
     const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(output);
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, dtype: TEST_DTYPE, pipelineFactory });
 
     await expect(classifier.classify('message')).resolves.toEqual(output);
   });
@@ -124,7 +125,7 @@ describe('TextEmotionClassifier', () => {
   it('throws for empty input text', async () => {
     const pipeline: TextEmotionPipeline = vi.fn();
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
-    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, dtype: TEST_DTYPE, pipelineFactory });
 
     await expect(classifier.classify('   ')).rejects.toThrow('text must be a non-empty string');
     expect(pipelineFactory).not.toHaveBeenCalled();
@@ -133,8 +134,17 @@ describe('TextEmotionClassifier', () => {
   it('fails closed when model is missing', () => {
     expect(() => new TextEmotionClassifier({
       model: '   ',
+      dtype: TEST_DTYPE,
       pipelineFactory: vi.fn(),
     })).toThrow('text emotion classifier model must be a non-empty string');
+  });
+
+  it('fails closed when dtype is missing', () => {
+    expect(() => new TextEmotionClassifier({
+      model: TEST_MODEL,
+      dtype: undefined as unknown as typeof TEXT_EMOTION_DTYPE_VALUES[number],
+      pipelineFactory: vi.fn(),
+    })).toThrow('text emotion classifier dtype must be a string');
   });
 
   it('fails closed when dtype is unsupported', () => {

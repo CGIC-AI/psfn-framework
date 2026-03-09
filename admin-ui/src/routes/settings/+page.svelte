@@ -187,7 +187,7 @@
   let echoTtsVoice = $state('');
   let echoTtsPreset = $state('');
   let sttProvider = $state('disabled');
-  let deepgramModel = $state('nova-3');
+  let deepgramModel = $state('');
 
   // ── Obsidian Vault ──
   let obsidianVaultName = $state('');
@@ -795,7 +795,7 @@
     echoTtsPreset = String(config.echoTtsPreset ?? '');
     const rawStt = String(config.sttProvider ?? (config.deepgramApiKey ? 'deepgram' : 'disabled')).trim();
     sttProvider = rawStt || 'disabled';
-    deepgramModel = String(config.deepgramModel ?? 'nova-3');
+    deepgramModel = String(config.deepgramModel ?? '');
 
     // Obsidian Vault
     obsidianVaultName = String(config.obsidianVaultName ?? '');
@@ -2176,7 +2176,7 @@
               </div>
               <div>
                 <label class={LABEL_CLS}>Deepgram Model</label>
-                <input type="text" bind:value={deepgramModel} class={INPUT_CLS} placeholder="nova-3" />
+                <input type="text" bind:value={deepgramModel} class={INPUT_CLS} placeholder="Deepgram model id" />
                 <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted model override.</p>
               </div>
               <div>

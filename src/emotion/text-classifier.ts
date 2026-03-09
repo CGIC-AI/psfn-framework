@@ -20,7 +20,7 @@ export type TextEmotionDType = typeof TEXT_EMOTION_DTYPE_VALUES[number];
 export interface TextEmotionClassifierConfig {
   model: string;
   cacheDir?: string;
-  dtype?: TextEmotionDType;
+  dtype: TextEmotionDType;
   pipelineFactory?: TextEmotionPipelineFactory;
 }
 
@@ -42,7 +42,6 @@ export type TextEmotionPipelineFactory = (
 export const TEXT_EMOTION_TOP_K = 28;
 export const TEXT_EMOTION_WARMUP_TEXT = '__psfn_startup_text_emotion_warmup__';
 
-const DEFAULT_DTYPE: TextEmotionDType = 'fp32';
 const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
 
 export class TextEmotionClassifier {
@@ -203,9 +202,14 @@ function normalizeRequiredModel(model: unknown): string {
   return normalized;
 }
 
-function normalizeDtype(dtype: TextEmotionDType | undefined): TextEmotionDType {
-  const normalized = dtype?.trim();
-  if (!normalized) return DEFAULT_DTYPE;
+function normalizeDtype(dtype: unknown): TextEmotionDType {
+  if (typeof dtype !== 'string') {
+    throw new Error('text emotion classifier dtype must be a string');
+  }
+  const normalized = dtype.trim();
+  if (!normalized) {
+    throw new Error('text emotion classifier dtype must be a non-empty string');
+  }
   if (!TEXT_EMOTION_DTYPE_SET.has(normalized)) {
     throw new Error(`unsupported text emotion classifier dtype: ${normalized}`);
   }

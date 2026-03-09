@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import type { SubstrateConfig } from '../types.js';
 import { loadRuntimeSettingsSeedDefaults } from '../config/seed-defaults.js';
+import { toErrorMessage } from '../utils/errors.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
 
@@ -52,6 +53,7 @@ export interface ApiEmbeddingConfig {
 }
 
 const RUNTIME_SEED_DEFAULTS = loadRuntimeSettingsSeedDefaults();
+export const STARTUP_EMBEDDING_WARMUP_TEXT = '__psfn_startup_embedding_warmup__';
 
 export function resolveProjectTransformersCacheDir(projectRoot: string = process.cwd()): string {
   return path.resolve(projectRoot, 'models', 'transformers');
@@ -398,6 +400,33 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
 
     const json = await response.json() as unknown;
     return toFloat32Embeddings(json);
+  }
+}
+
+export async function warmupEmbeddingService(
+  embeddingService: EmbeddingService,
+  text: string = STARTUP_EMBEDDING_WARMUP_TEXT,
+): Promise<void> {
+  const normalizedText = text.trim();
+  if (normalizedText.length === 0) {
+    throw new Error('embedding warmup text must be a non-empty string');
+  }
+
+  try {
+    const embedding = await embeddingService.embed(normalizedText);
+    if (!(embedding instanceof Float32Array)) {
+      throw new Error('embedding warmup must return a Float32Array');
+    }
+
+    if (Number.isFinite(embeddingService.dims) && embeddingService.dims > 0) {
+      if (embedding.length !== embeddingService.dims) {
+        throw new Error(
+          `embedding warmup dimension mismatch: expected ${embeddingService.dims}, got ${embedding.length}`,
+        );
+      }
+    }
+  } catch (error) {
+    throw new Error(`embedding service startup warmup failed: ${toErrorMessage(error)}`);
   }
 }
 

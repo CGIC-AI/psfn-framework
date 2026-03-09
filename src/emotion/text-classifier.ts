@@ -40,6 +40,7 @@ export type TextEmotionPipelineFactory = (
 ) => Promise<TextEmotionPipeline>;
 
 export const TEXT_EMOTION_TOP_K = 28;
+export const TEXT_EMOTION_WARMUP_TEXT = '__psfn_startup_text_emotion_warmup__';
 
 const DEFAULT_DTYPE: TextEmotionDType = 'fp32';
 const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
@@ -64,6 +65,14 @@ export class TextEmotionClassifier {
     const pipeline = await this.getPipeline();
     const rawOutput = await pipeline(normalizedText, { top_k: TEXT_EMOTION_TOP_K });
     return normalizeClassificationOutput(rawOutput);
+  }
+
+  async preload(text: string = TEXT_EMOTION_WARMUP_TEXT): Promise<void> {
+    try {
+      await this.classify(text);
+    } catch (error) {
+      throw new Error(`text emotion classifier warmup failed: ${String(error)}`);
+    }
   }
 
   private async getPipeline(): Promise<TextEmotionPipeline> {

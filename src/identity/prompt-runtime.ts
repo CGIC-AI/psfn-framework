@@ -1,19 +1,26 @@
+import {
+  formatActiveDate,
+  formatActiveDateTimeIso,
+  formatActiveTime,
+  resolveActiveTimezone,
+} from '../time/active-timezone.js';
+
 export interface PromptRuntimeContext {
   now?: Date;
   variables?: Record<string, unknown>;
   onUnresolvedToken?: (token: string) => void;
 }
 
-function utcIso(now: Date): string {
-  return now.toISOString();
+function activeIso(now: Date): string {
+  return formatActiveDateTimeIso(now);
 }
 
-function utcDate(now: Date): string {
-  return now.toISOString().slice(0, 10);
+function activeDate(now: Date): string {
+  return formatActiveDate(now);
 }
 
-function utcTime(now: Date): string {
-  return `${now.toISOString().slice(11, 19)}Z`;
+function activeTime(now: Date): string {
+  return formatActiveTime(now);
 }
 
 function unixTimestamp(now: Date): string {
@@ -23,9 +30,9 @@ function unixTimestamp(now: Date): string {
 type TokenResolver = (now: Date) => string;
 
 const TOKEN_RESOLVERS: Array<[RegExp, TokenResolver]> = [
-  [/\{\{\s*(?:current_datetime|current_datetime_iso|now|now\(\))\s*\}\}/gi, utcIso],
-  [/\{\{\s*(?:current_date|date|date\(\))\s*\}\}/gi, utcDate],
-  [/\{\{\s*(?:current_time|time|time\(\))\s*\}\}/gi, utcTime],
+  [/\{\{\s*(?:current_datetime|current_datetime_iso|now|now\(\))\s*\}\}/gi, activeIso],
+  [/\{\{\s*(?:current_date|date|date\(\))\s*\}\}/gi, activeDate],
+  [/\{\{\s*(?:current_time|time|time\(\))\s*\}\}/gi, activeTime],
   [/\{\{\s*(?:current_timestamp|unix_timestamp|timestamp|timestamp\(\))\s*\}\}/gi, unixTimestamp],
 ];
 
@@ -38,18 +45,18 @@ export interface PromptRuntimeMacroHint {
 export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   {
     token: '{{current_datetime}} / {{now()}}',
-    description: 'Current UTC datetime in ISO-8601 format.',
-    example: '2026-02-21T13:20:11.123Z',
+    description: `Current active timezone datetime in ISO-8601 format (${resolveActiveTimezone()}).`,
+    example: '2026-02-21T08:20:11.123-05:00',
   },
   {
     token: '{{current_date}}',
-    description: 'Current UTC calendar date.',
+    description: `Current calendar date in the active timezone (${resolveActiveTimezone()}).`,
     example: '2026-02-21',
   },
   {
     token: '{{current_time}}',
-    description: 'Current UTC time.',
-    example: '13:20:11Z',
+    description: `Current time in the active timezone (${resolveActiveTimezone()}).`,
+    example: '08:20:11-05:00',
   },
   {
     token: '{{unix_timestamp}}',

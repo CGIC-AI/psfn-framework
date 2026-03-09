@@ -3,6 +3,7 @@
 // Run: npm run agent
 
 import { randomUUID } from 'node:crypto';
+import { ensureActiveTimezone } from './time/active-timezone.js';
 import { loadConfig } from './types.js';
 import type {
   SubstrateMessage,
@@ -141,6 +142,7 @@ import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-
 import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Agent');
+ensureActiveTimezone();
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;

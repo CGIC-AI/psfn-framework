@@ -3849,15 +3849,15 @@ describe('SubstrateAgent.handleMessage', () => {
       const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
       const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
 
-      expect(firstPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-26T00:00:00.000Z');
-      expect(firstPrompt).toContain('[DYNAMIC] 2026-02-26T00:00:00.000Z');
-      expect(firstPrompt.indexOf('[DYNAMIC] 2026-02-26T00:00:00.000Z'))
+      expect(firstPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-25T19:00:00.000-05:00');
+      expect(firstPrompt).toContain('[DYNAMIC] 2026-02-25T19:00:00.000-05:00');
+      expect(firstPrompt.indexOf('[DYNAMIC] 2026-02-25T19:00:00.000-05:00'))
         .toBeLessThan(firstPrompt.indexOf('[Runtime Context]'));
-      expect(secondPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-26T00:00:00.000Z');
-      expect(secondPrompt).toContain('[DYNAMIC] 2026-02-26T00:10:00.000Z');
-      expect(secondPrompt.indexOf('[DYNAMIC] 2026-02-26T00:10:00.000Z'))
+      expect(secondPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-25T19:00:00.000-05:00');
+      expect(secondPrompt).toContain('[DYNAMIC] 2026-02-25T19:10:00.000-05:00');
+      expect(secondPrompt.indexOf('[DYNAMIC] 2026-02-25T19:10:00.000-05:00'))
         .toBeLessThan(secondPrompt.indexOf('[Runtime Context]'));
-      expect(secondPrompt).not.toContain('[STATIC] PrimaryUser @ 2026-02-26T00:10:00.000Z');
+      expect(secondPrompt).not.toContain('[STATIC] PrimaryUser @ 2026-02-25T19:10:00.000-05:00');
     } finally {
       vi.useRealTimers();
     }
@@ -3909,7 +3909,7 @@ describe('SubstrateAgent.handleMessage', () => {
       await agent.handleMessage(makeMessage({ id: 'msg-hash-2' }));
 
       const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-      expect(secondPrompt).toContain('[STATIC-v2] 2026-02-26T01:05:00.000Z');
+      expect(secondPrompt).toContain('[STATIC-v2] 2026-02-25T20:05:00.000-05:00');
     } finally {
       vi.useRealTimers();
     }

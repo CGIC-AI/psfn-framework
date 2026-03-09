@@ -3,6 +3,7 @@
 // Run: npm run gateway
 
 import 'dotenv/config';
+import { ensureActiveTimezone } from './time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { loadConfig } from './types.js';
@@ -108,6 +109,8 @@ const ALL_VAULT_ACTIONS: readonly VaultPolicyAction[] = [
   'search',
   'daily',
 ];
+
+ensureActiveTimezone();
 
 function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {
   if (diagnostics.modelsMigratedFromLegacySettings) {

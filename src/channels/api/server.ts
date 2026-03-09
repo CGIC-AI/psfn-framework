@@ -162,6 +162,7 @@ export interface ApiServerConfig {
   sessionManager: SessionManager;
   contactStore?: ContactStore;
   apiKey?: string;
+  adminToken?: string;
   modelName?: string;
   requestTimeoutMs?: number;
   voiceWebSocketPath?: string;
@@ -201,6 +202,7 @@ export class ApiServer implements ChannelAdapter {
   private sessionManager: SessionManager;
   private contactStore: ContactStore | null;
   private apiKey?: string;
+  private adminToken?: string;
   private allowInsecureWithoutAuth: boolean;
   private corsAllowedOrigins: ReturnType<typeof normalizeCorsAllowedOrigins>;
   private modelName: string;
@@ -222,6 +224,7 @@ export class ApiServer implements ChannelAdapter {
     this.sessionManager = config.sessionManager;
     this.contactStore = config.contactStore ?? null;
     this.apiKey = clampHeaderValue(config.apiKey, 512);
+    this.adminToken = clampHeaderValue(config.adminToken, 512);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
     this.corsAllowedOrigins = normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
     this.modelName = config.modelName ?? DEFAULT_COMPANION_ID;
@@ -596,6 +599,7 @@ export class ApiServer implements ChannelAdapter {
   ): ApiAuthPrincipal | null {
     const resolution = resolveApiRequestPrincipal(req, {
       apiKey: this.apiKey,
+      alternateApiToken: this.adminToken,
       allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
       isTelemetryIngest,
     });

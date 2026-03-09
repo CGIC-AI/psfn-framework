@@ -55,6 +55,7 @@ export type PrincipalResolution = PrincipalResolutionSuccess | PrincipalResoluti
 
 export interface ResolveApiPrincipalOptions {
   apiKey?: string;
+  alternateApiToken?: string;
   allowInsecureWithoutAuth: boolean;
   isTelemetryIngest: boolean;
 }
@@ -449,7 +450,8 @@ export function resolveApiRequestPrincipal(
   options: ResolveApiPrincipalOptions,
 ): PrincipalResolution {
   if (options.apiKey) {
-    const principal = getBearerPrincipal(req, options.apiKey);
+    const principal = getBearerPrincipal(req, options.apiKey)
+      ?? (options.alternateApiToken ? getBearerPrincipal(req, options.alternateApiToken) : null);
     if (!principal) {
       return {
         ok: false,

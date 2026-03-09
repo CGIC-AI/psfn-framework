@@ -742,6 +742,7 @@ async function main(): Promise<void> {
         sessionManager,
         contactStore,
         apiKey: process.env.API_KEY || undefined,
+        adminToken: process.env.ADMIN_TOKEN || undefined,
         allowInsecureWithoutAuth,
         corsAllowedOrigins,
         modelName: process.env.API_MODEL_NAME,

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { getCachedJsonValueDiagnostics } from './config/load-or-seed.js';
 import {
   loadSettings,
   saveSettings,
@@ -191,6 +192,71 @@ describe('settings', () => {
 
       expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
       expect(readFileSync(path, 'utf-8')).toBe('[]');
+    });
+
+    it('returns cached settings on repeated reads without re-reading disk', () => {
+      const path = join(tempDir, 'settings.json');
+      saveSettings(tempDir, { extractionInterval: 6 });
+
+      expect(loadSettings(tempDir).extractionInterval).toBe(6);
+      expect(loadSettings(tempDir).extractionInterval).toBe(6);
+
+      expect(getCachedJsonValueDiagnostics(path)).toEqual({
+        hits: 2,
+        misses: 0,
+        hasCachedValue: true,
+      });
+    });
+
+    it('refreshes the cache on save so subsequent reads use the new value without re-reading disk', () => {
+      const path = join(tempDir, 'settings.json');
+      saveSettings(tempDir, { extractionInterval: 4 });
+      expect(loadSettings(tempDir).extractionInterval).toBe(4);
+
+      const before = getCachedJsonValueDiagnostics(path);
+      saveSettings(tempDir, { extractionInterval: 9 });
+
+      expect(loadSettings(tempDir).extractionInterval).toBe(9);
+      expect(loadSettings(tempDir).extractionInterval).toBe(9);
+
+      expect(getCachedJsonValueDiagnostics(path)).toEqual({
+        hits: before.hits + 2,
+        misses: before.misses,
+        hasCachedValue: true,
+      });
+    });
+
+    it('invalidates the cache when settings.json changes on disk outside the runtime', () => {
+      const path = join(tempDir, 'settings.json');
+      saveSettings(tempDir, { extractionInterval: 7 });
+      const before = getCachedJsonValueDiagnostics(path);
+
+      writeFileSync(path, JSON.stringify({ extractionInterval: 11 }), 'utf-8');
+
+      expect(loadSettings(tempDir).extractionInterval).toBe(11);
+      expect(loadSettings(tempDir).extractionInterval).toBe(11);
+
+      expect(getCachedJsonValueDiagnostics(path)).toEqual({
+        hits: before.hits + 1,
+        misses: before.misses + 1,
+        hasCachedValue: true,
+      });
+    });
+
+    it('fails closed when an external disk change makes persisted settings invalid', () => {
+      const path = join(tempDir, 'settings.json');
+      saveSettings(tempDir, { extractionInterval: 5 });
+      const before = getCachedJsonValueDiagnostics(path);
+
+      writeFileSync(path, 'not json', 'utf-8');
+
+      expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
+      expect(readFileSync(path, 'utf-8')).toBe('not json');
+      expect(getCachedJsonValueDiagnostics(path)).toEqual({
+        hits: before.hits,
+        misses: before.misses + 1,
+        hasCachedValue: false,
+      });
     });
   });
 

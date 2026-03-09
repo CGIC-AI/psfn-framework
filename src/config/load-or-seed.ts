@@ -1,7 +1,4 @@
-import {
-  mkdirSync,
-  readFileSync,
-} from 'node:fs';
+import * as fs from 'node:fs';
 import { dirname } from 'node:path';
 import { writeJsonAtomic as writeJsonAtomicFile } from '../utils/fs.js';
 
@@ -17,6 +14,26 @@ interface NodeErrorLike {
   code?: string;
 }
 
+interface JsonFileFingerprint {
+  ctimeNs: bigint;
+  ino: bigint;
+  mtimeNs: bigint;
+  size: bigint;
+}
+
+interface CachedJsonValue {
+  fingerprint: JsonFileFingerprint;
+  value: unknown;
+}
+
+interface CachedJsonDiagnostics {
+  hits: number;
+  misses: number;
+}
+
+const cachedJsonValues = new Map<string, CachedJsonValue>();
+const cachedJsonDiagnostics = new Map<string, CachedJsonDiagnostics>();
+
 function isNodeErrorLike(value: unknown): value is NodeErrorLike {
   return typeof value === 'object' && value !== null;
 }
@@ -25,13 +42,44 @@ function isEnoent(error: unknown): boolean {
   return isNodeErrorLike(error) && error.code === 'ENOENT';
 }
 
+function cloneJsonValue<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function readJsonFileFingerprint(path: string): JsonFileFingerprint | undefined {
+  try {
+    const stats = fs.statSync(path, { bigint: true });
+    return {
+      ctimeNs: stats.ctimeNs,
+      ino: stats.ino,
+      mtimeNs: stats.mtimeNs,
+      size: stats.size,
+    };
+  } catch (error) {
+    if (isEnoent(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function sameFingerprint(
+  left: JsonFileFingerprint | undefined,
+  right: JsonFileFingerprint | undefined,
+): boolean {
+  return left?.ctimeNs === right?.ctimeNs
+    && left?.ino === right?.ino
+    && left?.mtimeNs === right?.mtimeNs
+    && left?.size === right?.size;
+}
+
 function parseJsonFile(path: string): unknown {
-  const raw = readFileSync(path, 'utf-8');
+  const raw = fs.readFileSync(path, 'utf-8');
   return JSON.parse(raw);
 }
 
 export function writeJsonAtomic(path: string, value: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
+  fs.mkdirSync(dirname(path), { recursive: true });
   writeJsonAtomicFile(path, value);
 }
 
@@ -57,5 +105,54 @@ export function loadOrSeedJson<T>(options: LoadOrSeedJsonOptions<T>): T {
     throw new Error(
       `Refusing to reseed invalid JSON config at ${dataPath}; fix or remove the file explicitly. Cause: ${reason}`,
     );
+  }
+}
+
+export function invalidateCachedJsonValue(path: string): void {
+  cachedJsonValues.delete(path);
+}
+
+export function cacheJsonValue<T>(path: string, value: T): void {
+  const fingerprint = readJsonFileFingerprint(path);
+  if (!fingerprint) {
+    invalidateCachedJsonValue(path);
+    return;
+  }
+
+  cachedJsonValues.set(path, {
+    fingerprint,
+    value: cloneJsonValue(value),
+  });
+}
+
+export function getCachedJsonValueDiagnostics(path: string): CachedJsonDiagnostics & {
+  hasCachedValue: boolean;
+} {
+  const diagnostics = cachedJsonDiagnostics.get(path);
+  return {
+    hits: diagnostics?.hits ?? 0,
+    misses: diagnostics?.misses ?? 0,
+    hasCachedValue: cachedJsonValues.has(path),
+  };
+}
+
+export function loadOrSeedJsonCached<T>(options: LoadOrSeedJsonOptions<T>): T {
+  const fingerprint = readJsonFileFingerprint(options.dataPath);
+  const cached = cachedJsonValues.get(options.dataPath);
+  const diagnostics = cachedJsonDiagnostics.get(options.dataPath) ?? { hits: 0, misses: 0 };
+  cachedJsonDiagnostics.set(options.dataPath, diagnostics);
+  if (cached && sameFingerprint(cached.fingerprint, fingerprint)) {
+    diagnostics.hits += 1;
+    return cloneJsonValue(cached.value as T);
+  }
+  diagnostics.misses += 1;
+
+  try {
+    const loaded = loadOrSeedJson(options);
+    cacheJsonValue(options.dataPath, loaded);
+    return cloneJsonValue(loaded);
+  } catch (error) {
+    invalidateCachedJsonValue(options.dataPath);
+    throw error;
   }
 }

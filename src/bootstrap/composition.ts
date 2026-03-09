@@ -12,10 +12,11 @@ import { SessionStore, type SessionIntegrityProvider } from '../session/store.js
 import { SessionManager } from '../session/manager.js';
 import { UserContinuityStore } from '../session/continuity.js';
 import {
+  createEmbeddingProviderFromConfig as createEmbeddingProviderFromMemoryConfig,
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
   type EmbeddingRuntimeProvider,
 } from '../memory/embedding.js';
-import { SubstrateAgent } from '../agent/substrate-agent.js';
+import { SubstrateAgent, type EmotionRuntimeWiring } from '../agent/substrate-agent.js';
 import { MemoryRetriever } from '../memory/retrieval.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import type { MemoryStore } from '../memory/store.js';
@@ -23,6 +24,12 @@ import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
 import { createSpawnShardTool } from '../shards/tools.js';
 import { createThinkTool } from '../repl/tools.js';
+import { CoreMemoryStore } from '../core-memory/store.js';
+import {
+  createCoreMemoryAppendTool,
+  createCoreMemoryReplaceTool,
+  createMemoryRethinkTool,
+} from '../core-memory/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { CapabilityTier } from '../types.js';
@@ -36,7 +43,10 @@ import type { ModuleRegistryMutation } from '../modules/types.js';
 import {
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
+  resolveConfiguredCompanionDataDir,
+  resolveCoreMemoryPath,
   resolveContinuityDir,
+  resolveShardSessionMemorySyncAuditPath,
   resolveSessionsDir,
 } from '../persistence/layout.js';
 
@@ -56,10 +66,11 @@ export interface SessionCompositionOptions {
 }
 
 export function composeSessionRuntime(options: SessionCompositionOptions): SessionComposition {
-  ensurePersistenceLayout(options.config.dataDir);
-  migrateLegacyPersistenceLayout(options.config.dataDir);
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  ensurePersistenceLayout(companionDataDir);
+  migrateLegacyPersistenceLayout(companionDataDir);
 
-  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(options.config.dataDir);
+  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
   const sessionStore = new SessionStore(sessionsDir, {
     integrityProvider: options.sessionIntegrityProvider ?? null,
   });
@@ -72,7 +83,7 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
 
   let continuityStore: UserContinuityStore | null = null;
   if (options.enableContinuity) {
-    continuityStore = new UserContinuityStore(resolveContinuityDir(options.config.dataDir));
+    continuityStore = new UserContinuityStore(resolveContinuityDir(companionDataDir));
     sessionManager.continuityStore = continuityStore;
   }
 
@@ -81,6 +92,10 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
 
 export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {
   return createEmbeddingProviderFromMemoryEnv(process.env);
+}
+
+export function createEmbeddingProviderFromConfig(config: SubstrateConfig): EmbeddingRuntimeProvider {
+  return createEmbeddingProviderFromMemoryConfig(config, process.env);
 }
 
 export interface IdentityComposition {
@@ -111,6 +126,7 @@ export interface SubstrateAgentCompositionOptions {
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
   config: SubstrateConfig;
+  emotionRuntime?: EmotionRuntimeWiring;
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -126,8 +142,33 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.characterPromptVariablesProvider
         ? { characterPromptVariablesProvider: options.characterPromptVariablesProvider }
         : {}),
+      ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
     },
   );
+}
+
+export interface SelfModelRuntimeTarget {
+  setSelfModelRuntimeRequired(required: boolean): void;
+}
+
+export function wireSelfModelRuntime(target: SelfModelRuntimeTarget): void {
+  target.setSelfModelRuntimeRequired(true);
+}
+
+export interface CoreMemoryRuntimeOptions {
+  agentLoop: SubstrateAgent;
+  sessionManager: SessionManager;
+  config: SubstrateConfig;
+}
+
+export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMemoryStore {
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  const store = new CoreMemoryStore(resolveCoreMemoryPath(companionDataDir));
+  options.sessionManager.setCoreMemoryProvider(store);
+  options.agentLoop.registerTool(createCoreMemoryAppendTool(store));
+  options.agentLoop.registerTool(createCoreMemoryReplaceTool(store));
+  options.agentLoop.registerTool(createMemoryRethinkTool(store));
+  return store;
 }
 
 export interface MemoryRuntimeOptions {
@@ -151,6 +192,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.config,
       options.eventBus,
       options.contactStore ?? null,
+      options.llmProvider,
     )
     : new MemoryRetriever(
       options.memoryStore,
@@ -158,6 +200,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       undefined,
       options.eventBus,
       options.contactStore ?? null,
+      options.llmProvider,
     );
 
   const memoryExtractor = options.config
@@ -208,10 +251,12 @@ export interface ToolRuntimeOptions {
   sessionManager: SessionManager;
   config: SubstrateConfig;
   parentSystemPrompt: string;
+  companionDataDir?: string;
   scheduler?: Scheduler | null;
   replConfig?: REPLConfig;
   shardAuditTrail?: ShardAuditTrail | null;
   getCapabilityTier?: () => CapabilityTier;
+  compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
 }
@@ -227,6 +272,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     parentSystemPrompt: options.parentSystemPrompt,
     toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
     auditTrail: options.shardAuditTrail ?? undefined,
+    shardSessionMemorySyncAuditPath: options.companionDataDir
+      ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
+      : undefined,
   });
   options.agentLoop.registerTool(createSpawnShardTool(shardManager));
 
@@ -238,6 +286,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     scheduler: options.scheduler ?? null,
     eventBus: options.eventBus,
     getCapabilityTier: options.getCapabilityTier,
+    compositionalPolicy: options.compositionalPolicy,
     moduleInstallConfirmationQueue: options.moduleInstallConfirmationQueue,
     onModuleRegistryMutation: options.onModuleRegistryMutation,
     config: options.replConfig ?? DEFAULT_REPL_CONFIG,

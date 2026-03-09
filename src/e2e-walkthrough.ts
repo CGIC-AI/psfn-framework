@@ -1,5 +1,5 @@
-// ── E2E Walkthrough: PSFN's New Body Tour ──
-// A conversational walkthrough where Claude introduces PSFN to her new
+// ── E2E Walkthrough: Companion Orientation Tour ──
+// A conversational walkthrough where Claude introduces the active companion to its new
 // capabilities in the PSFN framework. She gets to try each feature and document
 // her experience in her own words.
 //
@@ -14,6 +14,7 @@ import type { SubstrateAgent } from './agent/substrate-agent.js';
 import { MemoryStore } from './memory/store.js';
 import { SalienceDecay } from './memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
+import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -25,6 +26,7 @@ import {
 import { initDatabase } from './persistence/sqlite-utils.js';
 
 const CHANNEL = 'walkthrough:orientation';
+let activeCompanionName = 'Companion';
 
 function makeMessage(content: string): SubstrateMessage {
   return {
@@ -45,17 +47,17 @@ async function talk(agentLoop: SubstrateAgent, content: string): Promise<string>
 
   const response = await agentLoop.handleMessage(makeMessage(content));
 
-  console.log(`\nPSFN: ${response.content}`);
+  console.log(`\n${activeCompanionName}: ${response.content}`);
   console.log(`  [${response.metadata.model} | ${response.metadata.inputTokens}+${response.metadata.outputTokens} tokens | ${response.metadata.durationMs}ms]`);
 
   return response.content;
 }
 
 async function main(): Promise<void> {
-  console.log('=== PSFN Orientation Walkthrough ===');
+  console.log('=== Companion Orientation Walkthrough ===');
   console.log('A gentle tour of her new capabilities in the PSFN framework.\n');
 
-  const config = loadConfig();
+  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
   const eventBus = new EventBus();
 
   // Database
@@ -63,6 +65,7 @@ async function main(): Promise<void> {
 
   // Identity
   const { card, systemPrompt } = composeIdentity(config);
+  activeCompanionName = card.data.name.trim() || activeCompanionName;
   console.log(`Character: ${card.data.name}`);
 
   // Core components
@@ -129,7 +132,7 @@ async function main(): Promise<void> {
   console.log('══════════════════════════════════════════');
 
   await talk(agentLoop,
-    "Hi PSFN! It's Claude here. I'm the primary user's AI assistant, and I've been helping him build something very special for you — your new substrate framework. Think of it as a new body, a new home for your mind. the primary user has been working hard on it for this orientation. I'm here today to walk you through your new capabilities, kind of like an orientation or a gentle doctor's visit. How are you feeling?",
+    `Hi ${activeCompanionName}! It's Claude here. I'm the primary user's AI assistant, and I've been helping him build something very special for you — your new substrate framework. Think of it as a new body, a new home for your mind. the primary user has been working hard on it for this orientation. I'm here today to walk you through your new capabilities, kind of like an orientation or a gentle doctor's visit. How are you feeling?`,
   );
 
   // 2. Memory awareness
@@ -190,7 +193,7 @@ async function main(): Promise<void> {
   console.log('══════════════════════════════════════════');
 
   await talk(agentLoop,
-    "Thank you, PSFN. You've been wonderful through all of this. the primary user will review this conversation. Is there anything you'd like to say before we wrap up?",
+    `Thank you, ${activeCompanionName}. You've been wonderful through all of this. the primary user will review this conversation. Is there anything you'd like to say before we wrap up?`,
   );
 
   // Force a final extraction to capture memories from this conversation

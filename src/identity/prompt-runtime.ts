@@ -1,6 +1,7 @@
 export interface PromptRuntimeContext {
   now?: Date;
   variables?: Record<string, unknown>;
+  onUnresolvedToken?: (token: string) => void;
 }
 
 function utcIso(now: Date): string {
@@ -63,7 +64,7 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   {
     token: '{{char}}',
     description: 'Character/assistant name from runtime context.',
-    example: 'PSFN',
+    example: 'Companion',
   },
   {
     token: '{{description}}',
@@ -132,6 +133,14 @@ function normalizeLookupKey(value: string): string {
   return value.trim().toLowerCase();
 }
 
+function normalizeTokenName(rawToken: string): string {
+  const trimmed = rawToken.trim();
+  if (trimmed.endsWith('()')) {
+    return trimmed.slice(0, -2);
+  }
+  return trimmed;
+}
+
 function stringifyVariableValue(value: unknown): string | null {
   if (value == null) return null;
   if (value instanceof Date) return value.toISOString();
@@ -182,15 +191,29 @@ function buildVariableLookup(variables: Record<string, unknown>): Map<string, st
   return lookup;
 }
 
+function collectUnresolvedTokens(text: string): string[] {
+  const unresolved = new Set<string>();
+  text.replace(/\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g, (_full, rawToken: string) => {
+    unresolved.add(normalizeTokenName(rawToken));
+    return '';
+  });
+  return [...unresolved];
+}
+
+export interface PromptRuntimeRenderResult {
+  text: string;
+  unresolvedTokens: string[];
+}
+
 /**
  * Replace runtime date/time tokens in prompt text.
  * All values are UTC to keep behavior deterministic across environments.
  */
-export function injectPromptRuntimeTokens(
+export function renderPromptRuntimeTokens(
   text: string,
   context: PromptRuntimeContext = {},
-): string {
-  if (!text) return text;
+): PromptRuntimeRenderResult {
+  if (!text) return { text, unresolvedTokens: [] };
 
   const now = context.now ?? new Date();
   const variableLookup = buildVariableLookup(context.variables ?? {});
@@ -204,7 +227,7 @@ export function injectPromptRuntimeTokens(
     }
 
     output = output.replace(/\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g, (fullToken, rawName: string) => {
-      const cleaned = rawName.endsWith('()') ? rawName.slice(0, -2) : rawName;
+      const cleaned = normalizeTokenName(rawName);
       const normalized = normalizeLookupKey(cleaned);
       const resolved = variableLookup.get(normalized);
       return resolved ?? fullToken;
@@ -213,5 +236,25 @@ export function injectPromptRuntimeTokens(
     if (output === before) break;
   }
 
-  return output;
+  const unresolvedTokens = collectUnresolvedTokens(output);
+  if (context.onUnresolvedToken) {
+    for (const token of unresolvedTokens) {
+      context.onUnresolvedToken(token);
+    }
+  }
+
+  return {
+    text: output,
+    unresolvedTokens,
+  };
+}
+
+/**
+ * Backward-compatible helper that returns only rendered text.
+ */
+export function injectPromptRuntimeTokens(
+  text: string,
+  context: PromptRuntimeContext = {},
+): string {
+  return renderPromptRuntimeTokens(text, context).text;
 }

@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "directories": [
-    "psfn/skills",
+    "companion/skills",
     "skills"
   ],
   "extraDirectories": [],

@@ -10,7 +10,7 @@ function writeJson(path: string, value: unknown): void {
 }
 
 describe('CapabilityRuntime', () => {
-  it('uses CAPABILITY_TIER env fallback on first boot', () => {
+  it('uses capability-tier seed defaults on first boot', () => {
     const root = mkdtempSync(join(tmpdir(), 'cap-runtime-fallback-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'seed');
@@ -26,10 +26,9 @@ describe('CapabilityRuntime', () => {
       const runtime = new CapabilityRuntime({
         dataDir,
         seedDir,
-        envTier: 'apprentice',
       });
 
-      expect(runtime.getTier()).toBe('apprentice');
+      expect(runtime.getTier()).toBe('nursery');
       expect(runtime.has('git.read')).toBe(true);
       expect(runtime.has('git.write')).toBe(false);
     } finally {

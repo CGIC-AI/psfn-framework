@@ -1,5 +1,4 @@
 const DEFAULT_ADMIN_CHAT_API_HOST = '127.0.0.1';
-const DEFAULT_ADMIN_CHAT_API_PORT = 3000;
 const WILDCARD_BIND_HOSTS = new Set(['0.0.0.0', '::', '[::]']);
 
 /**

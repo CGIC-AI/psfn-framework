@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { getChatBootstrap, updateChatBootstrap } from '$lib/api/endpoints/chat';
+  import { applyIdentityOnboardingAction } from '$lib/api/endpoints/identity';
   import { getSessionMessages } from '$lib/api/endpoints/sessions';
   import { getToken } from '$lib/stores/auth.svelte';
   import type { AdminChatBootstrapResponse, SessionEntry } from '$lib/types';
@@ -35,6 +36,13 @@
   let selectedPrivacyLevel = $state('');
   let selectedChannelIdentity = $state(''); // "channel:userId" composite key
   let showIdentityDetails = $state(false);
+  let onboardingSaving = $state(false);
+  let onboardingError = $state('');
+  let onboardingDraft = $state({
+    name: '',
+    description: '',
+    personality: '',
+  });
 
   // Computed channel options for the identity selector
   const GARDEN_CHAT_CHANNEL = 'api';
@@ -80,12 +88,97 @@
     return opts;
   }
 
+  function initializeOnboardingDraft(bs: AdminChatBootstrapResponse) {
+    if (!bs.onboarding.required) {
+      onboardingDraft = {
+        name: '',
+        description: '',
+        personality: '',
+      };
+      onboardingError = '';
+      return;
+    }
+    const assistantName = bs.assistantName?.trim() || 'Companion';
+    onboardingDraft = {
+      name: onboardingDraft.name.trim().length > 0 ? onboardingDraft.name : assistantName,
+      description: onboardingDraft.description,
+      personality: onboardingDraft.personality,
+    };
+  }
+
+  async function refreshBootstrapFromServer(options: { reloadSession?: boolean } = {}) {
+    const previousSessionId = bootstrap?.defaultSessionId ?? '';
+    bootstrap = await getChatBootstrap();
+    selectedContactId = bootstrap.canonicalContactId;
+    selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+    selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+    initializeOnboardingDraft(bootstrap);
+    if (options.reloadSession || bootstrap.defaultSessionId !== previousSessionId) {
+      messages = [];
+      await loadSessionHistory(bootstrap.defaultSessionId);
+    }
+  }
+
+  function buildOnboardingEditFieldsPayload() {
+    const fields: Record<string, string> = {};
+    if (onboardingDraft.name.trim().length > 0) fields.name = onboardingDraft.name;
+    if (onboardingDraft.description.trim().length > 0) fields.description = onboardingDraft.description;
+    if (onboardingDraft.personality.trim().length > 0) fields.personality = onboardingDraft.personality;
+    return fields;
+  }
+
+  async function submitOnboardingIdentityEdits() {
+    if (!bootstrap || onboardingSaving) return;
+    onboardingError = '';
+    onboardingSaving = true;
+    const fields = buildOnboardingEditFieldsPayload();
+    if (Object.keys(fields).length === 0) {
+      onboardingError = 'Add at least one onboarding field before saving.';
+      onboardingSaving = false;
+      return;
+    }
+    try {
+      await applyIdentityOnboardingAction({
+        action: 'edit_identity',
+        fields,
+      });
+      await refreshBootstrapFromServer();
+      statusDetail = 'Identity onboarding updated.';
+    } catch (e) {
+      onboardingError = e instanceof Error ? e.message : 'Failed to apply onboarding edits';
+    } finally {
+      onboardingSaving = false;
+    }
+  }
+
+  async function keepStarterIdentity() {
+    if (!bootstrap || onboardingSaving) return;
+    onboardingError = '';
+    onboardingSaving = true;
+    try {
+      await applyIdentityOnboardingAction({
+        action: 'keep_starter',
+      });
+      await refreshBootstrapFromServer();
+      statusDetail = 'Starter identity confirmed.';
+    } catch (e) {
+      onboardingError = e instanceof Error ? e.message : 'Failed to keep starter identity';
+    } finally {
+      onboardingSaving = false;
+    }
+  }
+
+  function onOnboardingEditSubmit(event: SubmitEvent) {
+    event.preventDefault();
+    void submitOnboardingIdentityEdits();
+  }
+
   // Message area refs
   let messagesContainer: HTMLDivElement | undefined = $state(undefined);
   let inputEl: HTMLTextAreaElement | undefined = $state(undefined);
 
-  // SSE debug stream
-  let debugEventSource: EventSource | null = null;
+  // Debug telemetry stream
+  let debugWebSocket: WebSocket | null = null;
 
   // Health check
   let healthInterval: ReturnType<typeof setInterval> | undefined;
@@ -99,7 +192,7 @@
 
   // ── Constants ──
   const MAX_CONTEXT_MESSAGES = 40;
-  const DEBUG_SSE_PATH = '/api/chat/events/stream';
+  const DEBUG_TELEMETRY_WS_PATH = '/api/admin/events';
 
   // ── Lifecycle ──
 
@@ -135,6 +228,7 @@
       bootstrap = await getChatBootstrap();
       selectedContactId = bootstrap.canonicalContactId;
       selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      initializeOnboardingDraft(bootstrap);
 
       // Default to Garden Chat (api:admin-user) instead of whatever channel the contact has
       const currentIdentityKey = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
@@ -147,6 +241,7 @@
           userId: GARDEN_CHAT_USER_ID,
         });
         bootstrap = await getChatBootstrap();
+        initializeOnboardingDraft(bootstrap);
       }
       selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
 
@@ -196,31 +291,40 @@
     return `${h}h ${m}m`;
   }
 
-  // ── Debug SSE stream for tool/thinking events ──
+  // ── Debug telemetry stream for tool/thinking events ──
 
   function connectDebugStream() {
-    if (debugEventSource) return;
-    const url = new URL(DEBUG_SSE_PATH, window.location.origin);
-    const source = new EventSource(url, { withCredentials: true });
-    source.addEventListener('chat-debug', (event: MessageEvent) => {
+    if (debugWebSocket && (
+      debugWebSocket.readyState === WebSocket.CONNECTING
+      || debugWebSocket.readyState === WebSocket.OPEN
+    )) {
+      return;
+    }
+    const url = new URL(DEBUG_TELEMETRY_WS_PATH, window.location.origin);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url.toString());
+    socket.addEventListener('message', (event) => {
+      if (typeof event.data !== 'string') return;
       let payload: Record<string, unknown>;
       try { payload = JSON.parse(event.data); } catch { return; }
       if (!payload || typeof payload !== 'object' || !isStreaming) return;
-      switch (payload.event) {
+      const eventType = typeof payload.type === 'string' ? payload.type : '';
+      const details = typeof payload.data === 'object' && payload.data !== null
+        ? payload.data as Record<string, unknown>
+        : {};
+      switch (eventType) {
         case 'agent.stream.thinking': {
-          const text = typeof payload.message === 'string' ? payload.message : '';
+          const text = typeof details.text === 'string' ? details.text : '';
           if (text) streamingThinking += text;
           break;
         }
         case 'agent.tool.start': {
-          const details = (payload.details || {}) as Record<string, unknown>;
           const toolCallId = (details.toolCallId || `tool-${Date.now()}`) as string;
           const toolName = (details.toolName || 'unknown') as string;
           pendingToolCalls = [...pendingToolCalls, { name: toolName, id: toolCallId, args: '' }];
           break;
         }
         case 'agent.tool.end': {
-          const details = (payload.details || {}) as Record<string, unknown>;
           const toolCallId = (details.toolCallId || '') as string;
           const toolName = (details.toolName || 'unknown') as string;
           const isError = details.isError === true || details.isError === 'true';
@@ -233,12 +337,20 @@
         }
       }
     });
-    source.onerror = () => {};
-    debugEventSource = source;
+    socket.addEventListener('close', () => {
+      if (debugWebSocket === socket) {
+        debugWebSocket = null;
+      }
+    });
+    socket.addEventListener('error', () => {});
+    debugWebSocket = socket;
   }
 
   function disconnectDebugStream() {
-    if (debugEventSource) { debugEventSource.close(); debugEventSource = null; }
+    if (debugWebSocket) {
+      debugWebSocket.close();
+      debugWebSocket = null;
+    }
   }
 
   // ── SSE parsing ──
@@ -299,6 +411,7 @@
       const response = await fetch(endpointUrl, {
         method: 'POST',
         headers,
+        credentials: 'include',
         signal: abortController.signal,
         body: JSON.stringify({
           model: bootstrap.runtime.model.id,
@@ -408,13 +521,7 @@
         channel: GARDEN_CHAT_CHANNEL,
         userId: GARDEN_CHAT_USER_ID,
       });
-      bootstrap = await getChatBootstrap();
-      selectedContactId = bootstrap.canonicalContactId;
-      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
-      selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
-      // Reload session history for the new identity
-      messages = [];
-      await loadSessionHistory(bootstrap.defaultSessionId);
+      await refreshBootstrapFromServer({ reloadSession: true });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update chat settings';
     } finally {
@@ -430,9 +537,7 @@
         canonicalContactId: selectedContactId,
         privacyLevel: selectedPrivacyLevel,
       });
-      bootstrap = await getChatBootstrap();
-      selectedContactId = bootstrap.canonicalContactId;
-      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
+      await refreshBootstrapFromServer();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update privacy level';
     } finally {
@@ -454,13 +559,7 @@
         channel,
         userId,
       });
-      bootstrap = await getChatBootstrap();
-      selectedContactId = bootstrap.canonicalContactId;
-      selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
-      selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
-      // Reload session history for the new channel
-      messages = [];
-      await loadSessionHistory(bootstrap.defaultSessionId);
+      await refreshBootstrapFromServer({ reloadSession: true });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to switch channel identity';
     } finally {
@@ -504,7 +603,7 @@
     error: 'Disconnected',
   };
   const STATUS_TEXT: Record<string, string> = {
-    connecting: 'text-shadow-700',
+    connecting: 'text-bark-700',
     connected: 'text-moss-700',
     error: 'text-wilt-600',
   };
@@ -514,14 +613,14 @@
   <!-- Header -->
   <div class="flex items-center justify-between mb-3 shrink-0">
     <div>
-      <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Canopy</h1>
-      <p class="text-shadow-600 text-sm mt-0.5">Chat interface</p>
+      <h1 class="font-serif text-2xl text-bark-900 font-semibold">The Canopy</h1>
+      <p class="text-bark-700 text-sm mt-0.5">Chat interface</p>
     </div>
     <div class="flex items-center gap-2">
       <span class="inline-block w-2.5 h-2.5 rounded-full {STATUS_DOT[connectionStatus]}"></span>
       <span class="text-sm font-medium {STATUS_TEXT[connectionStatus]}">{STATUS_LABEL[connectionStatus]}</span>
       {#if statusDetail && connectionStatus !== 'connecting'}
-        <span class="text-sm text-shadow-600">-- {statusDetail}</span>
+        <span class="text-sm text-bark-700">-- {statusDetail}</span>
       {/if}
     </div>
   </div>
@@ -546,12 +645,69 @@
         <p class="text-sm text-shadow-700 mt-1">
           {bootstrap.onboarding.message ?? 'Import a character card or edit identity details to personalize this companion.'}
         </p>
-        <a
-          href="/garden/identity"
-          class="inline-flex mt-2 text-sm font-medium text-shadow-800 hover:text-shadow-900 underline"
-        >
-          Open Identity Settings
-        </a>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <a
+            href="/garden/identity"
+            class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-bark-100"
+          >
+            Import Character Card
+          </a>
+          <button
+            onclick={() => void keepStarterIdentity()}
+            disabled={onboardingSaving}
+            class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-100 px-3 py-1.5 text-sm font-medium text-shadow-900 hover:bg-gold-200 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            Keep Starter
+          </button>
+        </div>
+
+        <form class="mt-3 space-y-2" onsubmit={onOnboardingEditSubmit}>
+          <p class="text-sm font-semibold text-shadow-900">Quick Identity Edit</p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <label class="flex flex-col gap-1 text-sm text-shadow-800">
+              Name
+              <input
+                type="text"
+                bind:value={onboardingDraft.name}
+                disabled={onboardingSaving}
+                class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder="Companion name"
+              />
+            </label>
+            <label class="flex flex-col gap-1 text-sm text-shadow-800">
+              Description
+              <input
+                type="text"
+                bind:value={onboardingDraft.description}
+                disabled={onboardingSaving}
+                class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder="Short description"
+              />
+            </label>
+          </div>
+          <label class="flex flex-col gap-1 text-sm text-shadow-800">
+            Personality
+            <textarea
+              bind:value={onboardingDraft.personality}
+              disabled={onboardingSaving}
+              rows={2}
+              class="rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 resize-y focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400 disabled:opacity-50 disabled:cursor-not-allowed"
+              placeholder="Core personality traits"
+            ></textarea>
+          </label>
+          <div class="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={onboardingSaving}
+              class="rounded-lg bg-gold-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-gold-700 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {onboardingSaving ? 'Saving...' : 'Save Identity and Continue'}
+            </button>
+          </div>
+        </form>
+        {#if onboardingError}
+          <p class="text-sm text-wilt-600 mt-2">{onboardingError}</p>
+        {/if}
       </div>
     {/if}
 
@@ -679,10 +835,10 @@
       {#if messages.length === 0 && !isStreaming}
         <div class="flex items-center justify-center h-full">
           <div class="text-center">
-            <p class="text-shadow-700 text-sm font-medium">No messages in this session yet.</p>
-            <p class="text-shadow-500 text-sm mt-1">Type a message below to start chatting with {activeAssistantName()}.</p>
+            <p class="text-bark-700 text-sm font-medium">No messages in this session yet.</p>
+            <p class="text-bark-600 text-sm mt-1">Type a message below to start chatting with {activeAssistantName()}.</p>
             {#if bootstrap}
-              <p class="text-shadow-400 text-sm mt-2 font-mono">{bootstrap.defaultSessionId}</p>
+              <p class="text-bark-500 text-sm mt-2 font-mono">{bootstrap.defaultSessionId}</p>
             {/if}
           </div>
         </div>
@@ -694,7 +850,7 @@
               <div class="max-w-[85%]">
                 <button
                   onclick={() => toggleThinking(msg.id)}
-                  class="flex items-center gap-1.5 text-sm text-shadow-500 hover:text-shadow-700 transition-colors mb-1"
+                  class="flex items-center gap-1.5 text-sm text-bark-600 hover:text-bark-800 transition-colors mb-1"
                 >
                   <svg class="w-3.5 h-3.5 transition-transform {expandedThinking.has(msg.id) ? 'rotate-90' : ''}"
                     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -703,7 +859,7 @@
                   Thinking...
                 </button>
                 {#if expandedThinking.has(msg.id)}
-                  <div class="ml-5 p-3 rounded-lg bg-bark-200 border border-bark-300 text-sm text-shadow-700 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                  <div class="ml-5 p-3 rounded-lg bg-bark-200 border border-bark-300 text-sm text-bark-700 font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
                     {msg.thinking}
                   </div>
                 {/if}
@@ -715,7 +871,7 @@
               <div class="max-w-[85%]">
                 <button
                   onclick={() => toggleTools(msg.id)}
-                  class="flex items-center gap-1.5 text-sm text-shadow-500 hover:text-shadow-700 transition-colors mb-1"
+                  class="flex items-center gap-1.5 text-sm text-bark-600 hover:text-bark-800 transition-colors mb-1"
                 >
                   <svg class="w-3.5 h-3.5 transition-transform {expandedTools.has(msg.id) ? 'rotate-90' : ''}"
                     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -728,9 +884,9 @@
                     {#each msg.toolCalls as tc}
                       <div class="p-2.5 rounded-lg border text-sm
                         {tc.isError ? 'bg-wilt-50 border-wilt-200' : 'bg-bark-200 border-bark-300'}">
-                        <span class="font-medium text-shadow-800">{tc.name}</span>
+                        <span class="font-medium text-bark-800">{tc.name}</span>
                         {#if tc.result}
-                          <span class="text-shadow-600 ml-2">{tc.result}</span>
+                          <span class="text-bark-600 ml-2">{tc.result}</span>
                         {/if}
                       </div>
                     {/each}
@@ -757,13 +913,13 @@
             <!-- Streaming thinking -->
             {#if streamingThinking}
               <div class="max-w-[85%]">
-                <div class="flex items-center gap-1.5 text-sm text-shadow-500 mb-1">
+                <div class="flex items-center gap-1.5 text-sm text-bark-600 mb-1">
                   <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 2v4m0 12v4m-8-10H2m20 0h-4m-2.343-5.657L16.243 4.929M7.757 19.071l-1.414 1.414M19.071 16.243l1.414 1.414M4.929 7.757 3.515 6.343" />
                   </svg>
                   Thinking...
                 </div>
-                <div class="ml-5 p-3 rounded-lg bg-bark-200 border border-bark-300 text-sm text-shadow-700 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
+                <div class="ml-5 p-3 rounded-lg bg-bark-200 border border-bark-300 text-sm text-bark-700 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
                   {streamingThinking}
                 </div>
               </div>
@@ -775,11 +931,11 @@
                 {#each pendingToolCalls as tc}
                   <div class="p-2.5 rounded-lg border text-sm
                     {tc.result ? (tc.isError ? 'bg-wilt-50 border-wilt-200' : 'bg-bark-200 border-bark-300') : 'bg-gold-50 border-gold-200 animate-pulse'}">
-                    <span class="font-medium text-shadow-800">{tc.name}</span>
+                    <span class="font-medium text-bark-800">{tc.name}</span>
                     {#if tc.result}
-                      <span class="text-shadow-600 ml-2">{tc.result}</span>
+                      <span class="text-bark-600 ml-2">{tc.result}</span>
                     {:else}
-                      <span class="text-shadow-500 ml-2">running...</span>
+                      <span class="text-bark-500 ml-2">running...</span>
                     {/if}
                   </div>
                 {/each}

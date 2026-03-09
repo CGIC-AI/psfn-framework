@@ -4,7 +4,6 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ContactStore } from './store.js';
-import type { Contact } from './types.js';
 
 const PRIMARY_USER_ID = 'discord-primary-123';
 
@@ -636,7 +635,6 @@ describe('ContactStore', () => {
         displayName: 'Judy',
         discordUserId: 'discord-judy',
       });
-      const originalLastSeen = created.lastSeen;
 
       // Resolve again — should update lastSeen
       const resolved = store.resolveUserId('discord-judy');

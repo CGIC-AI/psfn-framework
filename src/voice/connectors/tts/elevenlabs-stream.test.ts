@@ -36,6 +36,8 @@ describe('ElevenLabsStreamingTtsConnector', () => {
     const connector = new ElevenLabsStreamingTtsConnector({
       apiKey: 'test-key',
       voiceId: 'voice-1',
+      modelId: 'eleven_turbo_v2_5',
+      endpointBase: 'https://api.elevenlabs.io/v1',
       fetchImpl: mockFetch as unknown as typeof fetch,
     });
 
@@ -91,6 +93,8 @@ describe('ElevenLabsStreamingTtsConnector', () => {
     const connector = new ElevenLabsStreamingTtsConnector({
       apiKey: 'test-key',
       voiceId: 'voice-2',
+      modelId: 'eleven_turbo_v2_5',
+      endpointBase: 'https://api.elevenlabs.io/v1',
       fetchImpl: mockFetch as unknown as typeof fetch,
     });
 

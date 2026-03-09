@@ -1,12 +1,11 @@
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CapabilityTier } from '../types.js';
 import {
   CAPABILITY_TIER_FILE_NAME,
   loadCapabilityTierConfig,
-  saveCapabilityTierConfig,
   type CapabilityTierConfig,
 } from '../config/capability-tier-config.js';
+import type { CapabilityTier } from '../types.js';
 import type { CapabilityAccess } from './access.js';
 import { resolveTierCapabilityTokens } from './tiers.js';
 import type { CapabilityToken } from './tokens.js';
@@ -14,7 +13,6 @@ import type { CapabilityToken } from './tokens.js';
 export interface CapabilityRuntimeOptions {
   dataDir: string;
   seedDir?: string;
-  envTier?: CapabilityTier;
 }
 
 export class CapabilityRuntime implements CapabilityAccess {
@@ -30,18 +28,9 @@ export class CapabilityRuntime implements CapabilityAccess {
     this.seedDir = options.seedDir;
     this.filePath = join(options.dataDir, CAPABILITY_TIER_FILE_NAME);
 
-    const hadConfigFile = existsSync(this.filePath);
     let config = loadCapabilityTierConfig(this.dataDir, {
       seedDir: this.seedDir,
     });
-
-    // Treat CAPABILITY_TIER as first-boot default; operator edits in data dir win afterward.
-    if (!hadConfigFile && options.envTier && config.tier !== options.envTier) {
-      config = saveCapabilityTierConfig(this.dataDir, {
-        ...config,
-        tier: options.envTier,
-      });
-    }
 
     this.currentConfig = config;
     this.setGrantedTokens(config);

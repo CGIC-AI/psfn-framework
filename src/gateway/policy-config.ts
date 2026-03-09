@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { parseBooleanEnv, parsePathListEnv } from '../utils/env.js';
 
 export interface GatewayPolicyEnv {
   [key: string]: string | undefined;
@@ -6,19 +7,6 @@ export interface GatewayPolicyEnv {
   MODULE_REGISTRY_TRUSTED_READ?: string;
   MODULE_REGISTRY_PATH?: string;
   PSFN_RUNTIME_MODE?: string;
-}
-
-function parseBooleanTrue(value: string | undefined): boolean {
-  if (!value) return false;
-  return value.trim().toLowerCase() === 'true';
-}
-
-function splitAllowedReadPaths(raw: string | undefined): string[] {
-  if (!raw) return [];
-  return raw
-    .split(':')
-    .map(entry => entry.trim())
-    .filter(Boolean);
 }
 
 function normalizeRuntimeMode(raw: string | undefined): string {
@@ -30,7 +18,7 @@ export function resolveAllowedReadPathsFromEnv(
   env: GatewayPolicyEnv,
   workspacePath: string,
 ): string[] | undefined {
-  const allowedReadPaths = splitAllowedReadPaths(env.ALLOWED_READ_PATHS);
+  const allowedReadPaths = parsePathListEnv(env.ALLOWED_READ_PATHS) ?? [];
 
   const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(env, workspacePath);
   if (trustedModuleRegistryPath) {
@@ -48,7 +36,7 @@ export function resolveTrustedModuleRegistryPathFromEnv(
   env: GatewayPolicyEnv,
   workspacePath: string,
 ): string | undefined {
-  if (!parseBooleanTrue(env.MODULE_REGISTRY_TRUSTED_READ)) {
+  if (parseBooleanEnv(env.MODULE_REGISTRY_TRUSTED_READ) !== true) {
     return undefined;
   }
   const moduleRegistryPath = env.MODULE_REGISTRY_PATH?.trim();

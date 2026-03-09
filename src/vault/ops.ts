@@ -185,7 +185,7 @@ export class VaultOps implements VaultOperations {
         throw new Error(`obsidian command not found — ensure CLI is installed and on PATH`);
       }
       if (msg.includes('vault') && msg.includes('not found')) {
-        throw new Error(`Vault '${this.config.vaultName}' not found — check OBSIDIAN_VAULT_NAME`);
+        throw new Error(`Vault '${this.config.vaultName}' not found — check the canonical Obsidian settings in settings.json`);
       }
       if (msg.includes('IPC') || msg.includes('connect')) {
         throw new Error('Obsidian desktop app is not running');

@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import type { BeadsAction, PolicyContext, PolicyDecision } from './protocol.js';
+import type { VaultOperations } from '../vault/ops.js';
 
 const log = createComponentLogger('Policy');
 import { evaluateUrlPolicy, type UrlPolicyConfig, type UrlPolicyLane } from './url-policy.js';
@@ -26,6 +27,18 @@ export interface BeadsPolicyConfig {
   allowActions?: BeadsAction[];
 }
 
+export type VaultPolicyAction = 'write' | 'read' | 'search' | 'daily';
+
+export interface VaultPolicyConfig {
+  enabled?: boolean;
+  allowActions?: VaultPolicyAction[];
+  /**
+   * Gateway-side runtime dependency for dedicated vault RPC operations.
+   * Kept optional so policy-only checks remain pure in tests.
+   */
+  ops?: VaultOperations;
+}
+
 export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
@@ -34,6 +47,46 @@ export interface PolicyConfig {
   webFetchTlsCaCertPaths?: string[];
   shellExec?: ShellExecPolicyConfig;
   beads?: BeadsPolicyConfig;
+  vault?: VaultPolicyConfig;
+}
+
+export type ShardSessionMemorySyncClass = 'transcript_fact' | 'derived_memory' | 'runtime_state';
+export type ShardSessionMemorySyncDirection = 'prime_to_shard' | 'shard_to_prime';
+export type ShardSessionMemorySyncAuthority = 'prime' | 'shard' | 'runtime';
+export type ShardSessionMemorySyncOperation =
+  | 'context_pack_session'
+  | 'context_pack_memory'
+  | 'memory_write'
+  | 'memory_import_batch'
+  | 'memory_redact';
+
+export interface ShardSessionMemorySyncEnvelope {
+  version: number;
+  syncClass: ShardSessionMemorySyncClass;
+  direction: ShardSessionMemorySyncDirection;
+  authority: ShardSessionMemorySyncAuthority;
+  operation: ShardSessionMemorySyncOperation;
+  shardId: string;
+  sourceId: string;
+  targetId: string;
+  idempotencyKey: string;
+  requestedAt: number;
+}
+
+export type ShardSessionMemorySyncDecisionReason =
+  | 'allowed_prime_transcript_fact'
+  | 'allowed_prime_memory_seed'
+  | 'allowed_shard_memory_write'
+  | 'allowed_shard_memory_import'
+  | 'denied_invalid_envelope'
+  | 'denied_runtime_state_sync'
+  | 'denied_direction_class'
+  | 'denied_authority'
+  | 'denied_operation';
+
+export interface ShardSessionMemorySyncDecision {
+  allowed: boolean;
+  reason: ShardSessionMemorySyncDecisionReason;
 }
 
 const BEADS_ACTION_BY_METHOD: Readonly<Record<string, BeadsAction>> = {
@@ -43,6 +96,13 @@ const BEADS_ACTION_BY_METHOD: Readonly<Record<string, BeadsAction>> = {
   'beads.update': 'update',
   'beads.close': 'close',
   'beads.sync': 'sync',
+};
+
+const VAULT_ACTION_BY_METHOD: Readonly<Record<string, VaultPolicyAction>> = {
+  'vault.write': 'write',
+  'vault.read': 'read',
+  'vault.search': 'search',
+  'vault.daily': 'daily',
 };
 
 /** Check whether a resolved path falls inside any of the allowed prefixes */
@@ -90,6 +150,72 @@ function resolveCanonicalPath(normalized: string, isWrite: boolean): string | nu
   }
 }
 
+const PRIME_TO_SHARD_SYNC_OPERATIONS: Readonly<Record<ShardSessionMemorySyncClass, readonly ShardSessionMemorySyncOperation[]>> = {
+  transcript_fact: ['context_pack_session'],
+  derived_memory: ['context_pack_memory'],
+  runtime_state: [],
+};
+
+const SHARD_TO_PRIME_SYNC_OPERATIONS: Readonly<Record<ShardSessionMemorySyncClass, readonly ShardSessionMemorySyncOperation[]>> = {
+  transcript_fact: [],
+  derived_memory: ['memory_write', 'memory_import_batch'],
+  runtime_state: [],
+};
+
+function hasText(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function evaluateShardSessionMemorySyncPolicy(
+  envelope: ShardSessionMemorySyncEnvelope,
+): ShardSessionMemorySyncDecision {
+  if (
+    envelope.version !== 1
+    || !Number.isFinite(envelope.requestedAt)
+    || envelope.requestedAt <= 0
+    || !hasText(envelope.shardId)
+    || !hasText(envelope.sourceId)
+    || !hasText(envelope.targetId)
+    || !hasText(envelope.idempotencyKey)
+    || envelope.idempotencyKey.trim().length > 200
+  ) {
+    return { allowed: false, reason: 'denied_invalid_envelope' };
+  }
+
+  if (envelope.syncClass === 'runtime_state') {
+    return { allowed: false, reason: 'denied_runtime_state_sync' };
+  }
+
+  const allowedOperations = envelope.direction === 'prime_to_shard'
+    ? PRIME_TO_SHARD_SYNC_OPERATIONS[envelope.syncClass]
+    : SHARD_TO_PRIME_SYNC_OPERATIONS[envelope.syncClass];
+  if (allowedOperations.length === 0) {
+    return { allowed: false, reason: 'denied_direction_class' };
+  }
+
+  if (envelope.direction === 'prime_to_shard' && envelope.authority !== 'prime') {
+    return { allowed: false, reason: 'denied_authority' };
+  }
+  if (envelope.direction === 'shard_to_prime' && envelope.authority !== 'shard') {
+    return { allowed: false, reason: 'denied_authority' };
+  }
+
+  if (!allowedOperations.includes(envelope.operation)) {
+    return { allowed: false, reason: 'denied_operation' };
+  }
+
+  if (envelope.operation === 'context_pack_session') {
+    return { allowed: true, reason: 'allowed_prime_transcript_fact' };
+  }
+  if (envelope.operation === 'context_pack_memory') {
+    return { allowed: true, reason: 'allowed_prime_memory_seed' };
+  }
+  if (envelope.operation === 'memory_write') {
+    return { allowed: true, reason: 'allowed_shard_memory_write' };
+  }
+  return { allowed: true, reason: 'allowed_shard_memory_import' };
+}
+
 export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): PolicyDecision {
   const { method, params } = ctx;
 
@@ -109,7 +235,9 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       const laneValue = (params as Record<string, unknown>).lane;
       const lane: UrlPolicyLane = laneValue === 'local_crawler'
         ? 'local_crawler'
-        : 'default';
+        : laneValue === 'discovery'
+          ? 'discovery'
+          : 'default';
       if (!url || typeof url !== 'string') {
         return 'DENY';
       }
@@ -142,6 +270,22 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       }
       const action = BEADS_ACTION_BY_METHOD[method];
       const allowedActions = new Set(beadsPolicy.allowActions ?? []);
+      if (!allowedActions.has(action)) {
+        return 'DENY';
+      }
+      return 'ALLOW';
+    }
+
+    case 'vault.write':
+    case 'vault.read':
+    case 'vault.search':
+    case 'vault.daily': {
+      const vaultPolicy = policyConfig.vault;
+      if (!vaultPolicy?.enabled) {
+        return 'DENY';
+      }
+      const action = VAULT_ACTION_BY_METHOD[method];
+      const allowedActions = new Set(vaultPolicy.allowActions ?? []);
       if (!allowedActions.has(action)) {
         return 'DENY';
       }

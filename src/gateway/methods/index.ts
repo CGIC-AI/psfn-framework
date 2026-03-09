@@ -6,6 +6,7 @@ import { registerSessionHmacMethods } from './session-hmac.js';
 import { registerNotifyMethods } from './notify.js';
 import { registerWebMethods } from './web.js';
 import { registerShellMethods } from './shell.js';
+import { registerVaultMethods } from './vault.js';
 import { registerFilesystemMethods } from './fs.js';
 import { registerGitMethods } from './git.js';
 import { registerBeadsMethods } from './beads.js';
@@ -18,6 +19,7 @@ export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerNotifyMethods(runtime);
   registerWebMethods(runtime);
   registerShellMethods(runtime);
+  registerVaultMethods(runtime);
   registerFilesystemMethods(runtime);
   registerGitMethods(runtime);
   registerBeadsMethods(runtime);

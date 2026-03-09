@@ -1,12 +1,28 @@
 import { randomUUID } from 'node:crypto';
+import * as net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:net';
 import { describe, it, expect } from 'vitest';
-import { createSocketClient, createSocketServer, type NdjsonConnection } from './transport.js';
+import {
+  createSocketClient,
+  createSocketServer,
+  NdjsonFramingError,
+  type NdjsonConnection,
+} from './transport.js';
 
 async function sleep(ms: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1_500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error('Timed out waiting for condition');
+    }
+    await sleep(10);
+  }
 }
 
 async function closeServer(server: Server): Promise<void> {
@@ -67,5 +83,46 @@ describe('createSocketClient lifecycle', () => {
 
     client.destroy();
     await closeServer(server);
+  });
+});
+
+describe('NdjsonConnection framing', () => {
+  it('fails closed on malformed NDJSON frames', async () => {
+    const socketPath = join(tmpdir(), `psfn-transport-${randomUUID()}.sock`);
+    let serverConn: NdjsonConnection | null = null;
+    const receivedMessages: unknown[] = [];
+    const frameErrors: unknown[] = [];
+    let clientClosed = false;
+
+    const server = createSocketServer(socketPath, (conn) => {
+      serverConn = conn;
+      conn.onMessage((message) => {
+        receivedMessages.push(message);
+      });
+      conn.on('frameError', (error) => {
+        frameErrors.push(error);
+      });
+    });
+
+    const client = net.createConnection(socketPath);
+    client.on('close', () => {
+      clientClosed = true;
+    });
+
+    try {
+      await waitFor(() => serverConn !== null);
+      client.write('{"jsonrpc":"2.0","method":"bad"\n');
+
+      await waitFor(() => frameErrors.length === 1);
+      await waitFor(() => serverConn?.destroyed === true);
+      await waitFor(() => clientClosed);
+
+      expect(frameErrors[0]).toBeInstanceOf(NdjsonFramingError);
+      expect((frameErrors[0] as NdjsonFramingError).preview).toContain('"method":"bad"');
+      expect(receivedMessages).toEqual([]);
+    } finally {
+      client.destroy();
+      await closeServer(server);
+    }
   });
 });

@@ -6,6 +6,6 @@ import {
 import type { AdminModelRoomBootstrapResponse } from '$lib/types';
 
 export async function getModelRoomBootstrap(): Promise<AdminModelRoomBootstrapResponse> {
-  const payload = await apiGet<AdminModelRoomBootstrapWireResponse>('/api/chat/model-room/bootstrap');
+  const payload = await apiGet<AdminModelRoomBootstrapWireResponse>('/api/admin/chat/model-room/bootstrap');
   return normalizeModelRoomBootstrap(payload);
 }

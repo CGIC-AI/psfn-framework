@@ -7,6 +7,14 @@ import {
   buildRuntimeChannelsConfigOverrides,
   createEmbeddingDimensionMismatchFatalMessage,
 } from './runtime.js';
+import {
+  buildChannelAdapterFactoryManifest,
+  loadChannelAdaptersFromManifest,
+} from './runtime/channel-lifecycle.js';
+import {
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
+} from './runtime/bootstrap-helpers.js';
 import { buildSessionHmacKeyring } from './session/journal-utils.js';
 import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { composeSessionRuntime } from './bootstrap/composition.js';
@@ -15,6 +23,7 @@ import { SessionManager } from './session/manager.js';
 import {
   readLastActiveSession,
 } from './lifecycle/notifications.js';
+import { installExternalPluginFixture } from './runtime/test-fixtures/external-plugin.js';
 
 function makeRuntime(): SubstrateRuntime {
   return new SubstrateRuntime({
@@ -159,6 +168,52 @@ describe('SubstrateRuntime crash recovery wiring', () => {
 
     expect(runtime.memoryExtractor.stop).toHaveBeenCalled();
     expect(runtime.sessionStore.markGracefulShutdownForActiveChannels).toHaveBeenCalled();
+    expect(runtime.db.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends graceful shutdown notification on normal stop path', async () => {
+    const runtime = makeRuntime() as any;
+    runtime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
+    runtime.scheduler = { stop: vi.fn() };
+    runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
+    runtime.sessionStore = {
+      getCrashRecoveryExtractionCandidates: vi.fn().mockReturnValue([]),
+      markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
+    };
+    runtime.stopVoiceObservers = vi.fn();
+    runtime.stopDebugObserver = vi.fn();
+    runtime.stopChannels = vi.fn().mockResolvedValue(undefined);
+    runtime.db = { close: vi.fn() };
+    runtime.lifecycleNotifier = {
+      notifyShutdown: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await runtime.stop();
+
+    expect(runtime.lifecycleNotifier.notifyShutdown).toHaveBeenCalledWith(undefined);
+    expect(runtime.db.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues shutdown when graceful shutdown notification fails', async () => {
+    const runtime = makeRuntime() as any;
+    runtime.eventBus = { emit: vi.fn().mockResolvedValue(undefined) };
+    runtime.scheduler = { stop: vi.fn() };
+    runtime.memoryExtractor = { stop: vi.fn().mockResolvedValue(true) };
+    runtime.sessionStore = {
+      getCrashRecoveryExtractionCandidates: vi.fn().mockReturnValue([]),
+      markGracefulShutdownForActiveChannels: vi.fn().mockReturnValue([]),
+    };
+    runtime.stopVoiceObservers = vi.fn();
+    runtime.stopDebugObserver = vi.fn();
+    runtime.stopChannels = vi.fn().mockResolvedValue(undefined);
+    runtime.db = { close: vi.fn() };
+    runtime.lifecycleNotifier = {
+      notifyShutdown: vi.fn().mockRejectedValue(new Error('ntfy offline')),
+    };
+
+    await expect(runtime.stop()).resolves.toBeUndefined();
+
+    expect(runtime.lifecycleNotifier.notifyShutdown).toHaveBeenCalledTimes(2);
     expect(runtime.db.close).toHaveBeenCalledTimes(1);
   });
 
@@ -463,6 +518,48 @@ describe('SubstrateRuntime crash recovery wiring', () => {
     runtime.agentLoop = { setChannelRegistry: vi.fn() };
 
     await expect(runtime.startChannels()).rejects.toThrow('No channel adapters started successfully');
+  });
+});
+
+describe('runtime plugin fixture seams', () => {
+  it('loads a sample external plugin fixture through the published channel/STT/TTS seams', async () => {
+    const fixture = installExternalPluginFixture();
+    const registry = new Map<string, any>();
+    const log = {
+      error: vi.fn(),
+      warn: vi.fn(),
+    };
+
+    try {
+      await loadChannelAdaptersFromManifest(
+        registry,
+        buildChannelAdapterFactoryManifest([fixture.channelEntry]),
+        () => undefined,
+        log,
+      );
+
+      const sttBinding = createRuntimeVoiceSttConnector(fixture.config as any);
+      const ttsBinding = createRuntimeVoiceTtsConnector(fixture.config as any);
+      const channel = registry.get('fixture-channel');
+
+      expect(channel).toBeDefined();
+      expect(sttBinding?.provider).toBe('fixture-stt');
+      expect(ttsBinding?.provider).toBe('fixture-tts');
+
+      await channel.outbound.sendText({ channelId: 'fixture-room' }, 'hello');
+      await sttBinding!.connector.startStream({
+        sampleRateHz: 16_000,
+        channels: 1,
+        encoding: 'pcm_s16le',
+      });
+      await ttsBinding!.connector.synthesizeBuffer({ text: 'hello' });
+
+      expect(fixture.state.channelMessages).toEqual([{ channelId: 'fixture-room', text: 'hello' }]);
+      expect(fixture.state.sttStarts).toBe(1);
+      expect(fixture.state.ttsBufferRequests).toEqual(['hello']);
+    } finally {
+      fixture.restore();
+    }
   });
 });
 

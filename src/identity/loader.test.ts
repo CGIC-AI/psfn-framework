@@ -26,6 +26,14 @@ const TEST_CARD: CharacterCardV2 = {
     post_history_instructions: 'post history',
     tags: ['test'],
     creator: 'test',
+    extensions: {
+      visual_description: 'cat ears and tail with human hands',
+      hexaco: {
+        emotional_expression: {
+          intensity: 0.5,
+        },
+      },
+    },
   },
 };
 
@@ -66,6 +74,19 @@ describe('composeSystemPrompt', () => {
     expect(prompt).not.toContain('{{user}}');
   });
 
+  it('resolves canonical aliases through runtime macro expansion', () => {
+    const aliasCard: CharacterCardV2 = {
+      ...TEST_CARD,
+      data: {
+        ...TEST_CARD.data,
+        description: '{{character.name}} with {{char_name}} helping {{user_name}}.',
+      },
+    };
+
+    const prompt = composeSystemPrompt(aliasCard, 'Alice');
+    expect(prompt).toContain('TestChar with TestChar helping Alice.');
+  });
+
   it('skips placeholder system_prompt and post_history', () => {
     const prompt = composeSystemPrompt(TEST_CARD);
     expect(prompt).not.toContain('sytem prompt');
@@ -100,6 +121,8 @@ describe('buildCharacterPromptTemplateVariables', () => {
     expect(variables.mes_example).toContain('Example dialogue style');
     expect(variables['character.description']).toContain('A test character');
     expect(variables['character.personality']).toContain('Friendly and helpful');
+    expect(variables.extensions_visual_description).toBe('cat ears and tail with human hands');
+    expect(variables['character.extensions.hexaco.emotional_expression.intensity']).toBe('0.5');
   });
 });
 

@@ -91,6 +91,49 @@ describe('AuditStore', () => {
     expect(params).toContain('300 chars');
   });
 
+  it('summarizes shard sync envelope and decision fields in audit params', () => {
+    store.log('shard.sync.policy', 'DENY', {
+      syncEnvelope: {
+        version: 1,
+        syncClass: 'derived_memory',
+        direction: 'shard_to_prime',
+        authority: 'shard',
+        operation: 'memory_redact',
+        shardId: 'shard-sync-1',
+        sourceId: 'shard:shard-sync-1',
+        targetId: 'memory:index',
+        idempotencyKey: 'k'.repeat(140),
+        requestedAt: 1_706_000_000_000,
+        rawPayload: 'should-not-be-stored',
+      },
+      syncDecision: {
+        allowed: false,
+        reason: 'denied_operation',
+        extra: 'ignored',
+      },
+    });
+
+    const entries = store.getRecent(1);
+    const params = JSON.parse(entries[0].paramsJson) as Record<string, Record<string, unknown>>;
+    expect(params.syncEnvelope).toMatchObject({
+      version: 1,
+      syncClass: 'derived_memory',
+      direction: 'shard_to_prime',
+      authority: 'shard',
+      operation: 'memory_redact',
+      shardId: 'shard-sync-1',
+      sourceId: 'shard:shard-sync-1',
+      targetId: 'memory:index',
+      requestedAt: 1_706_000_000_000,
+    });
+    expect(params.syncEnvelope.idempotencyKey).toMatch(/\.\.\. \(140 chars\)$/);
+    expect(params.syncEnvelope.rawPayload).toBeUndefined();
+    expect(params.syncDecision).toEqual({
+      allowed: false,
+      reason: 'denied_operation',
+    });
+  });
+
   it('preserves correlation fields in stored audit summaries', () => {
     store.log('llm.complete', 'ALLOW', {
       turnId: 'turn-77',

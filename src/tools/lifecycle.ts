@@ -1,5 +1,5 @@
 // ── Lifecycle tools ──
-// self_restart and self_rebuild tools for PSFN to trigger her own restarts.
+// self_restart and self_rebuild tools for the companion to trigger its own restarts.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
@@ -165,7 +165,6 @@ export function createRebuildTool(
 
       // Schedule build + shutdown after tool result returns
       setImmediate(async () => {
-        let buildSucceeded = false;
         try {
           const { execSync } = await import('node:child_process');
           log.info('Running npm run build...');
@@ -174,7 +173,6 @@ export function createRebuildTool(
             stdio: 'pipe',
             timeout: 120_000,
           });
-          buildSucceeded = true;
           log.info('Build complete, shutting down...');
         } catch (err) {
           const errorText = toErrorMessage(err);

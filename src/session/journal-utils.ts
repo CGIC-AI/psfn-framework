@@ -26,15 +26,18 @@ export {
   buildExtractionMarkerJournalEntry,
   buildGracefulShutdownMarkerJournalEntry,
   buildMessageJournalEntry,
+  buildTurnTombstoneJournalEntry,
   journalToCompactionSummary,
   journalToMarkerEntry,
   journalToSessionEntry,
+  journalToTurnTombstoneEntry,
 } from './journal/entries.js';
 
 export type {
   JournalFileMetadata,
   JournalIntegrityVerificationResult,
   JournalMarkerEntry,
+  JournalTurnTombstoneEntry,
   LegacyChatSourceFormat,
   LegacyChatSourceRecord,
   ParsedLegacyChatSource,

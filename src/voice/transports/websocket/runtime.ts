@@ -4,8 +4,13 @@ import type { TtsSynthesisSession } from '../../connectors/tts/types.js';
 import type { VoiceRuntimeStage } from '../../policy/reliability.js';
 import {
   VOICE_WIRE_PROTOCOL,
+  type VoiceAckFrame,
   type VoiceWireInboundFrame,
   type VoiceWireOutboundFrame,
+  type VoiceWireErrorFrame,
+  type VoicePlaybackFrame,
+  type VoicePongFrame,
+  type VoiceTranscriptFrame,
   type WebSocketVoiceRuntimeOptions,
   type WebSocketVoiceSession,
 } from './types.js';
@@ -49,6 +54,13 @@ interface SessionStartInFlight {
   abortController: AbortController;
   promise: Promise<RuntimeSessionState>;
 }
+
+type VoiceWireOutboundPayload =
+  | Omit<VoiceAckFrame, 'wire' | 'sessionId' | 'timestampMs'>
+  | Omit<VoiceTranscriptFrame, 'wire' | 'sessionId' | 'timestampMs'>
+  | Omit<VoicePlaybackFrame, 'wire' | 'sessionId' | 'timestampMs'>
+  | Omit<VoicePongFrame, 'wire' | 'sessionId' | 'timestampMs'>
+  | Omit<VoiceWireErrorFrame, 'wire' | 'sessionId' | 'timestampMs'>;
 
 class WebSocketVoiceRuntimeError extends Error {
   readonly code: RuntimeErrorCode;
@@ -564,14 +576,59 @@ export class WebSocketVoiceRuntime {
   private async emitOutbound(
     transportSession: WebSocketVoiceSession,
     frameSessionId: string,
-    frame: Omit<VoiceWireOutboundFrame, 'wire' | 'sessionId' | 'timestampMs'>,
+    frame: VoiceWireOutboundPayload,
   ): Promise<void> {
-    const outbound: VoiceWireOutboundFrame = {
-      ...frame,
-      wire: VOICE_WIRE_PROTOCOL,
-      sessionId: frameSessionId,
-      timestampMs: this.now(),
-    };
+    const timestampMs = this.now();
+    let outbound: VoiceWireOutboundFrame;
+    switch (frame.type) {
+      case 'ack':
+        outbound = {
+          wire: VOICE_WIRE_PROTOCOL,
+          sessionId: frameSessionId,
+          timestampMs,
+          type: 'ack',
+          ackType: frame.ackType,
+        };
+        break;
+      case 'transcript.partial':
+      case 'transcript.final':
+        outbound = {
+          wire: VOICE_WIRE_PROTOCOL,
+          sessionId: frameSessionId,
+          timestampMs,
+          type: frame.type,
+          text: frame.text,
+        };
+        break;
+      case 'playback.chunk':
+        outbound = {
+          wire: VOICE_WIRE_PROTOCOL,
+          sessionId: frameSessionId,
+          timestampMs,
+          type: 'playback.chunk',
+          seq: frame.seq,
+          audioBase64: frame.audioBase64,
+        };
+        break;
+      case 'pong':
+        outbound = {
+          wire: VOICE_WIRE_PROTOCOL,
+          sessionId: frameSessionId,
+          timestampMs,
+          type: 'pong',
+        };
+        break;
+      case 'error':
+        outbound = {
+          wire: VOICE_WIRE_PROTOCOL,
+          sessionId: frameSessionId,
+          timestampMs,
+          type: 'error',
+          code: frame.code,
+          message: frame.message,
+        };
+        break;
+    }
 
     await Promise.resolve(this.emitFrame(transportSession, outbound));
   }

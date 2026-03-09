@@ -3,6 +3,7 @@ import { ModelDiscovery } from './discovery.js';
 
 // Mock global fetch
 const mockFetch = vi.fn();
+const OPENROUTER_MODELS_API_URL = 'https://openrouter.ai/api/v1/models';
 
 describe('ModelDiscovery', () => {
   beforeEach(() => {
@@ -13,6 +14,17 @@ describe('ModelDiscovery', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+
+  function createDiscovery(
+    litellmBaseUrl: string,
+    litellmApiKey?: string,
+    options: Partial<ConstructorParameters<typeof ModelDiscovery>[2]> = {},
+  ): ModelDiscovery {
+    return new ModelDiscovery(litellmBaseUrl, litellmApiKey, {
+      openRouterModelsApiUrl: OPENROUTER_MODELS_API_URL,
+      ...options,
+    });
+  }
 
   function litellmResponse(models: Array<{
     id: string;
@@ -32,6 +44,12 @@ describe('ModelDiscovery', () => {
     name?: string;
     description?: string;
     context_length?: number;
+    architecture?: {
+      modality?: string | null;
+      input_modalities?: string[];
+      output_modalities?: string[];
+    };
+    supported_parameters?: string[];
     top_provider?: { context_length?: number; max_completion_tokens?: number };
     pricing?: Record<string, string | undefined>;
   }>) {
@@ -64,7 +82,7 @@ describe('ModelDiscovery', () => {
       return Promise.reject(new Error('unexpected URL'));
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000/v1');
+    const discovery = createDiscovery('http://localhost:4000/v1');
     const models = await discovery.getAvailableModels();
 
     expect(models).toHaveLength(2);
@@ -78,6 +96,73 @@ describe('ModelDiscovery', () => {
     // Second model has no OpenRouter metadata
     expect(models[1].id).toBe('deepseek/deepseek-v3.2');
     expect(models[1].description).toBeUndefined();
+  });
+
+  it('matches OpenRouter metadata when LiteLLM ids include wrapper prefixes', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('openrouter.ai')) {
+        return Promise.resolve(openRouterResponse([
+          {
+            id: 'z-ai/glm-5',
+            canonical_slug: 'z-ai/glm-5',
+            description: 'GLM-5 via OpenRouter',
+            top_provider: { context_length: 262_144, max_completion_tokens: 32_768 },
+            pricing: { prompt: '0.0000008', completion: '0.0000032' },
+          },
+        ]));
+      }
+      return Promise.resolve(litellmResponse([
+        {
+          id: 'openrouter/z-ai/glm-5',
+          litellm_provider: 'openrouter',
+        },
+      ]));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000/v1');
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('openrouter/z-ai/glm-5');
+    expect(models[0].description).toBe('GLM-5 via OpenRouter');
+    expect(models[0].contextLength).toBe(262_144);
+    expect(models[0].maxCompletionTokens).toBe(32_768);
+    expect(models[0].pricing).toEqual({ prompt: '0.0000008', completion: '0.0000032' });
+    expect(models[0].providerHints).toContain('openrouter');
+    expect(models[0].providerHints).toContain('z-ai');
+  });
+
+  it('maps OpenRouter modality/reasoning metadata into discovery capability flags', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('openrouter.ai')) {
+        return Promise.resolve(openRouterResponse([
+          {
+            id: 'google/gemini-3.1-flash-lite-preview',
+            architecture: {
+              modality: 'text+image+file+audio+video->text',
+              input_modalities: ['text', 'image', 'video'],
+              output_modalities: ['text'],
+            },
+            supported_parameters: ['reasoning', 'max_tokens'],
+            top_provider: { context_length: 1_048_576, max_completion_tokens: 65_536 },
+            pricing: { prompt: '0.00000025', completion: '0.0000015' },
+          },
+        ]));
+      }
+      return Promise.resolve(litellmResponse([
+        {
+          id: 'openrouter/google/gemini-3.1-flash-lite-preview',
+          litellm_provider: 'openrouter',
+        },
+      ]));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000/v1');
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toHaveLength(1);
+    expect(models[0].supportsVision).toBe(true);
+    expect(models[0].supportsReasoning).toBe(true);
   });
 
   it('prefers top_provider context length and preserves pricing keys', async () => {
@@ -104,7 +189,7 @@ describe('ModelDiscovery', () => {
       ]));
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000/v1');
+    const discovery = createDiscovery('http://localhost:4000/v1');
     const models = await discovery.getAvailableModels();
     expect(models).toHaveLength(1);
     expect(models[0].contextLength).toBe(131_072);
@@ -120,7 +205,7 @@ describe('ModelDiscovery', () => {
   it('uses cached results within TTL', async () => {
     mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000');
+    const discovery = createDiscovery('http://localhost:4000');
     await discovery.getAvailableModels();
     await discovery.getAvailableModels();
 
@@ -131,7 +216,7 @@ describe('ModelDiscovery', () => {
   it('invalidateCache forces re-fetch', async () => {
     mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000');
+    const discovery = createDiscovery('http://localhost:4000');
     await discovery.getAvailableModels();
     discovery.invalidateCache();
     await discovery.getAvailableModels();
@@ -140,7 +225,7 @@ describe('ModelDiscovery', () => {
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
-  it('handles LiteLLM fetch failure gracefully', async () => {
+  it('fails closed when LiteLLM fetch fails', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('openrouter.ai')) {
         return Promise.resolve(openRouterResponse([]));
@@ -148,9 +233,8 @@ describe('ModelDiscovery', () => {
       return Promise.reject(new Error('connection refused'));
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000');
-    const models = await discovery.getAvailableModels();
-    expect(models).toEqual([]);
+    const discovery = createDiscovery('http://localhost:4000');
+    await expect(discovery.getAvailableModels()).rejects.toThrow('connection refused');
   });
 
   it('handles OpenRouter fetch failure gracefully', async () => {
@@ -161,7 +245,7 @@ describe('ModelDiscovery', () => {
       return Promise.reject(new Error('network error'));
     });
 
-    const discovery = new ModelDiscovery('http://localhost:4000');
+    const discovery = createDiscovery('http://localhost:4000');
     const models = await discovery.getAvailableModels();
     expect(models).toHaveLength(1);
     expect(models[0].id).toBe('model-1');
@@ -171,7 +255,7 @@ describe('ModelDiscovery', () => {
   it('sends auth header when API key provided', async () => {
     mockFetch.mockResolvedValue(litellmResponse([]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000', 'test-key');
+    const discovery = createDiscovery('http://localhost:4000', 'test-key');
     await discovery.getAvailableModels();
 
     const litellmCall = mockFetch.mock.calls.find(
@@ -184,7 +268,7 @@ describe('ModelDiscovery', () => {
   it('strips trailing /v1 from base URL', async () => {
     mockFetch.mockResolvedValue(litellmResponse([]));
 
-    const discovery = new ModelDiscovery('http://localhost:4000/v1');
+    const discovery = createDiscovery('http://localhost:4000/v1');
     await discovery.getAvailableModels();
 
     const litellmCall = mockFetch.mock.calls.find(
@@ -193,5 +277,71 @@ describe('ModelDiscovery', () => {
     expect(String(litellmCall![0])).toBe('http://localhost:4000/v1/models');
     // Ensure no double /v1/v1
     expect(String(litellmCall![0])).not.toContain('/v1/v1');
+  });
+
+  it('fetches OpenRouter metadata from the configured URL', async () => {
+    const configuredOpenRouterUrl = 'https://metadata.example.test/custom/models';
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('/v1/models')) {
+        return Promise.resolve(litellmResponse([{ id: 'model-1' }]));
+      }
+      if (url === configuredOpenRouterUrl) {
+        return Promise.resolve(openRouterResponse([]));
+      }
+      return Promise.reject(new Error(`unexpected URL ${url}`));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000', undefined, {
+      openRouterModelsApiUrl: configuredOpenRouterUrl,
+    });
+    await discovery.getAvailableModels();
+
+    expect(mockFetch).toHaveBeenCalledWith(configuredOpenRouterUrl);
+  });
+
+  it('fails closed when openRouterModelsApiUrl is missing', () => {
+    expect(() => new ModelDiscovery('http://localhost:4000', undefined, {
+      openRouterModelsApiUrl: '   ',
+    })).toThrow('Model discovery requires openRouterModelsApiUrl');
+  });
+
+  it('fails closed when direct network is disabled and no gateway fetch is injected', async () => {
+    mockFetch.mockResolvedValue(litellmResponse([{ id: 'test' }]));
+
+    const discovery = createDiscovery('http://localhost:4000', undefined, {
+      allowDirectNetworkEgress: false,
+    });
+    await expect(discovery.getAvailableModels()).rejects.toThrow(
+      'Direct network egress is disabled; model discovery requires gateway-backed fetch wiring.',
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('uses injected fetch when direct network is disabled', async () => {
+    const injectedFetch = vi.fn(async (url: string | URL) => {
+      const target = String(url);
+      if (target.includes('/v1/models')) {
+        return litellmResponse([{ id: 'model-1', litellm_provider: 'openrouter' }]);
+      }
+      if (target.includes('openrouter.ai')) {
+        return openRouterResponse([{
+          id: 'model-1',
+          canonical_slug: 'openrouter/model-1',
+          description: 'ok',
+        }]);
+      }
+      throw new Error('unexpected URL');
+    });
+
+    const discovery = createDiscovery('http://localhost:4000', undefined, {
+      allowDirectNetworkEgress: false,
+      fetchFn: injectedFetch as unknown as typeof fetch,
+    });
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('model-1');
+    expect(injectedFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });

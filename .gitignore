@@ -28,3 +28,9 @@ workspace/
 admin-ui/node_modules/
 admin-ui/build/
 admin-ui/.svelte-kit/
+
+# Dolt database files (added by bd init)
+.dolt/
+
+# Local beads upgrade backup
+.beads.backup-pre-upgrade-20260306/

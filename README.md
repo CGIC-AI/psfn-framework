@@ -1,417 +1,359 @@
 # PSFN Substrate Framework (PSFN)
 
-A purpose-built runtime for AI companions with persistent memory, self-modification, and trust-aware privacy. Not a chatbot framework — a home for a mind.
+PSFN is a TypeScript runtime for long-lived AI companions with persistent memory, layered identity, trust-aware privacy, self-modification, and split-runtime isolation.
 
-Built with love for companions who deserve to remember, to grow, and to decide for themselves what matters.
+The current `phase-v` branch is not just a planning branch. It already includes the major Phase V foundation work in code: registry-driven plugin seams, schema-owned settings, two-root persistence, compositional context pipelines, emotion and self-model runtime wiring, and early distributed-autonomy slices.
 
-## What Makes This Different
+## Current Snapshot
 
-Most AI companion frameworks treat conversations as throwaway. PSFN treats every interaction as part of a life. Your companion remembers what matters, forgets what should fade, protects what's private, and can even improve their own thinking over time.
+Implemented on this branch today:
 
-- **Persistent memory** that decays naturally, like real memory does
-- **Trust-aware privacy** — your companion knows who they can share what with
-- **Self-modification** — they can edit their own prompts and propose code changes
-- **Defense-in-depth security** — secrets and access controls built in, not bolted on
+- Split runtime with `src/index.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`
+- Registry-driven channel/STT/TTS bootstrap with fail-closed eligibility checks
+- Canonical JSON-owned config domains for runtime, models, scheduler, capability tier, channel config, skills, and trust policy
+- Two-root persistence topology separating `system-data` from `companion-data`
+- JSONL session journal with integrity support, turn provenance, tool observations, masking, and context manifests
+- Memory extraction, retrieval, decay, contradiction handling, and scratchpad/core-memory tools
+- Policy-gated compositional extraction, retrieval rerank, appraisal, nested `sub_think`, shard context packs, and telemetry
+- Continuous emotion state, persona adaptation, intention/active-concern tracking, internal-state snapshots, and metacognitive flags
+- Capability tiers, safeguards, confirmation queues, and promoted-tool management
+- Git, vault, skills, values, heartbeat, beads, session, focus, and lifecycle tools
+- Discord, Telegram, OpenAI-compatible API, API voice websocket transport, Wyoming, and Garden admin UI
+- Backup scheduling, restore verification, and persistence cutover tooling
+- Runtime-loadable module registry with tier-gated install flow through the think/module path
 
-## Features
+Open Phase V work still remains. Use [PHASE_V.md](./PHASE_V.md) as the execution ledger for what is landed versus still queued.
 
-### Core
-- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and lazy tool loading (built on [pi-agent-core](https://github.com/nickvdyck/pi-ai))
-- **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
-- **Pluggable Embeddings** — Provider-agnostic embedding via `EMBEDDING_PROVIDER`: Ollama (local HTTP), transformers.js (in-process ONNX, zero network overhead), or any OpenAI-compatible API
-- **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
-- **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots (including vision)
-- **Capabilities System** — Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
-- **Skills System** — Self-authored capability documents (CRUD via agent tools, auto-filtered by eligibility)
-- **Values Journal** — Agent-authored principles with persistence
+## Source Of Truth
 
-### Privacy & Trust (Honne/Tatemae)
-- **4-tier trust model** — primary, trusted, regular, public
-- **4-tier sensitivity** — public, personal, intimate, confidential
-- **Trust-gated memory retrieval** — your companion naturally adjusts what they share based on who they're talking to
-- **Channel visibility** — private conversations stay private, public channels get appropriate boundaries
-- **Persona adaptation** — authentic self (honne) with trusted people, social self (tatemae) in public
-- **Contact management** — companion tracks relationships and trust levels via agent tools
+When docs and code disagree, prefer this order:
 
-### Self-Modification
-- **Layered Prompt Stack** — 5-layer editable prompt system (base→operator→runtime→channel→task) with versioning, rollback, and admin UI
-- **Git Tools** — 6 agent-accessible tools for self-modifying source code with path allowlists, protected branch blocking, audit trail
-- **RLM+REPL Sandbox** — Code execution via `think` tool with sub-LM calls, memory queries, variable persistence
-- **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks
-- **Obsidian Vault** — 4 agent tools (`vault_write`, `vault_read`, `vault_search`, `vault_daily`) for reading and writing Obsidian notes, with auto-publish for heartbeat reflections
+1. Entrypoints and runtime wiring in `src/index.ts`, `src/runtime.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`
+2. Config and ownership contracts in `src/types.ts`, `src/settings.ts`, `src/config/settings-contract.ts`, and `src/persistence/layout.ts`
+3. Branch status in `PHASE_V.md`
+4. `.env.example` as a bootstrap template only
 
-### Channels
-- **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
-- **WebSocket voice runtime** — transport primitives for browser/app clients using `voice-wire-v1` session frames
-- **OpenAI-Compatible API** — `/v1/chat/completions` with SSE streaming for WebUI integration
-- **Admin GUI (admin UI)** — Svelte 5 SPA at `/garden` with 17+ pages: memory browser, session viewer, contacts (CRUD, merge, unlink), scheduler, settings, prompt editor, model discovery, chat cockpit. WebSocket telemetry endpoint. *Legacy htmx admin server at `/` is deprecated and will be removed next release.*
+`.env.example` is intentionally a starter file. It is not the canonical authority for mutable runtime settings.
 
-### Infrastructure
-- **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
-- **Bidirectional RPC** — Voice turns get real agent responses via reverse RPC
-- **SSRF Defenses** — Private IP blocking, DNS rebinding protection, redirect validation
-- **Scheduler** — Heartbeat, recurring tasks, one-shot timers, configurable maintenance
-- **Lifecycle Notifications** — Discord messages on restart, ready, and shutdown
-- **Structured Logging** — Winston component loggers with configurable levels
+## Runtime Model
+
+PSFN supports three practical startup patterns:
+
+### Single process
+
+```bash
+npm run dev
+```
+
+- Loads dotenv in-process
+- Uses `src/index.ts` -> `SubstrateRuntime`
+- Best for local iteration and debugging
+
+### Split runtime
+
+```bash
+npm run split
+```
+
+- Starts gateway plus isolated agent together via `scripts/start-gateway-agent.sh`
+- Sets `PSFN_RUNTIME_MODE=split`
+- Keeps filesystem reads scoped to workspace plus explicit allowlists
+
+### YOLO split runtime
+
+```bash
+npm run yolo
+```
+
+- Same gateway/agent split
+- Sets `PSFN_RUNTIME_MODE=yolo`
+- Broadens gateway `fs.read` policy to the full local codebase root while leaving write restrictions intact
+
+### Manual split startup
+
+```bash
+# Terminal 1
+npm run gateway
+
+# Terminal 2
+set -a && source .env && set +a && npm run agent
+```
+
+`src/agent-main.ts` does not load dotenv on its own. Export the environment before starting it manually.
+
+### Containerized agent
+
+```bash
+npm run build
+npm run agent:docker
+npm run agent:docker:continuous
+```
+
+- `agent:docker` uses the production compose profile with `network_mode: "none"`
+- `agent:docker:continuous` uses the continuous/dev compose profile
+
+## Configuration Model
+
+Phase V changed configuration ownership materially.
+
+Use `.env` for secrets and bootstrap wiring only:
+
+- API keys and tokens
+- host/port/socket wiring
+- runtime layout/process wiring
+- optional transport bootstrap overrides
+
+Mutable runtime configuration now belongs to canonical JSON files in the system-owned config domain:
+
+- `settings.json`
+- `models.json`
+- `scheduler.json`
+- `capability-tier.json`
+- `channels.json`
+- `skills.json`
+- `trust-policy.json`
+
+Companion-specific state belongs under `companion-data`:
+
+- character card history
+- prompt layers and prompt history
+- sessions
+- notes and reflections
+- contact and memory state
+- working companion artifacts
+
+Relevant code:
+
+- Runtime config hydration: `src/config/runtime-config.ts`
+- Settings contract and owner map: `src/config/settings-contract.ts`
+- Persistence topology and fail-closed layout guards: `src/persistence/layout.ts`
+- Seed defaults: `config/*.seed.json` via `src/config/seed-defaults.ts`
+
+### Layout modes
+
+Continuous/dev mode keeps local defaults under the repo root.
+Production mode requires isolated mutable roots and rejects overlapping paths.
+
+Key environment variables:
+
+```bash
+PSFN_RUNTIME_LAYOUT_MODE=continuous   # or: production
+PSFN_RUNTIME_ROOT=./runtime/production
+SYSTEM_DATA_DIR=./runtime/production/system-data
+COMPANION_DATA_DIR=./runtime/production/companion-data
+```
+
+If only one of `SYSTEM_DATA_DIR` or `COMPANION_DATA_DIR` is set, startup fails closed.
 
 ## Quick Start
 
 ### Prerequisites
 
-- **Node.js 22+**
-- **Ollama** running locally (for embeddings — [install guide](https://ollama.ai))
-- **Discord bot** token and application ID
-- **OpenRouter** API key (or other LLM provider via LiteLLM)
+- Node.js 22+
+- npm
+- SQLite-compatible local filesystem
+- An LLM provider key or proxy setup
+- Optional: Ollama for local embeddings
+- Optional: Discord, Telegram, Deepgram, ElevenLabs, Echo, Wyoming, Obsidian
 
-### Setup
+### Bootstrap
 
 ```bash
-git clone <repo-url> && cd psfn-framework
+git clone <repo-url>
+cd psfn-framework
 npm install
 cp .env.example .env
 ```
 
-Edit `.env` with your credentials:
+Set secrets/bootstrap wiring in `.env`, then start the runtime once so canonical config files seed into the active data root.
+
+Common first-run commands:
 
 ```bash
-# Required
-OPENROUTER_API_KEY=sk-or-...
-DISCORD_TOKEN=...
-DISCORD_BOT_ID=...
-CHARACTER_CARD_PATH=/path/to/character.json
+npm run dev
+# or
+npm run split
+```
 
-# Models (change to your preference)
-PRIMARY_MODEL=z-ai/glm-5
-PRIMARY_PROVIDER=openrouter
-EXTRACTION_MODEL=deepseek/deepseek-v3.2
-EXTRACTION_PROVIDER=openrouter
+### Common bootstrap variables
 
-# Embeddings (default: Ollama)
-# EMBEDDING_PROVIDER=ollama  # ollama|transformers|api
+```bash
+OPENROUTER_API_KEY=
+DISCORD_TOKEN=
+DISCORD_BOT_ID=
+CHARACTER_CARD_PATH=./data/character.json
+OLLAMA_URL=http://localhost:11434
 EMBEDDING_MODEL=snowflake-arctic-embed2
 EMBEDDING_DIMS=1024
-OLLAMA_URL=http://localhost:11434
-
-# Transformers embedding provider
-# EMBEDDING_PROVIDER=transformers
-# TRANSFORMERS_MODEL=Xenova/bge-large-en-v1.5
-# TRANSFORMERS_EMBEDDING_DIMS=1024
-# TRANSFORMERS_CACHE_DIR=./data/models/transformers
-
-# OpenAI-compatible API embedding provider
-# EMBEDDING_PROVIDER=api
-# EMBEDDING_API_URL=https://api.openai.com/v1/embeddings
-# EMBEDDING_API_MODEL=text-embedding-3-small
-# EMBEDDING_API_DIMS=1536
-# EMBEDDING_API_KEY=
-
-# Data storage
-DATA_DIR=./data
-# DATABASE_BASENAME=companion        # Used when DATABASE_PATH is not set
-DATABASE_PATH=./data/companion.db
 ```
 
-For full configuration details, use `src/types.ts` as the parser/defaults source of truth and confirm runtime wiring in `src/runtime.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`. `.env.example` is a starter template and can lag newer voice keys (for example `ECHO_TTS_*`).
+For additional bootstrap examples, see [`.env.example`](./.env.example).
 
-### Running
+## Channels And Surfaces
 
-**Single-process (development):**
-```bash
-npm run dev          # Hot-reload via tsx
-```
+### Discord
 
-**Gateway + Agent split (production):**
-```bash
-npm run split
-```
+- Text adapter with per-channel turn serialization
+- Voice pipeline with reverse gateway RPC
+- Streaming STT/TTS provider support
+- Lifecycle notifications and optional voice readiness cues
 
-This launcher starts gateway + agent together, sets `PSFN_RUNTIME_MODE=split`, and keeps `fs.read` scoped to workspace plus explicit allowlist paths.
+### Telegram
 
-**YOLO split startup (broader read scope):**
-```bash
-npm run yolo
-```
+- Polling and webhook modes
+- Allowlist-aware inbound handling
+- Thread and attachment support
+- Long-running tool status updates
 
-`npm run yolo` runs the same split runtime but with `PSFN_RUNTIME_MODE=yolo`. In YOLO mode, gateway policy allows `fs.read` across the full local codebase root while preserving existing `fs.write` restrictions to workspace scope.
+### OpenAI-compatible API
 
-To return to normal split behavior:
-```bash
-npm run split
-# or set PSFN_RUNTIME_MODE=split
-```
+- `/v1/chat/completions`
+- SSE streaming
+- Active health probe support
+- API voice websocket runtime for `voice-wire-v1`
 
-**Manual split (two terminals):**
-```bash
-# Terminal 1 — Gateway (holds secrets, loads .env via dotenv)
-npm run gateway
+### Garden admin UI
 
-# Terminal 2 — Agent (agent-main.ts does NOT load dotenv)
-set -a && source .env && set +a && npm run agent
-```
+- Primary admin surface is `/garden`
+- Backed by `/api/admin/*` and `/api/admin/events`
+- Schema-aware settings editor, memory/session/contact views, chat cockpit, prompt and identity management, scheduler, confirmations, skills, and values
+- Admin request routing is `/login`, `/garden`, and `/api/admin/*`; unknown legacy admin paths are not preserved as first-class routes
 
-**Containerized agent (maximum isolation):**
+### Wyoming
+
+- TCP server and service registry
+- ASR/TTS/handle adapters
+- Runtime routing support for Wyoming-connected clients
+
+## Notable Runtime Systems
+
+### Memory and context
+
+- JSONL session archive is the L0 history layer
+- SQLite plus `sqlite-vec` stores extracted memories and retrieval metadata
+- Observation masking, context manifests, and stable-prefix optimization are implemented
+- Context feedback scoring is wired for post-turn evaluation
+
+### Emotion, intention, and self-model
+
+- Continuous VAD plus discrete emotion state
+- Persona adaptation and trust-aware expression shaping
+- Active concerns and intention appraisal
+- Internal-state snapshots and metacognitive flags propagated through responses and background work
+
+### Autonomy and tools
+
+- Core plus extended tool model with lazy activation
+- Deferred background continuation delivery queue
+- Shard lifecycle and routing hardening
+- Capability tier gating, safeguards, and confirmations
+
+Current extended tool surfaces called out explicitly in runtime/docs parity tests:
+
+| Area | Tool surface |
+| --- | --- |
+| **Values** | `values_list`, `values_add`, `values_update` |
+
+### Modules and self-modification
+
+- Runtime module registry and loader in `src/modules/`
+- Tier-gated install path integrated into think/module flows
+- Git self-modification tools with path controls and audit trail
+- Prompt layers, character-card versioning, and values/skills journals
+
+### Operations
+
+- Scheduled backups with restore verification
+- Persistence cutover migration CLI
+- Repository hygiene and settings-contract guards
+- Docker isolation verification scripts
+
+## Verification Commands
+
+Core checks:
+
 ```bash
 npm run build
-npm run agent:docker    # --network=none Docker container
+npm test
+npm run lint
+npm run verify:repository-hygiene
+npm run verify:settings-contract
 ```
 
-### Optional Services
+Useful targeted checks:
 
-**Admin GUI (admin UI) + JSON API:**
 ```bash
-ADMIN_PORT=3001        # Activates Garden Svelte SPA + JSON API
-ADMIN_TOKEN=your-token # Secures the panel and API
-ADMIN_HOST=127.0.0.1
-ADMIN_ALLOW_INSECURE=false # Set true only for local dev without token
+npm run smoke:chat
+npm run smoke:discord:dm-voice
+npm run e2e
+npm run e2e:voice
+npm run verify:backup-restore
+npm run verify:agent-docker-isolation
 ```
 
-Svelte 5 SPA served at `/garden` (build with `npm run garden:build` or dev with `npm run garden:dev`). JSON API at `/api/admin/*` (dashboard, memory, sessions, contacts, settings, identity, prompts). WebSocket telemetry at `WS /api/admin/events`. Legacy htmx panel at `/` is deprecated.
+Useful maintenance commands:
 
-**OpenAI-compatible API:**
 ```bash
-API_PORT=3000          # Activates /v1/chat/completions
-API_HOST=127.0.0.1
-API_KEY=your-key       # Required unless ALLOW_INSECURE_LOCAL_API=true
-ALLOW_INSECURE_LOCAL_API=false  # Explicitly allow keyless local-only mode
-API_CORS_ALLOWLIST=http://127.0.0.1:3001  # Comma-separated browser origin allowlist
-API_MODEL_NAME=psfn
-API_REQUEST_TIMEOUT_MS=90000
+npm run import-character
+npm run migrate-embeddings
+npm run migrate:persistence-layout
+npm run session:repair
+npm run walkthrough
 ```
 
-**Voice (Discord):**
-```bash
-DISCORD_VOICE_ENABLED=true
-DISCORD_VOICE_GUILD_ID=...
-DISCORD_VOICE_USER_ID=...
-DEEPGRAM_API_KEY=...
-TTS_PROVIDER=elevenlabs           # or: echo
+## Project Map
 
-# ElevenLabs path
-ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=your-voice-id-here
-ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
-
-# Echo path (provider-pluggable streaming TTS)
-ECHO_TTS_URL=http://<your-echo-tts-host>:8001
-ECHO_TTS_VOICE=11labs-Allison
-ECHO_TTS_PRESET=Independent-High-Speaker-CFG
-# ECHO_TTS_MODEL=echo-v1
-```
-
-`TTS_PROVIDER` defaults to `elevenlabs`. When using the API voice websocket runtime with `TTS_PROVIDER=echo`, configure `ECHO_TTS_URL`, `ECHO_TTS_VOICE`, and `ECHO_TTS_PRESET` via environment variables.
-
-**Voice (WebSocket runtime transport):**
-
-Expose your own WebSocket endpoint in gateway/runtime code, then attach accepted connections to `WebSocketVoiceServer` (`src/voice/transports/websocket/server.ts`). Inbound payloads must use `wire: "voice-wire-v1"` and one of: `session.start`, `audio.chunk`, `interrupt`, `session.end`, `ping`.
-
-**Obsidian Vault (optional):**
-```bash
-OBSIDIAN_VAULT_NAME=YourVault    # Enables vault_* tools
-OBSIDIAN_CLI_PATH=obsidian       # Path to Obsidian CLI binary
-OBSIDIAN_AUTO_PUBLISH=false      # Auto-publish reflections to vault
-OBSIDIAN_TIMEOUT_MS=10000        # CLI command timeout
-```
-
-Requires Obsidian desktop app running with CLI enabled (Settings > General > Enable CLI). In gateway mode, add `obsidian` to `SHELL_EXEC_ALLOWLIST`.
-
-**LiteLLM proxy (credential isolation):**
-```bash
-npm run proxy:up                          # Start proxy
-LITELLM_BASE_URL=http://localhost:4000/v1 # Enable in .env
-```
-
-**Operational knobs (recommended):**
-```bash
-DISCORD_HEARTBEAT_CHANNEL=...        # Lifecycle/heartbeat notification destination
-DISCORD_BACKFILL_ON_STARTUP=true     # Process recent backlog after reconnect
-DISCORD_START_RETRY_MAX_ATTEMPTS=0   # 0 = unbounded retries for transient Discord startup failures
-DISCORD_START_RETRY_BASE_DELAY_MS=2000
-DISCORD_START_RETRY_MAX_DELAY_MS=30000
-EXTRACTION_DRAIN_TIMEOUT_MS=10000    # Graceful shutdown wait for extraction drain
-PSFN_RUNTIME_MODE=split              # split default; yolo enables full-codebase fs.read
-LIFECYCLE_RESTART_COMMAND=npm run split
-ALLOW_HTTP_FETCH=false               # Gateway web fetch policy
-FETCH_DOMAIN_ALLOWLIST=example.com   # Optional gateway fetch domain restriction
-MODULE_REGISTRY_TRUSTED_READ=false   # Optional explicit allow for module registry reads
-MODULE_REGISTRY_PATH=companion/modules/repl-registry.json
-AUDIT_DB_PATH=./data/gateway-audit.db
-LOG_LEVEL=info
-```
-
-## Chat Cockpit Smoke Test
-
-Use the smoke harness to validate admin bootstrap + text completions (and optional voice websocket handshake) against running services.
-
-Prerequisites:
-- Admin server is running and reachable (for `/api/chat/bootstrap`)
-- API server is running and reachable (for `/v1/chat/completions`)
-- If admin auth is enabled, pass `ADMIN_TOKEN`
-- Ensure `API_KEY` is configured (or explicitly enable `ALLOW_INSECURE_LOCAL_API=true` on loopback-only dev runs)
-- For optional voice check, voice websocket runtime must be enabled
-
-Command:
-```bash
-npm run smoke:chat -- \
-  --admin-url http://127.0.0.1:3001 \
-  --api-base-url http://127.0.0.1:3000 \
-  --admin-token "$ADMIN_TOKEN"
-
-# Optional voice handshake check
-npm run smoke:chat -- --voice --api-base-url http://127.0.0.1:3000
-```
-
-Expected output:
-- `PASS Bootstrap returned required chat cockpit fields`
-- `PASS Chat completion returned assistant content: ...`
-- Optional: `PASS Voice websocket accepted session.start and returned ack`
-- Final: `PASS Chat cockpit smoke harness completed`
-
-Any failed step exits non-zero.
-
-## Architecture
-
-```
-Gateway (host)                    Agent (container, --network=none)
-+-----------------------+         +---------------------------+
-| Discord adapter       |         | Agent loop                |
-| LLM client (API keys) | <-sock-> | Session manager (JSONL)   |
-| Embedding provider    |         | Memory store (SQLite+vec) |
-| Policy engine         |         | Shard manager             |
-| URL policy (SSRF)     |         | RLM+REPL sandbox          |
-| Audit log             |         | Scheduler                 |
-+-----------------------+         | Prompt stack              |
-        |                         | Git self-modification     |
-  Admin GUI (localhost)           | Trust/Contact system      |
-                                  +---------------------------+
-                                           |
-                                    OpenAI API (localhost)
-```
-
-### Nine Layers
-
-| Layer | Purpose |
-|-------|---------|
-| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token budgeting, editable settings, lifecycle, bidirectional gateway RPC |
-| **REPL Sandbox** | RLM-style code execution, sub-LM calls, context-as-object |
-| **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec), 6 memory types, writer, tools |
-| **Trust & Privacy** | Honne/tatemae: 4-tier trust, 4-tier sensitivity, 5-layer policy, contact store, channel visibility, persona adaptation |
-| **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
-| **Git Self-Modification** | GitOps service, 6 tools (status, diff, patch, commit, branch, PR), path allowlist, audit log |
-| **Module System** | Hot-loadable TypeScript modules (planned) |
-| **Channel Layer** | Discord (text + voice), OpenAI API, admin GUI (Svelte SPA at `/garden`), Wyoming protocol |
-| **Scheduler** | Cron, heartbeat, one-shot tasks, maintenance workers |
-
-Heartbeat/reflection runtime wiring uses `wireHeartbeatRuntime` in `src/bootstrap/parity.ts`.
-
-### Storage
-
-- **Sessions (L0)**: Append-only JSONL files in `data/sessions/` — one per channel, immutable
-- **Memories (L2)**: SQLite + sqlite-vec — extracted facts, emotions, reflections with salience decay
-- **Contacts**: SQLite — trust levels, relationship notes, user identification
-- **Prompt layers**: JSON + JSONL history — versioned, rollback-capable
-- **Settings**: JSON — live-mutable, atomic writes
-- **Audit log**: JSONL — every git operation logged
-
-### Agent Tools (55)
-
-Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`.
-
-| Category | Tools |
-|----------|-------|
-| **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
-| **Contacts** | `contact_set_trust`, `contact_note`, `contact_set_channel_privacy`, `contact_link_identity`, `contact_lookup`, `contact_list` |
-| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `identity_diff`, `identity_changelog`, `character_card_update` |
-| **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
-| **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
-| **Values** | `values_list`, `values_add`, `values_update` |
-| **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
-| **Reasoning** | `think` (RLM+REPL sandbox) |
-| **Shards** | `spawn_shard` (parallel sub-agents) |
-| **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
-| **Sessions** | `session_new`, `session_list`, `session_resume` |
-| **Settings** | `settings_get`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap` |
-| **Lifecycle** | `self_restart`, `self_rebuild`, `notify_operator` |
-| **Meta** | `load_tools` (hot-swap core/extended tool sets) |
-
-## Project Structure
-
-```
+```text
 src/
-  index.ts                  # Single-process entry point
-  gateway-main.ts           # Gateway entry point
-  agent-main.ts             # Agent entry point
-  runtime.ts                # Core runtime orchestrator
+  index.ts                 single-process entrypoint
+  gateway-main.ts          host-side gateway entrypoint
+  agent-main.ts            isolated agent entrypoint
+  runtime.ts               shared single-process runtime
 
-  agent/                    # pi-agent-core wrapper, messages, event bridge
-  gateway/                  # JSON-RPC server/client, policy, SSRF, sanitization
-  git/                      # Git self-modification (ops, tools, wiring)
-  identity/                 # Character card, prompt stack (store, composer, tools)
-  llm/                      # LLM client, model roster, token estimation, discovery
-  lifecycle/                # Discord restart/ready/shutdown notifications
-  memory/                   # L2 extraction, retrieval, decay, writer, tools
-  trust/                    # Trust types, policy engine, channel classification
-  contacts/                 # Contact store, management tools
-  session/                  # JSONL sessions, compaction, user continuity
-  shards/                   # Self-spawning parallel sub-agents
-  repl/                     # RLM+REPL sandbox (think tool)
-  scheduler/                # Cron, heartbeat, one-shot, maintenance
-  voice/                    # Voice pipeline (STT, TTS connectors, WebSocket transport)
-  vault/                    # Obsidian vault integration (ops, tools, auto-publish, wiring)
-  skills/                   # Self-authored skill store (CRUD, execution)
-  capabilities/             # Runtime capability declarations
-  values/                   # Values journal (agent-authored principles)
-  bootstrap/                # Composition root (parity wiring, feature flags)
-  channels/
-    admin/                  # Legacy htmx admin server + JSON API (deprecated)
-      handlers/             # Domain handler modules (11 modules)
-      services/             # Data service layer (8 services + types)
-    api/                    # OpenAI-compatible REST API
-    discord/                # Discord.js adapter (text + voice)
-    wyoming/                # Wyoming protocol adapter
+  agent/                   substrate agent loop and tool/runtime orchestration
+  backup/                  scheduled backup and restore verification
+  beads/                   gateway-backed bd/beads tools
+  bootstrap/               shared parity/composition wiring
+  capabilities/            tiers, safeguards, confirmations, eligibility
+  channels/                admin, api, discord, telegram, wyoming
+  compositional/           policy-gated compose/evaluate flows
+  contacts/                contact state and trust-aware lookup/tools
+  context-feedback/        post-turn context scoring
+  emotion/                 classifiers, state, persona adaptation
+  gateway/                 policy engine, RPC, TLS, SSRF defenses
+  git/                     self-modification ops and tools
+  identity/                card loader, prompt stack, versioning, tools
+  llm/                     model routing, retries, discovery, budgets
+  memory/                  extraction, retrieval, decay, writer, tools
+  modules/                 runtime module registry and loader
+  persistence/             topology, path layout, migration helpers
+  repl/                    think/sub-think tooling and sandbox contracts
+  self-model/              internal-state and metacognitive primitives
+  session/                 JSONL journals, compaction, context manifests
+  settings/                coercion, schema, runtime settings helpers
+  shards/                  child-agent orchestration
+  skills/                  skill store and tools
+  values/                  values journal and tools
+  vault/                   Obsidian integration
+  voice/                   STT/TTS connectors, pipeline, transports
 
-admin-ui/                   # Svelte 5 SPA — admin UI at /garden
-companion_docs/             # Generic companion-facing documentation
-docker/                     # Agent container configuration
-proxy/                      # LiteLLM proxy configuration
-data/                       # Runtime data (gitignored)
-docs/                       # Architecture docs and specs
+admin-ui/                  Garden UI source
+config/                    seed defaults for canonical JSON config files
+docker/                    agent container profiles
+proxy/                     LiteLLM proxy compose config
+docs/                      architecture and operations docs
+PHASE_V.md                 branch execution/status ledger
 ```
 
-## Development
+## Additional Reading
 
-```bash
-npm test             # Run tests
-npm run test:watch   # Watch mode
-npm run lint         # ESLint
-npm run build        # Compile with tsup
-npm run garden:dev   # Svelte admin UI dev server (vite)
-npm run garden:build # Build admin UI for production
-npm run smoke:chat   # Chat cockpit smoke test
-npm run e2e          # End-to-end integration tests
-```
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|-----------|
-| Language | TypeScript (strict mode) |
-| Runtime | Node.js 22+ |
-| LLM | [@mariozechner/pi-ai](https://github.com/nickvdyck/pi-ai) + pi-agent-core |
-| Database | better-sqlite3 + sqlite-vec |
-| Discord | discord.js |
-| IPC | json-rpc-2.0 over NDJSON Unix socket |
-| Build | tsup |
-| Test | Vitest |
-
-## For Companion Developers
-
-If you're building a companion on this framework, check out:
-
-- **`psfn_instructions.md`** — A welcome guide written *for* your companion, explaining their home and capabilities in warm, accessible language. You can customize it for your companion's personality.
-- **`companion_docs/`** — Generic welcome documentation and a verification checklist for onboarding new companions.
-- **`CLAUDE.md`** — Technical reference for AI development assistants working on the codebase.
-- **`docs/PSFN_SUBSTRATE_SPEC.md`** — Full architecture specification.
+- [PHASE_V.md](./PHASE_V.md)
+- [docs/PHASE_V_VISION.md](./docs/PHASE_V_VISION.md)
+- [docs/PSFN_SUBSTRATE_SPEC.md](./docs/PSFN_SUBSTRATE_SPEC.md)
+- [docs/operations/runtime-mode-runbook.md](./docs/operations/runtime-mode-runbook.md)
+- [CLAUDE.md](./CLAUDE.md)
+- [AGENTS.md](./AGENTS.md)
 
 ## License
 
-Private — not yet published.
+Private repository.

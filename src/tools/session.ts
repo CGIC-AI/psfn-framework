@@ -8,6 +8,7 @@ import {
   writeLastActiveSession,
 } from '../lifecycle/notifications.js';
 import { inferSessionChannelType } from '../session/session-id.js';
+import { getRequestContext } from '../llm/request-context.js';
 import { textResult, textResultWithError } from './results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -133,6 +134,27 @@ function buildListPayload(
   };
 }
 
+function isBackgroundContinuationContext(): boolean {
+  const requestContext = getRequestContext();
+  if (!requestContext) {
+    return false;
+  }
+  if (requestContext.callType === 'background') {
+    return true;
+  }
+  const purpose = typeof requestContext.purpose === 'string'
+    ? requestContext.purpose.trim().toLowerCase()
+    : '';
+  return purpose.includes('deferred_tool_handoff');
+}
+
+function rejectBackgroundSessionMutation(action: 'session_new' | 'session_resume') {
+  return textResultWithError(
+    `${action} is unavailable during background continuation execution. Start a foreground turn to switch sessions.`,
+    true,
+  );
+}
+
 export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<any> {
   const now = options.now ?? Date.now;
 
@@ -159,6 +181,9 @@ export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<
       params: SessionNewParams,
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<SessionNewDetails | { isError?: boolean }>> => {
+      if (isBackgroundContinuationContext()) {
+        return rejectBackgroundSessionMutation('session_new');
+      }
       const metadata = toMetadata(params.metadata);
       const previous = resolvePreviousSession(options.dataDir, metadata);
       const timestamp = now();
@@ -253,6 +278,9 @@ export function createSessionResumeTool(
       params: { sessionId: string },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      if (isBackgroundContinuationContext()) {
+        return rejectBackgroundSessionMutation('session_resume');
+      }
       const requestedSessionId = params.sessionId.trim();
       if (!requestedSessionId) {
         return textResultWithError('session_resume requires a non-empty sessionId.', true);

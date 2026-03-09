@@ -1,6 +1,7 @@
 import { apiGet, apiPatch, apiPost, apiDelete } from '$lib/api/client';
 import type {
   AdminSchedulerData,
+  RecurringCadence,
   SchedulerMutationResult,
   ReflectionTemplate,
   TaskType,
@@ -20,7 +21,7 @@ export function getSchedulerData(): Promise<AdminSchedulerData> {
  */
 export function updateSchedulerTask(
   taskId: string,
-  updates: { intervalMs?: number; enabled?: boolean; name?: string },
+  updates: { intervalMs?: number; enabled?: boolean; name?: string; cadence?: RecurringCadence },
 ): Promise<SchedulerMutationResult> {
   return apiPatch<SchedulerMutationResult>(
     `/api/admin/scheduler/tasks/${encodeURIComponent(taskId)}`,
@@ -38,6 +39,7 @@ export function createSchedulerTask(input: {
   type: TaskType;
   intervalMs?: number;
   runAt?: number;
+  cadence?: RecurringCadence;
 }): Promise<SchedulerMutationResult> {
   return apiPost<SchedulerMutationResult>('/api/admin/scheduler/tasks', input);
 }

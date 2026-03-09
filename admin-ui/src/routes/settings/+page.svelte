@@ -1,47 +1,70 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { base } from '$app/paths';
   import {
     getSettings,
+    getSettingsSchema,
     updateSettings,
     getSubConfig,
     saveSubConfig,
-    listModels,
-    refreshModels,
   } from '$lib/api/endpoints/settings';
-  import type { AdminSettingsData, ConfigUpdateResult, DiscoveredModel } from '$lib/types';
+  import type {
+    AdminSettingsData,
+    ConfigUpdateResult,
+    SettingsContractData,
+    SettingsContractField,
+  } from '$lib/types';
+  import {
+    SETTINGS_GARDEN_SECTION_FIELDS,
+    SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY,
+    SETTINGS_GARDEN_RAW_EDITOR_KEYS,
+    SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
+    type GardenSettingsRawEditorKey,
+  } from '$lib/settings-garden-contract';
+  import SettingsSidebarNav from '$lib/components/settings/SettingsSidebarNav.svelte';
+  import {
+    buildSettingsSimpleSectionGroups,
+    isSettingsSimpleSectionId,
+    parseSettingsSimpleSectionHash,
+    resolveActiveSettingsSimpleSection,
+    settingsSimpleSectionAnchorId,
+    type SettingsSimpleSectionId,
+  } from '$lib/components/settings/navigation';
+  import { resolveVoiceProviderSelection } from './voice-provider-selection';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
-  // ── Model catalog types ──
-  interface CatalogSlot {
-    slotKey: string;
-    model: string;
-    provider: string;
-    defaultMaxTokens: number | null;
-    defaultContextWindow: number | null;
-    overrideMaxTokens: number | null;
-    overrideContextWindow: number | null;
+  const DISABLED_PROVIDER_ID = 'disabled';
+  const COMPOSITIONAL_TIER_OPTIONS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
+  const COMPOSITIONAL_CHANNEL_TYPE_OPTIONS = ['discord', 'terminal', 'api', 'telegram'] as const;
+  const COMPOSITIONAL_PURPOSE_OPTIONS = [
+    'extraction',
+    'retrieval',
+    'appraisal',
+    'think',
+    'shard_context',
+  ] as const;
+
+  type CompositionalListKey = 'allowedTiers' | 'allowedChannelTypes' | 'allowedPurposes';
+
+  interface CompositionalPolicyFormValue {
+    enabled: boolean;
+    allowedTiers: string[];
+    allowedChannelTypes: string[];
+    allowedPurposes: string[];
   }
 
-  interface PurposeMapping {
-    purpose: string;
-    slotKey: string;
-  }
-
-  const DEFAULT_PURPOSES = [
-    'chat', 'background', 'extraction', 'summary', 'reasoning', 'longContext', 'import_processing',
-  ];
-
-  const CAPABILITY_TIERS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
-  const IMPORT_ROUTE_MODES = [
-    { value: 'background', label: 'Background Routing (default)' },
-    { value: 'openrouter_zdr', label: 'OpenRouter ZDR-only' },
-    { value: 'local_endpoint', label: 'Local Endpoint Only' },
-  ] as const;
-  const SESSION_RESTART_BEHAVIORS = [
-    { value: 'reuse_latest_session', label: 'Reuse latest session' },
-    { value: 'new_session', label: 'Always start a new session' },
-  ] as const;
+  const ENUM_LABELS_BY_FIELD: Record<string, Record<string, string>> = {
+    importProcessingRouteMode: {
+      background: 'Background Routing (default)',
+      openrouter_zdr: 'OpenRouter ZDR-only',
+      local_endpoint: 'Local Endpoint Only',
+    },
+    sessionRestartBehavior: {
+      reuse_latest_session: 'Reuse latest session',
+      new_session: 'Always start a new session',
+    },
+  };
 
   // ── Budget constants (from context-budget.ts) ──
   const SESSION_HISTORY_TOKENS_PER_MSG = 256;
@@ -62,18 +85,27 @@
   let saving = $state(false);
   let saveMessage = $state('');
   let saveOk = $state(true);
-  let discoveredModels = $state<DiscoveredModel[]>([]);
-  let refreshingModels = $state(false);
+  let settingsSchema = $state<SettingsContractData | null>(null);
 
   // ── Dirty tracking ──
   let initialSnapshot = $state('');
   let dirty = $state(false);
+  type RawEditorKey = GardenSettingsRawEditorKey;
+  let initialRawJsonByKey = $state<Record<RawEditorKey, string>>({
+    settings: '',
+    models: '',
+    skills: '',
+    scheduler: '',
+    'trust-policy': '',
+    capabilities: '',
+  });
 
   function computeSnapshot(): string {
     return JSON.stringify({
-      primaryModel, extractionModel, memoryBudgetPct,
+      memoryBudgetPct,
       memoryRetrievalLimit, sessionMessageLimit,
       sessionRestartBehavior,
+      compositionalPolicy: configValue('compositionalPolicy') ?? null,
       sessionHistoryBudgetPct, memoryRetrievalBudgetPct,
       extractionThresholdPct, compactionThresholdPct,
       maxResponseTokens, retryMaxAttempts, retryBaseDelayMs,
@@ -82,7 +114,8 @@
       openRouterProviderOrder, webFetchAllowHttp,
       webFetchDomainAllowlist, webFetchAllowInternalNetwork,
       webFetchTlsCaCertPaths,
-      capabilityTier, catalogSlots, purposeMappings,
+      capabilityTier,
+      capabilityCustomTokens,
       // Memory & Extraction
       extractionInterval, compactionEmotionalSalienceThresholdPct,
       defaultContextWindow, maintenanceIntervalMs,
@@ -113,7 +146,7 @@
 
   $effect(() => {
     if (initialSnapshot) {
-      dirty = computeSnapshot() !== initialSnapshot;
+      dirty = computeSnapshot() !== initialSnapshot || dirtyRawEditorKeys().length > 0;
     }
   });
 
@@ -124,8 +157,6 @@
   }
 
   // ── Simple mode fields ──
-  let primaryModel = $state('');
-  let extractionModel = $state('');
   let memoryBudgetPct = $state(20);
   let memoryRetrievalLimit = $state<number | null>(null);
   let sessionMessageLimit = $state<number | null>(null);
@@ -136,10 +167,6 @@
   let compactionThresholdPct = $state(70);
   let maxResponseTokens = $state(4096);
   let retryMaxAttempts = $state(3);
-
-  // ── Model catalog ──
-  let catalogSlots = $state<CatalogSlot[]>([]);
-  let purposeMappings = $state<PurposeMapping[]>([]);
 
   // ── Import processing ──
   let importRouteMode = $state('background');
@@ -155,13 +182,13 @@
   let webFetchTlsCaCertPaths = $state('');
 
   // ── Voice / TTS ──
-  let ttsProvider = $state<'elevenlabs' | 'echo' | 'disabled'>('disabled');
+  let ttsProvider = $state('disabled');
   let voiceId = $state('');
   let echoTtsUrl = $state('');
   let echoTtsVoice = $state('');
   let echoTtsPreset = $state('');
-  let sttProvider = $state<'deepgram' | 'disabled'>('disabled');
-  let deepgramModel = $state('nova-3');
+  let sttProvider = $state('disabled');
+  let deepgramModel = $state('');
 
   // ── Obsidian Vault ──
   let obsidianVaultName = $state('');
@@ -180,6 +207,7 @@
 
   // ── Capability tier ──
   let capabilityTier = $state('apprentice');
+  let capabilityCustomTokens = $state('');
 
   // ── LLM retries ──
   let retryBaseDelayMs = $state(2000);
@@ -224,8 +252,51 @@
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
   let validationErrorsByField = $state<Record<string, string[]>>({});
 
+  // ── Simple mode IA navigation ──
+  const SIMPLE_SECTION_ORDER: readonly SettingsSimpleSectionId[] = [
+    'models',
+    'prompting',
+    'memory-budget',
+    'memory-extraction',
+    'memory-sessions',
+    'memory-tuning',
+    'memory-profile',
+    'tools-think',
+    'advanced-trust',
+    'runtime-llm',
+    'runtime-import',
+    'runtime-fetch',
+    'integrations-voice',
+    'integrations-obsidian',
+    'channels',
+    'advanced-secrets',
+  ];
+  const SIMPLE_SECTION_SCROLL_OFFSET_PX = 108;
+  const SIMPLE_SECTION_ACTIVE_THRESHOLD_PX = 168;
+  let activeSimpleSectionId = $state<SettingsSimpleSectionId>('models');
+  const simpleSectionNodes = new Map<SettingsSimpleSectionId, HTMLElement>();
+  let suppressSimpleSectionSyncUntil = 0;
+  let simpleViewportChangeHandler: (() => void) | null = null;
+  let simpleHashChangeHandler: (() => void) | null = null;
+
+  let visibleSimpleSectionIds = $derived.by(() => {
+    const ids = new Set<SettingsSimpleSectionId>(SIMPLE_SECTION_ORDER);
+    if (!data?.env) {
+      ids.delete('advanced-secrets');
+    }
+    return ids;
+  });
+
+  let simpleSectionGroups = $derived.by(() => (
+    buildSettingsSimpleSectionGroups({ includeSections: visibleSimpleSectionIds })
+  ));
+
+  let simpleQuickJumpSections = $derived.by(() => (
+    SIMPLE_SECTION_ORDER.filter((sectionId) => visibleSimpleSectionIds.has(sectionId))
+  ));
+
   // ── Collapsible sections ──
-  let openSections = $state(new Set<string>(['models']));
+  let openSections = $state(new Set<string>(['budget']));
 
   // ── Section definitions for advanced mode ──
   interface SectionDef {
@@ -236,39 +307,22 @@
     summary: () => string;
   }
 
+  const MODEL_OWNED_FIELDS = new Set<string>(SETTINGS_GARDEN_SECTION_FIELDS.models);
+
   const SECTIONS: SectionDef[] = [
     {
-      id: 'models', title: 'Models & Routing', icon: 'M',
-      keys: [
-        'primaryModel', 'primaryProvider', 'primaryMaxTokens',
-        'extractionModel', 'extractionProvider', 'extractionMaxTokens',
-        'defaultContextWindow',
-      ],
-      summary: () => {
-        const slots = catalogSlots.filter(s => s.slotKey && s.model);
-        if (slots.length === 0) return 'No models configured';
-        return slots.map(s => `${s.slotKey}: ${s.model.split('/').pop()}`).join(', ');
-      },
-    },
-    {
       id: 'budget', title: 'Context Budget', icon: 'B',
-      keys: [
-        'sessionHistoryBudgetPct', 'memoryRetrievalBudgetPct',
-        'sessionMessageLimit', 'memoryRetrievalLimit',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.budget,
       summary: () => `Session ${sessionHistoryBudgetPct}%, Memory ${memoryRetrievalBudgetPct}%`,
     },
     {
       id: 'memory', title: 'Memory & Extraction', icon: 'E',
-      keys: [
-        'memoryBudgetPct', 'extractionThresholdPct',
-        'extractionInterval', 'compactionEmotionalSalienceThresholdPct',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.memory,
       summary: () => `Budget ${memoryBudgetPct}%, Extract at ${extractionThresholdPct}%`,
     },
     {
       id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
-      keys: ['compactionThresholdPct', 'maintenanceIntervalMs', 'sessionRestartBehavior'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.sessions,
       summary: () => (
         `Compaction at ${compactionThresholdPct}%, ` +
         `Maintenance ${Math.round(maintenanceIntervalMs / 1000)}s, ` +
@@ -277,54 +331,42 @@
     },
     {
       id: 'extraction-tuning', title: 'Memory Extraction Tuning', icon: 'X',
-      keys: [
-        'memoryExtractionMinImportance', 'memoryExtractionMinConfidence',
-        'memoryExtractionMinNovelty', 'memoryExtractionMaxWrites',
-        'memoryExtractionTelemetryEnabled', 'memoryRetrievalTelemetryEnabled',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS['extraction-tuning'],
       summary: () => `Min importance: ${memoryExtractionMinImportance}, Max writes: ${memoryExtractionMaxWrites}`,
     },
     {
       id: 'profile', title: 'Profile Synthesis', icon: 'P',
-      keys: [
-        'profileSynthesisEnabled', 'profileSynthesisRefreshIntervalMs',
-        'profileSynthesisCooldownMs', 'profileSynthesisMinWrites',
-        'profileSynthesisMinImportance', 'profileSynthesisMinConfidence',
-        'profileSynthesisMinNovelty', 'profileSynthesisSourceMemoryLimit',
-        'profileSynthesisMinSourceMemories',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.profile,
       summary: () => profileSynthesisEnabled ? `Enabled, refresh ${Math.round(profileSynthesisRefreshIntervalMs / 60000)}min` : 'Disabled',
     },
     {
       id: 'think', title: 'Think Tool', icon: 'R',
-      keys: ['thinkMaxTokens', 'thinkMaxWallTimeMs', 'thinkMaxSubQueries'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.think,
       summary: () => `Max tokens: ${thinkMaxTokens.toLocaleString()}, Wall time: ${Math.round(thinkMaxWallTimeMs / 1000)}s`,
     },
     {
+      id: 'compositional', title: 'Compositional Cognition', icon: 'K',
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.compositional,
+      summary: () => summarizeCompositionalPolicy(configValue('compositionalPolicy')),
+    },
+    {
       id: 'trust', title: 'Trust & Capabilities', icon: 'T',
-      keys: ['capabilityTier'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.trust,
       summary: () => `Tier: ${capabilityTier}`,
     },
     {
       id: 'llm', title: 'LLM Retries & Behavior', icon: 'L',
-      keys: ['retryMaxAttempts', 'retryBaseDelayMs'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.llm,
       summary: () => `Max retries: ${retryMaxAttempts}, Base delay: ${retryBaseDelayMs}ms`,
     },
     {
       id: 'import', title: 'Import Processing', icon: 'I',
-      keys: [
-        'importProcessingRouteMode', 'importProcessingStrictPolicy',
-        'importProcessingLocalEndpointUrl', 'importProcessingLocalModel',
-        'openRouterProviderOrder',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.import,
       summary: () => `Route: ${importRouteMode}${importStrictPolicy ? ' (strict)' : ''}`,
     },
     {
       id: 'fetch', title: 'Web Fetch Policy', icon: 'W',
-      keys: [
-        'webFetchAllowHttp', 'webFetchDomainAllowlist',
-        'webFetchAllowInternalNetwork', 'webFetchTlsCaCertPaths',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.fetch,
       summary: () => {
         const parts: string[] = [];
         parts.push(webFetchAllowHttp ? 'HTTP allowed' : 'HTTPS only');
@@ -334,25 +376,17 @@
     },
     {
       id: 'voice', title: 'Voice & Speech', icon: 'V',
-      keys: [
-        'ttsProvider', 'voiceId', 'echoTtsUrl', 'echoTtsVoice', 'echoTtsPreset',
-        'sttProvider', 'deepgramModel',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.voice,
       summary: () => `TTS: ${ttsProvider}, STT: ${sttProvider}`,
     },
     {
       id: 'obsidian', title: 'Obsidian Vault', icon: 'O',
-      keys: ['obsidianVaultName', 'obsidianCliPath', 'obsidianAutoPublish', 'obsidianTimeoutMs'],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.obsidian,
       summary: () => obsidianVaultName ? `Vault: ${obsidianVaultName}${obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
     },
     {
       id: 'channels', title: 'Channels', icon: 'C',
-      keys: [
-        'discordEnabled', 'discordHeartbeatChannel',
-        'discordTriggerWords', 'discordTriggerReactions',
-        'discordTriggerListenWindowMs',
-        'telegramEnabled', 'telegramAuthorizedUsers',
-      ],
+      keys: SETTINGS_GARDEN_SECTION_FIELDS.channels,
       summary: () => {
         const wordsCount = splitCsv(discordTriggerWords).length;
         const reactionsCount = splitCsv(discordTriggerReactions).length;
@@ -368,16 +402,43 @@
     },
   ];
 
-  const RAW_EDITORS = [
-    { key: 'models', label: 'models.json' },
-    { key: 'skills', label: 'skills.json' },
-    { key: 'scheduler', label: 'scheduler.json' },
-    { key: 'trust-policy', label: 'trust-policy.json' },
-    { key: 'capabilities', label: 'capabilities.json' },
-  ] as const;
+  const RAW_EDITORS = SETTINGS_GARDEN_RAW_EDITOR_KEYS
+    .filter(
+      (key): key is Exclude<RawEditorKey, 'settings' | 'models'> => (
+        key !== 'settings' && key !== 'models'
+      ),
+    )
+    .map((key) => ({ key }));
+
+  type SchedulerEditorConfig = {
+    tickIntervalMs?: number;
+    heartbeatIntervalMs?: number;
+    salienceDecayIntervalMs?: number;
+  };
+
+  type CapabilitiesEditorConfig = {
+    tier?: string;
+    customTokens?: string[];
+  };
+
+  function getSchedulerEditorConfig(): SchedulerEditorConfig {
+    return (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
+  }
+
+  function getCapabilitiesEditorConfig(): CapabilitiesEditorConfig {
+    return (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
+  }
 
   function fieldErrors(field: string): string[] {
-    return validationErrorsByField[field] ?? [];
+    const nestedPrefix = `${field}.`;
+    const collected = new Set<string>();
+    for (const [path, messages] of Object.entries(validationErrorsByField)) {
+      if (path !== field && !path.startsWith(nestedPrefix)) continue;
+      for (const message of messages) {
+        collected.add(message);
+      }
+    }
+    return [...collected];
   }
 
   function hasFieldErrors(field: string): boolean {
@@ -400,14 +461,20 @@
 
     const invalidFields = new Set(Object.keys(next).filter((field) => field !== '$root'));
     if (invalidFields.size > 0) {
+      const invalidFieldList = [...invalidFields];
+      const matchesField = (candidate: string, key: string): boolean => (
+        candidate === key || candidate.startsWith(`${key}.`)
+      );
       const nextOpenSections = new Set(openSections);
       for (const section of SECTIONS) {
-        if (section.keys.some((key) => invalidFields.has(key))) {
+        if (section.keys.some((key) => invalidFieldList.some((field) => matchesField(field, key)))) {
           nextOpenSections.add(section.id);
         }
       }
-      const categorizedKeys = new Set(SECTIONS.flatMap((section) => section.keys));
-      if (Array.from(invalidFields).some((field) => !categorizedKeys.has(field))) {
+      const isCategorizedField = (field: string): boolean => (
+        SECTIONS.some((section) => section.keys.some((key) => matchesField(field, key)))
+      );
+      if (invalidFieldList.some((field) => !isCategorizedField(field))) {
         nextOpenSections.add('other');
       }
       openSections = nextOpenSections;
@@ -417,24 +484,181 @@
   }
 
   // ── Source attribution ──
-  type SettingSource = 'default' | 'settings.json' | 'env var';
+  type SettingSource = 'default' | string;
+
+  function fieldContract(key: string): SettingsContractField | undefined {
+    return settingsSchema?.fields?.[key];
+  }
+
+  function subsystemOwnerFile(subsystemId: string): string | undefined {
+    return settingsSchema?.subsystems?.[subsystemId]?.ownerFile;
+  }
+
+  function fieldOwnerFile(key: string): string | undefined {
+    return fieldContract(key)?.ownerFile;
+  }
+
+  function fieldMinimum(key: string): number | undefined {
+    return fieldContract(key)?.minimum;
+  }
+
+  function fieldMaximum(key: string): number | undefined {
+    return fieldContract(key)?.maximum;
+  }
+
+  function fieldEnumValues(key: string, fallback: readonly string[] = []): string[] {
+    const values = [
+      ...(fieldContract(key)?.enumValues ?? []),
+      ...fallback,
+    ];
+    return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
+  }
+
+  function humanizeSettingValue(value: string): string {
+    return value
+      .replaceAll(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replaceAll('_', ' ')
+      .replaceAll(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  function formatSettingOptionLabel(field: string, value: string): string {
+    return ENUM_LABELS_BY_FIELD[field]?.[value] ?? humanizeSettingValue(value);
+  }
+
+  function rawEditorOwnerFile(key: RawEditorKey): string {
+    const subsystemId = SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY[key];
+    return subsystemOwnerFile(subsystemId) ?? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY[key];
+  }
 
   function getSource(key: string): SettingSource {
     if (!data) return 'default';
-    const env = data.env as Record<string, unknown> | undefined;
-    const envMap: Record<string, string> = {
-      'primaryModel': 'primaryModel',
-      'extractionModel': 'extractionModel',
-      'webFetchAllowHttp': 'webFetchAllowHttp',
-    };
-    if (env && envMap[key] && env[envMap[key]] !== undefined) return 'env var';
+    const ownerFile = fieldOwnerFile(key);
+    if (ownerFile) return ownerFile;
     const config = data.config as Record<string, unknown>;
-    if (config[key] !== undefined) return 'settings.json';
-    return 'default';
+    return config[key] !== undefined ? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY.settings : 'default';
+  }
+
+  function fieldEditorType(
+    key: string,
+    value: unknown,
+  ): 'text' | 'number' | 'checkbox' | 'array' | 'object' | 'enum' {
+    const schemaType = fieldContract(key)?.type;
+    if (schemaType === 'boolean') return 'checkbox';
+    if (schemaType === 'integer' || schemaType === 'number') return 'number';
+    if (schemaType === 'string_array') return 'array';
+    if (schemaType === 'object') return 'object';
+    if (schemaType === 'enum') return 'enum';
+    if (typeof value === 'boolean') return 'checkbox';
+    if (typeof value === 'number') return 'number';
+    if (Array.isArray(value)) return 'array';
+    if (value !== null && typeof value === 'object') return 'object';
+    return 'text';
+  }
+
+  function summarizeCompositionalPolicy(value: unknown): string {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return 'Disabled';
+    }
+
+    const policy = value as {
+      enabled?: unknown;
+      allowedTiers?: unknown;
+      allowedChannelTypes?: unknown;
+      allowedPurposes?: unknown;
+    };
+    if (policy.enabled !== true) {
+      return 'Disabled';
+    }
+
+    const tierCount = Array.isArray(policy.allowedTiers) ? policy.allowedTiers.length : 0;
+    const channelCount = Array.isArray(policy.allowedChannelTypes) ? policy.allowedChannelTypes.length : 0;
+    const purposeCount = Array.isArray(policy.allowedPurposes) ? policy.allowedPurposes.length : 0;
+
+    return `Enabled, ${tierCount} tier${tierCount === 1 ? '' : 's'}, `
+      + `${channelCount} channel${channelCount === 1 ? '' : 's'}, `
+      + `${purposeCount} purpose${purposeCount === 1 ? '' : 's'}`;
+  }
+
+  function normalizeStringList(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(
+      value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0),
+    )];
+  }
+
+  function getCompositionalPolicy(): CompositionalPolicyFormValue {
+    const value = configValue('compositionalPolicy');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {
+        enabled: false,
+        allowedTiers: [],
+        allowedChannelTypes: [],
+        allowedPurposes: [],
+      };
+    }
+
+    const policy = value as {
+      enabled?: unknown;
+      allowedTiers?: unknown;
+      allowedChannelTypes?: unknown;
+      allowedPurposes?: unknown;
+    };
+    return {
+      enabled: policy.enabled === true,
+      allowedTiers: normalizeStringList(policy.allowedTiers),
+      allowedChannelTypes: normalizeStringList(policy.allowedChannelTypes),
+      allowedPurposes: normalizeStringList(policy.allowedPurposes),
+    };
+  }
+
+  function setCompositionalPolicy(policy: CompositionalPolicyFormValue): void {
+    setConfigValue('compositionalPolicy', {
+      enabled: policy.enabled === true,
+      allowedTiers: [...new Set(policy.allowedTiers)],
+      allowedChannelTypes: [...new Set(policy.allowedChannelTypes)],
+      allowedPurposes: [...new Set(policy.allowedPurposes)],
+    });
+  }
+
+  function toggleCompositionalPolicyValue(listKey: CompositionalListKey, value: string): void {
+    const policy = getCompositionalPolicy();
+    const currentList = policy[listKey];
+    const nextList = currentList.includes(value)
+      ? currentList.filter((entry) => entry !== value)
+      : [...currentList, value];
+    setCompositionalPolicy({
+      ...policy,
+      [listKey]: nextList,
+    } as CompositionalPolicyFormValue);
+  }
+
+  function setCompositionalPolicyEnabled(enabled: boolean): void {
+    setCompositionalPolicy({
+      ...getCompositionalPolicy(),
+      enabled,
+    });
+  }
+
+  function hasCompositionalPolicyValue(listKey: CompositionalListKey, value: string): boolean {
+    return getCompositionalPolicy()[listKey].includes(value);
   }
 
   // ── Derived ──
-  let slotKeys = $derived(catalogSlots.map(s => s.slotKey).filter(Boolean));
+  let ttsProviderOptions = $derived(
+    fieldEnumValues('ttsProvider', [DISABLED_PROVIDER_ID, ttsProvider]),
+  );
+  let sttProviderOptions = $derived(
+    fieldEnumValues('sttProvider', [DISABLED_PROVIDER_ID, sttProvider]),
+  );
+  let capabilityTierOptions = $derived(
+    fieldEnumValues('capabilityTier', COMPOSITIONAL_TIER_OPTIONS),
+  );
+  let importRouteModeOptions = $derived(
+    fieldEnumValues('importProcessingRouteMode', [importRouteMode]),
+  );
+  let sessionRestartBehaviorOptions = $derived(
+    fieldEnumValues('sessionRestartBehavior', [sessionRestartBehavior]),
+  );
 
   function clamp(value: number, min: number, max: number): number {
     return Math.max(min, Math.min(max, value));
@@ -501,9 +725,11 @@
   });
 
   // ── Helpers ──
-  function populateSimpleFields(config: Record<string, unknown>) {
-    primaryModel = String(config.primaryModel ?? '');
-    extractionModel = String(config.extractionModel ?? '');
+  function populateSimpleFields(settingsData: AdminSettingsData) {
+    const config = settingsData.config as Record<string, unknown>;
+    const scheduler = settingsData.editors?.scheduler as SchedulerEditorConfig | undefined;
+    const capabilities = settingsData.editors?.capabilities as CapabilitiesEditorConfig | undefined;
+    const maxOutputTokensFromConfig = Number(config.primaryMaxTokens ?? config.extractionMaxTokens ?? 4096);
     memoryBudgetPct = Number(config.memoryBudgetPct ?? 20);
     memoryRetrievalLimit = config.memoryRetrievalLimit != null ? Number(config.memoryRetrievalLimit) : null;
     sessionMessageLimit = config.sessionMessageLimit != null ? Number(config.sessionMessageLimit) : null;
@@ -512,7 +738,9 @@
     memoryRetrievalBudgetPct = Number(config.memoryRetrievalBudgetPct ?? 2);
     extractionThresholdPct = Number(config.extractionThresholdPct ?? 30);
     compactionThresholdPct = Number(config.compactionThresholdPct ?? 70);
-    maxResponseTokens = Number(config.primaryMaxTokens ?? 4096);
+    maxResponseTokens = Number.isFinite(maxOutputTokensFromConfig) && maxOutputTokensFromConfig > 0
+      ? maxOutputTokensFromConfig
+      : 4096;
     retryMaxAttempts = Number(config.retryMaxAttempts ?? 3);
     retryBaseDelayMs = Number(config.retryBaseDelayMs ?? 2000);
     importRouteMode = String(config.importProcessingRouteMode ?? 'background');
@@ -524,13 +752,16 @@
     webFetchDomainAllowlist = Array.isArray(config.webFetchDomainAllowlist) ? config.webFetchDomainAllowlist.join(', ') : '';
     webFetchAllowInternalNetwork = Boolean(config.webFetchAllowInternalNetwork);
     webFetchTlsCaCertPaths = Array.isArray(config.webFetchTlsCaCertPaths) ? config.webFetchTlsCaCertPaths.join(', ') : '';
-    capabilityTier = String(config.capabilityTier ?? 'apprentice');
+    capabilityTier = String(capabilities?.tier ?? 'apprentice');
+    capabilityCustomTokens = Array.isArray(capabilities?.customTokens)
+      ? capabilities.customTokens.join(', ')
+      : '';
 
     // Memory & Extraction
     extractionInterval = Number(config.extractionInterval ?? 5);
     compactionEmotionalSalienceThresholdPct = Number(config.compactionEmotionalSalienceThresholdPct ?? 75);
     defaultContextWindow = Number(config.defaultContextWindow ?? 128000);
-    maintenanceIntervalMs = Number(config.maintenanceIntervalMs ?? 300000);
+    maintenanceIntervalMs = Number(scheduler?.salienceDecayIntervalMs ?? 300000);
 
     // Memory Extraction Tuning
     memoryExtractionMinImportance = Number(config.memoryExtractionMinImportance ?? 0.3);
@@ -557,15 +788,14 @@
     thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 10);
 
     // Voice / TTS
-    const rawTts = String(config.ttsProvider ?? 'disabled');
-    ttsProvider = (rawTts === 'elevenlabs' || rawTts === 'echo') ? rawTts : 'disabled';
+    const providerSelection = resolveVoiceProviderSelection(config);
+    ttsProvider = providerSelection.ttsProvider;
     voiceId = String(config.voiceId ?? config.elevenLabsVoiceId ?? '');
     echoTtsUrl = String(config.echoTtsUrl ?? '');
     echoTtsVoice = String(config.echoTtsVoice ?? '');
     echoTtsPreset = String(config.echoTtsPreset ?? '');
-    const rawStt = String(config.sttProvider ?? (config.deepgramApiKey ? 'deepgram' : 'disabled'));
-    sttProvider = rawStt === 'deepgram' ? 'deepgram' : 'disabled';
-    deepgramModel = String(config.deepgramModel ?? 'nova-3');
+    sttProvider = providerSelection.sttProvider;
+    deepgramModel = String(config.deepgramModel ?? '');
 
     // Obsidian Vault
     obsidianVaultName = String(config.obsidianVaultName ?? '');
@@ -583,39 +813,6 @@
     );
     telegramEnabled = Boolean(config.telegramEnabled);
     telegramAuthorizedUsers = String(config.telegramAuthorizedUsers ?? '');
-
-    // Populate catalog slots
-    const catalog = config.modelCatalog as Record<string, Record<string, unknown>> | undefined;
-    if (catalog && Object.keys(catalog).length > 0) {
-      catalogSlots = Object.entries(catalog).map(([key, entry]) => ({
-        slotKey: key,
-        model: String(entry.model ?? ''),
-        provider: String(entry.provider ?? ''),
-        defaultMaxTokens: entry.defaults && typeof entry.defaults === 'object' ? Number((entry.defaults as Record<string, unknown>).maxTokens ?? 0) || null : null,
-        defaultContextWindow: entry.defaults && typeof entry.defaults === 'object' ? Number((entry.defaults as Record<string, unknown>).contextWindow ?? 0) || null : null,
-        overrideMaxTokens: entry.overrides && typeof entry.overrides === 'object' ? Number((entry.overrides as Record<string, unknown>).maxTokens ?? 0) || null : null,
-        overrideContextWindow: entry.overrides && typeof entry.overrides === 'object' ? Number((entry.overrides as Record<string, unknown>).contextWindow ?? 0) || null : null,
-      }));
-    } else {
-      catalogSlots = [
-        { slotKey: 'primary', model: String(config.primaryModel ?? ''), provider: String(config.primaryProvider ?? ''), defaultMaxTokens: Number(config.primaryMaxTokens ?? 4096), defaultContextWindow: Number(config.defaultContextWindow ?? 128000), overrideMaxTokens: null, overrideContextWindow: null },
-        { slotKey: 'extraction', model: String(config.extractionModel ?? ''), provider: String(config.extractionProvider ?? ''), defaultMaxTokens: Number(config.extractionMaxTokens ?? 4096), defaultContextWindow: null, overrideMaxTokens: null, overrideContextWindow: null },
-      ];
-    }
-
-    // Populate purpose mappings
-    const assignments = config.modelRoleAssignments as Record<string, string> | undefined;
-    if (assignments && Object.keys(assignments).length > 0) {
-      purposeMappings = Object.entries(assignments).map(([purpose, slotKey]) => ({ purpose, slotKey }));
-    } else {
-      purposeMappings = DEFAULT_PURPOSES.map(p => ({
-        purpose: p,
-        slotKey: p === 'chat' || p === 'summary' || p === 'reasoning' || p === 'longContext' ? 'primary' : 'extraction',
-      }));
-    }
-
-    // Set initial snapshot for dirty tracking
-    initialSnapshot = computeSnapshot();
   }
 
   function tryPrettyPrint(raw: string): string {
@@ -647,19 +844,83 @@
     (data.config as Record<string, unknown>)[key] = value;
   }
 
-  function fieldType(value: unknown): 'text' | 'number' | 'checkbox' | 'array' | 'object' {
-    if (typeof value === 'boolean') return 'checkbox';
-    if (typeof value === 'number') return 'number';
-    if (Array.isArray(value)) return 'array';
-    if (value !== null && typeof value === 'object') return 'object';
-    return 'text';
-  }
-
   function toggleSection(id: string) {
     const next = new Set(openSections);
     if (next.has(id)) next.delete(id);
     else next.add(id);
     openSections = next;
+  }
+
+  function syncActiveSimpleSection(): void {
+    if (mode !== 'simple') return;
+    if (typeof window === 'undefined') return;
+    if (Date.now() < suppressSimpleSectionSyncUntil) return;
+
+    const topBySectionId: Partial<Record<SettingsSimpleSectionId, number>> = {};
+    for (const sectionId of simpleQuickJumpSections) {
+      const node = simpleSectionNodes.get(sectionId);
+      if (!node) continue;
+      topBySectionId[sectionId] = node.getBoundingClientRect().top;
+    }
+    const resolved = resolveActiveSettingsSimpleSection(
+      simpleQuickJumpSections,
+      topBySectionId,
+      SIMPLE_SECTION_ACTIVE_THRESHOLD_PX,
+    );
+    if (resolved) {
+      activeSimpleSectionId = resolved;
+    }
+  }
+
+  function jumpToSimpleSection(
+    sectionId: SettingsSimpleSectionId,
+    behavior: ScrollBehavior = 'smooth',
+  ): void {
+    if (typeof window === 'undefined') return;
+    const node = simpleSectionNodes.get(sectionId);
+    if (!node) return;
+
+    activeSimpleSectionId = sectionId;
+    suppressSimpleSectionSyncUntil = Date.now() + 900;
+    const top = window.scrollY + node.getBoundingClientRect().top - SIMPLE_SECTION_SCROLL_OFFSET_PX;
+    window.history.replaceState(null, '', `#${settingsSimpleSectionAnchorId(sectionId)}`);
+    window.scrollTo({
+      top: Math.max(0, top),
+      behavior,
+    });
+  }
+
+  function jumpToHashSection(behavior: ScrollBehavior = 'auto'): void {
+    if (typeof window === 'undefined') return;
+    const sectionId = parseSettingsSimpleSectionHash(window.location.hash);
+    if (!sectionId || !visibleSimpleSectionIds.has(sectionId)) return;
+    jumpToSimpleSection(sectionId, behavior);
+  }
+
+  function simpleSectionAnchor(node: HTMLElement, sectionId: SettingsSimpleSectionId) {
+    let currentId = sectionId;
+    simpleSectionNodes.set(currentId, node);
+    syncActiveSimpleSection();
+
+    return {
+      update(nextSectionId: SettingsSimpleSectionId) {
+        if (nextSectionId === currentId) return;
+        simpleSectionNodes.delete(currentId);
+        currentId = nextSectionId;
+        simpleSectionNodes.set(currentId, node);
+        syncActiveSimpleSection();
+      },
+      destroy() {
+        simpleSectionNodes.delete(currentId);
+      },
+    };
+  }
+
+  function handleSimpleQuickJump(event: Event): void {
+    const sectionId = (event.currentTarget as HTMLSelectElement).value;
+    if (isSettingsSimpleSectionId(sectionId) && visibleSimpleSectionIds.has(sectionId)) {
+      jumpToSimpleSection(sectionId);
+    }
   }
 
   function getRawJson(key: string): string {
@@ -683,6 +944,52 @@
     }
   }
 
+  function currentRawJsonByKey(): Record<RawEditorKey, string> {
+    return {
+      settings: settingsJson,
+      models: modelsJson,
+      skills: skillsJson,
+      scheduler: schedulerJson,
+      'trust-policy': trustPolicyJson,
+      capabilities: capabilitiesJson,
+    };
+  }
+
+  function dirtyRawEditorKeys(): RawEditorKey[] {
+    const current = currentRawJsonByKey();
+    return (Object.keys(current) as RawEditorKey[]).filter(
+      key => current[key] !== initialRawJsonByKey[key],
+    );
+  }
+
+  function rawEditorLabel(key: RawEditorKey): string {
+    return rawEditorOwnerFile(key);
+  }
+
+  function resetDirtyTracking(): void {
+    initialSnapshot = computeSnapshot();
+    initialRawJsonByKey = currentRawJsonByKey();
+  }
+
+  function markRawEditorsCommitted(keys: RawEditorKey[]): void {
+    const current = currentRawJsonByKey();
+    const next = { ...initialRawJsonByKey };
+    for (const key of keys) {
+      next[key] = current[key];
+    }
+    initialRawJsonByKey = next;
+  }
+
+  function ensureNoDirtyRawEditorsForGeneralSave(): boolean {
+    const dirtyKeys = dirtyRawEditorKeys();
+    if (dirtyKeys.length === 0) return true;
+    flash(
+      false,
+      `Unsaved raw editor changes in ${dirtyKeys.map(rawEditorLabel).join(', ')}; save or discard them before using the general settings save.`,
+    );
+    return false;
+  }
+
   function fmtTokens(n: number): string {
     if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}K`;
     return String(n);
@@ -691,52 +998,6 @@
   function fmtMs(ms: number): string {
     if (ms >= 60000) return `${(ms / 60000).toFixed(1)}min`;
     return `${(ms / 1000).toFixed(1)}s`;
-  }
-
-  // ── Catalog actions ──
-  function addCatalogSlot() {
-    catalogSlots = [...catalogSlots, {
-      slotKey: '', model: '', provider: '',
-      defaultMaxTokens: null, defaultContextWindow: null,
-      overrideMaxTokens: null, overrideContextWindow: null,
-    }];
-  }
-
-  function removeCatalogSlot(idx: number) {
-    catalogSlots = catalogSlots.filter((_, i) => i !== idx);
-  }
-
-  function addPurposeMapping() {
-    purposeMappings = [...purposeMappings, { purpose: '', slotKey: catalogSlots[0]?.slotKey ?? '' }];
-  }
-
-  function removePurposeMapping(idx: number) {
-    purposeMappings = purposeMappings.filter((_, i) => i !== idx);
-  }
-
-  // ── Save actions ──
-  function buildCatalogPayload(): Record<string, unknown> {
-    const catalog: Record<string, unknown> = {};
-    for (const slot of catalogSlots) {
-      if (!slot.slotKey) continue;
-      catalog[slot.slotKey] = {
-        model: slot.model,
-        provider: slot.provider,
-        defaults: {
-          ...(slot.defaultMaxTokens ? { maxTokens: slot.defaultMaxTokens } : {}),
-          ...(slot.defaultContextWindow ? { contextWindow: slot.defaultContextWindow } : {}),
-        },
-        overrides: {
-          ...(slot.overrideMaxTokens ? { maxTokens: slot.overrideMaxTokens } : {}),
-          ...(slot.overrideContextWindow ? { contextWindow: slot.overrideContextWindow } : {}),
-        },
-      };
-    }
-    const assignments: Record<string, string> = {};
-    for (const m of purposeMappings) {
-      if (m.purpose && m.slotKey) assignments[m.purpose] = m.slotKey;
-    }
-    return { modelCatalog: catalog, modelRoleAssignments: assignments };
   }
 
   function splitCsv(str: string): string[] {
@@ -748,14 +1009,12 @@
     return clamp(Math.round(value), 10, 600);
   }
 
-  function collectSimplePayload(catalogPayload: Record<string, unknown>): Record<string, unknown> {
+  function collectSimplePayload(): Record<string, unknown> {
     const discordTriggerListenWindowMs = normalizeDiscordListenWindowSeconds(
       discordTriggerListenWindowSeconds,
     ) * 1000;
 
     return {
-      primaryModel,
-      extractionModel,
       memoryBudgetPct,
       ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
       ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
@@ -764,7 +1023,6 @@
       memoryRetrievalBudgetPct,
       extractionThresholdPct,
       compactionThresholdPct,
-      primaryMaxTokens: maxResponseTokens,
       retryMaxAttempts,
       retryBaseDelayMs,
       importProcessingRouteMode: importRouteMode,
@@ -772,16 +1030,15 @@
       importProcessingLocalEndpointUrl: importLocalEndpointUrl,
       importProcessingLocalModel: importLocalModel,
       openRouterProviderOrder: splitCsv(openRouterProviderOrder),
+      compositionalPolicy: getCompositionalPolicy(),
       webFetchAllowHttp,
       webFetchDomainAllowlist: splitCsv(webFetchDomainAllowlist),
       webFetchAllowInternalNetwork,
       webFetchTlsCaCertPaths: splitCsv(webFetchTlsCaCertPaths),
-      capabilityTier,
       // Memory & Extraction
       extractionInterval,
       compactionEmotionalSalienceThresholdPct,
       defaultContextWindow,
-      maintenanceIntervalMs,
       // Memory Extraction Tuning
       memoryExtractionMinImportance,
       memoryExtractionMinConfidence,
@@ -824,22 +1081,113 @@
       discordTriggerListenWindowMs,
       telegramEnabled,
       telegramAuthorizedUsers,
-      ...catalogPayload,
+    };
+  }
+
+  function buildSchedulerPayload(): Record<string, unknown> {
+    return {
+      ...getSchedulerEditorConfig(),
+      salienceDecayIntervalMs: maintenanceIntervalMs,
+    };
+  }
+
+  function buildCapabilitiesPayload(): Record<string, unknown> {
+    const current = getCapabilitiesEditorConfig();
+    const customTokens = capabilityTier === 'custom'
+      ? splitCsv(capabilityCustomTokens)
+      : (Array.isArray(current.customTokens) ? current.customTokens : []);
+    return {
+      ...current,
+      tier: capabilityTier,
+      customTokens,
+    };
+  }
+
+  async function reloadSettingsState(options: {
+    settingsData?: AdminSettingsData;
+    schemaData?: SettingsContractData;
+  } = {}): Promise<void> {
+    const nextSettingsData = options.settingsData ?? await getSettings();
+    const nextSchemaData = options.schemaData ?? await getSettingsSchema();
+    data = nextSettingsData;
+    settingsSchema = nextSchemaData;
+    populateSimpleFields(nextSettingsData);
+    settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
+
+    const [skConf, schConf, tpConf, capConf] = await Promise.all([
+      getSubConfig('skills').catch(() => '{}'),
+      getSubConfig('scheduler').catch(() => '{}'),
+      getSubConfig('trust-policy').catch(() => '{}'),
+      getSubConfig('capabilities').catch(() => '{}'),
+    ]);
+    skillsJson = tryPrettyPrint(skConf);
+    schedulerJson = tryPrettyPrint(schConf);
+    trustPolicyJson = tryPrettyPrint(tpConf);
+    capabilitiesJson = tryPrettyPrint(capConf);
+    resetDirtyTracking();
+  }
+
+  async function saveSettingsContract(
+    runtimePayload: Record<string, unknown>,
+  ): Promise<{ ok: boolean; invalidFieldCount: number; message: string }> {
+    const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
+    let invalidFieldCount = 0;
+    const ownerConfigSaves = [
+      {
+        key: 'scheduler' as const,
+        nextJson: JSON.stringify(buildSchedulerPayload(), null, 2),
+        currentJson: tryPrettyPrint(schedulerJson),
+      },
+      {
+        key: 'capabilities' as const,
+        nextJson: JSON.stringify(buildCapabilitiesPayload(), null, 2),
+        currentJson: tryPrettyPrint(capabilitiesJson),
+      },
+    ].filter(entry => entry.nextJson !== entry.currentJson);
+
+    if (hasRuntimePayload) {
+      const runtimeResult = await updateSettings(runtimePayload);
+      invalidFieldCount = applyValidationErrors(runtimeResult);
+      if (!runtimeResult.ok) {
+        return {
+          ok: false,
+          invalidFieldCount,
+          message: runtimeResult.message || 'Failed to save runtime settings',
+        };
+      }
+    } else {
+      applyValidationErrors({ ok: true, message: '' });
+    }
+
+    try {
+      for (const entry of ownerConfigSaves) {
+        await saveSubConfig(entry.key, entry.nextJson);
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        invalidFieldCount,
+        message: error instanceof Error
+          ? `Runtime settings saved, but canonical config save failed: ${error.message}`
+          : 'Runtime settings saved, but canonical config save failed',
+      };
+    }
+
+    await reloadSettingsState();
+    return {
+      ok: true,
+      invalidFieldCount,
+      message: 'Settings updated',
     };
   }
 
   async function saveSimple() {
     saving = true;
     try {
-      const catalogPayload = buildCatalogPayload();
-      const result = await updateSettings(collectSimplePayload(catalogPayload));
-      const invalidFieldCount = applyValidationErrors(result);
-      flash(result.ok, result.message || 'Settings saved');
-      if (result.ok) {
-        data = await getSettings();
-        populateSimpleFields(data.config as Record<string, unknown>);
-        settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
-      } else if (invalidFieldCount > 0) {
+      if (!ensureNoDirtyRawEditorsForGeneralSave()) return;
+      const result = await saveSettingsContract(collectSimplePayload());
+      flash(result.ok, result.message);
+      if (!result.ok && result.invalidFieldCount > 0) {
         mode = 'advanced';
       }
     } catch (e) {
@@ -853,14 +1201,10 @@
     if (!data) return;
     saving = true;
     try {
-      const result = await updateSettings(data.config as Record<string, unknown>);
-      const invalidFieldCount = applyValidationErrors(result);
-      flash(result.ok, result.message || 'Settings saved');
-      if (result.ok) {
-        data = await getSettings();
-        populateSimpleFields(data.config as Record<string, unknown>);
-        settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
-      } else if (invalidFieldCount > 0) {
+      if (!ensureNoDirtyRawEditorsForGeneralSave()) return;
+      const result = await saveSettingsContract(data.config as Record<string, unknown>);
+      flash(result.ok, result.message);
+      if (!result.ok && result.invalidFieldCount > 0) {
         mode = 'advanced';
       }
     } catch (e) {
@@ -892,9 +1236,7 @@
       }
 
       flashRaw('settings', true, result.message || 'settings.json saved');
-      data = await getSettings();
-      populateSimpleFields(data.config as Record<string, unknown>);
-      settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
+      await reloadSettingsState();
     } catch (e) {
       flashRaw('settings', false, e instanceof Error ? e.message : 'Failed to save settings.json');
     } finally {
@@ -909,6 +1251,11 @@
       JSON.parse(json);
       await saveSubConfig(key, json);
       applyValidationErrors({ ok: true, message: '' });
+      if (key === 'scheduler' || key === 'capabilities') {
+        await reloadSettingsState();
+      } else {
+        markRawEditorsCommitted([key as RawEditorKey]);
+      }
       flashRaw(key, true, `${label} saved`);
     } catch (e) {
       flashRaw(key, false, e instanceof Error ? e.message : `Failed to save ${label}`);
@@ -917,54 +1264,67 @@
     }
   }
 
-  async function doRefreshModels() {
-    refreshingModels = true;
-    try {
-      await refreshModels();
-      discoveredModels = await listModels();
-      flash(true, `Discovered ${discoveredModels.length} models`);
-    } catch (e) {
-      flash(false, e instanceof Error ? e.message : 'Model refresh failed');
-    } finally {
-      refreshingModels = false;
+  $effect(() => {
+    if (mode !== 'simple') return;
+    if (!visibleSimpleSectionIds.has(activeSimpleSectionId)) {
+      const fallback = simpleQuickJumpSections[0];
+      if (fallback) {
+        activeSimpleSectionId = fallback;
+      }
     }
-  }
+    syncActiveSimpleSection();
+  });
 
   // ── Init ──
   onMount(async () => {
     window.addEventListener('beforeunload', handleBeforeUnload);
+    simpleViewportChangeHandler = () => syncActiveSimpleSection();
+    simpleHashChangeHandler = () => jumpToHashSection('auto');
+    window.addEventListener('scroll', simpleViewportChangeHandler, { passive: true });
+    window.addEventListener('resize', simpleViewportChangeHandler);
+    window.addEventListener('hashchange', simpleHashChangeHandler);
     try {
-      const [settingsData, models] = await Promise.all([
+      const [settingsData, schemaData] = await Promise.all([
         getSettings(),
-        listModels().catch(() => [] as DiscoveredModel[]),
+        getSettingsSchema(),
       ]);
       data = settingsData;
-      discoveredModels = models;
-      populateSimpleFields(data.config as Record<string, unknown>);
+      settingsSchema = schemaData;
+      populateSimpleFields(data);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
-      const [mConf, skConf, schConf, tpConf, capConf] = await Promise.all([
-        getSubConfig('models').catch(() => '{}'),
+      const [skConf, schConf, tpConf, capConf] = await Promise.all([
         getSubConfig('skills').catch(() => '{}'),
         getSubConfig('scheduler').catch(() => '{}'),
         getSubConfig('trust-policy').catch(() => '{}'),
         getSubConfig('capabilities').catch(() => '{}'),
       ]);
-      modelsJson = tryPrettyPrint(mConf);
       skillsJson = tryPrettyPrint(skConf);
       schedulerJson = tryPrettyPrint(schConf);
       trustPolicyJson = tryPrettyPrint(tpConf);
       capabilitiesJson = tryPrettyPrint(capConf);
+      resetDirtyTracking();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load settings';
     } finally {
       loading = false;
+      window.requestAnimationFrame(() => {
+        syncActiveSimpleSection();
+        jumpToHashSection('auto');
+      });
     }
   });
 
   onDestroy(() => {
     if (typeof window !== 'undefined') {
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (simpleViewportChangeHandler) {
+        window.removeEventListener('scroll', simpleViewportChangeHandler);
+        window.removeEventListener('resize', simpleViewportChangeHandler);
+      }
+      if (simpleHashChangeHandler) {
+        window.removeEventListener('hashchange', simpleHashChangeHandler);
+      }
     }
   });
 
@@ -976,10 +1336,15 @@
   const TOGGLE_CLS = 'w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300';
 </script>
 
-<!-- Model datalist for autocomplete -->
-<datalist id="model-list">
-  {#each discoveredModels as m}
-    <option value={m.id}>{m.description ?? m.id}</option>
+<datalist id="tts-provider-list">
+  {#each ttsProviderOptions as providerId}
+    <option value={providerId}></option>
+  {/each}
+</datalist>
+
+<datalist id="stt-provider-list">
+  {#each sttProviderOptions as providerId}
+    <option value={providerId}></option>
   {/each}
 </datalist>
 
@@ -988,8 +1353,8 @@
   <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
     <div class="flex items-center gap-3">
       <div>
-        <h1 class="text-2xl font-serif font-bold text-shadow-900">The Climate</h1>
-        <p class="text-sm text-shadow-600 mt-1">Runtime configuration and tuning</p>
+        <h1 class="text-2xl font-serif font-bold text-bark-900">The Climate</h1>
+        <p class="text-sm text-bark-700 mt-1">Runtime configuration and tuning</p>
       </div>
       {#if dirty}
         <span class="px-2.5 py-1 rounded-full text-sm font-medium bg-gold-100 text-gold-700 border border-gold-300">
@@ -999,12 +1364,6 @@
     </div>
 
     <div class="flex items-center gap-3">
-      <button onclick={doRefreshModels} disabled={refreshingModels}
-        class="px-3 py-1.5 text-sm font-medium rounded-lg border border-bark-300
-               text-shadow-700 hover:bg-bark-200
-               disabled:opacity-50 transition-colors">
-        {refreshingModels ? 'Refreshing...' : 'Refresh Models'}
-      </button>
       <div class="flex rounded-lg border border-bark-300 overflow-hidden">
         {#each (['simple', 'advanced', 'raw'] as const) as m}
           <button
@@ -1047,40 +1406,80 @@
   <!-- SIMPLE MODE -->
   {:else if mode === 'simple'}
     <div class="space-y-5">
-      <!-- Primary models (quick-access) -->
-      <div class="card-garden p-6 space-y-4">
-        <h2 class="text-sm font-serif font-semibold text-shadow-800">Quick Model Selection</h2>
-        <hr class="divider-filigree" />
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <label class={LABEL_CLS}>
-              Primary Model
-              <span class="text-shadow-400 font-normal ml-1">({getSource('primaryModel')})</span>
-            </label>
-            <input type="text" list="model-list" bind:value={primaryModel} placeholder="provider/model"
-              class={INPUT_CLS} />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>
-              Extraction Model
-              <span class="text-shadow-400 font-normal ml-1">({getSource('extractionModel')})</span>
-            </label>
-            <input type="text" list="model-list" bind:value={extractionModel} placeholder="provider/model"
-              class={INPUT_CLS} />
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Default Context Window</label>
-            <input type="number" min="4096" step="1024" bind:value={defaultContextWindow} class={INPUT_CLS} />
-            <p class="text-sm text-shadow-500 mt-1">Context window size in tokens (default: 128,000)</p>
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Max Response Tokens</label>
-            <input type="number" min="256" max="1000000" step="256" bind:value={maxResponseTokens} class={INPUT_CLS} />
-            <p class="text-sm text-shadow-500 mt-1">Maximum tokens in LLM response (256-1,000,000)</p>
-          </div>
-        </div>
+      <div class="card-garden p-3 lg:hidden">
+        <label class="block text-sm font-medium text-shadow-700 mb-1.5" for="settings-jump-select">
+          Quick jump
+        </label>
+        <select
+          id="settings-jump-select"
+          class={INPUT_CLS}
+          value={activeSimpleSectionId}
+          onchange={handleSimpleQuickJump}
+        >
+          {#each simpleSectionGroups as group}
+            <optgroup label={group.label}>
+              {#each group.sections as section}
+                <option value={section.id}>{section.title}</option>
+              {/each}
+            </optgroup>
+          {/each}
+        </select>
       </div>
 
+      <div class="grid grid-cols-1 lg:grid-cols-[18rem_minmax(0,1fr)] gap-5 items-start">
+        <aside class="hidden lg:block lg:sticky lg:top-4">
+          <SettingsSidebarNav
+            groups={simpleSectionGroups}
+            activeSectionId={activeSimpleSectionId}
+            onNavigate={jumpToSimpleSection}
+          />
+        </aside>
+
+        <div class="space-y-5 min-w-0">
+          <section
+            id={settingsSimpleSectionAnchorId('models')}
+            use:simpleSectionAnchor={'models'}
+            class="card-garden p-5 space-y-3"
+            data-settings-section="models"
+          >
+            <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Models</p>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Registry and Purpose Routing</h2>
+            <p class="text-sm text-shadow-600">
+              Purpose-tagged primary/fallback models are managed in the dedicated Models workspace.
+            </p>
+            <a
+              href={`${base}/models`}
+              class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+            >
+              Open Models
+            </a>
+          </section>
+
+          <section
+            id={settingsSimpleSectionAnchorId('prompting')}
+            use:simpleSectionAnchor={'prompting'}
+            class="card-garden p-5 space-y-3"
+            data-settings-section="prompting"
+          >
+            <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Prompting</p>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Prompt Stack and Authoring</h2>
+            <p class="text-sm text-shadow-600">
+              Prompt layers and authoring controls live in Prompts so runtime tuning stays focused here.
+            </p>
+            <a
+              href={`${base}/prompts`}
+              class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+            >
+              Open Prompts
+            </a>
+          </section>
+
+          <section
+            id={settingsSimpleSectionAnchorId('memory-budget')}
+            use:simpleSectionAnchor={'memory-budget'}
+            class="space-y-5"
+            data-settings-section="memory-budget"
+          >
       <!-- Budget Preview with bar chart -->
       {#if budgetPreview}
         <div class="card-garden p-6 space-y-4">
@@ -1235,8 +1634,14 @@
           </div>
         </div>
       </div>
+      </section>
 
       <!-- Memory & Extraction -->
+      <section
+        id={settingsSimpleSectionAnchorId('memory-extraction')}
+        use:simpleSectionAnchor={'memory-extraction'}
+        data-settings-section="memory-extraction"
+      >
       <div class="card-garden p-6 space-y-6">
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory & Extraction</h2>
         <hr class="divider-filigree" />
@@ -1278,8 +1683,14 @@
           </div>
         </div>
       </div>
+      </section>
 
       <!-- Sessions & Compaction -->
+      <section
+        id={settingsSimpleSectionAnchorId('memory-sessions')}
+        use:simpleSectionAnchor={'memory-sessions'}
+        data-settings-section="memory-sessions"
+      >
       <div class="card-garden p-6 space-y-6">
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Sessions & Compaction</h2>
         <hr class="divider-filigree" />
@@ -1296,23 +1707,35 @@
             <p class="text-sm text-shadow-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Maintenance Interval (ms)</label>
+            <label class={LABEL_CLS}>
+              Maintenance Interval (ms)
+              <span class="text-shadow-400 font-normal ml-1">({getSource('maintenanceIntervalMs')})</span>
+            </label>
             <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Restart Behavior</label>
+            <label class={LABEL_CLS}>
+              Restart Behavior
+              <span class="text-shadow-400 font-normal ml-1">({getSource('sessionRestartBehavior')})</span>
+            </label>
             <select bind:value={sessionRestartBehavior} class={INPUT_CLS}>
-              {#each SESSION_RESTART_BEHAVIORS as option}
-                <option value={option.value}>{option.label}</option>
+              {#each sessionRestartBehaviorOptions as option}
+                <option value={option}>{formatSettingOptionLabel('sessionRestartBehavior', option)}</option>
               {/each}
             </select>
             <p class="text-sm text-shadow-500 mt-1">Choose whether startup resumes the latest session or seeds a fresh one.</p>
           </div>
         </div>
       </div>
+      </section>
 
       <!-- Memory Extraction Tuning (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('memory-tuning')}
+        use:simpleSectionAnchor={'memory-tuning'}
+        data-settings-section="memory-tuning"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('extraction-tuning')}
@@ -1370,8 +1793,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Profile Synthesis (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('memory-profile')}
+        use:simpleSectionAnchor={'memory-profile'}
+        data-settings-section="memory-profile"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('profile')}
@@ -1442,8 +1871,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Think Tool (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('tools-think')}
+        use:simpleSectionAnchor={'tools-think'}
+        data-settings-section="tools-think"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('think')}
@@ -1482,136 +1917,14 @@
           </div>
         {/if}
       </div>
-
-      <!-- Model Catalog (collapsible) -->
-      <div class="card-garden overflow-hidden">
-        <button
-          onclick={() => toggleSection('models')}
-          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
-        >
-          <div class="flex items-center gap-3">
-            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">M</span>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Catalog</h2>
-            <span class="text-sm text-shadow-500">{catalogSlots.filter(s => s.slotKey).length} slots</span>
-          </div>
-          <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('models') ? 'rotate-180' : ''}">&#9660;</span>
-        </button>
-        {#if !openSections.has('models')}
-          <div class="px-5 pb-3 text-sm text-shadow-500">
-            {catalogSlots.filter(s => s.slotKey && s.model).map(s => `${s.slotKey}: ${s.model.split('/').pop()}`).join(', ') || 'No models configured'}
-          </div>
-        {/if}
-        {#if openSections.has('models')}
-          <div class="px-5 pb-5 border-t border-bark-300 pt-4 space-y-4">
-            <div class="flex items-center justify-between">
-              <p class="text-sm text-shadow-600">Define reusable model slots, then map purposes to slots below.</p>
-              <button onclick={addCatalogSlot}
-                class="px-3 py-1 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors">
-                + Add Slot
-              </button>
-            </div>
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm min-w-[800px]">
-                <thead>
-                  <tr class="border-b border-bark-300">
-                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Slot Key</th>
-                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Model</th>
-                    <th class="text-left py-2 px-2 text-shadow-700 font-medium">Provider</th>
-                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Def. Max Tokens</th>
-                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Def. Context</th>
-                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Ovr. Max Tokens</th>
-                    <th class="text-right py-2 px-2 text-shadow-700 font-medium">Ovr. Context</th>
-                    <th class="py-2 px-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each catalogSlots as slot, i}
-                    <tr class="border-b border-bark-200">
-                      <td class="py-1.5 px-2">
-                        <input type="text" bind:value={slot.slotKey} placeholder="primary"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2">
-                        <input type="text" list="model-list" bind:value={slot.model} placeholder="provider/model"
-                          class="w-48 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2">
-                        <input type="text" bind:value={slot.provider} placeholder="openrouter"
-                          class="w-28 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2 text-right">
-                        <input type="number" min="1"
-                          value={slot.defaultMaxTokens ?? ''}
-                          onchange={(e) => { slot.defaultMaxTokens = Number((e.target as HTMLInputElement).value) || null; }}
-                          placeholder="auto"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2 text-right">
-                        <input type="number" min="1"
-                          value={slot.defaultContextWindow ?? ''}
-                          onchange={(e) => { slot.defaultContextWindow = Number((e.target as HTMLInputElement).value) || null; }}
-                          placeholder="auto"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2 text-right">
-                        <input type="number" min="1"
-                          value={slot.overrideMaxTokens ?? ''}
-                          onchange={(e) => { slot.overrideMaxTokens = Number((e.target as HTMLInputElement).value) || null; }}
-                          placeholder="optional"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2 text-right">
-                        <input type="number" min="1"
-                          value={slot.overrideContextWindow ?? ''}
-                          onchange={(e) => { slot.overrideContextWindow = Number((e.target as HTMLInputElement).value) || null; }}
-                          placeholder="optional"
-                          class="w-24 px-2 py-1 text-sm rounded border border-bark-300 bg-white text-shadow-800 text-right focus:ring-1 focus:ring-gold-300" />
-                      </td>
-                      <td class="py-1.5 px-2">
-                        <button onclick={() => removeCatalogSlot(i)}
-                          class="text-sm text-wilt-600 hover:text-wilt-400 font-medium">Remove</button>
-                      </td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
-            </div>
-
-            <!-- Purpose Mappings -->
-            <div class="pt-2 space-y-3">
-              <div class="flex items-center justify-between">
-                <h3 class="text-sm font-medium text-shadow-700">Purpose Mappings</h3>
-                <button onclick={addPurposeMapping}
-                  class="px-3 py-1 text-sm font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-50 transition-colors">
-                  + Add Mapping
-                </button>
-              </div>
-              <div class="space-y-2">
-                {#each purposeMappings as mapping, i}
-                  <div class="flex items-center gap-3">
-                    <input type="text" bind:value={mapping.purpose} placeholder="chat"
-                      class="w-40 px-3 py-1.5 text-sm rounded border border-bark-300 bg-white text-shadow-800 font-mono focus:ring-1 focus:ring-gold-300" />
-                    <svg class="w-4 h-4 text-shadow-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14m-4-4l4 4-4 4"/></svg>
-                    <select bind:value={mapping.slotKey}
-                      class="flex-1 px-3 py-1.5 text-sm rounded border border-bark-300 bg-white text-shadow-800 focus:ring-1 focus:ring-gold-300">
-                      {#each slotKeys as key}
-                        <option value={key}>{key}</option>
-                      {/each}
-                      {#if !slotKeys.includes(mapping.slotKey) && mapping.slotKey}
-                        <option value={mapping.slotKey}>{mapping.slotKey} (missing)</option>
-                      {/if}
-                    </select>
-                    <button onclick={() => removePurposeMapping(i)}
-                      class="text-sm text-wilt-600 hover:text-wilt-400 font-medium shrink-0">Remove</button>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          </div>
-        {/if}
-      </div>
+      </section>
 
       <!-- Trust & Capability (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('advanced-trust')}
+        use:simpleSectionAnchor={'advanced-trust'}
+        data-settings-section="advanced-trust"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('trust')}
@@ -1632,20 +1945,45 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Capability Tier</label>
+                <label class={LABEL_CLS}>
+                  Capability Tier
+                  <span class="text-shadow-400 font-normal ml-1">({getSource('capabilityTier')})</span>
+                </label>
                 <select bind:value={capabilityTier} class={INPUT_CLS}>
-                  {#each CAPABILITY_TIERS as tier}
-                    <option value={tier}>{tier}</option>
+                  {#each capabilityTierOptions as tier}
+                    <option value={tier}>{formatSettingOptionLabel('capabilityTier', tier)}</option>
                   {/each}
                 </select>
                 <p class="text-sm text-shadow-500 mt-1">Controls agent autonomy level</p>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>
+                  Custom Capability Tokens
+                  <span class="text-shadow-400 font-normal ml-1">({getSource('customTokens')})</span>
+                </label>
+                <input
+                  type="text"
+                  bind:value={capabilityCustomTokens}
+                  class={INPUT_CLS}
+                  placeholder="identity.read, git.read"
+                  disabled={capabilityTier !== 'custom'}
+                />
+                <p class="text-sm text-shadow-500 mt-1">
+                  Comma-separated capability tokens for the <span class="font-mono">custom</span> tier. Saved to {rawEditorLabel('capabilities')}.
+                </p>
               </div>
             </div>
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- LLM Retries (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('runtime-llm')}
+        use:simpleSectionAnchor={'runtime-llm'}
+        data-settings-section="runtime-llm"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('llm')}
@@ -1679,8 +2017,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Import Processing (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('runtime-import')}
+        use:simpleSectionAnchor={'runtime-import'}
+        data-settings-section="runtime-import"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('import')}
@@ -1701,10 +2045,13 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Route Mode</label>
+                <label class={LABEL_CLS}>
+                  Route Mode
+                  <span class="text-shadow-400 font-normal ml-1">({getSource('importProcessingRouteMode')})</span>
+                </label>
                 <select bind:value={importRouteMode} class={INPUT_CLS}>
-                  {#each IMPORT_ROUTE_MODES as opt}
-                    <option value={opt.value}>{opt.label}</option>
+                  {#each importRouteModeOptions as option}
+                    <option value={option}>{formatSettingOptionLabel('importProcessingRouteMode', option)}</option>
                   {/each}
                 </select>
               </div>
@@ -1718,6 +2065,7 @@
               <div>
                 <label class={LABEL_CLS}>OpenRouter Provider Order</label>
                 <input type="text" bind:value={openRouterProviderOrder} class={INPUT_CLS} placeholder="comma-separated providers" />
+                <p class="text-sm text-shadow-500 mt-1">Global/import fallback order for provider routing.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>Local Endpoint URL</label>
@@ -1731,8 +2079,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Gateway Web Fetch (collapsible) -->
+      <section
+        id={settingsSimpleSectionAnchorId('runtime-fetch')}
+        use:simpleSectionAnchor={'runtime-fetch'}
+        data-settings-section="runtime-fetch"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('fetch')}
@@ -1778,8 +2132,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Voice & TTS -->
+      <section
+        id={settingsSimpleSectionAnchorId('integrations-voice')}
+        use:simpleSectionAnchor={'integrations-voice'}
+        data-settings-section="integrations-voice"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('voice')}
@@ -1801,20 +2161,13 @@
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
                 <label class={LABEL_CLS}>TTS Provider</label>
-                <select bind:value={ttsProvider} class={INPUT_CLS}>
-                  <option value="disabled">disabled</option>
-                  <option value="elevenlabs">elevenlabs</option>
-                  <option value="echo">echo</option>
-                </select>
-                <p class="text-sm text-shadow-500 mt-1">Set to disabled to turn off voice synthesis connectors.</p>
+                <input type="text" bind:value={ttsProvider} list="tts-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
+                <p class="text-sm text-shadow-500 mt-1">Registered provider ids from the backend registry are suggested, and any current provider id is preserved and sent back unchanged.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>STT Provider</label>
-                <select bind:value={sttProvider} class={INPUT_CLS}>
-                  <option value="disabled">disabled</option>
-                  <option value="deepgram">deepgram</option>
-                </select>
-                <p class="text-sm text-shadow-500 mt-1">Set to disabled to turn off speech-to-text connectors.</p>
+                <input type="text" bind:value={sttProvider} list="stt-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
+                <p class="text-sm text-shadow-500 mt-1">Registered provider ids from the backend registry are suggested, and plugin ids are preserved instead of being coerced to disabled.</p>
               </div>
               <div>
                 <label class={LABEL_CLS}>ElevenLabs Voice ID</label>
@@ -1823,7 +2176,7 @@
               </div>
               <div>
                 <label class={LABEL_CLS}>Deepgram Model</label>
-                <input type="text" bind:value={deepgramModel} class={INPUT_CLS} placeholder="nova-3" />
+                <input type="text" bind:value={deepgramModel} class={INPUT_CLS} placeholder="Deepgram model id" />
                 <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted model override.</p>
               </div>
               <div>
@@ -1857,8 +2210,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Obsidian Vault -->
+      <section
+        id={settingsSimpleSectionAnchorId('integrations-obsidian')}
+        use:simpleSectionAnchor={'integrations-obsidian'}
+        data-settings-section="integrations-obsidian"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('obsidian')}
@@ -1899,8 +2258,14 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Channels -->
+      <section
+        id={settingsSimpleSectionAnchorId('channels')}
+        use:simpleSectionAnchor={'channels'}
+        data-settings-section="channels"
+      >
       <div class="card-garden overflow-hidden">
         <button
           onclick={() => toggleSection('channels')}
@@ -2004,10 +2369,16 @@
           </div>
         {/if}
       </div>
+      </section>
 
       <!-- Secrets display -->
       {#if data?.env}
         {@const env = data.env as Record<string, unknown>}
+        <section
+          id={settingsSimpleSectionAnchorId('advanced-secrets')}
+          use:simpleSectionAnchor={'advanced-secrets'}
+          data-settings-section="advanced-secrets"
+        >
         <div class="card-garden overflow-hidden">
           <button
             onclick={() => toggleSection('secrets')}
@@ -2050,6 +2421,7 @@
             </div>
           {/if}
         </div>
+        </section>
       {/if}
 
       <!-- Save -->
@@ -2066,13 +2438,15 @@
           <span class="text-sm text-shadow-500">You have unsaved changes</span>
         {/if}
       </div>
+        </div>
+      </div>
     </div>
 
   <!-- ADVANCED MODE -->
   {:else if mode === 'advanced'}
     <div class="space-y-3">
       {#each SECTIONS as section}
-        {@const sectionKeys = section.keys.filter((k) => data && k in (data.config as Record<string, unknown>))}
+        {@const sectionKeys = section.keys.filter((k) => data && k in (data.config as Record<string, unknown>) && !MODEL_OWNED_FIELDS.has(k))}
         {#if sectionKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button
@@ -2099,13 +2473,96 @@
               <div class="px-5 pb-5 space-y-3 border-t border-bark-300 pt-4">
                 {#each sectionKeys as key}
                   {@const value = configValue(key)}
-                  {@const ft = fieldType(value)}
-                  <div class="flex flex-col sm:flex-row sm:items-center gap-2">
+                  {@const editorType = fieldEditorType(key, value)}
+                  {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
+                  {@const fieldSchema = fieldContract(key)}
+                  <div class="flex flex-col sm:flex-row sm:items-start gap-2">
                     <div class="sm:w-60 shrink-0 flex items-center gap-2">
                       <label class="text-sm font-mono text-shadow-700">{key}</label>
                       <span class="text-shadow-400 text-sm">({getSource(key)})</span>
+                      {#if fieldSchema?.deprecated}
+                        <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>
+                      {/if}
                     </div>
-                    {#if ft === 'checkbox'}
+                    {#if key === 'compositionalPolicy'}
+                      {@const policy = getCompositionalPolicy()}
+                      <div class="flex-1 space-y-4 rounded-2xl border border-bark-300 bg-bark-100/60 p-4">
+                        <div class="space-y-2">
+                          <p class="text-sm text-shadow-600">
+                            Gate compositional cognition by capability tier, channel type, and purpose.
+                            This remains JSON-backed runtime config; secrets stay in the environment.
+                          </p>
+                          <label class="inline-flex items-center gap-3 rounded-full border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-medium text-shadow-800 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={policy.enabled}
+                              onchange={(e) => setCompositionalPolicyEnabled((e.target as HTMLInputElement).checked)}
+                              class={TOGGLE_CLS}
+                            />
+                            <span>Enable compositional cognition</span>
+                          </label>
+                        </div>
+
+                        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                          <div class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Tiers</p>
+                            <div class="flex flex-wrap gap-2">
+                              {#each capabilityTierOptions as option}
+                                <label
+                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedTiers', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={hasCompositionalPolicyValue('allowedTiers', option)}
+                                    onchange={() => toggleCompositionalPolicyValue('allowedTiers', option)}
+                                    class="sr-only"
+                                  />
+                                  <span>{formatSettingOptionLabel('capabilityTier', option)}</span>
+                                </label>
+                              {/each}
+                            </div>
+                          </div>
+
+                          <div class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Channels</p>
+                            <div class="flex flex-wrap gap-2">
+                              {#each COMPOSITIONAL_CHANNEL_TYPE_OPTIONS as option}
+                                <label
+                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedChannelTypes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={hasCompositionalPolicyValue('allowedChannelTypes', option)}
+                                    onchange={() => toggleCompositionalPolicyValue('allowedChannelTypes', option)}
+                                    class="sr-only"
+                                  />
+                                  <span>{humanizeSettingValue(option)}</span>
+                                </label>
+                              {/each}
+                            </div>
+                          </div>
+
+                          <div class="space-y-2">
+                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Purposes</p>
+                            <div class="flex flex-wrap gap-2">
+                              {#each COMPOSITIONAL_PURPOSE_OPTIONS as option}
+                                <label
+                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedPurposes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={hasCompositionalPolicyValue('allowedPurposes', option)}
+                                    onchange={() => toggleCompositionalPolicyValue('allowedPurposes', option)}
+                                    class="sr-only"
+                                  />
+                                  <span>{humanizeSettingValue(option)}</span>
+                                </label>
+                              {/each}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    {:else if editorType === 'checkbox'}
                       <label class="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox"
                           checked={Boolean(value)}
@@ -2117,18 +2574,30 @@
                                     after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
                                     peer-checked:after:translate-x-full"></div>
                       </label>
-                    {:else if ft === 'number'}
+                    {:else if editorType === 'enum'}
+                      <select
+                        value={String(value ?? '')}
+                        onchange={(e) => setConfigValue(key, (e.target as HTMLSelectElement).value)}
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
+                      >
+                        {#each enumValues as option}
+                          <option value={option}>{formatSettingOptionLabel(key, option)}</option>
+                        {/each}
+                      </select>
+                    {:else if editorType === 'number'}
                       <input type="number"
                         value={Number(value)}
+                        min={fieldMinimum(key)}
+                        max={fieldMaximum(key)}
                         onchange={(e) => setConfigValue(key, Number((e.target as HTMLInputElement).value))}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {:else if ft === 'array'}
+                    {:else if editorType === 'array'}
                       <input type="text"
                         value={Array.isArray(value) ? value.join(', ') : ''}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
                         placeholder="comma-separated values" />
-                    {:else if ft === 'object'}
+                    {:else if editorType === 'object'}
                       <textarea
                         value={JSON.stringify(value, null, 2)}
                         onchange={(e) => { try { setConfigValue(key, JSON.parse((e.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
@@ -2139,7 +2608,6 @@
                     {:else}
                       <input type="text"
                         value={String(value ?? '')}
-                        list={key.toLowerCase().includes('model') ? 'model-list' : undefined}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value)}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
                     {/if}
@@ -2161,7 +2629,7 @@
       <!-- Other (uncategorized) keys -->
       {#if data}
         {@const allCategorized = new Set(SECTIONS.flatMap(s => s.keys))}
-        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter(k => !allCategorized.has(k))}
+        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter(k => !allCategorized.has(k) && !MODEL_OWNED_FIELDS.has(k))}
         {#if otherKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button
@@ -2183,13 +2651,18 @@
               <div class="px-5 pb-5 space-y-3 border-t border-bark-300 pt-4">
                 {#each otherKeys as key}
                   {@const value = configValue(key)}
-                  {@const ft = fieldType(value)}
+                  {@const editorType = fieldEditorType(key, value)}
+                  {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
+                  {@const fieldSchema = fieldContract(key)}
                   <div class="flex flex-col sm:flex-row sm:items-center gap-2">
                     <div class="sm:w-60 shrink-0 flex items-center gap-2">
                       <label class="text-sm font-mono text-shadow-700">{key}</label>
                       <span class="text-shadow-400 text-sm">({getSource(key)})</span>
+                      {#if fieldSchema?.deprecated}
+                        <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>
+                      {/if}
                     </div>
-                    {#if ft === 'checkbox'}
+                    {#if editorType === 'checkbox'}
                       <label class="relative inline-flex items-center cursor-pointer">
                         <input type="checkbox"
                           checked={Boolean(value)}
@@ -2201,18 +2674,30 @@
                                     after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
                                     peer-checked:after:translate-x-full"></div>
                       </label>
-                    {:else if ft === 'number'}
+                    {:else if editorType === 'enum'}
+                      <select
+                        value={String(value ?? '')}
+                        onchange={(e) => setConfigValue(key, (e.target as HTMLSelectElement).value)}
+                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
+                      >
+                        {#each enumValues as option}
+                          <option value={option}>{formatSettingOptionLabel(key, option)}</option>
+                        {/each}
+                      </select>
+                    {:else if editorType === 'number'}
                       <input type="number"
                         value={Number(value)}
+                        min={fieldMinimum(key)}
+                        max={fieldMaximum(key)}
                         onchange={(e) => setConfigValue(key, Number((e.target as HTMLInputElement).value))}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {:else if ft === 'array'}
+                    {:else if editorType === 'array'}
                       <input type="text"
                         value={Array.isArray(value) ? value.join(', ') : ''}
                         onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))}
                         class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
                         placeholder="comma-separated values" />
-                    {:else if ft === 'object'}
+                    {:else if editorType === 'object'}
                       <textarea
                         value={JSON.stringify(value, null, 2)}
                         onchange={(e) => { try { setConfigValue(key, JSON.parse((e.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
@@ -2253,18 +2738,6 @@
   <!-- RAW MODE -->
   {:else}
     <div class="space-y-4">
-      {#if discoveredModels.length > 0}
-        <div class="card-garden px-5 py-3 flex items-center justify-between">
-          <span class="text-sm text-shadow-700">
-            {discoveredModels.length} models discovered via proxy
-          </span>
-          <button onclick={doRefreshModels} disabled={refreshingModels}
-            class="text-sm text-gold-700 hover:text-gold-600 font-medium disabled:opacity-50">
-            {refreshingModels ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
-      {/if}
-
       <div class="card-garden overflow-hidden">
         <div class="flex items-center justify-between px-5 py-3 border-b border-bark-300">
           <h3 class="text-sm font-serif font-semibold text-shadow-800">settings.json (full runtime object)</h3>
@@ -2307,9 +2780,10 @@
 
       {#each RAW_EDITORS as editor}
         {@const status = rawSaveStatus[editor.key]}
+        {@const ownerFile = rawEditorLabel(editor.key)}
         <div class="card-garden overflow-hidden">
           <div class="flex items-center justify-between px-5 py-3 border-b border-bark-300">
-            <h3 class="text-sm font-serif font-semibold text-shadow-800">{editor.label}</h3>
+            <h3 class="text-sm font-serif font-semibold text-shadow-800">{ownerFile}</h3>
             <div class="flex items-center gap-3">
               {#if status}
                 <span class="text-sm font-medium {status.ok ? 'text-moss-600' : 'text-wilt-600'}">
@@ -2317,7 +2791,7 @@
                 </span>
               {/if}
               <button
-                onclick={() => saveRawConfig(editor.key, editor.label)}
+                onclick={() => saveRawConfig(editor.key, ownerFile)}
                 disabled={saving}
                 class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium
                        hover:bg-gold-700 disabled:opacity-50 transition-colors"

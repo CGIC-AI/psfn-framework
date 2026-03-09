@@ -4,13 +4,38 @@ import type { EligibilityRequirements } from '../capabilities/eligibility.js';
 
 export type TaskType = 'every' | 'one-shot';
 export type TaskState = 'idle' | 'active' | 'paused' | 'complete';
+export type RecurringCadenceTimezone = 'local' | 'utc';
+
+export interface RelativeRecurringCadence {
+  kind: 'relative';
+}
+
+export interface HourlyRecurringCadence {
+  kind: 'hourly';
+  minute: number;
+  timezone: RecurringCadenceTimezone;
+}
+
+export interface DailyRecurringCadence {
+  kind: 'daily';
+  hour: number;
+  minute: number;
+  timezone: RecurringCadenceTimezone;
+}
+
+export type RecurringCadence =
+  | RelativeRecurringCadence
+  | HourlyRecurringCadence
+  | DailyRecurringCadence;
 
 export interface ScheduledTask {
   id: string;
   name: string;
   type: TaskType;
-  /** Interval in milliseconds (for 'every' tasks) */
+  /** Interval in milliseconds (for 'every' tasks with relative cadence). */
   intervalMs: number;
+  /** Optional cadence for 'every' tasks. Omitted means relative interval cadence. */
+  cadence?: RecurringCadence;
   /** Unix timestamp for 'one-shot' tasks */
   runAt?: number;
   /** Handler called when the task fires */

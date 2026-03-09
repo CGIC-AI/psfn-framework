@@ -6,6 +6,7 @@ import type {
 } from './types.js';
 import {
   DEFAULT_MAX_WRITES,
+  DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT,
   DEFAULT_MIN_CONFIDENCE,
   DEFAULT_MIN_IMPORTANCE,
   DEFAULT_MIN_NOVELTY,
@@ -48,6 +49,19 @@ export function resolveMaxWrites(
   return normalizeMaxWrites(
     runtimeConfig?.memoryExtractionMaxWrites,
     configuredMaxWrites,
+  );
+}
+
+export function resolveEmotionalIntensityImportanceWeight(
+  runtimeConfig: SubstrateConfig | null,
+  configuredWeight: number | undefined,
+): number {
+  return clamp(
+    runtimeConfig?.memoryExtractionEmotionalIntensityWeight
+      ?? configuredWeight
+      ?? DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT,
+    0,
+    1,
   );
 }
 

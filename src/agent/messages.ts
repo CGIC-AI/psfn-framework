@@ -1,11 +1,18 @@
 // ── Custom Message Types + convertToLlm ──
-// Extends pi-agent-core's AgentMessage with PSFN-specific types
+// Extends pi-agent-core's AgentMessage with companion-specific types
 // via TypeScript declaration merging. These are first-class in our session
 // pipeline but get flattened to standard Messages before hitting the LLM.
 
-import type { Message, UserMessage, AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
+import type {
+  Message,
+  UserMessage,
+  AssistantMessage as PiAssistantMessage,
+  ToolResultMessage,
+} from '@mariozechner/pi-ai';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import { DEFAULT_COMPANION_NAME } from '../identity/companion-naming.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
+import { parseToolObservationMetadata } from '../session/tool-observation.js';
 
 // ── Custom message types ──
 
@@ -66,7 +73,7 @@ declare module '@mariozechner/pi-agent-core' {
 
 /** Narrow AgentMessage to a record so we can check arbitrary properties without `as any`. */
 function hasCustomRole(m: AgentMessage): m is AgentMessage & { role: 'custom'; type: string } {
-  const record = m as Record<string, unknown>;
+  const record = m as unknown as Record<string, unknown>;
   return record.role === 'custom';
 }
 
@@ -123,9 +130,8 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       // Skip in LLM conversion.
       continue;
     } else if (isMirrorMessage(msg)) {
-      const speaker = msg.sourceRole === 'assistant'
-        ? 'PSFN'
-        : (msg.sourceAuthorName ?? 'User');
+      const speaker = msg.sourceAuthorName
+        ?? (msg.sourceRole === 'assistant' ? DEFAULT_COMPANION_NAME : 'User');
       result.push({
         role: 'user',
         content: `[Mirror note from ${msg.originChannelId}] ${speaker}: ${compactMirrorText(msg.content)}`,
@@ -177,6 +183,21 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
       content: entry.content,
       timestamp: ts,
     } satisfies UserMessage;
+  }
+
+  if (entry.role === 'tool') {
+    const toolObservation = parseToolObservationMetadata(entry.metadata);
+    if (!toolObservation) {
+      throw new Error(`Tool session entry ${entry.channelId}:${entry.id} is missing tool observation metadata`);
+    }
+    return {
+      role: 'toolResult',
+      toolCallId: toolObservation.toolCallId ?? `${entry.channelId}:${entry.id}`,
+      toolName: toolObservation.toolName,
+      content: [{ type: 'text', text: entry.content }],
+      isError: toolObservation.isError ?? false,
+      timestamp: ts,
+    } satisfies ToolResultMessage;
   }
 
   // assistant

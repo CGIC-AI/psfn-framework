@@ -165,6 +165,22 @@ describe('REPLSandbox', () => {
     expect(llm.complete).toHaveBeenCalled();
   });
 
+  it('sub_think calls the nested think runner and returns only the conclusion string', async () => {
+    const runNestedThink = vi.fn(async (task: string) => `child:${task}`);
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      runNestedThink,
+    });
+    const result = await sandbox.execute(
+      'const answer = await sub_think("inspect memories"); print(answer);',
+      5000,
+      8192,
+    );
+
+    expect(result.output).toBe('child:inspect memories');
+    expect(runNestedThink).toHaveBeenCalledWith('inspect memories', undefined);
+  });
+
   it('llm_query_strict retries until regex matches', async () => {
     const llm = mockSequentialLLM(['invalid', 'ID-42']);
     const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 5 };
@@ -757,6 +773,7 @@ describe('REPLSandbox', () => {
     expect(locals.event_emit).toBeUndefined();
     expect(locals.llm_query_strict).toBeUndefined();
     expect(locals.llm_query_json).toBeUndefined();
+    expect(locals.sub_think).toBeUndefined();
     expect(locals.module_list).toBeUndefined();
     expect(locals.module_install).toBeUndefined();
     expect(locals.module_enable).toBeUndefined();

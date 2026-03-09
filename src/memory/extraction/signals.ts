@@ -1,4 +1,5 @@
 import type { SessionEntry } from '../../session/types.js';
+import type { TurnID } from '../../types.js';
 import type { ChannelVisibility } from '../../trust/types.js';
 import type { ExtractedFact } from '../types.js';
 import { clamp } from './config.js';
@@ -336,10 +337,12 @@ export function buildExtractionSourceRef(
   channelId: string,
   entries: SessionEntry[],
   channelVisibility: ChannelVisibility,
+  turnId?: TurnID,
 ): string {
   const source = resolveExtractionSource(channelId);
   const lineRange = resolveExtractionLineRange(entries);
-  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}|visibility:${channelVisibility}|operation:extract`;
+  const turnToken = turnId ? `|turn:${turnId}` : '';
+  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}${turnToken}|visibility:${channelVisibility}|operation:extract`;
 }
 
 function resolveExtractionSource(channelId: string): string {

@@ -1,8 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { parseJsonBody, sendJson } from '../http/primitives.js';
+import { sendJson } from '../http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
 import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';
+import { parseAdminJsonBody } from './request-body.js';
+import { parseRequestUrl, resolveRequestOrigin } from './request-url.js';
+import {
+  exactPath,
+  paramWithSuffix,
+  prefixedParamPath,
+  type RouteMatcher,
+  type RouteParams,
+} from './route-matchers.js';
 import type {
   AdminAdaptiveToolsService,
   AdminContactsService,
@@ -13,8 +22,13 @@ import type {
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
-import type { ScheduledTask, TaskType } from '../../scheduler/types.js';
+import {
+  isDashboardCostWindow,
+  resolveDashboardCostWindow,
+} from './services/dashboard-cost-windows.js';
+import type { RecurringCadence, ScheduledTask, TaskType } from '../../scheduler/types.js';
 import type { SkillSnapshot } from '../../skills/types.js';
+import type { SubstrateConfig } from '../../types.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -23,6 +37,13 @@ import type {
 } from './types.js';
 import type { ValuesJournalEntry } from '../../values/store.js';
 import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
+import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
+import { applyAdminModelsConfigMutation } from './services/settings-service.js';
+import { loadModelsConfig } from '../../config/models-config.js';
+
+export type AdminTaskCadence = RecurringCadence;
+
+type ScheduledTaskWithCadence = ScheduledTask & { cadence?: AdminTaskCadence };
 
 /** Wire-safe task shape (no handler function). */
 export interface AdminScheduledTaskView {
@@ -32,6 +53,7 @@ export interface AdminScheduledTaskView {
   intervalMs: number;
   runAt?: number;
   state: string;
+  cadence?: AdminTaskCadence;
 }
 
 /** Minimal scheduler interface for JSON API routes. */
@@ -47,6 +69,7 @@ export interface AdminSchedulerApi {
     intervalMs?: number;
     enabled?: boolean;
     name?: string;
+    cadence?: unknown;
   }): { ok: boolean; message: string };
   /** Extended: create a new task. */
   createTask?(input: {
@@ -55,6 +78,7 @@ export interface AdminSchedulerApi {
     type: TaskType;
     intervalMs?: number;
     runAt?: number;
+    cadence?: unknown;
   }): { ok: boolean; message: string };
   /** Extended: remove a task. */
   removeTask?(id: string): { ok: boolean; message: string };
@@ -90,43 +114,27 @@ export interface AdminValuesJournalApi {
   list(options?: { limit?: number }): ValuesJournalEntry[];
 }
 
-type RouteParams = Record<string, string>;
-type RouteMatcher = (path: string) => RouteParams | null;
+export interface AdminModelDiscoveryApi {
+  getAvailableModels(): Promise<unknown[]>;
+  invalidateCache(): void;
+}
+
+export interface AdminChatBootstrapApi {
+  buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): unknown;
+  updateSelection(
+    input: AdminChatBootstrapUpdateInput,
+    options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
+  ): unknown;
+  buildModelRoomBootstrap(
+    config: SubstrateConfig,
+    options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
+  ): unknown;
+}
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
   handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
-}
-
-function exactPath(expected: string): RouteMatcher {
-  return (path) => (path === expected ? {} : null);
-}
-
-function prefixedParamPath(prefix: string, paramName: string): RouteMatcher {
-  return (path) => {
-    if (!path.startsWith(prefix)) return null;
-    const raw = path.slice(prefix.length);
-    if (!raw) return null;
-    return { [paramName]: decodeURIComponent(raw) };
-  };
-}
-
-function paramWithSuffix(prefix: string, paramName: string, suffix: string): RouteMatcher {
-  return (path) => {
-    if (!path.startsWith(prefix) || !path.endsWith(suffix)) return null;
-    const raw = path.slice(prefix.length, path.length - suffix.length);
-    if (!raw) return null;
-    return { [paramName]: decodeURIComponent(raw) };
-  };
-}
-
-function parseAdminJsonBody(body: string): { ok: true; value: unknown } | { ok: false; error: string } {
-  const trimmed = body.trim();
-  if (!trimmed) return { ok: true, value: {} };
-  const result = parseJsonBody(trimmed);
-  if (!result.ok) return { ok: false, error: 'Invalid JSON payload' };
-  return { ok: true, value: result.value };
 }
 
 function escapeHtmlPayloadText(value: string): string {
@@ -193,8 +201,15 @@ function toDateFilter(value: string | null, boundary: 'start' | 'end'): number |
 }
 
 const ADMIN_SETTINGS_API_PATH = '/api/admin/settings';
+const ADMIN_SETTINGS_MODELS_API_PATH = '/api/admin/settings/models';
+const ADMIN_MODELS_API_PATH = '/api/admin/models';
+const ADMIN_MODELS_REFRESH_API_PATH = '/api/admin/models/refresh';
+const ADMIN_CHAT_BOOTSTRAP_API_PATH = '/api/admin/chat/bootstrap';
+const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/bootstrap';
+const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 
 export function buildAdminApiRoutes(options: {
+  config: SubstrateConfig;
   dashboardService: AdminDashboardService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
@@ -203,6 +218,8 @@ export function buildAdminApiRoutes(options: {
   settingsService: AdminSettingsService;
   identityService: AdminIdentityService;
   promptsService: AdminPromptsService;
+  modelDiscovery?: AdminModelDiscoveryApi | null;
+  chatBootstrapService: AdminChatBootstrapApi;
   scheduler?: AdminSchedulerApi | null;
   skillsRuntime?: AdminSkillsApi | null;
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
@@ -217,6 +234,7 @@ export function buildAdminApiRoutes(options: {
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AdminApiRoute[] {
   const {
+    config,
     dashboardService,
     adaptiveToolsService,
     memoryService,
@@ -225,6 +243,8 @@ export function buildAdminApiRoutes(options: {
     settingsService,
     identityService,
     promptsService,
+    modelDiscovery,
+    chatBootstrapService,
     scheduler,
     skillsRuntime,
     confirmationQueueApi,
@@ -265,12 +285,66 @@ export function buildAdminApiRoutes(options: {
     });
   };
 
+  const handleDiscoveredModels = (res: ServerResponse, refresh: boolean): void => {
+    if (!modelDiscovery) {
+      sendJson(res, 503, { error: MODEL_DISCOVERY_UNAVAILABLE_ERROR });
+      return;
+    }
+
+    if (refresh) {
+      modelDiscovery.invalidateCache();
+    }
+
+    modelDiscovery.getAvailableModels().then(
+      models => sendJson(res, 200, models),
+      error => sendJson(res, 502, {
+        error: toSanitizedMessage(error, 'Model discovery failed'),
+      }),
+    );
+  };
+
+  const handleChatBootstrapUpdate = (req: IncomingMessage, res: ServerResponse): void => {
+    withBody(req, res, (body) => {
+      const parsed = parseAdminJsonBody(body);
+      if (!parsed.ok) {
+        sendJson(res, 400, { error: parsed.error });
+        return;
+      }
+      if (
+        parsed.value !== null
+        && (typeof parsed.value !== 'object' || Array.isArray(parsed.value))
+      ) {
+        sendJson(res, 400, { error: 'Chat bootstrap payload must be a JSON object' });
+        return;
+      }
+
+      try {
+        const bootstrap = chatBootstrapService.updateSelection(
+          (parsed.value ?? {}) as AdminChatBootstrapUpdateInput,
+          { requestOrigin: resolveRequestOrigin(req) },
+        );
+        sendJson(res, 200, { ok: true, bootstrap });
+      } catch (error) {
+        sendJson(res, 400, {
+          error: toSanitizedMessage(error, 'Failed to update chat bootstrap'),
+        });
+      }
+    });
+  };
+
   return [
     {
       method: 'GET',
       match: exactPath('/api/admin/dashboard'),
-      handle: (_req, res) => {
-        sendJson(res, 200, dashboardService.getDashboardData());
+      handle: (req, res) => {
+        const url = parseRequestUrl(req, '/api/admin/dashboard');
+        const costWindowParam = url.searchParams.get('costWindow');
+        if (costWindowParam !== null && !isDashboardCostWindow(costWindowParam)) {
+          sendJson(res, 400, { error: 'Invalid costWindow query parameter. Expected today, week, or month.' });
+          return;
+        }
+        const costWindow = resolveDashboardCostWindow(costWindowParam);
+        sendJson(res, 200, dashboardService.getDashboardData({ costWindow }));
       },
     },
     {
@@ -289,9 +363,67 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'GET',
+      match: exactPath(ADMIN_CHAT_BOOTSTRAP_API_PATH),
+      handle: (req, res) => {
+        try {
+          sendJson(res, 200, chatBootstrapService.buildBootstrap({
+            requestOrigin: resolveRequestOrigin(req),
+          }));
+        } catch (error) {
+          sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to build chat bootstrap'),
+          });
+        }
+      },
+    },
+    {
+      method: 'PATCH',
+      match: exactPath(ADMIN_CHAT_BOOTSTRAP_API_PATH),
+      handle: (req, res) => {
+        handleChatBootstrapUpdate(req, res);
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(ADMIN_CHAT_BOOTSTRAP_API_PATH),
+      handle: (req, res) => {
+        handleChatBootstrapUpdate(req, res);
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH),
+      handle: (req, res) => {
+        try {
+          sendJson(res, 200, chatBootstrapService.buildModelRoomBootstrap(config, {
+            requestOrigin: resolveRequestOrigin(req),
+          }));
+        } catch (error) {
+          sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to build model room bootstrap'),
+          });
+        }
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_MODELS_API_PATH),
+      handle: (_req, res) => {
+        handleDiscoveredModels(res, false);
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(ADMIN_MODELS_REFRESH_API_PATH),
+      handle: (_req, res) => {
+        handleDiscoveredModels(res, true);
+      },
+    },
+    {
+      method: 'GET',
       match: exactPath('/api/admin/memory'),
       handle: (req, res) => {
-        const url = new URL(req.url ?? '/api/admin/memory', `http://${req.headers.host ?? 'localhost'}`);
+        const url = parseRequestUrl(req, '/api/admin/memory');
         const typeFilter = toMemoryType(url.searchParams.get('type'));
         if (url.searchParams.get('type') && !typeFilter) {
           sendJson(res, 400, { error: 'Invalid memory type filter' });
@@ -327,7 +459,7 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/memory/search'),
       handle: (req, res) => {
-        const url = new URL(req.url ?? '/api/admin/memory/search', `http://${req.headers.host ?? 'localhost'}`);
+        const url = parseRequestUrl(req, '/api/admin/memory/search');
         const query = url.searchParams.get('q')?.trim() ?? '';
         if (!query) {
           sendJson(res, 400, { error: 'Missing q query parameter' });
@@ -521,7 +653,7 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/contacts'),
       handle: (req, res) => {
-        const url = new URL(req.url ?? '/api/admin/contacts', `http://${req.headers.host ?? 'localhost'}`);
+        const url = parseRequestUrl(req, '/api/admin/contacts');
         const data = contactsService.listContacts(url.searchParams);
         sendJson(res, 200, {
           ...data,
@@ -634,6 +766,60 @@ export function buildAdminApiRoutes(options: {
           data => sendJson(res, 200, data),
           error => sendJson(res, 500, { error: String(error) }),
         );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(`${ADMIN_SETTINGS_API_PATH}/schema`),
+      handle: (_req, res) => {
+        sendJson(res, 200, settingsService.getSettingsContractData());
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_SETTINGS_MODELS_API_PATH),
+      handle: (_req, res) => {
+        try {
+          const models = loadModelsConfig(config.dataDir, {
+            defaultContextWindow: config.defaultContextWindow,
+          });
+          sendJson(res, 200, models.modelRegistry);
+        } catch (error) {
+          sendJson(res, 500, { error: String(error) });
+        }
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(ADMIN_SETTINGS_MODELS_API_PATH),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const params = new URLSearchParams(body);
+          const configJson = params.get('configJson');
+          if (typeof configJson !== 'string' || configJson.trim().length === 0) {
+            sendJson(res, 400, { error: 'Missing configJson form field' });
+            return;
+          }
+
+          let payload: unknown;
+          try {
+            payload = JSON.parse(configJson);
+          } catch {
+            sendJson(res, 400, { error: 'configJson must be valid JSON' });
+            return;
+          }
+
+          const result = applyAdminModelsConfigMutation({ config, payload });
+          if (!result.ok) {
+            sendJson(res, 400, {
+              error: result.message,
+              ...result,
+            });
+            return;
+          }
+
+          sendJson(res, 200, { ok: true, message: 'models.json saved' });
+        });
       },
     },
     {
@@ -897,6 +1083,57 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'POST',
+      match: exactPath('/api/admin/identity/onboarding'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            appendIdentityMutationAudit(
+              'denied',
+              'Operator onboarding setup via /api/admin/identity/onboarding failed: invalid JSON payload.',
+            );
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const action = typeof payload.action === 'string' ? payload.action.trim() : '';
+          identityService.applyOnboardingAction(JSON.stringify(parsed.value)).then(
+            result => {
+              const safeMessage = toSanitizedMessage(result.message, 'Identity onboarding action failed');
+              if (!result.ok) {
+                appendIdentityMutationAudit(
+                  'denied',
+                  `Operator onboarding setup via /api/admin/identity/onboarding failed: ${safeMessage}`,
+                  [action ? `action=${action}` : null],
+                );
+                sendJson(res, 400, { error: safeMessage, onboardingRequired: result.onboardingRequired });
+                return;
+              }
+              appendIdentityMutationAudit(
+                'allowed',
+                'Operator completed identity onboarding action via /api/admin/identity/onboarding.',
+                [
+                  action ? `action=${action}` : null,
+                  safeMessage,
+                ],
+              );
+              sendJson(res, 200, { ...result, message: safeMessage });
+            },
+            error => {
+              const safeError = toSanitizedMessage(error, 'Identity onboarding action failed unexpectedly');
+              appendIdentityMutationAudit(
+                'denied',
+                `Operator onboarding setup via /api/admin/identity/onboarding failed: ${safeError}`,
+                [action ? `action=${action}` : null],
+              );
+              sendJson(res, 500, { error: safeError });
+            },
+          );
+        });
+      },
+    },
+    {
+      method: 'POST',
       match: exactPath('/api/admin/identity/diff'),
       handle: (req, res) => {
         withBody(req, res, (body) => {
@@ -956,6 +1193,37 @@ export function buildAdminApiRoutes(options: {
           }
 
           const result = reorderablePromptsService.reorderPromptLayers(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/prompts/constitution'),
+      handle: (_req, res) => {
+        const snapshot = promptsService.getConstitutionSnapshot();
+        if (!snapshot) {
+          sendJson(res, 400, { error: 'Prompt store not configured' });
+          return;
+        }
+        sendJson(res, 200, snapshot);
+      },
+    },
+    {
+      method: 'PUT',
+      match: exactPath('/api/admin/prompts/constitution'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = promptsService.saveConstitutionMutableLayers(JSON.stringify(parsed.value));
           if (!result.ok) {
             sendJson(res, 400, { error: result.message });
             return;
@@ -1064,6 +1332,9 @@ export function buildAdminApiRoutes(options: {
             intervalMs: task.intervalMs,
             runAt: task.runAt,
             state: task.state,
+            cadence: task.type === 'every'
+              ? (task as ScheduledTaskWithCadence).cadence
+              : undefined,
           }));
           sendJson(res, 200, { tasks, reflections: [] });
         }
@@ -1083,7 +1354,12 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { ok: false, message: parsed.error });
             return;
           }
-          const updates = parsed.value as { intervalMs?: number; enabled?: boolean; name?: string };
+          const updates = parsed.value as {
+            intervalMs?: number;
+            enabled?: boolean;
+            name?: string;
+            cadence?: unknown;
+          };
           const result = scheduler.updateTask!(taskId, updates);
           sendJson(res, result.ok ? 200 : 400, result);
         });
@@ -1109,6 +1385,7 @@ export function buildAdminApiRoutes(options: {
             type: TaskType;
             intervalMs?: number;
             runAt?: number;
+            cadence?: unknown;
           };
           const result = scheduler.createTask!(input);
           sendJson(res, result.ok ? 201 : 400, result);

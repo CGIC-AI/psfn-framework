@@ -3,6 +3,10 @@ import { mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { evaluatePolicy, type PolicyConfig } from './server.js';
+import {
+  evaluateShardSessionMemorySyncPolicy,
+  type ShardSessionMemorySyncEnvelope,
+} from './policy.js';
 
 const policyConfig: PolicyConfig = {
   workspacePath: '/app/workspace',
@@ -186,6 +190,54 @@ describe('evaluatePolicy', () => {
       { method: 'shell.exec', params: { command: 'node', args: ['-v'] } },
       configWithShell,
     )).toBe('ALLOW');
+  });
+
+  it('denies vault.read when vault policy is disabled', () => {
+    expect(evaluatePolicy(
+      { method: 'vault.read', params: { name: 'Daily.md' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('allows vault methods when explicitly allowlisted', () => {
+    const configWithVault: PolicyConfig = {
+      ...policyConfig,
+      vault: {
+        enabled: true,
+        allowActions: ['read', 'search', 'daily', 'write'],
+      },
+    };
+
+    expect(evaluatePolicy(
+      { method: 'vault.read', params: { name: 'Daily.md' } },
+      configWithVault,
+    )).toBe('ALLOW');
+    expect(evaluatePolicy(
+      { method: 'vault.search', params: { query: 'focus', limit: 10 } },
+      configWithVault,
+    )).toBe('ALLOW');
+    expect(evaluatePolicy(
+      { method: 'vault.daily', params: { content: 'hello' } },
+      configWithVault,
+    )).toBe('ALLOW');
+    expect(evaluatePolicy(
+      { method: 'vault.write', params: { name: 'Inbox', content: 'entry' } },
+      configWithVault,
+    )).toBe('ALLOW');
+  });
+
+  it('denies vault.write when action is not allowlisted', () => {
+    const configWithReadOnlyVault: PolicyConfig = {
+      ...policyConfig,
+      vault: {
+        enabled: true,
+        allowActions: ['read'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'vault.write', params: { name: 'Inbox', content: 'entry' } },
+      configWithReadOnlyVault,
+    )).toBe('DENY');
   });
 
   it('denies beads methods when beads policy is disabled', () => {
@@ -441,6 +493,135 @@ describe('evaluatePolicy', () => {
       { method: 'exec.shell', params: { cmd: 'rm -rf /' } },
       policyConfig,
     )).toBe('DENY');
+  });
+});
+
+describe('evaluateShardSessionMemorySyncPolicy', () => {
+  const baseEnvelope: ShardSessionMemorySyncEnvelope = {
+    version: 1,
+    syncClass: 'transcript_fact',
+    direction: 'prime_to_shard',
+    authority: 'prime',
+    operation: 'context_pack_session',
+    shardId: 'shard-abc',
+    sourceId: 'api:parent-1',
+    targetId: 'shard:shard-abc',
+    idempotencyKey: 'req-1:session',
+    requestedAt: Date.now(),
+  };
+
+  it('allows immutable transcript facts from prime to shard', () => {
+    expect(evaluateShardSessionMemorySyncPolicy(baseEnvelope)).toEqual({
+      allowed: true,
+      reason: 'allowed_prime_transcript_fact',
+    });
+  });
+
+  it('allows derived memory seeding from prime to shard', () => {
+    const decision = evaluateShardSessionMemorySyncPolicy({
+      ...baseEnvelope,
+      syncClass: 'derived_memory',
+      operation: 'context_pack_memory',
+      idempotencyKey: 'req-1:memory',
+    });
+    expect(decision).toEqual({
+      allowed: true,
+      reason: 'allowed_prime_memory_seed',
+    });
+  });
+
+  it('allows shard-to-prime memory writes and imports', () => {
+    const writeDecision = evaluateShardSessionMemorySyncPolicy({
+      ...baseEnvelope,
+      syncClass: 'derived_memory',
+      direction: 'shard_to_prime',
+      authority: 'shard',
+      operation: 'memory_write',
+      sourceId: 'shard:shard-abc',
+      targetId: 'memory:index',
+      idempotencyKey: 'tool-call-77',
+    });
+    expect(writeDecision).toEqual({
+      allowed: true,
+      reason: 'allowed_shard_memory_write',
+    });
+
+    const importDecision = evaluateShardSessionMemorySyncPolicy({
+      ...baseEnvelope,
+      syncClass: 'derived_memory',
+      direction: 'shard_to_prime',
+      authority: 'shard',
+      operation: 'memory_import_batch',
+      sourceId: 'shard:shard-abc',
+      targetId: 'memory:index',
+      idempotencyKey: 'tool-call-78',
+    });
+    expect(importDecision).toEqual({
+      allowed: true,
+      reason: 'allowed_shard_memory_import',
+    });
+  });
+
+  it('denies runtime-state sync across shards', () => {
+    expect(evaluateShardSessionMemorySyncPolicy({
+      ...baseEnvelope,
+      syncClass: 'runtime_state',
+      operation: 'context_pack_session',
+    })).toEqual({
+      allowed: false,
+      reason: 'denied_runtime_state_sync',
+    });
+  });
+
+  it('denies invalid envelope payloads', () => {
+    expect(evaluateShardSessionMemorySyncPolicy({
+      ...baseEnvelope,
+      idempotencyKey: ' ',
+    })).toEqual({
+      allowed: false,
+      reason: 'denied_invalid_envelope',
+    });
+  });
+
+  it('denies when authority does not match sync direction', () => {
+    expect(evaluateShardSessionMemorySyncPolicy({
+      ...baseEnvelope,
+      authority: 'shard',
+    })).toEqual({
+      allowed: false,
+      reason: 'denied_authority',
+    });
+  });
+
+  it('denies disallowed operations and direction/class combinations', () => {
+    const disallowedOp = evaluateShardSessionMemorySyncPolicy({
+      ...baseEnvelope,
+      syncClass: 'derived_memory',
+      direction: 'shard_to_prime',
+      authority: 'shard',
+      operation: 'memory_redact',
+      sourceId: 'shard:shard-abc',
+      targetId: 'memory:index',
+      idempotencyKey: 'tool-call-99',
+    });
+    expect(disallowedOp).toEqual({
+      allowed: false,
+      reason: 'denied_operation',
+    });
+
+    const disallowedClass = evaluateShardSessionMemorySyncPolicy({
+      ...baseEnvelope,
+      direction: 'shard_to_prime',
+      authority: 'shard',
+      operation: 'memory_write',
+      sourceId: 'shard:shard-abc',
+      targetId: 'memory:index',
+      idempotencyKey: 'tool-call-100',
+    });
+    expect(disallowedClass).toEqual({
+      allowed: false,
+      reason: 'denied_direction_class',
+    });
   });
 });
 

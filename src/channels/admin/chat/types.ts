@@ -97,7 +97,7 @@ export interface AdminModelRoomBootstrapApiConfig {
   apiKey?: string;
 }
 
-export interface AdminModelRoomPSFNConfig {
+export interface AdminModelRoomCompanionConfig {
   id: string;
   displayName: string;
   defaultSystemPromptMode: 'default';
@@ -106,7 +106,7 @@ export interface AdminModelRoomPSFNConfig {
 export interface AdminModelRoomBootstrapResponse {
   api: AdminModelRoomBootstrapApiConfig;
   defaultRoomId: string;
-  psfn: AdminModelRoomPSFNConfig;
+  companion: AdminModelRoomCompanionConfig;
   participants: AdminModelRoomParticipant[];
   constraints: {
     allowedProviders: string[];

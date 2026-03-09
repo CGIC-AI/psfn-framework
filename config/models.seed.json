@@ -1,33 +1,81 @@
 {
-  "modelCatalog": {
-    "primary": {
-      "model": "z-ai/glm-5",
-      "provider": "openrouter",
-      "defaults": {
-        "maxTokens": 16384,
+  "schemaVersion": 1,
+  "models": [
+    {
+      "id": "primary",
+      "rank": 100,
+      "identity": {
+        "provider": "openrouter",
+        "model": "z-ai/glm-5",
+        "source": {
+          "type": "openrouter"
+        }
+      },
+      "purposes": [
+        {
+          "purpose": "chat",
+          "primary": true
+        },
+        {
+          "purpose": "summary",
+          "primary": true
+        },
+        {
+          "purpose": "reasoning",
+          "primary": true
+        },
+        {
+          "purpose": "longContext",
+          "primary": true
+        },
+        {
+          "purpose": "vision",
+          "primary": true
+        },
+        {
+          "purpose": "moa",
+          "primary": true
+        }
+      ],
+      "capabilities": {
+        "maxOutputTokens": 16384,
         "contextWindow": 128000
       },
-      "overrides": {
-        "maxTokens": 16384
+      "tuning": {
+        "maxOutputTokens": 16384
       }
     },
-    "extraction": {
-      "model": "deepseek/deepseek-v3.2",
-      "provider": "openrouter",
-      "defaults": {
-        "maxTokens": 8192
+    {
+      "id": "extraction",
+      "rank": 80,
+      "identity": {
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-v3.2",
+        "source": {
+          "type": "openrouter"
+        }
       },
-      "overrides": {
-        "maxTokens": 8192
+      "purposes": [
+        {
+          "purpose": "background",
+          "primary": true
+        },
+        {
+          "purpose": "extraction",
+          "primary": true
+        },
+        {
+          "purpose": "import_processing",
+          "primary": true
+        }
+      ],
+      "capabilities": {
+        "maxOutputTokens": 8192,
+        "contextWindow": 128000
+      },
+      "tuning": {
+        "maxOutputTokens": 8192
       }
     }
-  },
-  "modelRoleAssignments": {
-    "chat": "primary",
-    "background": "extraction",
-    "extraction": "extraction",
-    "summary": "primary",
-    "reasoning": "primary",
-    "longContext": "primary"
-  }
+  ]
 }

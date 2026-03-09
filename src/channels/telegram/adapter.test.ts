@@ -208,6 +208,117 @@ describe('TelegramAdapter', () => {
     expect(typingCalls.length).toBeGreaterThan(0);
   });
 
+  it('streams progressive Telegram replies with editMessageText and reconciles the final response', async () => {
+    let sentMessageId = 800;
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: sentMessageId++ }),
+      editMessageText: () => true,
+    });
+    const eventBus = new EventBus();
+    const adapter = new TelegramAdapter(makeConfig(), eventBus, { fetchImpl });
+
+    adapter.onMessage(async (message) => {
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: 'Hello',
+      });
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: ' world',
+      });
+      return {
+        ...okResponse(message.channelId),
+        content: 'Hello *world*!',
+      };
+    });
+
+    await (adapter as any).handleUpdate({
+      update_id: 2,
+      message: {
+        message_id: 20,
+        date: 1_700_000_020,
+        text: 'stream please',
+        chat: { id: 222, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'stream_user' },
+      },
+    });
+
+    const sendCalls = calls.filter(call => call.method === 'sendMessage');
+    const editCalls = calls.filter(call => call.method === 'editMessageText');
+
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]?.body.chat_id).toBe('222');
+    expect(sendCalls[0]?.body.reply_to_message_id).toBe(20);
+    expect(sendCalls[0]?.body.text).toBe('Hello');
+    expect(sendCalls[0]?.body.parse_mode).toBeUndefined();
+
+    expect(editCalls).toHaveLength(2);
+    expect(editCalls[0]?.body.message_id).toBe(800);
+    expect(editCalls[0]?.body.text).toBe('Hello world');
+    expect(editCalls[0]?.body.parse_mode).toBeUndefined();
+    expect(editCalls[1]?.body.message_id).toBe(800);
+    expect(editCalls[1]?.body.text).toBe('Hello *world*!');
+    expect(editCalls[1]?.body.parse_mode).toBe('Markdown');
+  });
+
+  it('emits explicit egress diagnostics when Telegram stream edits fail', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 880 }),
+      editMessageText: () => {
+        throw new Error('telegram edit failed');
+      },
+    });
+    const eventBus = new EventBus();
+    const diagnostics: any[] = [];
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
+    const adapter = new TelegramAdapter(makeConfig(), eventBus, { fetchImpl });
+
+    adapter.onMessage(async (message) => {
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: 'Hello',
+      });
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: ' world',
+      });
+      return {
+        ...okResponse(message.channelId),
+        content: 'Hello world',
+      };
+    });
+
+    await (adapter as any).handleUpdate({
+      update_id: 3,
+      message: {
+        message_id: 21,
+        date: 1_700_000_021,
+        text: 'broken stream',
+        chat: { id: 223, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'stream_user' },
+      },
+    });
+
+    const sendCalls = calls.filter(call => call.method === 'sendMessage');
+    const editCalls = calls.filter(call => call.method === 'editMessageText');
+
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]?.body.text).toBe('Hello');
+    expect(editCalls).toHaveLength(1);
+    expect(editCalls[0]?.body.text).toBe('Hello world');
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      channelId: 'telegram:223',
+      channelType: 'telegram',
+      messageId: 'telegram:223:21',
+      phase: 'egress',
+      error: expect.stringContaining('telegram edit failed'),
+    }));
+  });
+
   it('sends rate-limited long-running think status updates and clears them after tool completion', async () => {
     vi.useFakeTimers();
     try {
@@ -465,6 +576,72 @@ describe('TelegramAdapter', () => {
     const sendCalls = calls.filter(call => call.method === 'sendMessage');
     expect(sendCalls).toHaveLength(2);
     expect(sendCalls[1]?.body.reply_to_message_id).toBe(11);
+  });
+
+  it('keeps ingress responsive across chats while one chat turn is in flight', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 701 }),
+    });
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    const handled: string[] = [];
+    const firstTurnStarted = createDeferred<void>();
+    const releaseFirstTurn = createDeferred<void>();
+
+    adapter.onMessage(async (message) => {
+      handled.push(`${message.channelId}:${message.content}`);
+      if (message.channelId === 'telegram:600') {
+        firstTurnStarted.resolve();
+        await releaseFirstTurn.promise;
+      }
+      return okResponse(message.channelId);
+    });
+
+    const firstTurn = (adapter as any).handleUpdate({
+      update_id: 10,
+      message: {
+        message_id: 30,
+        date: 1_700_000_010,
+        text: 'first',
+        chat: { id: 600, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'user' },
+      },
+    });
+    await firstTurnStarted.promise;
+
+    await (adapter as any).handleUpdate({
+      update_id: 11,
+      message: {
+        message_id: 31,
+        date: 1_700_000_011,
+        text: 'second',
+        chat: { id: 601, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'user' },
+      },
+    });
+
+    expect(handled).toEqual([
+      'telegram:600:first',
+      'telegram:601:second',
+    ]);
+
+    let sendCalls = calls.filter(call => call.method === 'sendMessage');
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]?.body.chat_id).toBe('601');
+    expect(sendCalls[0]?.body.reply_to_message_id).toBe(31);
+
+    releaseFirstTurn.resolve();
+    await firstTurn;
+
+    for (let i = 0; i < 40; i += 1) {
+      sendCalls = calls.filter(call => call.method === 'sendMessage');
+      if (sendCalls.length >= 2) break;
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+
+    expect(sendCalls).toHaveLength(2);
+    expect(sendCalls[1]?.body.chat_id).toBe('600');
+    expect(sendCalls[1]?.body.reply_to_message_id).toBe(30);
   });
 
   it('registers webhook mode lifecycle and routes incoming updates through listener', async () => {

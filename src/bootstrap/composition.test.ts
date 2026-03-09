@@ -405,6 +405,12 @@ describe('agent-main split wiring', () => {
     expect(source.indexOf('contactStore,', wireIndex)).toBeGreaterThan(wireIndex);
   });
 
+  it('wires core memory runtime in split mode', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(source).toContain('wireCoreMemoryRuntime({');
+    expect(source).toContain('sessionManager,');
+  });
+
   it('gates API voice websocket endpoint on fully wired runtime in split mode', () => {
     const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     expect(source).toContain('createApiVoiceWebSocketRuntime({');
@@ -432,19 +438,47 @@ describe('agent-main split wiring', () => {
 });
 
 describe('runtime composition wiring', () => {
+  it('keeps spawn_shard tool registration in shared shard/think composition wiring', () => {
+    const source = readFileSync(resolve('src/bootstrap/composition.ts'), 'utf-8');
+    expect(source).toContain('createSpawnShardTool(');
+    expect(source).toContain('registerTool(createSpawnShardTool(');
+    expect(source).toContain('wireShardAndThinkRuntime(');
+  });
+
   it('routes runtime bootstrap through composition helpers', () => {
     const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
     expect(source).toContain('composeIdentity(this.config)');
     expect(source).toContain('composeSessionRuntime({');
-    expect(source).toContain('createEmbeddingProviderFromEnv()');
+    expect(source).toContain('createEmbeddingProviderFromConfig(this.config)');
     expect(source).toContain('composeSubstrateAgent({');
+    expect(source).toContain('wireSelfModelRuntime(');
+    expect(source).toContain('wireCoreMemoryRuntime({');
     expect(source).toContain('wireMemoryRuntime({');
     expect(source).toContain('wireShardAndThinkRuntime({');
   });
 
-  it('routes gateway embedding bootstrap through env provider factory', () => {
+  it('passes sleeptime memory dependencies into shared heartbeat wiring in both runtime modes', () => {
+    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+    const runtimeHeartbeatIndex = runtimeSource.indexOf('wireHeartbeatRuntime(');
+    expect(runtimeHeartbeatIndex).toBeGreaterThanOrEqual(0);
+    expect(runtimeSource.indexOf('sessionManager: this.sessionManager', runtimeHeartbeatIndex))
+      .toBeGreaterThan(runtimeHeartbeatIndex);
+    expect(runtimeSource.indexOf('coreMemoryStore,', runtimeHeartbeatIndex))
+      .toBeGreaterThan(runtimeHeartbeatIndex);
+
+    const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(agentSource).toContain('wireSelfModelRuntime(');
+    const agentHeartbeatIndex = agentSource.indexOf('wireHeartbeatRuntime(');
+    expect(agentHeartbeatIndex).toBeGreaterThanOrEqual(0);
+    expect(agentSource.indexOf('sessionManager,', agentHeartbeatIndex))
+      .toBeGreaterThan(agentHeartbeatIndex);
+    expect(agentSource.indexOf('coreMemoryStore,', agentHeartbeatIndex))
+      .toBeGreaterThan(agentHeartbeatIndex);
+  });
+
+  it('routes gateway embedding bootstrap through config provider factory', () => {
     const source = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
-    expect(source).toContain('createEmbeddingProviderFromEnv(process.env)');
+    expect(source).toContain('createEmbeddingProviderFromConfig(config, process.env)');
     expect(source).not.toContain('new EmbeddingProvider(');
   });
 
@@ -453,6 +487,26 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('resolveRuntimeVoiceProviderGate(config)');
     expect(source).toContain('voiceProviderGate.sttEnabled');
     expect(source).toContain('voiceProviderGate.ttsEnabled');
+  });
+
+  it('routes channel adapter bootstrap through shared channel runtime helpers', () => {
+    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+    const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const gatewaySource = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
+
+    expect(runtimeSource).toContain('createDiscordChannelAdapterFactoryEntry({');
+    expect(runtimeSource).toContain('createTelegramChannelAdapterFactoryEntry({');
+    expect(runtimeSource).toContain('createApiServerChannelAdapterFactoryEntry({');
+    expect(agentSource).toContain('createApiServerChannelAdapterFactoryEntry({');
+    expect(gatewaySource).toContain('createDiscordChannelAdapterFactoryEntry({');
+    expect(gatewaySource).toContain('createTelegramChannelAdapterFactoryEntry({');
+
+    expect(runtimeSource).not.toContain('new DiscordAdapter(');
+    expect(runtimeSource).not.toContain('new TelegramAdapter(');
+    expect(runtimeSource).not.toContain('new ApiServer(');
+    expect(agentSource).not.toContain('new ApiServer(');
+    expect(gatewaySource).not.toContain('new DiscordAdapter(');
+    expect(gatewaySource).not.toContain('new TelegramAdapter(');
   });
 
   it('uses durable gateway shutdown sequencing in split mode', () => {

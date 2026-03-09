@@ -1,4 +1,15 @@
-import type { ChannelAdapter } from '../channels/types.js';
+import type {
+  ChannelAdapter,
+  ChannelAdapterFactoryEntry,
+} from '../channels/types.js';
+import {
+  EligibilityDeniedError,
+  type EligibilityGate,
+} from '../capabilities/eligibility.js';
+import {
+  requirePluginActivationEligibility,
+  wrapChannelAdapterWithEligibility,
+} from './plugin-eligibility.js';
 
 export interface RuntimeChannelLifecycleLogger {
   error(message: string, meta?: Record<string, unknown>): void;
@@ -6,6 +17,103 @@ export interface RuntimeChannelLifecycleLogger {
 }
 
 type SyncChannelRegistry = (channelRegistry: Map<string, ChannelAdapter>) => void;
+
+export function buildChannelAdapterFactoryManifest(
+  entries: readonly ChannelAdapterFactoryEntry[],
+): ChannelAdapterFactoryEntry[] {
+  const seen = new Set<string>();
+  const normalized: ChannelAdapterFactoryEntry[] = [];
+  for (const entry of entries) {
+    const id = entry.manifest.id.trim();
+    if (!id) {
+      throw new Error('Channel adapter manifest entry id must be non-empty');
+    }
+    if (seen.has(id)) {
+      throw new Error(`Duplicate channel adapter manifest entry "${id}"`);
+    }
+    seen.add(id);
+    normalized.push({
+      ...entry,
+      manifest: {
+        ...entry.manifest,
+        id,
+      },
+    });
+  }
+  return normalized;
+}
+
+export async function loadChannelAdaptersFromManifest(
+  channelRegistry: Map<string, ChannelAdapter>,
+  entries: readonly ChannelAdapterFactoryEntry[],
+  syncChannelRegistry: SyncChannelRegistry,
+  log: RuntimeChannelLifecycleLogger,
+  eligibilityGate?: EligibilityGate,
+): Promise<void> {
+  for (const entry of entries) {
+    const { manifest } = entry;
+    if (!manifest.enabled) {
+      if (manifest.required) {
+        throw new Error(`Required channel adapter "${manifest.id}" is disabled in manifest`);
+      }
+      log.warn('Skipping disabled channel adapter manifest entry', {
+        adapterId: manifest.id,
+        required: Boolean(manifest.required),
+      });
+      continue;
+    }
+
+    try {
+      requirePluginActivationEligibility(
+        eligibilityGate,
+        'channel',
+        manifest.id,
+        manifest.eligibility,
+      );
+      const adapter = wrapChannelAdapterWithEligibility(
+        await entry.create(),
+        eligibilityGate,
+        manifest.eligibility,
+      );
+      if (adapter.id !== manifest.id) {
+        throw new Error(
+          `Manifest id "${manifest.id}" does not match adapter id "${adapter.id}"`,
+        );
+      }
+      registerChannelAdapter(channelRegistry, adapter, syncChannelRegistry);
+    } catch (error) {
+      if (error instanceof EligibilityDeniedError) {
+        if (manifest.required) {
+          throw new Error(
+            `Required channel adapter "${manifest.id}" denied by eligibility gate: ${error.message}`,
+          );
+        }
+        log.warn('Skipping channel adapter denied by eligibility gate', {
+          adapterId: manifest.id,
+          reasonCode: error.decision.reasonCode,
+          tier: error.decision.tier,
+          requiredTokens: error.decision.requiredTokens,
+          missingTokens: error.decision.missingTokens,
+          minimumTier: error.decision.minimumTier,
+        });
+        continue;
+      }
+      if (manifest.required) {
+        throw new Error(
+          `Required channel adapter "${manifest.id}" failed to initialize: ${String(error)}`,
+        );
+      }
+      log.warn('Optional channel adapter failed to initialize', {
+        adapterId: manifest.id,
+        error: String(error),
+      });
+    }
+  }
+
+  if (channelRegistry.size === 0) {
+    throw new Error('No channel adapters loaded from manifest');
+  }
+}
 
 export function registerChannelAdapter(
   channelRegistry: Map<string, ChannelAdapter>,

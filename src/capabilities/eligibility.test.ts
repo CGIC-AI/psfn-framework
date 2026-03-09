@@ -65,4 +65,26 @@ describe('EligibilityGate', () => {
     expect(decision.allowed).toBe(true);
     expect(decision.reasonCode).toBe('allowed');
   });
+
+  it('fails closed for plugin activation without explicit eligibility requirements', () => {
+    const decision = evaluateEligibilityDecision(
+      accessForTier('autonomous'),
+      { kind: 'plugin.activate', pluginType: 'stt', pluginId: 'plugin-test' },
+    );
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe('unsupported_operation');
+  });
+
+  it('enforces explicit eligibility requirements for plugin actions', () => {
+    const decision = evaluateEligibilityDecision(
+      accessForTier('nursery'),
+      { kind: 'plugin.action', pluginType: 'tts', pluginId: 'plugin-test', action: 'synthesize_stream' },
+      { requiredTokens: ['external.web'] },
+    );
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasonCode).toBe('missing_capability_tokens');
+    expect(decision.missingTokens).toEqual(['external.web']);
+  });
 });

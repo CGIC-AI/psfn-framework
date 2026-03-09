@@ -1,0 +1,64 @@
+{
+  "entries": [
+    {
+      "path": "admin-ui/src/app.css",
+      "contains": "admin UI",
+      "reason": "Legacy UI branding pending follow-up customization epic.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "admin-ui/src/app.html",
+      "contains": "admin UI",
+      "reason": "Legacy UI branding pending follow-up customization epic.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "admin-ui/src/lib/companion-name.ts",
+      "contains": "psfn?:",
+      "reason": "Legacy API field compatibility for bootstrap payload shape.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/lib/companion-name.ts",
+      "contains": "payload.psfn",
+      "reason": "Legacy API field compatibility for bootstrap payload shape.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/admin/templates/layout.ts",
+      "contains": "admin UI",
+      "reason": "Legacy admin template branding pending neutral terminology migration.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/git/tools.ts",
+      "contains": "legacy psfn/ is still allowed",
+      "reason": "Intentional note describing temporary legacy skills path.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/identity/companion-naming.ts",
+      "contains": "LEGACY_COMPANION_NAME = 'PSFN'",
+      "reason": "Legacy companion-name migration constant.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/identity/companion-naming.ts",
+      "contains": "LEGACY_COMPANION_ID = 'psfn'",
+      "reason": "Legacy companion-id migration constant.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/identity/companion-naming.ts",
+      "contains": "LEGACY_COMPANION_SKILLS_DIRECTORY = 'psfn/skills'",
+      "reason": "Legacy skills directory migration constant.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/identity/loader.ts",
+      "contains": "LEGACY_BOOTSTRAP_NAME = 'PSFN'",
+      "reason": "Legacy bootstrap identity migration marker.",
+      "pattern": "identity-proper-name"
+    }
+  ]
+}

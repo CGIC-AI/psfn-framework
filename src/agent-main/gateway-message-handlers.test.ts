@@ -178,10 +178,10 @@ describe('registerGatewayMessageHandlers', () => {
     });
   });
 
-  it('falls back to primary agent path when Wyoming delegation throws', async () => {
+  it('falls back to primary agent path when Wyoming delegation reports no ready shard', async () => {
     const harness = createHarness({
       delegateWyomingSession: async () => {
-        throw new Error('delegation exploded');
+        throw new Error('No ready agent connected');
       },
       handleMessage: async () => makeResponse('fallback response'),
     });
@@ -195,14 +195,14 @@ describe('registerGatewayMessageHandlers', () => {
       'Wyoming delegation failed; falling back to primary path',
       {
         channelId: message.channelId,
-        error: 'delegation exploded',
+        error: 'No ready agent connected',
       },
     );
     expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(2, 'wyoming.routing.fallback', {
       channelId: message.channelId,
       messageId: message.id,
       reason: 'delegation_error',
-      error: 'delegation exploded',
+      error: 'No ready agent connected',
       connectionId: 'conn-1',
       sessionId: 'session-1',
       turnId: 'turn-1',

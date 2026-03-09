@@ -20,6 +20,7 @@ import { MemoryStore } from './memory/store.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { runRLMLoop } from './repl/loop.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
+import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -65,7 +66,7 @@ function makeMessage(channelId: string, content: string, id?: string): Substrate
 async function main(): Promise<void> {
   console.log('=== PSFN E2E Integration Test ===\n');
 
-  const config = loadConfig();
+  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
   const CHANNEL = 'e2e:test-' + Date.now();
 
   // Use temp directory for sessions to avoid polluting production data
@@ -91,7 +92,8 @@ async function main(): Promise<void> {
   eventBus.on('agent.error', track('error'));
 
   // Identity
-  const { systemPrompt } = composeIdentity(config);
+  const { card, systemPrompt } = composeIdentity(config);
+  const companionName = card.data.name.trim() || 'Companion';
 
   // Core components
   const llmClient = new LLMClient(config);
@@ -152,7 +154,7 @@ async function main(): Promise<void> {
   try {
     process.stdout.write('  Sending message...');
     response = await agentLoop.handleMessage(
-      makeMessage(CHANNEL, 'Hello PSFN! This is a quick E2E test. Please say hello back in one sentence.'),
+      makeMessage(CHANNEL, `Hello ${companionName}! This is a quick E2E test. Please say hello back in one sentence.`),
     );
     console.log(' done');
 
@@ -301,7 +303,7 @@ async function main(): Promise<void> {
 
     const mentionsTiramisu = r3.content.toLowerCase().includes('tiramisu');
     assert(mentionsTiramisu,
-      'PSFN recalls tiramisu from memory',
+      `${companionName} recalls tiramisu from memory`,
       mentionsTiramisu ? undefined : `Response: "${r3.content.slice(0, 120)}"`);
   } catch (err) {
     assert(false, 'Memory retrieval succeeded', String(err));

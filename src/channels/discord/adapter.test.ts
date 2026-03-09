@@ -512,6 +512,63 @@ describe('DiscordAdapter DM routing', () => {
     expect(interactive.sent).toContain('dm reply');
   });
 
+  it('keeps DM ingress responsive across channels while another DM turn is in flight', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const busyChannelId = 'dm-busy-channel';
+    const fastChannelId = 'dm-fast-channel';
+    const busyChannel = makeInteractiveTextChannel();
+    const fastChannel = makeInteractiveTextChannel();
+    discordMock.channelsById.set(busyChannelId, busyChannel.channel);
+    discordMock.channelsById.set(fastChannelId, fastChannel.channel);
+
+    let releaseBusyTurn: (() => void) | null = null;
+    let markBusyTurnStarted: (() => void) | null = null;
+    const busyTurnStarted = new Promise<void>((resolve) => {
+      markBusyTurnStarted = resolve;
+    });
+
+    const handler = vi.fn(async (message: SubstrateMessage) => {
+      if (message.channelId === busyChannelId) {
+        markBusyTurnStarted?.();
+        await new Promise<void>((resolve) => {
+          releaseBusyTurn = resolve;
+        });
+      }
+      return {
+        content: `reply-${message.id}`,
+        channelId: message.channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    const busyDispatch = (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(busyChannelId, busyChannel.channel, {
+        id: 'dm-busy-1',
+        content: 'busy turn',
+      }),
+    );
+    await busyTurnStarted;
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(fastChannelId, fastChannel.channel, {
+        id: 'dm-fast-1',
+        content: 'quick follow-up',
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(fastChannel.sent).toContain('reply-dm-fast-1');
+    expect(busyChannel.sent).toHaveLength(0);
+
+    releaseBusyTurn?.();
+    await busyDispatch;
+    expect(busyChannel.sent).toContain('reply-dm-busy-1');
+  });
+
   it('extracts image attachments into substrate messages', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);
@@ -752,7 +809,8 @@ describe('DiscordAdapter DM routing', () => {
 
   it('responds to guild messages without mention when character name trigger matches', async () => {
     const eventBus = new EventBus();
-    const adapter = new DiscordAdapter(makeConfig({ characterName: 'PSFN' }), eventBus);
+    const characterName = 'Companion';
+    const adapter = new DiscordAdapter(makeConfig({ characterName }), eventBus);
     await adapter.init();
 
     const channelId = 'guild-channel-trigger-char';
@@ -772,7 +830,7 @@ describe('DiscordAdapter DM routing', () => {
       makeDiscordIncomingMessage(channelId, interactive.channel, {
         id: 'guild-trigger-1',
         guildId: 'guild-1',
-        content: 'hey psfn, are you there?',
+        content: `hey ${characterName.toLowerCase()}, are you there?`,
         mentioned: false,
       }),
     );

@@ -1,11 +1,15 @@
 // ── Prompt Layer Agent Tools ──
-// Tools that let PSFN inspect and modify her own prompt stack.
+// Tools that let the companion inspect and modify its own prompt stack.
 // Policy: read access is always available; writes are tier-gated by capabilities.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { PromptLayer, PromptHistoryEntry } from './prompt-types.js';
+import {
+  CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
+  isCanonicalCharacterFoundationLayer,
+} from './canonical-foundation.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { withCapabilityRequirement } from '../capabilities/requirements.js';
 import {
@@ -44,6 +48,103 @@ function resolvePromptLayerWriteCapability(store: PromptLayerStore, layerId: str
   if (layer.type === 'base') return 'identity.write.base';
   if (layer.type === 'operator') return 'identity.write.operator';
   return 'identity.write.runtime';
+}
+
+function resolvePromptLayerWriteCapabilityForAction(
+  store: PromptLayerStore,
+  identityCoolingOff: IdentityCoolingOffManager | undefined,
+  params: {
+    action?: unknown;
+    stage_id?: unknown;
+    layer_id?: unknown;
+  },
+): CapabilityToken {
+  const action = String(params.action ?? 'update');
+  const stageId = typeof params.stage_id === 'string' ? params.stage_id : '';
+  if ((action === 'commit' || action === 'cancel') && stageId && identityCoolingOff) {
+    const stage = identityCoolingOff.getStage(stageId);
+    if (stage) {
+      return resolvePromptLayerWriteCapability(store, stage.layerId);
+    }
+  }
+  return resolvePromptLayerWriteCapability(store, String(params.layer_id ?? ''));
+}
+
+function handlePromptLayerStagedAction(
+  store: PromptLayerStore,
+  identityCoolingOff: IdentityCoolingOffManager | undefined,
+  params: {
+    action: 'commit' | 'cancel';
+    stage_id?: string;
+    reason?: string;
+  },
+  options: {
+    commitReason: string;
+    commitSuccessMessage: (updatedLayer: PromptLayer, stageId: string) => string;
+    cancelSuccessMessage: (stageId: string) => string;
+  },
+): AgentToolResult<{ isError?: boolean }> {
+  if (!identityCoolingOff) {
+    return textResultWithError('Identity cooling-off safeguard is not configured.', true);
+  }
+
+  const stageId = params.stage_id?.trim();
+  if (!stageId) {
+    return textResultWithError('stage_id is required for commit/cancel actions.', true);
+  }
+
+  if (params.action === 'cancel') {
+    const cancelled = identityCoolingOff.cancel(stageId);
+    if (cancelled.status === 'not_found') {
+      return textResultWithError(`Stage not found: ${stageId}`, true);
+    }
+    if (cancelled.status === 'already_committed') {
+      return textResultWithError(`Stage already committed: ${stageId}`, true);
+    }
+    if (cancelled.status === 'already_cancelled') {
+      return textResultWithError(`Stage already cancelled: ${stageId}`, true);
+    }
+    return textResult(options.cancelSuccessMessage(stageId));
+  }
+
+  const readiness = identityCoolingOff.checkReady(stageId);
+  if (readiness.status === 'not_found') {
+    return textResultWithError(`Stage not found: ${stageId}`, true);
+  }
+  if (readiness.status === 'already_cancelled') {
+    return textResultWithError(`Stage already cancelled: ${stageId}`, true);
+  }
+  if (readiness.status === 'already_committed') {
+    return textResultWithError(`Stage already committed: ${stageId}`, true);
+  }
+  if (readiness.status === 'cooling_off') {
+    const waitSeconds = Math.max(1, Math.ceil((readiness.waitMs ?? 0) / 1000));
+    return textResultWithError(
+      `Stage ${stageId} is still cooling off (${waitSeconds}s remaining).`,
+      true,
+    );
+  }
+
+  const committed = identityCoolingOff.markCommitted(stageId);
+  if (committed.status !== 'ready' || !committed.stage) {
+    return textResultWithError(`Unable to commit stage ${stageId}.`, true);
+  }
+
+  const layer = store.getById(committed.stage.layerId);
+  if (!layer) return textResultWithError(`Layer not found: ${committed.stage.layerId}`, true);
+  if (isCanonicalCharacterFoundationLayer(layer)) {
+    return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+  }
+
+  const reason = normalizeReason(params.reason) ?? options.commitReason;
+  const updated = store.update(
+    layer.id,
+    committed.stage.nextContent,
+    'agent',
+    {},
+    reason,
+  );
+  return textResult(options.commitSuccessMessage(updated, stageId));
 }
 
 function normalizeReason(reason: string | undefined): string | undefined {
@@ -424,65 +525,17 @@ export function createPromptLayerUpdateTool(
         const action = params.action ?? 'update';
 
         if (action === 'cancel' || action === 'commit') {
-          if (!identityCoolingOff) {
-            return textResultWithError('Identity cooling-off safeguard is not configured.', true);
-          }
-          const stageId = params.stage_id?.trim();
-          if (!stageId) {
-            return textResultWithError('stage_id is required for commit/cancel actions.', true);
-          }
-
-          if (action === 'cancel') {
-            const cancelled = identityCoolingOff.cancel(stageId);
-            if (cancelled.status === 'not_found') {
-              return textResultWithError(`Stage not found: ${stageId}`, true);
-            }
-            if (cancelled.status === 'already_committed') {
-              return textResultWithError(`Stage already committed: ${stageId}`, true);
-            }
-            if (cancelled.status === 'already_cancelled') {
-              return textResultWithError(`Stage already cancelled: ${stageId}`, true);
-            }
-            return textResult(`Cancelled staged base-layer update (stage_id: ${stageId}).`);
-          }
-
-          const readiness = identityCoolingOff.checkReady(stageId);
-          if (readiness.status === 'not_found') {
-            return textResultWithError(`Stage not found: ${stageId}`, true);
-          }
-          if (readiness.status === 'already_cancelled') {
-            return textResultWithError(`Stage already cancelled: ${stageId}`, true);
-          }
-          if (readiness.status === 'already_committed') {
-            return textResultWithError(`Stage already committed: ${stageId}`, true);
-          }
-          if (readiness.status === 'cooling_off') {
-            const waitSeconds = Math.max(1, Math.ceil((readiness.waitMs ?? 0) / 1000));
-            return textResultWithError(
-              `Stage ${stageId} is still cooling off (${waitSeconds}s remaining).`,
-              true,
-            );
-          }
-
-          const committed = identityCoolingOff.markCommitted(stageId);
-          if (committed.status !== 'ready' || !committed.stage) {
-            return textResultWithError(`Unable to commit stage ${stageId}.`, true);
-          }
-
-          const layer = store.getById(committed.stage.layerId);
-          if (!layer) return textResultWithError(`Layer not found: ${committed.stage.layerId}`, true);
-
-          const reason = normalizeReason(params.reason) ?? 'Committed staged prompt-layer update via prompt_layer_update';
-          const updated = store.update(
-            layer.id,
-            committed.stage.nextContent,
-            'agent',
-            {},
-            reason,
-          );
-          return textResult(
-            `Committed staged update for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
-          );
+          return handlePromptLayerStagedAction(store, identityCoolingOff, {
+            action,
+            stage_id: params.stage_id,
+            reason: params.reason,
+          }, {
+            commitReason: 'Committed staged prompt-layer update via prompt_layer_update',
+            commitSuccessMessage: (updated, stageId) =>
+              `Committed staged update for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
+            cancelSuccessMessage: (stageId) =>
+              `Cancelled staged base-layer update (stage_id: ${stageId}).`,
+          });
         }
 
         const layerId = params.layer_id?.trim();
@@ -492,6 +545,9 @@ export function createPromptLayerUpdateTool(
 
         const layer = resolvePromptLayerById(store, layerId);
         if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+        if (isCanonicalCharacterFoundationLayer(layer)) {
+          return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+        }
 
         const tier = getCapabilityTier();
         const needsCoolingOff = (
@@ -525,15 +581,134 @@ export function createPromptLayerUpdateTool(
   };
 
   return withCapabilityRequirement(tool, (params) => {
-    const action = String(params.action ?? 'update');
-    const stageId = typeof params.stage_id === 'string' ? params.stage_id : '';
-    if ((action === 'commit' || action === 'cancel') && stageId && identityCoolingOff) {
-      const stage = identityCoolingOff.getStage(stageId);
-      if (stage) {
-        return resolvePromptLayerWriteCapability(store, stage.layerId);
+    return resolvePromptLayerWriteCapabilityForAction(store, identityCoolingOff, params);
+  });
+}
+
+export function createPromptLayerRollbackTool(
+  store: PromptLayerStore,
+  options: PromptLayerUpdateToolOptions = {},
+): AgentTool<any> {
+  const identityCoolingOff = options.identityCoolingOff;
+  const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
+
+  const tool: AgentTool<any> = {
+    name: 'prompt_layer_rollback',
+    description:
+      'Rollback a prompt layer to historical content. Access is controlled by capability tier. ' +
+      'Base-layer rollbacks at Nursery/Apprentice are staged with cooling-off and require commit/cancel.',
+    label: 'prompt_layer_rollback',
+    parameters: Type.Object({
+      layer_id: Type.Optional(Type.String({ description: 'ID of the prompt layer to roll back (prefix match OK).' })),
+      version: Type.Optional(Type.Number({ description: 'Historical version to restore.', minimum: 1 })),
+      reason: Type.Optional(Type.String({ description: 'Short rationale for the rollback.' })),
+      action: Type.Optional(
+        Type.Union([
+          Type.Literal('rollback'),
+          Type.Literal('commit'),
+          Type.Literal('cancel'),
+        ], { description: 'Action mode. Default: rollback.' }),
+      ),
+      stage_id: Type.Optional(Type.String({ description: 'Staged base-rollback id used for commit/cancel.' })),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: {
+        layer_id?: string;
+        version?: number;
+        reason?: string;
+        action?: 'rollback' | 'commit' | 'cancel';
+        stage_id?: string;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const action = params.action ?? 'rollback';
+        if (action === 'cancel' || action === 'commit') {
+          return handlePromptLayerStagedAction(store, identityCoolingOff, {
+            action,
+            stage_id: params.stage_id,
+            reason: params.reason,
+          }, {
+            commitReason: 'Committed staged prompt-layer rollback via prompt_layer_rollback',
+            commitSuccessMessage: (updated, stageId) =>
+              `Committed staged rollback for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
+            cancelSuccessMessage: (stageId) =>
+              `Cancelled staged base-layer rollback (stage_id: ${stageId}).`,
+          });
+        }
+
+        const layerId = params.layer_id?.trim();
+        if (!layerId) return textResultWithError('layer_id is required.', true);
+        if (typeof params.version !== 'number' || !Number.isInteger(params.version) || params.version <= 0) {
+          return textResultWithError('version must be a positive integer.', true);
+        }
+
+        const layer = resolvePromptLayerById(store, layerId);
+        if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+        if (isCanonicalCharacterFoundationLayer(layer)) {
+          return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+        }
+
+        const requestedVersion = params.version;
+        if (requestedVersion > layer.version) {
+          return textResultWithError(
+            `Version ${requestedVersion} is newer than current version ${layer.version}.`,
+            true,
+          );
+        }
+        if (requestedVersion === layer.version) {
+          return textResult(`Layer "${layer.name}" is already at v${requestedVersion}; no rollback needed.`);
+        }
+
+        const history = store.getLayerHistory(layer.id);
+        const baseline = resolveHistoricalPromptVersion(layer, history, requestedVersion);
+        if (!baseline) {
+          return textResultWithError(`No prompt history entry found for version ${requestedVersion}.`, true);
+        }
+        if (baseline.content === layer.content) {
+          return textResult(
+            `Layer "${layer.name}" already matches content from v${requestedVersion}; no rollback applied.`,
+          );
+        }
+
+        const tier = getCapabilityTier();
+        const needsCoolingOff = (
+          layer.type === 'base'
+          && (tier === 'nursery' || tier === 'apprentice')
+          && !!identityCoolingOff
+        );
+        if (needsCoolingOff) {
+          const staged = identityCoolingOff.stageBaseLayerEdit({
+            layerId: layer.id,
+            layerName: layer.name,
+            previousContent: layer.content,
+            nextContent: baseline.content,
+            requestedBy: 'agent',
+            tier,
+          });
+          return textResult(
+            `Staged base-layer rollback to v${requestedVersion} (stage_id: ${staged.id}). ` +
+            `Cooling-off until ${new Date(staged.readyAt).toISOString()}. ` +
+            'Use prompt_layer_rollback with action=commit and stage_id to apply, or action=cancel to abort.',
+          );
+        }
+
+        const reason = normalizeReason(params.reason)
+          ?? `Prompt layer rolled back via prompt_layer_rollback to version ${requestedVersion}`;
+        const updated = store.update(layer.id, baseline.content, 'agent', {}, reason);
+        return textResult(
+          `Rolled back layer "${updated.name}" to v${requestedVersion} content ` +
+          `(now v${updated.version}, checksum: ${updated.checksum})`,
+        );
+      } catch (error) {
+        return textResultWithError(`prompt_layer_rollback failed: ${errorMessage(error)}`, true);
       }
-    }
-    return resolvePromptLayerWriteCapability(store, String(params.layer_id ?? ''));
+    },
+  };
+
+  return withCapabilityRequirement(tool, (params) => {
+    return resolvePromptLayerWriteCapabilityForAction(store, identityCoolingOff, params);
   });
 }
 
@@ -554,6 +729,9 @@ export function createPromptLayerToggleTool(store: PromptLayerStore): AgentTool<
         const layers = store.getAll();
         const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
         if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
+        if (isCanonicalCharacterFoundationLayer(layer)) {
+          return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+        }
 
         const toggled = store.toggle(layer.id);
         return textResult(`Layer "${toggled.name}" is now ${toggled.enabled ? 'enabled' : 'disabled'}`);

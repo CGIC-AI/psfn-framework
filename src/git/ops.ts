@@ -5,6 +5,10 @@
 import { execSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve, relative, normalize, dirname } from 'node:path';
+import {
+  DEFAULT_COMPANION_ID,
+  DEFAULT_COMPANION_NAME,
+} from '../identity/companion-naming.js';
 import { createComponentLogger } from '../logger.js';
 import { REPO_ALLOWED_PATHS } from '../security/policy-constants.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
@@ -193,8 +197,8 @@ export class GitOps implements GitOperations {
       '',
       `[Intent] ${intent}`,
       scope ? `[Scope] ${scope}` : null,
-      '[Agent] PSFN',
-      '[Signed-off-by] psfn-agent',
+      `[Agent] ${DEFAULT_COMPANION_NAME}`,
+      `[Signed-off-by] ${DEFAULT_COMPANION_ID}-agent`,
     ].filter(Boolean).join('\n');
 
     this.exec(`git commit -m ${this.shellEscape(fullMessage)}`);
@@ -217,6 +221,7 @@ export class GitOps implements GitOperations {
   openPR(title: string, body: string, base?: string): string {
     const baseArg = base ? `--base ${this.shellEscape(base)}` : '';
     try {
+      this.assertNotProtected();
       const result = this.exec(
         `gh pr create --title ${this.shellEscape(title)} --body ${this.shellEscape(body)} ${baseArg}`,
       );

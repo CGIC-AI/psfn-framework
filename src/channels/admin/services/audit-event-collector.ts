@@ -1,4 +1,5 @@
 import type { EventBus } from '../../../event-bus.js';
+import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -31,12 +32,14 @@ export function registerAuditTimelineSources(options: {
   eventBus: EventBus;
   activeToolInvocations: Map<string, ActiveToolInvocation>;
   appendAuditTimelineEntry: AuditTimelineAppender;
+  resolveCompanionName?: () => string;
   now?: () => number;
 }): void {
   const {
     eventBus,
     activeToolInvocations,
     appendAuditTimelineEntry,
+    resolveCompanionName = () => DEFAULT_COMPANION_NAME,
     now = () => Date.now(),
   } = options;
 
@@ -57,12 +60,13 @@ export function registerAuditTimelineSources(options: {
     const decision: AdminAuditDecision = isError ? 'denied' : 'allowed';
     const toolLabel = active?.toolName ?? toolName;
     const channelLabel = active?.channelId ?? channelId;
+    const companionName = resolveCompanionName();
     appendAuditTimelineEntry(
       'tool_invocation',
       decision,
       isError
-        ? `PSFN attempted tool "${toolLabel}" in ${channelLabel}, but it failed.`
-        : `PSFN completed tool "${toolLabel}" in ${channelLabel}.`,
+        ? `${companionName} attempted tool "${toolLabel}" in ${channelLabel}, but it failed.`
+        : `${companionName} completed tool "${toolLabel}" in ${channelLabel}.`,
       [
         `callId=${toolCallId}`,
         shardId ? `shard=${shardId}` : null,
@@ -76,8 +80,8 @@ export function registerAuditTimelineSources(options: {
         'identity_edit',
         decision,
         isError
-          ? `PSFN attempted identity edit via "${toolLabel}" in ${channelLabel}, but it failed.`
-          : `PSFN edited identity via "${toolLabel}" in ${channelLabel}.`,
+          ? `${companionName} attempted identity edit via "${toolLabel}" in ${channelLabel}, but it failed.`
+          : `${companionName} edited identity via "${toolLabel}" in ${channelLabel}.`,
         [
           `callId=${toolCallId}`,
           shardId ? `shard=${shardId}` : null,
@@ -94,12 +98,13 @@ export function registerAuditTimelineSources(options: {
     const supersededCount = event.supersededCount ?? 0;
     if (writeCount <= 0 && deduplicatedCount <= 0 && supersededCount <= 0) return;
     const decision: AdminAuditDecision = writeCount > 0 ? 'allowed' : 'denied';
+    const companionName = resolveCompanionName();
     appendAuditTimelineEntry(
       'memory_mutation',
       decision,
       writeCount > 0
-        ? `PSFN mutated memory in ${event.channelId}: wrote ${writeCount} memory entries.`
-        : `PSFN attempted a memory mutation in ${event.channelId}, but no entries were written.`,
+        ? `${companionName} mutated memory in ${event.channelId}: wrote ${writeCount} memory entries.`
+        : `${companionName} attempted a memory mutation in ${event.channelId}, but no entries were written.`,
       [
         `accepted=${event.acceptedCount ?? 0}`,
         `rejected=${event.rejectedCount ?? 0}`,
@@ -111,10 +116,11 @@ export function registerAuditTimelineSources(options: {
   });
 
   eventBus.on('message.sent', ({ response }) => {
+    const companionName = resolveCompanionName();
     appendAuditTimelineEntry(
       'external_action',
       'allowed',
-      `PSFN sent an external response to ${response.channelId}.`,
+      `${companionName} sent an external response to ${response.channelId}.`,
       [
         `model=${response.metadata.model}`,
         `durationMs=${response.metadata.durationMs}`,

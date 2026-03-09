@@ -5,6 +5,7 @@ export interface ThinkContextMetadata {
   memoryBreakdown: string;  // "42 semantic, 18 episodic, ..."
   channelCount: number;
   currentChannelMessages: number;
+  nestedThinkAvailable?: boolean;
 }
 
 const RLM_BASE_PROMPT = `You are an analytical reasoning engine. You solve tasks by writing and executing code.
@@ -111,11 +112,21 @@ FINAL(summary);
 `;
 
 export function buildRLMSystemPrompt(metadata?: ThinkContextMetadata): string {
-  if (!metadata || metadata.memoryCount === 0) {
-    return RLM_BASE_PROMPT;
+  const lines = [RLM_BASE_PROMPT.trimEnd()];
+
+  if (metadata?.nestedThinkAvailable) {
+    lines.push(
+      '',
+      '### Recursive Reasoning',
+      '- `await sub_think(task, options?)` — Run an isolated child think loop with a fresh sandbox and message list; only the child conclusion string returns to the parent',
+    );
   }
 
-  const lines = [RLM_BASE_PROMPT.trimEnd(), '', 'AVAILABLE DATA:'];
+  if (!metadata || metadata.memoryCount === 0) {
+    return lines.join('\n');
+  }
+
+  lines.push('', 'AVAILABLE DATA:');
   lines.push(`- Memories: ${metadata.memoryCount} total (${metadata.memoryBreakdown})`);
   if (metadata.currentChannelMessages > 0) {
     lines.push(`- Current channel: ${metadata.currentChannelMessages} messages`);

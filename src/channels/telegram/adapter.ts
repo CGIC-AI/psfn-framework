@@ -155,6 +155,16 @@ interface TelegramStatusMessageRef {
   messageId: number;
 }
 
+interface TelegramStreamResponseState {
+  channelId: string;
+  target: OutboundTarget;
+  accumulatedText: string;
+  lastAppliedText: string;
+  sentMessageId?: number;
+  pending: Promise<void>;
+  failure: Error | null;
+}
+
 type TelegramMediaMethod = 'sendPhoto' | 'sendDocument' | 'sendVoice';
 type TelegramMediaField = 'photo' | 'document' | 'voice';
 
@@ -252,6 +262,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private statusUnsubscribers: Array<() => void> = [];
   private longRunningTools = new Map<string, LongRunningToolState>();
   private longRunningStatusMessages = new Map<string, TelegramStatusMessageRef>();
+  private streamResponses = new Map<string, TelegramStreamResponseState>();
 
   constructor(
     telegramConfig: TelegramChannelConfig,
@@ -362,6 +373,7 @@ export class TelegramAdapter implements ChannelAdapter {
     for (const unsub of this.statusUnsubscribers) unsub();
     this.statusUnsubscribers = [];
     this.clearAllLongRunningTools();
+    this.streamResponses.clear();
     await this.clearAllLongRunningStatusMessages();
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
@@ -718,32 +730,59 @@ export class TelegramAdapter implements ChannelAdapter {
       ...(attachments.length > 0 ? { attachments } : {}),
       timestamp: new Date(message.date * 1000),
     };
+    const replyContext: OutboundContext = {
+      channelId,
+      replyToMessageId: replyToId ?? messageId,
+      threadId,
+    };
+    this.beginStreamResponse(replyContext);
 
     try {
       await this.eventBus.emit('message.received', { message: substrateMessage });
-      const response = await this.handler(substrateMessage);
-      const hasText = response.content.trim().length > 0;
-      if (hasText) {
-        await this.outbound.sendText(
-          { channelId, replyToMessageId: replyToId ?? messageId, threadId },
-          response.content,
-        );
-        await this.eventBus.emit('message.sent', { response });
+      let response: Awaited<ReturnType<MessageHandler>>;
+      try {
+        response = await this.handler(substrateMessage);
+      } catch (error) {
+        const errorText = toErrorMessage(error);
+        log.error('Telegram message handling error', {
+          channelId,
+          messageId,
+          error: errorText,
+        });
+        await this.eventBus.emit('channel.message.error', {
+          channelId,
+          channelType: 'telegram',
+          messageId,
+          phase: 'handler',
+          error: errorText,
+        }).catch(() => undefined);
+        return;
       }
-    } catch (error) {
-      const errorText = toErrorMessage(error);
-      log.error('Telegram message handling error', {
-        channelId,
-        messageId,
-        error: errorText,
-      });
-      await this.eventBus.emit('channel.message.error', {
-        channelId,
-        channelType: 'telegram',
-        messageId,
-        phase: 'handler',
-        error: errorText,
-      }).catch(() => undefined);
+
+      const hasText = response.content.trim().length > 0;
+      if (!hasText) return;
+
+      try {
+        const streamed = await this.finalizeStreamResponse(channelId, response.content);
+        if (!streamed) {
+          await this.outbound.sendText(replyContext, response.content);
+        }
+        await this.eventBus.emit('message.sent', { response });
+      } catch (error) {
+        const errorText = toErrorMessage(error);
+        log.error('Telegram message send error', {
+          channelId,
+          messageId,
+          error: errorText,
+        });
+        await this.eventBus.emit('channel.message.error', {
+          channelId,
+          channelType: 'telegram',
+          messageId,
+          phase: 'egress',
+          error: errorText,
+        }).catch(() => undefined);
+      }
     } finally {
       clearInterval(typingInterval);
       const lockStartMs = this.lockStartedAt.get(channelId) ?? Date.now();
@@ -754,6 +793,7 @@ export class TelegramAdapter implements ChannelAdapter {
       this.lockStartedAt.delete(channelId);
       this.lockContention.delete(channelId);
       this.processingChannels.delete(channelId);
+      this.streamResponses.delete(channelId);
       this.clearLongRunningToolsForChannel(channelId);
       await this.clearLongRunningStatus(channelId);
       const pending = this.pendingByChannel.take(channelId);
@@ -815,6 +855,14 @@ export class TelegramAdapter implements ChannelAdapter {
     }) => {
       if (!this.isLongRunningTool(toolName)) return;
       await this.stopLongRunningToolStatus(toolCallId, channelId);
+    }));
+
+    this.statusUnsubscribers.push(this.eventBus.on('agent.stream.delta', async ({
+      channelId,
+      text,
+    }) => {
+      if (!this.processingChannels.has(channelId)) return;
+      await this.appendStreamResponseDelta(channelId, text);
     }));
   }
 
@@ -959,6 +1007,105 @@ export class TelegramAdapter implements ChannelAdapter {
       }).catch(() => undefined));
     }
     await Promise.allSettled(pending);
+  }
+
+  private beginStreamResponse(ctx: OutboundContext): void {
+    this.streamResponses.set(ctx.channelId, {
+      channelId: ctx.channelId,
+      target: this.resolveOutboundTarget(ctx),
+      accumulatedText: '',
+      lastAppliedText: '',
+      pending: Promise.resolve(),
+      failure: null,
+    });
+  }
+
+  private async appendStreamResponseDelta(channelId: string, text: string): Promise<void> {
+    if (!text) return;
+    const state = this.streamResponses.get(channelId);
+    if (!state) return;
+    state.accumulatedText += text;
+    await this.queueStreamResponseUpdate(state, state.accumulatedText, false);
+  }
+
+  private async finalizeStreamResponse(channelId: string, finalContent: string): Promise<boolean> {
+    const state = this.streamResponses.get(channelId);
+    if (!state) return false;
+
+    await state.pending.catch(() => undefined);
+    if (state.failure) throw state.failure;
+    if (state.sentMessageId === undefined && state.accumulatedText.length === 0) {
+      return false;
+    }
+    if (finalContent.trim().length === 0) {
+      return state.sentMessageId !== undefined;
+    }
+
+    await this.queueStreamResponseUpdate(state, finalContent, true);
+    await state.pending.catch(() => undefined);
+    const failure = this.streamResponses.get(channelId)?.failure;
+    if (failure instanceof Error) throw failure;
+    return state.sentMessageId !== undefined;
+  }
+
+  private queueStreamResponseUpdate(
+    state: TelegramStreamResponseState,
+    content: string,
+    isFinal: boolean,
+  ): Promise<void> {
+    const previous = state.pending;
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        if (state.failure) throw state.failure;
+        if (!isFinal && content === state.lastAppliedText) return;
+        await this.applyStreamResponseUpdate(state, content, isFinal);
+        state.lastAppliedText = content;
+      });
+
+    state.pending = next.catch((error) => {
+      const normalized = error instanceof Error ? error : new Error(toErrorMessage(error));
+      state.failure = normalized;
+      throw normalized;
+    });
+    return state.pending;
+  }
+
+  private async applyStreamResponseUpdate(
+    state: TelegramStreamResponseState,
+    content: string,
+    isFinal: boolean,
+  ): Promise<void> {
+    if (content.trim().length === 0) return;
+    if (content.length > TELEGRAM_TEXT_LIMIT) {
+      throw new Error(
+        `Telegram streaming responses cannot exceed ${TELEGRAM_TEXT_LIMIT} characters in a single edited message`,
+      );
+    }
+
+    if (state.sentMessageId !== undefined) {
+      await this.callApi('editMessageText', {
+        chat_id: state.target.chatId,
+        message_id: state.sentMessageId,
+        text: content,
+        ...(isFinal ? { parse_mode: 'Markdown' } : {}),
+      });
+      return;
+    }
+
+    const sent = await this.callApi<TelegramSentMessage>('sendMessage', {
+      chat_id: state.target.chatId,
+      text: content,
+      ...(isFinal ? { parse_mode: 'Markdown' } : {}),
+      ...(state.target.threadId ? { message_thread_id: Number(state.target.threadId) } : {}),
+      ...(state.target.replyToMessageId ? { reply_to_message_id: state.target.replyToMessageId } : {}),
+    });
+    state.sentMessageId = sent.message_id;
+    this.recordMessagePointer(this.toSubstrateMessageId(state.target.chatId, sent.message_id), {
+      chatId: state.target.chatId,
+      messageId: sent.message_id,
+      ...(state.target.threadId ? { threadId: state.target.threadId } : {}),
+    });
   }
 
   private isAllowed(user: TelegramUser): boolean {

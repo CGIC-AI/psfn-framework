@@ -14,9 +14,18 @@ export interface PostTurnActionAgent {
 }
 
 export type PostTurnActionHandler = (action: InferredPostTurnAction) => Promise<void> | void;
+export type PostTurnActionExecutionMode = 'foreground' | 'background';
+
+export interface PostTurnActionHandlerOptions {
+  executionMode?: PostTurnActionExecutionMode;
+}
 
 export interface PostTurnActionRuntime {
-  registerHandler(kind: string, handler: PostTurnActionHandler): () => void;
+  registerHandler(
+    kind: string,
+    handler: PostTurnActionHandler,
+    options?: PostTurnActionHandlerOptions,
+  ): () => void;
   listQueued(): Array<{
     actionId: string;
     actionKind: string;
@@ -32,6 +41,11 @@ interface DeferredQueueEntry {
   attempt: number;
   nextRunAt: number;
   maxRetries: number;
+}
+
+interface RegisteredPostTurnActionHandler {
+  callback: PostTurnActionHandler;
+  executionMode: PostTurnActionExecutionMode;
 }
 
 export interface WirePostTurnActionRuntimeOptions {
@@ -65,7 +79,7 @@ export function wirePostTurnActionRuntime(
     maxRetryDelayMs = 30_000,
   } = options;
 
-  const handlers = new Map<string, Set<PostTurnActionHandler>>();
+  const handlers = new Map<string, Map<PostTurnActionHandler, RegisteredPostTurnActionHandler>>();
   const queue = new Map<string, DeferredQueueEntry>();
   let processing = false;
 
@@ -136,8 +150,8 @@ export function wirePostTurnActionRuntime(
       return false;
     }
 
-    const callbacks = handlers.get(entry.action.kind);
-    if (!callbacks || callbacks.size === 0) {
+    const registrations = handlers.get(entry.action.kind);
+    if (!registrations || registrations.size === 0) {
       queue.delete(entry.action.dedupeKey);
       const missingHandlerError = `No deferred-action handler registered for "${entry.action.kind}"`;
       log.warn(missingHandlerError, {
@@ -178,8 +192,14 @@ export function wirePostTurnActionRuntime(
     emitTelemetry('started', entry);
 
     try {
-      await agentLoop.waitForIdle?.();
-      for (const callback of callbacks) {
+      const registeredHandlers = [...registrations.values()];
+      const requiresForegroundIdle = registeredHandlers.some(
+        ({ executionMode }) => executionMode !== 'background',
+      );
+      if (requiresForegroundIdle) {
+        await agentLoop.waitForIdle?.();
+      }
+      for (const { callback } of registeredHandlers) {
         await callback(entry.action);
       }
       queue.delete(entry.action.dedupeKey);
@@ -252,13 +272,20 @@ export function wirePostTurnActionRuntime(
   }
 
   return {
-    registerHandler(kind: string, handler: PostTurnActionHandler): () => void {
+    registerHandler(
+      kind: string,
+      handler: PostTurnActionHandler,
+      options: PostTurnActionHandlerOptions = {},
+    ): () => void {
       const normalizedKind = kind.trim();
       if (!normalizedKind) {
         throw new Error('Deferred action handler kind must be non-empty');
       }
-      const handlerSet = handlers.get(normalizedKind) ?? new Set<PostTurnActionHandler>();
-      handlerSet.add(handler);
+      const handlerSet = handlers.get(normalizedKind) ?? new Map<PostTurnActionHandler, RegisteredPostTurnActionHandler>();
+      handlerSet.set(handler, {
+        callback: handler,
+        executionMode: options.executionMode === 'background' ? 'background' : 'foreground',
+      });
       handlers.set(normalizedKind, handlerSet);
       return () => {
         const current = handlers.get(normalizedKind);

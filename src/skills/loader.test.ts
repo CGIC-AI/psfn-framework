@@ -14,7 +14,7 @@ import {
 function makeConfig(overrides?: Partial<SkillsRuntimeConfig>): SkillsRuntimeConfig {
   return {
     enabled: true,
-    directories: ['psfn/skills', 'skills'],
+    directories: ['companion/skills', 'skills'],
     extraDirectories: [],
     maxLoadedSkills: 32,
     maxSkillChars: 24_000,
@@ -86,7 +86,7 @@ describe('skills loader', () => {
       '/repo',
     );
 
-    expect(directories[0]?.relativePath).toBe('psfn/skills');
+    expect(directories[0]?.relativePath).toBe('companion/skills');
     expect(directories[1]?.relativePath).toBe('skills');
     expect(directories.at(-1)?.relativePath).toBe('vendor/skills');
   });
@@ -94,12 +94,12 @@ describe('skills loader', () => {
   it('keeps higher-precedence skill definitions when names collide', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-loader-'));
     try {
-      writeSkill(root, 'psfn/skills/conversation', `
+      writeSkill(root, 'companion/skills/conversation', `
 ---
 name: conversation
-description: psfn override
+description: companion override
 ---
-# PSFN
+# Companion
 `);
       writeSkill(root, 'skills/conversation', `
 ---
@@ -116,8 +116,8 @@ description: bundled version
 
       expect(files.length).toBe(2);
       expect(deduped.entries).toHaveLength(1);
-      expect(deduped.entries[0]?.description).toBe('psfn override');
-      expect(deduped.entries[0]?.relativePath).toContain('psfn/skills/conversation/SKILL.md');
+      expect(deduped.entries[0]?.description).toBe('companion override');
+      expect(deduped.entries[0]?.relativePath).toContain('companion/skills/conversation/SKILL.md');
       expect(deduped.skipped).toHaveLength(1);
       expect(deduped.skipped[0]?.kind).toBe('shadowed');
     } finally {

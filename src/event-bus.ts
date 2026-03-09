@@ -1,6 +1,7 @@
 import type {
   SubstrateMessage,
   AgentResponse,
+  ModelBudgetBlockedEvent,
   TurnUsage,
   InferredPostTurnAction,
   CorrelationMetadata,
@@ -59,6 +60,24 @@ export interface EventMap {
     nextRetryAt?: number;
     delayMs?: number;
     error?: string;
+  };
+  'context.feedback.telemetry': {
+    actionId: string;
+    turnId: string;
+    channelId: string;
+    phase: 'started' | 'scored' | 'persisted' | 'failed';
+    score?: number;
+    scoreBucket?: 'low' | 'medium' | 'high';
+    signals?: {
+      confabulation: boolean;
+      missed_context: boolean;
+      wasted_tokens: boolean;
+      good: boolean;
+    };
+    followUpIncluded?: boolean;
+    memoryId?: string;
+    error?: string;
+    timestamp: number;
   };
   'agent.tool_handoff.telemetry': {
     actionId: string;
@@ -155,6 +174,16 @@ export interface EventMap {
       durationMs: number;
       truncated: boolean;
       budgetStop: string | null;
+      subQueries: number;
+      toolCalls: number;
+      sessionCostUsd: number;
+      warnings: string[];
+      nestedThink: {
+        nestedThinkCallCount: number;
+        nestedThinkSuccessCount: number;
+        nestedThinkFailureCount: number;
+        maxNestedDepthReached: number;
+      };
       steps: Array<{
         iteration: number;
         timestamp: number;
@@ -168,7 +197,7 @@ export interface EventMap {
         variablesChanged: string[];
       }>;
     };
-  };
+  } & EventCorrelationFields;
   'agent.error': { message: SubstrateMessage; error: Error } & EventCorrelationFields;
   'memory.extraction.start': { channelId: string; triggerReason?: string } & EventCorrelationFields;
   'memory.extraction.end': {
@@ -183,6 +212,11 @@ export interface EventMap {
     deduplicatedCount?: number;
     supersededCount?: number;
     rejectionBreakdown?: Record<string, number>;
+    compositionalMode?: 'legacy' | 'chunk_compose';
+    chunkCount?: number;
+    mergedFactCount?: number;
+    crossChunkDeduplicatedCount?: number;
+    boundaryFactCount?: number;
   } & EventCorrelationFields;
   'memory.retrieval': {
     channelId: string;
@@ -190,12 +224,31 @@ export interface EventMap {
     candidates?: number;
     ranked?: number;
     returned?: number;
+    candidateCount?: number;
+    rankedCount?: number;
+    returnedCount?: number;
     reason?: string;
+    retrievalSource?: 'embedding' | 'lexical_fallback';
     channelVisibility?: string;
     visibilityScope?: 'public_only' | 'approved_private_context' | 'non_broadcast';
     operatorApproval?: boolean;
     provenanceRefs?: string[];
-  };
+    policyAllowedCount?: number;
+    sensitivityRejectedCount?: number;
+    policyRejectedCount?: number;
+    policyRejectedReasonTags?: Record<string, number>;
+    scoreRejectedCount?: number;
+    retrievalLimit?: number;
+    retrievalBudgetPct?: number;
+    retrievalTokenBudget?: number;
+    retrievalLimitMode?: 'budget' | 'hard_limit';
+    budgetCappedCount?: number;
+    selectedTypes?: Record<string, number>;
+    compositionalMode?: 'disabled_policy' | 'llm_unavailable' | 'insufficient_candidates' | 'malformed_or_failed' | 'applied';
+    compositionalCandidateCount?: number;
+    compositionalEvaluationBatchCount?: number;
+    compositionalFinalistCount?: number;
+  } & EventCorrelationFields;
   'broadcast.pre_send.classified': {
     channelId: string;
     risky: boolean;
@@ -230,8 +283,15 @@ export interface EventMap {
     superseded?: boolean;
     timestamp: number;
   };
+  'channel.message.error': {
+    channelId: string;
+    channelType: 'discord' | 'telegram' | 'api' | 'terminal' | 'unknown';
+    messageId?: string;
+    phase: 'ingress' | 'handler' | 'egress' | 'unknown';
+    error: string;
+  };
   'capability.eligibility': {
-    operationKind: 'tool.execute' | 'llm.purpose' | 'scheduler.task' | 'post_turn.action';
+    operationKind: 'tool.execute' | 'llm.purpose' | 'scheduler.task' | 'post_turn.action' | 'plugin.activate' | 'plugin.action';
     operationRef: string;
     allowed: boolean;
     reasonCode: string;
@@ -256,6 +316,7 @@ export interface EventMap {
     minimumTier?: string;
   } & EventCorrelationFields;
   'schedule.heartbeat': { timestamp: number; taskCount: number };
+  'model.budget.blocked': ModelBudgetBlockedEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };
   'channel.voice.transcript.partial': {
@@ -342,7 +403,7 @@ export interface EventMap {
     turnId?: string;
     channelId?: string;
     userId?: string;
-    stage?: 'transport' | 'stt' | 'tts' | 'orchestrator' | 'unknown';
+    stage?: 'ingest' | 'transport' | 'stt' | 'llm' | 'tts' | 'orchestrator' | 'unknown';
     code?: string;
     error: string;
     timestampMs?: number;

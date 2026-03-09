@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { EmbeddingService } from '../../../agent/contracts.js';
 import type { ContactStore } from '../../../contacts/store.js';
+import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
+import { isInternalMemoryArtifact } from '../../../memory/internal-artifacts.js';
 import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
-import { VALID_MEMORY_TYPES, type MemoryType, type PurrMemory } from '../../../memory/types.js';
+import { VALID_MEMORY_TYPES, type MemoryType } from '../../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../trust/types.js';
 import type {
   AdminBulkMutationResult,
@@ -85,6 +87,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     memoryStore: MemoryStore;
     contactStore?: ContactStore | null;
     embeddingService?: EmbeddingService | null;
+    resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
       actionType: 'memory_mutation',
       decision: 'allowed' | 'denied',
@@ -92,6 +95,10 @@ export class AdminMemoryDataService implements AdminMemoryService {
       details?: Array<string | null | undefined>,
     ) => void;
   }) {}
+
+  private resolveCompanionName(): string {
+    return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
+  }
 
   private buildContactSummaryMap(): Map<string, { id: string; displayName: string }> {
     const contactStore = this.deps.contactStore;
@@ -119,6 +126,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const filtered = this.deps.memoryStore
       .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN)
       .filter((memory) => {
+        if (isInternalMemoryArtifact(memory)) return false;
         if (typeFilter && memory.type !== typeFilter) return false;
         if (sensitivityFilter && memory.sensitivity !== sensitivityFilter) return false;
         const createdAt = memoryTimestamp(memory);
@@ -171,7 +179,9 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const embedding = await embeddingService.embed(query);
     return {
       query,
-      results: this.deps.memoryStore.searchByEmbedding(embedding, 0.1, 50),
+      results: this.deps.memoryStore
+        .searchByEmbedding(embedding, 0.1, 50)
+        .filter(memory => !isInternalMemoryArtifact(memory)),
       contactsById: this.buildContactSummaryMap(),
     };
   }
@@ -194,7 +204,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',
-      `PSFN superseded memory "${memory.id}".`,
+      `${this.resolveCompanionName()} superseded memory "${memory.id}".`,
       [`source=${memory.sourceRef}`],
     );
     return { ok: true };

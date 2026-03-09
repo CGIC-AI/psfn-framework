@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { HeartbeatPolicyStore, validateTemplate } from './heartbeat-policy.js';
@@ -21,7 +21,7 @@ describe('HeartbeatPolicyStore', () => {
 
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
 
@@ -30,6 +30,7 @@ describe('HeartbeatPolicyStore', () => {
     expect(ids).toContain('daily-review');
     expect(ids).toContain('emotional-check');
     expect(ids).toContain('goal-update');
+    expect(ids).toContain('experiential-review');
     expect(ids).toContain('values-reflection');
 
     // File should now exist
@@ -55,13 +56,21 @@ describe('HeartbeatPolicyStore', () => {
     expect(whisper).toBeDefined();
     expect(whisper!.sendToDiscord).toBe(true);
     expect(whisper!.intervalMs).toBe(3_600_000); // 1 hour
+    expect(whisper!.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
     expect(whisper!.enabled).toBe(true);
+  });
+
+  it('daily-review template defaults to local 06:00 cadence', () => {
+    const policy = store.load();
+    const dailyReview = policy.templates.find(t => t.id === 'daily-review');
+    expect(dailyReview).toBeDefined();
+    expect(dailyReview!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
   });
 
   it('non-whisper templates do not send to Discord', () => {
     const policy = store.load();
     const nonWhispers = policy.templates.filter(t => t.id !== 'whisper');
-    expect(nonWhispers.length).toBe(4);
+    expect(nonWhispers.length).toBe(5);
     for (const t of nonWhispers) {
       expect(t.sendToDiscord).toBe(false);
     }
@@ -72,13 +81,22 @@ describe('HeartbeatPolicyStore', () => {
     const values = policy.templates.find(t => t.id === 'values-reflection');
     expect(values?.mode).toBe('deliberation');
     expect(values?.deliberation?.maxRounds).toBe(4);
+    expect(values?.internalStateInput).toBe(true);
+  });
+
+  it('experiential-review defaults to internal-state narrative mode', () => {
+    const policy = store.load();
+    const experiential = policy.templates.find(t => t.id === 'experiential-review');
+    expect(experiential).toBeDefined();
+    expect(experiential?.intervalMs).toBe(4 * 60 * 60_000);
+    expect(experiential?.internalStateInput).toBe(true);
   });
 
   it('returns defaults for corrupt file', () => {
     store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
     const policy = store.load();
     // Invalid templates (not an array) triggers default
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
   });
 
   it('restores defaults when persisted template intervals are invalid', () => {
@@ -103,9 +121,80 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
+  });
+
+  it('restores defaults when persisted template cadence is invalid', () => {
+    writeFileSync(
+      join(tmpDir, 'heartbeat-policy.json'),
+      JSON.stringify({
+        templates: [
+          {
+            id: 'whisper',
+            name: 'Whisper',
+            prompt: 'This prompt is long enough to pass prompt validation.',
+            intervalMs: 3_600_000,
+            cadence: { kind: 'hourly', minute: 99, timezone: 'local' },
+            enabled: true,
+            sendToDiscord: true,
+          },
+        ],
+        version: 99,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'test',
+      }),
+      'utf-8',
+    );
+
+    const policy = store.load();
+    expect(policy.templates).toHaveLength(6);
+    expect(policy.version).toBe(1);
+    expect(policy.updatedBy).toBe('system');
+  });
+
+  it('backfills and persists missing cadence for known default templates', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        templates: [
+          {
+            id: 'whisper',
+            name: 'Whisper',
+            prompt: 'This prompt is long enough to pass prompt validation.',
+            intervalMs: 3_600_000,
+            enabled: true,
+            sendToDiscord: true,
+          },
+          {
+            id: 'daily-review',
+            name: 'Daily Review',
+            prompt: 'This daily review prompt is long enough to pass validation.',
+            intervalMs: 86_400_000,
+            enabled: true,
+            sendToDiscord: false,
+          },
+        ],
+        version: 7,
+        updatedAt: '2026-03-01T00:00:00.000Z',
+        updatedBy: 'admin',
+      }),
+      'utf-8',
+    );
+
+    const loaded = store.load();
+    const whisper = loaded.templates.find(t => t.id === 'whisper');
+    const dailyReview = loaded.templates.find(t => t.id === 'daily-review');
+    expect(whisper?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
+    expect(dailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
+
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
+    const persistedWhisper = persisted.templates.find(t => t.id === 'whisper');
+    const persistedDailyReview = persisted.templates.find(t => t.id === 'daily-review');
+    expect(persistedWhisper?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
+    expect(persistedDailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
   });
 });
 
@@ -122,6 +211,40 @@ describe('validateTemplate', () => {
   it('accepts a valid template', () => {
     const errors = validateTemplate(validTemplate, true);
     expect(errors).toHaveLength(0);
+  });
+
+  it('accepts valid wall-clock cadence payloads', () => {
+    const hourlyErrors = validateTemplate({
+      ...validTemplate,
+      cadence: { kind: 'hourly', minute: 0, timezone: 'utc' },
+    }, true);
+    expect(hourlyErrors.filter(e => e.field.startsWith('cadence'))).toHaveLength(0);
+
+    const dailyErrors = validateTemplate({
+      ...validTemplate,
+      cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'local' },
+    }, true);
+    expect(dailyErrors.filter(e => e.field.startsWith('cadence'))).toHaveLength(0);
+  });
+
+  it('rejects invalid cadence payloads', () => {
+    const invalidKind = validateTemplate({
+      ...validTemplate,
+      cadence: { kind: 'weekly' as any },
+    }, true);
+    expect(invalidKind.some(e => e.field === 'cadence.kind')).toBe(true);
+
+    const invalidHourlyMinute = validateTemplate({
+      ...validTemplate,
+      cadence: { kind: 'hourly', minute: 60, timezone: 'utc' } as any,
+    }, true);
+    expect(invalidHourlyMinute.some(e => e.field === 'cadence.minute')).toBe(true);
+
+    const invalidDailyTimezone = validateTemplate({
+      ...validTemplate,
+      cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'mars' } as any,
+    }, true);
+    expect(invalidDailyTimezone.some(e => e.field === 'cadence.timezone')).toBe(true);
   });
 
   it('rejects intervalMs below minimum (5 min)', () => {
@@ -174,6 +297,11 @@ describe('validateTemplate', () => {
   it('rejects invalid mode', () => {
     const errors = validateTemplate({ ...validTemplate, mode: 'other' as any }, true);
     expect(errors.some(e => e.field === 'mode')).toBe(true);
+  });
+
+  it('rejects invalid internalStateInput type', () => {
+    const errors = validateTemplate({ ...validTemplate, internalStateInput: 'yes' as any }, true);
+    expect(errors.some(e => e.field === 'internalStateInput')).toBe(true);
   });
 
   it('rejects invalid deliberation voices', () => {

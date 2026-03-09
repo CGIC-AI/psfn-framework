@@ -11,14 +11,35 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  DEFAULT_CONTINUOUS_RUNTIME_ROOT,
+  DEFAULT_PRODUCTION_RUNTIME_ROOT,
+  RUNTIME_LAYOUT_MODE,
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
+  normalizeRuntimeLayoutMode,
+  resolveBackupsDir,
+  resolveCharacterCardHistoryPath,
+  resolveCoreMemoryPath,
+  resolveConfiguredCompanionDataDir,
+  resolveConfiguredSystemDataDir,
   resolveContactsDir,
   resolveContinuityDir,
+  resolveHeartbeatPolicyPath,
+  resolveIdentityAssetsDir,
   resolveLegacyValuesJournalPath,
+  resolveLastActiveSessionPath,
   resolveNotesDir,
+  resolvePersistenceRoots,
+  resolvePromptHistoryPath,
+  resolvePromptLayersPath,
+  resolvePromptRegistryHistoryPath,
+  resolvePromptRegistryPath,
   resolveReflectionJournalPath,
   resolveReflectionNotesDir,
+  resolveRuntimeLayoutMode,
+  resolveRuntimePathLayout,
+  resolveSafeguardAuditTrailPath,
+  resolveShardSessionMemorySyncAuditPath,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
   resolveValuesJournalPath,
@@ -51,8 +72,8 @@ describe('persistence layout', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('resolves canonical paths under a data directory', () => {
-    const dataDir = join(tempDir, 'data');
+  it('resolves canonical companion-state paths under a companion data directory', () => {
+    const dataDir = join(tempDir, 'companion');
 
     expect(resolveSessionsDir(dataDir)).toBe(join(dataDir, 'sessions'));
     expect(resolveNotesDir(dataDir)).toBe(join(dataDir, 'notes'));
@@ -63,6 +84,151 @@ describe('persistence layout', () => {
     expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'notes', 'reflections'));
     expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'journal.jsonl'));
     expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'notes', 'scratchpad.json'));
+    expect(resolveCoreMemoryPath(dataDir)).toBe(join(dataDir, 'core_memory.json'));
+    expect(resolveCharacterCardHistoryPath(dataDir)).toBe(join(dataDir, 'character-card-history.jsonl'));
+    expect(resolvePromptLayersPath(dataDir)).toBe(join(dataDir, 'prompt-layers.json'));
+    expect(resolvePromptHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-history.jsonl'));
+    expect(resolvePromptRegistryPath(dataDir)).toBe(join(dataDir, 'prompt-registry.json'));
+    expect(resolvePromptRegistryHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-registry-history.jsonl'));
+    expect(resolveHeartbeatPolicyPath(dataDir)).toBe(join(dataDir, 'heartbeat-policy.json'));
+    expect(resolveSafeguardAuditTrailPath(dataDir)).toBe(join(dataDir, 'safeguards-audit.jsonl'));
+    expect(resolveShardSessionMemorySyncAuditPath(dataDir)).toBe(
+      join(dataDir, 'shard-session-memory-sync-audit.jsonl'),
+    );
+    expect(resolveIdentityAssetsDir(dataDir)).toBe(join(dataDir, 'identity-assets'));
+    expect(resolveBackupsDir(dataDir)).toBe(join(dataDir, 'backups'));
+    expect(resolveLastActiveSessionPath(dataDir)).toBe(join(dataDir, 'last_active_channel.json'));
+  });
+
+  it('uses the legacy shared data root when split roots are not configured', () => {
+    expect(resolvePersistenceRoots()).toEqual({
+      systemDataDir: './data',
+      companionDataDir: './data',
+      usesLegacySharedDataDir: true,
+    });
+    expect(resolvePersistenceRoots({ legacyDataDir: '/tmp/shared-root' })).toEqual({
+      systemDataDir: '/tmp/shared-root',
+      companionDataDir: '/tmp/shared-root',
+      usesLegacySharedDataDir: true,
+    });
+  });
+
+  it('resolves explicit system/companion split roots', () => {
+    expect(resolvePersistenceRoots({
+      systemDataDir: '/tmp/system-data',
+      companionDataDir: '/tmp/companion-data',
+    })).toEqual({
+      systemDataDir: '/tmp/system-data',
+      companionDataDir: '/tmp/companion-data',
+      usesLegacySharedDataDir: false,
+    });
+  });
+
+  it('rejects ambiguous or invalid split-root configuration', () => {
+    expect(() => resolvePersistenceRoots({
+      systemDataDir: '/tmp/system-data',
+    })).toThrow('SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together');
+    expect(() => resolvePersistenceRoots({
+      companionDataDir: '/tmp/companion-data',
+    })).toThrow('SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together');
+    expect(() => resolvePersistenceRoots({
+      systemDataDir: '/tmp/shared',
+      companionDataDir: '/tmp/shared',
+    })).toThrow('SYSTEM_DATA_DIR and COMPANION_DATA_DIR must point to different roots');
+  });
+
+  it('normalizes runtime layout mode aliases and defaults from NODE_ENV', () => {
+    expect(normalizeRuntimeLayoutMode('prod')).toBe(RUNTIME_LAYOUT_MODE.PRODUCTION);
+    expect(normalizeRuntimeLayoutMode('DEV')).toBe(RUNTIME_LAYOUT_MODE.CONTINUOUS);
+    expect(resolveRuntimeLayoutMode({ nodeEnv: 'production' })).toBe(RUNTIME_LAYOUT_MODE.PRODUCTION);
+    expect(resolveRuntimeLayoutMode({ nodeEnv: 'development' })).toBe(RUNTIME_LAYOUT_MODE.CONTINUOUS);
+    expect(() => resolveRuntimeLayoutMode({ mode: 'staging' })).toThrow(
+      'Unsupported PSFN_RUNTIME_LAYOUT_MODE "staging"',
+    );
+  });
+
+  it('resolves continuous-mode defaults with shared data root compatibility', () => {
+    expect(resolveRuntimePathLayout()).toEqual({
+      mode: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+      runtimeRootDir: DEFAULT_CONTINUOUS_RUNTIME_ROOT,
+      systemDataDir: './data',
+      companionDataDir: './data',
+      workspacePath: './workspace',
+      logsDir: './logs',
+      tempDir: './tmp',
+      backupsDir: resolveBackupsDir('./data'),
+      usesLegacySharedDataDir: true,
+    });
+  });
+
+  it('resolves production-mode defaults with isolated roots', () => {
+    expect(resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+    })).toEqual({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+      runtimeRootDir: DEFAULT_PRODUCTION_RUNTIME_ROOT,
+      systemDataDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/system-data`,
+      companionDataDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/companion-data`,
+      workspacePath: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/workspace`,
+      logsDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/logs`,
+      tempDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/tmp`,
+      backupsDir: `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/backups`,
+      usesLegacySharedDataDir: false,
+    });
+  });
+
+  it('rejects production mode when DATA_DIR shared-root fallback would be used', () => {
+    expect(() => resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+      legacyDataDir: '/srv/shared-data',
+    })).toThrow('DATA_DIR shared-root mode is forbidden');
+  });
+
+  it('rejects duplicate and overlapping mutable roots in production mode', () => {
+    expect(() => resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+      systemDataDir: '/srv/psfn/system-data',
+      companionDataDir: '/srv/psfn/companion-data',
+      workspacePath: '/srv/psfn/companion-data',
+    })).toThrow('shares a mutable root');
+
+    expect(() => resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+      systemDataDir: '/srv/psfn/system-data',
+      companionDataDir: '/srv/psfn/companion-data',
+      backupsDir: '/srv/psfn/companion-data/backups',
+    })).toThrow('must not overlap');
+  });
+
+  it('derives continuous shared data defaults from explicit runtime root', () => {
+    const layout = resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+      runtimeRootDir: '/srv/psfn/continuous',
+    });
+    expect(layout.systemDataDir).toBe('/srv/psfn/continuous/data');
+    expect(layout.companionDataDir).toBe('/srv/psfn/continuous/data');
+    expect(layout.workspacePath).toBe('/srv/psfn/continuous/workspace');
+    expect(layout.logsDir).toBe('/srv/psfn/continuous/logs');
+    expect(layout.tempDir).toBe('/srv/psfn/continuous/tmp');
+  });
+
+  it('resolves configured system and companion dirs from config-style objects', () => {
+    expect(resolveConfiguredSystemDataDir({
+      dataDir: '/tmp/legacy',
+    })).toBe('/tmp/legacy');
+    expect(resolveConfiguredCompanionDataDir({
+      dataDir: '/tmp/legacy',
+    })).toBe('/tmp/legacy');
+    expect(resolveConfiguredSystemDataDir({
+      dataDir: '/tmp/legacy',
+      systemDataDir: '/tmp/system',
+      companionDataDir: '/tmp/companion',
+    })).toBe('/tmp/system');
+    expect(resolveConfiguredCompanionDataDir({
+      dataDir: '/tmp/legacy',
+      systemDataDir: '/tmp/system',
+      companionDataDir: '/tmp/companion',
+    })).toBe('/tmp/companion');
   });
 
   it('creates all expected persistence directories', () => {

@@ -4,13 +4,13 @@
 
 import 'dotenv/config';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { LLMClient } from './llm/client.js';
-import { createEmbeddingProviderFromEnv } from './memory/embedding.js';
-import { DiscordAdapter } from './channels/discord/adapter.js';
-import { TelegramAdapter } from './channels/telegram/adapter.js';
+import { createEmbeddingProviderFromConfig } from './memory/embedding.js';
+import type { DiscordAdapter } from './channels/discord/adapter.js';
+import type { TelegramAdapter } from './channels/telegram/adapter.js';
 import {
   loadRuntimeChannelsConfig,
   type RuntimeChannelsConfigOverrides,
@@ -21,13 +21,13 @@ import { AuditStore } from './gateway/audit.js';
 import {
   resolveAllowedReadPathsFromEnv,
   resolveFullCodebaseReadRootFromEnv,
-  resolveTrustedModuleRegistryPathFromEnv,
 } from './gateway/policy-config.js';
 import {
   ensureRegistryFile,
   resolveModuleRegistryPathFromWorkspace,
 } from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
+import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
 import type { SubstrateMessage } from './types.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
@@ -35,31 +35,54 @@ import { createWyomingServiceRegistry } from './channels/wyoming/services/index.
 import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/handle.js';
 import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
-import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
-import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
+import type { ChannelAdapter } from './channels/types.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,
+  EligibilityDeniedError,
   type EligibilityDecision,
 } from './capabilities/eligibility.js';
 import { GitOps } from './git/ops.js';
-import { loadSettings, applySettings } from './settings.js';
-import { loadModelsConfig } from './config/models-config.js';
+import { resolveGitRepoRoot } from './git/repo-root.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
-import { parsePositiveIntEnv } from './utils/env.js';
+import {
+  parseBooleanEnv as parseEnvBoolean,
+  parseEnvList,
+  parsePositiveIntEnv,
+} from './utils/env.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
-import { resolveRuntimeVoiceProviderGate } from './runtime/bootstrap-helpers.js';
+import {
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
+  hydrateCanonicalStartupConfig,
+  resolveRuntimeVoiceProviderGate,
+  type StartupConfigHydrationDiagnostics,
+} from './runtime/bootstrap-helpers.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
 import type { BeadsAction } from './gateway/protocol.js';
+import type { VaultPolicyAction } from './gateway/policy.js';
+import { VaultOps } from './vault/ops.js';
 import {
   startDiscordWithRetry,
   DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
 } from './gateway/discord-startup.js';
+import {
+  createDiscordChannelAdapterFactoryEntry,
+  createTelegramChannelAdapterFactoryEntry,
+  getOptionalChannelAdapter,
+  requireChannelAdapter,
+} from './bootstrap/channel-runtime.js';
+import {
+  buildChannelAdapterFactoryManifest,
+  loadChannelAdaptersFromManifest,
+} from './runtime/channel-lifecycle.js';
+import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
@@ -70,6 +93,7 @@ const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;
 const DEFAULT_SHELL_EXEC_OUTPUT_CHARS = 20_000;
 const DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP = 100_000;
+const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 const ALL_BEADS_ACTIONS: readonly BeadsAction[] = [
   'ready',
   'show',
@@ -78,6 +102,67 @@ const ALL_BEADS_ACTIONS: readonly BeadsAction[] = [
   'close',
   'sync',
 ];
+const ALL_VAULT_ACTIONS: readonly VaultPolicyAction[] = [
+  'write',
+  'read',
+  'search',
+  'daily',
+];
+
+function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {
+  if (diagnostics.modelsMigratedFromLegacySettings) {
+    log.warn('Migrated legacy model settings from settings.json to models.json');
+  } else if (diagnostics.modelsLegacyDriftDetected) {
+    log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+  }
+
+  if (diagnostics.maintenanceIntervalMigration.state === 'migrated') {
+    log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
+      maintenanceIntervalMs:
+        diagnostics.maintenanceIntervalMigration.storedValue
+        ?? diagnostics.maintenanceIntervalMigration.settingsValue,
+    });
+  } else if (diagnostics.maintenanceIntervalMigration.state === 'drift_detected') {
+    log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
+      settingsMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.settingsValue,
+      schedulerMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.storedValue,
+    });
+  } else if (diagnostics.maintenanceIntervalMigration.state === 'error') {
+    log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
+      error: diagnostics.maintenanceIntervalMigration.error ?? 'unknown',
+    });
+  }
+
+  if (diagnostics.capabilityTierMigration.state === 'migrated') {
+    log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
+      capabilityTier:
+        diagnostics.capabilityTierMigration.storedValue
+        ?? diagnostics.capabilityTierMigration.settingsValue,
+    });
+  } else if (diagnostics.capabilityTierMigration.state === 'drift_detected') {
+    log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
+      settingsCapabilityTier: diagnostics.capabilityTierMigration.settingsValue,
+      capabilityTier: diagnostics.capabilityTierMigration.storedValue,
+    });
+  } else if (diagnostics.capabilityTierMigration.state === 'error') {
+    log.warn('Failed to migrate legacy capabilityTier from settings.json', {
+      error: diagnostics.capabilityTierMigration.error ?? 'unknown',
+    });
+  }
+
+  if (diagnostics.removedLegacyKeys.length > 0) {
+    if (diagnostics.settingsRewriteError) {
+      log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
+        keys: diagnostics.removedLegacyKeys,
+        error: diagnostics.settingsRewriteError,
+      });
+    } else {
+      log.warn('Removed legacy cross-domain keys from settings.json', {
+        keys: diagnostics.removedLegacyKeys,
+      });
+    }
+  }
+}
 
 function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
   eventBus.emit('capability.eligibility', {
@@ -160,27 +245,13 @@ function createDiscordReverseRpcVoiceModule(): GatewayVoiceModule {
   };
 }
 
-function parseStringListEnv(value: string | undefined): string[] | undefined {
-  if (typeof value !== 'string') return undefined;
-  const parsed = [...new Set(
-    value
-      .split(',')
-      .map(entry => entry.trim())
-      .filter(Boolean),
-  )];
-  return parsed.length > 0 ? parsed : undefined;
-}
-
-function parseBooleanEnv(value: string | undefined, fallback = false): boolean {
-  if (typeof value !== 'string') return fallback;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
-  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
-  return fallback;
+function parseBooleanEnvWithFallback(value: string | undefined, fallback = false): boolean {
+  const parsed = parseEnvBoolean(value);
+  return parsed === undefined ? fallback : parsed;
 }
 
 function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefined {
-  const parsed = parseStringListEnv(value);
+  const parsed = parseEnvList(value, { separators: [','] });
   if (!parsed) {
     return value === undefined ? undefined : [];
   }
@@ -191,6 +262,23 @@ function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefi
     const normalized = entry.toLowerCase();
     if (valid.has(normalized as BeadsAction)) {
       actions.push(normalized as BeadsAction);
+    }
+  }
+  return actions;
+}
+
+function parseVaultActionsEnv(value: string | undefined): VaultPolicyAction[] | undefined {
+  const parsed = parseEnvList(value, { separators: [','] });
+  if (!parsed) {
+    return value === undefined ? undefined : [];
+  }
+
+  const valid = new Set(ALL_VAULT_ACTIONS);
+  const actions: VaultPolicyAction[] = [];
+  for (const entry of parsed) {
+    const normalized = entry.toLowerCase();
+    if (valid.has(normalized as VaultPolicyAction)) {
+      actions.push(normalized as VaultPolicyAction);
     }
   }
   return actions;
@@ -226,6 +314,66 @@ function resolveGatewayRuntimeMode(raw: string | undefined): string {
     return 'gateway-agent';
   }
   return normalized;
+}
+
+function normalizeConfiguredHttpUrl(raw: string | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    if ((parsed.protocol === 'http:' && parsed.port === '80')
+      || (parsed.protocol === 'https:' && parsed.port === '443')) {
+      parsed.port = '';
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function resolveLiteLLMDiscoveryModelsUrl(rawBaseUrl: string | undefined): string | null {
+  const normalizedBaseUrl = normalizeConfiguredHttpUrl(rawBaseUrl);
+  if (!normalizedBaseUrl) return null;
+
+  const parsed = new URL(normalizedBaseUrl);
+  const basePath = parsed.pathname
+    .replace(/\/+$/, '')
+    .replace(/\/v1$/i, '');
+  parsed.pathname = `${basePath}/v1/models`.replace(/\/{2,}/g, '/');
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString();
+}
+
+function resolveDiscoveryLaneConfig(input: {
+  litellmBaseUrl: string | undefined;
+  openRouterModelsApiUrl: string | undefined;
+}): { enabled: true; allowHttp: boolean; urlAllowlist: string[] } | undefined {
+  const litellmModelsUrl = resolveLiteLLMDiscoveryModelsUrl(input.litellmBaseUrl);
+  if (!litellmModelsUrl) {
+    return undefined;
+  }
+
+  const openRouterUrl = normalizeConfiguredHttpUrl(input.openRouterModelsApiUrl);
+  const urlAllowlist = [...new Set(
+    [litellmModelsUrl, openRouterUrl]
+      .filter((value): value is string => Boolean(value)),
+  )];
+  if (urlAllowlist.length === 0) {
+    return undefined;
+  }
+
+  return {
+    enabled: true,
+    allowHttp: urlAllowlist.some(url => url.startsWith('http://')),
+    urlAllowlist,
+  };
 }
 
 async function runShutdownStep(
@@ -289,22 +437,44 @@ function buildGatewayChannelsConfigOverrides(
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const savedSettings = loadSettings(config.dataDir);
-  applySettings(config, savedSettings);
-  const modelsConfig = loadModelsConfig(config.dataDir, {
-    defaultContextWindow: config.defaultContextWindow,
+  const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
+  if (ignoredMutableEnvKeys.length > 0) {
+    log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
+      keys: ignoredMutableEnvKeys,
+    });
+  }
+  const startupHydration = hydrateCanonicalStartupConfig(config, {
+    env: process.env,
   });
-  applySettings(config, modelsConfig);
+  const {
+    systemDataDir,
+    companionDataDir,
+    runtimePathLayout,
+    settingsDomains,
+    trustPolicyConfig,
+  } = startupHydration;
+  logStartupHydrationDiagnostics(startupHydration.diagnostics);
+  log.info('Loaded trust policy configuration', {
+    exactOverrideCount: Object.keys(
+      trustPolicyConfig.channelClassification.visibilityOverrides.exact,
+    ).length,
+    prefixOverrideCount: Object.keys(
+      trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
+    ).length,
+  });
   const channelsConfig = loadRuntimeChannelsConfig(
-    config.dataDir,
+    systemDataDir,
     process.env,
-    buildGatewayChannelsConfigOverrides(config, savedSettings),
+    buildGatewayChannelsConfigOverrides(config, settingsDomains.runtime),
   );
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const workspacePathEnv = process.env.WORKSPACE_PATH;
-  const workspacePath = workspacePathEnv ?? './workspace';
+  const workspacePath = runtimePathLayout.workspacePath;
   if (!workspacePathEnv) {
-    log.warn('WORKSPACE_PATH not set, defaulting to ./workspace');
+    log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
+      mode: runtimePathLayout.mode,
+      workspacePath,
+    });
   }
   const ntfyBaseUrl = process.env.NTFY_BASE_URL?.trim() || undefined;
   const ntfyTopic = process.env.NTFY_TOPIC?.trim() || undefined;
@@ -317,9 +487,9 @@ async function main(): Promise<void> {
   );
   const confirmationOperatorDiscordChannelId = process.env.CONFIRMATION_OPERATOR_DISCORD_CHANNEL_ID?.trim() || undefined;
   const confirmationNtfyTopic = process.env.CONFIRMATION_NTFY_TOPIC?.trim() || undefined;
-  const shellExecEnabled = parseBooleanEnv(process.env.SHELL_EXEC_ENABLED, false);
-  const shellExecAllowlist = parseStringListEnv(process.env.SHELL_EXEC_ALLOWLIST);
-  const shellExecAllowedCwd = parseStringListEnv(process.env.SHELL_EXEC_ALLOWED_CWD);
+  const shellExecEnabled = parseBooleanEnvWithFallback(process.env.SHELL_EXEC_ENABLED, false);
+  const shellExecAllowlist = parseEnvList(process.env.SHELL_EXEC_ALLOWLIST, { separators: [','] });
+  const shellExecAllowedCwd = parseEnvList(process.env.SHELL_EXEC_ALLOWED_CWD, { separators: [','] });
   const shellExecDefaultTimeoutMs = parsePositiveIntEnv(
     process.env.SHELL_EXEC_DEFAULT_TIMEOUT_MS,
     DEFAULT_SHELL_EXEC_TIMEOUT_MS,
@@ -336,9 +506,15 @@ async function main(): Promise<void> {
     process.env.SHELL_EXEC_MAX_OUTPUT_CHARS,
     DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
   );
-  const beadsToolsEnabled = parseBooleanEnv(process.env.BEADS_TOOLS_ENABLED, false);
+  const beadsToolsEnabled = parseBooleanEnvWithFallback(process.env.BEADS_TOOLS_ENABLED, false);
   const beadsAllowActions = parseBeadsActionsEnv(process.env.BEADS_ALLOW_ACTIONS)
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
+  const vaultToolsEnabled = parseBooleanEnvWithFallback(
+    process.env.VAULT_TOOLS_ENABLED,
+    Boolean(config.obsidianVaultName),
+  );
+  const vaultAllowActions = parseVaultActionsEnv(process.env.VAULT_ALLOW_ACTIONS)
+    ?? (vaultToolsEnabled ? [...ALL_VAULT_ACTIONS] : undefined);
   const discordStartRetryBaseDelayMs = parsePositiveIntEnv(
     process.env.DISCORD_START_RETRY_BASE_DELAY_MS,
     DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
@@ -361,14 +537,48 @@ async function main(): Promise<void> {
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
   log.info('Initializing...');
+  if (systemDataDir !== companionDataDir) {
+    log.info('Configured split persistence roots', {
+      systemDataDir,
+      companionDataDir,
+    });
+  }
 
   // Ensure gateway socket directory exists
   mkdirSync(dirname(socketPath), { recursive: true });
   const runtimeMode = resolveGatewayRuntimeMode(process.env.PSFN_RUNTIME_MODE);
   const codebaseRoot = resolve('.');
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
+  const gitRepoRoot = resolveGitRepoRoot({
+    codebaseRoot,
+    configuredGitRepoRoot: process.env.GIT_REPO_ROOT,
+  });
   mkdirSync(workspaceRoot, { recursive: true });
+  if (workspaceRoot !== gitRepoRoot) {
+    log.info('Gateway workspace and git roots diverge', {
+      workspaceRoot,
+      gitRepoRoot,
+    });
+  }
+  if (vaultToolsEnabled && !config.obsidianVaultName) {
+    throw new Error(
+      'VAULT_TOOLS_ENABLED is true but obsidianVaultName is not configured in settings.',
+    );
+  }
+  const vaultOps = vaultToolsEnabled
+    ? new VaultOps({
+      vaultName: config.obsidianVaultName!,
+      ...(config.obsidianCliPath ? { cliPath: config.obsidianCliPath } : {}),
+      ...(typeof config.obsidianTimeoutMs === 'number'
+        ? { timeoutMs: config.obsidianTimeoutMs }
+        : {}),
+    })
+    : undefined;
   const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(process.env, codebaseRoot);
+  const discoveryLaneConfig = resolveDiscoveryLaneConfig({
+    litellmBaseUrl: process.env.LITELLM_BASE_URL,
+    openRouterModelsApiUrl: config.openRouterModelsApiUrl,
+  });
   if (fullCodebaseReadRoot) {
     log.warn('YOLO runtime mode active: full-codebase fs.read is enabled', {
       runtimeMode,
@@ -386,35 +596,62 @@ async function main(): Promise<void> {
     process.env.MODULE_REGISTRY_PATH,
   );
   ensureRegistryFile(moduleRegistryAbsolute);
-  const trustedModuleRegistryPath = resolveTrustedModuleRegistryPathFromEnv(process.env, workspaceRoot);
 
   // ── Create providers (these hold secrets / have network access) ──
-  const embeddingProvider = createEmbeddingProviderFromEnv(process.env);
+  const embeddingProvider = createEmbeddingProviderFromConfig(config, process.env);
   log.info('Embedding provider initialized', {
     provider: embeddingProvider.kind,
     dims: embeddingProvider.dims,
   });
   const gitOps = new GitOps({
-    repoRoot: workspaceRoot,
+    repoRoot: gitRepoRoot,
   });
-
-  const discord = new DiscordAdapter(config, eventBus);
-  const telegram = channelsConfig.telegram.enabled
-    ? new TelegramAdapter(channelsConfig.telegram, eventBus)
-    : null;
   const capabilityRuntime = new CapabilityRuntime({
-    dataDir: config.dataDir,
-    envTier: config.capabilityTier,
+    dataDir: systemDataDir,
   });
   const eligibilityGate = createEligibilityGate(
     () => capabilityRuntime,
     (decision) => emitEligibilityDecision(eventBus, decision),
   );
-  const llmClient = new LLMClient(config, { eligibilityGate });
+  const llmClient = new LLMClient(config, {
+    eligibilityGate,
+    onBudgetBlocked: (event) => {
+      eventBus.emit('model.budget.blocked', event).catch((error) => {
+        log.error('Failed to emit model budget blocked telemetry', {
+          error: error instanceof Error ? error.message : String(error),
+          provider: event.provider,
+          model: event.model,
+          reason: event.reason,
+        });
+      });
+    },
+  });
+
+  const gatewayChannelRegistry = new Map<string, ChannelAdapter>();
+  const gatewayChannelManifest = buildChannelAdapterFactoryManifest([
+    createDiscordChannelAdapterFactoryEntry({
+      config,
+      eventBus,
+      eligibilityGate,
+    }),
+    createTelegramChannelAdapterFactoryEntry({
+      config: channelsConfig.telegram,
+      eventBus,
+    }),
+  ]);
+  await loadChannelAdaptersFromManifest(
+    gatewayChannelRegistry,
+    gatewayChannelManifest,
+    () => undefined,
+    log,
+    eligibilityGate,
+  );
+  const discord = requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord');
+  const telegram = getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram');
 
   // ── Audit database (separate from agent's runtime DB) ──
 
-  const auditDbPath = process.env.AUDIT_DB_PATH ?? './data/gateway-audit.db';
+  const auditDbPath = process.env.AUDIT_DB_PATH ?? join(systemDataDir, 'gateway-audit.db');
   const auditDb = initDatabase(auditDbPath, { foreignKeys: false });
   const auditStore = new AuditStore(auditDb);
   log.info(`Audit log: ${auditDbPath}`);
@@ -437,6 +674,7 @@ async function main(): Promise<void> {
           ? { domainAllowlist: config.webFetchDomainAllowlist }
           : {}),
         allowInternalNetwork: config.webFetchAllowInternalNetwork === true,
+        ...(discoveryLaneConfig ? { discoveryLane: discoveryLaneConfig } : {}),
         // Deprecated: local crawler lane preserved for backward compat
         localCrawlerLane: {
           enabled: config.webFetchLocalCrawlerEnabled === true,
@@ -464,6 +702,11 @@ async function main(): Promise<void> {
       beads: {
         enabled: beadsToolsEnabled,
         ...(beadsAllowActions ? { allowActions: beadsAllowActions } : {}),
+      },
+      vault: {
+        enabled: vaultToolsEnabled,
+        ...(vaultAllowActions ? { allowActions: vaultAllowActions } : {}),
+        ...(vaultOps ? { ops: vaultOps } : {}),
       },
     },
     ntfy: ntfyBaseUrl && ntfyTopic
@@ -528,14 +771,29 @@ async function main(): Promise<void> {
     const wyomingSttProvider = voiceProviderGate.sttProvider;
     const wyomingTtsProvider = voiceProviderGate.ttsProvider;
 
-    // ASR adapter — wired to Deepgram STT only when provider + credentials are enabled
-    if (voiceProviderGate.sttEnabled && wyomingSttProvider === 'deepgram') {
-      const sttConnector = createStreamingSttConnector('deepgram', {
-        apiKey: config.deepgramApiKey!,
-        model: config.deepgramModel,
-      });
-      wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
-      log.info('Wyoming ASR adapter enabled (deepgram)');
+    if (voiceProviderGate.sttEnabled) {
+      try {
+        const runtimeStt = createRuntimeVoiceSttConnector(config, {
+          eligibilityGate,
+        });
+        if (!runtimeStt) {
+          log.info('Wyoming ASR adapter disabled', {
+            provider: wyomingSttProvider,
+            reason: 'eligibility_or_runtime_binding_unavailable',
+          });
+        } else {
+          wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: runtimeStt.connector }));
+          log.info('Wyoming ASR adapter enabled', { provider: runtimeStt.provider });
+        }
+      } catch (error) {
+        if (!(error instanceof EligibilityDeniedError)) {
+          throw error;
+        }
+        log.info('Wyoming ASR adapter disabled by eligibility gate', {
+          provider: wyomingSttProvider,
+          error: error.message,
+        });
+      }
     } else {
       log.info('Wyoming ASR adapter disabled', {
         provider: wyomingSttProvider,
@@ -545,26 +803,16 @@ async function main(): Promise<void> {
 
     // TTS adapter — wired only when provider + credentials/config are enabled
     try {
-      let ttsConnector;
       if (voiceProviderGate.ttsEnabled) {
-        if (wyomingTtsProvider === 'echo') {
-          ttsConnector = createStreamingTtsConnector('echo', {
-            url: config.echoTtsUrl!,
-            voice: config.echoTtsVoice!,
-            ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
-            ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
-          });
-        } else if (wyomingTtsProvider === 'elevenlabs' && config.elevenLabsVoiceId) {
-          ttsConnector = createStreamingTtsConnector('elevenlabs', {
-            apiKey: config.elevenLabsApiKey!,
-            voiceId: config.elevenLabsVoiceId,
-            modelId: config.elevenLabsModelId,
-          });
+        const runtimeTts = createRuntimeVoiceTtsConnector(config, {
+          requireElevenLabsVoiceId: true,
+          eligibilityGate,
+        });
+        if (!runtimeTts) {
+          throw new Error(`Expected runtime TTS connector for provider "${wyomingTtsProvider}"`);
         }
-      }
-      if (ttsConnector) {
-        wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: ttsConnector }));
-        log.info('Wyoming TTS adapter enabled', { provider: wyomingTtsProvider });
+        wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: runtimeTts.connector }));
+        log.info('Wyoming TTS adapter enabled', { provider: runtimeTts.provider });
       } else {
         log.info('Wyoming TTS adapter disabled', {
           provider: wyomingTtsProvider,
@@ -573,7 +821,14 @@ async function main(): Promise<void> {
         });
       }
     } catch (error) {
-      log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+      if (error instanceof EligibilityDeniedError) {
+        log.info('Wyoming TTS adapter disabled by eligibility gate', {
+          provider: wyomingTtsProvider,
+          error: error.message,
+        });
+      } else {
+        log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+      }
     }
 
     const serviceRegistry = createWyomingServiceRegistry(wyomingAdapters);
@@ -588,9 +843,9 @@ async function main(): Promise<void> {
 
     wyomingRuntime = new WyomingRuntime({
       info: {
-        name: 'psfn',
+        name: DEFAULT_COMPANION_ID,
         version: '1.0.0',
-        description: 'PSFN Substrate Framework — Wyoming voice bridge',
+        description: 'Companion Substrate Framework — Wyoming voice bridge',
         services: serviceRegistry.services,
       } as WyomingInfoData,
       emitFrame: (session, frame) => wyomingTcpServer!.send(session, frame),
@@ -613,6 +868,9 @@ async function main(): Promise<void> {
   });
 
   if (telegram) {
+    if (typeof telegram.onMessage !== 'function') {
+      throw new Error('Telegram adapter is missing onMessage bootstrap hook');
+    }
     telegram.onMessage(async (msg) => {
       const result = await gateway.requestAgentVoiceStream(msg);
       return {
@@ -702,28 +960,15 @@ async function main(): Promise<void> {
     await stopPromise;
   };
 
-  let shutdownPromise: Promise<void> | null = null;
-  const shutdown = async (signal: string) => {
-    if (shutdownPromise) {
-      log.warn('Shutdown already in progress; ignoring additional signal', { signal });
-      await shutdownPromise;
-      return;
-    }
-
-    shutdownPromise = (async () => {
-      log.info(`Received ${signal}, shutting down...`);
-      await stop();
-      process.exit(0);
-    })().catch((error) => {
-      log.error('Graceful shutdown failed; forcing exit', {
-        signal,
-        error: String(error),
-      });
-      process.exit(1);
-    });
-
-    await shutdownPromise;
-  };
+  const shutdown = createSignalShutdownHandler({
+    logger: log,
+    runGracefulShutdown: stop,
+    exit: (code) => { process.exit(code); },
+    forceExitTimeoutMs: parsePositiveIntEnv(
+      process.env.SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+      DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+    ),
+  });
 
   process.on('SIGINT', () => {
     void shutdown('SIGINT').catch((error) => {

@@ -319,7 +319,7 @@ function buildAggregatorMessages(
   return [{ role: 'user', content }];
 }
 
-interface DeliberationCompletionProvider extends LLMProvider {
+interface DeliberationCompletionProvider {
   complete(
     context: { systemPrompt: string; messages: ContextMessage[] },
     purpose: CompletionPurpose,
@@ -423,7 +423,7 @@ export async function runDeliberation(
       const roundRemainingTokens = config.caps.maxTokensPerRound !== undefined
         ? Math.max(1, config.caps.maxTokensPerRound - (roundInputTokens + roundOutputTokens))
         : undefined;
-      if (config.caps.maxTokensPerRound !== undefined && roundRemainingTokens <= 0) {
+      if (roundRemainingTokens !== undefined && roundRemainingTokens <= 0) {
         stopReason = 'token_cap';
         break;
       }
@@ -489,7 +489,7 @@ export async function runDeliberation(
       const roundRemainingTokens = config.caps.maxTokensPerRound !== undefined
         ? Math.max(1, config.caps.maxTokensPerRound - (roundInputTokens + roundOutputTokens))
         : undefined;
-      if (config.caps.maxTokensPerRound !== undefined && roundRemainingTokens <= 0) {
+      if (roundRemainingTokens !== undefined && roundRemainingTokens <= 0) {
         stopReason = 'token_cap';
       } else {
         const synthesisResponse = await completeForDeliberation(

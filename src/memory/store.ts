@@ -10,9 +10,11 @@ import { writeJsonAtomic } from '../utils/fs.js';
 import { createComponentLogger } from '../logger.js';
 import {
   normalizeConsentFlags,
+  normalizeFormationVAD,
   type PurrMemory,
   type SensitivityLevel,
   type ConsentFlags,
+  type MemoryFormationVAD,
 } from './types.js';
 
 const SCRATCHPAD_MAX_ENTRIES = 64;
@@ -63,6 +65,7 @@ interface MemoryRow {
   importance: number;
   confidence: number;
   emotional_valence: number;
+  formation_vad: string | null;
   salience: number;
   source_ref: string;
   extracted_at: number;
@@ -236,6 +239,7 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
   let tags: string[] = [];
   let provenanceRefs: string[] = [];
   let consentFlags: ConsentFlags = {};
+  let formationVAD: MemoryFormationVAD | undefined;
   try {
     tags = JSON.parse(row.tags) as string[];
   } catch {
@@ -254,6 +258,12 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
   } catch {
     consentFlags = {};
   }
+  try {
+    const parsed = JSON.parse(row.formation_vad ?? 'null');
+    formationVAD = normalizeFormationVAD(parsed as Partial<MemoryFormationVAD> | undefined);
+  } catch {
+    formationVAD = undefined;
+  }
 
   return {
     id: row.id,
@@ -262,6 +272,7 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
     importance: row.importance,
     confidence: row.confidence,
     emotionalValence: row.emotional_valence,
+    formationVAD,
     salience: row.salience,
     sourceRef: row.source_ref,
     extractedAt: row.extracted_at,
@@ -398,6 +409,7 @@ export class MemoryStore {
         importance REAL NOT NULL DEFAULT 0.5,
         confidence REAL NOT NULL DEFAULT 0.7,
         emotional_valence REAL NOT NULL DEFAULT 0.0,
+        formation_vad TEXT,
         salience REAL NOT NULL DEFAULT 0.5,
         source_ref TEXT NOT NULL,
         extracted_at INTEGER NOT NULL,
@@ -498,6 +510,10 @@ export class MemoryStore {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_refs TEXT NOT NULL DEFAULT '[]'`);
     }
 
+    if (!hasColumn(this.db, 'l2_memories', 'formation_vad')) {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN formation_vad TEXT`);
+    }
+
     // Add soft-delete columns for reversible destructive operations
     try {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN deleted_at INTEGER`);
@@ -568,10 +584,10 @@ export class MemoryStore {
 
   insertMemory(memory: PurrMemory, embedding: Float32Array): void {
     const insertMem = this.db.prepare(`
-      INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence,
+      INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence, formation_vad,
         salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
         provenance_refs, sensitivity, consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = this.db.prepare(`
@@ -587,6 +603,7 @@ export class MemoryStore {
         memory.importance,
         memory.confidence,
         memory.emotionalValence,
+        memory.formationVAD ? JSON.stringify(memory.formationVAD) : null,
         memory.salience,
         memory.sourceRef,
         memory.extractedAt,

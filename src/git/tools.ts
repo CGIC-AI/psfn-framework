@@ -94,7 +94,7 @@ export function createRepoApplyPatchTool(gitOps: GitOperations): AgentTool<any> 
     label: 'repo_apply_patch',
     description:
       'Write content to a file and stage it for commit. Path must be in allowed directories ' +
-      '(src/, docs/, psfn/). Blocked on protected branches.',
+      '(src/, docs/, companion/; legacy psfn/ is still allowed). Blocked on protected branches.',
     parameters: Type.Object({
       file_path: Type.String({
         description: 'Path relative to repo root (must be in allowed directories).',
@@ -179,7 +179,8 @@ export function createRepoOpenPRTool(gitOps: GitOperations): AgentTool<any> {
     name: 'repo_open_pr',
     label: 'repo_open_pr',
     description:
-      'Open a GitHub pull request from the current branch. Requires the gh CLI to be installed.',
+      'Open a GitHub pull request from the current branch. Blocked on protected branches (main, master). ' +
+      'Requires the gh CLI to be installed.',
     parameters: Type.Object({
       title: Type.String({ description: 'PR title.' }),
       body: Type.String({ description: 'PR description body (markdown).' }),

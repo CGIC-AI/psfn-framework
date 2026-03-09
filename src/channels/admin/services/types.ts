@@ -12,6 +12,7 @@ import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
 import type { SessionEntry } from '../../../session/types.js';
+import type { EditableSettings } from '../../../settings.js';
 import type { SubstrateConfig } from '../../../types.js';
 import type {
   Contact,
@@ -22,6 +23,7 @@ import type {
 import type {
   CapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
+import type { SettingsContractData } from '../../../config/settings-contract.js';
 import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
@@ -29,11 +31,12 @@ import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
 import type {
   ChannelInfo,
   CompactionAuditView,
+  DashboardCostWindow,
   DashboardStats,
   EnvInfo,
 } from '../types.js';
 import type { ContactConversationChannelView } from './contact-session-linker.js';
-import type { IdentityIntakeReviewState } from '../templates/identity.js';
+import type { IdentityIntakeReviewState } from '../identity-intake-types.js';
 import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolRuntimeState,
@@ -45,7 +48,7 @@ export interface AdminDashboardData {
 }
 
 export interface AdminDashboardService {
-  getDashboardData(): AdminDashboardData;
+  getDashboardData(options?: { costWindow?: DashboardCostWindow }): AdminDashboardData;
 }
 
 export type AdminAdaptiveToolTelemetryEvent =
@@ -184,6 +187,14 @@ export interface FieldUpdateResult {
   message: string;
 }
 
+export interface OnboardingActionResult {
+  ok: boolean;
+  message: string;
+  onboardingRequired: boolean;
+  action?: 'keep_starter' | 'edit_identity';
+  updatedFields?: string[];
+}
+
 export interface AdminIdentityService {
   getIdentityData(): AdminIdentityData;
   importIdentityCard(body: string): Promise<ImportResult>;
@@ -192,6 +203,7 @@ export interface AdminIdentityService {
   rollbackIdentityCard(body: string): RollbackResult;
   previewIdentityCardDiff(body: string): DiffPreviewResult;
   updateIdentityField(body: string): FieldUpdateResult;
+  applyOnboardingAction(body: string): Promise<OnboardingActionResult>;
 }
 
 export interface SettingsConfigEditors {
@@ -202,10 +214,22 @@ export interface SettingsConfigEditors {
   capabilities: CapabilityTierConfig;
 }
 
+export interface AdminVoiceProviderOption {
+  id: string;
+  configured: boolean;
+  requiredTokens: string[];
+}
+
+export interface AdminVoiceProviderData {
+  stt: AdminVoiceProviderOption[];
+  tts: AdminVoiceProviderOption[];
+}
+
 export interface AdminSettingsData {
-  config: SubstrateConfig;
+  config: EditableSettings;
   env: EnvInfo;
   editors: SettingsConfigEditors;
+  voiceProviders: AdminVoiceProviderData;
 }
 
 export interface SettingsValidationError {
@@ -222,6 +246,7 @@ export interface ConfigUpdateResult {
 
 export interface AdminSettingsService {
   getSettingsData(): Promise<AdminSettingsData>;
+  getSettingsContractData(): SettingsContractData;
   updateSettings(body: string): ConfigUpdateResult;
 }
 
@@ -262,6 +287,42 @@ export interface AdminPromptListData {
   staticPrompts: PromptRegistryEntry[];
 }
 
+export interface AdminConstitutionImmutableBlock {
+  id: string;
+  title: string;
+  content: string;
+  editable: false;
+}
+
+export interface AdminConstitutionCompanionLayer {
+  id: string;
+  title: string;
+  content: string;
+  provenanceRefs: string[];
+  historyVersions: number[];
+  entryIds: string[];
+  editable: false;
+}
+
+export interface AdminConstitutionMutableLayer extends PromptLayer {
+  editable: boolean;
+  readOnlyReason?: string;
+}
+
+export interface AdminConstitutionPreview {
+  text: string;
+  hash: string;
+  staticPrefix: string;
+  dynamicSuffix: string;
+}
+
+export interface AdminConstitutionSnapshotData {
+  immutableBlocks: AdminConstitutionImmutableBlock[];
+  companionLayer: AdminConstitutionCompanionLayer | null;
+  mutableLayers: AdminConstitutionMutableLayer[];
+  preview: AdminConstitutionPreview;
+}
+
 export interface AdminPromptDetailData {
   layer?: PromptLayer;
   layerHistory?: PromptHistoryEntry[];
@@ -276,8 +337,16 @@ export interface PromptUpdateResult {
   staticPrompt?: PromptRegistryEntry;
 }
 
+export interface ConstitutionUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: AdminConstitutionSnapshotData;
+}
+
 export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
+  getConstitutionSnapshot(): AdminConstitutionSnapshotData | null;
+  saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult;
   getPromptDetail(layerId: string): AdminPromptDetailData | null;
   getStaticPromptDetail(key: string): AdminPromptDetailData | null;
   createPromptLayer(body: string): PromptUpdateResult;

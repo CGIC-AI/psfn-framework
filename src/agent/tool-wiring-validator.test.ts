@@ -6,6 +6,7 @@ import {
   validateAndLogToolWiring,
   extractGatewayMethods,
   resolveClientMethod,
+  type ToolConcurrencyMeta,
   type WirableTool,
 } from './tool-wiring-validator.js';
 
@@ -23,6 +24,32 @@ function makeTool(name: string, meta?: WirableTool['wiringMeta']): AgentTool<any
     tool.wiringMeta = meta;
   }
   return tool;
+}
+
+function makeConcurrencyMeta(
+  toolClass: ToolConcurrencyMeta['class'],
+  overrides?: Partial<ToolConcurrencyMeta>,
+): ToolConcurrencyMeta {
+  const eligibility = {
+    foreground: true,
+    background: true,
+    ...(overrides?.eligibility ?? {}),
+  };
+
+  const base: ToolConcurrencyMeta = {
+    class: toolClass,
+    exclusivityKeyPolicy: toolClass === 'exclusive' ? 'category_tool_name' : 'none',
+    ...(toolClass === 'exclusive' ? { exclusivityKey: 'core:test_tool' } : {}),
+    ...(toolClass === 'exclusive' ? {} : { maxParallel: 3 }),
+    interruptibility: toolClass === 'spawn_shard' ? 'non_interruptible' : 'cooperative',
+    eligibility,
+  };
+
+  return {
+    ...base,
+    ...overrides,
+    ...(overrides?.eligibility ? { eligibility: { ...eligibility, ...overrides.eligibility } } : {}),
+  };
 }
 
 // ── Tests ──
@@ -246,6 +273,79 @@ describe('validateToolWiring', () => {
     expect(report.validTools).toBe(3);
     expect(report.invalidTools).toHaveLength(1);
     expect(report.invalidTools[0].toolName).toBe('annotated_bad');
+  });
+
+  it('fails closed when concurrency metadata is required and missing', () => {
+    const tools = [
+      makeTool('repo_status', { requiredGatewayMethods: ['git.status'] }),
+      makeTool('memory_write'),
+    ];
+    const report = validateToolWiring({
+      mode: 'single',
+      tools,
+      requireConcurrencyMetadata: true,
+    });
+    expect(report.invalidTools).toHaveLength(2);
+    expect(report.invalidTools[0].missingConcurrencyMetadata).toContain('concurrency metadata missing');
+    expect(report.invalidTools[1].missingConcurrencyMetadata).toContain('concurrency metadata missing');
+  });
+
+  it('accepts valid concurrency metadata when required', () => {
+    const tools = [
+      makeTool('repo_status', {
+        requiredGatewayMethods: ['git.status'],
+        concurrency: makeConcurrencyMeta('read_only', { maxParallel: 3 }),
+      }),
+      makeTool('memory_write', {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKey: 'core:memory_write',
+          exclusivityKeyPolicy: 'static_key',
+        }),
+      }),
+      makeTool('spawn_shard', {
+        concurrency: makeConcurrencyMeta('spawn_shard', { maxParallel: 5 }),
+      }),
+    ];
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools,
+      gatewayClientMethods: new Set(['gitStatus']),
+      requireConcurrencyMetadata: true,
+    });
+    expect(report.invalidTools).toHaveLength(0);
+  });
+
+  it('rejects invalid exclusive concurrency metadata when required', () => {
+    const tools = [
+      makeTool('memory_delete', {
+        concurrency: {
+          ...makeConcurrencyMeta('exclusive', {
+            exclusivityKey: undefined,
+            exclusivityKeyPolicy: 'none',
+          }),
+          // explicit any-casts verify validator fail-closed behavior for invalid metadata
+          interruptibility: 'invalid' as any,
+        },
+      }),
+      makeTool('repo_diff', {
+        concurrency: makeConcurrencyMeta('read_only', {
+          maxParallel: 0,
+          exclusivityKeyPolicy: 'static_key' as any,
+          exclusivityKey: 'extended:repo_diff',
+          eligibility: { foreground: false, background: false },
+        }),
+      }),
+    ];
+    const report = validateToolWiring({
+      mode: 'single',
+      tools,
+      requireConcurrencyMetadata: true,
+    });
+    expect(report.invalidTools).toHaveLength(2);
+    expect(report.invalidTools[0].missingConcurrencyMetadata.join(' ')).toContain('exclusive tools require');
+    expect(report.invalidTools[0].missingConcurrencyMetadata.join(' ')).toContain('interruptibility');
+    expect(report.invalidTools[1].missingConcurrencyMetadata.join(' ')).toContain('maxParallel');
+    expect(report.invalidTools[1].missingConcurrencyMetadata.join(' ')).toContain('eligibility');
   });
 });
 

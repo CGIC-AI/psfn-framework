@@ -339,6 +339,123 @@ describe('runRLMLoop', () => {
     });
   });
 
+  it('runs sub_think with isolated child context and conclusion-only return when policy allows it', async () => {
+    const llm = sequentialLLM([
+      '```repl\nconst child = await sub_think("child task"); print(child);\n```',
+      'FINAL("child conclusion")',
+      'FINAL("parent conclusion")',
+    ]);
+
+    const result = await runRLMLoop(
+      'Root task',
+      makeDeps(llm, {
+        getCapabilityTier: () => 'autonomous',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['think'],
+        },
+      }),
+      {
+        channelId: 'api:session-1',
+        requestId: 'req-nested',
+        toolCallId: 'tool-nested',
+        toolName: 'think',
+        originType: 'tool',
+        originStage: 'repl.think.tool',
+      },
+    );
+
+    expect(result.answer).toBe('parent conclusion');
+    expect(result.diagnostics).toMatchObject({
+      nestedThinkCallCount: 1,
+      nestedThinkSuccessCount: 1,
+      nestedThinkFailureCount: 0,
+      maxNestedDepthReached: 1,
+    });
+
+    const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(3);
+    expect(calls[1][0].messages[0]).toEqual({ role: 'user', content: 'child task' });
+    expect(calls[1][0].messages).toHaveLength(2);
+    expect(calls[1][0].correlation).toMatchObject({
+      requestId: 'req-nested:subthink-1:iteration-1',
+      toolCallId: 'tool-nested:subthink-1',
+      originStage: 'repl.think.iteration',
+      purpose: 'repl.think.iteration',
+    });
+
+    const feedback = calls[2][0].messages[2].content;
+    expect(feedback).toContain('child conclusion');
+    expect(feedback).not.toContain('[Think:');
+  });
+
+  it('fails closed when sub_think is denied by compositional policy', async () => {
+    const llm = sequentialLLM([
+      '```repl\nawait sub_think("blocked task");\n```',
+      'FINAL("done")',
+    ]);
+
+    const result = await runRLMLoop(
+      'Denied nested think',
+      makeDeps(llm),
+      {
+        channelId: 'api:session-2',
+        requestId: 'req-denied',
+        toolCallId: 'tool-denied',
+        toolName: 'think',
+        originType: 'tool',
+        originStage: 'repl.think.tool',
+      },
+    );
+
+    const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1][0].messages[2].content).toContain(
+      'sub_think is disabled by compositional policy (disabled)',
+    );
+    expect(result.diagnostics.nestedThinkFailureCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('counts nested think LLM spend against the parent token budget', async () => {
+    const llm = sequentialLLM([
+      '```repl\nconst child = await sub_think("budget child"); print(child);\n```',
+      'FINAL("child conclusion")',
+      'FINAL("parent conclusion")',
+    ]);
+    const deps = makeDeps(llm, {
+      getCapabilityTier: () => 'autonomous',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['think'],
+      },
+      config: makeConfig({ maxTokens: 50 }),
+    });
+
+    const result = await runRLMLoop(
+      'Nested budget test',
+      deps,
+      {
+        channelId: 'api:session-3',
+        requestId: 'req-budget',
+        toolCallId: 'tool-budget',
+        toolName: 'think',
+        originType: 'tool',
+        originStage: 'repl.think.tool',
+      },
+    );
+
+    expect(result.truncated).toBe(true);
+    expect(result.iterations).toBe(2);
+    expect(result.totalInputTokens).toBe(20);
+    expect(result.totalOutputTokens).toBe(40);
+    expect(result.budgetStatus.exceeded).toBe('token budget');
+    expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(2);
+  });
+
   it('enforces max tool-call budget across sandbox helper calls', async () => {
     const llm = Object.assign(
       sequentialLLM([
@@ -498,6 +615,35 @@ describe('runRLMLoop', () => {
     expect(nursery.iterations).toBe(5);
     expect(apprentice.iterations).toBe(10);
     expect(autonomous.iterations).toBe(15);
+  });
+
+  it('clamps configured wall-time budget to active tier wall-time ceiling', async () => {
+    const llm: LLMProvider = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => {
+        await new Promise(resolve => setTimeout(resolve, 45));
+        return mockResponse('FINAL("too late")');
+      }),
+    };
+
+    const config = makeConfig({ maxWallTimeMs: 500_000 });
+    config.tierBudgets = {
+      ...config.tierBudgets,
+      nursery: {
+        ...config.tierBudgets.nursery,
+        maxWallTimeMs: 25,
+      },
+    };
+
+    const result = await runRLMLoop('tier wall-time clamp', makeDeps(llm, {
+      config,
+      getCapabilityTier: () => 'nursery',
+    }));
+
+    expect(result.truncated).toBe(true);
+    expect(result.iterations).toBe(0);
+    expect(result.budgetStatus.exceeded).toBe('wall time');
+    expect(result.answer).toBe('[No response generated]');
   });
 
   it('enforces invocation rate limits across think calls', async () => {

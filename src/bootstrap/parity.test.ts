@@ -8,14 +8,51 @@ import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { readLastActiveSession } from '../lifecycle/notifications.js';
 import { createDefaultExtendedToolAutoloadPolicy } from '../agent/extended-tool-autoload-policy.js';
+import { buildInternalStateSnapshotRef, InternalStateComputer } from '../self-model/state.js';
 import {
   wireExtendedToolAutoloadPolicy,
   wireHeartbeatRuntime,
+  wirePromptRuntime,
   wireSessionToolsRuntime,
   wireSettingsRuntime,
 } from './parity.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../agent/deferred-tool-handoff.js';
+
+function createInternalStateNarrativeFixture() {
+  const internalState = new InternalStateComputer().computeState({
+    emotionState: {
+      vad: { valence: 0.2, arousal: 0.35, dominance: 0.1 },
+      mood: { valence: 0.1, arousal: 0.25, dominance: 0.05 },
+      discrete: { curiosity: 0.6, calm: 0.4 },
+      confidence: 0.78,
+    },
+    activeConcerns: [{
+      id: 'concern-1',
+      text: 'Keep reflections grounded in lived experience',
+      priority: 'high',
+      source: 'heartbeat',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      expiresAt: '2026-03-02T00:00:00.000Z',
+    }],
+    trustLevel: 'trusted',
+    contactId: 'contact-1',
+    sessionMetrics: {
+      userMessageText: 'How am I doing right now?',
+      responseText: 'You are steady with moments of uncertainty.',
+      toolCallCount: 1,
+      recentTurnCount: 4,
+      lastSeenDeltaSeconds: 180,
+    },
+  });
+  return {
+    internalState,
+    snapshotRef: buildInternalStateSnapshotRef(internalState),
+    metacognitiveFlags: [
+      { flag: 'uncertainty', confidence: 0.57, evidence: 'multiple competing hypotheses' },
+    ],
+  };
+}
 
 describe('wireSessionToolsRuntime', () => {
   let tempDir: string;
@@ -38,13 +75,39 @@ describe('wireSessionToolsRuntime', () => {
       getSessionActivity: vi.fn(() => null),
       setActiveContextSession: vi.fn(),
       getActiveContextSession: vi.fn(() => null),
+      startFocusSession: vi.fn((channelId: string, scope: string) => ({
+        focusId: 'focus-test',
+        channelId,
+        scope,
+        startedAt: 1_700_000_000_000,
+        startEntryId: 0,
+      })),
+      getFocusSessionContext: vi.fn(() => null),
+      completeFocusSession: vi.fn(),
+    } as any;
+    const llmProvider = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => ({
+        content: 'focus summary',
+        toolCalls: [],
+        model: 'mock-context',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
     } as any;
 
-    wireSessionToolsRuntime(target, sessionManager, tempDir);
+    wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls).toHaveLength(3);
-    expect(calls.map(([tool]) => tool.name).sort()).toEqual(['session_list', 'session_new', 'session_resume']);
+    expect(calls).toHaveLength(5);
+    expect(calls.map(([tool]) => tool.name).sort()).toEqual([
+      'complete_focus',
+      'session_list',
+      'session_new',
+      'session_resume',
+      'start_focus',
+    ]);
     expect(calls.every(([, category]) => category === 'extended')).toBe(true);
 
     const sessionNewTool = calls.find(([tool]) => tool.name === 'session_new')?.[0] as {
@@ -111,6 +174,39 @@ describe('wireSettingsRuntime', () => {
   });
 });
 
+describe('wirePromptRuntime', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'prompt-runtime-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('registers prompt tools including prompt rollback as extended tools', () => {
+    const target = {
+      promptComposer: null,
+      registerTool: vi.fn(),
+    };
+
+    wirePromptRuntime(target as any, tempDir, 'Base prompt');
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    expect(calls.every(([, category]) => category === 'extended')).toBe(true);
+    expect(calls.map(([tool]) => tool.name)).toEqual(expect.arrayContaining([
+      'prompt_layer_list',
+      'prompt_layer_get',
+      'identity_diff',
+      'identity_changelog',
+      'prompt_layer_update',
+      'prompt_layer_rollback',
+      'prompt_layer_toggle',
+    ]));
+  });
+});
+
 describe('wireExtendedToolAutoloadPolicy', () => {
   it('applies default autoload policy when no override is provided', () => {
     const target = {
@@ -152,7 +248,16 @@ describe('wireHeartbeatRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('writes versioned values entries when values-reflection task runs', async () => {
+  it('registers reflection tasks using template cadence', () => {
+    const store = new HeartbeatPolicyStore(join(tempDir, 'heartbeat-policy.json'));
+    const policy = store.load();
+    const whisper = policy.templates.find(template => template.id === 'whisper');
+    if (!whisper) {
+      throw new Error('whisper template missing');
+    }
+    whisper.cadence = { kind: 'hourly', minute: 0, timezone: 'utc' };
+    store.save(policy);
+
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -162,7 +267,85 @@ describe('wireHeartbeatRuntime', () => {
       registerTool: vi.fn(),
     };
     const agentLoop = {
-      handleMessage: vi.fn().mockResolvedValue({ content: 'Values reflection body' }),
+      handleMessage: vi.fn().mockResolvedValue({ content: 'reflection output' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+    );
+
+    const task = scheduler.getTask('reflection:whisper');
+    expect(task).toBeDefined();
+    expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
+  });
+
+  it('registers values tool surface as extended tools', () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'reflection output' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+    );
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    const names = calls.map(([tool]) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([
+      'values_list',
+      'values_add',
+      'values_update',
+    ]));
+    expect(
+      calls
+        .filter(([tool]) => ['values_list', 'values_add', 'values_update'].includes(tool.name))
+        .every(([, category]) => category === 'extended'),
+    ).toBe(true);
+  });
+
+  it('writes versioned values entries when values-reflection task runs', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const narrative = createInternalStateNarrativeFixture();
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({
+        content: 'Values reflection body',
+        metadata: {
+          internalState: narrative.internalState,
+          internalStateSnapshotRef: narrative.snapshotRef,
+          metacognitiveFlags: narrative.metacognitiveFlags,
+        },
+      }),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -194,11 +377,23 @@ describe('wireHeartbeatRuntime', () => {
         templateId: string;
         templateName: string;
         reflection: string;
+        internalStateSnapshotRef?: string;
+        internalState?: unknown;
+        metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
       };
       expect(entry.version).toBe(1);
       expect(entry.templateId).toBe('values-reflection');
       expect(entry.templateName).toBe('Values Reflection');
       expect(entry.reflection).toContain('Values reflection body');
+      expect(entry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+      expect(entry.internalState).toEqual(narrative.internalState);
+      expect(entry.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
+
+      const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
+        (call) => call[0]?.channelId === 'internal:reflection:values-reflection',
+      );
+      expect(valuesCall?.[0]?.content).toContain('[Internal State Input]');
+      expect(valuesCall?.[0]?.content).toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
     }
@@ -228,8 +423,12 @@ describe('wireHeartbeatRuntime', () => {
     const target = {
       registerTool: vi.fn(),
     };
+    const narrative = createInternalStateNarrativeFixture();
     const agentLoop = {
       handleMessage: vi.fn().mockResolvedValue({ content: 'fallback response' }),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -324,11 +523,16 @@ describe('wireHeartbeatRuntime', () => {
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(
         'Appearance context:\nhands with cat ears and tail',
       );
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Internal State Input]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
       expect(memoryWriter.write).toHaveBeenCalledTimes(1);
 
       const raw = readFileSync(join(tempDir, 'notes', 'values.jsonl'), 'utf-8').trim();
       const entry = JSON.parse(raw) as {
         reflection: string;
+        internalStateSnapshotRef?: string;
+        internalState?: unknown;
+        metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
         deliberation?: {
           rounds: number;
           totalTokens: number;
@@ -336,6 +540,9 @@ describe('wireHeartbeatRuntime', () => {
         };
       };
       expect(entry.reflection).toContain('synthesized values reflection');
+      expect(entry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+      expect(entry.internalState).toEqual(narrative.internalState);
+      expect(entry.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
       expect(entry.deliberation?.rounds).toBe(1);
       expect(entry.deliberation?.totalTokens).toBe(190);
       expect(entry.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
@@ -346,12 +553,64 @@ describe('wireHeartbeatRuntime', () => {
       const reflectionEntry = JSON.parse(reflectionLines[reflectionLines.length - 1] ?? '{}') as {
         mode: string;
         templateId: string;
+        internalStateSnapshotRef?: string;
       };
       expect(reflectionEntry.templateId).toBe('values-reflection');
       expect(reflectionEntry.mode).toBe('deliberation');
+      expect(reflectionEntry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('injects InternalState narrative payload for experiential-review template runs', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const narrative = createInternalStateNarrativeFixture();
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'Experiential reflection body' }),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+    );
+
+    const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
+    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
+    expect(runTemplateTool).toBeDefined();
+
+    const runResult = await runTemplateTool.execute(
+      'manual-experiential',
+      { templateId: 'experiential-review', deferIfBusy: false },
+      new AbortController().signal,
+    );
+    const runText = runResult.content.map((part: { text: string }) => part.text).join('');
+    expect(runText).toContain('Triggered reflection template "Experiential Review" (experiential-review).');
+
+    const experientialCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0]?.channelId === 'internal:reflection:experiential-review',
+    );
+    expect(experientialCall).toBeDefined();
+    expect(experientialCall?.[0]?.content).toContain('[Internal State Input]');
+    expect(experientialCall?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
+    expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
+    expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
   });
 
   it('defers manual template runs when the agent is busy and executes them after idle', async () => {
@@ -462,8 +721,8 @@ describe('wireHeartbeatRuntime', () => {
         response: { content: string };
         turnMessages: unknown[];
       },
-    ) => Array<{ kind: string; dedupeKey?: string; payload?: Record<string, unknown> }>;
-    const inferredActions = inferer({
+    ) => Promise<Array<{ kind: string; dedupeKey?: string; payload?: Record<string, unknown> }>>;
+    const inferredActions = await inferer({
       message: { id: 'msg-1', channelId: 'test-channel' },
       response: { content: 'ok' },
       turnMessages: [{
@@ -528,6 +787,115 @@ describe('wireHeartbeatRuntime', () => {
 
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
     expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+  });
+
+  it('gates composed post-turn appraisal by compositional policy', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const duplicateTurnMessages = [{
+      role: 'toolResult',
+      toolName: 'load_tools',
+      result: {
+        details: {
+          deferredToolHandoff: {
+            toolNames: ['extended_probe_tool'],
+            intendedAction: 'Use extended_probe_tool to collect diagnostics.',
+            maxRetries: 1,
+          },
+        },
+      },
+    }, {
+      role: 'toolResult',
+      toolName: 'load_tools',
+      result: {
+        details: {
+          deferredToolHandoff: {
+            toolNames: ['extended_probe_tool'],
+            intendedAction: 'Use extended_probe_tool to collect diagnostics.',
+            maxRetries: 1,
+          },
+        },
+      },
+    }];
+    const message = {
+      id: 'msg-dup-1',
+      channelId: 'api:test',
+      channelType: 'terminal' as const,
+      authorId: 'user-1',
+      authorName: 'Test User',
+      content: 'hello',
+      timestamp: new Date(),
+    };
+    const buildInferer = (allowedPurposes: string[]) => {
+      const target = { registerTool: vi.fn() };
+      const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
+      const agentLoop = {
+        handleMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        activateExtendedTools: vi.fn().mockReturnValue({
+          requestedTools: ['extended_probe_tool'],
+          activatedTools: ['extended_probe_tool'],
+          alreadyActiveTools: [],
+          missingTools: [],
+        }),
+        registerPostTurnActionInferer,
+      };
+      const sender = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      const postTurnActions = {
+        registerHandler: vi.fn().mockReturnValue(() => {}),
+        listQueued: vi.fn().mockReturnValue([]),
+      };
+
+      wireHeartbeatRuntime(
+        target,
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+        undefined,
+        {
+          eventBus,
+          postTurnActions,
+          capabilityTier: 'autonomous',
+          compositionalPolicy: {
+            enabled: true,
+            allowedTiers: ['autonomous'],
+            allowedChannelTypes: ['api'],
+            allowedPurposes,
+          },
+        },
+      );
+
+      return registerPostTurnActionInferer.mock.calls[0]?.[0] as (
+        context: {
+          message: typeof message;
+          response: { content: string };
+          turnMessages: unknown[];
+        },
+      ) => Promise<Array<any>>;
+    };
+
+    const composedInferer = buildInferer(['appraisal']);
+    const legacyInferer = buildInferer(['retrieval']);
+
+    const composedActions = await composedInferer({
+      message,
+      response: { content: 'ok' },
+      turnMessages: duplicateTurnMessages,
+    });
+    const legacyActions = await legacyInferer({
+      message,
+      response: { content: 'ok' },
+      turnMessages: duplicateTurnMessages,
+    });
+
+    expect(composedActions).toHaveLength(1);
+    expect(legacyActions).toHaveLength(2);
   });
 
   it('suppresses rapid-fire deferred heartbeat template execution loops', async () => {
@@ -612,7 +980,7 @@ describe('wireHeartbeatRuntime', () => {
     }
   });
 
-  it('infers deferred tool-handoff actions from late load_tools discovery payloads', () => {
+  it('infers deferred tool-handoff actions from late load_tools discovery payloads', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -668,7 +1036,7 @@ describe('wireHeartbeatRuntime', () => {
         response: { content: string };
         turnMessages: unknown[];
       },
-    ) => Array<{
+    ) => Promise<Array<{
       kind: string;
       payload?: {
         toolNames?: string[];
@@ -683,8 +1051,8 @@ describe('wireHeartbeatRuntime', () => {
       };
       dedupeKey?: string;
       maxRetries?: number;
-    }>;
-    const inferredActions = inferer({
+    }>>;
+    const inferredActions = await inferer({
       message: {
         id: 'msg-1',
         channelId: 'test-channel',
@@ -729,7 +1097,7 @@ describe('wireHeartbeatRuntime', () => {
     expect(inferredActions[0]?.dedupeKey).toContain(`${DEFERRED_TOOL_HANDOFF_ACTION_KIND}:msg-1:`);
   });
 
-  it('continues deferred tool handoff after idle and emits queued/activated/executed telemetry', async () => {
+  it('continues deferred tool handoff in background and emits queued/activated/executed telemetry', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -787,7 +1155,7 @@ describe('wireHeartbeatRuntime', () => {
         response: { content: string };
         turnMessages: unknown[];
       },
-    ) => Array<any>;
+    ) => Promise<Array<any>>;
     const message = {
       id: 'msg-load-tools-1',
       channelId: 'test-channel',
@@ -797,7 +1165,7 @@ describe('wireHeartbeatRuntime', () => {
       content: 'hello',
       timestamp: new Date(),
     };
-    const inferredActions = inferer({
+    const inferredActions = await inferer({
       message,
       response: { content: 'ok' },
       turnMessages: [{
@@ -837,7 +1205,7 @@ describe('wireHeartbeatRuntime', () => {
 
     await scheduler.tick();
 
-    expect(agentLoop.waitForIdle).toHaveBeenCalled();
+    expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
     expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
     expect(agentLoop.activateExtendedTools).toHaveBeenCalledWith(
       ['extended_probe_tool'],
@@ -853,7 +1221,7 @@ describe('wireHeartbeatRuntime', () => {
     );
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(1);
     expect(sender.send).toHaveBeenCalledWith('test-channel', 'Deferred continuation output');
-    expect(phases).toEqual(expect.arrayContaining(['queued', 'activated', 'executed']));
+    expect(phases).toEqual(['queued', 'activated', 'executed']);
   });
 
   it('bounds deferred tool-handoff retries and emits failed telemetry once exhausted', async () => {
@@ -920,7 +1288,7 @@ describe('wireHeartbeatRuntime', () => {
           response: { content: string };
           turnMessages: unknown[];
         },
-      ) => Array<any>;
+      ) => Promise<Array<any>>;
       const message = {
         id: 'msg-load-tools-fail-1',
         channelId: 'test-channel',
@@ -930,7 +1298,7 @@ describe('wireHeartbeatRuntime', () => {
         content: 'hello',
         timestamp: new Date(),
       };
-      const inferredActions = inferer({
+      const inferredActions = await inferer({
         message,
         response: { content: 'ok' },
         turnMessages: [{
@@ -981,8 +1349,9 @@ describe('wireHeartbeatRuntime', () => {
       await scheduler.tick();
       expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
       expect(agentLoop.activateExtendedTools).toHaveBeenCalledTimes(1);
+      expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
       expect(sender.send).not.toHaveBeenCalled();
-      expect(phases).toEqual(expect.arrayContaining(['queued', 'activated', 'failed']));
+      expect(phases).toEqual(['queued', 'activated', 'failed']);
     } finally {
       nowSpy.mockRestore();
     }

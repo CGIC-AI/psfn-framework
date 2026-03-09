@@ -14,7 +14,7 @@ describe('skills runtime wiring', () => {
     mkdirSync(seedDir, { recursive: true });
     writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify({
       enabled: true,
-      directories: ['psfn/skills', 'skills'],
+      directories: ['companion/skills', 'skills'],
       extraDirectories: [],
       maxLoadedSkills: 32,
       maxSkillChars: 24_000,

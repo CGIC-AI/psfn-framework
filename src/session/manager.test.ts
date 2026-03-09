@@ -13,6 +13,7 @@ import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/
 import { MemoryStore } from '../memory/store.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
+import { createTurnId } from '../turns/id.js';
 import {
   buildCompactionSourceBlock,
   computeCompactionSourceSha256,
@@ -100,6 +101,204 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('ch1', 'System', 'Memory block');
     expect(ctx.systemPrompt).toContain('Memory block');
+  });
+
+  it('injects core memory into system prompt before retrieved memory block', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.setCoreMemoryProvider({
+      formatForContext: () => [
+        '[Core Memory]',
+        'persona:',
+        'Analytical and direct.',
+        'human:',
+        'Prefers concise updates.',
+        'goals:',
+        'Complete Phase V task PSFN-du0t.',
+      ].join('\n'),
+    });
+
+    const ctx = await mgr.buildContext('ch1', 'System', 'Retrieved memory block');
+    const coreIndex = ctx.systemPrompt.indexOf('[Core Memory]');
+    const memoryIndex = ctx.systemPrompt.indexOf('Retrieved memory block');
+
+    expect(coreIndex).toBeGreaterThanOrEqual(0);
+    expect(memoryIndex).toBeGreaterThan(coreIndex);
+    expect(ctx.systemPrompt).toContain('Complete Phase V task PSFN-du0t.');
+  });
+
+  it('records memory manifest details when retrieval seed metadata is provided', async () => {
+    const config = makeConfig({
+      memoryRetrievalLimit: 2,
+      memoryRetrievalBudgetPct: 15,
+    });
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'Hi there');
+
+    const ctx = await mgr.buildContext(
+      'ch1',
+      'System',
+      'Remembered facts',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      undefined,
+      {
+        reason: 'ok',
+        retrievalSource: 'embedding',
+        candidateCount: 6,
+        policyAllowedCount: 4,
+        rankedCount: 3,
+        returnedCount: 2,
+        retrievalLimit: 2,
+        retrievalBudgetPct: 15,
+        retrievalTokenBudget: 150,
+        retrievalLimitMode: 'hard_limit',
+        sensitivityRejectedCount: 1,
+        policyRejectedCount: 1,
+        scoreRejectedCount: 1,
+        budgetCappedCount: 1,
+        selectedTypes: { semantic: 1, episodic: 1 },
+        compositionalMode: 'applied',
+      },
+    );
+
+    expect(ctx.manifest?.memory).toMatchObject({
+      includedCount: 2,
+      includedTypes: { semantic: 1, episodic: 1 },
+      includedTokenCount: expect.any(Number),
+      reason: 'ok',
+      retrievalSource: 'embedding',
+      candidateCount: 6,
+      policyAllowedCount: 4,
+      rankedCount: 3,
+      returnedCount: 2,
+      excluded: {
+        sensitivityRejectedCount: 1,
+        policyRejectedCount: 1,
+        scoreRejectedCount: 1,
+        budgetCappedCount: 1,
+      },
+      retrieval: {
+        mode: 'hard_limit',
+        budgetPct: 15,
+        tokenBudget: 150,
+        limit: 2,
+        compositionalMode: 'applied',
+      },
+    });
+    expect(ctx.manifest?.budgets.memoryRetrieval).toMatchObject({
+      mode: 'hard_limit',
+      budgetPct: 15,
+      tokenBudget: 150,
+      hardLimit: 2,
+      actualCount: 2,
+      actualTokenCount: expect.any(Number),
+    });
+    expect(ctx.manifest?.budgets.sections).toEqual(expect.arrayContaining([
+      { section: 'system_prompt', tokenCount: expect.any(Number) },
+      { section: 'core_memory', tokenCount: expect.any(Number) },
+      { section: 'memories', tokenCount: expect.any(Number) },
+      { section: 'compaction_summary', tokenCount: 0 },
+      { section: 'continuity', tokenCount: 0 },
+      { section: 'session_history', tokenCount: expect.any(Number) },
+    ]));
+  });
+
+  it('persists tool observations and renders them as distinct context blocks', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Search for the latest log', 'u1', 'User');
+    mgr.recordToolObservation('ch1', {
+      toolName: 'search_logs',
+      toolCallId: 'tool-1',
+      content: 'Found 3 matching log entries.',
+    });
+    mgr.recordAssistantMessage('ch1', 'I found the relevant logs.');
+
+    const reloadedStore = new SessionStore(dir);
+    const reloadedManager = new SessionManager(reloadedStore, config);
+    const entries = reloadedStore.getRecent('ch1', 3);
+    expect(entries.map(entry => entry.role)).toEqual(['user', 'tool', 'assistant']);
+
+    const ctx = await reloadedManager.buildContext('ch1', 'System prompt', '');
+    expect(ctx.messages).toHaveLength(3);
+    expect(ctx.messages[0]).toEqual({ role: 'user', content: 'Search for the latest log' });
+    expect(ctx.messages[1]).toEqual({
+      role: 'user',
+      content: '[Tool result: search_logs] Found 3 matching log entries.',
+    });
+    expect(ctx.messages[2]).toEqual({ role: 'assistant', content: 'I found the relevant logs.' });
+  });
+
+  it('masks tool observations outside the configured rolling turn window', async () => {
+    const config = makeConfig({ observationMaskingWindow: 1 });
+    const mgr = new SessionManager(store, config);
+    const firstTurnId = createTurnId();
+    const secondTurnId = createTurnId();
+
+    mgr.recordUserMessage('ch1', 'First tool turn', 'u1', 'User', undefined, undefined, {
+      turnId: firstTurnId,
+      requestId: 'req-1',
+      sourceMessageId: 'msg-1',
+    });
+    mgr.recordToolObservation('ch1', {
+      toolName: 'search_logs',
+      toolCallId: 'tool-1',
+      content: 'Older tool output should be masked.',
+    }, undefined, {
+      turnId: firstTurnId,
+      requestId: 'req-1',
+      sourceMessageId: 'msg-1',
+    });
+    mgr.recordAssistantMessage('ch1', 'First turn complete.', undefined, undefined, undefined, {
+      turnId: firstTurnId,
+      requestId: 'req-1',
+      sourceMessageId: 'msg-1',
+    });
+
+    mgr.recordUserMessage('ch1', 'Second tool turn', 'u1', 'User', undefined, undefined, {
+      turnId: secondTurnId,
+      requestId: 'req-2',
+      sourceMessageId: 'msg-2',
+    });
+    mgr.recordToolObservation('ch1', {
+      toolName: 'search_logs',
+      toolCallId: 'tool-2',
+      content: 'Newest tool output should remain visible.',
+    }, undefined, {
+      turnId: secondTurnId,
+      requestId: 'req-2',
+      sourceMessageId: 'msg-2',
+    });
+    mgr.recordAssistantMessage('ch1', 'Second turn complete.', undefined, undefined, undefined, {
+      turnId: secondTurnId,
+      requestId: 'req-2',
+      sourceMessageId: 'msg-2',
+    });
+
+    const ctx = await mgr.buildContext('ch1', 'System prompt', '');
+    const allContent = ctx.messages.map(message => message.content).join('\n');
+    expect(allContent).toContain('[Tool result: search_logs — see earlier context]');
+    expect(allContent).not.toContain('Older tool output should be masked.');
+    expect(allContent).toContain('[Tool result: search_logs] Newest tool output should remain visible.');
+    expect(ctx.manifest?.session).toMatchObject({
+      sourceEntryCount: 6,
+      trimmedEntryCount: 0,
+      maskedEntryCount: 1,
+      compactedEntryCount: 0,
+      finalEntryCount: 6,
+      finalMessageCount: 6,
+      compactionSummaryCount: 0,
+      continuityEntryCount: 0,
+    });
+    expect(ctx.manifest?.budgets.sessionHistory).toMatchObject({
+      actualCount: 6,
+      actualTokenCount: expect.any(Number),
+    });
   });
 
   it('does not persist internal reflection channels to session journals', () => {
@@ -266,6 +465,84 @@ describe('SessionManager', () => {
     expect(budgetCtx.messages.length).toBeLessThan(overrideCtx.messages.length);
   });
 
+  it('applies adaptive per-turn session and memory budgets when enabled', async () => {
+    const config = makeConfig({
+      adaptiveContextBudgetsEnabled: true,
+      sessionMessageLimit: undefined,
+      memoryRetrievalLimit: undefined,
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 200_000,
+          contextBudget: {
+            sessionHistoryMinTokens: 1,
+            memoryRetrievalMinTokens: 1,
+          },
+        },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+
+    for (let i = 0; i < 40; i++) {
+      mgr.recordUserMessage('ch-adaptive', `Turn ${i} ` + 'x'.repeat(200), 'u1', 'User');
+    }
+
+    const recallTurn = { messageText: 'Can you remember what I told you last week?' };
+    const taskTurn = { messageText: 'Please implement this step-by-step refactor plan.' };
+    const recallSnapshot = mgr.captureTurnContextSnapshot(
+      'ch-adaptive',
+      undefined,
+      undefined,
+      [],
+      recallTurn,
+    );
+    const taskSnapshot = mgr.captureTurnContextSnapshot(
+      'ch-adaptive',
+      undefined,
+      undefined,
+      [],
+      taskTurn,
+    );
+
+    expect(recallSnapshot.recentEntries.length).toBeLessThan(taskSnapshot.recentEntries.length);
+
+    const recallContext = await mgr.buildContext(
+      'ch-adaptive',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      recallSnapshot,
+      undefined,
+      recallTurn,
+    );
+    const taskContext = await mgr.buildContext(
+      'ch-adaptive',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      taskSnapshot,
+      undefined,
+      taskTurn,
+    );
+
+    expect(recallContext.messages.length).toBeGreaterThan(0);
+    expect(taskContext.messages.length).toBeGreaterThan(0);
+    expect(recallContext.manifest?.budgets.sessionHistory.budgetPct).toBe(4);
+    expect(recallContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(8);
+    expect(taskContext.manifest?.budgets.sessionHistory.budgetPct).toBe(12);
+    expect(taskContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(2);
+  });
+
   it('prefers hard session limit over budget percentage', async () => {
     const config = makeConfig({
       sessionMessageLimit: 8,
@@ -335,6 +612,44 @@ describe('SessionManager', () => {
 
     expect(ctx.systemPrompt).toContain('Canonical continuity message');
     expect(ctx.systemPrompt).toContain('Legacy continuity message');
+  });
+
+  it('buildContext reuses a captured turn snapshot when live session state drifts', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity-snapshot'));
+    mgr.continuityStore = continuityStore;
+
+    mgr.recordUserMessage('api:main', 'snapshot message', 'u1', 'User');
+    mgr.recordAssistantMessage('api:main', 'snapshot reply');
+    continuityStore.append('user1', {
+      channelId: 'api:side',
+      originChannelId: 'api:side',
+      role: 'assistant',
+      content: 'snapshot continuity',
+      timestamp: 1_700_000_000_000,
+      channelVisibility: 'private',
+    });
+
+    const snapshot = mgr.captureTurnContextSnapshot('api:main', 'user1');
+
+    mgr.recordAssistantMessage('api:main', 'late drift');
+    continuityStore.append('user1', {
+      channelId: 'api:side',
+      originChannelId: 'api:side',
+      role: 'assistant',
+      content: 'late continuity',
+      timestamp: 1_700_000_000_100,
+      channelVisibility: 'private',
+    });
+
+    const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1', undefined, [], snapshot);
+
+    expect(ctx.messages.some(message => message.content.includes('snapshot message'))).toBe(true);
+    expect(ctx.messages.some(message => message.content.includes('snapshot reply'))).toBe(true);
+    expect(ctx.messages.some(message => message.content.includes('late drift'))).toBe(false);
+    expect(ctx.systemPrompt).toContain('snapshot continuity');
+    expect(ctx.systemPrompt).not.toContain('late continuity');
   });
 
   it('mirrors related messages into other active sessions with mirror metadata', () => {
@@ -530,6 +845,78 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBeLessThan(20);
     // Compaction summary should be in system prompt
     expect(ctx.systemPrompt).toContain('Previous conversation summary');
+    expect(ctx.manifest?.session).toMatchObject({
+      sourceEntryCount: 20,
+      compactedEntryCount: 10,
+      finalEntryCount: 10,
+      compactionSummaryCount: 1,
+    });
+    expect(ctx.manifest?.compaction).toMatchObject({
+      triggered: true,
+      thresholdPct: 70,
+    });
+    expect(ctx.manifest?.compaction.totalTokensAfter).toBeLessThan(
+      ctx.manifest?.compaction.totalTokensBefore ?? 0,
+    );
+  });
+
+  it('waits for scheduled auto-compaction before building the next turn context', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const mgr = new SessionManager(store, config);
+    let releaseCompaction: (() => void) | null = null;
+    const mockLLM: LLMProvider = {
+      stream: async () => ({
+        content: '',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+      complete: vi.fn<LLMProvider['complete']>().mockImplementation(async () => {
+        await new Promise<void>((resolve) => {
+          releaseCompaction = resolve;
+        });
+        return {
+          content: 'Summary of old messages.',
+          model: 'test',
+          inputTokens: 0,
+          outputTokens: 0,
+          toolCalls: [],
+          stopReason: 'end_turn',
+        };
+      }),
+    };
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
+    }
+
+    const compactionPromise = mgr.scheduleAutoCompactionBetweenTurns({
+      channelId: 'ch1',
+      systemPrompt: 'Sys',
+      memoriesBlock: '',
+      llmProvider: mockLLM,
+      userId: 'u1',
+    });
+    const nextContextPromise = mgr.buildContext('ch1', 'Sys', '');
+    const timeoutSentinel = Symbol('timeout');
+
+    const blockedResult = await Promise.race([
+      nextContextPromise,
+      new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), 20)),
+    ]);
+    expect(blockedResult).toBe(timeoutSentinel);
+
+    releaseCompaction?.();
+    await compactionPromise;
+    const ctx = await nextContextPromise;
+
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
+    expect(ctx.messages.length).toBeLessThan(20);
+    expect(ctx.systemPrompt).toContain('Previous conversation summary');
+    expect(ctx.systemPrompt).toContain('Summary of old messages.');
   });
 
   it('marks compaction summaries as untrusted at generation and retrieval boundaries', async () => {
@@ -1082,7 +1469,35 @@ describe('SessionManager', () => {
 
     expect(mockLLM.complete).toHaveBeenCalled();
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
-    expect(call.systemPrompt).toBe(customPrompt);
+    expect(call.systemPrompt).toContain(customPrompt);
+    expect(call.systemPrompt).toContain('[Compression Guideline v1]');
+  });
+
+  it('pins the compaction prompt inside a captured turn snapshot', async () => {
+    const config = makeConfig({ compactionThresholdPct: 70 });
+    const promptRegistry = new PromptRegistryStore(
+      join(dir, 'prompt-registry.json'),
+      join(dir, 'prompt-registry-history.jsonl'),
+    );
+    promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, 'Snapshot prompt v1', 'test');
+
+    const mgr = new SessionManager(store, config, undefined, promptRegistry);
+    const mockLLM = makeMockLLM();
+
+    for (let i = 0; i < 10; i++) {
+      mgr.recordUserMessage('ch1', 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
+    }
+
+    const snapshot = mgr.captureTurnContextSnapshot('ch1', 'u1');
+    promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, 'Live prompt v2', 'test');
+
+    await mgr.buildContext('ch1', 'Sys', '', mockLLM, 'u1', undefined, [], snapshot);
+
+    const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
+    expect(call.systemPrompt).toContain('Snapshot prompt v1');
+    expect(call.systemPrompt).not.toContain('Live prompt v2');
+    expect(call.systemPrompt).toContain('[Compression Guideline v1]');
   });
 
   it('injects runtime datetime tokens in compaction prompts', async () => {
@@ -1182,7 +1597,7 @@ describe('SessionManager', () => {
 
 describe('resolveRoleName', () => {
   it('maps assistant to configured character name', () => {
-    expect(resolveRoleName('assistant', { charName: 'PSFN' })).toBe('PSFN');
+    expect(resolveRoleName('assistant', { charName: 'Companion' })).toBe('Companion');
   });
 
   it('maps user to configured user name', () => {

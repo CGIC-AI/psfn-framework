@@ -138,6 +138,10 @@ The `think` tool (RLM+REPL sandbox) has per-tier hard ceilings on compute:
 | Tool calls | 25 | 40 | 50 |
 | Memory ceiling | 128 MB | 192 MB | 256 MB |
 
+Effective think wall-time is always:
+`min(settings.json thinkMaxWallTimeMs, active-tier wall-time cap)`.
+Example: with tier `nursery`, any higher settings value is clamped to 30s.
+
 ### Cost Caps
 
 | Tier | Daily Cap | Behavior |

@@ -356,6 +356,7 @@ export async function handleMessageForTurn(
   });
 
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
+  await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
   const userSessionEntryId = runtime.recordUserMessage(
     message,
@@ -579,7 +580,7 @@ export async function handleMessageForTurn(
         message.channelId,
         fullPrompt,
         memoryContextBlock,
-        runtime.llmClient,
+        undefined,
         authorContext.canonicalContactKey ?? message.authorId,
         channelMeta,
         authorContext.continuityFallbackKeys,
@@ -1083,6 +1084,22 @@ export async function handleMessageForTurn(
       templateVariables,
     }).catch((error) => {
       log.error('Emotion appraisal error', {
+        channelId: message.channelId,
+        error: toErrorMessage(error),
+      });
+    });
+
+    void runtime.sessionManager.scheduleAutoCompactionBetweenTurns({
+      channelId: message.channelId,
+      systemPrompt: fullPrompt,
+      memoriesBlock: memoryContextBlock,
+      llmProvider: runtime.llmClient,
+      channelMeta,
+      userId: authorContext.canonicalContactKey ?? message.authorId,
+      compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
+      turnBudgetCharacteristics,
+    }).catch((error) => {
+      log.error('Auto-compaction dispatch error', {
         channelId: message.channelId,
         error: toErrorMessage(error),
       });

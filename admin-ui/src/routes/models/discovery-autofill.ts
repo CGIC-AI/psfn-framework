@@ -28,6 +28,7 @@ const PER_TOKEN_TO_PER_MILLION = 1_000_000;
 const LOOKUP_WRAPPER_PREFIXES = new Set(['openrouter', 'litellm', 'proxy']);
 const PROVIDER_INFRA_HINTS = new Set(['proxy', 'litellm', 'router']);
 const LOOKUP_DISPLAY_SEPARATORS = [' — ', ' – ', ' - ', ' | ', ' · '] as const;
+const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 function normalizeString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -236,7 +237,16 @@ export function deriveDiscoveryAutofill(model: DiscoveryAutofillSource): Discove
 }
 
 export function buildUniqueModelId(preferredId: string, existingIds: ReadonlySet<string>): string {
-  const normalizedPreferred = normalizeString(preferredId) ?? 'model';
+  const normalizedPreferred = (() => {
+    const raw = normalizeString(preferredId) ?? 'model';
+    const sanitized = raw
+      .replace(/[^A-Za-z0-9._-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^[-._]+|[-._]+$/g, '');
+    if (sanitized.length === 0) return 'model';
+    if (!MODEL_SLOT_KEY_PATTERN.test(sanitized)) return 'model';
+    return sanitized;
+  })();
   if (!existingIds.has(normalizedPreferred)) return normalizedPreferred;
 
   let suffix = 2;

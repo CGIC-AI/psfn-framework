@@ -122,7 +122,13 @@ test('resolveDiscoveredModelSelection falls back to unique description matches',
 });
 
 test('buildUniqueModelId appends deterministic numeric suffixes', () => {
-  const existing = new Set(['z-ai/glm-5', 'z-ai/glm-5-2']);
-  assert.equal(buildUniqueModelId('z-ai/glm-5', existing), 'z-ai/glm-5-3');
-  assert.equal(buildUniqueModelId('openai/gpt-4.1-mini', existing), 'openai/gpt-4.1-mini');
+  const existing = new Set(['z-ai-glm-5', 'z-ai-glm-5-2']);
+  assert.equal(buildUniqueModelId('z-ai/glm-5', existing), 'z-ai-glm-5-3');
+  assert.equal(buildUniqueModelId('openai/gpt-4.1-mini', existing), 'openai-gpt-4.1-mini');
+});
+
+test('buildUniqueModelId normalizes invalid slot-key characters', () => {
+  const existing = new Set<string>();
+  assert.equal(buildUniqueModelId('openrouter/google/gemini-3.1-flash-lite-preview', existing), 'openrouter-google-gemini-3.1-flash-lite-preview');
+  assert.equal(buildUniqueModelId('  / /  ', existing), 'model');
 });

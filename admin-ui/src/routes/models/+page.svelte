@@ -110,6 +110,7 @@
     { key: 'supportsReasoning', label: 'Supports Thinking / Reasoning' },
     { key: 'supportsVision', label: 'Supports Vision' },
   ] as const;
+  const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
   let loading = $state(true);
   let saving = $state(false);
@@ -721,6 +722,8 @@
       const id = entry.id.trim();
       if (!id) {
         errors.push(`Model #${index + 1} is missing "id".`);
+      } else if (!MODEL_SLOT_KEY_PATTERN.test(id)) {
+        errors.push(`Model "${id}" has invalid id; use only letters, numbers, dot, underscore, or hyphen.`);
       } else if (seenIds.has(id)) {
         errors.push(`Duplicate model id "${id}" is not allowed.`);
       } else {

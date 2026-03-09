@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
+import type { ValuesMetacognitiveFlag } from './narrative-context-types.js';
 import {
   normalizeNarrativeMetacognitiveFlags,
   normalizeNarrativeSnapshotRef,
@@ -59,12 +60,6 @@ export interface ValuesDeliberationMetadata {
   totalTokens: number;
   estimatedCostUsd: number;
   durationMs: number;
-}
-
-export interface ValuesMetacognitiveFlag {
-  flag: string;
-  confidence: number;
-  evidence?: string;
 }
 
 export type ValuesEntryProvenanceSource =

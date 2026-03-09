@@ -166,6 +166,9 @@ describe('evaluateCorsPolicy', () => {
     expect(decision.headers?.['Access-Control-Allow-Origin']).toBe('https://console.example');
     expect(decision.headers?.['Access-Control-Allow-Methods']).toContain('POST');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Session-ID');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-User-ID');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-User-Name');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Channel-ID');
   });
 
   it('allows wildcard LAN host preflight origins with exact scheme and port semantics', () => {

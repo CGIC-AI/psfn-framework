@@ -1,11 +1,12 @@
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { createComponentLogger } from '../logger.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
-import type { ValuesDeliberationMetadata, ValuesMetacognitiveFlag } from '../values/store.js';
+import type { ValuesMetacognitiveFlag } from '../values/narrative-context-types.js';
 import {
   normalizeNarrativeMetacognitiveFlags,
   normalizeNarrativeSnapshotRef,
 } from '../values/narrative-context-normalization.js';
+import type { ValuesDeliberationMetadata } from '../values/store.js';
 
 const log = createComponentLogger('ReflectionJournal');
 const REFLECTION_JOURNAL_ERROR_PREFIX = 'Reflection journal';

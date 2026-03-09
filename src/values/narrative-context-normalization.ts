@@ -1,4 +1,4 @@
-import type { ValuesMetacognitiveFlag } from './store.js';
+import type { ValuesMetacognitiveFlag } from './narrative-context-types.js';
 
 interface NarrativeContextErrorOptions {
   contextPrefix: string;

@@ -208,6 +208,117 @@ describe('TelegramAdapter', () => {
     expect(typingCalls.length).toBeGreaterThan(0);
   });
 
+  it('streams progressive Telegram replies with editMessageText and reconciles the final response', async () => {
+    let sentMessageId = 800;
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: sentMessageId++ }),
+      editMessageText: () => true,
+    });
+    const eventBus = new EventBus();
+    const adapter = new TelegramAdapter(makeConfig(), eventBus, { fetchImpl });
+
+    adapter.onMessage(async (message) => {
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: 'Hello',
+      });
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: ' world',
+      });
+      return {
+        ...okResponse(message.channelId),
+        content: 'Hello *world*!',
+      };
+    });
+
+    await (adapter as any).handleUpdate({
+      update_id: 2,
+      message: {
+        message_id: 20,
+        date: 1_700_000_020,
+        text: 'stream please',
+        chat: { id: 222, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'stream_user' },
+      },
+    });
+
+    const sendCalls = calls.filter(call => call.method === 'sendMessage');
+    const editCalls = calls.filter(call => call.method === 'editMessageText');
+
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]?.body.chat_id).toBe('222');
+    expect(sendCalls[0]?.body.reply_to_message_id).toBe(20);
+    expect(sendCalls[0]?.body.text).toBe('Hello');
+    expect(sendCalls[0]?.body.parse_mode).toBeUndefined();
+
+    expect(editCalls).toHaveLength(2);
+    expect(editCalls[0]?.body.message_id).toBe(800);
+    expect(editCalls[0]?.body.text).toBe('Hello world');
+    expect(editCalls[0]?.body.parse_mode).toBeUndefined();
+    expect(editCalls[1]?.body.message_id).toBe(800);
+    expect(editCalls[1]?.body.text).toBe('Hello *world*!');
+    expect(editCalls[1]?.body.parse_mode).toBe('Markdown');
+  });
+
+  it('emits explicit egress diagnostics when Telegram stream edits fail', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 880 }),
+      editMessageText: () => {
+        throw new Error('telegram edit failed');
+      },
+    });
+    const eventBus = new EventBus();
+    const diagnostics: any[] = [];
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
+    const adapter = new TelegramAdapter(makeConfig(), eventBus, { fetchImpl });
+
+    adapter.onMessage(async (message) => {
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: 'Hello',
+      });
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: ' world',
+      });
+      return {
+        ...okResponse(message.channelId),
+        content: 'Hello world',
+      };
+    });
+
+    await (adapter as any).handleUpdate({
+      update_id: 3,
+      message: {
+        message_id: 21,
+        date: 1_700_000_021,
+        text: 'broken stream',
+        chat: { id: 223, type: 'private' },
+        from: { id: 42, is_bot: false, username: 'stream_user' },
+      },
+    });
+
+    const sendCalls = calls.filter(call => call.method === 'sendMessage');
+    const editCalls = calls.filter(call => call.method === 'editMessageText');
+
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]?.body.text).toBe('Hello');
+    expect(editCalls).toHaveLength(1);
+    expect(editCalls[0]?.body.text).toBe('Hello world');
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      channelId: 'telegram:223',
+      channelType: 'telegram',
+      messageId: 'telegram:223:21',
+      phase: 'egress',
+      error: expect.stringContaining('telegram edit failed'),
+    }));
+  });
+
   it('sends rate-limited long-running think status updates and clears them after tool completion', async () => {
     vi.useFakeTimers();
     try {

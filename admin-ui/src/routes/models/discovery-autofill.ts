@@ -9,6 +9,8 @@ export interface DiscoveryAutofillSource {
   contextLength?: number;
   maxCompletionTokens?: number;
   pricing?: DiscoveryPricingRecord;
+  supportsVision?: boolean;
+  supportsReasoning?: boolean;
 }
 
 export interface DiscoveryAutofillValues {
@@ -18,6 +20,8 @@ export interface DiscoveryAutofillValues {
   maxOutputTokens?: number;
   inputPer1MUsd?: number;
   outputPer1MUsd?: number;
+  supportsVision?: boolean;
+  supportsReasoning?: boolean;
 }
 
 const PER_TOKEN_TO_PER_MILLION = 1_000_000;
@@ -46,6 +50,10 @@ function normalizePrice(value: unknown): number | undefined {
     : (typeof value === 'string' ? Number(value.trim()) : NaN);
   if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
   return numeric * PER_TOKEN_TO_PER_MILLION;
+}
+
+function normalizeTrue(value: unknown): boolean | undefined {
+  return value === true ? true : undefined;
 }
 
 function providerPrefixFromModelId(modelId: string): string | undefined {
@@ -222,6 +230,8 @@ export function deriveDiscoveryAutofill(model: DiscoveryAutofillSource): Discove
     ...(normalizePrice(pricing.completion) !== undefined
       ? { outputPer1MUsd: normalizePrice(pricing.completion) }
       : {}),
+    ...(normalizeTrue(model.supportsVision) ? { supportsVision: true } : {}),
+    ...(normalizeTrue(model.supportsReasoning) ? { supportsReasoning: true } : {}),
   };
 }
 

@@ -13,6 +13,8 @@ export interface DiscoveredModel {
   contextLength?: number;
   maxCompletionTokens?: number;
   pricing?: Record<string, string>;
+  supportsVision?: boolean;
+  supportsReasoning?: boolean;
 }
 
 export interface ModelDiscoveryOptions {
@@ -40,6 +42,15 @@ interface OpenRouterModelEntry {
   name?: string;
   description?: string;
   context_length?: number;
+  modalities?: string[] | null;
+  architecture?: {
+    modality?: string | null;
+    input_modalities?: string[] | null;
+    output_modalities?: string[] | null;
+    tokenizer?: string | null;
+    instruct_type?: string | null;
+  };
+  supported_parameters?: string[] | null;
   top_provider?: {
     context_length?: number;
     max_completion_tokens?: number;
@@ -123,6 +134,70 @@ function normalizePricing(pricing: OpenRouterModelEntry['pricing']): Record<stri
     .filter(([, value]) => value.length > 0);
   if (entries.length === 0) return undefined;
   return Object.fromEntries(entries);
+}
+
+function normalizeLowerToken(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function inferSupportsVision(meta: OpenRouterModelEntry | undefined): boolean | undefined {
+  if (!meta) return undefined;
+  const tokens = new Set<string>();
+  const push = (value: unknown): void => {
+    const normalized = normalizeLowerToken(value);
+    if (normalized) {
+      tokens.add(normalized);
+    }
+  };
+
+  if (typeof meta.architecture?.modality === 'string') {
+    const parts = meta.architecture.modality.split(/[^a-z0-9_+-]+/i);
+    for (const part of parts) {
+      push(part);
+    }
+  }
+  if (Array.isArray(meta.architecture?.input_modalities)) {
+    for (const modality of meta.architecture.input_modalities) {
+      push(modality);
+    }
+  }
+  if (Array.isArray(meta.architecture?.output_modalities)) {
+    for (const modality of meta.architecture.output_modalities) {
+      push(modality);
+    }
+  }
+  if (Array.isArray(meta.modalities)) {
+    for (const modality of meta.modalities) {
+      push(modality);
+    }
+  }
+
+  for (const token of tokens) {
+    if (token.includes('image') || token.includes('vision') || token.includes('video')) {
+      return true;
+    }
+  }
+  return undefined;
+}
+
+function inferSupportsReasoning(meta: OpenRouterModelEntry | undefined): boolean | undefined {
+  if (!meta) return undefined;
+  const supportedParameters = Array.isArray(meta.supported_parameters)
+    ? meta.supported_parameters
+    : [];
+  for (const parameter of supportedParameters) {
+    const normalized = normalizeLowerToken(parameter);
+    if (!normalized) continue;
+    if (normalized === 'reasoning' || normalized === 'include_reasoning') {
+      return true;
+    }
+  }
+  if (typeof meta.pricing?.internal_reasoning === 'string' && meta.pricing.internal_reasoning.trim().length > 0) {
+    return true;
+  }
+  return undefined;
 }
 
 function buildOpenRouterMetaMap(openRouterMeta: OpenRouterModelEntry[]): Map<string, OpenRouterModelEntry> {
@@ -214,6 +289,8 @@ export class ModelDiscovery {
         contextLength: meta?.top_provider?.context_length ?? meta?.context_length,
         maxCompletionTokens: meta?.top_provider?.max_completion_tokens,
         pricing: normalizePricing(meta?.pricing),
+        ...(inferSupportsVision(meta) ? { supportsVision: true } : {}),
+        ...(inferSupportsReasoning(meta) ? { supportsReasoning: true } : {}),
       };
     });
 

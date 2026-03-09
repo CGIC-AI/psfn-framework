@@ -12,6 +12,8 @@ test('deriveDiscoveryAutofill prefers openrouter hints and maps metadata fields'
     providerHints: ['z-ai', 'openrouter'],
     contextLength: 128_000,
     maxCompletionTokens: 16_384,
+    supportsReasoning: true,
+    supportsVision: true,
     pricing: {
       prompt: '0.0000025',
       completion: '0.00001',
@@ -25,6 +27,8 @@ test('deriveDiscoveryAutofill prefers openrouter hints and maps metadata fields'
     maxOutputTokens: 16_384,
     inputPer1MUsd: 2.5,
     outputPer1MUsd: 10,
+    supportsReasoning: true,
+    supportsVision: true,
   });
 });
 

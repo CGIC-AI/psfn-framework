@@ -604,6 +604,8 @@ export interface DiscoveredModel {
   contextLength?: number;
   maxCompletionTokens?: number;
   pricing?: Record<string, string | number | undefined>;
+  supportsVision?: boolean;
+  supportsReasoning?: boolean;
 }
 
 // Scheduler

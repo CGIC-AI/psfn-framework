@@ -593,6 +593,21 @@
       if (autofill.maxOutputTokens !== undefined) {
         capabilities.maxOutputTokens = autofill.maxOutputTokens;
       }
+      if (autofill.supportsVision === true) {
+        capabilities.supportsVision = true;
+      }
+      if (autofill.supportsReasoning === true) {
+        capabilities.supportsReasoning = true;
+      }
+      entry.capabilities = capabilities;
+    } else if (autofill.supportsVision === true || autofill.supportsReasoning === true) {
+      const capabilities = isRecord(entry.capabilities) ? { ...entry.capabilities } : {};
+      if (autofill.supportsVision === true) {
+        capabilities.supportsVision = true;
+      }
+      if (autofill.supportsReasoning === true) {
+        capabilities.supportsReasoning = true;
+      }
       entry.capabilities = capabilities;
     }
     if (autofill.maxOutputTokens !== undefined) {
@@ -609,6 +624,18 @@
         cost.outputPer1MUsd = autofill.outputPer1MUsd;
       }
       entry.cost = cost;
+    }
+    if (entry.purposes.length === 0) {
+      const purposes: ModelRegistryPurposeTag[] = [{ purpose: 'chat', primary: false }];
+      if (autofill.supportsReasoning === true) {
+        purposes.push({ purpose: 'reasoning', primary: false });
+      }
+      if (autofill.supportsVision === true) {
+        purposes.push({ purpose: 'vision', primary: false });
+      }
+      entry.purposes = purposes
+        .filter((tag, index, array) => array.findIndex((candidate) => candidate.purpose === tag.purpose) === index)
+        .sort((a, b) => CANONICAL_PURPOSES.indexOf(a.purpose) - CANONICAL_PURPOSES.indexOf(b.purpose));
     }
     return entry;
   }
@@ -707,6 +734,9 @@
       }
       if (!entry.identity.source.type.trim()) {
         errors.push(`Model "${id || index + 1}" is missing source type.`);
+      }
+      if (!Array.isArray(entry.purposes) || entry.purposes.length === 0) {
+        errors.push(`Model "${id || index + 1}" must include at least one purpose tag.`);
       }
       const maxOutputTokens = numberFromContainer(entry, 'tuning', 'maxOutputTokens')
         ?? numberFromContainer(entry, 'capabilities', 'maxOutputTokens');

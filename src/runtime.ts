@@ -800,7 +800,6 @@ export class SubstrateRuntime implements Lifecycle {
       agentLoop: this.agentLoop,
       postTurnActions,
       llmProvider: this.llmClient,
-      memoryWriter,
       sessionStore: this.sessionStore,
       eventBus: this.eventBus,
     });

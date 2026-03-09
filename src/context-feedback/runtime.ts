@@ -3,13 +3,11 @@ import type { LLMProvider } from '../agent/contracts.js';
 import type { PostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
 import type { EventBus } from '../event-bus.js';
 import { createComponentLogger } from '../logger.js';
-import type { MemoryWriter } from '../memory/writer.js';
 import type { ContextManifest } from '../session/context-manifest.js';
 import type { SessionStore } from '../session/store.js';
 import type { PostTurnActionCandidate } from '../types.js';
 import { isRecord } from '../utils/types.js';
 import {
-  CONTEXT_FEEDBACK_SIGNAL_KEYS,
   ContextEvaluator,
   type ContextEvaluationResult,
   type ContextFeedbackSignalKey,
@@ -29,7 +27,6 @@ export interface WireContextFeedbackRuntimeOptions {
   agentLoop: ContextFeedbackRuntimeAgentLoop;
   postTurnActions: PostTurnActionRuntime;
   llmProvider: LLMProvider;
-  memoryWriter: Pick<MemoryWriter, 'write'>;
   sessionStore: Pick<SessionStore, 'getRecent'>;
   eventBus: EventBus;
 }
@@ -150,51 +147,6 @@ function scoreBucket(score: number): 'low' | 'medium' | 'high' {
   if (score >= 0.8) return 'high';
   if (score >= 0.5) return 'medium';
   return 'low';
-}
-
-function resolveMemoryImportance(evaluation: ContextEvaluationResult): number {
-  if (evaluation.signals.confabulation) return 0.92;
-  if (evaluation.signals.missed_context || evaluation.signals.wasted_tokens) return 0.8;
-  if (evaluation.signals.good) return 0.65;
-  return 0.72;
-}
-
-function resolveSignalTagList(evaluation: ContextEvaluationResult): string[] {
-  const tags: string[] = [];
-  for (const key of CONTEXT_FEEDBACK_SIGNAL_KEYS) {
-    if (evaluation.signals[key]) {
-      tags.push(`signal:${key}`);
-    }
-  }
-  if (tags.length === 0) {
-    tags.push('signal:none');
-  }
-  return tags;
-}
-
-function buildMemoryText(
-  payload: ContextFeedbackActionPayload,
-  evaluation: ContextEvaluationResult,
-  followUpText: string | undefined,
-): string {
-  const sectionSummary = payload.contextManifest.budgets.sections
-    .map(section => `${section.section}:${section.tokenCount}`)
-    .join(', ');
-  return [
-    `Context feedback for turn ${payload.turnId}.`,
-    `Score=${evaluation.effectivenessScore.toFixed(2)} bucket=${scoreBucket(evaluation.effectivenessScore)}.`,
-    `Signals: confabulation=${evaluation.signals.confabulation};`
-    + ` missed_context=${evaluation.signals.missed_context};`
-    + ` wasted_tokens=${evaluation.signals.wasted_tokens};`
-    + ` good=${evaluation.signals.good}.`,
-    `Response usage: input=${payload.responseInputTokens}, output=${payload.responseOutputTokens}.`,
-    `Manifest: memoryIncluded=${payload.contextManifest.memory.includedCount},`
-    + ` finalMessages=${payload.contextManifest.session.finalMessageCount},`
-    + ` compactionTriggered=${payload.contextManifest.compaction.triggered}.`,
-    `Section tokens: ${sectionSummary}.`,
-    `Evaluator summary: ${evaluation.summary}`,
-    followUpText ? `Observed follow-up: ${followUpText}` : 'Observed follow-up: none.',
-  ].join(' ');
 }
 
 function resolveFollowUpText(
@@ -336,28 +288,6 @@ export function wireContextFeedbackRuntime(options: WireContextFeedbackRuntimeOp
           followUpIncluded: Boolean(followUpText),
         });
 
-        const result = await options.memoryWriter.write({
-          text: buildMemoryText(payload, evaluation, followUpText),
-          type: 'procedural',
-          importance: resolveMemoryImportance(evaluation),
-          confidence: 0.78,
-          emotionalValence: evaluation.signals.good ? 0.2 : -0.1,
-          sourceRef:
-            `source:context_feedback|turn:${payload.turnId}`
-            + `|score:${evaluation.effectivenessScore.toFixed(2)}`
-            + `|model:${evaluation.evaluationModel}`,
-          provenanceRefs: [`turn:${payload.turnId}`, `post_turn_action:${action.id}`],
-          tags: [
-            'context_feedback',
-            'context_composition',
-            'procedural_learning',
-            `score_bucket:${scoreBucket(evaluation.effectivenessScore)}`,
-            ...resolveSignalTagList(evaluation),
-            followUpText ? 'follow_up:present' : 'follow_up:absent',
-          ],
-          ...(payload.canonicalContactKey ? { contactId: payload.canonicalContactKey } : {}),
-        });
-
         await emitContextFeedbackTelemetry(options.eventBus, {
           actionId: action.id,
           turnId: payload.turnId,
@@ -367,7 +297,6 @@ export function wireContextFeedbackRuntime(options: WireContextFeedbackRuntimeOp
           scoreBucket: scoreBucket(evaluation.effectivenessScore),
           signals: evaluation.signals,
           followUpIncluded: Boolean(followUpText),
-          memoryId: result.memory.id,
         });
       } catch (error) {
         const errorMessage = normalizeErrorMessage(error);

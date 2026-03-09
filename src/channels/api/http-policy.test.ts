@@ -86,8 +86,8 @@ describe('resolveApiCorsAllowedOrigins', () => {
     }));
     const decision = evaluateCorsPolicy(
       requestWithHeaders({
-        host: 'psfn.local.operator.nyc:3200',
-        origin: 'http://psfn.local.operator.nyc:3201',
+        host: 'psfn.local.mesh:3200',
+        origin: 'http://psfn.local.mesh:3201',
       }),
       corsAllowedOrigins,
       undefined,
@@ -98,7 +98,7 @@ describe('resolveApiCorsAllowedOrigins', () => {
       throw new Error('Expected same-request-host fallback CORS decision to be allowed');
     }
     expect(decision.headers?.['Access-Control-Allow-Origin']).toBe(
-      'http://psfn.local.operator.nyc:3201',
+      'http://psfn.local.mesh:3201',
     );
   });
 });
@@ -208,7 +208,7 @@ describe('evaluateCorsPolicy', () => {
     }));
     const decision = evaluateCorsPolicy(
       requestWithHeaders({
-        host: 'psfn.local.operator.nyc:3200',
+        host: 'psfn.local.mesh:3200',
         origin: 'http://evil.example:3201',
       }),
       corsAllowedOrigins,

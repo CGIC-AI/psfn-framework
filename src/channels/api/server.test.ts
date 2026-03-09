@@ -1299,12 +1299,12 @@ describe('ApiServer', () => {
       await server.start();
 
       const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
-        Host: `psfn.local.operator.nyc:${port}`,
-        Origin: 'http://psfn.local.operator.nyc:3201',
+        Host: `psfn.local.mesh:${port}`,
+        Origin: 'http://psfn.local.mesh:3201',
         'Access-Control-Request-Method': 'POST',
       });
       expect(res.status).toBe(204);
-      expect(res.headers['access-control-allow-origin']).toBe('http://psfn.local.operator.nyc:3201');
+      expect(res.headers['access-control-allow-origin']).toBe('http://psfn.local.mesh:3201');
       expect(res.headers.vary).toContain('Origin');
     });
 
@@ -1326,7 +1326,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
-        Host: `psfn.local.operator.nyc:${port}`,
+        Host: `psfn.local.mesh:${port}`,
         Origin: 'http://evil.example:3201',
         'Access-Control-Request-Method': 'POST',
       });

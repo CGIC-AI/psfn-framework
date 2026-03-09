@@ -411,6 +411,7 @@
       const response = await fetch(endpointUrl, {
         method: 'POST',
         headers,
+        credentials: 'include',
         signal: abortController.signal,
         body: JSON.stringify({
           model: bootstrap.runtime.model.id,

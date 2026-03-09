@@ -600,6 +600,7 @@ export class ApiServer implements ChannelAdapter {
     const resolution = resolveApiRequestPrincipal(req, {
       apiKey: this.apiKey,
       alternateApiToken: this.adminToken,
+      alternateCookieTokenNames: this.adminToken ? ['psfn_token'] : [],
       allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
       isTelemetryIngest,
     });

@@ -1640,6 +1640,25 @@ describe('ApiServer with auth', () => {
     expect(res.status).toBe(200);
   });
 
+  it('accepts requests with admin auth cookie when configured as alternate auth token', async () => {
+    await server.stop();
+    server = new ApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      adminToken: 'test-admin-token',
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'GET', '/v1/models', undefined, {
+      Cookie: 'psfn_token=test-admin-token',
+    });
+    expect(res.status).toBe(200);
+  });
+
   it('requires authentication for health probes and accepts valid bearer auth', async () => {
     const unauthenticated = await request(port, 'GET', '/health');
     expect(unauthenticated.status).toBe(401);

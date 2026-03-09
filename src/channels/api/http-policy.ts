@@ -1,7 +1,10 @@
 import type { IncomingMessage } from 'node:http';
 import {
+  getCookieValue,
   getBearerPrincipal,
   INSECURE_LOCAL_API_PRINCIPAL,
+  isExpectedApiToken,
+  principalFromApiKeyToken,
   type ApiAuthPrincipal,
 } from '../http/auth.js';
 
@@ -56,6 +59,7 @@ export type PrincipalResolution = PrincipalResolutionSuccess | PrincipalResoluti
 export interface ResolveApiPrincipalOptions {
   apiKey?: string;
   alternateApiToken?: string;
+  alternateCookieTokenNames?: readonly string[];
   allowInsecureWithoutAuth: boolean;
   isTelemetryIngest: boolean;
 }
@@ -438,6 +442,7 @@ export function evaluateCorsPolicy(
     headers: {
       Vary: appendVaryValue(existingVaryHeader, 'Origin'),
       'Access-Control-Allow-Origin': parsedOrigin.origin,
+      'Access-Control-Allow-Credentials': 'true',
       'Access-Control-Allow-Methods': API_CORS_ALLOWED_METHODS,
       'Access-Control-Allow-Headers': API_CORS_ALLOWED_HEADERS.join(', '),
       'Access-Control-Max-Age': '600',
@@ -450,19 +455,27 @@ export function resolveApiRequestPrincipal(
   options: ResolveApiPrincipalOptions,
 ): PrincipalResolution {
   if (options.apiKey) {
-    const principal = getBearerPrincipal(req, options.apiKey)
+    const bearerPrincipal = getBearerPrincipal(req, options.apiKey)
       ?? (options.alternateApiToken ? getBearerPrincipal(req, options.alternateApiToken) : null);
-    if (!principal) {
-      return {
-        ok: false,
-        error: {
-          status: 401,
-          type: 'invalid_api_key',
-          message: 'Invalid or missing API key',
-        },
-      };
+    if (bearerPrincipal) {
+      return { ok: true, principal: bearerPrincipal };
     }
-    return { ok: true, principal };
+    if (options.alternateApiToken) {
+      for (const cookieName of options.alternateCookieTokenNames ?? []) {
+        const cookieToken = getCookieValue(req, cookieName);
+        if (!isExpectedApiToken(cookieToken, options.alternateApiToken)) continue;
+        return { ok: true, principal: principalFromApiKeyToken(options.alternateApiToken) };
+      }
+    }
+
+    return {
+      ok: false,
+      error: {
+        status: 401,
+        type: 'invalid_api_key',
+        message: 'Invalid or missing API key',
+      },
+    };
   }
 
   if (options.isTelemetryIngest) {

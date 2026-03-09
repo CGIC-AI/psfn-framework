@@ -5,7 +5,6 @@ import {
   getStreamingSttProviderEligibility,
   getStreamingSttProviderMetadata,
   registerStreamingSttProvider,
-  resolveDefaultStreamingSttProvider,
   resolveStreamingSttRuntimeConfig,
 } from './index.js';
 import type { StreamingSttConnector } from './types.js';
@@ -58,11 +57,10 @@ describe('createStreamingSttConnector', () => {
     }
   });
 
-  it('exposes provider metadata for default provider selection', () => {
+  it('exposes provider metadata without runtime auto-selection', () => {
     const restoreProvider = registerStreamingSttProvider('plugin-test', {
       createConnector: vi.fn(() => createStubConnector('plugin-test')),
       metadata: {
-        canAutoEnable: true,
         isConfigured: (config) => Boolean(config.pluginSttToken),
         eligibility: {},
       },
@@ -73,7 +71,7 @@ describe('createStreamingSttConnector', () => {
       expect(getStreamingSttProviderEligibility('deepgram')).toEqual({
         requiredTokens: ['external.web'],
       });
-      expect(resolveDefaultStreamingSttProvider({ pluginSttToken: 'plugin-key' })).toBe('plugin-test');
+      expect(getStreamingSttProviderMetadata('plugin-test')?.isConfigured({ pluginSttToken: 'plugin-key' })).toBe(true);
     } finally {
       restoreProvider();
     }

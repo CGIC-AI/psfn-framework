@@ -303,7 +303,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return {
             id: providerId,
             configured: isStreamingSttProviderConfigured(providerId, this.deps.config),
-            canAutoEnable: metadata?.canAutoEnable === true,
             requiredTokens: [...(metadata?.eligibility?.requiredTokens ?? [])],
           };
         })
@@ -316,7 +315,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
         return {
           id: providerId,
           configured: isStreamingTtsProviderConfigured(providerId, this.deps.config),
-          canAutoEnable: metadata?.canAutoEnable === true,
           requiredTokens: [...(metadata?.eligibility?.requiredTokens ?? [])],
         };
       })

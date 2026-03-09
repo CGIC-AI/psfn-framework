@@ -5,11 +5,9 @@ import type {
 } from '../types.js';
 import {
   isStreamingSttProvider,
-  resolveDefaultStreamingSttProvider,
 } from '../voice/connectors/stt/index.js';
 import {
   isStreamingTtsProvider,
-  resolveDefaultStreamingTtsProvider,
 } from '../voice/connectors/tts/index.js';
 
 const IMPORT_PROCESSING_ROUTE_MODE_VALUES = new Set<ImportProcessingRouteMode>([
@@ -140,14 +138,12 @@ export function toConfiguredSttProvider(value: unknown): RuntimeVoiceSttProvider
 
 export function resolveRuntimeTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
   const configured = normalizeTtsProvider(config.ttsProvider);
-  if (configured !== undefined) return configured;
-  return resolveDefaultStreamingTtsProvider(config) ?? 'disabled';
+  return configured ?? 'disabled';
 }
 
 export function resolveRuntimeSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
   const configured = normalizeSttProvider(config.sttProvider);
-  if (configured !== undefined) return configured;
-  return resolveDefaultStreamingSttProvider(config) ?? 'disabled';
+  return configured ?? 'disabled';
 }
 
 export function toImportProcessingRouteMode(value: unknown): ImportProcessingRouteMode | undefined {

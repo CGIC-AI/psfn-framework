@@ -21,7 +21,6 @@ import {
   getStreamingSttProviderMetadata,
   isStreamingSttProvider,
   isStreamingSttProviderConfigured,
-  resolveDefaultStreamingSttProvider,
   resolveStreamingSttRuntimeConfig,
   type StreamingSttConnector,
   type StreamingSttProvider,
@@ -32,7 +31,6 @@ import {
   isStreamingTtsProvider,
   isStreamingTtsProviderConfigured,
   listStreamingTtsProviders,
-  resolveDefaultStreamingTtsProvider,
   resolveStreamingTtsRuntimeConfig,
   type StreamingTtsConnector,
   type StreamingTtsProvider,
@@ -151,7 +149,7 @@ export function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): Runtime
     return normalized;
   }
 
-  return resolveDefaultStreamingSttProvider(config) ?? 'disabled';
+  return 'disabled';
 }
 
 export function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
@@ -168,7 +166,7 @@ export function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): Runtime
     return normalized;
   }
 
-  return resolveDefaultStreamingTtsProvider(config) ?? 'disabled';
+  return 'disabled';
 }
 
 export function resolveRuntimeVoiceProviderGate(
@@ -200,12 +198,12 @@ export function createRuntimeVoiceSttConnector(
   const explicitlySelectedProvider = hasExplicitRuntimeProviderSelection(config.sttProvider)
     ? resolveRuntimeVoiceSttProvider(config)
     : null;
-  if (!isStreamingSttProviderConfigured(provider, config) && explicitlySelectedProvider !== provider) {
+  const shouldFailClosed = explicitlySelectedProvider === provider || options.provider === provider;
+  if (!isStreamingSttProviderConfigured(provider, config) && !shouldFailClosed) {
     return null;
   }
 
   const providerMetadata = getStreamingSttProviderMetadata(provider);
-  const shouldFailClosed = explicitlySelectedProvider === provider || options.provider === provider;
   try {
     requirePluginActivationEligibility(
       options.eligibilityGate,
@@ -246,6 +244,7 @@ export function createRuntimeVoiceTtsConnector(
   if (
     !isStreamingTtsProviderConfigured(provider, config, options)
     && explicitlySelectedProvider !== provider
+    && options.provider !== provider
   ) {
     return null;
   }

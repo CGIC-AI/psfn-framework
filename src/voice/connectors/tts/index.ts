@@ -40,7 +40,6 @@ export interface StreamingTtsProviderMetadataOptions {
 }
 
 export interface StreamingTtsProviderMetadata {
-  canAutoEnable?: boolean;
   isConfigured(
     config: StreamingTtsProviderRuntimeConfig,
     options?: StreamingTtsProviderMetadataOptions,
@@ -60,7 +59,6 @@ const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistratio
   ['elevenlabs', {
     createConnector: createElevenLabsStreamingTtsConnector,
     metadata: {
-      canAutoEnable: true,
       isConfigured: (config, options) => (
         options?.requireElevenLabsVoiceId === true
           ? Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId)
@@ -225,18 +223,6 @@ export function isStreamingTtsProviderConfigured(
 ): boolean {
   const metadata = getStreamingTtsProviderMetadata(provider);
   return metadata?.isConfigured(config, options) ?? false;
-}
-
-export function resolveDefaultStreamingTtsProvider(
-  config: StreamingTtsProviderRuntimeConfig,
-): StreamingTtsProvider | null {
-  for (const [provider, registration] of providerRegistrations.entries()) {
-    if (registration.metadata.canAutoEnable !== true) continue;
-    if (registration.metadata.isConfigured(config)) {
-      return provider as StreamingTtsProvider;
-    }
-  }
-  return null;
 }
 
 export function createStreamingTtsConnector<TProvider extends StreamingTtsProvider>(

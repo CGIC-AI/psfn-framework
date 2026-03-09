@@ -20,7 +20,6 @@ export interface StreamingSttProviderRuntimeConfig {
 }
 
 export interface StreamingSttProviderMetadata {
-  canAutoEnable?: boolean;
   isConfigured(config: StreamingSttProviderRuntimeConfig): boolean;
   eligibility?: EligibilityRequirements;
 }
@@ -37,7 +36,6 @@ const providerRegistrations = new Map<string, AnyStreamingSttProviderRegistratio
   ['deepgram', {
     createConnector: createDeepgramStreamingSttConnector,
     metadata: {
-      canAutoEnable: true,
       isConfigured: (config) => Boolean(config.deepgramApiKey),
       eligibility: { requiredTokens: ['external.web'] },
     },
@@ -126,18 +124,6 @@ export function getStreamingSttProviderEligibility(
   provider: StreamingSttProvider,
 ): EligibilityRequirements | null {
   return getStreamingSttProviderMetadata(provider)?.eligibility ?? null;
-}
-
-export function resolveDefaultStreamingSttProvider(
-  config: StreamingSttProviderRuntimeConfig,
-): StreamingSttProvider | null {
-  for (const [provider, registration] of providerRegistrations.entries()) {
-    if (registration.metadata.canAutoEnable !== true) continue;
-    if (registration.metadata.isConfigured(config)) {
-      return provider as StreamingSttProvider;
-    }
-  }
-  return null;
 }
 
 export function createStreamingSttConnector<TProvider extends StreamingSttProvider>(

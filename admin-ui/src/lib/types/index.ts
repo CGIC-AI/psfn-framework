@@ -319,13 +319,11 @@ export interface AdminSettingsData {
     stt: Array<{
       id: string;
       configured: boolean;
-      canAutoEnable: boolean;
       requiredTokens: string[];
     }>;
     tts: Array<{
       id: string;
       configured: boolean;
-      canAutoEnable: boolean;
       requiredTokens: string[];
     }>;
   };

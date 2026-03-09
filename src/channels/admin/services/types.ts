@@ -217,7 +217,6 @@ export interface SettingsConfigEditors {
 export interface AdminVoiceProviderOption {
   id: string;
   configured: boolean;
-  canAutoEnable: boolean;
   requiredTokens: string[];
 }
 

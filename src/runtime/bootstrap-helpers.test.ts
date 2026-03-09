@@ -788,7 +788,7 @@ describe('createRuntimeVoiceTtsConnector', () => {
 });
 
 describe('resolveRuntimeVoiceTtsProviderOrder', () => {
-  it('keeps the preferred provider first and appends other configured providers', () => {
+  it('returns only the preferred explicit provider without implicit fallbacks', () => {
     const restoreProvider = registerStreamingTtsProvider('plugin-test', {
       createConnector: vi.fn(() => ({
         id: 'plugin-test',
@@ -813,10 +813,17 @@ describe('resolveRuntimeVoiceTtsProviderOrder', () => {
         pluginTtsEndpoint: 'https://plugin-tts.invalid',
         elevenLabsApiKey: 'elevenlabs-key',
         elevenLabsVoiceId: 'voice-id',
-      } as any)).toEqual(['plugin-test', 'elevenlabs']);
+      } as any)).toEqual(['plugin-test']);
     } finally {
       restoreProvider();
     }
+  });
+
+  it('returns an empty provider order when no provider is explicitly configured', () => {
+    expect(resolveRuntimeVoiceTtsProviderOrder({
+      elevenLabsApiKey: 'elevenlabs-key',
+      elevenLabsVoiceId: 'voice-id',
+    } as any)).toEqual([]);
   });
 });
 

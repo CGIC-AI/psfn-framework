@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { injectPromptRuntimeTokens } from './prompt-runtime.js';
+import { injectPromptRuntimeTokens, renderPromptRuntimeTokens } from './prompt-runtime.js';
 
 describe('injectPromptRuntimeTokens', () => {
   const fixedNow = new Date('2026-02-20T13:45:27.000Z');
@@ -34,18 +34,54 @@ describe('injectPromptRuntimeTokens', () => {
     expect(output).toBe('Keep {{unknown_token}} unchanged');
   });
 
+  it('reports unresolved macro tokens explicitly', () => {
+    const input = 'Known={{user}} Unknown={{unknown_token}}';
+    const unresolved: string[] = [];
+    const output = renderPromptRuntimeTokens(input, {
+      now: fixedNow,
+      variables: { user: 'PrimaryUser' },
+      onUnresolvedToken: (token) => unresolved.push(token),
+    });
+
+    expect(output.text).toBe('Known=PrimaryUser Unknown={{unknown_token}}');
+    expect(output.unresolvedTokens).toEqual(['unknown_token']);
+    expect(unresolved).toEqual(['unknown_token']);
+  });
+
+  it('reports unresolved missing dotted keys once', () => {
+    const unresolved: string[] = [];
+    const output = renderPromptRuntimeTokens(
+      'Missing={{character.extensions.voice_style}} Repeat={{character.extensions.voice_style}}',
+      {
+        now: fixedNow,
+        variables: {
+          character: {
+            name: 'Companion',
+          },
+        },
+        onUnresolvedToken: (token) => unresolved.push(token),
+      },
+    );
+
+    expect(output.text).toBe(
+      'Missing={{character.extensions.voice_style}} Repeat={{character.extensions.voice_style}}',
+    );
+    expect(output.unresolvedTokens).toEqual(['character.extensions.voice_style']);
+    expect(unresolved).toEqual(['character.extensions.voice_style']);
+  });
+
   it('injects simple prompt variables', () => {
     const input = 'Hello {{user}}, you are speaking with {{char}} in {{channel_id}}';
     const output = injectPromptRuntimeTokens(input, {
       now: fixedNow,
       variables: {
         user: 'PrimaryUser',
-        char: 'Purrsephone',
+        char: 'Companion',
         channel_id: 'discord:dm:primary-user',
       },
     });
 
-    expect(output).toBe('Hello PrimaryUser, you are speaking with Purrsephone in discord:dm:primary-user');
+    expect(output).toBe('Hello PrimaryUser, you are speaking with Companion in discord:dm:primary-user');
   });
 
   it('supports dotted and snake-case aliases for variables', () => {

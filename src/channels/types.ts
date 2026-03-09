@@ -1,4 +1,5 @@
 import type { AgentResponse, Attachment, Lifecycle, SubstrateMessage } from '../types.js';
+import type { EligibilityRequirements } from '../capabilities/eligibility.js';
 
 export type MessageHandler = (message: SubstrateMessage) => Promise<AgentResponse>;
 export type ChannelChatType = 'direct' | 'channel' | 'thread';
@@ -78,6 +79,19 @@ export interface ChannelAdapter extends Lifecycle {
   // Compatibility shim for existing call sites.
   onMessage?(handler: MessageHandler): void;
   send?(channelId: string, content: string): Promise<void>;
+}
+
+export interface ChannelAdapterManifestEntry {
+  id: string;
+  enabled: boolean;
+  required?: boolean;
+  label?: string;
+  eligibility?: EligibilityRequirements;
+}
+
+export interface ChannelAdapterFactoryEntry {
+  manifest: ChannelAdapterManifestEntry;
+  create: () => Promise<ChannelAdapter> | ChannelAdapter;
 }
 
 // Lightweight docks for shared call sites that only need a focused channel facet.

@@ -1,27 +1,55 @@
 import { composeSystemPromptTemplate } from './loader.js';
+import { buildCharacterMacroMap } from './character-macro-map.js';
+import { isCanonicalCharacterFoundationLayer } from './canonical-foundation.js';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { CharacterCardV2 } from './types.js';
+import { renderPromptRuntimeTokens } from './prompt-runtime.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 export interface PromptSyncResult {
   ok: boolean;
   updated: boolean;
   error?: string;
+  errorCode?: 'missing_required_fields' | 'unsupported_unresolved_macros' | 'prompt_store_update_failed';
 }
+
+const ALLOWED_RUNTIME_UNRESOLVED_TOKENS = new Set([
+  'user',
+  'user_name',
+  'user_id',
+  'channel',
+  'channel_id',
+  'channel_type',
+  'channel_visibility',
+  'trust_level',
+  'canonical_contact_id',
+  'model',
+  'model_id',
+  'now_iso',
+  'current_datetime',
+  'current_datetime_iso',
+  'now',
+  'current_date',
+  'date',
+  'current_time',
+  'time',
+  'current_timestamp',
+  'unix_timestamp',
+  'timestamp',
+]);
+const REQUIRED_CHARACTER_MACRO_FIELDS = ['name', 'personality'] as const;
 
 function resolveCharacterFoundationLayer(
   promptStore: PromptLayerStore,
 ): ReturnType<PromptLayerStore['getByType']>[number] | undefined {
   const baseLayers = promptStore.getByType('base');
   if (baseLayers.length === 0) return undefined;
-  return baseLayers.find(layer => layer.identifier === 'main')
-    ?? baseLayers.find(layer => layer.name === 'Character Foundation')
-    ?? baseLayers[0];
+  return baseLayers.find(layer => isCanonicalCharacterFoundationLayer(layer)) ?? baseLayers[0];
 }
 
 export function syncCharacterFoundationPromptFromCard(
   promptStore: PromptLayerStore | null | undefined,
-  _card: CharacterCardV2,
+  card: CharacterCardV2,
   updatedBy: string,
   reason = 'Sync Character Foundation prompt from imported character card',
 ): PromptSyncResult {
@@ -35,18 +63,44 @@ export function syncCharacterFoundationPromptFromCard(
   }
 
   const nextPrompt = composeSystemPromptTemplate();
+  const macroVariables = buildCharacterMacroMap(card);
+  const missingRequiredFields = REQUIRED_CHARACTER_MACRO_FIELDS.filter((field) => {
+    const value = macroVariables[field];
+    return typeof value !== 'string' || value.trim().length === 0;
+  });
+  if (missingRequiredFields.length > 0) {
+    return {
+      ok: false,
+      updated: false,
+      error: `Missing required identity fields for prompt sync: ${missingRequiredFields.join(', ')}`,
+      errorCode: 'missing_required_fields',
+    };
+  }
+  const macroValidation = renderPromptRuntimeTokens(nextPrompt, { variables: macroVariables });
+  const unsupportedUnresolved = macroValidation.unresolvedTokens.filter(
+    token => !ALLOWED_RUNTIME_UNRESOLVED_TOKENS.has(token),
+  );
+  if (unsupportedUnresolved.length > 0) {
+    return {
+      ok: false,
+      updated: false,
+      error: `Unsupported unresolved prompt macros: ${unsupportedUnresolved.join(', ')}`,
+      errorCode: 'unsupported_unresolved_macros',
+    };
+  }
   if (foundation.content === nextPrompt) {
     return { ok: true, updated: false };
   }
 
   try {
-    promptStore.update(foundation.id, nextPrompt, updatedBy, reason);
+    promptStore.update(foundation.id, nextPrompt, updatedBy, undefined, reason);
     return { ok: true, updated: true };
   } catch (error) {
     return {
       ok: false,
       updated: false,
       error: toErrorMessage(error),
+      errorCode: 'prompt_store_update_failed',
     };
   }
 }

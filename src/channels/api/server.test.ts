@@ -11,10 +11,12 @@ import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../types.js';
 import type { ApiServerHealthChecks } from './types.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,
 } from '../http/auth.js';
+import { resolveApiCorsAllowedOrigins } from './http-policy.js';
 import type {
   VoiceWebSocketCloseReason,
   VoiceWebSocketRuntimeHooks,
@@ -379,7 +381,7 @@ describe('ApiServer', () => {
       const body = JSON.parse(res.body);
       expect(body.object).toBe('list');
       expect(body.data).toHaveLength(1);
-      expect(body.data[0].id).toBe('purrsephone');
+      expect(body.data[0].id).toBe('companion');
       expect(body.data[0].object).toBe('model');
       expect(body.data[0].owned_by).toBe('psfn');
     });
@@ -424,11 +426,15 @@ describe('ApiServer', () => {
       expect(body.status).toBe('healthy');
       expect(typeof body.checkedAt).toBe('string');
       expect(typeof body.uptimeSeconds).toBe('number');
+      expect(body.continuity.status).toBe('healthy');
       expect(body.subsystems.memory.status).toBe('healthy');
       expect(body.subsystems.llm.status).toBe('healthy');
       expect(body.subsystems.discord.status).toBe('healthy');
       expect(body.subsystems.embeddings.status).toBe('healthy');
       expect(body.subsystems.scheduler.status).toBe('healthy');
+      expect(body.continuity.checks.database.status).toBe('healthy');
+      expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
       expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
       expect(typeof body.subsystems.embeddings.meta.checkLatencyMs).toBe('number');
     });
@@ -455,6 +461,7 @@ describe('ApiServer', () => {
 
       const body = JSON.parse(res.body);
       expect(body.status).toBe('degraded');
+      expect(body.continuity.status).toBe('healthy');
       expect(body.subsystems.llm.status).toBe('degraded');
       expect(body.subsystems.llm.detail).toContain('LLM provider timeout');
       expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
@@ -462,20 +469,80 @@ describe('ApiServer', () => {
       expect(body.subsystems.discord.status).toBe('healthy');
       expect(body.subsystems.embeddings.status).toBe('healthy');
       expect(body.subsystems.scheduler.status).toBe('healthy');
+      expect(body.continuity.checks.database.status).toBe('healthy');
+      expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
+    });
+
+    it('degrades health when scheduler heartbeat is stale beyond threshold', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        healthChecks: createHealthyHealthChecks(),
+        schedulerHeartbeatStaleAfterMs: 1_000,
+      });
+      await server.init();
+      await server.start();
+      await eventBus.emit('schedule.heartbeat', {
+        timestamp: Date.now() - 10_000,
+        taskCount: 2,
+      });
+
+      const res = await request(port, 'GET', '/health');
+      expect(res.status).toBe(503);
+
+      const body = JSON.parse(res.body);
+      expect(body.status).toBe('degraded');
+      expect(body.continuity.status).toBe('degraded');
+      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('degraded');
+      expect(body.continuity.checks.schedulerHeartbeat.detail).toContain('Scheduler heartbeat stale');
+    });
+
+    it('uses fresh schedule.heartbeat events for scheduler continuity health', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        healthChecks: createHealthyHealthChecks(),
+        schedulerHeartbeatStaleAfterMs: 1_000,
+      });
+      await server.init();
+      await server.start();
+
+      await eventBus.emit('schedule.heartbeat', {
+        timestamp: Date.now(),
+        taskCount: 2,
+      });
+
+      const res = await request(port, 'GET', '/health');
+      expect(res.status).toBe(200);
+
+      const body = JSON.parse(res.body);
+      expect(body.status).toBe('healthy');
+      expect(body.continuity.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHeartbeat.meta.heartbeatObserved).toBe(true);
     });
   });
 
   describe('POST /v1/chat/completions (non-streaming)', () => {
     it('returns valid OpenAI response shape', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Hello' }],
       });
       expect(res.status).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.object).toBe('chat.completion');
       expect(body.id).toMatch(/^chatcmpl-/);
-      expect(body.model).toBe('purrsephone');
+      expect(body.model).toBe(DEFAULT_COMPANION_ID);
       expect(body.choices).toHaveLength(1);
       expect(body.choices[0].message.role).toBe('assistant');
       expect(body.choices[0].message.content).toBe('Hello world');
@@ -499,7 +566,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Hello' }],
       }, {
         'X-User-ID': 'v-primary',
@@ -530,7 +597,7 @@ describe('ApiServer', () => {
         provider: 'anthropic',
         system_prompt_mode: 'none',
         response_style: 'concise',
-        messages: [{ role: 'user', content: 'Talk with Purrsephone.' }],
+        messages: [{ role: 'user', content: 'Talk with Companion.' }],
       });
       expect(res.status).toBe(200);
 
@@ -547,7 +614,7 @@ describe('ApiServer', () => {
 
     it('rejects invalid response_style overrides', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         response_style: 'verbose',
         messages: [{ role: 'user', content: 'test' }],
       });
@@ -573,7 +640,7 @@ describe('ApiServer', () => {
 
     it('rejects caller-provided primary trust fields in API payloads', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         trustLevel: 'primary',
         contact: { trust_level: 'primary' },
         messages: [{ role: 'user', content: 'attempt privilege escalation' }],
@@ -606,7 +673,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'hello with claim' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -647,7 +714,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const initial = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'claim me' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -662,7 +729,7 @@ describe('ApiServer', () => {
       };
 
       const verified = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'claim me verified' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -677,7 +744,7 @@ describe('ApiServer', () => {
       expect(contactStore.getByChannelIdentity('api', INSECURE_LOCAL_API_PRINCIPAL_ID)?.id).toBe(contact.id);
 
       const replay = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'replay proof' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -715,7 +782,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const spoofed = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'spoofed claim' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -726,7 +793,7 @@ describe('ApiServer', () => {
       expect(JSON.parse(spoofed.body).error.type).toBe('identity_claim_source_not_linked');
 
       const initial = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'issue challenge' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -748,7 +815,7 @@ describe('ApiServer', () => {
       `).run(expiredAt, verification.nonce);
 
       const expired = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'use expired challenge' }],
       }, {
         'X-Canonical-Contact-ID': contact.id,
@@ -767,7 +834,7 @@ describe('ApiServer', () => {
 
     it('returns 400 for missing messages', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
       });
       expect(res.status).toBe(400);
       const body = JSON.parse(res.body);
@@ -776,7 +843,7 @@ describe('ApiServer', () => {
 
     it('returns 400 for empty messages array', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [],
       });
       expect(res.status).toBe(400);
@@ -826,14 +893,14 @@ describe('ApiServer', () => {
       await server.start();
 
       const firstRequest = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'First' }],
       }, { 'X-Session-ID': 'same-session' });
 
       await new Promise(resolve => setTimeout(resolve, 20));
 
       const secondRequest = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Second' }],
       }, { 'X-Session-ID': 'same-session' });
 
@@ -883,14 +950,14 @@ describe('ApiServer', () => {
       await server.start();
 
       const firstRequest = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'First telemetry turn' }],
       }, { 'X-Session-ID': 'queue-telemetry' });
 
       await new Promise(resolve => setTimeout(resolve, 20));
 
       const secondRequest = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Second telemetry turn' }],
       }, { 'X-Session-ID': 'queue-telemetry' });
 
@@ -950,7 +1017,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const timedOut = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Long task' }],
       }, { 'X-Session-ID': 'timeout-session' });
 
@@ -959,7 +1026,7 @@ describe('ApiServer', () => {
       expect(abortSpy).toHaveBeenCalledTimes(1);
 
       const queuedTimeout = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Retry too soon' }],
       }, { 'X-Session-ID': 'timeout-session' });
       expect(queuedTimeout.status).toBe(504);
@@ -974,7 +1041,7 @@ describe('ApiServer', () => {
       await new Promise(resolve => setTimeout(resolve, 10));
 
       const recovered = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Retry after settle' }],
       }, { 'X-Session-ID': 'timeout-session' });
       expect(recovered.status).toBe(200);
@@ -1000,7 +1067,7 @@ describe('ApiServer', () => {
       await server.start();
 
       const res = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'hello' }],
       });
 
@@ -1042,7 +1109,7 @@ describe('ApiServer', () => {
           resolve();
         };
         const payload = JSON.stringify({
-          model: 'purrsephone',
+          model: DEFAULT_COMPANION_ID,
           messages: [{ role: 'user', content: 'disconnect me' }],
         });
         const req = http.request(
@@ -1069,7 +1136,7 @@ describe('ApiServer', () => {
       });
 
       const queuedRecovery = request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'still running' }],
       }, { 'X-Session-ID': 'disconnect-session' });
       await new Promise(resolve => setTimeout(resolve, 20));
@@ -1086,7 +1153,7 @@ describe('ApiServer', () => {
       expect(abortSpy).toHaveBeenCalledTimes(1);
 
       const recovered = await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'normal turn' }],
       }, { 'X-Session-ID': 'disconnect-session' });
       expect(recovered.status).toBe(200);
@@ -1097,7 +1164,7 @@ describe('ApiServer', () => {
   describe('POST /v1/chat/completions (streaming)', () => {
     it('returns proper SSE format', async () => {
       const res = await streamRequest(port, {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Hello' }],
         stream: true,
       });
@@ -1182,6 +1249,133 @@ describe('ApiServer', () => {
       expect(res.headers['access-control-allow-origin']).toBe('https://console.example');
       expect(res.headers['access-control-allow-methods']).toContain('POST');
       expect(res.headers['access-control-allow-headers']).toContain('X-Session-ID');
+      expect(res.headers.vary).toContain('Origin');
+    });
+
+    it('allows preflight for split-mode admin origin derived from admin host/port', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: resolveApiCorsAllowedOrigins({
+          explicitAllowlist: [],
+          adminHost: 'purrsephone.local',
+          adminPort: 3001,
+        }),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Origin: 'http://purrsephone.local:3001',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'Authorization, Content-Type, X-Session-ID, X-User-ID, X-User-Name',
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('http://purrsephone.local:3001');
+      expect(res.headers['access-control-allow-headers']).toContain('X-User-ID');
+      expect(res.headers['access-control-allow-headers']).toContain('X-User-Name');
+      expect(res.headers.vary).toContain('Origin');
+    });
+
+    it('allows preflight for split-mode admin origin when admin host is wildcard bind', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: resolveApiCorsAllowedOrigins({
+          explicitAllowlist: [],
+          adminHost: '0.0.0.0',
+          adminPort: 3201,
+        }),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Host: `purrsephone.local.mesh:${port}`,
+        Origin: 'http://purrsephone.local.mesh:3201',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('http://purrsephone.local.mesh:3201');
+      expect(res.headers.vary).toContain('Origin');
+    });
+
+    it('rejects wildcard-bind split-mode preflight when origin host differs from request host', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: resolveApiCorsAllowedOrigins({
+          explicitAllowlist: [],
+          adminHost: '0.0.0.0',
+          adminPort: 3201,
+        }),
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Host: `purrsephone.local.mesh:${port}`,
+        Origin: 'http://evil.example:3201',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.body).error.type).toBe('cors_origin_not_allowed');
+    });
+
+    it('allows wildcard LAN preflight when configured origin host matches', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: ['http://*.local:3201'],
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Origin: 'http://garden.local:3201',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers['access-control-allow-origin']).toBe('http://garden.local:3201');
+      expect(res.headers['access-control-allow-methods']).toContain('POST');
+      expect(res.headers.vary).toContain('Origin');
+    });
+
+    it('rejects wildcard LAN preflight when origin does not match configured port', async () => {
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        corsAllowedOrigins: ['http://*.local:3201'],
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
+        Origin: 'http://garden.local:3202',
+        'Access-Control-Request-Method': 'POST',
+      });
+      expect(res.status).toBe(403);
+      expect(JSON.parse(res.body).error.type).toBe('cors_origin_not_allowed');
     });
   });
 
@@ -1274,7 +1468,7 @@ describe('ApiServer', () => {
       await server.start();
 
       await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [
           { role: 'user', content: 'First message' },
           { role: 'assistant', content: 'First response' },
@@ -1309,7 +1503,7 @@ describe('ApiServer', () => {
       await server.start();
 
       await request(port, 'POST', '/v1/chat/completions', {
-        model: 'purrsephone',
+        model: DEFAULT_COMPANION_ID,
         messages: [
           { role: 'user', content: 'First message' },
           { role: 'assistant', content: 'First response' },
@@ -1427,6 +1621,59 @@ describe('ApiServer with auth', () => {
     expect(res.status).toBe(200);
   });
 
+  it('accepts requests with admin token when configured as alternate auth token', async () => {
+    await server.stop();
+    server = new ApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      adminToken: 'test-admin-token',
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'GET', '/v1/models', undefined, {
+      Authorization: 'Bearer test-admin-token',
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('accepts requests with admin auth cookie when configured as alternate auth token', async () => {
+    await server.stop();
+    server = new ApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      adminToken: 'test-admin-token',
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'GET', '/v1/models', undefined, {
+      Cookie: 'psfn_token=test-admin-token',
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('requires authentication for health probes and accepts valid bearer auth', async () => {
+    const unauthenticated = await request(port, 'GET', '/health');
+    expect(unauthenticated.status).toBe(401);
+    const unauthenticatedBody = JSON.parse(unauthenticated.body);
+    expect(unauthenticatedBody.error.type).toBe('invalid_api_key');
+
+    const authenticated = await request(port, 'GET', '/health', undefined, {
+      Authorization: 'Bearer test-secret-key',
+    });
+    expect(authenticated.status).not.toBe(401);
+    const authenticatedBody = JSON.parse(authenticated.body);
+    expect(['healthy', 'degraded']).toContain(authenticatedBody.status);
+    expect(authenticatedBody.continuity).toBeDefined();
+  });
+
   it('binds message identity to authenticated principal and ignores spoofed user headers', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);
@@ -1441,7 +1688,7 @@ describe('ApiServer with auth', () => {
     await server.start();
 
     const res = await request(port, 'POST', '/v1/chat/completions', {
-      model: 'purrsephone',
+      model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'identity test' }],
     }, {
       Authorization: 'Bearer test-secret-key',
@@ -1480,7 +1727,7 @@ describe('ApiServer with auth', () => {
 
     const principalId = deriveApiKeyPrincipalId('test-secret-key');
     const challenge = await request(port, 'POST', '/v1/chat/completions', {
-      model: 'purrsephone',
+      model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'claim identity' }],
     }, {
       Authorization: 'Bearer test-secret-key',
@@ -1499,7 +1746,7 @@ describe('ApiServer with auth', () => {
       signature: string;
     };
     const verified = await request(port, 'POST', '/v1/chat/completions', {
-      model: 'purrsephone',
+      model: DEFAULT_COMPANION_ID,
       messages: [{ role: 'user', content: 'claim identity verified' }],
     }, {
       Authorization: 'Bearer test-secret-key',

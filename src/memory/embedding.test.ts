@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 import {
+  DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR,
+  STARTUP_EMBEDDING_WARMUP_TEXT,
   OllamaEmbeddingProvider,
   TransformersEmbeddingProvider,
   createEmbeddingProviderFromEnv,
+  warmupEmbeddingService,
 } from './embedding.js';
 
 const fetchMock = vi.fn();
@@ -230,6 +234,51 @@ describe('embedding providers', () => {
     expect(mockEnv.cacheDir).toBe('/tmp/hf-cache');
   });
 
+  it('defaults transformers cacheDir to the project-local models directory', async () => {
+    process.env.EMBEDDING_PROVIDER = 'transformers';
+    delete process.env.TRANSFORMERS_CACHE_DIR;
+    mockEnv.cacheDir = './.cache';
+
+    const tensorData = new Float32Array([1]);
+    mockExtractor.mockResolvedValue({ data: tensorData, dims: [1, 1] });
+    mockPipeline.mockResolvedValue(mockExtractor);
+
+    const provider = createEmbeddingProviderFromEnv();
+    await provider.embed('test');
+
+    expect(mockEnv.cacheDir).toBe(DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR);
+  });
+
+  it('resolves relative TRANSFORMERS_CACHE_DIR to an absolute project-local path', async () => {
+    process.env.EMBEDDING_PROVIDER = 'transformers';
+    process.env.TRANSFORMERS_CACHE_DIR = 'models/custom-transformers-cache';
+    mockEnv.cacheDir = './.cache';
+
+    const tensorData = new Float32Array([1]);
+    mockExtractor.mockResolvedValue({ data: tensorData, dims: [1, 1] });
+    mockPipeline.mockResolvedValue(mockExtractor);
+
+    const provider = createEmbeddingProviderFromEnv();
+    await provider.embed('test');
+
+    expect(mockEnv.cacheDir).toBe(path.resolve(process.cwd(), 'models/custom-transformers-cache'));
+  });
+
+  it('accepts HUGGINGFACE_HUB_TOKEN as an HF auth token alias', async () => {
+    process.env.EMBEDDING_PROVIDER = 'transformers';
+    delete process.env.HF_TOKEN;
+    process.env.HUGGINGFACE_HUB_TOKEN = 'hf_alias_token';
+
+    const tensorData = new Float32Array([1]);
+    mockExtractor.mockResolvedValue({ data: tensorData, dims: [1, 1] });
+    mockPipeline.mockResolvedValue(mockExtractor);
+
+    const provider = createEmbeddingProviderFromEnv();
+    await provider.embed('test');
+
+    expect(process.env.HF_TOKEN).toBe('hf_alias_token');
+  });
+
   it('returns empty array for empty batch', async () => {
     const provider = new TransformersEmbeddingProvider({ dims: 3 });
     const result = await provider.embedBatch([]);
@@ -311,6 +360,30 @@ describe('embedding providers', () => {
 
     expect(() => createEmbeddingProviderFromEnv()).toThrow(
       'EMBEDDING_API_URL must be set when EMBEDDING_PROVIDER=api',
+    );
+  });
+
+  it('warms the embedding service with the startup probe text', async () => {
+    const embeddingService = {
+      dims: 3,
+      embedBatch: vi.fn(),
+      embed: vi.fn().mockResolvedValue(new Float32Array([1, 2, 3])),
+    };
+
+    await warmupEmbeddingService(embeddingService);
+
+    expect(embeddingService.embed).toHaveBeenCalledWith(STARTUP_EMBEDDING_WARMUP_TEXT);
+  });
+
+  it('fails closed when warmup returns the wrong embedding dimensions', async () => {
+    const embeddingService = {
+      dims: 3,
+      embedBatch: vi.fn(),
+      embed: vi.fn().mockResolvedValue(new Float32Array([1, 2])),
+    };
+
+    await expect(warmupEmbeddingService(embeddingService)).rejects.toThrow(
+      'embedding service startup warmup failed: embedding warmup dimension mismatch: expected 3, got 2',
     );
   });
 });

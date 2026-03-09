@@ -1,17 +1,102 @@
 // ── Scheduler ──
-// Purrsephone's internal clock. A base tick checks registered tasks for due status.
+// The companion's internal clock. A base tick checks registered tasks for due status.
 // Heartbeat is a special 'every' task — her self-check rhythm.
 
 import type { EventBus } from '../event-bus.js';
-import type { ScheduledTask, SchedulerConfig, TaskState } from './types.js';
+import type {
+  DailyRecurringCadence,
+  HourlyRecurringCadence,
+  RecurringCadence,
+  ScheduledTask,
+  SchedulerConfig,
+  TaskState,
+} from './types.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
 import { createComponentLogger } from '../logger.js';
 import type {
   EligibilityDecision,
   EligibilityGate,
+  EligibilityRequirements,
 } from '../capabilities/eligibility.js';
 
 const log = createComponentLogger('Scheduler');
+
+function isWallClockCadence(
+  cadence: RecurringCadence | undefined,
+): cadence is HourlyRecurringCadence | DailyRecurringCadence {
+  return cadence?.kind === 'hourly' || cadence?.kind === 'daily';
+}
+
+function validateRecurringCadence(taskId: string, cadence: RecurringCadence | undefined): void {
+  if (cadence === undefined || cadence.kind === 'relative') {
+    return;
+  }
+
+  const timezone = (cadence as { timezone?: unknown }).timezone;
+  if (timezone !== 'local' && timezone !== 'utc') {
+    throw new Error(`Task "${taskId}" cadence.timezone must be "local" or "utc"`);
+  }
+
+  if (cadence.kind === 'hourly') {
+    if (!Number.isInteger(cadence.minute) || cadence.minute < 0 || cadence.minute > 59) {
+      throw new Error(`Task "${taskId}" cadence.minute must be an integer between 0 and 59`);
+    }
+    return;
+  }
+
+  if (!Number.isInteger(cadence.hour) || cadence.hour < 0 || cadence.hour > 23) {
+    throw new Error(`Task "${taskId}" cadence.hour must be an integer between 0 and 23`);
+  }
+  if (!Number.isInteger(cadence.minute) || cadence.minute < 0 || cadence.minute > 59) {
+    throw new Error(`Task "${taskId}" cadence.minute must be an integer between 0 and 59`);
+  }
+}
+
+function getCurrentSlotStart(
+  now: number,
+  cadence: HourlyRecurringCadence | DailyRecurringCadence,
+): number {
+  const slot = new Date(now);
+
+  if (cadence.kind === 'hourly') {
+    if (cadence.timezone === 'utc') {
+      slot.setUTCMinutes(cadence.minute, 0, 0);
+      if (slot.getTime() > now) {
+        slot.setUTCHours(slot.getUTCHours() - 1);
+      }
+      return slot.getTime();
+    }
+
+    slot.setMinutes(cadence.minute, 0, 0);
+    if (slot.getTime() > now) {
+      slot.setHours(slot.getHours() - 1);
+    }
+    return slot.getTime();
+  }
+
+  if (cadence.timezone === 'utc') {
+    slot.setUTCHours(cadence.hour, cadence.minute, 0, 0);
+    if (slot.getTime() > now) {
+      slot.setUTCDate(slot.getUTCDate() - 1);
+    }
+    return slot.getTime();
+  }
+
+  slot.setHours(cadence.hour, cadence.minute, 0, 0);
+  if (slot.getTime() > now) {
+    slot.setDate(slot.getDate() - 1);
+  }
+  return slot.getTime();
+}
+
+function isWallClockTaskDue(
+  now: number,
+  lastRun: number,
+  cadence: HourlyRecurringCadence | DailyRecurringCadence,
+): boolean {
+  const currentSlotStart = getCurrentSlotStart(now, cadence);
+  return now >= currentSlotStart && lastRun < currentSlotStart;
+}
 
 export interface SchedulerRuntimeOptions {
   eligibilityGate?: EligibilityGate;
@@ -65,7 +150,16 @@ export class Scheduler {
     if (task.type === 'every' && (!Number.isFinite(task.intervalMs) || task.intervalMs <= 0)) {
       throw new Error(`Task "${task.id}" intervalMs must be a positive finite number`);
     }
-    const lastRun = opts?.skipFirstRun ? Date.now() : 0;
+    if (task.type === 'every') {
+      validateRecurringCadence(task.id, task.cadence);
+    } else if (task.cadence !== undefined) {
+      throw new Error(`Task "${task.id}" cadence is only supported for "every" tasks`);
+    }
+
+    const now = Date.now();
+    const lastRun = task.type === 'every' && isWallClockCadence(task.cadence)
+      ? now
+      : (opts?.skipFirstRun ? now : 0);
     this.tasks.set(task.id, { ...task, lastRun });
   }
 
@@ -76,6 +170,7 @@ export class Scheduler {
       state?: TaskState;
       name?: string;
       runAt?: number;
+      cadence?: RecurringCadence;
       resetLastRun?: boolean;
     },
   ): boolean {
@@ -87,6 +182,20 @@ export class Scheduler {
       }
       entry.intervalMs = updates.intervalMs;
       if (updates.resetLastRun) {
+        entry.lastRun = Date.now();
+      }
+    }
+    if (updates.cadence !== undefined) {
+      if (entry.type !== 'every') {
+        return false;
+      }
+      try {
+        validateRecurringCadence(id, updates.cadence);
+      } catch {
+        return false;
+      }
+      entry.cadence = updates.cadence;
+      if (isWallClockCadence(updates.cadence)) {
         entry.lastRun = Date.now();
       }
     }
@@ -182,7 +291,11 @@ export class Scheduler {
       let isDue = false;
 
       if (entry.type === 'every') {
-        isDue = entry.lastRun === 0 || (now - entry.lastRun >= entry.intervalMs);
+        if (isWallClockCadence(entry.cadence)) {
+          isDue = isWallClockTaskDue(now, entry.lastRun, entry.cadence);
+        } else {
+          isDue = entry.lastRun === 0 || (now - entry.lastRun >= entry.intervalMs);
+        }
       } else {
         isDue = entry.runAt !== undefined && now >= entry.runAt;
       }

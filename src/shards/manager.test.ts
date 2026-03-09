@@ -1,15 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Agent } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
 import { EventBus } from '../event-bus.js';
 import { SessionStore } from '../session/store.js';
+import { runWithRequestContext } from '../llm/request-context.js';
+import { buildSessionMetadataWithTurn } from '../session/turn-provenance.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createSpawnShardTool } from './tools.js';
 import type { LLMProvider, MemoryProvider } from '../agent/contracts.js';
 import type { SubstrateConfig, LLMResponse } from '../types.js';
+import { createTurnId } from '../turns/id.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -36,6 +39,23 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
 
 const setSystemPromptSpy = vi.spyOn(Agent.prototype, 'setSystemPrompt');
 const setToolsSpy = vi.spyOn(Agent.prototype, 'setTools');
+
+function restoreDefaultPromptMock(): void {
+  promptSpy.mockImplementation(async function (this: Agent) {
+    if (mockShardError) throw mockShardError;
+    if (mockShardDelayMs > 0) await new Promise(r => setTimeout(r, mockShardDelayMs));
+    this.appendMessage({
+      role: 'assistant',
+      content: [{ type: 'text' as const, text: mockShardContent }],
+      api: '' as any,
+      provider: '' as any,
+      model: '',
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: 'stop' as any,
+      timestamp: Date.now(),
+    });
+  });
+}
 
 function makeTestTool(name: string) {
   const execute = vi.fn(async () => ({
@@ -78,8 +98,8 @@ function mockLLM(): LLMProvider {
   };
 }
 
-function mockMemoryProvider(): MemoryProvider {
-  return { retrieve: vi.fn(async () => '') };
+function mockMemoryProvider(result = ''): MemoryProvider {
+  return { retrieve: vi.fn(async () => result) };
 }
 
 const TEST_CONFIG: SubstrateConfig = {
@@ -124,6 +144,7 @@ describe('ShardManager', () => {
     promptSpy.mockClear();
     setSystemPromptSpy.mockClear();
     setToolsSpy.mockClear();
+    restoreDefaultPromptMock();
   });
 
   afterEach(() => {
@@ -180,6 +201,7 @@ describe('ShardManager', () => {
   });
 
   it('inherits parent system prompt when none specified', async () => {
+    const companionPrompt = 'I am Companion.';
     const manager = new ShardManager({
       eventBus,
       llmProvider: mockLLM(),
@@ -187,7 +209,7 @@ describe('ShardManager', () => {
       embeddingService: null,
       memoryProvider: null,
       config: TEST_CONFIG,
-      parentSystemPrompt: 'I am Purrsephone.',
+      parentSystemPrompt: companionPrompt,
     });
 
     await manager.spawn({ name: 'inherit', task: 'test' });
@@ -196,10 +218,11 @@ describe('ShardManager', () => {
     // from buildContext, which includes the base prompt
     expect(setSystemPromptSpy).toHaveBeenCalled();
     const setPromptCall = setSystemPromptSpy.mock.calls[0];
-    expect(setPromptCall[0]).toContain('I am Purrsephone.');
+    expect(setPromptCall[0]).toContain(companionPrompt);
   });
 
   it('uses custom system prompt when provided', async () => {
+    const companionPrompt = 'I am Companion.';
     const manager = new ShardManager({
       eventBus,
       llmProvider: mockLLM(),
@@ -207,7 +230,7 @@ describe('ShardManager', () => {
       embeddingService: null,
       memoryProvider: null,
       config: TEST_CONFIG,
-      parentSystemPrompt: 'I am Purrsephone.',
+      parentSystemPrompt: companionPrompt,
     });
 
     await manager.spawn({
@@ -219,7 +242,7 @@ describe('ShardManager', () => {
     expect(setSystemPromptSpy).toHaveBeenCalled();
     const setPromptCall = setSystemPromptSpy.mock.calls[0];
     expect(setPromptCall[0]).toContain('You are a research shard.');
-    expect(setPromptCall[0]).not.toContain('I am Purrsephone.');
+    expect(setPromptCall[0]).not.toContain(companionPrompt);
   });
 
   it('runs concurrent shards in parallel', async () => {
@@ -323,6 +346,126 @@ describe('ShardManager', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('tracks explicit lifecycle and health metadata for active and completed shards', async () => {
+    mockShardDelayMs = 40;
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const pending = manager.spawn({ name: 'lifecycle', task: 'check lifecycle metadata' });
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    const active = manager.getActiveShards();
+    expect(active).toHaveLength(1);
+    expect(active[0].name).toBe('lifecycle');
+    expect(['registering', 'ready']).toContain(active[0].state);
+    expect(active[0].health).toBe('healthy');
+    expect(active[0].lastHeartbeatAt).toBeGreaterThan(0);
+
+    const result = await pending;
+    expect(result.lifecycleState).toBe('offline');
+    expect(result.health).toBe('healthy');
+    expect(result.capabilities).toContain('general');
+  });
+
+  it('fails closed when required shard capabilities are missing', async () => {
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    await expect(
+      manager.spawn({
+        name: 'missing-capability',
+        task: 'test',
+        requiredCapabilities: ['wyoming:ha-main'],
+      }),
+    ).rejects.toThrow('missing required capability');
+    expect(manager.getActiveCount()).toBe(0);
+  });
+
+  it('evicts stale shards from active routing and frees execution slots', async () => {
+    mockShardDelayMs = 120;
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      maxConcurrent: 1,
+      heartbeatStaleAfterMs: 20,
+      heartbeatDisconnectAfterMs: 30,
+    });
+
+    const staleShard = manager.spawn({ name: 'stale', task: 'long-running task' });
+    await new Promise(resolve => setTimeout(resolve, 60));
+
+    // Health sweep happens on accessors; stale shard should be evicted from active routing.
+    expect(manager.getActiveCount()).toBe(0);
+    expect(manager.getActiveShards()).toHaveLength(0);
+
+    await expect(
+      manager.spawn({ name: 'replacement', task: 'new task after stale eviction' }),
+    ).resolves.toMatchObject({
+      name: 'replacement',
+      lifecycleState: 'offline',
+    });
+    await staleShard;
+  });
+
+  it('recovers a heartbeat-stale shard when activity resumes before disconnect timeout', async () => {
+    mockShardDelayMs = 160;
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      heartbeatStaleAfterMs: 20,
+      heartbeatDisconnectAfterMs: 200,
+    });
+
+    const pending = manager.spawn({ name: 'recoverable', task: 'long-running task' });
+    await new Promise(resolve => setTimeout(resolve, 45));
+
+    const degraded = manager.getActiveShards();
+    expect(degraded).toHaveLength(1);
+    expect(degraded[0].state).toBe('degraded');
+    expect(degraded[0].health).toBe('stale');
+    expect(degraded[0].stateReason).toBe('heartbeat_stale');
+    expect(degraded[0].failureReason).toContain('No heartbeat observed');
+
+    await eventBus.emit('agent.tool.start', {
+      channelId: degraded[0].channelId,
+      toolCallId: 'recover-call',
+      toolName: 'repo_status',
+    });
+
+    const recovered = manager.getActiveShards();
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0].state).toBe('ready');
+    expect(recovered[0].health).toBe('healthy');
+    expect(recovered[0].stateReason).toBe('heartbeat_recovered');
+    expect(recovered[0].failureReason).toBeUndefined();
+
+    await pending;
+  });
+
   it('wires memory provider for read access', async () => {
     const memory = mockMemoryProvider();
     const manager = new ShardManager({
@@ -339,6 +482,164 @@ describe('ShardManager', () => {
 
     // Memory retrieval should have been called for the shard's channel
     expect(memory.retrieve).toHaveBeenCalled();
+  });
+
+  it('injects a shard context pack from the source channel and keeps shard writes isolated', async () => {
+    mockShardContent = 'context-packed response';
+    const sourceTurnId = createTurnId();
+    const sourceChannelId = 'api:parent-session';
+    sessionStore.append({
+      channelId: sourceChannelId,
+      role: 'assistant',
+      content: 'Earlier project summary',
+      timestamp: Date.now() - 2_000,
+    });
+    sessionStore.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'Please check the deployment blockers.',
+      authorId: 'user-1',
+      authorName: 'PrimaryUser',
+      timestamp: Date.now() - 1_000,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: sourceTurnId,
+        requestId: 'req-parent-1',
+        role: 'user',
+      }),
+    });
+    const sourceEntriesBefore = sessionStore.getRecent(sourceChannelId, 10);
+    const memory = mockMemoryProvider('Remember the staging database migration is still pending.');
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: memory,
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'autonomous',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['shard_context'],
+        },
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    const result = await manager.spawn({
+      name: 'context-pack',
+      task: 'Summarize the deployment blockers.',
+      sourceContext: {
+        channelId: sourceChannelId,
+        requestId: 'req-parent-1',
+        turnId: sourceTurnId,
+      },
+    });
+
+    expect(memory.retrieve).toHaveBeenCalledTimes(1);
+    expect(memory.retrieve).toHaveBeenCalledWith(
+      'Summarize the deployment blockers.',
+      sourceChannelId,
+    );
+    expect(setSystemPromptSpy).toHaveBeenCalled();
+    const setPromptCall = setSystemPromptSpy.mock.calls[0];
+    expect(setPromptCall).toBeDefined();
+    const [setPromptText] = setPromptCall;
+    expect(setPromptText).toContain('[Shard context pack]');
+    expect(setPromptText).toContain(`Source channel: ${sourceChannelId}`);
+    expect(setPromptText).toContain('PrimaryUser: Please check the deployment blockers.');
+    expect(setPromptText).toContain('Remember the staging database migration is still pending.');
+
+    const shardEntries = sessionStore.getRecent(`shard:${result.shardId}`, 10);
+    expect(shardEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'user',
+        content: 'Summarize the deployment blockers.',
+      }),
+      expect.objectContaining({
+        role: 'assistant',
+        content: 'context-packed response',
+      }),
+    ]));
+    expect(sessionStore.getRecent(sourceChannelId, 10)).toEqual(sourceEntriesBefore);
+  });
+
+  it('audits and persists allow decisions for source-to-shard context-pack sync', async () => {
+    const sourceTurnId = createTurnId();
+    const sourceChannelId = 'api:sync-parent';
+    sessionStore.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'Carry only the last blocker into the shard.',
+      authorId: 'user-1',
+      authorName: 'PrimaryUser',
+      timestamp: Date.now() - 100,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: sourceTurnId,
+        requestId: 'req-sync-parent',
+        role: 'user',
+      }),
+    });
+    const auditTrail = { append: vi.fn() };
+    const syncAuditPath = join(dir, 'audit', 'shard-session-memory-sync-audit.jsonl');
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: mockMemoryProvider('Carry over: deployment is blocked by DNS cutover.'),
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'autonomous',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['shard_context'],
+        },
+      },
+      parentSystemPrompt: 'test',
+      auditTrail,
+      shardSessionMemorySyncAuditPath: syncAuditPath,
+    });
+
+    await manager.spawn({
+      name: 'sync-audit',
+      task: 'Extract only blockers.',
+      sourceContext: {
+        channelId: sourceChannelId,
+        requestId: 'req-sync-parent',
+        turnId: sourceTurnId,
+      },
+    });
+
+    const syncAuditCalls = auditTrail.append.mock.calls
+      .filter(([event]) => event === 'shard.sync.policy')
+      .map(([, details]) => details);
+    expect(syncAuditCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        operation: 'context_pack_session',
+        decision: 'ALLOW',
+        reason: 'allowed_prime_transcript_fact',
+      }),
+      expect.objectContaining({
+        operation: 'context_pack_memory',
+        decision: 'ALLOW',
+        reason: 'allowed_prime_memory_seed',
+      }),
+    ]));
+
+    expect(existsSync(syncAuditPath)).toBe(true);
+    const persistedEntries = readFileSync(syncAuditPath, 'utf-8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(persistedEntries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operation: 'context_pack_session', decision: 'ALLOW' }),
+      expect.objectContaining({ operation: 'context_pack_memory', decision: 'ALLOW' }),
+    ]));
   });
 
   it('injects default nursery shard toolset and blocks recursion tools', async () => {
@@ -458,6 +759,68 @@ describe('ShardManager', () => {
     expect(injected).not.toContain('repo_status');
   });
 
+  it('keeps shard tool restrictions unchanged when a context pack is active', async () => {
+    const sourceTurnId = createTurnId();
+    const sourceChannelId = 'api:context-pack-tools';
+    sessionStore.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'Check the repo state before acting.',
+      authorId: 'user-1',
+      authorName: 'PrimaryUser',
+      timestamp: Date.now() - 500,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: sourceTurnId,
+        requestId: 'req-context-tools',
+        role: 'user',
+      }),
+    });
+    const memoryWrite = makeTestTool('memory_write');
+    const contactLookup = makeTestTool('contact_lookup');
+    const repoStatus = makeTestTool('repo_status');
+    const repoDiff = makeTestTool('repo_diff');
+    const repoCommit = makeTestTool('repo_commit');
+    const spawnShard = makeTestTool('spawn_shard');
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: mockMemoryProvider('Parent memory block'),
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'nursery',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['nursery'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['shard_context'],
+        },
+      },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryWrite.tool, contactLookup.tool],
+        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
+      }),
+    });
+
+    await manager.spawn({
+      name: 'toolset-packed',
+      task: 'Audit tool restrictions',
+      sourceContext: {
+        channelId: sourceChannelId,
+        requestId: 'req-context-tools',
+        turnId: sourceTurnId,
+      },
+    });
+
+    const injected = lastSetToolNames();
+    expect(injected).toEqual(expect.arrayContaining(['load_tools', ...DEFAULT_SHARD_TOOLSET]));
+    expect(injected).not.toContain('repo_commit');
+    expect(injected).not.toContain('spawn_shard');
+  });
+
   it('stamps shard source provenance on shard memory tools', async () => {
     const memoryWrite = makeTestTool('memory_write');
     const memoryImport = makeTestTool('memory_import_batch');
@@ -497,6 +860,51 @@ describe('ShardManager', () => {
         __psfnShardSource: `shard:${result.shardId}`,
       }),
       undefined,
+    );
+  });
+
+  it('denies disallowed shard-to-prime memory sync operations and audits the denial', async () => {
+    const memoryRedact = makeTestTool('memory_redact');
+    const auditTrail = { append: vi.fn() };
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryRedact.tool],
+        extended: [],
+      }),
+      auditTrail,
+    });
+
+    const result = await manager.spawn({ name: 'policy-deny', task: 'test' });
+    const tools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{
+      name: string;
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const wrappedMemoryRedact = tools.find((tool) => tool.name === 'memory_redact');
+    expect(wrappedMemoryRedact).toBeDefined();
+    if (!wrappedMemoryRedact) {
+      throw new Error('Expected wrapped memory_redact tool to be present');
+    }
+
+    await expect(
+      wrappedMemoryRedact.execute('redact-call', { memory_id: 'mem-1' }),
+    ).rejects.toThrow('denied_operation');
+    expect(memoryRedact.execute).not.toHaveBeenCalled();
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'shard.sync.policy',
+      expect.objectContaining({
+        shardId: result.shardId,
+        operation: 'memory_redact',
+        decision: 'DENY',
+        reason: 'denied_operation',
+      }),
     );
   });
 
@@ -581,6 +989,16 @@ describe('ShardManager', () => {
 
     expect(result.shardId).toMatch(/^wyoming-shard-/);
     expect(result.content.length).toBeGreaterThan(0);
+    expect(result.capabilities).toEqual(expect.arrayContaining([
+      'wyoming',
+      'wyoming:ha-main',
+      'wyoming:ha-main:voice-pe-kitchen',
+    ]));
+    expect(result.requiredCapabilities).toEqual(expect.arrayContaining([
+      'wyoming',
+      'wyoming:ha-main',
+      'wyoming:ha-main:voice-pe-kitchen',
+    ]));
     const delegatedEntries = sessionStore.getRecent('api:wyoming:ha-main:voice-pe-kitchen', 10);
     expect(delegatedEntries).toHaveLength(2);
     expect(delegatedEntries[0]).toMatchObject({
@@ -688,18 +1106,7 @@ describe('createSpawnShardTool', () => {
     mockShardError = null;
     promptSpy.mockClear();
     setToolsSpy.mockClear();
-    // Restore default prompt mock behavior
-    promptSpy.mockImplementation(async function (this: Agent) {
-      if (mockShardError) throw mockShardError;
-      if (mockShardDelayMs > 0) await new Promise(r => setTimeout(r, mockShardDelayMs));
-      this.appendMessage({
-        role: 'assistant',
-        content: [{ type: 'text' as const, text: mockShardContent }],
-        api: '' as any, provider: '' as any, model: '',
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: 'stop' as any, timestamp: Date.now(),
-      });
-    });
+    restoreDefaultPromptMock();
   });
 
   afterEach(() => {
@@ -745,7 +1152,80 @@ describe('createSpawnShardTool', () => {
     expect(text).toContain('Shard "test-tool" completed');
     expect(text).toContain('1 turn(s)');
     expect(text).toContain('0 tokens');  // pi-agent-core doesn't surface token counts
+    expect(text).toContain('[State reason: completed]');
     expect(text).toContain('tool output');
+  });
+
+  it('surfaces explicit lifecycle failure diagnostics from shard results', async () => {
+    const spawn = vi.fn(async () => ({
+      shardId: 'shard-failure',
+      name: 'degraded-shard',
+      content: 'partial output',
+      model: 'mock-model',
+      inputTokens: 1,
+      outputTokens: 2,
+      durationMs: 33,
+      turns: 1,
+      lifecycleState: 'offline' as const,
+      health: 'failed' as const,
+      stateReason: 'heartbeat_timeout',
+      failureReason: 'Heartbeat stale for 4200ms exceeded recovery window (4000ms).',
+      capabilities: ['general'],
+      requiredCapabilities: [],
+    }));
+    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+
+    const result = await tool.execute('call-failure', {
+      name: 'degraded-shard',
+      task: 'diagnostic run',
+    });
+
+    const text = result.content.map((c: any) => c.text).join('');
+    expect(text).toContain('[State reason: heartbeat_timeout]');
+    expect(text).toContain('[Failure reason: Heartbeat stale for 4200ms exceeded recovery window (4000ms).]');
+  });
+
+  it('passes source request context into shard spawns', async () => {
+    const spawn = vi.fn(async () => ({
+      shardId: 'shard-test',
+      name: 'ctx',
+      content: 'ok',
+      model: 'mock-model',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: 1,
+      turns: 1,
+      lifecycleState: 'offline' as const,
+      health: 'healthy' as const,
+      stateReason: 'completed',
+      capabilities: ['general'],
+      requiredCapabilities: [],
+    }));
+    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+
+    await runWithRequestContext(
+      {
+        channelId: 'api:source-context',
+        requestId: 'req-source-context',
+        turnId: 'turn-source-context',
+      },
+      async () => {
+        await tool.execute('call-context', {
+          name: 'ctx',
+          task: 'Inspect source context',
+        });
+      },
+    );
+
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'ctx',
+      task: 'Inspect source context',
+      sourceContext: {
+        channelId: 'api:source-context',
+        requestId: 'req-source-context',
+        turnId: 'turn-source-context',
+      },
+    }));
   });
 
   it('returns error content on failure', async () => {

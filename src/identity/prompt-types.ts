@@ -46,6 +46,29 @@ export interface ComposeContext {
   taskKind?: string;
 }
 
+export interface CompanionValuesLayerSnapshot {
+  content: string;
+  provenanceRefs: string[];
+  historyVersions: number[];
+  entryIds: string[];
+}
+
+export interface PromptComposerOptions {
+  /**
+   * When enabled, prepend immutable constitution amendments before mutable prompt layers.
+   */
+  enableConstitution?: boolean;
+  /**
+   * Optional provider for the secondary companion-derived values layer.
+   */
+  companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
+  /**
+   * Persist last-known-good composed prompt snapshots to disk.
+   * Defaults to true.
+   */
+  persistLastKnownGood?: boolean;
+}
+
 export interface ComposeResult {
   text: string;
   hash: string;

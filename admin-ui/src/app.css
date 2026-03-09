@@ -1,7 +1,6 @@
 @import 'tailwindcss';
 
-/* Purrsephone's Garden — Versailles Rococo Theme
-   WHITE and GOLD. Like Versailles. */
+/* Base palette defaults. Active theme packs can override these CSS variables at runtime. */
 
 @theme {
   /* Bark — BACKGROUNDS: pure white -> warm light greys */
@@ -74,7 +73,7 @@
 body {
   font-family: var(--font-sans);
   font-size: 16px;
-  background-color: #fafafa;
+  background-color: var(--color-bark-100);
   color: var(--color-shadow-800);
 }
 

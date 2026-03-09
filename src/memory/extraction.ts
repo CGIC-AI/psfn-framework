@@ -5,13 +5,15 @@ import type { ContactStore } from '../contacts/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { SessionStore } from '../session/store.js';
 import type { SessionEntry } from '../session/types.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig, TurnID } from '../types.js';
 import { createComponentLogger } from '../logger.js';
+import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import type { MemoryStore } from './store.js';
-import type { ExtractedFact } from './types.js';
+import type { ExtractedFact, MemoryFormationVAD } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
 import {
+  DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT,
   DEFAULT_MAX_WRITES,
   DEFAULT_MIN_CONFIDENCE,
   DEFAULT_MIN_IMPORTANCE,
@@ -24,6 +26,7 @@ import {
 } from './extraction/types.js';
 import {
   normalizeMaxWrites,
+  resolveEmotionalIntensityImportanceWeight,
   resolveGateConfig,
   resolveMaxWrites,
   resolveProfileConfig,
@@ -41,6 +44,7 @@ import {
   resolveCoveredUpToMessageId as resolveCoveredMarker,
   scheduleProfileRefresh,
 } from './extraction/runtime-helpers.js';
+import { applyEmotionalIntensityImportanceMultiplier } from './extraction/importance.js';
 import {
   computeNoveltyScore,
   computeProfileNovelty,
@@ -50,6 +54,10 @@ import {
 import { parseFactsXml } from './extraction/parser.js';
 
 const log = createComponentLogger('Extraction');
+
+export interface MemoryExtractorFormationOptions {
+  getFormationVAD?: () => MemoryFormationVAD | undefined;
+}
 
 export class MemoryExtractor {
   private llmClient: LLMProvider;
@@ -63,6 +71,7 @@ export class MemoryExtractor {
   private minConfidence: number;
   private minNovelty: number;
   private maxWrites: number;
+  private emotionalIntensityImportanceWeight: number;
   private telemetryEnabled: boolean;
   private promptRegistry: PromptRegistryStore | null;
   private sessionStore: SessionStore | null;
@@ -72,6 +81,7 @@ export class MemoryExtractor {
   private inFlightByChannel = new Map<string, Promise<void>>();
   private inFlightProfileRefreshes = new Set<Promise<void>>();
   private inFlightProfileByContact = new Map<string, Promise<void>>();
+  private getFormationVAD: (() => MemoryFormationVAD | undefined) | null = null;
 
   constructor(
     llmClient: LLMProvider,
@@ -83,6 +93,7 @@ export class MemoryExtractor {
     promptRegistry?: PromptRegistryStore | null,
     sessionStore?: SessionStore | null,
     contactStore?: ContactStore | null,
+    formationOptions?: MemoryExtractorFormationOptions,
   ) {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
@@ -97,6 +108,7 @@ export class MemoryExtractor {
       this.minConfidence = config.memoryExtractionMinConfidence ?? DEFAULT_MIN_CONFIDENCE;
       this.minNovelty = config.memoryExtractionMinNovelty ?? DEFAULT_MIN_NOVELTY;
       this.maxWrites = normalizeMaxWrites(config.memoryExtractionMaxWrites, DEFAULT_MAX_WRITES);
+      this.emotionalIntensityImportanceWeight = DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT;
       this.telemetryEnabled = config.memoryExtractionTelemetryEnabled ?? true;
     } else {
       const extractorConfig = config as MemoryExtractorConfig | undefined;
@@ -106,12 +118,15 @@ export class MemoryExtractor {
       this.minConfidence = extractorConfig?.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
       this.minNovelty = extractorConfig?.minNovelty ?? DEFAULT_MIN_NOVELTY;
       this.maxWrites = normalizeMaxWrites(extractorConfig?.maxWrites, DEFAULT_MAX_WRITES);
+      this.emotionalIntensityImportanceWeight = extractorConfig?.emotionalIntensityImportanceWeight
+        ?? DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT;
       this.telemetryEnabled = extractorConfig?.telemetryEnabled ?? true;
     }
 
     this.promptRegistry = promptRegistry ?? null;
     this.sessionStore = sessionStore ?? null;
     this.contactStore = contactStore ?? null;
+    this.getFormationVAD = formationOptions?.getFormationVAD ?? null;
   }
 
   async queueRetroactiveExtraction(
@@ -144,7 +159,7 @@ export class MemoryExtractor {
     await this.trackExtraction(channelId, 'pre_compaction', canonicalContactId, orderedEntries);
   }
 
-  async maybeExtract(channelId: string, canonicalContactId?: string): Promise<void> {
+  async maybeExtract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
       return;
@@ -172,16 +187,16 @@ export class MemoryExtractor {
       });
     }
 
-    await this.trackExtraction(channelId, trigger.triggerReason, canonicalContactId);
+    await this.trackExtraction(channelId, trigger.triggerReason, canonicalContactId, undefined, turnId);
   }
 
-  async extract(channelId: string, canonicalContactId?: string): Promise<void> {
+  async extract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction request while extractor is draining', { channelId });
       return;
     }
 
-    await this.trackExtraction(channelId, 'manual', canonicalContactId);
+    await this.trackExtraction(channelId, 'manual', canonicalContactId, undefined, turnId);
   }
 
   async stop(options?: MemoryExtractorDrainOptions): Promise<boolean> {
@@ -231,6 +246,7 @@ export class MemoryExtractor {
     triggerReason: ExtractionTriggerReason,
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
+    turnId?: TurnID,
   ): Promise<void> {
     const existing = this.inFlightByChannel.get(channelId);
     if (existing) {
@@ -238,7 +254,7 @@ export class MemoryExtractor {
       return existing;
     }
 
-    const promise = this.runExtraction(channelId, triggerReason, canonicalContactId, recoveredEntries);
+    const promise = this.runExtraction(channelId, triggerReason, canonicalContactId, recoveredEntries, turnId);
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(channelId, promise);
     void promise
@@ -264,11 +280,27 @@ export class MemoryExtractor {
     triggerReason: ExtractionTriggerReason,
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
+    turnId?: TurnID,
   ): Promise<void> {
+    let cachedFormationVAD: MemoryFormationVAD | undefined;
+    let didResolveFormationVAD = false;
+    const resolveFormationVAD = (): MemoryFormationVAD | undefined => {
+      if (!didResolveFormationVAD) {
+        cachedFormationVAD = this.getFormationVAD?.();
+        didResolveFormationVAD = true;
+      }
+      return cachedFormationVAD;
+    };
+    const intensityWeight = resolveEmotionalIntensityImportanceWeight(
+      this.runtimeConfig,
+      this.emotionalIntensityImportanceWeight,
+    );
+
     await runExtractionOrchestration({
       channelId,
       triggerReason,
       canonicalContactId,
+      turnId,
       recoveredEntries,
       llmClient: this.llmClient,
       sessionManager: this.sessionManager,
@@ -281,10 +313,16 @@ export class MemoryExtractor {
       }),
       maxWrites: resolveMaxWrites(this.runtimeConfig, this.maxWrites),
       telemetryEnabled: this.isTelemetryEnabled(),
+      useCompositionalExtraction: this.shouldUseCompositionalExtraction(channelId),
       isAcceptingExtractions: () => this.acceptingExtractions,
-      processFact: (fact, sourceRef, maybeContactId) => this.processFact(fact, sourceRef, maybeContactId),
-      emitExtractionStart: (extractionChannelId, reason) => (
-        emitExtractionStartEvent(this.eventBus, this.isTelemetryEnabled(), extractionChannelId, reason)
+      adjustFactForWrite: fact => (
+        this.adjustFactImportanceByEmotion(fact, resolveFormationVAD(), intensityWeight)
+      ),
+      processFact: (fact, sourceRef, maybeContactId) => (
+        this.processFact(fact, sourceRef, maybeContactId, resolveFormationVAD())
+      ),
+      emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
+        emitExtractionStartEvent(this.eventBus, this.isTelemetryEnabled(), extractionChannelId, reason, extractionTurnId)
       ),
       emitExtractionEnd: telemetry => (
         emitExtractionEndEvent(this.eventBus, this.isTelemetryEnabled(), telemetry)
@@ -307,22 +345,52 @@ export class MemoryExtractor {
     });
   }
 
+  private shouldUseCompositionalExtraction(channelId: string): boolean {
+    if (!this.runtimeConfig) return false;
+
+    return evaluateCompositionalPolicyForChannelId({
+      policy: this.runtimeConfig.compositionalPolicy,
+      capabilityTier: this.runtimeConfig.capabilityTier,
+      channelId,
+      purpose: 'extraction',
+    }).allowed;
+  }
+
   private async processFact(
     fact: ExtractedFact,
     sourceRef: string,
     canonicalContactId?: string,
+    formationVAD?: MemoryFormationVAD,
   ): Promise<WriteResult> {
     return this.writer.write({
       text: fact.text,
       type: fact.type,
       importance: fact.importance,
       emotionalValence: fact.emotionalValence,
+      formationVAD,
       confidence: fact.confidence,
       tags: fact.tags,
       sourceRef,
       sensitivity: fact.sensitivity,
       contactId: canonicalContactId,
     });
+  }
+
+  private adjustFactImportanceByEmotion(
+    fact: ExtractedFact,
+    formationVAD: MemoryFormationVAD | undefined,
+    intensityWeight: number,
+  ): ExtractedFact {
+    const adjustedImportance = applyEmotionalIntensityImportanceMultiplier({
+      baseImportance: fact.importance,
+      formationVAD,
+      intensityWeight,
+    });
+    if (adjustedImportance === fact.importance) return fact;
+    return {
+      ...fact,
+      importance: adjustedImportance,
+    };
   }
 
   private maybeRefreshContactProfile(

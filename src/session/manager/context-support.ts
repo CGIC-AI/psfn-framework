@@ -4,6 +4,10 @@ import type { ChannelVisibility } from '../../trust/types.js';
 import type { UserContinuityStore } from '../continuity.js';
 import type { SessionEntry } from '../types.js';
 import {
+  formatToolObservationForContext,
+  parseToolObservationMetadata,
+} from '../tool-observation.js';
+import {
   isUntrustedVisibility,
   parseChannelVisibility,
   parseMirrorMetadata,
@@ -71,11 +75,10 @@ export function entriesToMessages(
   defaultVisibility: ChannelVisibility,
   includeTrustTags: boolean = true,
 ): ContextMessage[] {
-  const messages: ContextMessage[] = [];
+  const messages: Array<ContextMessage & { sourceRole: SessionEntry['role'] }> = [];
 
   for (const entry of entries) {
-    // System notes are included as user-role messages with a marker
-    const role: 'user' | 'assistant' = entry.role === 'system' ? 'user' : entry.role as 'user' | 'assistant';
+    const role: 'user' | 'assistant' = entry.role === 'assistant' ? 'assistant' : 'user';
     let content = entry.content;
     if (entry.role === 'system') {
       const mirror = parseMirrorMetadata(entry.metadata);
@@ -84,6 +87,12 @@ export function entriesToMessages(
       } else {
         content = `[System note] ${entry.content}`;
       }
+    } else if (entry.role === 'tool') {
+      const toolObservation = parseToolObservationMetadata(entry.metadata);
+      if (!toolObservation) {
+        throw new Error(`Tool session entry ${entry.channelId}:${entry.id} is missing tool observation metadata`);
+      }
+      content = formatToolObservationForContext(entry.content, toolObservation);
     }
     if (includeTrustTags) {
       const visibility = parseChannelVisibility(entry.channelVisibility) ?? defaultVisibility;
@@ -94,10 +103,11 @@ export function entriesToMessages(
 
     // Merge consecutive same-role messages
     const last = messages.at(-1);
-    if (last && last.role === role) {
+    const canMerge = entry.role === 'user' || entry.role === 'assistant';
+    if (canMerge && last && last.role === role && last.sourceRole === entry.role) {
       last.content += '\n' + content;
     } else {
-      messages.push({ role, content });
+      messages.push({ role, content, sourceRole: entry.role });
     }
   }
 
@@ -106,5 +116,5 @@ export function entriesToMessages(
     messages.shift();
   }
 
-  return messages;
+  return messages.map(({ role, content }) => ({ role, content }));
 }

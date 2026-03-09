@@ -15,9 +15,8 @@ import { Readable } from 'node:stream';
 import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
-import { createStreamingSttConnector, type StreamingSttConnector, type SttStreamSession } from '../../voice/connectors/stt/index.js';
+import type { EligibilityGate } from '../../capabilities/eligibility.js';
 import {
-  createStreamingTtsConnector,
   type StreamingTtsConnector,
   type StreamingTtsProvider,
   type TtsAudioChunk,
@@ -40,6 +39,15 @@ import {
 } from '../../voice/policy/security.js';
 import type { MessageHandler } from '../types.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import {
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
+  resolveRuntimeVoiceProviderGate,
+  type RuntimeVoiceTtsProvider,
+  resolveRuntimeVoiceTtsProvider,
+  resolveRuntimeVoiceTtsProviderOrder,
+} from '../../runtime/bootstrap-helpers.js';
+import type { StreamingSttConnector, SttStreamSession } from '../../voice/connectors/stt/index.js';
 
 const log = createComponentLogger('DiscordVoice');
 const CAPTURE_SILENCE_MS = 1_200;
@@ -49,7 +57,6 @@ const UNKNOWN_VOICE_ERROR_CODE = 'VOICE_PIPELINE_ERROR';
 const DECRYPT_RECOVERY_COOLDOWN_MS = 1_500;
 const DECRYPT_RECOVERY_MAX_REJOINS = 3;
 const DECRYPT_RECOVERY_WINDOW_MS = 5 * 60_000;
-const DEFAULT_TTS_PROVIDER: StreamingTtsProvider = 'elevenlabs';
 
 /**
  * Maximum number of consecutive stream errors per user before tearing down
@@ -121,10 +128,13 @@ export interface VoicePreflightResult {
 export function voicePreflight(config: SubstrateConfig): VoicePreflightResult {
   const opus = checkOpusAvailability();
   const missingConfig: string[] = [];
+  const providerGate = resolveRuntimeVoiceProviderGate(config, {
+    requireElevenLabsVoiceId: true,
+  });
 
   if (!config.voiceTargetGuildId) missingConfig.push('VOICE_TARGET_GUILD_ID');
   if (!config.voiceTargetUserId) missingConfig.push('VOICE_TARGET_USER_ID');
-  if (!config.deepgramApiKey) missingConfig.push('DEEPGRAM_API_KEY');
+  if (!providerGate.sttEnabled) missingConfig.push('VOICE_STT_PROVIDER_CONFIG');
 
   const configComplete = missingConfig.length === 0;
   const canReceive = opus.available && configComplete;
@@ -176,6 +186,7 @@ interface DiscordVoiceRuntimeConfig {
   config: SubstrateConfig;
   eventBus: EventBus;
   getHandler: () => MessageHandler | null;
+  eligibilityGate?: EligibilityGate;
 }
 
 interface VoiceConnectionStateChange {
@@ -198,59 +209,37 @@ interface ActiveVoiceTurn {
 }
 
 function hasTtsProviderConfig(provider: StreamingTtsProvider, config: SubstrateConfig): boolean {
-  if (provider === 'echo') {
-    return Boolean(config.echoTtsUrl && config.echoTtsVoice);
+  try {
+    return createRuntimeVoiceTtsConnector(config, {
+      provider,
+      requireElevenLabsVoiceId: true,
+    }) !== null;
+  } catch {
+    return false;
   }
-
-  return Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId);
-}
-
-function createConfiguredTtsConnector(
-  provider: StreamingTtsProvider,
-  config: SubstrateConfig,
-): StreamingTtsConnector | null {
-  if (provider === 'echo') {
-    const url = config.echoTtsUrl ?? '';
-    const voice = config.echoTtsVoice ?? '';
-    if (!url || !voice) {
-      return null;
-    }
-
-    return createStreamingTtsConnector('echo', {
-      url,
-      voice,
-      ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
-      ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
-    });
-  }
-
-  const apiKey = config.elevenLabsApiKey ?? '';
-  const voiceId = config.elevenLabsVoiceId ?? '';
-  if (!apiKey || !voiceId) {
-    return null;
-  }
-
-  return createStreamingTtsConnector('elevenlabs', {
-    apiKey,
-    voiceId,
-    modelId: config.elevenLabsModelId,
-  });
 }
 
 function buildConfiguredTtsConnectors(
   config: SubstrateConfig,
   preferredProviderId: StreamingTtsProvider,
+  eligibilityGate?: EligibilityGate,
 ): StreamingTtsConnector[] {
-  const providerOrder: StreamingTtsProvider[] = preferredProviderId === 'echo'
-    ? ['echo', 'elevenlabs']
-    : ['elevenlabs', 'echo'];
+  const providerOrder = resolveRuntimeVoiceTtsProviderOrder(
+    config,
+    preferredProviderId,
+    { requireElevenLabsVoiceId: true },
+  );
   const connectors: StreamingTtsConnector[] = [];
 
   for (const providerId of providerOrder) {
     try {
-      const connector = createConfiguredTtsConnector(providerId, config);
-      if (connector) {
-        connectors.push(connector);
+      const binding = createRuntimeVoiceTtsConnector(config, {
+        provider: providerId,
+        requireElevenLabsVoiceId: true,
+        eligibilityGate,
+      });
+      if (binding) {
+        connectors.push(binding.connector);
       }
     } catch (error) {
       log.warn('Discord voice TTS connector initialization failed', {
@@ -268,13 +257,14 @@ export class DiscordVoiceRuntime {
   private readonly config: SubstrateConfig;
   private readonly eventBus: EventBus;
   private readonly getHandler: () => MessageHandler | null;
+  private readonly eligibilityGate?: EligibilityGate;
 
   private readonly enabled: boolean;
   private readonly targetGuildId: string;
   private readonly targetUserId: string;
   private readonly daveEncryption: boolean;
   private readonly decryptionFailureTolerance: number;
-  private readonly preferredTtsProviderId: StreamingTtsProvider;
+  private readonly preferredTtsProviderId: RuntimeVoiceTtsProvider;
   private readonly sttConnector?: StreamingSttConnector;
   private readonly ttsConnectors: StreamingTtsConnector[];
   private readonly reliabilityBudgets: VoiceReliabilityBudgets;
@@ -300,18 +290,20 @@ export class DiscordVoiceRuntime {
   /** Per-user stream error counters for isolation and graceful teardown. */
   private streamErrorCounts = new Map<string, number>();
 
-  constructor({ client, config, eventBus, getHandler }: DiscordVoiceRuntimeConfig) {
+  constructor({ client, config, eventBus, getHandler, eligibilityGate }: DiscordVoiceRuntimeConfig) {
     this.client = client;
     this.config = config;
     this.eventBus = eventBus;
     this.getHandler = getHandler;
+    this.eligibilityGate = eligibilityGate;
     this.reliabilityBudgets = resolveVoiceReliabilityBudgets();
     this.securityLimits = resolveVoiceSecurityLimits();
 
     this.targetGuildId = config.voiceTargetGuildId ?? '';
     this.targetUserId = config.voiceTargetUserId ?? '';
     this.daveEncryption = config.voiceDaveEncryption ?? true;
-    this.preferredTtsProviderId = config.ttsProvider ?? DEFAULT_TTS_PROVIDER;
+    const configuredTtsProvider = resolveRuntimeVoiceTtsProvider(config);
+    this.preferredTtsProviderId = configuredTtsProvider;
     const configuredDecryptionTolerance = config.voiceDecryptionFailureTolerance;
     this.decryptionFailureTolerance = (
       typeof configuredDecryptionTolerance === 'number'
@@ -321,7 +313,6 @@ export class DiscordVoiceRuntime {
       : 24;
 
     const voiceEnabled = config.voiceEnabled === true;
-    const deepgramApiKey = config.deepgramApiKey ?? '';
 
     if (!voiceEnabled) {
       this.enabled = false;
@@ -334,15 +325,29 @@ export class DiscordVoiceRuntime {
     this.opusAvailable = preflight.opusAvailable;
     this.receiveEnabled = preflight.opusAvailable;
 
-    if (!this.targetGuildId || !this.targetUserId || !deepgramApiKey) {
+    let sttBinding: ReturnType<typeof createRuntimeVoiceSttConnector> = null;
+    try {
+      sttBinding = createRuntimeVoiceSttConnector(config, {
+        eligibilityGate: this.eligibilityGate,
+      });
+    } catch (error) {
+      log.warn('Discord voice STT connector initialization failed', {
+        error: toErrorMessage(error),
+      });
+    }
+
+    if (!this.targetGuildId || !this.targetUserId || !sttBinding) {
       this.enabled = false;
       this.ttsConnectors = [];
+      const hasSelectedTtsConfig = this.preferredTtsProviderId !== 'disabled'
+        ? hasTtsProviderConfig(this.preferredTtsProviderId, config)
+        : false;
       log.warn('Voice enabled but missing required config, disabling voice runtime', {
         hasGuild: !!this.targetGuildId,
         hasUser: !!this.targetUserId,
-        hasDeepgram: !!deepgramApiKey,
+        hasSttConfig: Boolean(sttBinding),
         ttsProvider: this.preferredTtsProviderId,
-        hasSelectedTtsConfig: hasTtsProviderConfig(this.preferredTtsProviderId, config),
+        hasSelectedTtsConfig,
         hasElevenLabsConfig: hasTtsProviderConfig('elevenlabs', config),
         hasEchoConfig: hasTtsProviderConfig('echo', config),
       });
@@ -357,7 +362,9 @@ export class DiscordVoiceRuntime {
       );
     }
 
-    const ttsConnectors = buildConfiguredTtsConnectors(config, this.preferredTtsProviderId);
+    const ttsConnectors = this.preferredTtsProviderId === 'disabled'
+      ? []
+      : buildConfiguredTtsConnectors(config, this.preferredTtsProviderId, this.eligibilityGate);
     if (ttsConnectors.length === 0) {
       this.enabled = false;
       this.ttsConnectors = [];
@@ -370,10 +377,7 @@ export class DiscordVoiceRuntime {
       return;
     }
 
-    this.sttConnector = createStreamingSttConnector('deepgram', {
-      apiKey: deepgramApiKey,
-      model: config.deepgramModel,
-    });
+    this.sttConnector = sttBinding.connector;
     this.ttsConnectors = ttsConnectors;
     this.enabled = true;
   }
@@ -1736,8 +1740,9 @@ export class DiscordVoiceRuntime {
     detail?: Record<string, unknown>;
   }): Promise<void> {
     const { turnId, stage, kind, detail } = params;
+    const resolvedTurnId = turnId ?? this.activeTurnId ?? `voice-observation-${Date.now()}`;
     const payload = {
-      turnId,
+      turnId: resolvedTurnId,
       channelId: this.activeChannel?.id,
       userId: this.targetUserId,
       stage,

@@ -5,6 +5,14 @@ import { createEligibilityGate } from '../capabilities/eligibility.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolver) => {
+    resolve = resolver;
+  });
+  return { promise, resolve };
+}
+
 function makeMessage(): SubstrateMessage {
   return {
     id: 'msg-1',
@@ -87,6 +95,84 @@ describe('wirePostTurnActionRuntime', () => {
     expect(phases).toContain('deduplicated');
     expect(phases).toContain('started');
     expect(phases).toContain('succeeded');
+  });
+
+  it('waits for foreground handlers to reach agent idle before executing', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const idleGate = createDeferred<void>();
+    const agentLoop = {
+      waitForIdle: vi.fn().mockImplementation(() => idleGate.promise),
+    };
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop,
+      intervalMs: 10,
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    runtime.registerHandler('heartbeat.run_template', handler);
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [makeAction({ id: 'foreground-action', dedupeKey: 'foreground:key' })],
+    });
+
+    const tickPromise = scheduler.tick();
+    await Promise.resolve();
+
+    expect(agentLoop.waitForIdle).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+
+    idleGate.resolve(undefined);
+    await tickPromise;
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(runtime.listQueued()).toHaveLength(0);
+  });
+
+  it('runs background-capable handlers without waiting for agent idle', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const idleGate = createDeferred<void>();
+    const agentLoop = {
+      waitForIdle: vi.fn().mockImplementation(() => idleGate.promise),
+    };
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop,
+      intervalMs: 10,
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    runtime.registerHandler('heartbeat.run_template', handler, {
+      executionMode: 'background',
+    });
+
+    const phases: string[] = [];
+    eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
+      phases.push(phase);
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [makeAction({ id: 'background-action', dedupeKey: 'background:key' })],
+    });
+
+    await scheduler.tick();
+
+    expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(runtime.listQueued()).toHaveLength(0);
+    expect(phases).toEqual(expect.arrayContaining(['queued', 'started', 'succeeded']));
   });
 
   it('retries failures with bounded attempts and then marks failed', async () => {

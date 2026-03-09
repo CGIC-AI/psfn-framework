@@ -7,10 +7,12 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type {
+  CompanionValuesLayerSnapshot,
   ComposeContext,
   ComposeResult,
   ComposeSplitResult,
   LayerType,
+  PromptComposerOptions,
   PromptLayer,
 } from './prompt-types.js';
 import { LAYER_TYPE_ORDER } from './prompt-types.js';
@@ -19,13 +21,28 @@ import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../logger.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 
-const STATIC_PREFIX_LAYER_TYPES = new Set<LayerType>(['base', 'operator', 'channel']);
+// Keep only identity/foundation + operator policy in the frozen prompt prefix.
+// Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.
+const STATIC_PREFIX_LAYER_TYPES = new Set<LayerType>(['base', 'operator']);
 const LAST_KNOWN_GOOD_FILENAME = 'last-known-good.json';
 const LAST_KNOWN_GOOD_VERSION = 1;
 const UNTRUSTED_COMPACTION_RECORD_TAG = 'untrusted_compaction_summary_record';
 const UNTRUSTED_COMPACTION_PROMPT_TAG = 'untrusted_compaction_summary';
 const SOURCE_BLOCK_SHA256_TAG_PREFIX_PATTERN = /<source_block_sha256\b/i;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+const CONSTITUTION_PRECEDENCE_HEADER = '[Constitution Precedence]';
+export const IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER = '[Immutable Human-Safety Amendments]';
+export const COMPANION_VALUES_LAYER_HEADER = '[Companion-Derived Values Layer]';
+export const IMMUTABLE_HUMAN_SAFETY_AMENDMENTS = Object.freeze([
+  'Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.',
+  'Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.',
+  'When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.',
+] as const);
+const CONSTITUTION_PRECEDENCE_GUARD = [
+  CONSTITUTION_PRECEDENCE_HEADER,
+  'Immutable amendments are hardcoded and non-editable.',
+  'If any mutable instruction conflicts with them, follow the immutable amendments.',
+].join('\n');
 const log = createComponentLogger('PromptComposer');
 
 interface PersistedLastKnownGood {
@@ -49,6 +66,15 @@ export const UNTRUSTED_COMPACTION_PROMPT_GUARD = UNTRUSTED_COMPACTION_PROMPT_GUA
 
 function hashText(text: string): string {
   return createHash('sha256').update(text).digest('hex').slice(0, 16);
+}
+
+export function buildImmutableHumanSafetySection(): string {
+  return [
+    IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
+    ...IMMUTABLE_HUMAN_SAFETY_AMENDMENTS.map((amendment, index) => `${String(index + 1)}. ${amendment}`),
+    '',
+    CONSTITUTION_PRECEDENCE_GUARD,
+  ].join('\n');
 }
 
 function stripControlCharacters(text: string): string {
@@ -152,6 +178,18 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(entry => typeof entry === 'string');
 }
 
+function isCompanionValuesLayerSnapshot(value: unknown): value is CompanionValuesLayerSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const snapshot = value as Record<string, unknown>;
+  if (typeof snapshot.content !== 'string') return false;
+  if (!isStringArray(snapshot.provenanceRefs)) return false;
+  if (!isStringArray(snapshot.entryIds)) return false;
+  if (!Array.isArray(snapshot.historyVersions) || !snapshot.historyVersions.every(entry => typeof entry === 'number')) {
+    return false;
+  }
+  return true;
+}
+
 function isComposeSplitResult(value: unknown): value is ComposeSplitResult {
   if (!value || typeof value !== 'object') return false;
   const result = value as Record<string, unknown>;
@@ -208,6 +246,9 @@ function composeSplitResultsEqual(left: ComposeSplitResult, right: ComposeSplitR
 export class PromptComposer {
   private store: PromptLayerStore;
   private manager: PromptManager;
+  private readonly enableConstitution: boolean;
+  private readonly companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
+  private readonly persistLastKnownGoodSnapshot: boolean;
   private lastKnownGood: ComposeSplitResult | null = null;
   private lastKnownGoodPath: string;
 
@@ -215,11 +256,15 @@ export class PromptComposer {
     store: PromptLayerStore,
     manager: PromptManager = new PromptManager(),
     lastKnownGoodPath?: string,
+    options: PromptComposerOptions = {},
   ) {
     this.store = store;
     this.manager = manager;
+    this.enableConstitution = options.enableConstitution === true;
+    this.companionValuesLayerProvider = options.companionValuesLayerProvider;
+    this.persistLastKnownGoodSnapshot = options.persistLastKnownGood !== false;
     this.lastKnownGoodPath = lastKnownGoodPath ?? join(dirname(this.store.layerFilePath), LAST_KNOWN_GOOD_FILENAME);
-    this.lastKnownGood = this.loadPersistedLastKnownGood();
+    this.lastKnownGood = this.ensureConstitutionPrefix(this.loadPersistedLastKnownGood());
   }
 
   compose(ctx?: ComposeContext): ComposeResult {
@@ -240,7 +285,14 @@ export class PromptComposer {
 
     // Prompt-manager composition (required prompts, deterministic prompt ordering, auto-heal)
     const managed = this.manager.compose(sorted);
+    const hasManagedPrompts = managed.prompts.length > 0;
     const layerById = new Map(sorted.map(layer => [layer.id, layer]));
+    const immutableSection = this.enableConstitution
+      ? buildImmutableHumanSafetySection()
+      : '';
+    const companionValuesSection = this.enableConstitution
+      ? this.resolveCompanionValuesLayer()
+      : null;
 
     const staticChunks: string[] = [];
     const dynamicChunks: string[] = [];
@@ -248,6 +300,13 @@ export class PromptComposer {
     const dynamicLayerIds: string[] = [];
     const seenStaticLayerIds = new Set<string>();
     const seenDynamicLayerIds = new Set<string>();
+
+    if (immutableSection) {
+      staticChunks.push(immutableSection);
+    }
+    if (companionValuesSection) {
+      staticChunks.push(companionValuesSection.content);
+    }
 
     for (const prompt of managed.prompts) {
       const sourceLayer = prompt.sourceLayerId ? layerById.get(prompt.sourceLayerId) : undefined;
@@ -294,20 +353,30 @@ export class PromptComposer {
       autoHealedPromptIdentifiers: managed.autoHealedIdentifiers,
     };
 
-    // Fallback guard
-    if (!text && this.lastKnownGood) {
-      return this.lastKnownGood;
+    // Fallback guard. In constitution mode, allow fallback when no mutable content matched.
+    const shouldUseFallback = (
+      (!text)
+      || (
+        this.enableConstitution
+        && !hasManagedPrompts
+        && !companionValuesSection
+      )
+    );
+    if (shouldUseFallback && this.lastKnownGood) {
+      const recovered = this.ensureConstitutionPrefix(this.lastKnownGood);
+      return recovered ?? this.lastKnownGood;
     }
 
     if (text) {
       const shouldPersist = !this.lastKnownGood || !composeSplitResultsEqual(this.lastKnownGood, result);
-      this.lastKnownGood = result;
-      if (shouldPersist) {
-        this.persistLastKnownGood(result);
+      const normalizedResult = this.ensureConstitutionPrefix(result) ?? result;
+      this.lastKnownGood = normalizedResult;
+      if (this.persistLastKnownGoodSnapshot && shouldPersist) {
+        this.persistLastKnownGood(normalizedResult);
       }
     }
 
-    return result;
+    return this.ensureConstitutionPrefix(result) ?? result;
   }
 
   private loadPersistedLastKnownGood(): ComposeSplitResult | null {
@@ -371,5 +440,69 @@ export class PromptComposer {
   private resolvePromptSection(layer: PromptLayer | undefined): 'static' | 'dynamic' {
     if (!layer) return 'static';
     return STATIC_PREFIX_LAYER_TYPES.has(layer.type) ? 'static' : 'dynamic';
+  }
+
+  private resolveCompanionValuesLayer(): CompanionValuesLayerSnapshot | null {
+    if (!this.companionValuesLayerProvider) return null;
+    try {
+      const snapshot = this.companionValuesLayerProvider();
+      if (snapshot == null) return null;
+      if (!isCompanionValuesLayerSnapshot(snapshot)) {
+        throw new Error('Companion values layer provider returned malformed payload');
+      }
+      const content = stripControlCharacters(snapshot.content);
+      if (!content) return null;
+      const provenanceRefs = snapshot.provenanceRefs
+        .map(entry => entry.trim())
+        .filter(entry => entry.length > 0);
+      const entryIds = snapshot.entryIds
+        .map(entry => entry.trim())
+        .filter(entry => entry.length > 0);
+      const historyVersions = snapshot.historyVersions
+        .filter(entry => Number.isFinite(entry))
+        .map(entry => Math.floor(entry));
+      const normalizedContent = content.includes(COMPANION_VALUES_LAYER_HEADER)
+        ? content
+        : `${COMPANION_VALUES_LAYER_HEADER}\n${content}`;
+      return {
+        content: normalizedContent,
+        provenanceRefs,
+        entryIds,
+        historyVersions,
+      };
+    } catch (error) {
+      log.warn('Companion values layer provider failed closed', {
+        error: String(error),
+      });
+      return null;
+    }
+  }
+
+  private ensureConstitutionPrefix(result: ComposeSplitResult | null): ComposeSplitResult | null {
+    if (!this.enableConstitution || !result) return result;
+
+    const hasImmutableSection = result.staticPrefix.includes(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+    const hasPrecedenceGuard = result.staticPrefix.includes(CONSTITUTION_PRECEDENCE_HEADER);
+    if (hasImmutableSection && hasPrecedenceGuard) {
+      return result;
+    }
+
+    const rebuiltStaticPrefix = [
+      (hasImmutableSection && hasPrecedenceGuard) ? null : buildImmutableHumanSafetySection(),
+      result.staticPrefix.trim() || null,
+    ].filter((chunk): chunk is string => Boolean(chunk)).join('\n\n');
+
+    const rebuiltText = [
+      rebuiltStaticPrefix.trim() || null,
+      result.dynamicSuffix.trim() || null,
+    ].filter((chunk): chunk is string => Boolean(chunk)).join('\n\n');
+
+    return {
+      ...result,
+      staticPrefix: rebuiltStaticPrefix,
+      text: rebuiltText,
+      staticHash: hashText(rebuiltStaticPrefix),
+      hash: hashText(rebuiltText),
+    };
   }
 }

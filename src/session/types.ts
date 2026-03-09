@@ -1,7 +1,12 @@
+export type SessionEntryRole = 'user' | 'assistant' | 'system' | 'tool';
+export type JournalMarkerType = 'extraction' | 'graceful_shutdown';
+export type JournalTombstoneTargetType = 'turn';
+export type JournalTombstoneAction = 'redact' | 'restore';
+
 export interface SessionEntry {
   id: number;
   channelId: string;
-  role: 'user' | 'assistant' | 'system';
+  role: SessionEntryRole;
   content: string;
   authorId?: string;
   authorName?: string;
@@ -20,15 +25,13 @@ export interface CompactionSummary {
   createdAt: number;
 }
 
-export type JournalMarkerType = 'extraction' | 'graceful_shutdown';
-
 /** A single line in a channel's JSONL session file. */
 export interface JournalEntry {
-  type: 'message' | 'compaction' | 'marker';
+  type: 'message' | 'compaction' | 'marker' | 'tombstone';
   id: number;
   channelId: string;
   // message fields
-  role?: 'user' | 'assistant' | 'system';
+  role?: SessionEntryRole;
   content?: string;
   authorId?: string;
   authorName?: string;
@@ -43,6 +46,12 @@ export interface JournalEntry {
   coveredUpTo?: number;
   // marker fields
   marker?: JournalMarkerType;
+  // tombstone fields
+  tombstoneTargetType?: JournalTombstoneTargetType;
+  tombstoneTargetId?: string;
+  tombstoneAction?: JournalTombstoneAction;
+  tombstoneActor?: string;
+  tombstoneReason?: string;
   // integrity fields
   _hmac?: string;
   _hmacKeyVersion?: string;

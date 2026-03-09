@@ -91,8 +91,15 @@ export const API_HEALTH_SUBSYSTEMS = [
   'scheduler',
 ] as const;
 
+export const API_CONTINUITY_WATCHDOG_CHECKS = [
+  'database',
+  'gatewayLink',
+  'schedulerHeartbeat',
+] as const;
+
 export type ApiHealthState = 'healthy' | 'degraded';
 export type ApiHealthSubsystem = (typeof API_HEALTH_SUBSYSTEMS)[number];
+export type ApiContinuityWatchdogCheck = (typeof API_CONTINUITY_WATCHDOG_CHECKS)[number];
 
 export interface ApiHealthSubsystemStatus {
   status: ApiHealthState;
@@ -110,4 +117,8 @@ export interface ApiHealthResponse {
   checkedAt: string;
   uptimeSeconds: number;
   subsystems: Record<ApiHealthSubsystem, ApiHealthSubsystemStatus>;
+  continuity: {
+    status: ApiHealthState;
+    checks: Record<ApiContinuityWatchdogCheck, ApiHealthSubsystemStatus>;
+  };
 }

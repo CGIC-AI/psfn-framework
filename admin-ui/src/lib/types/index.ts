@@ -1,4 +1,25 @@
 // Dashboard
+export type DashboardCostWindow = 'today' | 'week' | 'month';
+
+export interface DashboardCostWindowUsage {
+  turns: number;
+  llmCalls: number;
+  toolCalls: number;
+  estimatedCostUsd: number;
+}
+
+export interface DashboardCostWindowTotals {
+  today: DashboardCostWindowUsage;
+  week: DashboardCostWindowUsage;
+  month: DashboardCostWindowUsage;
+}
+
+export interface DashboardSessionContextPressure {
+  sessionId: string | null;
+  utilizationPct: number;
+  hasTelemetry: boolean;
+}
+
 export interface DashboardStats {
   memoryTotal: number;
   memoryByType: Record<string, number>;
@@ -13,8 +34,12 @@ export interface DashboardStats {
     cacheReadTokens: number;
     llmCalls: number;
     toolCalls: number;
-    avgContextUtilization: number;
+    activeSessionContextPressure: DashboardSessionContextPressure;
     estimatedCostUsd: number;
+    costWindows: {
+      selected: DashboardCostWindow;
+      byWindow: DashboardCostWindowTotals;
+    };
   };
   recentThinkTraces: ThinkTraceView[];
 }
@@ -257,6 +282,29 @@ export interface ContactMutationAuditEntry {
 }
 
 // Settings
+export interface SettingsContractSubsystem {
+  id: string;
+  ownerFile: string;
+  mode: 'structured' | 'raw_only';
+}
+
+export interface SettingsContractField {
+  key: string;
+  ownerSubsystem: string;
+  ownerFile: string;
+  type: 'string' | 'boolean' | 'integer' | 'number' | 'string_array' | 'enum' | 'object';
+  minimum?: number;
+  maximum?: number;
+  enumValues?: string[];
+  deprecated?: boolean;
+}
+
+export interface SettingsContractData {
+  schemaVersion: number;
+  subsystems: Record<string, SettingsContractSubsystem>;
+  fields: Record<string, SettingsContractField>;
+}
+
 export interface AdminSettingsData {
   config: Record<string, unknown>;
   env: Record<string, unknown>;
@@ -266,6 +314,18 @@ export interface AdminSettingsData {
     scheduler: unknown;
     trustPolicy: unknown;
     capabilities: unknown;
+  };
+  voiceProviders: {
+    stt: Array<{
+      id: string;
+      configured: boolean;
+      requiredTokens: string[];
+    }>;
+    tts: Array<{
+      id: string;
+      configured: boolean;
+      requiredTokens: string[];
+    }>;
   };
 }
 
@@ -397,6 +457,46 @@ export interface AdminPromptListData {
   staticPrompts: PromptRegistryEntry[];
 }
 
+export interface ConstitutionImmutableBlock {
+  id: string;
+  title: string;
+  content: string;
+  editable: false;
+}
+
+export interface ConstitutionCompanionLayer {
+  id: string;
+  title: string;
+  content: string;
+  provenanceRefs: string[];
+  historyVersions: number[];
+  entryIds: string[];
+  editable: false;
+}
+
+export interface ConstitutionMutableLayer extends PromptLayer {
+  editable: boolean;
+  readOnlyReason?: string;
+}
+
+export interface ConstitutionSnapshotData {
+  immutableBlocks: ConstitutionImmutableBlock[];
+  companionLayer: ConstitutionCompanionLayer | null;
+  mutableLayers: ConstitutionMutableLayer[];
+  preview: {
+    text: string;
+    hash: string;
+    staticPrefix: string;
+    dynamicSuffix: string;
+  };
+}
+
+export interface ConstitutionUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: ConstitutionSnapshotData;
+}
+
 export interface PromptUpdateResult {
   ok: boolean;
   message: string;
@@ -498,20 +598,47 @@ export interface AdminModelRoomBootstrapResponse {
 export interface DiscoveredModel {
   id: string;
   description?: string;
+  providerHints?: string[];
   contextLength?: number;
   maxCompletionTokens?: number;
-  pricing?: { prompt?: number; completion?: number };
+  pricing?: Record<string, string | number | undefined>;
+  supportsVision?: boolean;
+  supportsReasoning?: boolean;
 }
 
 // Scheduler
 export type TaskType = 'every' | 'one-shot';
 export type TaskState = 'idle' | 'active' | 'paused' | 'complete';
+export type SchedulerCadenceTimezone = 'local' | 'utc';
+
+export interface RelativeRecurringCadence {
+  kind: 'relative';
+}
+
+export interface HourlyRecurringCadence {
+  kind: 'hourly';
+  minute: number;
+  timezone: SchedulerCadenceTimezone;
+}
+
+export interface DailyRecurringCadence {
+  kind: 'daily';
+  hour: number;
+  minute: number;
+  timezone: SchedulerCadenceTimezone;
+}
+
+export type RecurringCadence =
+  | RelativeRecurringCadence
+  | HourlyRecurringCadence
+  | DailyRecurringCadence;
 
 export interface ScheduledTask {
   id: string;
   name: string;
   type: TaskType;
   intervalMs: number;
+  cadence?: RecurringCadence;
   runAt?: number;
   state: TaskState;
 }
@@ -530,6 +657,7 @@ export interface ReflectionTemplate {
   name: string;
   prompt: string;
   intervalMs: number;
+  cadence?: RecurringCadence;
   enabled: boolean;
   sendToDiscord: boolean;
   mode?: 'standard' | 'deliberation';

@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateUrlPolicy, isPrivateIP, isAlwaysBlockedIP, checkResolvedIP, type DnsResolver } from './url-policy.js';
+import {
+  checkResolvedIP,
+  DEFAULT_MAX_REDIRECT_HOPS,
+  evaluateUrlPolicy,
+  isAlwaysBlockedIP,
+  isPrivateIP,
+  MAX_REDIRECT_HOPS,
+  resolveMaxRedirectHops,
+  type DnsResolver,
+} from './url-policy.js';
 
 describe('isPrivateIP', () => {
   it('detects IPv4 loopback', () => {
@@ -543,5 +552,23 @@ describe('checkResolvedIP', () => {
     );
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain('cloud metadata');
+  });
+});
+
+describe('resolveMaxRedirectHops', () => {
+  it('uses the default when unset', () => {
+    expect(resolveMaxRedirectHops({})).toBe(DEFAULT_MAX_REDIRECT_HOPS);
+  });
+
+  it('normalizes and floors finite numbers', () => {
+    expect(resolveMaxRedirectHops({ maxRedirectHops: 3.9 })).toBe(3);
+  });
+
+  it('clamps negative values to zero', () => {
+    expect(resolveMaxRedirectHops({ maxRedirectHops: -7 })).toBe(0);
+  });
+
+  it('caps values at the maximum allowed limit', () => {
+    expect(resolveMaxRedirectHops({ maxRedirectHops: MAX_REDIRECT_HOPS + 25 })).toBe(MAX_REDIRECT_HOPS);
   });
 });

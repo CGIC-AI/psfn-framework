@@ -1,20 +1,32 @@
-import type { MemoryProvider, EmbeddingService } from '../agent/contracts.js';
+import type {
+  MemoryProvider,
+  EmbeddingService,
+  LLMProvider,
+  RetrievalVADInput,
+} from '../agent/contracts.js';
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
 import type { PurrMemory, MemoryPrivacyRiskBreakdown } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
-import type { SubstrateConfig } from '../types.js';
+import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
-import type { TrustLevel, ChannelVisibility, SensitivityLevel } from '../trust/types.js';
+import {
+  isHighIntimacySensitivityLevel,
+  type TrustLevel,
+  type ChannelVisibility,
+  type SensitivityLevel,
+} from '../trust/types.js';
 import { countTokens } from '../llm/tokens.js';
 import type { ContextBudgetConfigLike } from '../context-budget.js';
 import {
   MEMORY_RETRIEVAL_MIN_ITEMS,
   resolveMemoryRetrievalBudget,
+  type ContextBudgetTurnCharacteristics,
 } from '../context-budget.js';
 import {
   classifyChannel,
   getAllowedSensitivities,
   evaluateMemoryPolicy,
+  type DisclosureBoundaryDirective,
   type ChannelMeta,
 } from '../trust/policy.js';
 import {
@@ -24,6 +36,25 @@ import {
 import { computeBoundarySimilarityBoost, isBoundaryMemory } from './boundary-log.js';
 import { createComponentLogger } from '../logger.js';
 import type { ContactStore } from '../contacts/store.js';
+import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+import type { TurnMemorySnapshot } from '../turns/snapshot.js';
+import { getRequestContext } from '../llm/request-context.js';
+import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
+import {
+  buildSnapshotVersionPointer,
+  cloneContactProfileArtifact,
+  cloneEmotionalSnapshot,
+  cloneMemory,
+  cloneScoredMemory,
+} from '../turns/snapshot.js';
+import {
+  composeRetrievalRanking,
+  RETRIEVAL_COMPOSITION_BATCH_SIZE,
+  RETRIEVAL_COMPOSITION_FINALIST_LIMIT,
+  RETRIEVAL_COMPOSITION_MAX_CANDIDATES,
+  type RetrievalComposeCandidate,
+} from './retrieval-compose.js';
+import { isInternalMemoryArtifact } from './internal-artifacts.js';
 const log = createComponentLogger('Retrieval');
 
 /**
@@ -41,10 +72,29 @@ const SCORE_GUARANTEE_MIN_K = 3;
  * so naturally-scored memories always rank higher.
  */
 const SCORE_GUARANTEE_FLOOR = 0.01;
+const WITHHOLD_BOUNDARY_TAGS = new Set([
+  'withhold',
+  'withheld',
+  'boundary_withhold',
+  'do_not_disclose',
+  'no_disclose',
+  'private_boundary',
+]);
+const CONSENT_REQUIRED_BOUNDARY_TAGS = new Set([
+  'consent_required',
+  'requires_consent',
+  'disclosure_requires_consent',
+  'gate_consent',
+]);
 
 interface ScoredMemory {
   memory: PurrMemory & { similarity: number };
   baseScore: number;
+  evidenceSupport: number;
+  contradictionPenaltyMultiplier: number;
+  explicitlyQueried: boolean;
+  lowConfidenceSingleSourceSuppressed: boolean;
+  evidenceSourceCount: number;
   privacyRisk: number;
   privacyPenalty: number;
   privacyBreakdown: MemoryPrivacyRiskBreakdown;
@@ -54,19 +104,27 @@ interface ScoredMemory {
 interface RetrievalDecisionDiagnostics {
   candidateCount: number;
   policyAllowedCount: number;
+  rejectedByContactScope: number;
   rejectedBySensitivity: number;
   rejectedByPolicy: number;
-  rejectedByPolicyReason: Record<string, number>;
+  rejectedByPolicyReasonTag: Record<string, number>;
   rejectedByScore: number;
   selectedCount: number;
   topSelected: Array<{
     id: string;
     score: number;
     baseScore: number;
+    evidenceSupport: number;
+    contradictionPenaltyMultiplier: number;
+    lowConfidenceSingleSourceSuppressed: boolean;
+    explicitlyQueried: boolean;
     privacyRisk: number;
     privacyPenalty: number;
     sensitivity: SensitivityLevel;
   }>;
+  contradictionAdjustedCount: number;
+  lowConfidenceSuppressedCount: number;
+  explicitQueryOverrideCount: number;
 }
 
 interface RetrievalTelemetry {
@@ -87,10 +145,16 @@ interface RetrievalTelemetry {
   retrievalTokenBudget: number;
   retrievalLimitMode: 'budget' | 'hard_limit';
   policyAllowedCount?: number;
+  contactScopeRejectedCount?: number;
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
+  policyRejectedReasonTags?: Record<string, number>;
   scoreRejectedCount?: number;
   scoreGuaranteedCount?: number;
+  evidenceSupportAverage?: number;
+  contradictionAdjustedCount?: number;
+  lowConfidenceSuppressedCount?: number;
+  explicitQueryOverrideCount?: number;
   visibilityScope: BroadcastVisibilityScope | 'non_broadcast';
   operatorApproval: boolean;
   provenanceRefs: string[];
@@ -101,6 +165,20 @@ interface RetrievalTelemetry {
   bottomSimilarity?: number;
   topScore?: number;
   bottomScore?: number;
+  budgetCappedCount?: number;
+  selectedTypes?: Record<string, number>;
+  compositionalMode?: 'disabled_policy' | 'llm_unavailable' | 'insufficient_candidates' | 'malformed_or_failed' | 'applied';
+  compositionalCandidateCount?: number;
+  compositionalEvaluationBatchCount?: number;
+  compositionalFinalistCount?: number;
+}
+
+interface CompositionalRetrievalDecision {
+  ranked: ScoredMemory[] | null;
+  mode: NonNullable<RetrievalTelemetry['compositionalMode']>;
+  candidateCount: number;
+  evaluationBatchCount: number;
+  finalistCount: number;
 }
 
 interface ProactiveWeightedMemory {
@@ -108,12 +186,37 @@ interface ProactiveWeightedMemory {
   weight: number;
 }
 
-interface EmotionalSnapshot {
-  baselineValence: number;
-  moodValence: number;
-  moodDrift: number;
-  moodSamples: number;
-  lastMoodUpdateEpochMs?: number;
+function violatesHighIntimacyContactScope(
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId'>,
+  canonicalContactId?: string,
+): boolean {
+  if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return false;
+  if (!canonicalContactId) return false;
+  return memory.contactId !== canonicalContactId;
+}
+
+type RetrievalIntegrityErrorStage =
+  | 'retrieve'
+  | 'selected_access_update'
+  | 'proactive_access_update';
+
+export interface RetrievalIntegrityErrorContext {
+  stage: RetrievalIntegrityErrorStage;
+  channelId: string;
+  trustLevel?: TrustLevel;
+  memoryId?: string;
+}
+
+export class RetrievalIntegrityError extends Error {
+  readonly context: RetrievalIntegrityErrorContext;
+  readonly cause: unknown;
+
+  constructor(message: string, context: RetrievalIntegrityErrorContext, cause: unknown) {
+    super(message);
+    this.name = 'RetrievalIntegrityError';
+    this.context = context;
+    this.cause = cause;
+  }
 }
 
 export interface MemoryRetrieverConfig {
@@ -121,6 +224,7 @@ export interface MemoryRetrieverConfig {
   retrievalBudgetPct?: number;
   contextWindow?: number;
   retrievalThreshold?: number;
+  moodCongruenceWeight?: number;
   telemetryEnabled?: boolean;
   proactiveRecallProbability?: number;
   proactiveRecallMinTurnsBetween?: number;
@@ -144,6 +248,8 @@ export class MemoryRetriever implements MemoryProvider {
   private eventBus?: EventBus;
   private contactStore: ContactStore | null;
   private telemetryEnabled: boolean;
+  private llmProvider: LLMProvider | null;
+  private moodCongruenceWeight: number;
   private proactiveRecallProbability: number;
   private proactiveRecallMinTurnsBetween: number;
   private proactiveTurnCounter: number;
@@ -155,6 +261,7 @@ export class MemoryRetriever implements MemoryProvider {
     config?: MemoryRetrieverConfig | SubstrateConfig,
     eventBus?: EventBus,
     contactStore?: ContactStore | null,
+    llmProvider?: LLMProvider | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -163,6 +270,7 @@ export class MemoryRetriever implements MemoryProvider {
       this.runtimeConfig = config;
       this.fallbackBudgetConfig = null;
       this.retrievalThreshold = MEMORY_CONFIG.retrievalThreshold;
+      this.moodCongruenceWeight = resolveMoodCongruenceWeight(config.moodCongruenceWeight);
       this.telemetryEnabled = config.memoryRetrievalTelemetryEnabled ?? true;
       const proactiveConfig = config as ProactiveRecallRuntimeConfig;
       this.proactiveRecallProbability = clampProbability(proactiveConfig.memoryProactiveRecallProbability ?? 0);
@@ -181,18 +289,24 @@ export class MemoryRetriever implements MemoryProvider {
           : {}),
       };
       this.retrievalThreshold = retrieverConfig?.retrievalThreshold ?? MEMORY_CONFIG.retrievalThreshold;
+      this.moodCongruenceWeight = resolveMoodCongruenceWeight(retrieverConfig?.moodCongruenceWeight);
       this.telemetryEnabled = retrieverConfig?.telemetryEnabled ?? true;
       this.proactiveRecallProbability = clampProbability(retrieverConfig?.proactiveRecallProbability ?? 0);
       this.proactiveRecallMinTurnsBetween = clampTurnFrequency(retrieverConfig?.proactiveRecallMinTurnsBetween ?? 2);
     }
     this.contactStore = contactStore ?? null;
+    this.llmProvider = llmProvider ?? null;
     this.proactiveTurnCounter = 0;
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
   }
 
-  private resolveRetrievalBudget(): ReturnType<typeof resolveMemoryRetrievalBudget> {
+  private resolveRetrievalBudget(
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+  ): ReturnType<typeof resolveMemoryRetrievalBudget> {
     if (this.runtimeConfig) {
-      return resolveMemoryRetrievalBudget(this.runtimeConfig);
+      return resolveMemoryRetrievalBudget(this.runtimeConfig, {
+        ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
+      });
     }
 
     return resolveMemoryRetrievalBudget(
@@ -200,7 +314,84 @@ export class MemoryRetriever implements MemoryProvider {
         defaultContextWindow: 128_000,
         modelRoster: {},
       },
+      {
+        ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
+      },
     );
+  }
+
+  async captureTurnMemorySnapshot(
+    contextText: string,
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+  ): Promise<TurnMemorySnapshot> {
+    const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
+      channelId,
+      ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
+      messageText: contextText,
+    };
+    const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
+    const limit = budget.estimatedCount;
+    const effectiveTrust = trustLevel ?? 'regular';
+    const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
+    const operatorApproval = visibilityScope === 'approved_private_context';
+    const profile = canonicalContactId
+      ? this.memoryStore.getContactProfile(canonicalContactId)
+      : undefined;
+    const emotionalSnapshot = canonicalContactId
+      ? this.resolveEmotionalSnapshot(canonicalContactId)
+      : undefined;
+    const contactEmotionalMemories = canonicalContactId
+      ? this.collectContactEmotionalMemories(canonicalContactId)
+      : [];
+
+    let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
+    let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
+
+    if (contextText.trim().length > 0) {
+      const embedding = await this.embeddingService.embed(contextText);
+      const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
+      semanticCandidates = this.memoryStore.searchByEmbedding(
+        embedding,
+        this.retrievalThreshold,
+        candidateLimit,
+      )
+        .filter(memory => !isInternalMemoryArtifact(memory))
+        .map(cloneScoredMemory);
+      if (semanticCandidates.length === 0) {
+        lexicalCandidates = this.memoryStore
+          .searchByText(contextText, candidateLimit)
+          .filter(memory => !isInternalMemoryArtifact(memory))
+          .map(cloneScoredMemory);
+      }
+    }
+
+    const proactiveCandidates = this.collectProactiveRecallCandidates(channelId, canonicalContactId).map(cloneMemory);
+
+    return {
+      channelId,
+      ...(profile ? { profile: cloneContactProfileArtifact(profile) } : {}),
+      ...(emotionalSnapshot ? { emotionalSnapshot: cloneEmotionalSnapshot(emotionalSnapshot) } : {}),
+      contactEmotionalMemories: contactEmotionalMemories.map(cloneMemory),
+      semanticCandidates,
+      lexicalCandidates,
+      proactiveCandidates,
+      versionPointer: buildSnapshotVersionPointer([
+        channelId,
+        effectiveTrust,
+        visibilityScope,
+        operatorApproval ? 'approved' : 'default',
+        profile?.updatedAt,
+        emotionalSnapshot?.lastMoodUpdateEpochMs,
+        contactEmotionalMemories.map(memory => memory.id).join(','),
+        semanticCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
+        lexicalCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
+        proactiveCandidates.map(memory => memory.id).join(','),
+      ]),
+    };
   }
 
   async retrieve(
@@ -209,8 +400,16 @@ export class MemoryRetriever implements MemoryProvider {
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
+    turnSnapshot?: TurnMemorySnapshot,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    currentVAD?: RetrievalVADInput,
   ): Promise<string> {
-    const budget = this.resolveRetrievalBudget();
+    const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
+      channelId,
+      ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
+      messageText: contextText,
+    };
+    const budget = this.resolveRetrievalBudget(effectiveBudgetTurn);
     const limit = budget.estimatedCount;
     const effectiveTrust = trustLevel ?? 'regular';
     const channelVisibility = classifyChannel(channelId, channelMeta);
@@ -240,13 +439,17 @@ export class MemoryRetriever implements MemoryProvider {
       emotionalSnapshotIncluded: false,
       emotionalContinuityCount: 0,
     };
-    const profile = canonicalContactId
-      ? this.memoryStore.getContactProfile(canonicalContactId)
-      : undefined;
+    const profile = turnSnapshot?.profile
+      ? cloneContactProfileArtifact(turnSnapshot.profile)
+      : canonicalContactId
+        ? this.memoryStore.getContactProfile(canonicalContactId)
+        : undefined;
     telemetry.profileIncluded = !!profile;
-    const emotionalSnapshot = canonicalContactId
-      ? this.resolveEmotionalSnapshot(canonicalContactId)
-      : undefined;
+    const emotionalSnapshot = turnSnapshot?.emotionalSnapshot
+      ? cloneEmotionalSnapshot(turnSnapshot.emotionalSnapshot)
+      : canonicalContactId
+        ? this.resolveEmotionalSnapshot(canonicalContactId)
+        : undefined;
     telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
 
     const emptySelectedIds = new Set<string>();
@@ -257,6 +460,8 @@ export class MemoryRetriever implements MemoryProvider {
         channelVisibility,
         emptySelectedIds,
         operatorApproval,
+        channelMeta,
+        turnSnapshot?.contactEmotionalMemories,
       )
       : [];
     telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
@@ -271,20 +476,26 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     try {
-      const embedding = await this.embeddingService.embed(contextText);
-      // Oversample candidates: trust/score filtering can drop many, so fetch 4x budget
-      const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
-
-      const semanticMemories = this.memoryStore.searchByEmbedding(
-        embedding,
-        this.retrievalThreshold,
-        candidateLimit,
-      );
+      let semanticMemories = (turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [])
+        .filter(memory => !isInternalMemoryArtifact(memory));
+      if (semanticMemories.length === 0 && !turnSnapshot) {
+        const embedding = await this.embeddingService.embed(contextText);
+        const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
+        semanticMemories = this.memoryStore.searchByEmbedding(
+          embedding,
+          this.retrievalThreshold,
+          candidateLimit,
+        ).filter(memory => !isInternalMemoryArtifact(memory));
+      }
       telemetry.semanticCandidateCount = semanticMemories.length;
 
       let memories = semanticMemories;
       if (semanticMemories.length === 0) {
-        const lexicalMemories = this.memoryStore.searchByText(contextText, candidateLimit);
+        const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
+          ?? this.memoryStore.searchByText(
+            contextText,
+            Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4)),
+          )).filter(memory => !isInternalMemoryArtifact(memory));
         telemetry.lexicalCandidateCount = lexicalMemories.length;
         if (lexicalMemories.length > 0) {
           memories = lexicalMemories;
@@ -325,16 +536,25 @@ export class MemoryRetriever implements MemoryProvider {
       const diagnostics: RetrievalDecisionDiagnostics = {
         candidateCount: memories.length,
         policyAllowedCount: 0,
+        rejectedByContactScope: 0,
         rejectedBySensitivity: 0,
         rejectedByPolicy: 0,
-        rejectedByPolicyReason: {},
+        rejectedByPolicyReasonTag: {},
         rejectedByScore: 0,
         selectedCount: 0,
         topSelected: [],
+        contradictionAdjustedCount: 0,
+        lowConfidenceSuppressedCount: 0,
+        explicitQueryOverrideCount: 0,
       };
       const policyAllowed: Array<PurrMemory & { similarity: number }> = [];
 
       for (const memory of memories) {
+        if (violatesHighIntimacyContactScope(memory, canonicalContactId)) {
+          diagnostics.rejectedByContactScope++;
+          continue;
+        }
+
         if (!operatorApproval && !allowed.includes(memory.sensitivity)) {
           diagnostics.rejectedBySensitivity++;
           continue;
@@ -345,12 +565,14 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          disclosureBoundary: resolveDisclosureBoundaryDirective(memory, channelMeta),
           operatorApproval,
         });
         if (policy.decision !== 'allow') {
           diagnostics.rejectedByPolicy++;
-          const reasonKey = `${policy.layer}:${policy.reason}`;
-          diagnostics.rejectedByPolicyReason[reasonKey] = (diagnostics.rejectedByPolicyReason[reasonKey] ?? 0) + 1;
+          diagnostics.rejectedByPolicyReasonTag[policy.reasonTag] = (
+            diagnostics.rejectedByPolicyReasonTag[policy.reasonTag] ?? 0
+          ) + 1;
           continue;
         }
 
@@ -358,8 +580,10 @@ export class MemoryRetriever implements MemoryProvider {
       }
       diagnostics.policyAllowedCount = policyAllowed.length;
       telemetry.policyAllowedCount = diagnostics.policyAllowedCount;
+      telemetry.contactScopeRejectedCount = diagnostics.rejectedByContactScope;
       telemetry.sensitivityRejectedCount = diagnostics.rejectedBySensitivity;
       telemetry.policyRejectedCount = diagnostics.rejectedByPolicy;
+      telemetry.policyRejectedReasonTags = diagnostics.rejectedByPolicyReasonTag;
 
       if (policyAllowed.length === 0) {
         telemetry.reason = 'trust_filtered';
@@ -369,8 +593,10 @@ export class MemoryRetriever implements MemoryProvider {
           trustLevel: effectiveTrust,
           channelVisibility,
           candidateCount: diagnostics.candidateCount,
+          rejectedByContactScope: diagnostics.rejectedByContactScope,
           rejectedBySensitivity: diagnostics.rejectedBySensitivity,
           rejectedByPolicy: diagnostics.rejectedByPolicy,
+          rejectedByPolicyReasonTags: diagnostics.rejectedByPolicyReasonTag,
         });
         return renderPromptBlock(profile, [], {
           emotionalSnapshot,
@@ -383,11 +609,48 @@ export class MemoryRetriever implements MemoryProvider {
       // memories surface even when privacy penalties zero their composite score.
       // This prevents "water in the well, bucket has holes" retrieval gaps.
       const allScored = policyAllowed
-        .map(memory => ({ memory, ...computeRetrievalScore(memory, contextText) }))
+        .map(memory => ({
+          memory,
+          ...computeRetrievalScore(memory, contextText, {
+            currentVAD,
+            moodCongruenceWeight: this.moodCongruenceWeight,
+          }),
+        }))
         .sort((a, b) => b.score - a.score);
+      const rerankDecision = await this.applyCompositionalRetrievalRanking(
+        contextText,
+        channelId,
+        allScored,
+      );
+      const scoredCandidates = rerankDecision.ranked ?? allScored;
+      telemetry.compositionalMode = rerankDecision.mode;
+      telemetry.compositionalCandidateCount = rerankDecision.candidateCount;
+      telemetry.compositionalEvaluationBatchCount = rerankDecision.evaluationBatchCount;
+      telemetry.compositionalFinalistCount = rerankDecision.finalistCount;
 
-      const positiveScored = allScored.filter(c => c.score > 0);
-      const zeroScored = allScored.filter(c => c.score <= 0);
+      diagnostics.contradictionAdjustedCount = scoredCandidates
+        .filter(item => item.contradictionPenaltyMultiplier < 1)
+        .length;
+      diagnostics.lowConfidenceSuppressedCount = scoredCandidates
+        .filter(item => item.lowConfidenceSingleSourceSuppressed)
+        .length;
+      diagnostics.explicitQueryOverrideCount = scoredCandidates
+        .filter(item => item.explicitlyQueried && item.evidenceSupport < 0.5)
+        .length;
+      telemetry.evidenceSupportAverage = scoredCandidates.length > 0
+        ? Number(
+          (
+            scoredCandidates.reduce((sum, item) => sum + item.evidenceSupport, 0)
+            / scoredCandidates.length
+          ).toFixed(4),
+        )
+        : 0;
+      telemetry.contradictionAdjustedCount = diagnostics.contradictionAdjustedCount;
+      telemetry.lowConfidenceSuppressedCount = diagnostics.lowConfidenceSuppressedCount;
+      telemetry.explicitQueryOverrideCount = diagnostics.explicitQueryOverrideCount;
+
+      const positiveScored = scoredCandidates.filter(c => c.score > 0);
+      const zeroScored = scoredCandidates.filter(c => c.score <= 0);
       diagnostics.rejectedByScore = zeroScored.length;
       telemetry.scoreRejectedCount = diagnostics.rejectedByScore;
 
@@ -443,11 +706,19 @@ export class MemoryRetriever implements MemoryProvider {
         : selectWithinTokenBudget(ranked, budget.tokenBudget);
 
       telemetry.returnedCount = selected.length;
+      telemetry.budgetCappedCount = budget.mode === 'hard_limit'
+        ? Math.max(0, scored.length - selected.length)
+        : Math.max(0, ranked.length - selected.length);
+      telemetry.selectedTypes = countSelectedMemoryTypes(selected);
       diagnostics.selectedCount = selected.length;
       diagnostics.topSelected = selected.slice(0, 3).map((item) => ({
         id: item.memory.id,
         score: Number(item.score.toFixed(4)),
         baseScore: Number(item.baseScore.toFixed(4)),
+        evidenceSupport: Number(item.evidenceSupport.toFixed(4)),
+        contradictionPenaltyMultiplier: Number(item.contradictionPenaltyMultiplier.toFixed(4)),
+        lowConfidenceSingleSourceSuppressed: item.lowConfidenceSingleSourceSuppressed,
+        explicitlyQueried: item.explicitlyQueried,
         privacyRisk: Number(item.privacyRisk.toFixed(4)),
         privacyPenalty: Number(item.privacyPenalty.toFixed(4)),
         sensitivity: item.memory.sensitivity,
@@ -463,12 +734,22 @@ export class MemoryRetriever implements MemoryProvider {
         semanticCandidates: telemetry.semanticCandidateCount,
         lexicalCandidates: telemetry.lexicalCandidateCount,
         pipeline: `${diagnostics.candidateCount} candidates -> ${diagnostics.policyAllowedCount} policy-allowed -> ${scored.length} scored -> ${ranked.length} ranked -> ${selected.length} selected`,
+        rejectedByContactScope: diagnostics.rejectedByContactScope,
         rejectedBySensitivity: diagnostics.rejectedBySensitivity,
         rejectedByPolicy: diagnostics.rejectedByPolicy,
+        rejectedByPolicyReasonTags: diagnostics.rejectedByPolicyReasonTag,
         rejectedByScore: diagnostics.rejectedByScore,
         scoreGuaranteedCount,
+        evidenceSupportAverage: telemetry.evidenceSupportAverage,
+        contradictionAdjustedCount: diagnostics.contradictionAdjustedCount,
+        lowConfidenceSuppressedCount: diagnostics.lowConfidenceSuppressedCount,
+        explicitQueryOverrideCount: diagnostics.explicitQueryOverrideCount,
         budgetMode: budget.mode,
         tokenBudget: budget.tokenBudget,
+        compositionalMode: telemetry.compositionalMode,
+        compositionalCandidateCount: telemetry.compositionalCandidateCount,
+        compositionalEvaluationBatchCount: telemetry.compositionalEvaluationBatchCount,
+        compositionalFinalistCount: telemetry.compositionalFinalistCount,
       });
       log.debug('Retrieval decision rationale', {
         trustLevel: effectiveTrust,
@@ -483,6 +764,8 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           selectedIds,
           operatorApproval,
+          channelMeta,
+          turnSnapshot?.contactEmotionalMemories,
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
@@ -491,14 +774,25 @@ export class MemoryRetriever implements MemoryProvider {
         telemetry.retrievalSource,
       );
 
-      // Update access stats (fire-and-forget)
+      // Update access stats; fail closed if persistence fails.
       for (const s of selected) {
         try {
           this.memoryStore.updateMemory(s.memory.id, {
             lastAccessed: Date.now(),
             accessCount: s.memory.accessCount + 1,
           });
-        } catch { /* ignore */ }
+        } catch (error) {
+          throw new RetrievalIntegrityError(
+            `Failed to update retrieval access stats for memory ${s.memory.id}`,
+            {
+              stage: 'selected_access_update',
+              channelId,
+              trustLevel: effectiveTrust,
+              memoryId: s.memory.id,
+            },
+            error,
+          );
+        }
       }
 
       telemetry.count = selected.length;
@@ -508,14 +802,26 @@ export class MemoryRetriever implements MemoryProvider {
         emotionalSnapshot,
         emotionalContinuityMemories,
       });
-    } catch (err) {
-      log.error('Retrieval error', { error: String(err) });
+    } catch (error) {
       telemetry.reason = 'error';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, [], {
-        emotionalSnapshot,
-        emotionalContinuityMemories: fallbackEmotionalContinuity,
+      const wrapped = error instanceof RetrievalIntegrityError
+        ? error
+        : new RetrievalIntegrityError(
+          'Memory retrieval failed',
+          {
+            stage: 'retrieve',
+            channelId,
+            trustLevel: effectiveTrust,
+          },
+          error,
+        );
+      log.error('Retrieval integrity failure', {
+        context: wrapped.context,
+        error: toErrorMessage(wrapped),
+        cause: toErrorMessage(wrapped.cause),
       });
+      throw wrapped;
     }
   }
 
@@ -524,6 +830,8 @@ export class MemoryRetriever implements MemoryProvider {
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
+    turnSnapshot?: TurnMemorySnapshot,
+    _turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<string> {
     if (this.proactiveRecallProbability <= 0) return '';
 
@@ -540,11 +848,13 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
-    const candidates = this.collectProactiveRecallCandidates(channelId, canonicalContactId);
+    const candidates = turnSnapshot?.proactiveCandidates.map(cloneMemory)
+      ?? this.collectProactiveRecallCandidates(channelId, canonicalContactId);
     if (candidates.length === 0) return '';
 
     const allowed = getAllowedSensitivities(effectiveTrust, channelVisibility);
     const weighted = candidates
+      .filter(memory => !violatesHighIntimacyContactScope(memory, canonicalContactId))
       .filter(memory => operatorApproval || allowed.includes(memory.sensitivity))
       .filter((memory) => {
         const policy = evaluateMemoryPolicy({
@@ -552,6 +862,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          disclosureBoundary: resolveDisclosureBoundaryDirective(memory, channelMeta),
           operatorApproval,
         });
         return policy.decision === 'allow';
@@ -574,7 +885,24 @@ export class MemoryRetriever implements MemoryProvider {
         lastAccessed: Date.now(),
         accessCount: selected.accessCount + 1,
       });
-    } catch { /* ignore */ }
+    } catch (error) {
+      const wrapped = new RetrievalIntegrityError(
+        `Failed to update proactive recall access stats for memory ${selected.id}`,
+        {
+          stage: 'proactive_access_update',
+          channelId,
+          trustLevel: effectiveTrust,
+          memoryId: selected.id,
+        },
+        error,
+      );
+      log.error('Proactive recall integrity failure', {
+        context: wrapped.context,
+        error: toErrorMessage(wrapped),
+        cause: toErrorMessage(wrapped.cause),
+      });
+      throw wrapped;
+    }
 
     return renderProactiveRecall(selected);
   }
@@ -629,8 +957,11 @@ export class MemoryRetriever implements MemoryProvider {
     channelVisibility: ChannelVisibility,
     selectedIds: ReadonlySet<string>,
     operatorApproval = false,
+    channelMeta?: ChannelMeta,
+    sourceOverride?: readonly PurrMemory[],
   ): PurrMemory[] {
-    const source = this.memoryStore.getMemoriesByContact(canonicalContactId, 12);
+    const source = (sourceOverride?.map(cloneMemory) ?? this.collectContactEmotionalMemories(canonicalContactId))
+      .filter(memory => !isInternalMemoryArtifact(memory));
     if (source.length === 0) return [];
 
     const allowed = getAllowedSensitivities(trustLevel, channelVisibility);
@@ -638,6 +969,7 @@ export class MemoryRetriever implements MemoryProvider {
     return source
       .filter(memory => memory.type === 'emotional')
       .filter(memory => !selectedIds.has(memory.id))
+      .filter(memory => !violatesHighIntimacyContactScope(memory, canonicalContactId))
       .filter((memory) => {
         if (!operatorApproval && !allowed.includes(memory.sensitivity)) return false;
         const policy = evaluateMemoryPolicy({
@@ -645,6 +977,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           memorySensitivity: memory.sensitivity,
           consentFlags: memory.consentFlags,
+          disclosureBoundary: resolveDisclosureBoundaryDirective(memory, channelMeta),
           operatorApproval,
         });
         return policy.decision === 'allow';
@@ -653,22 +986,140 @@ export class MemoryRetriever implements MemoryProvider {
       .slice(0, 3);
   }
 
+  private collectContactEmotionalMemories(canonicalContactId: string): PurrMemory[] {
+    return this.memoryStore
+      .getMemoriesByContact(canonicalContactId, 12)
+      .filter(memory => !isInternalMemoryArtifact(memory));
+  }
+
   private collectProactiveRecallCandidates(
     channelId: string,
     canonicalContactId?: string,
   ): PurrMemory[] {
     if (canonicalContactId) {
-      const byContact = this.memoryStore.getMemoriesByContact(canonicalContactId, 24);
+      const byContact = this.memoryStore
+        .getMemoriesByContact(canonicalContactId, 24)
+        .filter(memory => !isInternalMemoryArtifact(memory));
       if (byContact.length > 0) return byContact;
     }
 
-    const byChannel = this.memoryStore.getMemoriesByChannel(channelId, 24);
+    const byChannel = this.memoryStore
+      .getMemoriesByChannel(channelId, 24)
+      .filter(memory => !isInternalMemoryArtifact(memory));
     if (byChannel.length > 0) return byChannel;
 
     return this.memoryStore
       .getAllActiveMemories()
+      .filter(memory => !isInternalMemoryArtifact(memory))
       .sort((left, right) => right.lastAccessed - left.lastAccessed)
       .slice(0, 24);
+  }
+
+  private shouldUseCompositionalRetrieval(channelId: string): boolean {
+    if (!this.runtimeConfig || !this.llmProvider) return false;
+
+    return evaluateCompositionalPolicyForChannelId({
+      policy: this.runtimeConfig.compositionalPolicy,
+      capabilityTier: this.runtimeConfig.capabilityTier,
+      channelId,
+      purpose: 'retrieval',
+    }).allowed;
+  }
+
+  private async applyCompositionalRetrievalRanking(
+    contextText: string,
+    channelId: string,
+    candidates: ScoredMemory[],
+  ): Promise<CompositionalRetrievalDecision> {
+    const compositionalCandidateCount = Math.min(candidates.length, RETRIEVAL_COMPOSITION_MAX_CANDIDATES);
+    const finalistCount = compositionalCandidateCount < 2
+      ? compositionalCandidateCount
+      : Math.min(RETRIEVAL_COMPOSITION_FINALIST_LIMIT, compositionalCandidateCount);
+    const evaluationBatchCount = compositionalCandidateCount < 2
+      ? 0
+      : Math.ceil(compositionalCandidateCount / RETRIEVAL_COMPOSITION_BATCH_SIZE);
+
+    if (!this.shouldUseCompositionalRetrieval(channelId)) {
+      return {
+        ranked: null,
+        mode: 'disabled_policy',
+        candidateCount: compositionalCandidateCount,
+        evaluationBatchCount,
+        finalistCount,
+      };
+    }
+    if (candidates.length < 2) {
+      return {
+        ranked: null,
+        mode: 'insufficient_candidates',
+        candidateCount: compositionalCandidateCount,
+        evaluationBatchCount,
+        finalistCount,
+      };
+    }
+    if (!this.llmProvider) {
+      return {
+        ranked: null,
+        mode: 'llm_unavailable',
+        candidateCount: compositionalCandidateCount,
+        evaluationBatchCount,
+        finalistCount,
+      };
+    }
+
+    const decision = await composeRetrievalRanking({
+      llmClient: this.llmProvider,
+      query: contextText,
+      channelId,
+      candidates: candidates.map((candidate): RetrievalComposeCandidate => ({
+        id: candidate.memory.id,
+        text: candidate.memory.text,
+        type: candidate.memory.type,
+        score: candidate.score,
+        similarity: candidate.memory.similarity,
+        importance: candidate.memory.importance,
+        confidence: candidate.memory.confidence,
+        salience: candidate.memory.salience,
+        evidenceSupport: candidate.evidenceSupport,
+        explicitlyQueried: candidate.explicitlyQueried,
+      })),
+    });
+    if (!decision) {
+      return {
+        ranked: null,
+        mode: 'malformed_or_failed',
+        candidateCount: compositionalCandidateCount,
+        evaluationBatchCount,
+        finalistCount,
+      };
+    }
+
+    const finalOrderIndex = new Map(
+      decision.finalOrder.map((id, index) => [id, index] as const),
+    );
+
+    return {
+      ranked: candidates
+      .map((candidate) => {
+        const relevance = decision.relevanceById.get(candidate.memory.id) ?? 0;
+        const finalIndex = finalOrderIndex.get(candidate.memory.id);
+        let multiplier = 1 + (relevance * 0.75);
+        if (finalIndex !== undefined && decision.finalOrder.length > 0) {
+          const composeWeight = (decision.finalOrder.length - finalIndex) / decision.finalOrder.length;
+          multiplier += composeWeight * 1.25;
+        }
+
+        return {
+          ...candidate,
+          score: candidate.score * multiplier,
+        };
+      })
+      .sort((left, right) => right.score - left.score),
+      mode: 'applied',
+      candidateCount: compositionalCandidateCount,
+      evaluationBatchCount,
+      finalistCount,
+    };
   }
 
   private isTelemetryEnabled(): boolean {
@@ -683,17 +1134,28 @@ export class MemoryRetriever implements MemoryProvider {
     if (!this.eventBus) return;
 
     try {
-      if (!this.isTelemetryEnabled()) {
-        await this.eventBus.emit('memory.retrieval', {
-          channelId: telemetry.channelId,
-          count: telemetry.count,
-        });
-        return;
-      }
-
+      const requestContext = getRequestContext();
+      const correlation = requestContext
+        ? {
+          ...(requestContext.turnId ? { turnId: requestContext.turnId } : {}),
+          ...(requestContext.requestId ? { requestId: requestContext.requestId } : {}),
+          callType: requestContext.callType ?? 'memory',
+          purpose: 'memory.retrieval',
+          originType: requestContext.originType ?? requestContext.callType ?? 'memory',
+          originStage: requestContext.originStage ?? 'memory.retrieval',
+          ...(requestContext.toolName ? { toolName: requestContext.toolName } : {}),
+          ...(requestContext.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
+        }
+        : {};
       await this.eventBus.emit(
         'memory.retrieval',
-        telemetry as { channelId: string; count: number },
+        {
+          ...telemetry,
+          candidates: telemetry.candidateCount,
+          ranked: telemetry.rankedCount,
+          returned: telemetry.returnedCount,
+          ...correlation,
+        } as { channelId: string; count: number },
       );
     } catch (err) {
       log.error('Failed to emit retrieval telemetry', {
@@ -702,6 +1164,49 @@ export class MemoryRetriever implements MemoryProvider {
       });
     }
   }
+}
+
+function countSelectedMemoryTypes(scored: ScoredMemory[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of scored) {
+    counts[item.memory.type] = (counts[item.memory.type] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeBoundaryTag(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+function hasBoundaryDirectiveTag(
+  tags: readonly string[],
+  candidates: ReadonlySet<string>,
+): boolean {
+  for (const rawTag of tags) {
+    const normalized = normalizeBoundaryTag(rawTag);
+    if (normalized.length === 0) continue;
+    if (candidates.has(normalized)) return true;
+  }
+  return false;
+}
+
+function resolveDisclosureBoundaryDirective(
+  memory: Pick<PurrMemory, 'tags'>,
+  channelMeta?: ChannelMeta,
+): DisclosureBoundaryDirective | undefined {
+  const withhold = hasBoundaryDirectiveTag(memory.tags, WITHHOLD_BOUNDARY_TAGS);
+  const consentRequired = hasBoundaryDirectiveTag(memory.tags, CONSENT_REQUIRED_BOUNDARY_TAGS);
+  if (!withhold && !consentRequired) return undefined;
+
+  return {
+    withhold,
+    consentRequired,
+    consentGranted: channelMeta?.disclosureConsentGranted === true,
+  };
 }
 
 function collectSelectedProvenanceRefs(
@@ -727,9 +1232,18 @@ function collectSelectedProvenanceRefs(
 function computeRetrievalScore(
   memory: PurrMemory & { similarity: number },
   contextText: string,
+  options?: {
+    currentVAD?: RetrievalVADInput;
+    moodCongruenceWeight: number;
+  },
 ): {
   score: number;
   baseScore: number;
+  evidenceSupport: number;
+  contradictionPenaltyMultiplier: number;
+  explicitlyQueried: boolean;
+  lowConfidenceSingleSourceSuppressed: boolean;
+  evidenceSourceCount: number;
   privacyRisk: number;
   privacyPenalty: number;
   privacyBreakdown: MemoryPrivacyRiskBreakdown;
@@ -737,29 +1251,199 @@ function computeRetrievalScore(
   const ageDays = (Date.now() - memory.extractedAt) / (1000 * 60 * 60 * 24);
   const recencyBoost = 1 / (1 + ageDays / 30);
   const emotionalWeight = 1 + Math.abs(memory.emotionalValence) * 0.5;
+  const moodCongruenceFactor = computeMoodCongruenceFactor(
+    memory.formationVAD,
+    options?.currentVAD,
+    options?.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
+  );
   const typePriorityBoost = isBoundaryMemory(memory) ? 1.6 : 1;
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
     : 1;
-  const baseScore = (
+  const accessReinforcementBoost = deriveAccessReinforcement(memory);
+  const rawBaseScore = (
     memory.similarity *
     recencyBoost *
     emotionalWeight *
     memory.importance *
     memory.salience *
+    moodCongruenceFactor *
     typePriorityBoost *
-    boundarySimilarityBoost
+    boundarySimilarityBoost *
+    accessReinforcementBoost
   );
+  const evidence = deriveEvidenceSupport(memory);
+  const contradictionPenaltyMultiplier = deriveContradictionPenalty(memory);
+  const explicitlyQueried = hasExplicitMemoryMention(contextText, memory.text);
+  const lowConfidenceSingleSourceSuppressed = (
+    evidence.sourceCount <= 1
+    && memory.confidence < 0.45
+    && !explicitlyQueried
+  );
+  const evidenceBoost = 0.45 + (evidence.support * 0.55);
+  const baseScore = rawBaseScore * evidenceBoost * contradictionPenaltyMultiplier;
   const privacyEvaluation = evaluateMemoryPrivacyRisk(memory);
   const privacyPenalty = baseScore * privacyEvaluation.risk * MEMORY_CONFIG.privacyRiskPenaltyWeight;
-  const score = Math.max(0, baseScore - privacyPenalty);
+  let score = Math.max(0, baseScore - privacyPenalty);
+  if (lowConfidenceSingleSourceSuppressed) {
+    // Keep weak single-source memories available for rescue/explicit retrieval,
+    // but prevent them from dominating ranked outputs by default.
+    const dominanceCap = memory.similarity * 0.02;
+    score = Math.min(score, dominanceCap);
+  }
   return {
     score,
     baseScore,
+    evidenceSupport: evidence.support,
+    contradictionPenaltyMultiplier,
+    explicitlyQueried,
+    lowConfidenceSingleSourceSuppressed,
+    evidenceSourceCount: evidence.sourceCount,
     privacyRisk: privacyEvaluation.risk,
     privacyPenalty,
     privacyBreakdown: privacyEvaluation.breakdown,
   };
+}
+
+function computeMoodCongruenceFactor(
+  formationVAD: RetrievalVADInput | undefined,
+  currentVAD: RetrievalVADInput | undefined,
+  moodCongruenceWeight: number,
+): number {
+  if (moodCongruenceWeight <= 0) return 1;
+  if (!isFiniteRetrievalVAD(formationVAD) || !isFiniteRetrievalVAD(currentVAD)) return 1;
+  const similarity = computeVADSimilarity(formationVAD, currentVAD);
+  return 1 + (moodCongruenceWeight * similarity);
+}
+
+function computeVADSimilarity(
+  left: RetrievalVADInput,
+  right: RetrievalVADInput,
+): number {
+  const deltaValence = clamp(left.valence, -1, 1) - clamp(right.valence, -1, 1);
+  const deltaArousal = clamp(left.arousal, -1, 1) - clamp(right.arousal, -1, 1);
+  const deltaDominance = clamp(left.dominance, -1, 1) - clamp(right.dominance, -1, 1);
+  const distance = Math.sqrt(
+    (deltaValence ** 2)
+    + (deltaArousal ** 2)
+    + (deltaDominance ** 2),
+  );
+  const maxDistance = 2 * Math.sqrt(3);
+  return clamp(1 - (distance / maxDistance), 0, 1);
+}
+
+function isFiniteRetrievalVAD(vad: RetrievalVADInput | undefined): vad is RetrievalVADInput {
+  if (!vad) return false;
+  return Number.isFinite(vad.valence)
+    && Number.isFinite(vad.arousal)
+    && Number.isFinite(vad.dominance);
+}
+
+function deriveEvidenceSupport(
+  memory: Pick<PurrMemory, 'confidence' | 'sourceRef' | 'provenanceRefs' | 'accessCount'>,
+): { support: number; sourceCount: number } {
+  const confidence = clamp(memory.confidence, 0, 1);
+  const sourceCount = countDistinctEvidenceSources(memory);
+  const sourceSupport = clamp(0.25 + (Math.min(4, sourceCount) / 4) * 0.75, 0, 1);
+  const reinforcement = clamp(memory.accessCount / 8, 0, 1);
+  const support = clamp(
+    (confidence * 0.6)
+    + (sourceSupport * 0.3)
+    + (reinforcement * 0.1),
+    0.05,
+    1,
+  );
+  return { support, sourceCount };
+}
+
+function deriveAccessReinforcement(
+  memory: Pick<PurrMemory, 'lastAccessed' | 'extractedAt' | 'accessCount'>,
+): number {
+  const effectiveLastAccessed = Number.isFinite(memory.lastAccessed)
+    ? memory.lastAccessed
+    : memory.extractedAt;
+  const ageMs = Math.max(0, Date.now() - effectiveLastAccessed);
+  const ageDays = ageMs / (1000 * 60 * 60 * 24);
+  const freshnessDays = Math.max(1, MEMORY_CONFIG.retrievalAccessFreshnessDays);
+  const countCap = Math.max(1, MEMORY_CONFIG.retrievalAccessCountCap);
+  const freshness = clamp(1 / (1 + ageDays / freshnessDays), 0, 1);
+  const reinforcement = clamp(memory.accessCount / countCap, 0, 1);
+  const combinedSignal = clamp(
+    (freshness * MEMORY_CONFIG.retrievalAccessFreshnessWeight)
+    + (reinforcement * (1 - MEMORY_CONFIG.retrievalAccessFreshnessWeight)),
+    0,
+    1,
+  );
+  return 1 + (combinedSignal * MEMORY_CONFIG.retrievalAccessReinforcementMaxBoost);
+}
+
+function deriveContradictionPenalty(
+  memory: Pick<PurrMemory, 'supersededBy' | 'tags'>,
+): number {
+  const normalizedTags = new Set(memory.tags.map(tag => tag.trim().toLowerCase()).filter(Boolean));
+  const hasContradictionHint = [...normalizedTags].some(tag => (
+    tag === 'contradicted'
+    || tag === 'contradiction'
+    || tag === 'disputed'
+    || tag === 'retracted'
+    || tag === 'hallucinated'
+    || tag.includes('contradict')
+    || tag.includes('disput')
+  ));
+  if (memory.supersededBy) return 0.25;
+  if (hasContradictionHint) return 0.55;
+  return 1;
+}
+
+function countDistinctEvidenceSources(
+  memory: Pick<PurrMemory, 'sourceRef' | 'provenanceRefs'>,
+): number {
+  const sourceSet = new Set<string>();
+  const normalizedSourceRef = normalizeEvidenceSource(memory.sourceRef);
+  if (normalizedSourceRef) sourceSet.add(normalizedSourceRef);
+  for (const ref of memory.provenanceRefs ?? []) {
+    const normalized = normalizeEvidenceSource(ref);
+    if (normalized) sourceSet.add(normalized);
+  }
+  return sourceSet.size;
+}
+
+function normalizeEvidenceSource(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return '';
+  const firstSeparator = trimmed.indexOf(':');
+  if (firstSeparator <= 0) return trimmed;
+  return trimmed.slice(0, firstSeparator + 1);
+}
+
+function hasExplicitMemoryMention(contextText: string, memoryText: string): boolean {
+  const contextTokens = tokenizeForExplicitMatch(contextText);
+  if (contextTokens.length === 0) return false;
+
+  const memoryTokenSet = new Set(tokenizeForExplicitMatch(memoryText));
+  if (memoryTokenSet.size === 0) return false;
+
+  let overlap = 0;
+  let hasLongOverlap = false;
+  for (const token of contextTokens) {
+    if (!memoryTokenSet.has(token)) continue;
+    overlap++;
+    if (token.length >= 6) {
+      hasLongOverlap = true;
+    }
+  }
+
+  if (overlap >= 2 && hasLongOverlap) return true;
+  return overlap >= 3;
+}
+
+function tokenizeForExplicitMatch(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map(token => token.trim())
+    .filter(token => token.length >= 4);
 }
 
 function estimateMemoryPromptTokens(memory: PurrMemory): number {
@@ -884,6 +1568,14 @@ function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
 function clamp(val: number, min: number, max: number): number {
   if (!Number.isFinite(val)) return (min + max) / 2;
   return Math.max(min, Math.min(max, val));
+}
+
+function resolveMoodCongruenceWeight(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_MOOD_CONGRUENCE_WEIGHT;
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`moodCongruenceWeight must be a finite number between 0 and 1; received ${String(value)}`);
+  }
+  return value;
 }
 
 function clampProbability(value: number): number {

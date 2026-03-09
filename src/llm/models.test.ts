@@ -50,28 +50,23 @@ describe('createLiteLLMModel', () => {
 });
 
 describe('createModel', () => {
-  it('applies known defaults for z-ai/glm-5', () => {
-    const model = createModel('http://localhost:4000/v1', 'z-ai/glm-5');
+  it('uses caller-provided token and context values', () => {
+    const model = createModel('http://localhost:4000/v1', 'z-ai/glm-5', 16_384, 128_000);
 
     expect(model.id).toBe('z-ai/glm-5');
-    expect(model.maxTokens).toBe(16384);
+    expect(model.maxTokens).toBe(16_384);
     expect(model.contextWindow).toBe(128_000);
   });
 
-  it('applies known defaults for deepseek/deepseek-v3.2', () => {
-    const model = createModel('http://localhost:4000/v1', 'deepseek/deepseek-v3.2');
+  it('allows maxTokens override without model-specific fallback table', () => {
+    const model = createModel('http://localhost:4000/v1', 'z-ai/glm-5', 8192, 128_000);
 
-    expect(model.maxTokens).toBe(16384);
+    expect(model.maxTokens).toBe(8_192);
+    expect(model.contextWindow).toBe(128_000);
   });
 
-  it('allows maxTokens override', () => {
-    const model = createModel('http://localhost:4000/v1', 'z-ai/glm-5', 8192);
-
-    expect(model.maxTokens).toBe(8192);
-  });
-
-  it('handles unknown model IDs with generic defaults', () => {
-    const model = createModel('http://localhost:4000/v1', 'some/new-model');
+  it('retains generic defaults when caller omits explicit routing metadata', () => {
+    const model = createModel('http://localhost:4000/v1', 'some/new-model', undefined, undefined);
 
     expect(model.id).toBe('some/new-model');
     expect(model.api).toBe('openai-completions');

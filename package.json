@@ -16,35 +16,45 @@
     "split:debug": "./scripts/start-gateway-agent.sh --debug",
     "yolo": "./scripts/start-gateway-agent.sh --yolo",
     "yolo:debug": "./scripts/start-gateway-agent.sh --yolo --debug",
-    "agent:docker": "docker compose -f docker/docker-compose.yml up --build",
+    "agent:docker": "docker compose -f docker/docker-compose.production.yml up --build",
+    "agent:docker:continuous": "docker compose -f docker/docker-compose.yml up --build",
     "proxy:up": "docker compose -f proxy/docker-compose.yml up -d",
     "proxy:down": "docker compose -f proxy/docker-compose.yml down",
     "proxy:logs": "docker compose -f proxy/docker-compose.yml logs -f",
     "test": "vitest run",
     "test:privacy": "vitest run src/__tests__/privacy/privacy-regression.test.ts",
+    "test:leak-audit": "vitest run src/session/context-leak-audit.test.ts",
     "test:watch": "vitest",
     "chat": "tsx src/chat-cli.ts",
     "session:repair": "tsx src/session-repair.ts",
     "migrate:embeddings": "tsx src/migrate-embeddings.ts",
+    "prefetch:hf-models": "tsx scripts/prefetch-hf-models.ts",
+    "migrate:persistence-layout": "tsx src/migrate-persistence-layout.ts",
     "import-character": "tsx src/import-character.ts",
     "e2e": "tsx src/e2e-test.ts",
     "e2e:voice": "tsx src/e2e-voice-roundtrip.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
     "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
     "walkthrough": "tsx src/e2e-walkthrough.ts",
-    "lint": "eslint \"src/**/*.ts\"",
+    "lint": "eslint .",
     "garden:dev": "cd admin-ui && npm run dev",
     "garden:build": "cd admin-ui && npm run build",
     "garden:preview": "cd admin-ui && npm run preview",
-    "verify:public-sanitize": "node scripts/public-sanitize-check.mjs"
+    "verify:public-sanitize": "node scripts/public-sanitize-check.mjs",
+    "verify:identity-literals": "node scripts/identity-literal-scan.mjs",
+    "verify:dependency-cycles": "node scripts/check-dependency-cycles.mjs",
+    "verify:repository-hygiene": "npm run verify:public-sanitize && npm run verify:identity-literals && npm run verify:dependency-cycles",
+    "verify:settings-contract": "tsx scripts/verify-settings-contract.ts",
+    "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
+    "verify:agent-docker-isolation": "node scripts/verify-agent-docker-isolation.mjs"
   },
   "dependencies": {
     "@character-foundry/character-foundry": "^0.5.0",
     "@discordjs/voice": "^0.19.0",
     "@huggingface/transformers": "^3.8.1",
-    "@mariozechner/pi-agent-core": "^0.52.12",
-    "@mariozechner/pi-ai": "^0.52.12",
-    "@mariozechner/pi-web-ui": "^0.52.12",
+    "@mariozechner/pi-agent-core": "^0.56.2",
+    "@mariozechner/pi-ai": "^0.56.2",
+    "@mariozechner/pi-web-ui": "^0.56.2",
     "@snazzah/davey": "^0.1.9",
     "better-sqlite3": "^11.7.0",
     "discord.js": "^14.16.0",
@@ -58,8 +68,26 @@
     "ws": "^8.19.0"
   },
   "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0",
     "opusscript": "^0.0.8"
+  },
+  "overrides": {
+    "@discordjs/rest": {
+      "undici": "^6.23.0"
+    },
+    "discord.js": {
+      "undici": "^6.23.0"
+    },
+    "basic-ftp": "^5.2.0",
+    "fast-xml-parser": "^5.3.8",
+    "minimatch": "^9.0.7",
+    "tar": "^7.5.10",
+    "rollup": "^4.59.0",
+    "eslint": {
+      "minimatch": "^10.2.3"
+    },
+    "@eslint/config-array": {
+      "minimatch": "^10.2.3"
+    }
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
@@ -72,7 +100,7 @@
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=22.0.0"

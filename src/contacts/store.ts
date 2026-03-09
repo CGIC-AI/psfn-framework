@@ -17,7 +17,15 @@ import type {
   ChannelPrivacyLevel,
   RelationshipType,
 } from './types.js';
-import type { TrustLevel } from '../trust/types.js';
+import type { TrustLevel, LowTierTrustLevel, TrustMutationSource } from '../trust/types.js';
+import { isHighTierTrustLevel, isLowTierTrustLevel } from '../trust/types.js';
+import {
+  evaluateLowTierTrustDriftSuggestion,
+  isManualHighTierTrustMutationAuthorized,
+  resolveTrustMutationSource,
+  type LowTierTrustDriftSuggestion,
+  type TrustDriftBehaviorSignals,
+} from '../trust/policy.js';
 import { createComponentLogger } from '../logger.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 import { appendMutationAuditEntry, listMutationAuditEntries } from './store/audit.js';
@@ -78,6 +86,7 @@ interface ContactStoreOptions {
 
 interface TrustMutationOptions {
   allowPrimaryTrustAssignment?: boolean;
+  mutationSource?: TrustMutationSource;
 }
 
 interface UpsertMutationOptions extends TrustMutationOptions {
@@ -86,6 +95,16 @@ interface UpsertMutationOptions extends TrustMutationOptions {
 
 type PrimaryTrustMutationSource = 'upsert' | 'set_trust_level';
 type PrimaryTrustMutationOutcome = 'allowed' | 'denied';
+
+export interface ContactTrustDriftSuggestion extends LowTierTrustDriftSuggestion {
+  contactId: string;
+  createdAt: string;
+}
+
+export interface ContactTrustDriftApplyResult {
+  applied: boolean;
+  reason: string;
+}
 
 function sanitizeContactFileComponent(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -202,6 +221,16 @@ export class ContactStore {
   ): Contact {
     const identities = collectUpsertIdentities(partial);
     const target = this.resolveUpsertTarget(partial, identities);
+    const mutationSource = resolveTrustMutationSource(options.actor, options.mutationSource);
+
+    if (
+      partial.trustLevel !== undefined
+      && isHighTierTrustLevel(partial.trustLevel)
+      && !isManualHighTierTrustMutationAuthorized(options.actor, mutationSource)
+    ) {
+      throw new Error('High-tier trust assignment denied: manual operator authorization required');
+    }
+
     if (
       partial.trustLevel === 'primary'
       && !this.isPrimaryTrustAssignmentAuthorized(target, identities, partial.discordUserId, options)
@@ -252,6 +281,124 @@ export class ContactStore {
     return getContactsByTrustLevel(this.db, trustLevel);
   }
 
+  private isBehaviorDriftMutationAllowed(
+    contactId: string,
+    currentTrustLevel: TrustLevel,
+    requestedTrustLevel: TrustLevel,
+    actor?: string,
+  ): boolean {
+    if (isHighTierTrustLevel(currentTrustLevel) || isHighTierTrustLevel(requestedTrustLevel)) {
+      log.warn('Denied behavior-driven trust mutation touching high-tier trust', {
+        contactId,
+        currentTrustLevel,
+        requestedTrustLevel,
+        actor,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  private isHighTierMutationAllowed(
+    contactId: string,
+    currentTrustLevel: TrustLevel,
+    requestedTrustLevel: TrustLevel,
+    actor: string | undefined,
+    mutationSource: TrustMutationSource,
+  ): boolean {
+    if (!isHighTierTrustLevel(currentTrustLevel) && !isHighTierTrustLevel(requestedTrustLevel)) {
+      return true;
+    }
+
+    if (isManualHighTierTrustMutationAuthorized(actor, mutationSource)) {
+      return true;
+    }
+
+    log.warn('Denied trust mutation touching high-tier trust without manual authorization', {
+      contactId,
+      currentTrustLevel,
+      requestedTrustLevel,
+      actor,
+      mutationSource,
+    });
+    return false;
+  }
+
+  suggestLowTierTrustDrift(
+    id: string,
+    signals: TrustDriftBehaviorSignals,
+    actor?: string,
+  ): ContactTrustDriftSuggestion | null {
+    const contact = this.getById(id);
+    if (!contact) return null;
+
+    const suggestion = evaluateLowTierTrustDriftSuggestion(contact.trustLevel, signals);
+    if (!suggestion) return null;
+
+    const contactSuggestion: ContactTrustDriftSuggestion = {
+      ...suggestion,
+      contactId: contact.id,
+      createdAt: new Date().toISOString(),
+    };
+    log.info('Generated low-tier trust drift suggestion', {
+      contactId: contact.id,
+      fromTrustLevel: contactSuggestion.fromTrustLevel,
+      suggestedTrustLevel: contactSuggestion.suggestedTrustLevel,
+      confidence: contactSuggestion.confidence,
+      actor,
+    });
+    return contactSuggestion;
+  }
+
+  applyLowTierTrustDriftSuggestion(
+    id: string,
+    suggestion: ContactTrustDriftSuggestion,
+    actor?: string,
+  ): ContactTrustDriftApplyResult {
+    const contact = this.getById(id);
+    if (!contact) {
+      return { applied: false, reason: `Contact ${id} not found` };
+    }
+
+    if (suggestion.contactId !== id) {
+      return { applied: false, reason: 'Trust drift suggestion contact mismatch' };
+    }
+
+    if (!isLowTierTrustLevel(contact.trustLevel)) {
+      return { applied: false, reason: 'High-tier trust requires manual-only mutation paths' };
+    }
+
+    const currentTrustLevel = contact.trustLevel as LowTierTrustLevel;
+    if (suggestion.fromTrustLevel !== currentTrustLevel) {
+      return {
+        applied: false,
+        reason: `Stale trust drift suggestion: expected ${suggestion.fromTrustLevel}, found ${currentTrustLevel}`,
+      };
+    }
+
+    if (!isLowTierTrustLevel(suggestion.suggestedTrustLevel)) {
+      return {
+        applied: false,
+        reason: 'Trust drift suggestion denied: high-tier trust cannot be set through suggestion flow',
+      };
+    }
+
+    const applied = this.setTrustLevel(
+      id,
+      suggestion.suggestedTrustLevel,
+      actor,
+      { mutationSource: 'behavior_drift' },
+    );
+    if (!applied) {
+      return { applied: false, reason: 'Trust drift suggestion denied by trust guardrails' };
+    }
+
+    return {
+      applied: true,
+      reason: `Applied low-tier trust drift: ${suggestion.fromTrustLevel} -> ${suggestion.suggestedTrustLevel}`,
+    };
+  }
+
   setTrustLevel(
     id: string,
     trustLevel: TrustLevel,
@@ -262,6 +409,18 @@ export class ContactStore {
     if (!contact) return false;
 
     if (contact.trustLevel === trustLevel) return true;
+
+    const mutationSource = resolveTrustMutationSource(actor, options.mutationSource);
+    if (
+      mutationSource === 'behavior_drift'
+      && !this.isBehaviorDriftMutationAllowed(id, contact.trustLevel, trustLevel, actor)
+    ) {
+      return false;
+    }
+
+    if (!this.isHighTierMutationAllowed(id, contact.trustLevel, trustLevel, actor, mutationSource)) {
+      return false;
+    }
 
     if (contact.trustLevel === 'primary') {
       log.warn('Attempted to change primary user trust level', { id });

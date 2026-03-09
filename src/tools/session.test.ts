@@ -14,6 +14,7 @@ import {
   createSessionNewTool,
   createSessionResumeTool,
 } from './session.js';
+import { runWithRequestContext } from '../llm/request-context.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {
@@ -136,6 +137,34 @@ describe('session_new tool', () => {
       rmSync(dataDir, { recursive: true, force: true });
     }
   });
+
+  it('fails closed when invoked from background continuation context', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'session-new-tool-background-'));
+    try {
+      const setActiveSession = vi.fn();
+      const tool = createSessionNewTool({
+        dataDir,
+        now: () => 1_700_000_000_900,
+        idFactory: () => 'api:session-test-bg',
+        setActiveSession,
+      });
+
+      const result = await runWithRequestContext(
+        {
+          callType: 'background',
+          purpose: 'agent.background.continuation',
+        },
+        () => tool.execute('call-bg-1', {}),
+      );
+
+      expect(toolText(result as any)).toContain('session_new is unavailable during background continuation execution');
+      expect((result.details as { isError?: boolean }).isError).toBe(true);
+      expect(setActiveSession).not.toHaveBeenCalled();
+    } finally {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('session list/resume tools', () => {
@@ -250,5 +279,34 @@ describe('session list/resume tools', () => {
     manager.recordUserMessage('api:transient-incoming', 'continued turn', 'u1', 'User');
     expect(store.count('api:transient-incoming')).toBe(0);
     expect(store.getLastEntry('api:session-two')?.content).toBe('continued turn');
+  });
+
+  it('session_resume rejects background continuation context to avoid session leakage', async () => {
+    store.append({
+      channelId: 'api:session-one',
+      role: 'assistant',
+      content: 'session one',
+      timestamp: 1_000,
+    });
+    store.append({
+      channelId: 'api:session-two',
+      role: 'assistant',
+      content: 'session two',
+      timestamp: 2_000,
+    });
+    manager.setActiveContextSession('api:session-one');
+
+    const tool = createSessionResumeTool(manager, { dataDir: dir, now: () => 10_001 });
+    const result = await runWithRequestContext(
+      {
+        callType: 'background',
+        purpose: 'deferred_tool_handoff',
+      },
+      () => tool.execute('resume-bg-1', { sessionId: 'api:session-two' }),
+    );
+
+    expect(toolText(result)).toContain('session_resume is unavailable during background continuation execution');
+    expect((result.details as { isError?: boolean }).isError).toBe(true);
+    expect(manager.getActiveContextSession()).toBe('api:session-one');
   });
 });

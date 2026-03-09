@@ -11,6 +11,7 @@ import {
 import type { JournalEntry } from '../types.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import { backfillLegacyTurnId, parseTurnId } from '../../turns/id.js';
 import type {
   JournalFileMetadata,
   QuarantinedJournalEntry,
@@ -23,6 +24,36 @@ import type {
 
 const DEFAULT_JOURNAL_SCAN_CHUNK_BYTES = 64 * 1024;
 
+function resolveJournalMessageTurnId(entry: JournalEntry): string {
+  if (entry.type !== 'message') {
+    throw new Error('resolveJournalMessageTurnId expects message entries only');
+  }
+
+  const fallbackRole = entry.role === 'assistant' || entry.role === 'system' || entry.role === 'tool'
+    ? entry.role
+    : 'user';
+  const fallbackSeed = `legacy-turn:${entry.channelId}:${entry.id}:${entry.timestamp}:${fallbackRole}`;
+
+  if (typeof entry.metadata !== 'string' || entry.metadata.trim().length === 0) {
+    return backfillLegacyTurnId(fallbackSeed);
+  }
+
+  try {
+    const parsed = JSON.parse(entry.metadata) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const candidate = (parsed as Record<string, unknown>).turn;
+      if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+        const turnId = parseTurnId((candidate as Record<string, unknown>).turnId, 'metadata.turn.turnId');
+        if (turnId) return turnId;
+      }
+    }
+  } catch {
+    // Fall through to deterministic backfill below.
+  }
+
+  return backfillLegacyTurnId(fallbackSeed);
+}
+
 function parseJournalLine(line: string): JournalEntry {
   const parsed = JSON.parse(line) as unknown;
   if (!parsed || typeof parsed !== 'object') {
@@ -30,8 +61,13 @@ function parseJournalLine(line: string): JournalEntry {
   }
 
   const entry = parsed as Partial<JournalEntry>;
-  if (entry.type !== 'message' && entry.type !== 'compaction' && entry.type !== 'marker') {
-    throw new Error('entry type must be "message", "compaction", or "marker"');
+  if (
+    entry.type !== 'message'
+    && entry.type !== 'compaction'
+    && entry.type !== 'marker'
+    && entry.type !== 'tombstone'
+  ) {
+    throw new Error('entry type must be "message", "compaction", "marker", or "tombstone"');
   }
   if (typeof entry.id !== 'number' || !Number.isFinite(entry.id)) {
     throw new Error('entry id must be a finite number');
@@ -50,6 +86,34 @@ function parseJournalLine(line: string): JournalEntry {
       if (typeof entry.coveredUpTo !== 'number' || !Number.isFinite(entry.coveredUpTo)) {
         throw new Error('extraction marker entry coveredUpTo must be a finite number');
       }
+    }
+  }
+
+  if (entry.type === 'message') {
+    if (entry.role !== 'user' && entry.role !== 'assistant' && entry.role !== 'system' && entry.role !== 'tool') {
+      throw new Error('message entry role must be "user", "assistant", "system", or "tool"');
+    }
+    if (typeof entry.content !== 'string') {
+      throw new Error('message entry content must be a string');
+    }
+  }
+
+  if (entry.type === 'tombstone') {
+    if (entry.tombstoneTargetType !== 'turn') {
+      throw new Error('tombstone entry target type must be "turn"');
+    }
+    const turnId = parseTurnId(entry.tombstoneTargetId, 'tombstoneTargetId');
+    if (!turnId) {
+      throw new Error('tombstone entry target id must be a valid TurnID');
+    }
+    if (entry.tombstoneAction !== 'redact' && entry.tombstoneAction !== 'restore') {
+      throw new Error('tombstone entry action must be "redact" or "restore"');
+    }
+    if (entry.tombstoneActor !== undefined && typeof entry.tombstoneActor !== 'string') {
+      throw new Error('tombstone entry actor must be a string when present');
+    }
+    if (entry.tombstoneReason !== undefined && typeof entry.tombstoneReason !== 'string') {
+      throw new Error('tombstone entry reason must be a string when present');
     }
   }
 
@@ -242,6 +306,7 @@ export function scanJournalFileMetadata(
       entryCount: 0,
       maxId: 0,
       messageCount: 0,
+      activeTurnTombstoneCount: 0,
       lastTimestamp: 0,
       lastHmac: null,
       lastEntry: null,
@@ -252,7 +317,8 @@ export function scanJournalFileMetadata(
 
   let entryCount = 0;
   let maxId = 0;
-  let messageCount = 0;
+  const messageCountsByTurn = new Map<string, number>();
+  const activeTurnTombstones = new Set<string>();
   let lastTimestamp = 0;
   let lastHmac: string | null = null;
   let lastEntry: JournalEntry | null = null;
@@ -267,7 +333,17 @@ export function scanJournalFileMetadata(
       entryCount += 1;
       maxId = Math.max(maxId, entry.id);
       if (entry.type === 'message') {
-        messageCount += 1;
+        const turnId = resolveJournalMessageTurnId(entry);
+        messageCountsByTurn.set(turnId, (messageCountsByTurn.get(turnId) ?? 0) + 1);
+      } else if (entry.type === 'tombstone' && entry.tombstoneTargetType === 'turn') {
+        const turnId = parseTurnId(entry.tombstoneTargetId, 'tombstoneTargetId');
+        if (turnId) {
+          if (entry.tombstoneAction === 'redact') {
+            activeTurnTombstones.add(turnId);
+          } else if (entry.tombstoneAction === 'restore') {
+            activeTurnTombstones.delete(turnId);
+          }
+        }
       }
       lastTimestamp = entry.timestamp;
       lastEntry = entry;
@@ -299,10 +375,17 @@ export function scanJournalFileMetadata(
     }
   }
 
+  let messageCount = 0;
+  for (const [turnId, count] of messageCountsByTurn.entries()) {
+    if (activeTurnTombstones.has(turnId)) continue;
+    messageCount += count;
+  }
+
   return {
     entryCount,
     maxId,
     messageCount,
+    activeTurnTombstoneCount: activeTurnTombstones.size,
     lastTimestamp,
     lastHmac,
     lastEntry,

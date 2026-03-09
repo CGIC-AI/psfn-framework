@@ -1,0 +1,42 @@
+import { describe, expect, it } from 'vitest';
+import { buildSettingsContractData } from './settings-contract.js';
+import { verifySettingsContractGuard } from './settings-contract-guard.js';
+
+describe('settings contract guard', () => {
+  it('keeps backend schema, Garden exposure metadata, and owner files aligned', () => {
+    const result = verifySettingsContractGuard();
+    expect(result).toEqual({
+      ok: true,
+      errors: [],
+    });
+  });
+
+  it('fails closed when a schema field loses Garden exposure metadata', () => {
+    const contractData = buildSettingsContractData();
+    const uiFieldExposureKeys = Object.keys(contractData.fields).filter((fieldKey) => fieldKey !== 'sessionMessageLimit');
+
+    const result = verifySettingsContractGuard({
+      contractData,
+      uiFieldExposureKeys,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('Field "sessionMessageLimit" is missing Garden UI exposure metadata.');
+  });
+
+  it('fails closed when an advanced Garden field drifts to a non-runtime owner', () => {
+    const contractData = buildSettingsContractData();
+    contractData.fields.sessionMessageLimit = {
+      ...contractData.fields.sessionMessageLimit,
+      ownerSubsystem: 'scheduler',
+      ownerFile: contractData.subsystems.scheduler.ownerFile,
+    };
+
+    const result = verifySettingsContractGuard({ contractData });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      'Advanced field "sessionMessageLimit" must remain runtime-owned because Garden advanced editors read from runtime config.',
+    );
+  });
+});

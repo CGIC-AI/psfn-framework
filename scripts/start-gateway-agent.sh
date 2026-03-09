@@ -24,6 +24,24 @@ if [ -f ".env" ]; then
   set +a
 fi
 
+if [ -z "${MODULE_REGISTRY_PATH:-}" ]; then
+  for candidate in \
+    "./companion/modules/repl-registry.json" \
+    "./workspace/purrsephone/modules/repl-registry.json" \
+    ./workspace/*/modules/repl-registry.json; do
+    if [ -f "${candidate}" ]; then
+      export MODULE_REGISTRY_PATH="${candidate}"
+      echo "[launcher] MODULE_REGISTRY_PATH not set; defaulting to ${MODULE_REGISTRY_PATH}"
+      break
+    fi
+  done
+fi
+
+if [ -z "${NRC_VAD_LEXICON_PATH:-}" ]; then
+  export NRC_VAD_LEXICON_PATH="./companion/emotion/nrc-vad-lexicon-v2.tsv"
+  echo "[launcher] NRC_VAD_LEXICON_PATH not set; defaulting to ${NRC_VAD_LEXICON_PATH}"
+fi
+
 # Local-dev defaults so split/yolo mode is one-command.
 if [ -z "${ADMIN_PORT:-}" ]; then
   export ADMIN_PORT=3001

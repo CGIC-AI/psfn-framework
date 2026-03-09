@@ -1,5 +1,5 @@
 // ── CLI Chat Tool ──
-// Interactive terminal chat with Purrsephone, using the same runtime stack as Discord.
+// Interactive terminal chat with the active companion, using the same runtime stack as Discord.
 // Run: npx tsx src/chat-cli.ts
 // Or:  npm run chat
 
@@ -8,12 +8,13 @@ import { createInterface } from 'node:readline';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
 import { EventBus } from './event-bus.js';
+import { resolveCompanionNameFromCard } from './identity/companion-runtime.js';
 import { LLMClient } from './llm/client.js';
 import { MemoryStore } from './memory/store.js';
 import { SalienceDecay } from './memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
-import { loadSettings, applySettings } from './settings.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
+import { hydrateCanonicalStartupConfig } from './runtime/bootstrap-helpers.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -27,18 +28,18 @@ const CHANNEL_ID = 'cli:chat';
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const savedSettings = loadSettings(config.dataDir);
-  applySettings(config, savedSettings);
+  hydrateCanonicalStartupConfig(config, { env: process.env });
   const eventBus = new EventBus();
 
-  console.log('[CLI] Initializing Purrsephone...');
+  console.log('[CLI] Initializing companion runtime...');
 
   // Database for memory (L2)
   const db = initDatabase(config.databasePath);
 
   // Identity
   const { card, systemPrompt } = composeIdentity(config);
-  console.log(`[CLI] Loaded character: ${card.data.name}`);
+  const companionName = resolveCompanionNameFromCard(card);
+  console.log(`[CLI] Loaded character: ${companionName}`);
 
   // Core components
   const llmClient = new LLMClient(config);
@@ -164,7 +165,7 @@ async function main(): Promise<void> {
 
     try {
       // Newline before streaming output
-      process.stdout.write('\nPurrsephone> ');
+      process.stdout.write(`\n${companionName}> `);
       const response = await agentLoop.handleMessage(message);
       // Newline after streamed response
       console.log();

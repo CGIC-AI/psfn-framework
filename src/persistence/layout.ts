@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { readJournalFirstEntry } from '../session/journal-utils.js';
 import { writeJsonAtomic } from '../utils/fs.js';
@@ -9,6 +9,337 @@ const log = createComponentLogger('PersistenceLayout');
 interface ChannelIndexPayload {
   version?: number;
   channels?: Record<string, unknown>;
+}
+
+export const DEFAULT_LEGACY_SHARED_DATA_DIR = './data';
+export const DEFAULT_PRODUCTION_RUNTIME_ROOT = './runtime/production';
+export const DEFAULT_CONTINUOUS_RUNTIME_ROOT = '.';
+
+export interface PersistenceRoots {
+  systemDataDir: string;
+  companionDataDir: string;
+  usesLegacySharedDataDir: boolean;
+}
+
+export interface PersistenceRootOptions {
+  systemDataDir?: string;
+  companionDataDir?: string;
+  legacyDataDir?: string;
+}
+
+export interface ConfiguredPersistenceDirs {
+  dataDir?: string;
+  systemDataDir?: string;
+  companionDataDir?: string;
+}
+
+export const RUNTIME_LAYOUT_MODE = Object.freeze({
+  CONTINUOUS: 'continuous',
+  PRODUCTION: 'production',
+} as const);
+
+export type RuntimeLayoutMode = (typeof RUNTIME_LAYOUT_MODE)[keyof typeof RUNTIME_LAYOUT_MODE];
+
+export interface RuntimePathLayoutOptions extends PersistenceRootOptions {
+  mode?: string;
+  nodeEnv?: string;
+  runtimeRootDir?: string;
+  workspacePath?: string;
+  logsDir?: string;
+  tempDir?: string;
+  backupsDir?: string;
+}
+
+export interface RuntimePathLayout extends PersistenceRoots {
+  mode: RuntimeLayoutMode;
+  runtimeRootDir: string;
+  workspacePath: string;
+  logsDir: string;
+  tempDir: string;
+  backupsDir: string;
+}
+
+const DEFAULT_CONTINUOUS_WORKSPACE_PATH = './workspace';
+const DEFAULT_CONTINUOUS_LOGS_DIR = './logs';
+const DEFAULT_CONTINUOUS_TEMP_DIR = './tmp';
+const DEFAULT_PRODUCTION_SYSTEM_DATA_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/system-data`;
+const DEFAULT_PRODUCTION_COMPANION_DATA_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/companion-data`;
+const DEFAULT_PRODUCTION_WORKSPACE_PATH = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/workspace`;
+const DEFAULT_PRODUCTION_LOGS_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/logs`;
+const DEFAULT_PRODUCTION_TEMP_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/tmp`;
+const DEFAULT_PRODUCTION_BACKUPS_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/backups`;
+
+const RUNTIME_LAYOUT_MODE_ALIASES: Readonly<Record<string, RuntimeLayoutMode>> = Object.freeze({
+  continuous: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+  dev: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+  development: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+  production: RUNTIME_LAYOUT_MODE.PRODUCTION,
+  prod: RUNTIME_LAYOUT_MODE.PRODUCTION,
+  live: RUNTIME_LAYOUT_MODE.PRODUCTION,
+});
+
+function normalizeDir(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function normalizeRuntimeLayoutMode(value: string | undefined): RuntimeLayoutMode | null {
+  const normalized = value?.trim().toLowerCase() ?? '';
+  if (!normalized) return null;
+  return RUNTIME_LAYOUT_MODE_ALIASES[normalized] ?? null;
+}
+
+export function resolveRuntimeLayoutMode(
+  options: { mode?: string; nodeEnv?: string } = {},
+): RuntimeLayoutMode {
+  const normalizedMode = normalizeRuntimeLayoutMode(options.mode);
+  if (normalizedMode) {
+    return normalizedMode;
+  }
+
+  if (normalizeDir(options.mode)) {
+    throw new Error(
+      `Unsupported PSFN_RUNTIME_LAYOUT_MODE "${options.mode}". ` +
+      'Expected one of: continuous, dev, production, prod.',
+    );
+  }
+
+  if ((options.nodeEnv ?? '').trim().toLowerCase() === 'production') {
+    return RUNTIME_LAYOUT_MODE.PRODUCTION;
+  }
+
+  return RUNTIME_LAYOUT_MODE.CONTINUOUS;
+}
+
+function isStrictSubpath(path: string, root: string): boolean {
+  const relativePath = relative(resolve(root), resolve(path));
+  return relativePath.length > 0 && !relativePath.startsWith('..') && !isAbsolute(relativePath);
+}
+
+function assertNoDuplicateRoots(
+  mode: RuntimeLayoutMode,
+  roots: Readonly<Record<string, string>>,
+): void {
+  const seen = new Map<string, string>();
+  for (const [label, path] of Object.entries(roots)) {
+    const resolvedPath = resolve(path);
+    const existing = seen.get(resolvedPath);
+    if (existing) {
+      throw new Error(
+        `Runtime layout path "${label}" (${path}) shares a mutable root with "${existing}" in ${mode} mode.`,
+      );
+    }
+    seen.set(resolvedPath, label);
+  }
+}
+
+function assertNoOverlappingRoots(
+  mode: RuntimeLayoutMode,
+  roots: Readonly<Record<string, string>>,
+): void {
+  const entries = Object.entries(roots);
+  for (let i = 0; i < entries.length; i += 1) {
+    const [firstLabel, firstPath] = entries[i];
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const [secondLabel, secondPath] = entries[j];
+      if (isStrictSubpath(firstPath, secondPath) || isStrictSubpath(secondPath, firstPath)) {
+        throw new Error(
+          `Runtime layout paths "${firstLabel}" (${firstPath}) and "${secondLabel}" (${secondPath}) ` +
+          `must not overlap in ${mode} mode.`,
+        );
+      }
+    }
+  }
+}
+
+function resolveProductionDefaultPath(
+  explicitRuntimeRoot: string | undefined,
+  runtimeRootDir: string,
+  suffix: string,
+): string {
+  if (!explicitRuntimeRoot) {
+    switch (suffix) {
+      case 'system-data':
+        return DEFAULT_PRODUCTION_SYSTEM_DATA_DIR;
+      case 'companion-data':
+        return DEFAULT_PRODUCTION_COMPANION_DATA_DIR;
+      case 'workspace':
+        return DEFAULT_PRODUCTION_WORKSPACE_PATH;
+      case 'logs':
+        return DEFAULT_PRODUCTION_LOGS_DIR;
+      case 'tmp':
+        return DEFAULT_PRODUCTION_TEMP_DIR;
+      case 'backups':
+        return DEFAULT_PRODUCTION_BACKUPS_DIR;
+      default:
+        return join(runtimeRootDir, suffix);
+    }
+  }
+  return join(runtimeRootDir, suffix);
+}
+
+export function resolveRuntimePathLayout(
+  options: RuntimePathLayoutOptions = {},
+): RuntimePathLayout {
+  const mode = resolveRuntimeLayoutMode({
+    mode: options.mode,
+    nodeEnv: options.nodeEnv,
+  });
+  const explicitRuntimeRoot = normalizeDir(options.runtimeRootDir);
+  const runtimeRootDir = explicitRuntimeRoot
+    ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
+      ? DEFAULT_PRODUCTION_RUNTIME_ROOT
+      : DEFAULT_CONTINUOUS_RUNTIME_ROOT);
+
+  const explicitSystem = normalizeDir(options.systemDataDir);
+  const explicitCompanion = normalizeDir(options.companionDataDir);
+  const legacyDataDir = normalizeDir(options.legacyDataDir);
+
+  if ((explicitSystem && !explicitCompanion) || (!explicitSystem && explicitCompanion)) {
+    throw new Error(
+      'SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together; ' +
+      'use DATA_DIR only for continuous mode shared-root compatibility',
+    );
+  }
+
+  let systemDataDir: string;
+  let companionDataDir: string;
+  let usesLegacySharedDataDir = false;
+
+  if (explicitSystem && explicitCompanion) {
+    if (explicitSystem === explicitCompanion) {
+      throw new Error(
+        'SYSTEM_DATA_DIR and COMPANION_DATA_DIR must point to different roots; ' +
+        'use DATA_DIR only for continuous mode shared-root compatibility',
+      );
+    }
+    systemDataDir = explicitSystem;
+    companionDataDir = explicitCompanion;
+  } else if (legacyDataDir) {
+    if (mode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
+      throw new Error(
+        'DATA_DIR shared-root mode is forbidden when PSFN runtime layout mode is production. ' +
+        'Set SYSTEM_DATA_DIR and COMPANION_DATA_DIR to isolated roots instead.',
+      );
+    }
+    systemDataDir = legacyDataDir;
+    companionDataDir = legacyDataDir;
+    usesLegacySharedDataDir = true;
+  } else if (mode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
+    systemDataDir = resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'system-data');
+    companionDataDir = resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'companion-data');
+  } else if (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT) {
+    const sharedDataDir = join(runtimeRootDir, 'data');
+    systemDataDir = sharedDataDir;
+    companionDataDir = sharedDataDir;
+    usesLegacySharedDataDir = true;
+  } else {
+    systemDataDir = DEFAULT_LEGACY_SHARED_DATA_DIR;
+    companionDataDir = DEFAULT_LEGACY_SHARED_DATA_DIR;
+    usesLegacySharedDataDir = true;
+  }
+
+  const workspacePath = normalizeDir(options.workspacePath)
+    ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
+      ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'workspace')
+      : (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT
+        ? join(runtimeRootDir, 'workspace')
+        : DEFAULT_CONTINUOUS_WORKSPACE_PATH));
+  const logsDir = normalizeDir(options.logsDir)
+    ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
+      ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'logs')
+      : (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT
+        ? join(runtimeRootDir, 'logs')
+        : DEFAULT_CONTINUOUS_LOGS_DIR));
+  const tempDir = normalizeDir(options.tempDir)
+    ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
+      ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'tmp')
+      : (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT
+        ? join(runtimeRootDir, 'tmp')
+        : DEFAULT_CONTINUOUS_TEMP_DIR));
+  const backupsDir = normalizeDir(options.backupsDir)
+    ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
+      ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'backups')
+      : resolveBackupsDir(companionDataDir));
+
+  if (mode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
+    assertNoDuplicateRoots(mode, {
+      systemDataDir,
+      companionDataDir,
+      workspacePath,
+      logsDir,
+      tempDir,
+      backupsDir,
+    });
+    assertNoOverlappingRoots(mode, {
+      systemDataDir,
+      companionDataDir,
+      workspacePath,
+      logsDir,
+      tempDir,
+      backupsDir,
+    });
+  }
+
+  return {
+    mode,
+    runtimeRootDir,
+    systemDataDir,
+    companionDataDir,
+    workspacePath,
+    logsDir,
+    tempDir,
+    backupsDir,
+    usesLegacySharedDataDir,
+  };
+}
+
+export function resolvePersistenceRoots(
+  options: PersistenceRootOptions = {},
+): PersistenceRoots {
+  const explicitSystem = normalizeDir(options.systemDataDir);
+  const explicitCompanion = normalizeDir(options.companionDataDir);
+
+  if ((explicitSystem && !explicitCompanion) || (!explicitSystem && explicitCompanion)) {
+    throw new Error(
+      'SYSTEM_DATA_DIR and COMPANION_DATA_DIR must both be set together; ' +
+      'use DATA_DIR for legacy shared-root mode',
+    );
+  }
+
+  if (explicitSystem && explicitCompanion) {
+    if (explicitSystem === explicitCompanion) {
+      throw new Error(
+        'SYSTEM_DATA_DIR and COMPANION_DATA_DIR must point to different roots; ' +
+        'use DATA_DIR for legacy shared-root mode',
+      );
+    }
+    return {
+      systemDataDir: explicitSystem,
+      companionDataDir: explicitCompanion,
+      usesLegacySharedDataDir: false,
+    };
+  }
+
+  const legacyDataDir = normalizeDir(options.legacyDataDir) ?? DEFAULT_LEGACY_SHARED_DATA_DIR;
+  return {
+    systemDataDir: legacyDataDir,
+    companionDataDir: legacyDataDir,
+    usesLegacySharedDataDir: true,
+  };
+}
+
+export function resolveConfiguredSystemDataDir(config: ConfiguredPersistenceDirs): string {
+  return normalizeDir(config.systemDataDir)
+    ?? normalizeDir(config.dataDir)
+    ?? DEFAULT_LEGACY_SHARED_DATA_DIR;
+}
+
+export function resolveConfiguredCompanionDataDir(config: ConfiguredPersistenceDirs): string {
+  return normalizeDir(config.companionDataDir)
+    ?? normalizeDir(config.dataDir)
+    ?? DEFAULT_LEGACY_SHARED_DATA_DIR;
 }
 
 function isInternalReflectionChannel(channelId: string | undefined): boolean {
@@ -148,8 +479,68 @@ export function resolveReflectionJournalPath(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'journal.jsonl');
 }
 
+export function resolveFocusKnowledgePath(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'focus-knowledge.jsonl');
+}
+
+export function resolveCompressionGuidelinePath(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'compaction-guideline.json');
+}
+
+export function resolveCompressionFailureLogPath(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'compaction-failures.jsonl');
+}
+
 export function resolveScratchpadMirrorPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'scratchpad.json');
+}
+
+export function resolveCoreMemoryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'core_memory.json');
+}
+
+export function resolveCharacterCardHistoryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'character-card-history.jsonl');
+}
+
+export function resolvePromptLayersPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-layers.json');
+}
+
+export function resolvePromptHistoryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-history.jsonl');
+}
+
+export function resolvePromptRegistryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-registry.json');
+}
+
+export function resolvePromptRegistryHistoryPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-registry-history.jsonl');
+}
+
+export function resolveHeartbeatPolicyPath(companionDataDir: string): string {
+  return join(companionDataDir, 'heartbeat-policy.json');
+}
+
+export function resolveSafeguardAuditTrailPath(companionDataDir: string): string {
+  return join(companionDataDir, 'safeguards-audit.jsonl');
+}
+
+export function resolveShardSessionMemorySyncAuditPath(companionDataDir: string): string {
+  return join(companionDataDir, 'shard-session-memory-sync-audit.jsonl');
+}
+
+export function resolveIdentityAssetsDir(companionDataDir: string): string {
+  return join(companionDataDir, 'identity-assets');
+}
+
+export function resolveBackupsDir(companionDataDir: string): string {
+  return join(companionDataDir, 'backups');
+}
+
+export function resolveLastActiveSessionPath(companionDataDir: string): string {
+  return join(companionDataDir, 'last_active_channel.json');
 }
 
 export function ensurePersistenceLayout(dataDir: string): void {

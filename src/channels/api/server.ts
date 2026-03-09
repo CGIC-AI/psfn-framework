@@ -3,8 +3,8 @@
 // Uses Node.js built-in http module — no framework dependency.
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import type { Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
+import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type {
@@ -17,6 +17,7 @@ import type {
 import type { ContactStore } from '../../contacts/store.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
+import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import type { SessionManager } from '../../session/manager.js';
 import type {
   ChannelAdapter,
@@ -28,23 +29,19 @@ import type {
   OutboundContext,
 } from '../types.js';
 import type {
+  ApiContinuityWatchdogCheck,
   ApiHealthResponse,
   ApiHealthSubsystem,
   ApiHealthSubsystemStatus,
   ApiServerHealthChecks,
   ChatCompletionRequest,
-  ChatCompletionResponse,
   ChatCompletionChunk,
   TelemetryIngestRequest,
   TelemetryIngestResponse,
 } from './types.js';
-import { API_HEALTH_SUBSYSTEMS } from './types.js';
+import { API_CONTINUITY_WATCHDOG_CHECKS, API_HEALTH_SUBSYSTEMS } from './types.js';
 import { createComponentLogger } from '../../logger.js';
-import {
-  getBearerPrincipal,
-  INSECURE_LOCAL_API_PRINCIPAL,
-  type ApiAuthPrincipal,
-} from '../http/auth.js';
+import { type ApiAuthPrincipal } from '../http/auth.js';
 import {
   ApiVoiceWebSocketAdapter,
   type VoiceWebSocketRuntime,
@@ -62,10 +59,32 @@ import {
   emitTurnContentionTelemetry,
   isBusyTurnError,
 } from '../../lifecycle/turn-contention.js';
+import {
+  clampHttpHeader as clampHeaderValue,
+  corsAllowlistIsEmpty,
+  evaluateCorsPolicy,
+  isLoopbackHost,
+  normalizeCorsAllowedOrigins,
+  resolveApiRequestPrincipal,
+  singleHeader as firstHeaderValue,
+} from './http-policy.js';
+import {
+  SSE_RESPONSE_HEADERS,
+  buildApiErrorEnvelope,
+  buildChatCompletionResponse,
+  buildModelListResponse,
+  buildStreamingContentChunk,
+  buildStreamingErrorChunk,
+  buildStreamingFinishChunk,
+  buildStreamingRoleChunk,
+  formatSseDataEvent,
+  formatSseDoneEvent,
+} from './response-format.js';
 
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 90_000;
+const DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS = 65 * 60_000;
 const TELEMETRY_MAX_SKEW_MS = 5 * 60_000;
 const TELEMETRY_NONCE_TTL_MS = 10 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
@@ -75,20 +94,6 @@ const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
   'external.telemetry.incident',
 ]);
 const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google']);
-const API_CORS_ALLOWED_METHODS = 'GET, POST, OPTIONS';
-const API_CORS_ALLOWED_HEADERS = [
-  'Content-Type',
-  'Authorization',
-  'X-Session-ID',
-  'X-Broadcast-Approval-Token',
-  'X-Broadcast-Visibility-Scope',
-  'X-Canonical-Contact-ID',
-  'X-Identity-Claim-Channel',
-  'X-Identity-Claim-User-ID',
-  'X-Identity-Claim-Nonce',
-  'X-Identity-Claim-Expires',
-  'X-Identity-Claim-Signature',
-] as const;
 
 const IDENTITY_CLAIM_HEADERS = {
   canonicalContactId: 'x-canonical-contact-id',
@@ -157,6 +162,7 @@ export interface ApiServerConfig {
   sessionManager: SessionManager;
   contactStore?: ContactStore;
   apiKey?: string;
+  adminToken?: string;
   modelName?: string;
   requestTimeoutMs?: number;
   voiceWebSocketPath?: string;
@@ -165,6 +171,7 @@ export interface ApiServerConfig {
   allowInsecureWithoutAuth?: boolean;
   corsAllowedOrigins?: string[];
   healthChecks?: ApiServerHealthChecks;
+  schedulerHeartbeatStaleAfterMs?: number;
 }
 
 export class ApiServer implements ChannelAdapter {
@@ -195,8 +202,9 @@ export class ApiServer implements ChannelAdapter {
   private sessionManager: SessionManager;
   private contactStore: ContactStore | null;
   private apiKey?: string;
+  private adminToken?: string;
   private allowInsecureWithoutAuth: boolean;
-  private corsAllowedOrigins: Set<string>;
+  private corsAllowedOrigins: ReturnType<typeof normalizeCorsAllowedOrigins>;
   private modelName: string;
   private requestTimeoutMs: number;
   private seenTelemetryNonces = new Map<string, number>();
@@ -204,6 +212,9 @@ export class ApiServer implements ChannelAdapter {
   private processingChannels = new Set<string>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
+  private schedulerHeartbeatStaleAfterMs: number;
+  private lastSchedulerHeartbeatAtMs: number | null = null;
+  private unregisterSchedulerHeartbeat: (() => void) | null = null;
 
   constructor(config: ApiServerConfig) {
     this.port = config.port;
@@ -212,12 +223,23 @@ export class ApiServer implements ChannelAdapter {
     this.eventBus = config.eventBus;
     this.sessionManager = config.sessionManager;
     this.contactStore = config.contactStore ?? null;
-    this.apiKey = this.clampHeader(config.apiKey, 512);
+    this.apiKey = clampHeaderValue(config.apiKey, 512);
+    this.adminToken = clampHeaderValue(config.adminToken, 512);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
-    this.corsAllowedOrigins = this.normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
-    this.modelName = config.modelName ?? 'purrsephone';
+    this.corsAllowedOrigins = normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
+    this.modelName = config.modelName ?? DEFAULT_COMPANION_ID;
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
+    this.schedulerHeartbeatStaleAfterMs = this.parseSchedulerHeartbeatStaleAfterMs(
+      config.schedulerHeartbeatStaleAfterMs,
+    );
+    this.unregisterSchedulerHeartbeat = this.eventBus.on('schedule.heartbeat', ({ timestamp }) => {
+      if (Number.isFinite(timestamp) && timestamp > 0) {
+        this.lastSchedulerHeartbeatAtMs = Math.floor(timestamp);
+      } else {
+        this.lastSchedulerHeartbeatAtMs = Date.now();
+      }
+    });
     this.voiceWebSocket = new ApiVoiceWebSocketAdapter({
       apiKey: this.apiKey,
       path: config.voiceWebSocketPath,
@@ -261,7 +283,7 @@ export class ApiServer implements ChannelAdapter {
       throw err;
     }
 
-    if (!this.apiKey && !this.isLoopbackHost(this.host)) {
+    if (!this.apiKey && !isLoopbackHost(this.host)) {
       const err = new Error(
         'ALLOW_INSECURE_LOCAL_API=true requires API_HOST to be loopback (127.0.0.1, ::1, or localhost)',
       );
@@ -292,7 +314,7 @@ export class ApiServer implements ChannelAdapter {
         if (!this.apiKey) {
           log.warn('API authentication disabled by explicit ALLOW_INSECURE_LOCAL_API=true');
         }
-        if (this.corsAllowedOrigins.size === 0) {
+        if (corsAllowlistIsEmpty(this.corsAllowedOrigins)) {
           log.warn('API CORS allowlist is empty; cross-origin browser requests are denied by default');
         }
         resolve();
@@ -301,6 +323,8 @@ export class ApiServer implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
+    this.unregisterSchedulerHeartbeat?.();
+    this.unregisterSchedulerHeartbeat = null;
     await this.voiceWebSocket.stop();
     return new Promise((resolve, reject) => {
       this.server.close((err) => {
@@ -310,7 +334,7 @@ export class ApiServer implements ChannelAdapter {
     });
   }
 
-  private handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): void {
+  private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const handled = this.voiceWebSocket.handleUpgrade(req, socket, head);
     if (!handled) {
       this.voiceWebSocket.rejectUnknownUpgrade(socket);
@@ -325,66 +349,33 @@ export class ApiServer implements ChannelAdapter {
     return Math.floor(value);
   }
 
-  private normalizeCorsAllowedOrigins(origins: readonly string[] | undefined): Set<string> {
-    const normalized = new Set<string>();
-    if (!origins) return normalized;
-
-    for (const origin of origins) {
-      const trimmed = origin.trim();
-      if (!trimmed || trimmed === '*') continue;
-      normalized.add(trimmed);
+  private parseSchedulerHeartbeatStaleAfterMs(value: number | undefined): number {
+    if (value !== undefined && Number.isFinite(value) && value >= 1_000) {
+      return Math.floor(value);
     }
 
-    return normalized;
-  }
-
-  private isLoopbackHost(host: string): boolean {
-    const normalized = host.trim().toLowerCase();
-    if (normalized === 'localhost' || normalized === '::1') return true;
-    return normalized.startsWith('127.');
-  }
-
-  private appendVaryHeader(res: ServerResponse, value: string): void {
-    const existing = res.getHeader('Vary');
-    const varyValues = new Set<string>();
-
-    if (typeof existing === 'string') {
-      for (const item of existing.split(',')) {
-        const trimmed = item.trim();
-        if (trimmed) varyValues.add(trimmed);
-      }
-    } else if (Array.isArray(existing)) {
-      for (const item of existing) {
-        const trimmed = item.trim();
-        if (trimmed) varyValues.add(trimmed);
+    const envValue = process.env.API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
+    if (envValue) {
+      const parsed = Number.parseInt(envValue, 10);
+      if (Number.isFinite(parsed) && parsed >= 1_000) {
+        return parsed;
       }
     }
 
-    varyValues.add(value);
-    res.setHeader('Vary', Array.from(varyValues).join(', '));
+    return DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
   }
 
   private applyCorsPolicy(req: IncomingMessage, res: ServerResponse): boolean {
-    const origin = this.clampHeader(this.singleHeader(req.headers.origin), 512);
-    if (!origin) {
-      return true;
-    }
-
-    if (!this.corsAllowedOrigins.has(origin)) {
-      this.sendError(
-        res,
-        403,
-        'cors_origin_not_allowed',
-        'Origin is not allowed by API_CORS_ALLOWLIST',
-      );
+    const policy = evaluateCorsPolicy(req, this.corsAllowedOrigins, res.getHeader('Vary'));
+    if (!policy.ok) {
+      this.sendError(res, policy.error.status, policy.error.type, policy.error.message);
       return false;
     }
 
-    this.appendVaryHeader(res, 'Origin');
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', API_CORS_ALLOWED_METHODS);
-    res.setHeader('Access-Control-Allow-Headers', API_CORS_ALLOWED_HEADERS.join(', '));
-    res.setHeader('Access-Control-Max-Age', '600');
+    if (!policy.headers) return true;
+    for (const [key, value] of Object.entries(policy.headers)) {
+      res.setHeader(key, value);
+    }
     return true;
   }
 
@@ -606,48 +597,23 @@ export class ApiServer implements ChannelAdapter {
     res: ServerResponse,
     isTelemetryIngest: boolean,
   ): ApiAuthPrincipal | null {
-    if (this.apiKey) {
-      const principal = getBearerPrincipal(req, this.apiKey);
-      if (!principal) {
-        this.sendError(res, 401, 'invalid_api_key', 'Invalid or missing API key');
-        return null;
-      }
-      return principal;
-    }
+    const resolution = resolveApiRequestPrincipal(req, {
+      apiKey: this.apiKey,
+      alternateApiToken: this.adminToken,
+      alternateCookieTokenNames: this.adminToken ? ['psfn_token'] : [],
+      allowInsecureWithoutAuth: this.allowInsecureWithoutAuth,
+      isTelemetryIngest,
+    });
 
-    if (isTelemetryIngest) {
-      this.sendError(
-        res,
-        503,
-        'telemetry_auth_unconfigured',
-        'Telemetry ingestion requires API authentication to be configured',
-      );
-      return null;
+    if (resolution.ok) {
+      return resolution.principal;
     }
-
-    if (this.allowInsecureWithoutAuth) {
-      return INSECURE_LOCAL_API_PRINCIPAL;
-    }
-
-    this.sendError(
-      res,
-      503,
-      'api_auth_unconfigured',
-      'API_KEY is required unless ALLOW_INSECURE_LOCAL_API=true',
-    );
+    this.sendError(res, resolution.error.status, resolution.error.type, resolution.error.message);
     return null;
   }
 
   private handleModels(res: ServerResponse): void {
-    const body = {
-      object: 'list',
-      data: [{
-        id: this.modelName,
-        object: 'model',
-        created: Math.floor(Date.now() / 1000),
-        owned_by: 'psfn',
-      }],
-    };
+    const body = buildModelListResponse(this.modelName, Math.floor(Date.now() / 1000));
     sendJson(res, 200, body);
   }
 
@@ -658,22 +624,171 @@ export class ApiServer implements ChannelAdapter {
         return [subsystem, status] as const;
       }),
     );
+    const checkedAtMs = Date.now();
 
     const subsystems = Object.fromEntries(subsystemEntries) as ApiHealthResponse['subsystems'];
-    const status: ApiHealthResponse['status'] = API_HEALTH_SUBSYSTEMS.every(
+    const subsystemStatus: ApiHealthResponse['status'] = API_HEALTH_SUBSYSTEMS.every(
       (subsystem) => subsystems[subsystem].status === 'healthy',
+    )
+      ? 'healthy'
+      : 'degraded';
+    const continuity = this.evaluateContinuityWatchdogHealth(subsystems, checkedAtMs);
+    const status: ApiHealthResponse['status'] = (
+      subsystemStatus === 'healthy'
+      && continuity.status === 'healthy'
     )
       ? 'healthy'
       : 'degraded';
 
     const body: ApiHealthResponse = {
       status,
-      checkedAt: new Date().toISOString(),
+      checkedAt: new Date(checkedAtMs).toISOString(),
       uptimeSeconds: Math.floor(process.uptime()),
       subsystems,
+      continuity,
     };
 
     sendJson(res, status === 'healthy' ? 200 : 503, body);
+  }
+
+  private evaluateContinuityWatchdogHealth(
+    subsystems: ApiHealthResponse['subsystems'],
+    checkedAtMs: number,
+  ): ApiHealthResponse['continuity'] {
+    const checks: Record<ApiContinuityWatchdogCheck, ApiHealthSubsystemStatus> = {
+      database: this.mapSubsystemToContinuityCheck(
+        subsystems.memory,
+        'memory',
+        'Database-backed memory subsystem is degraded',
+      ),
+      gatewayLink: this.evaluateGatewayLinkHealth(subsystems),
+      schedulerHeartbeat: this.evaluateSchedulerHeartbeatHealth(subsystems.scheduler, checkedAtMs),
+    };
+
+    const status: ApiHealthResponse['continuity']['status'] = API_CONTINUITY_WATCHDOG_CHECKS.every(
+      (check) => checks[check].status === 'healthy',
+    )
+      ? 'healthy'
+      : 'degraded';
+
+    return {
+      status,
+      checks,
+    };
+  }
+
+  private mapSubsystemToContinuityCheck(
+    source: ApiHealthSubsystemStatus,
+    sourceSubsystem: ApiHealthSubsystem,
+    degradedFallbackDetail: string,
+  ): ApiHealthSubsystemStatus {
+    const detail = source.detail?.trim();
+    return {
+      status: source.status === 'healthy' ? 'healthy' : 'degraded',
+      ...(source.status === 'degraded'
+        ? { detail: detail || degradedFallbackDetail }
+        : {}),
+      meta: {
+        ...(source.meta ?? {}),
+        sourceSubsystem,
+      },
+    };
+  }
+
+  private evaluateGatewayLinkHealth(
+    subsystems: ApiHealthResponse['subsystems'],
+  ): ApiHealthSubsystemStatus {
+    const llmHealthy = subsystems.llm.status === 'healthy';
+    const embeddingsHealthy = subsystems.embeddings.status === 'healthy';
+    if (llmHealthy || embeddingsHealthy) {
+      return {
+        status: 'healthy',
+        meta: {
+          sourceSubsystems: ['llm', 'embeddings'],
+          llmStatus: subsystems.llm.status,
+          embeddingsStatus: subsystems.embeddings.status,
+        },
+      };
+    }
+
+    const llmDetail = subsystems.llm.detail?.trim();
+    const embeddingsDetail = subsystems.embeddings.detail?.trim();
+    const detailParts = [llmDetail, embeddingsDetail].filter((value): value is string => Boolean(value));
+    return {
+      status: 'degraded',
+      detail: detailParts.join(' | ') || 'Gateway-linked LLM and embeddings checks are degraded',
+      meta: {
+        sourceSubsystems: ['llm', 'embeddings'],
+        llmStatus: subsystems.llm.status,
+        embeddingsStatus: subsystems.embeddings.status,
+      },
+    };
+  }
+
+  private evaluateSchedulerHeartbeatHealth(
+    schedulerSubsystem: ApiHealthSubsystemStatus,
+    checkedAtMs: number,
+  ): ApiHealthSubsystemStatus {
+    const schedulerDetail = schedulerSubsystem.detail?.trim();
+    const heartbeatObservedAtMs = this.lastSchedulerHeartbeatAtMs;
+    const uptimeMs = Math.max(0, Math.floor(process.uptime() * 1_000));
+    const heartbeatAgeMs = heartbeatObservedAtMs === null
+      ? null
+      : Math.max(0, checkedAtMs - heartbeatObservedAtMs);
+
+    const baseMeta: Record<string, unknown> = {
+      ...(schedulerSubsystem.meta ?? {}),
+      sourceSubsystem: 'scheduler',
+      schedulerHeartbeatStaleAfterMs: this.schedulerHeartbeatStaleAfterMs,
+      ...(heartbeatObservedAtMs === null
+        ? { heartbeatObserved: false }
+        : {
+          heartbeatObserved: true,
+          schedulerHeartbeatAt: new Date(heartbeatObservedAtMs).toISOString(),
+          schedulerHeartbeatAgeMs: heartbeatAgeMs,
+        }),
+    };
+
+    if (schedulerSubsystem.status !== 'healthy') {
+      return {
+        status: 'degraded',
+        detail: schedulerDetail || 'Scheduler subsystem is degraded',
+        meta: baseMeta,
+      };
+    }
+
+    if (heartbeatObservedAtMs === null) {
+      if (uptimeMs <= this.schedulerHeartbeatStaleAfterMs) {
+        return {
+          status: 'healthy',
+          meta: {
+            ...baseMeta,
+            schedulerHeartbeatGraceMsRemaining: Math.max(
+              0,
+              this.schedulerHeartbeatStaleAfterMs - uptimeMs,
+            ),
+          },
+        };
+      }
+      return {
+        status: 'degraded',
+        detail: `No scheduler heartbeat observed within ${this.schedulerHeartbeatStaleAfterMs}ms`,
+        meta: baseMeta,
+      };
+    }
+
+    if (heartbeatAgeMs !== null && heartbeatAgeMs > this.schedulerHeartbeatStaleAfterMs) {
+      return {
+        status: 'degraded',
+        detail: `Scheduler heartbeat stale: ${heartbeatAgeMs}ms since last pulse (limit ${this.schedulerHeartbeatStaleAfterMs}ms)`,
+        meta: baseMeta,
+      };
+    }
+
+    return {
+      status: 'healthy',
+      meta: baseMeta,
+    };
   }
 
   private async evaluateSubsystemHealth(
@@ -983,15 +1098,11 @@ export class ApiServer implements ChannelAdapter {
   }
 
   private singleHeader(value: string | string[] | undefined): string | undefined {
-    if (Array.isArray(value)) return value[0];
-    return value;
+    return firstHeaderValue(value);
   }
 
   private clampHeader(value: string | undefined, maxLength: number): string | undefined {
-    if (!value) return undefined;
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+    return clampHeaderValue(value, maxLength);
   }
 
   private getLastUserMessage(messages: ChatCompletionRequest['messages']): string {
@@ -1248,15 +1359,23 @@ export class ApiServer implements ChannelAdapter {
       }
     }
 
+    const nonce = claim.nonce;
+    const expiresAt = claim.expiresAt;
+    const signature = claim.signature;
+    if (!nonce || !expiresAt || !signature) {
+      this.sendError(res, 400, 'invalid_identity_claim', 'Identity claim verification headers were incomplete');
+      return false;
+    }
+
     const verificationResult = this.contactStore.verifyIdentityLinkChallenge({
       contactId: claim.canonicalContactId,
       sourceChannel: claim.sourceChannel,
       sourceUserId: claim.sourceUserId,
       targetChannel: 'api',
       targetUserId: authorId,
-      nonce: claim.nonce,
-      expiresAt: claim.expiresAt,
-      signature: claim.signature,
+      nonce,
+      expiresAt,
+      signature,
     });
 
     switch (verificationResult.status) {
@@ -1391,11 +1510,11 @@ export class ApiServer implements ChannelAdapter {
   }
 
   private writeStreamingChunk(res: ServerResponse, chunk: ChatCompletionChunk): void {
-    res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    res.write(formatSseDataEvent(chunk));
   }
 
   private writeStreamingDone(res: ServerResponse): void {
-    res.write('data: [DONE]\n\n');
+    res.write(formatSseDoneEvent());
   }
 
   private writeStreamingErrorAndDone(
@@ -1404,13 +1523,11 @@ export class ApiServer implements ChannelAdapter {
     created: number,
     content: string,
   ): void {
-    const errorChunk: ChatCompletionChunk = {
-      id: completionId,
-      object: 'chat.completion.chunk',
+    const errorChunk = buildStreamingErrorChunk({
+      completionId,
       created,
       model: this.modelName,
-      choices: [{ index: 0, delta: { content }, finish_reason: 'stop' }],
-    };
+    }, content);
     this.writeStreamingChunk(res, errorChunk);
     this.writeStreamingDone(res);
   }
@@ -1469,22 +1586,14 @@ export class ApiServer implements ChannelAdapter {
       );
       if (!this.canWriteResponse(res)) return;
 
-      const response: ChatCompletionResponse = {
+      const response = buildChatCompletionResponse({
         id: `chatcmpl-${randomUUID()}`,
-        object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: this.modelName,
-        choices: [{
-          index: 0,
-          message: { role: 'assistant', content: agentResponse.content },
-          finish_reason: 'stop',
-        }],
-        usage: {
-          prompt_tokens: agentResponse.metadata.inputTokens,
-          completion_tokens: agentResponse.metadata.outputTokens,
-          total_tokens: agentResponse.metadata.inputTokens + agentResponse.metadata.outputTokens,
-        },
-      };
+        content: agentResponse.content,
+        inputTokens: agentResponse.metadata.inputTokens,
+        outputTokens: agentResponse.metadata.outputTokens,
+      });
 
       sendJson(res, 200, response);
     } catch (err) {
@@ -1505,32 +1614,24 @@ export class ApiServer implements ChannelAdapter {
     const created = Math.floor(Date.now() / 1000);
 
     // Set SSE headers
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    });
+    res.writeHead(200, SSE_RESPONSE_HEADERS);
 
     // Send initial role chunk
-    const roleChunk: ChatCompletionChunk = {
-      id: completionId,
-      object: 'chat.completion.chunk',
+    const roleChunk = buildStreamingRoleChunk({
+      completionId,
       created,
       model: this.modelName,
-      choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
-    };
+    });
     this.writeStreamingChunk(res, roleChunk);
 
     // Subscribe to stream deltas for this channelId
     const unsubscribe = this.eventBus.on('agent.stream.delta', (data) => {
       if (data.channelId !== pendingTurn.channelId) return;
-      const chunk: ChatCompletionChunk = {
-        id: completionId,
-        object: 'chat.completion.chunk',
+      const chunk = buildStreamingContentChunk({
+        completionId,
         created,
         model: this.modelName,
-        choices: [{ index: 0, delta: { content: data.text }, finish_reason: null }],
-      };
+      }, data.text);
       this.writeStreamingChunk(res, chunk);
     });
     const turn = this.beginPreparedTurn(pendingTurn);
@@ -1540,13 +1641,11 @@ export class ApiServer implements ChannelAdapter {
       if (!this.canWriteResponse(res)) return;
 
       // Send finish chunk
-      const finishChunk: ChatCompletionChunk = {
-        id: completionId,
-        object: 'chat.completion.chunk',
+      const finishChunk = buildStreamingFinishChunk({
+        completionId,
         created,
         model: this.modelName,
-        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-      };
+      });
       this.writeStreamingChunk(res, finishChunk);
       this.writeStreamingDone(res);
     } catch (err) {
@@ -1566,14 +1665,6 @@ export class ApiServer implements ChannelAdapter {
     message: string,
     details?: Record<string, unknown>,
   ): void {
-    sendJson(res, status, {
-      error: {
-        message,
-        type,
-        param: null,
-        code: null,
-        ...(details ? { details } : {}),
-      },
-    });
+    sendJson(res, status, buildApiErrorEnvelope(type, message, details));
   }
 }

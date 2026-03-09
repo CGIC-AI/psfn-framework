@@ -9,6 +9,7 @@ import { sanitizeWebContent } from '../sanitize.js';
 import {
   evaluateUrlPolicy,
   checkResolvedIP,
+  resolveMaxRedirectHops,
   type DnsResolver,
   type UrlPolicyConfig,
   type UrlPolicyLane,
@@ -25,6 +26,7 @@ import { registerGatedDescriptors } from './register.js';
 const log = createComponentLogger('GatewayWeb');
 const tlsBundleCache = new Map<string, string>();
 const WEB_FETCH_BINARY_MAX_BYTES_DEFAULT = 8 * 1024 * 1024;
+const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
 interface ResponseLike {
   status: number;
@@ -40,6 +42,8 @@ interface ResponseLike {
 interface WebPolicyTestHooks {
   webFetchDnsResolver?: DnsResolver;
 }
+
+type WebFetchMethodName = 'web.fetch' | 'web.fetch_binary';
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -93,9 +97,9 @@ function formatFetchProviderError(err: unknown): string {
 }
 
 function toLane(value: unknown): UrlPolicyLane {
-  return value === 'local_crawler'
-    ? 'local_crawler'
-    : 'default';
+  if (value === 'local_crawler') return 'local_crawler';
+  if (value === 'discovery') return 'discovery';
+  return 'default';
 }
 
 function normalizeBinaryMaxBytes(value: unknown): number {
@@ -110,13 +114,7 @@ function resolveUrlPolicyConfig(runtime: GatewayMethodRuntime): UrlPolicyConfig 
     return runtime.policyConfig.urlPolicy;
   }
 
-  // Backward-compatible env fallback for direct gateway method registration in tests.
-  const fallback: UrlPolicyConfig = {
-    allowHttp: process.env.ALLOW_HTTP_FETCH === 'true',
-    domainAllowlist: process.env.FETCH_DOMAIN_ALLOWLIST
-      ? process.env.FETCH_DOMAIN_ALLOWLIST.split(',').map(d => d.trim()).filter(Boolean)
-      : undefined,
-  };
+  const fallback: UrlPolicyConfig = {};
   runtime.policyConfig.urlPolicy = fallback;
   return fallback;
 }
@@ -125,24 +123,13 @@ function resolveDnsResolver(runtime: GatewayMethodRuntime): DnsResolver | undefi
   return (runtime.policyConfig as WebPolicyTestHooks).webFetchDnsResolver;
 }
 
-function parseCsvEnv(value: string | undefined): string[] | undefined {
-  if (typeof value !== 'string') return undefined;
-  const parsed = [...new Set(
-    value
-      .split(',')
-      .map(entry => entry.trim())
-      .filter(Boolean),
-  )];
-  return parsed.length > 0 ? parsed : undefined;
-}
-
 function resolveTlsCertPaths(runtime: GatewayMethodRuntime): string[] {
   const configured = runtime.policyConfig.webFetchTlsCaCertPaths;
   if (configured && configured.length > 0) {
     return configured;
   }
 
-  return parseCsvEnv(process.env.FETCH_TLS_CA_CERT_PATHS) ?? [];
+  return [];
 }
 
 function loadTlsBundle(paths: readonly string[]): string | undefined {
@@ -166,9 +153,29 @@ function loadTlsBundle(paths: readonly string[]): string | undefined {
   return bundle;
 }
 
+function normalizeRequestHeaders(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object') return {};
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length === 0) return {};
+
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of entries) {
+    const headerName = name.trim();
+    if (!headerName) continue;
+    if (/^host$/i.test(headerName) || /^content-length$/i.test(headerName)) {
+      continue;
+    }
+    if (typeof value !== 'string') continue;
+    const headerValue = value.trim();
+    if (!headerValue) continue;
+    normalized[headerName] = headerValue;
+  }
+  return normalized;
+}
+
 async function requestText(
   url: string,
-  options: { tlsCaBundle?: string; connectAddress?: string },
+  options: { tlsCaBundle?: string; connectAddress?: string; headers?: Record<string, string> },
 ): Promise<ResponseLike> {
   const parsed = new URL(url);
   const isHttps = parsed.protocol === 'https:';
@@ -181,6 +188,7 @@ async function requestText(
     && options.connectAddress.length > 0
     && isIP(originalHostname) === 0;
   const headers: Record<string, string> = {
+    ...normalizeRequestHeaders(options.headers),
     'User-Agent': WEB_FETCH_USER_AGENT,
   };
   if (options.connectAddress) {
@@ -268,6 +276,7 @@ async function fetchWithPolicyChecks(
   lane: UrlPolicyLane,
   urlPolicyConfig: UrlPolicyConfig,
   tlsCaBundle: string | undefined,
+  requestHeaders: Record<string, string>,
   dnsResolver?: DnsResolver,
 ): Promise<ResponseLike> {
   const urlCheck = evaluateUrlPolicy(url, urlPolicyConfig, lane);
@@ -281,7 +290,10 @@ async function fetchWithPolicyChecks(
 
   const parsed = new URL(url);
   const dnsCheck = await checkResolvedIP(parsed.hostname, dnsResolver, {
-    allowPrivateResolvedIp: lane === 'local_crawler' || urlPolicyConfig.allowInternalNetwork === true,
+    allowPrivateResolvedIp:
+      lane === 'local_crawler'
+      || lane === 'discovery'
+      || urlPolicyConfig.allowInternalNetwork === true,
   });
   if (!dnsCheck.allowed) {
     log.warn(`DNS resolution blocked fetch: ${dnsCheck.reason} (${url})`);
@@ -303,12 +315,146 @@ async function fetchWithPolicyChecks(
     return await requestText(url, {
       tlsCaBundle,
       connectAddress,
+      headers: requestHeaders,
     });
   } catch (err) {
     throw new JSONRPCErrorException(
       formatFetchProviderError(err),
       GatewayErrors.PROVIDER_ERROR,
     );
+  }
+}
+
+interface RedirectChainFetchResult {
+  response: ResponseLike;
+  finalUrl: string;
+  redirectHopCount: number;
+  redirectChain: string[];
+}
+
+function isRedirectStatus(status: number): boolean {
+  return REDIRECT_STATUS_CODES.has(status);
+}
+
+function recordRedirectChainAudit(
+  runtime: GatewayMethodRuntime,
+  event: {
+    rpcMethod: WebFetchMethodName;
+    lane: UrlPolicyLane;
+    originUrl: string;
+    finalUrl: string;
+    redirectHopCount: number;
+    redirectChain: string[];
+    outcome: 'success' | 'error';
+  },
+  durationMs: number,
+  error?: string,
+): void {
+  runtime.recordAuditEvent?.({
+    method: 'web.fetch.redirect_chain',
+    decision: event.outcome === 'success' ? 'ALLOW' : 'DENY',
+    params: event,
+    durationMs,
+    ...(error ? { error } : {}),
+  });
+}
+
+async function fetchWithValidatedRedirectChain(
+  rpcMethod: WebFetchMethodName,
+  originUrl: string,
+  lane: UrlPolicyLane,
+  urlPolicyConfig: UrlPolicyConfig,
+  tlsCaBundle: string | undefined,
+  requestHeaders: Record<string, string>,
+  runtime: GatewayMethodRuntime,
+  dnsResolver?: DnsResolver,
+): Promise<RedirectChainFetchResult> {
+  const maxRedirectHops = resolveMaxRedirectHops(urlPolicyConfig);
+  let currentUrl = originUrl;
+  let redirectHopCount = 0;
+  const redirectChain = [originUrl];
+  const visited = new Set<string>(redirectChain);
+  const startedAt = Date.now();
+
+  try {
+    for (;;) {
+      const response = await fetchWithPolicyChecks(
+        currentUrl,
+        lane,
+        urlPolicyConfig,
+        tlsCaBundle,
+        requestHeaders,
+        dnsResolver,
+      );
+      if (!isRedirectStatus(response.status)) {
+        if (redirectHopCount > 0) {
+          recordRedirectChainAudit(runtime, {
+            rpcMethod,
+            lane,
+            originUrl,
+            finalUrl: currentUrl,
+            redirectHopCount,
+            redirectChain: [...redirectChain],
+            outcome: 'success',
+          }, Date.now() - startedAt);
+        }
+        return {
+          response,
+          finalUrl: currentUrl,
+          redirectHopCount,
+          redirectChain: [...redirectChain],
+        };
+      }
+
+      const location = response.headers.get('location');
+      if (!location) {
+        throw new JSONRPCErrorException(
+          'Fetch failed: redirect response missing Location header',
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+      if (redirectHopCount >= maxRedirectHops) {
+        throw new JSONRPCErrorException(
+          `Fetch failed: redirect chain exceeded ${maxRedirectHops} hops`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      let redirectUrl: string;
+      try {
+        redirectUrl = new URL(location, currentUrl).href;
+      } catch {
+        throw new JSONRPCErrorException(
+          `Fetch failed: invalid redirect location ${location}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      if (visited.has(redirectUrl)) {
+        throw new JSONRPCErrorException(
+          `Fetch failed: redirect loop detected at ${redirectUrl}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      visited.add(redirectUrl);
+      redirectChain.push(redirectUrl);
+      redirectHopCount += 1;
+      currentUrl = redirectUrl;
+    }
+  } catch (err) {
+    if (redirectHopCount > 0) {
+      recordRedirectChainAudit(runtime, {
+        rpcMethod,
+        lane,
+        originUrl,
+        finalUrl: currentUrl,
+        redirectHopCount,
+        redirectChain: [...redirectChain],
+        outcome: 'error',
+      }, Date.now() - startedAt, getErrorMessage(err));
+    }
+    throw err;
   }
 }
 
@@ -330,42 +476,16 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         );
       }
 
-      const response = await fetchWithPolicyChecks(
+      const { response, finalUrl } = await fetchWithValidatedRedirectChain(
+        'web.fetch',
         params.url,
         lane,
         urlPolicyConfig,
         tlsCaBundle,
+        {},
+        runtime,
         dnsResolver,
       );
-
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get('location');
-        if (!location) {
-          throw new JSONRPCErrorException('Redirect with no Location header', GatewayErrors.PROVIDER_ERROR);
-        }
-
-        const redirectUrl = new URL(location, params.url).href;
-        const redirectResponse = await fetchWithPolicyChecks(
-          redirectUrl,
-          lane,
-          urlPolicyConfig,
-          tlsCaBundle,
-          dnsResolver,
-        );
-        if (!redirectResponse.ok) {
-          throw new JSONRPCErrorException(
-            `Fetch failed after redirect: ${redirectResponse.status} ${redirectResponse.statusText}`,
-            GatewayErrors.PROVIDER_ERROR,
-          );
-        }
-
-        const rawRedirectContent = await redirectResponse.text();
-        const redirectResult = sanitizeWebContent(rawRedirectContent, redirectUrl);
-        if (redirectResult.injectionPatternsFound > 0) {
-          log.warn(`Sanitized ${redirectResult.injectionPatternsFound} injection patterns from ${redirectUrl}`);
-        }
-        return { content: redirectResult.content, sanitized: redirectResult.sanitized };
-      }
 
       if (!response.ok) {
         throw new JSONRPCErrorException(
@@ -374,9 +494,9 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         );
       }
       const rawContent = await response.text();
-      const result = sanitizeWebContent(rawContent, params.url);
+      const result = sanitizeWebContent(rawContent, finalUrl);
       if (result.injectionPatternsFound > 0) {
-        log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${params.url}`);
+        log.warn(`Sanitized ${result.injectionPatternsFound} injection patterns from ${finalUrl}`);
       }
       return { content: result.content, sanitized: result.sanitized };
     },
@@ -391,6 +511,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const maxBytes = normalizeBinaryMaxBytes(params.maxBytes);
       const dnsResolver = resolveDnsResolver(runtime);
+      const requestHeaders = normalizeRequestHeaders(params.headers);
 
       let tlsCaBundle: string | undefined;
       try {
@@ -402,29 +523,16 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         );
       }
 
-      let fetchUrl = params.url;
-      let response = await fetchWithPolicyChecks(
-        fetchUrl,
+      const { response } = await fetchWithValidatedRedirectChain(
+        'web.fetch_binary',
+        params.url,
         lane,
         urlPolicyConfig,
         tlsCaBundle,
+        requestHeaders,
+        runtime,
         dnsResolver,
       );
-
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get('location');
-        if (!location) {
-          throw new JSONRPCErrorException('Redirect with no Location header', GatewayErrors.PROVIDER_ERROR);
-        }
-        fetchUrl = new URL(location, params.url).href;
-        response = await fetchWithPolicyChecks(
-          fetchUrl,
-          lane,
-          urlPolicyConfig,
-          tlsCaBundle,
-          dnsResolver,
-        );
-      }
 
       if (!response.ok) {
         throw new JSONRPCErrorException(

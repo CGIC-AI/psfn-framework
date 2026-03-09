@@ -74,13 +74,13 @@ export async function emitProcessorOutput<TOut extends VoiceFrame>(
   if (!output) return;
 
   if (Array.isArray(output)) {
-    for (const frame of output) {
-      await context.emit(frame);
+    for (const frame of output as readonly TOut[]) {
+      await context.emit(frame as TOut);
     }
     return;
   }
 
-  await context.emit(output);
+  await context.emit(output as TOut);
 }
 
 export async function processFrameThroughProcessor<

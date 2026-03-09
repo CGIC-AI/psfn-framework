@@ -8,6 +8,7 @@ import type { EventBus } from '../../event-bus.js';
 import type { CapabilityTier } from '../../types.js';
 import type { ConfirmationQueue } from '../../capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../../modules/types.js';
+import type { NestedThinkRunner } from '../types.js';
 
 export interface GitStatusView {
   branch: string;
@@ -86,6 +87,7 @@ export interface SandboxDeps {
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;
   getCapabilityTier?: () => CapabilityTier;
+  runNestedThink?: NestedThinkRunner;
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   requestMetadata?: Partial<LLMRequestMetadata>;

@@ -5,7 +5,12 @@ import type {
   LLMChunkNotification,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
-import type { CorrelationMetadata, CompletionPurpose, ObservabilityCallType } from '../../types.js';
+import type {
+  CorrelationMetadata,
+  CompletionPurpose,
+  LLMModelHint,
+  ObservabilityCallType,
+} from '../../types.js';
 import { registerAuditedDescriptors } from './register.js';
 import {
   inferCallType as inferCorrelationCallType,
@@ -16,23 +21,28 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
+      const shardRouting = resolveShardChannelRouting(params.channelId);
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
+      const callType = params.callType ?? (shardRouting ? 'tool' : 'chat');
+      const purpose = normalizePurpose(params.purpose) ?? (shardRouting ? 'shard.execution' : 'chat');
+      const modelHint = extractModelHintFromParams(params);
       const correlation = buildCorrelation({
         turnId: params.turnId,
         requestId,
         channelId: params.channelId,
-        callType: params.callType ?? 'chat',
+        callType,
         originType: params.originType,
         originStage: params.originStage,
         toolName: params.toolName,
         toolCallId: params.toolCallId,
-        purpose: params.purpose ?? 'chat',
+        purpose,
       });
       const response = await runtime.llmProvider.stream(
         {
           systemPrompt: params.systemPrompt,
           messages: params.messages,
           ...(params.tools?.length ? { tools: params.tools } : {}),
+          ...(modelHint ? { modelHint } : {}),
           correlation,
         },
         params.stream ? {
@@ -53,29 +63,35 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       };
     },
     summary: (p: LLMChatParams) => ({
+      ...toShardRoutingSummary(resolveShardChannelRouting(p.channelId)),
       model: p.model,
       stream: p.stream,
       ...toSummaryCorrelation(buildCorrelation({
         turnId: p.turnId,
         requestId: p.requestId,
         channelId: p.channelId,
-        callType: p.callType ?? 'chat',
+        callType: p.callType ?? (resolveShardChannelRouting(p.channelId) ? 'tool' : 'chat'),
         originType: p.originType,
         originStage: p.originStage,
         toolName: p.toolName,
         toolCallId: p.toolCallId,
-        purpose: p.purpose ?? 'chat',
+        purpose: normalizePurpose(p.purpose) ?? (resolveShardChannelRouting(p.channelId) ? 'shard.execution' : 'chat'),
       })),
     }),
   },
   {
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
+      const shardRouting = resolveShardChannelRouting(params.channelId);
+      const inferredCallType = inferCallType(params.purpose, params.channelId);
+      const modelHint = extractModelHintFromParams(params);
       const correlation = buildCorrelation({
         turnId: params.turnId,
         requestId: params.requestId ?? params.turnId,
         channelId: params.channelId,
-        callType: params.callType ?? inferCallType(params.purpose, params.channelId),
+        callType: params.callType ?? (shardRouting && inferredCallType === 'chat'
+          ? 'tool'
+          : inferredCallType),
         originType: params.originType,
         originStage: params.originStage,
         toolName: params.toolName,
@@ -86,6 +102,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         {
           systemPrompt: params.systemPrompt,
           messages: params.messages,
+          ...(modelHint ? { modelHint } : {}),
           correlation,
         },
         params.purpose,
@@ -100,12 +117,18 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       };
     },
     summary: (p: LLMCompleteParams) => ({
+      ...toShardRoutingSummary(resolveShardChannelRouting(p.channelId)),
       purpose: p.purpose,
       ...toSummaryCorrelation(buildCorrelation({
         turnId: p.turnId,
         requestId: p.requestId ?? p.turnId,
         channelId: p.channelId,
-        callType: p.callType ?? inferCallType(p.purpose, p.channelId),
+        callType: p.callType ?? (() => {
+          const shardRouting = resolveShardChannelRouting(p.channelId);
+          const inferred = inferCallType(p.purpose, p.channelId);
+          if (shardRouting && inferred === 'chat') return 'tool';
+          return inferred;
+        })(),
         originType: p.originType,
         originStage: p.originStage,
         toolName: p.toolName,
@@ -177,4 +200,115 @@ function toSummaryCorrelation(
     ...(correlation.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
     purpose: correlation.purpose,
   };
+}
+
+function resolveShardChannelRouting(
+  channelId: string | undefined,
+): { shardId: string } | null {
+  const normalized = channelId?.trim();
+  if (!normalized || !normalized.startsWith('shard:')) {
+    return null;
+  }
+
+  const shardId = normalized.slice('shard:'.length).trim();
+  if (!shardId) {
+    throw new Error('Shard channel routing requires a non-empty shard identifier.');
+  }
+  return { shardId };
+}
+
+function toShardRoutingSummary(
+  shardRouting: { shardId: string } | null,
+): Record<string, string> {
+  if (!shardRouting) {
+    return {};
+  }
+  return {
+    routingTarget: 'shard',
+    shardId: shardRouting.shardId,
+  };
+}
+
+function normalizePurpose(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function extractModelHintFromParams(
+  params: LLMChatParams | LLMCompleteParams,
+): LLMModelHint | undefined {
+  const model = normalizePurpose(params.model);
+  const provider = normalizePurpose(params.provider)?.toLowerCase();
+  const maxTokens = toPositiveInteger(params.maxTokens);
+  const contextWindow = toPositiveInteger(params.contextWindow);
+  const thinkingEnabled = typeof params.thinkingEnabled === 'boolean'
+    ? params.thinkingEnabled
+    : undefined;
+  const thinkingEffort = toThinkingEffort(params.thinkingEffort);
+  const temperature = toFiniteNumber(params.temperature);
+  const topP = toUnitInterval(params.topP);
+  const topK = toPositiveInteger(params.topK);
+  const frequencyPenalty = toFiniteNumber(params.frequencyPenalty);
+  const repetitionPenalty = toFiniteNumber(params.repetitionPenalty);
+  if (
+    !model
+    && !provider
+    && maxTokens === undefined
+    && contextWindow === undefined
+    && thinkingEnabled === undefined
+    && thinkingEffort === undefined
+    && temperature === undefined
+    && topP === undefined
+    && topK === undefined
+    && frequencyPenalty === undefined
+    && repetitionPenalty === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+    ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+    ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
+    ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
+  };
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric <= 0) return undefined;
+  return Math.floor(numeric);
+}
+
+function toUnitInterval(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
+  return numeric;
+}
+
+function toThinkingEffort(value: unknown): LLMModelHint['thinkingEffort'] | undefined {
+  switch (value) {
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+      return value;
+    default:
+      return undefined;
+  }
 }

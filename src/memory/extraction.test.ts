@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore } from '../session/store.js';
 import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
+import { createTurnId, isTurnId } from '../turns/id.js';
 
 const tempDirs: string[] = [];
 
@@ -250,6 +251,7 @@ describe('extraction acceptance gates', () => {
 
 describe('MemoryExtractor telemetry payloads', () => {
   it('includes trigger reason and extraction stats in emitted events', async () => {
+    const turnId = createTurnId();
     const llmClient = {
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
     } as any;
@@ -257,7 +259,22 @@ describe('MemoryExtractor telemetry payloads', () => {
     const sessionManager = {
       getMessageCount: vi.fn().mockReturnValue(5),
       getRecentMessages: vi.fn().mockReturnValue([
-        { role: 'user', content: 'User likes coffee', authorName: 'user' },
+        {
+          id: 17,
+          channelId: 'api:telemetry-test',
+          role: 'user',
+          content: 'User likes coffee',
+          authorName: 'user',
+          timestamp: 1_000,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId,
+              requestId: 'req-telemetry-test',
+              role: 'user',
+            },
+          }),
+        },
       ]),
     } as any;
 
@@ -298,11 +315,82 @@ describe('MemoryExtractor telemetry payloads', () => {
 
     expect(startCall).toBeTruthy();
     expect(startCall?.[1]?.triggerReason).toBe('interval');
+    expect(startCall?.[1]?.turnId).toBe(turnId);
 
     expect(endCall).toBeTruthy();
+    expect(endCall?.[1]?.turnId).toBe(turnId);
     expect(endCall?.[1]?.count).toBe(0);
     expect(endCall?.[1]?.parsedCount).toBe(0);
     expect(endCall?.[1]?.acceptedCount).toBe(0);
+    expect(endCall?.[1]).toMatchObject({
+      compositionalMode: 'legacy',
+      chunkCount: 1,
+      mergedFactCount: 0,
+      crossChunkDeduplicatedCount: 0,
+      boundaryFactCount: 0,
+    });
+    expect(llmClient.complete).toHaveBeenCalled();
+    expect(llmClient.complete.mock.calls[0][0].correlation).toMatchObject({
+      turnId,
+      requestId: 'req-telemetry-test',
+    });
+  });
+
+  it('fails closed when session turn metadata is malformed', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(5),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 44,
+          channelId: 'api:malformed-turn',
+          role: 'user',
+          content: 'Broken metadata should block provenance',
+          authorName: 'user',
+          timestamp: 100,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId: 'not-a-turn-id',
+              role: 'user',
+            },
+          }),
+        },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5, telemetryEnabled: true },
+    );
+
+    await expect(extractor.maybeExtract('api:malformed-turn')).rejects.toThrow('Extraction orchestration failed');
+
+    expect(llmClient.complete).not.toHaveBeenCalled();
+    const emittedEventNames = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls.map(([name]) => name);
+    expect(emittedEventNames).not.toContain('memory.extraction.start');
+    expect(emittedEventNames).not.toContain('memory.extraction.end');
   });
 
   it('uses framed message token counting for context-threshold triggers', async () => {
@@ -548,6 +636,250 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(endCall?.[1]?.acceptedCount).toBe(2);
     expect(endCall?.[1]?.writeCount).toBe(2);
     expect(endCall?.[1]?.rejectionBreakdown?.write_cap).toBe(1);
+    expect(endCall?.[1]).toMatchObject({
+      compositionalMode: 'legacy',
+      chunkCount: 1,
+      mergedFactCount: 3,
+      crossChunkDeduplicatedCount: 0,
+      boundaryFactCount: 0,
+    });
+  });
+});
+
+function makeCompositionalExtractionRuntimeConfig(overrides: Record<string, unknown> = {}) {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test-provider',
+    extractionModel: 'test-model',
+    extractionProvider: 'test-provider',
+    primaryMaxTokens: 4096,
+    extractionMaxTokens: 4096,
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir: '',
+    databasePath: '',
+    sessionMessageLimit: 30,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    maintenanceIntervalMs: 60_000,
+    defaultContextWindow: 16_000,
+    memoryBudgetPct: 20,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    memoryExtractionMinImportance: 0.45,
+    memoryExtractionMinConfidence: 0.6,
+    memoryExtractionMinNovelty: 0.35,
+    memoryExtractionMaxWrites: 2,
+    memoryExtractionTelemetryEnabled: true,
+    capabilityTier: 'autonomous',
+    compositionalPolicy: {
+      enabled: true,
+      allowedTiers: ['autonomous'],
+      allowedChannelTypes: ['api'],
+      allowedPurposes: ['extraction'],
+    },
+    modelRoster: {
+      chat: {
+        model: 'test-model',
+        provider: 'test-provider',
+        maxTokens: 4096,
+        contextWindow: 16_000,
+      },
+    },
+    ...overrides,
+  } as any;
+}
+
+describe('MemoryExtractor compositional extraction', () => {
+  it('uses chunk extraction with merge/dedup and a global write cap when policy allows extraction', async () => {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({
+          content: `<response>
+<fact>
+<text>User plans a Kyoto trip in April</text>
+<type>episodic</type>
+<importance>0.95</importance>
+<emotional_valence>0.2</emotional_valence>
+<confidence>0.96</confidence>
+<tags>travel</tags>
+</fact>
+</response>`,
+        })
+        .mockResolvedValueOnce({
+          content: `<response>
+<fact>
+<text>User plans a Kyoto trip in April</text>
+<type>episodic</type>
+<importance>0.7</importance>
+<emotional_valence>0.1</emotional_valence>
+<confidence>0.8</confidence>
+<tags>duplicate</tags>
+</fact>
+<fact>
+<text>User prefers aisle seats on flights</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<emotional_valence>0</emotional_valence>
+<confidence>0.9</confidence>
+<tags>travel</tags>
+</fact>
+</response>`,
+        })
+        .mockResolvedValueOnce({
+          content: `<response>
+<fact>
+<text>User travels with carry-on luggage only</text>
+<type>semantic</type>
+<importance>0.6</importance>
+<emotional_valence>0</emotional_valence>
+<confidence>0.82</confidence>
+<tags>travel</tags>
+</fact>
+</response>`,
+        }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([]),
+      getMessageCount: vi.fn().mockReturnValue(0),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      makeCompositionalExtractionRuntimeConfig(),
+    );
+
+    const processFact = vi.fn(async (fact: { text: string }) => ({
+      action: 'created',
+      memory: { id: `memory:${fact.text}` },
+    }));
+    (extractor as any).processFact = processFact;
+
+    const compactedEntries = Array.from({ length: 25 }, (_, index) => ({
+      id: index + 1,
+      channelId: 'api:compositional-chunk',
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      authorName: index % 2 === 0 ? 'user' : 'assistant',
+      content: `Message ${index + 1}`,
+      timestamp: (index + 1) * 1_000,
+    }));
+
+    await extractor.queueCompactionExtraction('api:compositional-chunk', compactedEntries);
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(3);
+    expect(llmClient.complete.mock.calls[0][0].systemPrompt).toContain('Message 1');
+    expect(llmClient.complete.mock.calls[0][0].systemPrompt).not.toContain('Message 21');
+    expect(llmClient.complete.mock.calls[2][0].systemPrompt).toContain('Message 21');
+    expect(llmClient.complete.mock.calls[2][0].systemPrompt).toContain('Message 25');
+
+    expect(processFact).toHaveBeenCalledTimes(2);
+    const writtenTexts = processFact.mock.calls.map((call) => call[0].text);
+    expect(writtenTexts).toContain('User plans a Kyoto trip in April');
+    expect(writtenTexts).toContain('User prefers aisle seats on flights');
+    expect(writtenTexts).not.toContain('User travels with carry-on luggage only');
+
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const endCall = calls.find(([name]) => name === 'memory.extraction.end');
+    expect(endCall).toBeTruthy();
+    expect(endCall?.[1]?.triggerReason).toBe('pre_compaction');
+    expect(endCall?.[1]?.parsedCount).toBe(3);
+    expect(endCall?.[1]?.acceptedCount).toBe(2);
+    expect(endCall?.[1]?.writeCount).toBe(2);
+    expect(endCall?.[1]?.rejectionBreakdown?.write_cap).toBe(1);
+    expect(endCall?.[1]).toMatchObject({
+      compositionalMode: 'chunk_compose',
+      chunkCount: 3,
+      mergedFactCount: 3,
+      crossChunkDeduplicatedCount: 1,
+      boundaryFactCount: 0,
+    });
+  });
+
+  it('fails closed to the legacy one-shot extraction path when policy does not allow extraction', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([]),
+      getMessageCount: vi.fn().mockReturnValue(0),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      makeCompositionalExtractionRuntimeConfig({
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['retrieval'],
+        },
+      }),
+    );
+
+    const compactedEntries = Array.from({ length: 25 }, (_, index) => ({
+      id: index + 1,
+      channelId: 'api:compositional-fail-closed',
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      authorName: index % 2 === 0 ? 'user' : 'assistant',
+      content: `Message ${index + 1}`,
+      timestamp: (index + 1) * 1_000,
+    }));
+
+    await extractor.queueCompactionExtraction('api:compositional-fail-closed', compactedEntries);
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    const prompt = llmClient.complete.mock.calls[0][0].systemPrompt as string;
+    expect(prompt).toContain('Message 1');
+    expect(prompt).toContain('Message 25');
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    const endCall = calls.find(([name]) => name === 'memory.extraction.end');
+    expect(endCall?.[1]).toMatchObject({
+      compositionalMode: 'legacy',
+      chunkCount: 1,
+      mergedFactCount: 0,
+      crossChunkDeduplicatedCount: 0,
+      boundaryFactCount: 0,
+    });
   });
 });
 
@@ -617,6 +949,7 @@ describe('MemoryExtractor refusal boundary extraction', () => {
       }),
       expect.stringContaining('visibility:private'),
       undefined,
+      undefined,
     );
     expect(processFact.mock.calls[0][0].text.toLowerCase()).toContain('paywall');
 
@@ -625,6 +958,7 @@ describe('MemoryExtractor refusal boundary extraction', () => {
     expect(endCall).toBeTruthy();
     expect(endCall?.[1]?.parsedCount).toBe(1);
     expect(endCall?.[1]?.acceptedCount).toBe(1);
+    expect(endCall?.[1]?.boundaryFactCount).toBe(1);
   });
 });
 
@@ -685,6 +1019,12 @@ describe('MemoryExtractor provenance and trust caps', () => {
       emit: vi.fn().mockResolvedValue(undefined),
     } as any;
 
+    const getFormationVAD = vi.fn(() => ({
+      valence: 1,
+      arousal: 1,
+      dominance: 0,
+    }));
+
     const extractor = new MemoryExtractor(
       llmClient,
       sessionManager,
@@ -692,6 +1032,10 @@ describe('MemoryExtractor provenance and trust caps', () => {
       embeddingService,
       eventBus,
       { extractionInterval: 5 },
+      null,
+      null,
+      null,
+      { getFormationVAD },
     );
 
     const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-public-1' } }));
@@ -700,6 +1044,7 @@ describe('MemoryExtractor provenance and trust caps', () => {
     await extractor.extract('discord:public-room');
 
     expect(write).toHaveBeenCalledTimes(1);
+    expect(getFormationVAD).toHaveBeenCalledTimes(1);
     expect(write).toHaveBeenCalledWith(expect.objectContaining({
       importance: 0.5,
       sourceRef: expect.stringContaining('visibility:public'),
@@ -707,6 +1052,8 @@ describe('MemoryExtractor provenance and trust caps', () => {
   });
 
   it('tags shard extractions with shard source and session line range', async () => {
+    const turnId = createTurnId();
+    expect(isTurnId(turnId)).toBe(true);
     const llmClient = {
       complete: vi.fn().mockResolvedValue({
         content: `<response>
@@ -723,8 +1070,38 @@ describe('MemoryExtractor provenance and trust caps', () => {
 
     const sessionManager = {
       getRecentMessages: vi.fn().mockReturnValue([
-        { id: 41, role: 'user', authorName: 'user', content: 'Investigating option A', timestamp: 1_000 },
-        { id: 42, role: 'assistant', authorName: 'assistant', content: 'Option A works', timestamp: 2_000 },
+        {
+          id: 41,
+          channelId: 'shard:shard-abc',
+          role: 'user',
+          authorName: 'user',
+          content: 'Investigating option A',
+          timestamp: 1_000,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId,
+              requestId: 'req-shard',
+              role: 'user',
+            },
+          }),
+        },
+        {
+          id: 42,
+          channelId: 'shard:shard-abc',
+          role: 'assistant',
+          authorName: 'assistant',
+          content: 'Option A works',
+          timestamp: 2_000,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId,
+              requestId: 'req-shard',
+              role: 'assistant',
+            },
+          }),
+        },
       ]),
     } as any;
 
@@ -761,6 +1138,153 @@ describe('MemoryExtractor provenance and trust caps', () => {
     expect(sourceRef).toContain('source:shard:shard-abc');
     expect(sourceRef).toContain('session:shard:shard-abc');
     expect(sourceRef).toContain('lines:41-42');
+    expect(sourceRef).toContain(`turn:${turnId}`);
+  });
+
+  it('propagates formationVAD into extracted memory writes when provider is configured', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User is excited about the launch</text>
+<type>emotional</type>
+<importance>0.8</importance>
+<emotional_valence>0.6</emotional_valence>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+      }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { id: 1, role: 'user', authorName: 'user', content: 'I am excited for launch day', timestamp: 1_000 },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const getFormationVAD = vi.fn(() => ({
+      valence: 0.55,
+      arousal: 0.8,
+      dominance: -0.25,
+    }));
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+      null,
+      null,
+      null,
+      { getFormationVAD },
+    );
+
+    const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-vad-1' } }));
+    (extractor as any).writer = { write };
+
+    await extractor.extract('api:emotion-formation');
+
+    expect(getFormationVAD).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(expect.objectContaining({
+      formationVAD: {
+        valence: 0.55,
+        arousal: 0.8,
+        dominance: -0.25,
+      },
+    }));
+  });
+
+  it('applies emotional intensity multiplier to extracted importance before writing', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User is excited about the launch</text>
+<type>emotional</type>
+<importance>0.8</importance>
+<emotional_valence>0.6</emotional_valence>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+      }),
+    } as any;
+
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { id: 1, role: 'user', authorName: 'user', content: 'I am excited for launch day', timestamp: 1_000 },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const getFormationVAD = vi.fn(() => ({
+      valence: 1,
+      arousal: 1,
+      dominance: 0,
+    }));
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        emotionalIntensityImportanceWeight: 0.1,
+      },
+      null,
+      null,
+      null,
+      { getFormationVAD },
+    );
+
+    const write = vi.fn(async () => ({ action: 'created', memory: { id: 'm-vad-importance-1' } }));
+    (extractor as any).writer = { write };
+
+    await extractor.extract('api:emotion-formation');
+
+    expect(getFormationVAD).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    const writeInput = write.mock.calls[0][0] as {
+      importance: number;
+      formationVAD: { valence: number; arousal: number; dominance: number };
+    };
+    expect(writeInput.importance).toBeCloseTo(0.88);
+    expect(writeInput.formationVAD).toEqual({
+      valence: 1,
+      arousal: 1,
+      dominance: 0,
+    });
   });
 });
 
@@ -1020,6 +1544,7 @@ describe('MemoryExtractor emotional state persistence', () => {
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
       searchByEmbedding: vi.fn().mockReturnValue([]),
       insertMemory: vi.fn(),
+      runInTransaction: vi.fn(async (operation: () => Promise<unknown>) => operation()),
     } as any;
 
     const embeddingService = {

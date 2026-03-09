@@ -1,0 +1,247 @@
+import type Database from 'better-sqlite3';
+import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
+import type { EmotionStateSnapshot } from '../emotion/state.js';
+import {
+  ActiveConcernStore,
+  type ActiveConcernContextProvider,
+} from './concerns.js';
+import type {
+  ActiveConcernSnapshot,
+  IntentionActionDecision,
+} from './appraisal.js';
+import {
+  BehavioralPatternTracker,
+  scoreBehavioralOutcomeFromEmotion,
+  type BehavioralPatternContextProvider,
+} from './patterns.js';
+import {
+  createCreateConcernTool,
+  createListConcernsTool,
+  createResolveConcernTool,
+} from './tools.js';
+
+export interface IntentionRuntimeTarget {
+  activeConcernProvider: ActiveConcernContextProvider | null;
+  behavioralPatternProvider?: BehavioralPatternContextProvider | null;
+  setActiveConcernProvider?: (provider: ActiveConcernContextProvider | null) => void;
+  setBehavioralPatternProvider?: (provider: BehavioralPatternContextProvider | null) => void;
+  registerIntentionPostTurnHook?: (hook: IntentionPostTurnHook) => (() => void) | void;
+  registerTool: ToolRegistrar;
+}
+
+export interface IntentionRuntimeWiring {
+  concernStore: ActiveConcernStore;
+  behavioralPatternTracker: BehavioralPatternTracker;
+}
+
+export interface IntentionAppraisalHooks {
+  getActiveConcerns(input: {
+    channelId: string;
+    canonicalContactKey?: string;
+  }): readonly ActiveConcernSnapshot[];
+  onIntentionConcernDecision(input: {
+    decision: IntentionActionDecision;
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+  }): void;
+}
+
+export interface IntentionBehavioralPatternHooks {
+  onBehavioralPatternOutcome(input: {
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    emotionSnapshot: EmotionStateSnapshot;
+    observedAtMs?: number;
+  }): Promise<void>;
+  onTurnResponseRecorded(input: {
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    responseContent: string;
+    completedAtMs?: number;
+  }): void;
+}
+
+function normalizeOptionalText(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveConcernDecisionText(decision: IntentionActionDecision): string {
+  if (decision.type !== 'concern') {
+    throw new Error(`Expected concern decision, received "${decision.type}"`);
+  }
+  if (!decision.concern) {
+    throw new Error('Concern decision is missing concern payload');
+  }
+
+  const title = normalizeOptionalText(decision.concern.title);
+  const summary = normalizeOptionalText(decision.concern.summary);
+  if (!title && !summary) {
+    throw new Error('Concern decision must include title or summary');
+  }
+  if (title && summary) {
+    return `${title}: ${summary}`;
+  }
+  return title ?? summary ?? '';
+}
+
+function normalizeFutureIsoTimestamp(value: number | undefined): string | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  const normalized = Math.floor(value);
+  if (normalized <= Date.now()) {
+    return undefined;
+  }
+  return new Date(normalized).toISOString();
+}
+
+function toActiveConcernSnapshot(concern: ReturnType<ActiveConcernStore['getActiveConcerns']>[number]): ActiveConcernSnapshot {
+  const dueAtMs = Date.parse(concern.expiresAt);
+  return {
+    id: concern.id,
+    title: concern.text,
+    status: 'open',
+    ...(Number.isFinite(dueAtMs) ? { dueAt: dueAtMs } : {}),
+    priority: concern.priority,
+  };
+}
+
+function normalizeObservedAtIso(value: number | undefined): string | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return new Date(Math.floor(value)).toISOString();
+}
+
+export function createIntentionAppraisalHooks(
+  concernStore: ActiveConcernStore,
+): IntentionAppraisalHooks {
+  return {
+    getActiveConcerns: ({ canonicalContactKey }) => (
+      concernStore
+        .getActiveConcerns(canonicalContactKey)
+        .map(concern => toActiveConcernSnapshot(concern))
+    ),
+    onIntentionConcernDecision: ({
+      decision,
+      canonicalContactKey,
+    }) => {
+      if (decision.type !== 'concern') {
+        return;
+      }
+      const text = resolveConcernDecisionText(decision);
+      const expiresAt = normalizeFutureIsoTimestamp(
+        decision.concern?.dueAt ?? decision.dueAt,
+      );
+      concernStore.create({
+        text,
+        priority: decision.concern?.priority ?? decision.priority,
+        source: 'appraisal',
+        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+        ...(expiresAt ? { expiresAt } : {}),
+      });
+    },
+  };
+}
+
+export function createIntentionBehavioralPatternHooks(
+  patternTracker: BehavioralPatternTracker,
+): IntentionBehavioralPatternHooks {
+  return {
+    onBehavioralPatternOutcome: async ({
+      canonicalContactKey,
+      sourceMessageId,
+      emotionSnapshot,
+      observedAtMs,
+    }) => {
+      const contactId = normalizeOptionalText(canonicalContactKey);
+      if (!contactId) {
+        return;
+      }
+      const sourceId = normalizeOptionalText(sourceMessageId);
+      if (!sourceId) {
+        throw new Error('Behavioral pattern outcome requires sourceMessageId');
+      }
+      const outcomeScore = scoreBehavioralOutcomeFromEmotion(emotionSnapshot);
+      const observedAt = normalizeObservedAtIso(observedAtMs);
+      await patternTracker.tryRecordOutcomeForLatestPending({
+        contactId,
+        outcomeScore,
+        ...(observedAt ? { observedAt } : {}),
+        outcomeSourceMessageId: sourceId,
+      });
+    },
+    onTurnResponseRecorded: ({
+      canonicalContactKey,
+      sourceMessageId,
+      responseContent,
+      completedAtMs,
+    }) => {
+      const contactId = normalizeOptionalText(canonicalContactKey);
+      if (!contactId) {
+        return;
+      }
+      const sourceId = normalizeOptionalText(sourceMessageId);
+      if (!sourceId) {
+        throw new Error('Behavioral pattern turn recording requires sourceMessageId');
+      }
+      const normalizedResponse = normalizeOptionalText(responseContent);
+      if (!normalizedResponse) {
+        return;
+      }
+      const createdAt = normalizeObservedAtIso(completedAtMs);
+
+      patternTracker.recordResponseStrategy({
+        contactId,
+        sourceMessageId: sourceId,
+        responseContent: normalizedResponse,
+        ...(createdAt ? { createdAt } : {}),
+      });
+    },
+  };
+}
+
+export function wireIntentionRuntime(
+  target: IntentionRuntimeTarget,
+  db: Database.Database,
+): IntentionRuntimeWiring {
+  const concernStore = new ActiveConcernStore(db);
+  const behavioralPatternTracker = new BehavioralPatternTracker(db);
+  const behavioralHooks = createIntentionBehavioralPatternHooks(behavioralPatternTracker);
+
+  if (typeof target.setActiveConcernProvider === 'function') {
+    target.setActiveConcernProvider(concernStore);
+  } else {
+    target.activeConcernProvider = concernStore;
+  }
+
+  if (typeof target.setBehavioralPatternProvider === 'function') {
+    target.setBehavioralPatternProvider(behavioralPatternTracker);
+  } else {
+    target.behavioralPatternProvider = behavioralPatternTracker;
+  }
+
+  if (typeof target.registerIntentionPostTurnHook === 'function') {
+    target.registerIntentionPostTurnHook((context) => {
+      behavioralHooks.onTurnResponseRecorded({
+        canonicalContactKey: context.canonicalContactKey,
+        sourceMessageId: context.message.id,
+        responseContent: context.response.content,
+        completedAtMs: context.completedAt,
+      });
+    });
+  }
+
+  target.registerTool(createCreateConcernTool(concernStore));
+  target.registerTool(createListConcernsTool(concernStore));
+  target.registerTool(createResolveConcernTool(concernStore));
+  return {
+    concernStore,
+    behavioralPatternTracker,
+  };
+}

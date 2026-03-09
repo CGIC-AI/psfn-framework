@@ -47,6 +47,7 @@ export function inferCallType(
       return 'memory';
     case 'summary':
       return 'summary';
+    case 'context':
     case 'background':
     case 'import_processing':
     default:

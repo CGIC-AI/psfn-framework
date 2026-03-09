@@ -1,15 +1,18 @@
-import type { CapabilityTier } from '../types.js';
 import type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
+import type { CapabilityTier } from './tier-types.js';
 import type { CapabilityToken } from './tokens.js';
 
 export type RuntimeTier = CapabilityTier;
 export type EligibilityLLMPurpose = 'chat' | 'background' | 'reasoning' | 'import_processing';
+export type EligibilityPluginType = 'channel' | 'stt' | 'tts';
 
 export type EligibilityOperation =
   | { kind: 'tool.execute'; toolName: string }
   | { kind: 'llm.purpose'; purpose: string }
   | { kind: 'scheduler.task'; taskId: string; taskName: string; taskType: 'every' | 'one-shot' }
-  | { kind: 'post_turn.action'; actionKind: string; actionId?: string };
+  | { kind: 'post_turn.action'; actionKind: string; actionId?: string }
+  | { kind: 'plugin.activate'; pluginType: EligibilityPluginType; pluginId: string }
+  | { kind: 'plugin.action'; pluginType: EligibilityPluginType; pluginId: string; action: string };
 
 export type EligibilityReasonCode =
   | 'allowed'
@@ -178,12 +181,18 @@ export function evaluateEligibilityDecision(
 function defaultRequirementsForOperation(
   operation: EligibilityOperation,
 ): EligibilityRequirements | undefined {
-  if (operation.kind !== 'llm.purpose') {
-    return {};
+  switch (operation.kind) {
+    case 'llm.purpose': {
+      const purpose = operation.purpose;
+      if (!isEligibilityLLMPurpose(purpose)) return undefined;
+      return DEFAULT_LLM_PURPOSE_REQUIREMENTS[purpose];
+    }
+    case 'plugin.activate':
+    case 'plugin.action':
+      return undefined;
+    default:
+      return {};
   }
-  const purpose = operation.purpose;
-  if (!isEligibilityLLMPurpose(purpose)) return undefined;
-  return DEFAULT_LLM_PURPOSE_REQUIREMENTS[purpose];
 }
 
 export function isEligibilityLLMPurpose(value: string): value is EligibilityLLMPurpose {
@@ -200,7 +209,11 @@ function describeOperation(operation: EligibilityOperation): string {
       return `scheduler task "${operation.taskId}"`;
     case 'post_turn.action':
       return `post-turn action "${operation.actionKind}"`;
+    case 'plugin.activate':
+      return `${operation.pluginType} plugin "${operation.pluginId}" activation`;
+    case 'plugin.action':
+      return `${operation.pluginType} plugin "${operation.pluginId}" action "${operation.action}"`;
     default:
-      return operation.kind;
+      return '';
   }
 }

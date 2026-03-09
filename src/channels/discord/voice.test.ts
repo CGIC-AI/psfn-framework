@@ -20,6 +20,83 @@ const connectorMocks = vi.hoisted(() => {
     ttsConnector,
     createStreamingSttConnector: vi.fn(() => sttConnector),
     createStreamingTtsConnector: vi.fn(() => ttsConnector),
+    isStreamingSttProvider: vi.fn((provider: string) => provider === 'deepgram'),
+    getStreamingSttProviderMetadata: vi.fn((provider: string) => (
+      provider === 'deepgram'
+        ? {
+          isConfigured: (config: Record<string, unknown>) => Boolean(config.deepgramApiKey),
+          eligibility: { requiredTokens: ['external.web'] },
+        }
+        : null
+    )),
+    isStreamingSttProviderConfigured: vi.fn((provider: string, config: Record<string, unknown>) => (
+      provider === 'deepgram' && Boolean(config.deepgramApiKey)
+    )),
+    resolveDefaultStreamingSttProvider: vi.fn((config: Record<string, unknown>) => (
+      config.deepgramApiKey ? 'deepgram' : null
+    )),
+    resolveStreamingSttRuntimeConfig: vi.fn((_provider: string, config: Record<string, unknown>) => ({
+      apiKey: config.deepgramApiKey,
+      ...(config.deepgramModel ? { model: config.deepgramModel } : {}),
+    })),
+    isStreamingTtsProvider: vi.fn((provider: string) => (
+      provider === 'elevenlabs' || provider === 'echo'
+    )),
+    getStreamingTtsProviderMetadata: vi.fn((provider: string) => {
+      if (provider === 'echo') {
+        return {
+          isConfigured: (config: Record<string, unknown>) => Boolean(config.echoTtsUrl && config.echoTtsVoice),
+          eligibility: { requiredTokens: ['external.web'] },
+        };
+      }
+      if (provider === 'elevenlabs') {
+        return {
+          isConfigured: (
+            config: Record<string, unknown>,
+            options?: { requireElevenLabsVoiceId?: boolean },
+          ) => (
+            options?.requireElevenLabsVoiceId === true
+              ? Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId)
+              : Boolean(config.elevenLabsApiKey)
+          ),
+          eligibility: { requiredTokens: ['external.web'] },
+        };
+      }
+      return null;
+    }),
+    isStreamingTtsProviderConfigured: vi.fn((
+      provider: string,
+      config: Record<string, unknown>,
+      options?: { requireElevenLabsVoiceId?: boolean },
+    ) => {
+      if (provider === 'echo') {
+        return Boolean(config.echoTtsUrl && config.echoTtsVoice);
+      }
+      if (provider === 'elevenlabs') {
+        return options?.requireElevenLabsVoiceId === true
+          ? Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId)
+          : Boolean(config.elevenLabsApiKey);
+      }
+      return false;
+    }),
+    listStreamingTtsProviders: vi.fn(() => ['elevenlabs', 'echo']),
+    resolveDefaultStreamingTtsProvider: vi.fn((config: Record<string, unknown>) => (
+      config.elevenLabsApiKey ? 'elevenlabs' : null
+    )),
+    resolveStreamingTtsRuntimeConfig: vi.fn((provider: string, config: Record<string, unknown>) => (
+      provider === 'echo'
+        ? {
+          url: config.echoTtsUrl,
+          voice: config.echoTtsVoice,
+          ...(config.echoTtsPreset ? { preset: config.echoTtsPreset } : {}),
+          ...(config.echoTtsModel ? { model: config.echoTtsModel } : {}),
+        }
+        : {
+          apiKey: config.elevenLabsApiKey,
+          voiceId: config.elevenLabsVoiceId,
+          ...(config.elevenLabsModelId ? { modelId: config.elevenLabsModelId } : {}),
+        }
+    )),
   };
 });
 
@@ -132,12 +209,23 @@ vi.mock('prism-media', () => {
 vi.mock('../../voice/connectors/stt/index.js', () => {
   return {
     createStreamingSttConnector: connectorMocks.createStreamingSttConnector,
+    getStreamingSttProviderMetadata: connectorMocks.getStreamingSttProviderMetadata,
+    isStreamingSttProvider: connectorMocks.isStreamingSttProvider,
+    isStreamingSttProviderConfigured: connectorMocks.isStreamingSttProviderConfigured,
+    resolveDefaultStreamingSttProvider: connectorMocks.resolveDefaultStreamingSttProvider,
+    resolveStreamingSttRuntimeConfig: connectorMocks.resolveStreamingSttRuntimeConfig,
   };
 });
 
 vi.mock('../../voice/connectors/tts/index.js', () => {
   return {
     createStreamingTtsConnector: connectorMocks.createStreamingTtsConnector,
+    getStreamingTtsProviderMetadata: connectorMocks.getStreamingTtsProviderMetadata,
+    isStreamingTtsProvider: connectorMocks.isStreamingTtsProvider,
+    isStreamingTtsProviderConfigured: connectorMocks.isStreamingTtsProviderConfigured,
+    listStreamingTtsProviders: connectorMocks.listStreamingTtsProviders,
+    resolveDefaultStreamingTtsProvider: connectorMocks.resolveDefaultStreamingTtsProvider,
+    resolveStreamingTtsRuntimeConfig: connectorMocks.resolveStreamingTtsRuntimeConfig,
   };
 });
 
@@ -194,6 +282,8 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
     voiceEnabled: true,
     voiceTargetGuildId: 'guild-1',
     voiceTargetUserId: 'user-1',
+    sttProvider: 'deepgram',
+    ttsProvider: 'elevenlabs',
     deepgramApiKey: 'deepgram-key',
     elevenLabsApiKey: 'elevenlabs-key',
     elevenLabsVoiceId: 'voice-id',
@@ -537,7 +627,7 @@ describe('DiscordVoiceRuntime', () => {
     }));
   });
 
-  it('builds both echo and elevenlabs TTS connectors when echo is configured', () => {
+  it('builds only the explicitly selected echo TTS connector when echo is configured', () => {
     const echoConnector = createMockTtsConnector('echo');
     const elevenLabsConnector = createMockTtsConnector('elevenlabs');
     connectorMocks.createStreamingTtsConnector.mockImplementation((provider: string) => {
@@ -560,12 +650,10 @@ describe('DiscordVoiceRuntime', () => {
       getHandler: () => null,
     });
 
-    // Both echo (preferred) and elevenlabs (fallback) connectors should be created
-    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledTimes(2);
+    expect(connectorMocks.createStreamingTtsConnector).toHaveBeenCalledTimes(1);
     const calls = connectorMocks.createStreamingTtsConnector.mock.calls;
     const providers = calls.map((call: unknown[]) => call[0]);
-    expect(providers[0]).toBe('echo');
-    expect(providers[1]).toBe('elevenlabs');
+    expect(providers).toEqual(['echo']);
   });
 
   it('uses echo TTS when echo is configured as provider', async () => {
@@ -597,7 +685,7 @@ describe('DiscordVoiceRuntime', () => {
     await (runtime as any).speakText('hello world');
 
     // Echo should be the preferred provider
-    expect(reliabilityMocks.buildFallbackOrder).toHaveBeenCalledWith('echo', ['echo', 'elevenlabs']);
+    expect(reliabilityMocks.buildFallbackOrder).toHaveBeenCalledWith('echo', ['echo']);
   });
 
   it('emits partial transcript events and uses streaming TTS playback', async () => {
@@ -1245,21 +1333,29 @@ describe('DiscordVoiceRuntime', () => {
       expect(providers[0]).toBe('echo');
     });
 
-    it('defaults to elevenlabs when no provider is configured', () => {
+    it('disables runtime when no TTS provider is explicitly configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       const runtime = new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
-        config: makeConfig(),
+        config: makeConfig({
+          ttsProvider: undefined,
+        }),
         eventBus: new EventBus(),
         getHandler: () => null,
       });
 
-      expect((runtime as any).preferredTtsProviderId).toBe('elevenlabs');
+      expect((runtime as any).preferredTtsProviderId).toBe('disabled');
+      expect((runtime as any).enabled).toBe(false);
     });
 
     it('skips elevenlabs connector when no voice ID is configured', () => {
-      connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
+      connectorMocks.createStreamingTtsConnector.mockImplementation((provider: string, runtimeConfig: Record<string, unknown>) => {
+        if (provider === 'elevenlabs' && !runtimeConfig.voiceId) {
+          throw new Error('missing elevenlabs voice id');
+        }
+        return connectorMocks.ttsConnector;
+      });
 
       const runtime = new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
@@ -1309,7 +1405,7 @@ describe('DiscordVoiceRuntime', () => {
       expect((runtime as any).enabled).toBe(false);
     });
 
-    it('builds both echo and elevenlabs connectors when both are configured', () => {
+    it('builds only the explicitly selected echo connector when both providers are configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
       new DiscordVoiceRuntime({
@@ -1327,8 +1423,7 @@ describe('DiscordVoiceRuntime', () => {
 
       const calls = connectorMocks.createStreamingTtsConnector.mock.calls;
       const providers = calls.map((call) => call[0]);
-      expect(providers).toContain('echo');
-      expect(providers).toContain('elevenlabs');
+      expect(providers).toEqual(['echo']);
     });
   });
 
@@ -1349,7 +1444,7 @@ describe('DiscordVoiceRuntime', () => {
       expect(result.configComplete).toBe(false);
       expect(result.missingConfig).toContain('VOICE_TARGET_GUILD_ID');
       expect(result.missingConfig).toContain('VOICE_TARGET_USER_ID');
-      expect(result.missingConfig).toContain('DEEPGRAM_API_KEY');
+      expect(result.missingConfig).toContain('VOICE_STT_PROVIDER_CONFIG');
     });
 
     it('voicePreflight reports config complete when all required vars are set', () => {

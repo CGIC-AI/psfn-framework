@@ -1,10 +1,16 @@
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
+import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import {
   PROMPT_LAYER_ROLES,
+  type CompanionValuesLayerSnapshot,
   type LayerType,
   type PromptLayerRole,
 } from '../../../identity/prompt-types.js';
+import {
+  PromptComposer,
+  IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
+} from '../../../identity/prompt-composer.js';
 import type {
   PromptLayerMetadataUpdate,
   PromptLayerStore,
@@ -12,16 +18,37 @@ import type {
 } from '../../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../../identity/prompt-registry.js';
 import {
+  CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
+  isCanonicalCharacterFoundationLayer,
+} from '../../../identity/canonical-foundation.js';
+import {
   containsStructuredPromptSections,
   getMalformedStructuredPromptErrors,
   parseStructuredPromptForm,
 } from '../prompt-structured-content.js';
 import type {
+  AdminConstitutionCompanionLayer,
+  AdminConstitutionImmutableBlock,
+  AdminConstitutionMutableLayer,
+  AdminConstitutionSnapshotData,
   AdminPromptDetailData,
   AdminPromptListData,
   AdminPromptsService,
+  ConstitutionUpdateResult,
   PromptUpdateResult,
 } from './types.js';
+
+const CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX = 'constitution:immutable:';
+const CONSTITUTION_COMPANION_LAYER_ID = 'constitution:companion-derived-values';
+
+interface ConstitutionMutableLayerPatchInput {
+  id: string;
+  content?: string;
+  enabled?: boolean;
+  identifier?: string | null;
+  role?: string | null;
+  promptOrder?: number | null;
+}
 
 export class AdminPromptsDataService implements AdminPromptsService {
   constructor(private readonly deps: {
@@ -29,13 +56,19 @@ export class AdminPromptsDataService implements AdminPromptsService {
     promptRegistry?: PromptRegistryStore | null;
     sessionStore?: SessionStore | null;
     sessionManager?: SessionManager | null;
+    resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
       actionType: 'identity_edit',
       decision: 'allowed' | 'denied',
       narrative: string,
       details?: Array<string | null | undefined>,
     ) => void;
+    companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
   }) {}
+
+  private resolveCompanionName(): string {
+    return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
+  }
 
   private parseBody(body: string): URLSearchParams {
     const trimmed = body.trim();
@@ -145,6 +178,282 @@ export class AdminPromptsDataService implements AdminPromptsService {
     };
   }
 
+  private buildImmutableConstitutionBlocks(): AdminConstitutionImmutableBlock[] {
+    return IMMUTABLE_HUMAN_SAFETY_AMENDMENTS.map((amendment, index) => ({
+      id: `${CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX}${String(index + 1)}`,
+      title: `Immutable Amendment ${String(index + 1)}`,
+      content: amendment,
+      editable: false as const,
+    }));
+  }
+
+  private resolveCompanionLayerSnapshot(): AdminConstitutionCompanionLayer | null {
+    const provider = this.deps.companionValuesLayerProvider;
+    if (!provider) return null;
+
+    try {
+      const snapshot = provider();
+      if (!snapshot) return null;
+      const content = snapshot.content.trim();
+      if (!content) return null;
+      return {
+        id: CONSTITUTION_COMPANION_LAYER_ID,
+        title: 'Companion-Derived Values Layer',
+        content,
+        provenanceRefs: snapshot.provenanceRefs
+          .map(entry => entry.trim())
+          .filter(entry => entry.length > 0),
+        historyVersions: snapshot.historyVersions
+          .filter(entry => Number.isFinite(entry))
+          .map(entry => Math.floor(entry)),
+        entryIds: snapshot.entryIds
+          .map(entry => entry.trim())
+          .filter(entry => entry.length > 0),
+        editable: false as const,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  getConstitutionSnapshot(): AdminConstitutionSnapshotData | null {
+    const promptStore = this.deps.promptStore;
+    if (!promptStore) return null;
+
+    const immutableBlocks = this.buildImmutableConstitutionBlocks();
+    const companionLayer = this.resolveCompanionLayerSnapshot();
+    const mutableLayers: AdminConstitutionMutableLayer[] = promptStore
+      .getAll()
+      .sort((left, right) => left.priority - right.priority)
+      .map(layer => {
+        const editable = !isCanonicalCharacterFoundationLayer(layer);
+        return {
+          ...layer,
+          editable,
+          ...(editable ? {} : { readOnlyReason: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE }),
+        };
+      });
+
+    const composer = new PromptComposer(
+      promptStore,
+      undefined,
+      undefined,
+      {
+        enableConstitution: true,
+        companionValuesLayerProvider: this.deps.companionValuesLayerProvider,
+        persistLastKnownGood: false,
+      },
+    );
+    const composed = composer.composeSplit();
+    const staticPrefix = composed.staticPrefix;
+    const text = composed.text;
+
+    return {
+      immutableBlocks,
+      companionLayer,
+      mutableLayers,
+      preview: {
+        text,
+        hash: composed.hash,
+        staticPrefix,
+        dynamicSuffix: composed.dynamicSuffix,
+      },
+    };
+  }
+
+  private parseConstitutionMutableLayerPatch(
+    value: unknown,
+  ): ConstitutionMutableLayerPatchInput | { error: string } {
+    if (!value || typeof value !== 'object') {
+      return { error: 'mutableLayers entries must be objects' };
+    }
+    const patch = value as Record<string, unknown>;
+    if (typeof patch.id !== 'string' || patch.id.trim().length === 0) {
+      return { error: 'mutableLayers entries require a non-empty id' };
+    }
+
+    const layerPatch: ConstitutionMutableLayerPatchInput = {
+      id: patch.id.trim(),
+    };
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'content')) {
+      if (typeof patch.content !== 'string') {
+        return { error: `mutable layer "${layerPatch.id}" content must be a string` };
+      }
+      layerPatch.content = patch.content;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'enabled')) {
+      if (typeof patch.enabled !== 'boolean') {
+        return { error: `mutable layer "${layerPatch.id}" enabled must be a boolean` };
+      }
+      layerPatch.enabled = patch.enabled;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'identifier')) {
+      if (!(typeof patch.identifier === 'string' || patch.identifier === null)) {
+        return { error: `mutable layer "${layerPatch.id}" identifier must be a string or null` };
+      }
+      layerPatch.identifier = patch.identifier as string | null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'role')) {
+      if (!(typeof patch.role === 'string' || patch.role === null)) {
+        return { error: `mutable layer "${layerPatch.id}" role must be a string or null` };
+      }
+      layerPatch.role = patch.role as string | null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'promptOrder')) {
+      if (!(typeof patch.promptOrder === 'number' || patch.promptOrder === null)) {
+        return { error: `mutable layer "${layerPatch.id}" promptOrder must be a number or null` };
+      }
+      if (typeof patch.promptOrder === 'number'
+        && (!Number.isInteger(patch.promptOrder) || patch.promptOrder < 0)) {
+        return { error: `mutable layer "${layerPatch.id}" promptOrder must be an integer >= 0` };
+      }
+      layerPatch.promptOrder = patch.promptOrder as number | null;
+    }
+
+    return layerPatch;
+  }
+
+  saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult {
+    const promptStore = this.deps.promptStore;
+    if (!promptStore) {
+      return { ok: false, message: 'Prompt store not configured' };
+    }
+
+    const params = this.parseBody(body);
+    if (params.has('immutableBlocks') || params.has('companionLayer')) {
+      return { ok: false, message: 'Immutable constitution layers are read-only and cannot be edited' };
+    }
+
+    const rawMutableLayers = params.get('mutableLayers');
+    if (!rawMutableLayers) {
+      return { ok: false, message: 'mutableLayers is required' };
+    }
+
+    let parsedLayers: unknown;
+    try {
+      parsedLayers = JSON.parse(rawMutableLayers);
+    } catch {
+      return { ok: false, message: 'mutableLayers must be a JSON array' };
+    }
+
+    if (!Array.isArray(parsedLayers)) {
+      return { ok: false, message: 'mutableLayers must be a JSON array' };
+    }
+
+    const existingLayers = promptStore.getAll();
+    const existingLayerIds = new Set(existingLayers.map(layer => layer.id));
+    if (parsedLayers.length !== existingLayerIds.size) {
+      return { ok: false, message: 'mutableLayers must include every mutable layer exactly once' };
+    }
+
+    const mutableLayerPatches: ConstitutionMutableLayerPatchInput[] = [];
+    const seen = new Set<string>();
+    for (const entry of parsedLayers) {
+      const parsedEntry = this.parseConstitutionMutableLayerPatch(entry);
+      if ('error' in parsedEntry) {
+        return { ok: false, message: parsedEntry.error };
+      }
+
+      if (parsedEntry.id.startsWith(CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX)
+        || parsedEntry.id === CONSTITUTION_COMPANION_LAYER_ID) {
+        return { ok: false, message: 'Immutable constitution layers are read-only and cannot be edited' };
+      }
+
+      if (!existingLayerIds.has(parsedEntry.id)) {
+        return { ok: false, message: `Prompt layer not found: ${parsedEntry.id}` };
+      }
+      if (seen.has(parsedEntry.id)) {
+        return { ok: false, message: `Duplicate mutable layer id: ${parsedEntry.id}` };
+      }
+      seen.add(parsedEntry.id);
+      mutableLayerPatches.push(parsedEntry);
+    }
+
+    try {
+      promptStore.reorderByLayerIds(
+        mutableLayerPatches.map(entry => entry.id),
+        'admin',
+        'Admin constitution layer reorder via Garden API',
+      );
+    } catch (error) {
+      return { ok: false, message: String(error) };
+    }
+
+    for (const patchEntry of mutableLayerPatches) {
+      const layer = promptStore.getById(patchEntry.id);
+      if (!layer) {
+        return { ok: false, message: `Prompt layer not found: ${patchEntry.id}` };
+      }
+
+      const metadataParams = new URLSearchParams();
+      if (Object.prototype.hasOwnProperty.call(patchEntry, 'identifier')) {
+        metadataParams.set('identifier', patchEntry.identifier ?? '');
+      }
+      if (Object.prototype.hasOwnProperty.call(patchEntry, 'role')) {
+        metadataParams.set('role', patchEntry.role ?? '');
+      }
+      if (Object.prototype.hasOwnProperty.call(patchEntry, 'promptOrder')) {
+        metadataParams.set('promptOrder', patchEntry.promptOrder == null ? '' : String(patchEntry.promptOrder));
+      }
+      const resolvedMetadata = this.resolvePromptLayerMetadata(metadataParams);
+      if ('error' in resolvedMetadata) {
+        return { ok: false, message: resolvedMetadata.error };
+      }
+
+      const updatePatch: PromptLayerUpdatePatch = {};
+      if (patchEntry.content !== undefined && patchEntry.content !== layer.content) {
+        if (isCanonicalCharacterFoundationLayer(layer)) {
+          return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
+        }
+        updatePatch.content = patchEntry.content;
+      }
+
+      if (Object.keys(resolvedMetadata.metadata).length > 0) {
+        updatePatch.metadata = resolvedMetadata.metadata;
+      }
+
+      if (Object.keys(updatePatch).length > 0) {
+        try {
+          promptStore.update(
+            patchEntry.id,
+            updatePatch,
+            'admin',
+            'Admin constitution mutable-layer edit via Garden API',
+          );
+        } catch (error) {
+          return { ok: false, message: String(error) };
+        }
+      }
+
+      if (patchEntry.enabled !== undefined && patchEntry.enabled !== layer.enabled) {
+        if (isCanonicalCharacterFoundationLayer(layer)) {
+          return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
+        }
+        try {
+          promptStore.toggle(patchEntry.id);
+        } catch (error) {
+          return { ok: false, message: String(error) };
+        }
+      }
+    }
+
+    const snapshot = this.getConstitutionSnapshot();
+    if (!snapshot) {
+      return { ok: false, message: 'Failed to load constitution snapshot after save' };
+    }
+
+    return {
+      ok: true,
+      message: 'Saved mutable constitution layers',
+      snapshot,
+    };
+  }
+
   createPromptLayer(body: string): PromptUpdateResult {
     const promptStore = this.deps.promptStore;
     if (!promptStore) {
@@ -241,6 +550,17 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? params.get('id') ?? '';
+    const layer = promptStore.getById(layerId);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      this.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'denied',
+        `Prompt layer edit was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`],
+      );
+      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
+    }
+
     const resolved = this.resolvePromptLayerContent(params);
     if ('error' in resolved) {
       return { ok: false, message: resolved.error };
@@ -281,7 +601,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
       this.deps.appendAuditTimelineEntry?.(
         'identity_edit',
         'allowed',
-        `Purrsephone edited ${layer.type} prompt layer "${layer.name}".`,
+        `${this.resolveCompanionName()} edited ${layer.type} prompt layer "${layer.name}".`,
         [`layerId=${layer.id}`, `version=${layer.version}`],
       );
       return {
@@ -386,13 +706,24 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
+    const layer = promptStore.getById(layerId);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      this.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'denied',
+        `Prompt layer toggle was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`],
+      );
+      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
+    }
+
     try {
       promptStore.toggle(layerId);
-      const layer = promptStore.getById(layerId);
+      const toggledLayer = promptStore.getById(layerId);
       return {
         ok: true,
-        message: `Toggled "${layer?.name ?? layerId}"`,
-        layer: layer ?? undefined,
+        message: `Toggled "${toggledLayer?.name ?? layerId}"`,
+        layer: toggledLayer ?? undefined,
       };
     } catch (error) {
       return {
@@ -410,16 +741,27 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
+    const layer = promptStore.getById(layerId);
+    if (isCanonicalCharacterFoundationLayer(layer)) {
+      this.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'denied',
+        `Prompt layer rollback was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
+        [`layerId=${layerId}`],
+      );
+      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
+    }
+
     const version = parseInt(params.get('version') ?? '0', 10);
     try {
-      const layer = promptStore.rollback(layerId, version);
+      const rolledBackLayer = promptStore.rollback(layerId, version);
       this.injectPromptEditSystemNote(
-        `Admin rolled back ${layer.type} prompt layer "${layer.name}" using v${version} content (now v${layer.version}).`,
+        `Admin rolled back ${rolledBackLayer.type} prompt layer "${rolledBackLayer.name}" using v${version} content (now v${rolledBackLayer.version}).`,
       );
       return {
         ok: true,
-        message: `Rolled back "${layer.name}" to content from v${version}`,
-        layer,
+        message: `Rolled back "${rolledBackLayer.name}" to content from v${version}`,
+        layer: rolledBackLayer,
       };
     } catch (error) {
       return {

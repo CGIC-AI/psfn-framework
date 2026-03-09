@@ -33,10 +33,13 @@ export function toPipelineOutputs<TOutput>(
   value: VoicePipelineStageOutput<TOutput>,
 ): ReadonlyArray<TOutput> {
   if (value === undefined) {
-    return EMPTY_OUTPUTS;
+    return EMPTY_OUTPUTS as ReadonlyArray<TOutput>;
   }
 
-  return Array.isArray(value) ? value : [value];
+  if (Array.isArray(value)) {
+    return value as ReadonlyArray<TOutput>;
+  }
+  return [value as TOutput];
 }
 
 export class VoicePipeline<TInput, TOutput = TInput> {

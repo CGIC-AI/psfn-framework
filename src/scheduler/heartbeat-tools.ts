@@ -11,9 +11,8 @@ import type {
   ReflectionDeliberationConfig,
 } from './heartbeat-policy.js';
 import type { Scheduler } from './scheduler.js';
-import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
-import type { PostTurnActionCandidate } from '../types.js';
+import type { PostTurnActionCandidate, SubstrateMessage } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { isBusyTurnError } from '../lifecycle/turn-contention.js';
@@ -67,6 +66,11 @@ interface HeartbeatRunTemplateResult {
   reflection: string;
   queued?: boolean;
   deferredAction?: PostTurnActionCandidate;
+}
+
+interface ScheduleTaskAgentLoop {
+  handleMessage(message: SubstrateMessage): Promise<{ content: string }>;
+  waitForIdle?(): Promise<void>;
 }
 
 // ── Tool 1: heartbeat_get_policy ──
@@ -139,6 +143,12 @@ export function createHeartbeatUpdatePolicyTool(
       sendToDiscord: Type.Optional(
         Type.Boolean({ description: 'Whether to send the response to Discord' }),
       ),
+      internalStateInput: Type.Optional(
+        Type.Boolean({
+          description:
+            'When true, injects serialized InternalState + recent metacognitive flags + active concerns into prompt input.',
+        }),
+      ),
       mode: Type.Optional(
         Type.Union([
           Type.Literal('standard'),
@@ -176,6 +186,7 @@ export function createHeartbeatUpdatePolicyTool(
         intervalMs?: number;
         enabled?: boolean;
         sendToDiscord?: boolean;
+        internalStateInput?: boolean;
         mode?: 'standard' | 'deliberation';
         deliberation?: ReflectionDeliberationConfig;
       },
@@ -204,6 +215,7 @@ export function createHeartbeatUpdatePolicyTool(
             intervalMs: params.intervalMs,
             enabled: params.enabled ?? true,
             sendToDiscord: params.sendToDiscord ?? false,
+            ...(params.internalStateInput !== undefined ? { internalStateInput: params.internalStateInput } : {}),
             mode: params.mode ?? 'standard',
             ...(params.deliberation ? { deliberation: cloneDeliberation(params.deliberation) } : {}),
           };
@@ -241,6 +253,7 @@ export function createHeartbeatUpdatePolicyTool(
         if (params.name !== undefined) updates.name = params.name;
         if (params.prompt !== undefined) updates.prompt = params.prompt;
         if (params.intervalMs !== undefined) updates.intervalMs = params.intervalMs;
+        if (params.internalStateInput !== undefined) updates.internalStateInput = params.internalStateInput;
         if (params.mode !== undefined) updates.mode = params.mode;
         if (params.deliberation !== undefined) updates.deliberation = params.deliberation;
 
@@ -260,6 +273,7 @@ export function createHeartbeatUpdatePolicyTool(
         if (params.intervalMs !== undefined) template.intervalMs = params.intervalMs;
         if (params.enabled !== undefined) template.enabled = params.enabled;
         if (params.sendToDiscord !== undefined) template.sendToDiscord = params.sendToDiscord;
+        if (params.internalStateInput !== undefined) template.internalStateInput = params.internalStateInput;
         if (params.mode !== undefined) template.mode = params.mode;
         if (params.deliberation !== undefined) template.deliberation = cloneDeliberation(params.deliberation);
 
@@ -358,7 +372,7 @@ export function createHeartbeatRunTemplateTool(
 
 export function createScheduleTaskTool(
   scheduler: Scheduler,
-  agentLoop: SubstrateAgent,
+  agentLoop: ScheduleTaskAgentLoop,
   sender: MessageSender,
   heartbeatChannelId?: string,
 ): AgentTool<any> {
@@ -427,6 +441,9 @@ export function createScheduleTaskTool(
               await runPlannedPrompt();
             } catch (err) {
               if (!isBusyTurnError(err)) {
+                throw err;
+              }
+              if (typeof agentLoop.waitForIdle !== 'function') {
                 throw err;
               }
               await agentLoop.waitForIdle();

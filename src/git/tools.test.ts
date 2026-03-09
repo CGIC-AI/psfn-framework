@@ -293,5 +293,19 @@ describe('git tools', () => {
       expect(resultText(result)).toContain('pr failed');
       expect(result.details?.isError).toBe(true);
     });
+
+    it('surfaces protected-branch blocking errors', async () => {
+      mockOps.openPR.mockRejectedValueOnce(new Error('Operation blocked on protected branch: main'));
+
+      const tool = createRepoOpenPRTool(mockOps);
+      const result = await tool.execute('call-pr-protected', {
+        title: 'Title',
+        body: 'Body',
+      });
+
+      expect(resultText(result)).toContain('repo_open_pr failed');
+      expect(resultText(result)).toContain('protected branch');
+      expect(result.details?.isError).toBe(true);
+    });
   });
 });

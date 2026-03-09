@@ -3,21 +3,21 @@
 // Run: npm run agent
 
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { loadConfig } from './types.js';
 import type {
-  SubstrateConfig,
   SubstrateMessage,
 } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
 import { MemoryStore } from './memory/store.js';
+import { EmotionObserver } from './emotion/observer.js';
+import { EmotionState } from './emotion/state.js';
+import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from './security/policy-constants.js';
-import { ApiServer } from './channels/api/server.js';
+import type { ApiServer } from './channels/api/server.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import {
   CachedActiveHealthProbe,
@@ -26,21 +26,7 @@ import {
 } from './channels/api/active-health-probe.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { applySettings, loadSettings, saveSettings, splitSettingsByDomain } from './settings.js';
-import { loadModelsConfigWithLegacyMigration } from './config/models-config.js';
-import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
-import {
-  CAPABILITY_TIER_FILE_NAME,
-  loadCapabilityTierConfig,
-  saveCapabilityTierConfig,
-} from './config/capability-tier-config.js';
-import {
-  SCHEDULER_FILE_NAME,
-  loadSchedulerConfig,
-  saveSchedulerConfig,
-} from './config/scheduler-config.js';
-import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
-import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
 import { registerScheduledBackupTask } from './backup/service.js';
 import {
@@ -81,9 +67,17 @@ import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntf
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
+  createIntentionAppraisalHooks,
+  createIntentionBehavioralPatternHooks,
+  wireIntentionRuntime,
+} from './intention/runtime-wiring.js';
+import { createBehavioralPatternMemoryPromotionHook } from './intention/patterns.js';
+import {
   composeIdentity,
   composeSessionRuntime,
   composeSubstrateAgent,
+  wireSelfModelRuntime,
+  wireCoreMemoryRuntime,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
@@ -101,7 +95,6 @@ import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,
-  type EligibilityDecision,
 } from './capabilities/eligibility.js';
 import {
   createSafeguardAuditTrail,
@@ -119,51 +112,103 @@ import {
   ensureRegistryFile,
   resolveModuleRegistryPathFromWorkspace,
 } from './modules/registry.js';
+import type { ChannelAdapter } from './channels/types.js';
+import {
+  createApiServerChannelAdapterFactoryEntry,
+  requireChannelAdapter,
+} from './bootstrap/channel-runtime.js';
+import {
+  buildChannelAdapterFactoryManifest,
+  loadChannelAdaptersFromManifest,
+} from './runtime/channel-lifecycle.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
+import { createGatewayBackedDiscoveryFetch } from './agent-main/discovery-gateway-fetch.js';
 import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
+  resolveCharacterCardHistoryPath,
   resolveContactsDir,
   resolveNotesDir,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
+import {
+  hydrateCanonicalStartupConfig,
+  type StartupConfigHydrationDiagnostics,
+} from './runtime/bootstrap-helpers.js';
+import { isExplicitTrue, parseCommaSeparatedEnv } from './runtime/env-parsing.js';
+import {
+  createStartupTextEmotionClassifier,
+  warmRuntimeMlServices,
+} from './runtime/ml-warmup.js';
+import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
+import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
+import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
+import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
+const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
+const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
 
-function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
-  eventBus.emit('capability.eligibility', {
-    operationKind: decision.operation.kind,
-    operationRef: JSON.stringify(decision.operation),
-    allowed: decision.allowed,
-    reasonCode: decision.reasonCode,
-    tier: decision.tier,
-    requiredTokens: decision.requiredTokens,
-    missingTokens: decision.missingTokens,
-    ...(decision.minimumTier ? { minimumTier: decision.minimumTier } : {}),
-    timestamp: Date.now(),
-  }).catch((error) => {
-    log.warn('Failed to emit capability eligibility telemetry', { error: String(error) });
-  });
-}
+function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {
+  if (diagnostics.modelsMigratedFromLegacySettings) {
+    log.warn('Migrated legacy model settings from settings.json to models.json');
+  } else if (diagnostics.modelsLegacyDriftDetected) {
+    log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+  }
 
-function isExplicitTrue(value: string | undefined): boolean {
-  return value?.trim().toLowerCase() === 'true';
-}
+  if (diagnostics.maintenanceIntervalMigration.state === 'migrated') {
+    log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
+      maintenanceIntervalMs:
+        diagnostics.maintenanceIntervalMigration.storedValue
+        ?? diagnostics.maintenanceIntervalMigration.settingsValue,
+    });
+  } else if (diagnostics.maintenanceIntervalMigration.state === 'drift_detected') {
+    log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
+      settingsMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.settingsValue,
+      schedulerMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.storedValue,
+    });
+  } else if (diagnostics.maintenanceIntervalMigration.state === 'error') {
+    log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
+      error: diagnostics.maintenanceIntervalMigration.error ?? 'unknown',
+    });
+  }
 
-function parseCommaSeparatedEnv(value: string | undefined): string[] {
-  if (!value) return [];
-  const entries = value
-    .split(',')
-    .map(entry => entry.trim())
-    .filter(Boolean);
-  return [...new Set(entries)];
+  if (diagnostics.capabilityTierMigration.state === 'migrated') {
+    log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
+      capabilityTier:
+        diagnostics.capabilityTierMigration.storedValue
+        ?? diagnostics.capabilityTierMigration.settingsValue,
+    });
+  } else if (diagnostics.capabilityTierMigration.state === 'drift_detected') {
+    log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
+      settingsCapabilityTier: diagnostics.capabilityTierMigration.settingsValue,
+      capabilityTier: diagnostics.capabilityTierMigration.storedValue,
+    });
+  } else if (diagnostics.capabilityTierMigration.state === 'error') {
+    log.warn('Failed to migrate legacy capabilityTier from settings.json', {
+      error: diagnostics.capabilityTierMigration.error ?? 'unknown',
+    });
+  }
+
+  if (diagnostics.removedLegacyKeys.length > 0) {
+    if (diagnostics.settingsRewriteError) {
+      log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
+        keys: diagnostics.removedLegacyKeys,
+        error: diagnostics.settingsRewriteError,
+      });
+    } else {
+      log.warn('Removed legacy cross-domain keys from settings.json', {
+        keys: diagnostics.removedLegacyKeys,
+      });
+    }
+  }
 }
 
 async function runShutdownStep(
@@ -171,50 +216,7 @@ async function runShutdownStep(
   action: () => void | Promise<void>,
   maxAttempts = 2,
 ): Promise<void> {
-  const attempts = Math.max(1, Math.floor(maxAttempts));
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      await action();
-      if (attempt > 1) {
-        log.info('Shutdown step recovered after retry', {
-          step,
-          attempt,
-          maxAttempts: attempts,
-        });
-      }
-      return;
-    } catch (error) {
-      if (attempt < attempts) {
-        log.warn('Shutdown step failed; retrying', {
-          step,
-          attempt,
-          maxAttempts: attempts,
-          error: String(error),
-        });
-        continue;
-      }
-      log.error('Shutdown step failed; continuing shutdown', {
-        step,
-        attempt,
-        maxAttempts: attempts,
-        error: String(error),
-      });
-    }
-  }
-}
-
-function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
-  const existingHooks = config.runtimeHooks ?? {};
-  config.runtimeHooks = {
-    ...existingHooks,
-    persistPromotedExtendedTools: (toolNames) => {
-      const current = loadSettings(config.dataDir);
-      saveSettings(config.dataDir, {
-        ...current,
-        promotedExtendedTools: [...toolNames],
-      });
-    },
-  };
+  await runShutdownStepWithRetry(step, action, log, maxAttempts);
 }
 
 async function enforceNetworkIsolationOnStartup(): Promise<void> {
@@ -252,96 +254,24 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const savedSettings = loadSettings(config.dataDir);
-  const settingsDomains = splitSettingsByDomain(savedSettings);
-  applySettings(config, settingsDomains.runtime);
-  installPromotedToolsPersistenceHook(config);
-
-  const modelsLoadResult = loadModelsConfigWithLegacyMigration(config.dataDir, {
-    defaultContextWindow: config.defaultContextWindow,
-    legacySettings: settingsDomains.models,
+  const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
+  if (ignoredMutableEnvKeys.length > 0) {
+    log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
+      keys: ignoredMutableEnvKeys,
+    });
+  }
+  const startupHydration = hydrateCanonicalStartupConfig(config, {
+    env: process.env,
   });
-  if (modelsLoadResult.migratedFromLegacySettings) {
-    log.warn('Migrated legacy model settings from settings.json to models.json');
-  } else if (modelsLoadResult.legacyDriftDetected) {
-    log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
-  }
-  applySettings(config, modelsLoadResult.config);
+  const {
+    systemDataDir,
+    companionDataDir,
+    runtimePathLayout,
+    trustPolicyConfig,
+    schedulerConfig,
+  } = startupHydration;
+  logStartupHydrationDiagnostics(startupHydration.diagnostics);
 
-  if (settingsDomains.maintenanceIntervalMs !== undefined) {
-    try {
-      const schedulerPath = join(config.dataDir, SCHEDULER_FILE_NAME);
-      const schedulerFileExisted = existsSync(schedulerPath);
-      const persistedScheduler = loadSchedulerConfig(config.dataDir, {
-        seedDir: process.env.CONFIG_DIR,
-      });
-      if (!schedulerFileExisted) {
-        saveSchedulerConfig(config.dataDir, {
-          ...persistedScheduler,
-          salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
-        });
-        log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
-          maintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
-        });
-      } else if (persistedScheduler.salienceDecayIntervalMs !== settingsDomains.maintenanceIntervalMs) {
-        log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
-          settingsMaintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
-          schedulerMaintenanceIntervalMs: persistedScheduler.salienceDecayIntervalMs,
-        });
-      }
-    } catch (error) {
-      log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
-        error: String(error),
-      });
-    }
-  }
-
-  if (settingsDomains.capabilityTier !== undefined) {
-    try {
-      const capabilityPath = join(config.dataDir, CAPABILITY_TIER_FILE_NAME);
-      const capabilityFileExisted = existsSync(capabilityPath);
-      const persistedCapabilities = loadCapabilityTierConfig(config.dataDir, {
-        seedDir: process.env.CONFIG_DIR,
-      });
-      if (!capabilityFileExisted) {
-        saveCapabilityTierConfig(config.dataDir, {
-          ...persistedCapabilities,
-          tier: settingsDomains.capabilityTier,
-        });
-        log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
-          capabilityTier: settingsDomains.capabilityTier,
-        });
-      } else if (persistedCapabilities.tier !== settingsDomains.capabilityTier) {
-        log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
-          settingsCapabilityTier: settingsDomains.capabilityTier,
-          capabilityTier: persistedCapabilities.tier,
-        });
-      }
-    } catch (error) {
-      log.warn('Failed to migrate legacy capabilityTier from settings.json', {
-        error: String(error),
-      });
-    }
-  }
-
-  if (settingsDomains.legacyKeys.length > 0) {
-    try {
-      saveSettings(config.dataDir, settingsDomains.runtime);
-      log.warn('Removed legacy cross-domain keys from settings.json', {
-        keys: settingsDomains.legacyKeys,
-      });
-    } catch (error) {
-      log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
-        keys: settingsDomains.legacyKeys,
-        error: String(error),
-      });
-    }
-  }
-
-  const trustPolicyConfig = loadTrustPolicyConfig(config.dataDir, {
-    seedDir: process.env.CONFIG_DIR,
-  });
-  setRuntimeTrustPolicy(trustPolicyConfig);
   log.info('Loaded trust policy configuration', {
     exactOverrideCount: Object.keys(
       trustPolicyConfig.channelClassification.visibilityOverrides.exact,
@@ -350,23 +280,18 @@ async function main(): Promise<void> {
       trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
   });
-  const schedulerConfig = resolveRuntimeSchedulerConfig({
-    dataDir: config.dataDir,
-    seedDir: process.env.CONFIG_DIR,
-  });
   const backupConfig = resolveBackupRuntimeConfig({
-    dataDir: config.dataDir,
+    dataDir: companionDataDir,
+    defaultRootDir: runtimePathLayout.backupsDir,
   });
-  config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const capabilityRuntime = new CapabilityRuntime({
-    dataDir: config.dataDir,
+    dataDir: systemDataDir,
     seedDir: process.env.CONFIG_DIR,
-    envTier: config.capabilityTier,
   });
   config.capabilityTier = capabilityRuntime.getTier();
   const eligibilityGate = createEligibilityGate(
     () => capabilityRuntime,
-    (decision) => emitEligibilityDecision(eventBus, decision),
+    (decision) => emitEligibilityDecisionTelemetry(eventBus, decision, log),
   );
   const lifecycleRuntimeContract = resolveRuntimeModeContract({
     entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
@@ -376,10 +301,14 @@ async function main(): Promise<void> {
   const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   const workspacePathEnv = process.env.WORKSPACE_PATH;
-  const workspacePath = workspacePathEnv ?? './workspace';
+  const workspacePath = runtimePathLayout.workspacePath;
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
   if (!workspacePathEnv) {
-    log.warn('WORKSPACE_PATH not set, defaulting to ./workspace', { resolved: workspaceRoot });
+    log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
+      mode: runtimePathLayout.mode,
+      workspacePath,
+      resolved: workspaceRoot,
+    });
   }
   const moduleRegistryPath = resolveModuleRegistryPathFromWorkspace(
     workspaceRoot,
@@ -395,7 +324,7 @@ async function main(): Promise<void> {
 
   // ── Connect to gateway ──
 
-  const embeddingDims = parsePositiveIntEnv(process.env.EMBEDDING_DIMS, 1024);
+  const embeddingDims = config.embeddingDims ?? 1024;
 
   log.info(`Connecting to gateway at ${socketPath}...`);
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
@@ -442,18 +371,18 @@ async function main(): Promise<void> {
   }
   const cardVersionStore = new CharacterCardVersionStore(
     config.characterCardPath,
-    join(config.dataDir, 'character-card-history.jsonl'),
+    resolveCharacterCardHistoryPath(companionDataDir),
   );
   const cardProposalQueue = new ConfirmationQueue({
     idFactory: () => `card-${randomUUID()}`,
   });
   log.info(`Loaded character: ${card.data.name}`);
   config.characterName = card.data.name;
-  const promptRegistry = wireStaticPromptRegistry(config.dataDir);
+  const promptRegistry = wireStaticPromptRegistry(companionDataDir);
 
   // ── Initialize local components ──
 
-  const sessionsDir = resolveSessionsDir(config.dataDir);
+  const sessionsDir = resolveSessionsDir(companionDataDir);
   const sessionComposition = composeSessionRuntime({
     config,
     eventBus,
@@ -467,7 +396,7 @@ async function main(): Promise<void> {
   const restartBehavior = config.sessionRestartBehavior ?? 'reuse_latest_session';
   const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
   if (startupSession) {
-    writeLastActiveSession(config.dataDir, startupSession);
+    writeLastActiveSession(companionDataDir, startupSession);
     if (restartBehavior === 'new_session') {
       log.info('Initialized fresh startup session metadata', {
         sessionId: startupSession.sessionId,
@@ -484,8 +413,8 @@ async function main(): Promise<void> {
   }
 
   const memoryStore = new MemoryStore(db, gateway.dims, {
-    notesDir: resolveNotesDir(config.dataDir),
-    scratchpadMirrorPath: resolveScratchpadMirrorPath(config.dataDir),
+    notesDir: resolveNotesDir(companionDataDir),
+    scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
   });
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
   const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
@@ -501,6 +430,22 @@ async function main(): Promise<void> {
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
+  const textClassifier = createStartupTextEmotionClassifier({
+    model: config.textEmotionModel,
+    cacheDir: config.textEmotionCacheDir,
+    dtype: config.textEmotionDtype,
+  });
+  await warmRuntimeMlServices({
+    textClassifier,
+    embeddingService: gateway,
+    textEmotionModel: config.textEmotionModel!.trim(),
+    logger: log,
+  });
+  const emotionObserver = new EmotionObserver({
+    textClassifier,
+    audioClassifier: getSharedAudioEmotionClassifier(),
+  });
+  const emotionState = new EmotionState();
   const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: gateway,
@@ -509,10 +454,15 @@ async function main(): Promise<void> {
     characterName: card.data.name,
     characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
+    emotionRuntime: {
+      observer: emotionObserver,
+      state: emotionState,
+      requireWiring: true,
+    },
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
-  const safeguardAuditTrail = createSafeguardAuditTrail(config.dataDir);
+  const safeguardAuditTrail = createSafeguardAuditTrail(companionDataDir);
   const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
     auditTrail: safeguardAuditTrail,
   });
@@ -524,13 +474,13 @@ async function main(): Promise<void> {
   });
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
-    dataDir: config.dataDir,
+    dataDir: systemDataDir,
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
   });
 
   // Prompt stack — layered, editable system prompt
-  const promptStore = wirePromptRuntime(agentLoop, config.dataDir, composeSystemPromptTemplate(), {
+  const promptStore = wirePromptRuntime(agentLoop, companionDataDir, composeSystemPromptTemplate(), {
     identityCoolingOff,
     getCapabilityTier: () => capabilityRuntime.getTier(),
   });
@@ -539,7 +489,12 @@ async function main(): Promise<void> {
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config);
-  wireSessionToolsRuntime(agentLoop, sessionManager, config.dataDir);
+  wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir, gateway);
+  const coreMemoryStore = wireCoreMemoryRuntime({
+    agentLoop,
+    sessionManager,
+    config,
+  });
 
   // Contact store + tools — trust-gated privacy system
   const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
@@ -553,7 +508,7 @@ async function main(): Promise<void> {
     db,
     primaryUserId,
     {
-      exportDir: resolveContactsDir(config.dataDir),
+      exportDir: resolveContactsDir(companionDataDir),
       ...(primaryTelegramUserId
         ? {
           bootstrapPrimaryIdentityLinks: [{
@@ -562,8 +517,14 @@ async function main(): Promise<void> {
             privacyLevel: 'private',
           }],
         }
-        : {}),
-    },
+      : {}),
+  },
+);
+  const intentionRuntime = wireIntentionRuntime(agentLoop, db);
+  wireSelfModelRuntime(agentLoop);
+  const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionRuntime.concernStore);
+  const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
+    intentionRuntime.behavioralPatternTracker,
   );
 
   // Wire memory system (uses gateway for embeddings + LLM extraction)
@@ -582,7 +543,7 @@ async function main(): Promise<void> {
 
   const salienceDecay = new SalienceDecay(memoryStore);
 
-  // Scheduler — Purrsephone's internal clock
+  // Scheduler — the companion's internal clock
   const scheduler = new Scheduler(eventBus, {
     tickIntervalMs: schedulerConfig.tickIntervalMs,
     heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,
@@ -595,6 +556,28 @@ async function main(): Promise<void> {
     type: 'every',
     intervalMs: config.maintenanceIntervalMs,
     handler: () => salienceDecay.run(),
+    eligibility: { requiredTokens: ['memory.write'] },
+    state: 'idle',
+  });
+  scheduler.register({
+    id: COMPACTION_GUIDELINE_REVIEW_TASK_ID,
+    name: 'Compression Guideline Review',
+    type: 'every',
+    intervalMs: config.maintenanceIntervalMs,
+    handler: async () => {
+      const result = await sessionManager.runPeriodicCompressionGuidelineUpdate(gateway);
+      if (result.status === 'updated') {
+        log.info('Compression guideline updated from failure log review', {
+          version: result.version,
+          reviewedFailureCount: result.reviewedFailureCount,
+        });
+        return;
+      }
+      log.debug('Compression guideline review skipped', {
+        reason: result.reason,
+        reviewedFailureCount: result.reviewedFailureCount,
+      });
+    },
     eligibility: { requiredTokens: ['memory.write'] },
     state: 'idle',
   });
@@ -619,6 +602,18 @@ async function main(): Promise<void> {
     scheduler,
     agentLoop,
     eligibilityGate,
+  });
+  eventBus.on('agent.turn.end', ({ message, response }) => {
+    const captured = sessionManager.recordCompressionFailureFromResponse(
+      message.channelId,
+      message.id,
+      response.content,
+    );
+    if (!captured) return;
+    log.info('Captured compression failure signal for guideline evolution', {
+      channelId: message.channelId,
+      sourceMessageId: message.id,
+    });
   });
   scheduler.start();
   log.info(`Memory system enabled (${gateway.dims}d embeddings via gateway)`);
@@ -645,6 +640,7 @@ async function main(): Promise<void> {
     replConfig,
     shardAuditTrail: safeguardAuditTrail,
     getCapabilityTier: () => capabilityRuntime.getTier(),
+    compositionalPolicy: config.compositionalPolicy,
     moduleInstallConfirmationQueue: cardProposalQueue,
     onModuleRegistryMutation: async (mutation) => {
       await moduleLoader.applyRegistryMutation(mutation);
@@ -653,6 +649,9 @@ async function main(): Promise<void> {
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
+  intentionRuntime.behavioralPatternTracker.setPromotionHook(
+    createBehavioralPatternMemoryPromotionHook(memoryWriter),
+  );
   agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
   agentLoop.registerTool(createMemoryImportTool(memoryWriter));
   agentLoop.registerTool(createMemoryRedactTool(memoryWriter));
@@ -660,6 +659,7 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createUndoMemoryDeleteTool(memoryStore));
   agentLoop.registerTool(createScratchpadReadTool(memoryStore));
   agentLoop.registerTool(createScratchpadWriteTool(memoryStore));
+  log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
   // Git tools — self-modification via gateway-hosted git ops
   registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });
@@ -700,13 +700,20 @@ async function main(): Promise<void> {
   let apiServer: ApiServer | undefined;
   const apiHost = process.env.API_HOST || undefined;
   const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
+  const adminHost = process.env.ADMIN_HOST || undefined;
+  const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (apiPort) {
     const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
-    const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
+    const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
+      explicitAllowlist: parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST),
+      adminHost,
+      adminPort,
+    });
     const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
       agentLoop,
       eventBus,
       config,
+      eligibilityGate,
     });
     const voiceWebSocketPath = voiceWebSocketRuntime
       ? undefined
@@ -717,24 +724,27 @@ async function main(): Promise<void> {
     const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
     const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
     const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
-    apiServer = new ApiServer({
-      port: apiPort,
-      host: apiHost,
-      agentLoop,
-      eventBus,
-      sessionManager,
-      contactStore,
-      apiKey: process.env.API_KEY || undefined,
-      allowInsecureWithoutAuth,
-      corsAllowedOrigins,
-      modelName: process.env.API_MODEL_NAME,
-      requestTimeoutMs: parsePositiveIntEnv(
-        process.env.API_REQUEST_TIMEOUT_MS,
-        DEFAULT_API_REQUEST_TIMEOUT_MS,
-      ),
-      voiceWebSocketPath,
-      voiceWebSocketRuntime,
-      healthChecks: {
+    const apiChannelRegistry = new Map<string, ChannelAdapter>();
+    const apiChannelManifest = buildChannelAdapterFactoryManifest([
+      createApiServerChannelAdapterFactoryEntry({
+        port: apiPort,
+        host: apiHost,
+        agentLoop,
+        eventBus,
+        sessionManager,
+        contactStore,
+        apiKey: process.env.API_KEY || undefined,
+        adminToken: process.env.ADMIN_TOKEN || undefined,
+        allowInsecureWithoutAuth,
+        corsAllowedOrigins,
+        modelName: process.env.API_MODEL_NAME,
+        requestTimeoutMs: parsePositiveIntEnv(
+          process.env.API_REQUEST_TIMEOUT_MS,
+          DEFAULT_API_REQUEST_TIMEOUT_MS,
+        ),
+        voiceWebSocketPath,
+        voiceWebSocketRuntime,
+        healthChecks: {
         memory: () => {
           const stats = memoryStore.getStats();
           return {
@@ -865,9 +875,17 @@ async function main(): Promise<void> {
             meta: { taskCount, ...runtimeStatusMeta },
           };
         },
-      },
-    });
-    await apiServer.init();
+        },
+      }),
+    ]);
+    await loadChannelAdaptersFromManifest(
+      apiChannelRegistry,
+      apiChannelManifest,
+      () => undefined,
+      log,
+      eligibilityGate,
+    );
+    apiServer = requireChannelAdapter<ApiServer>(apiChannelRegistry, 'api');
     await apiServer.start();
     log.info(`API server listening on port ${apiPort}`);
   }
@@ -875,13 +893,16 @@ async function main(): Promise<void> {
   // Model discovery (if LiteLLM is configured)
   const litellmBaseUrl = process.env.LITELLM_BASE_URL;
   const modelDiscovery = litellmBaseUrl
-    ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY)
+    ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY, {
+      openRouterModelsApiUrl: config.openRouterModelsApiUrl ?? '',
+      fetchFn: createGatewayBackedDiscoveryFetch(gateway),
+      allowDirectNetworkEgress: false,
+    })
     : null;
 
   // ── Admin GUI (optional) ──
 
   let adminServer: AdminServer | undefined;
-  const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (adminPort) {
     const adminToken = process.env.ADMIN_TOKEN || undefined;
     const allowInsecureWithoutToken = isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE);
@@ -905,7 +926,7 @@ async function main(): Promise<void> {
     };
     adminServer = new AdminServer({
       port: adminPort,
-      host: process.env.ADMIN_HOST || undefined,
+      host: adminHost,
       token: adminToken,
       allowInsecureWithoutToken,
       apiBaseUrl: process.env.API_BASE_URL,
@@ -944,7 +965,7 @@ async function main(): Promise<void> {
   const lifecycleNotifier = new DiscordLifecycleNotifier({
     sender: gatewaySender,
     heartbeatChannelId,
-    dataDir: config.dataDir,
+    dataDir: companionDataDir,
     startTime,
   });
 
@@ -1039,13 +1060,22 @@ async function main(): Promise<void> {
     scheduler,
     agentLoop,
     gatewaySender,
-    config.dataDir,
+    companionDataDir,
     heartbeatChannelId,
     {
       eventBus,
       llmProvider: gateway,
+      capabilityTier: config.capabilityTier,
+      compositionalPolicy: config.compositionalPolicy,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
+      sessionManager,
+      emotionState,
+      contactStore,
+      getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
+      onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
+      onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
+      coreMemoryStore,
       postTurnActions,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
     },
@@ -1053,7 +1083,7 @@ async function main(): Promise<void> {
 
   const trackSessionActivity = (message: SubstrateMessage): void => {
     const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
-    writeLastActiveSession(config.dataDir, {
+    writeLastActiveSession(companionDataDir, {
       sessionId,
       channelType: inferSessionChannelType(sessionId) ?? message.channelType,
       timestamp: message.timestamp instanceof Date
@@ -1086,28 +1116,15 @@ async function main(): Promise<void> {
 
   // ── Graceful shutdown ──
 
-  let shutdownPromise: Promise<void> | null = null;
-  const shutdown = async (signal: string) => {
-    if (shutdownPromise) {
-      log.warn('Shutdown already in progress; ignoring additional signal', { signal });
-      await shutdownPromise;
-      return;
-    }
-
-    shutdownPromise = (async () => {
-      log.info(`Received ${signal}, shutting down...`);
-      await stopFn();
-      process.exit(0);
-    })().catch((error) => {
-      log.error('Graceful shutdown failed; forcing exit', {
-        signal,
-        error: String(error),
-      });
-      process.exit(1);
-    });
-
-    await shutdownPromise;
-  };
+  const shutdown = createSignalShutdownHandler({
+    logger: log,
+    runGracefulShutdown: stopFn,
+    exit: (code) => { process.exit(code); },
+    forceExitTimeoutMs: parsePositiveIntEnv(
+      process.env.SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+      DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
+    ),
+  });
 
   process.on('SIGINT', () => {
     void shutdown('SIGINT').catch((error) => {

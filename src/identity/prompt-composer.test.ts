@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from './prompt-store.js';
-import { PromptComposer } from './prompt-composer.js';
+import {
+  IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
+  IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
+  PromptComposer,
+} from './prompt-composer.js';
+import { ValuesJournalStore } from '../values/store.js';
 
 describe('PromptComposer', () => {
   let tmpDir: string;
@@ -190,11 +195,11 @@ describe('PromptComposer', () => {
 
       const split = composer.composeSplit({ channelType: 'discord_text', taskKind: 'heartbeat' });
 
-      expect(split.staticPrefix).toBe('BASE\n\nDISCORD');
-      expect(split.dynamicSuffix).toBe('RUNTIME\n\nHEARTBEAT');
-      expect(split.text).toBe('BASE\n\nDISCORD\n\nRUNTIME\n\nHEARTBEAT');
-      expect(split.staticLayerIds).toEqual([base.id, channel.id]);
-      expect(split.dynamicLayerIds).toEqual([runtime.id, task.id]);
+      expect(split.staticPrefix).toBe('BASE');
+      expect(split.dynamicSuffix).toBe('RUNTIME\n\nDISCORD\n\nHEARTBEAT');
+      expect(split.text).toBe('BASE\n\nRUNTIME\n\nDISCORD\n\nHEARTBEAT');
+      expect(split.staticLayerIds).toEqual([base.id]);
+      expect(split.dynamicLayerIds).toEqual([runtime.id, channel.id, task.id]);
 
       const composed = composer.compose({ channelType: 'discord_text', taskKind: 'heartbeat' });
       expect(composed.text).toBe(split.text);
@@ -204,10 +209,17 @@ describe('PromptComposer', () => {
     it('keeps static hash stable when only dynamic layers change', () => {
       const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME-A' });
+      const channel = store.create({
+        type: 'channel',
+        name: 'Discord',
+        content: 'DISCORD-A',
+        channelType: 'discord_text',
+      });
 
-      const before = composer.composeSplit();
+      const before = composer.composeSplit({ channelType: 'discord_text' });
       store.update(runtime.id, 'RUNTIME-B', 'test');
-      const after = composer.composeSplit();
+      store.update(channel.id, 'DISCORD-B', 'test');
+      const after = composer.composeSplit({ channelType: 'discord_text' });
 
       expect(before.staticHash).toBe(after.staticHash);
       expect(before.dynamicHash).not.toBe(after.dynamicHash);
@@ -230,7 +242,7 @@ describe('PromptComposer', () => {
   describe('fallback to lastKnownGood', () => {
     it('returns lastKnownGood when all layers are disabled', () => {
       const base1 = store.create({ type: 'base', name: 'Base 1', content: 'BASE 1' });
-      const base2 = store.create({ type: 'base', name: 'Base 2', content: 'BASE 2' });
+      const _base2 = store.create({ type: 'base', name: 'Base 2', content: 'BASE 2' });
 
       // Compose once to set lastKnownGood
       const good = composer.compose();
@@ -328,6 +340,88 @@ describe('PromptComposer', () => {
       expect(result.text).toContain('DISCORD');
       expect(result.text).toContain('HEARTBEAT');
       expect(result.layerCount).toBe(3);
+    });
+  });
+
+  describe('constitution mode', () => {
+    it('prepends immutable amendments and a companion-derived values layer before mutable layers', () => {
+      const valuesStore = new ValuesJournalStore(join(tmpDir, 'values.jsonl'));
+      valuesStore.append({
+        templateId: 'values-reflection',
+        templateName: 'Values Reflection',
+        prompt: 'P1',
+        reflection: 'Companion value one',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        provenance: {
+          source: 'companion_reflection',
+          templateId: 'values-reflection',
+          channelId: 'internal:reflection:values-reflection',
+          mode: 'agent',
+        },
+      });
+      valuesStore.append({
+        templateId: 'values-tool',
+        templateName: 'Values Tool',
+        prompt: 'manual',
+        reflection: 'Manual value should not be in companion layer',
+        createdAt: '2026-03-01T00:05:00.000Z',
+        provenance: {
+          source: 'values_add_tool',
+          templateId: 'values-tool',
+        },
+      });
+
+      const constitutionComposer = new PromptComposer(
+        store,
+        undefined,
+        undefined,
+        {
+          enableConstitution: true,
+          companionValuesLayerProvider: () => valuesStore.buildCompanionDerivedLayer(),
+        },
+      );
+      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
+
+      const result = constitutionComposer.compose();
+      const immutableIndex = result.text.indexOf(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+      const companionIndex = result.text.indexOf('[Companion-Derived Values Layer]');
+      const baseIndex = result.text.indexOf('BASE');
+      const runtimeIndex = result.text.indexOf('RUNTIME');
+
+      expect(immutableIndex).toBeGreaterThanOrEqual(0);
+      expect(companionIndex).toBeGreaterThan(immutableIndex);
+      expect(baseIndex).toBeGreaterThan(companionIndex);
+      expect(runtimeIndex).toBeGreaterThan(baseIndex);
+      expect(result.text).toContain('Companion value one');
+      expect(result.text).not.toContain('Manual value should not be in companion layer');
+    });
+
+    it('fails closed by keeping immutable amendments when the companion layer provider fails', () => {
+      const constitutionComposer = new PromptComposer(
+        store,
+        undefined,
+        undefined,
+        {
+          enableConstitution: true,
+          companionValuesLayerProvider: () => {
+            throw new Error('provider failure');
+          },
+        },
+      );
+      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+
+      const result = constitutionComposer.compose();
+      expect(result.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+      expect(result.text).toContain('BASE');
+      expect(result.text).not.toContain('[Companion-Derived Values Layer]');
+    });
+
+    it('exposes hardcoded immutable amendments as non-editable constants', () => {
+      expect(Object.isFrozen(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS)).toBe(true);
+      const descriptor = Object.getOwnPropertyDescriptor(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS, '0');
+      expect(descriptor?.writable).toBe(false);
+      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS).toHaveLength(3);
     });
   });
 });

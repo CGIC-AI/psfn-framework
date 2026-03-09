@@ -1,6 +1,4 @@
 import type Database from 'better-sqlite3';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type { SubstrateConfig, Lifecycle } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
@@ -14,38 +12,27 @@ import { SessionManager } from './session/manager.js';
 import { buildSessionHmacKeyring } from './session/journal-utils.js';
 import { createKeyringIntegrityProvider } from './session/store-primitives.js';
 import { SubstrateAgent } from './agent/substrate-agent.js';
-import { DiscordAdapter } from './channels/discord/adapter.js';
-import { TelegramAdapter } from './channels/telegram/adapter.js';
+import { EmotionObserver } from './emotion/observer.js';
+import { EmotionState } from './emotion/state.js';
+import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
+import type { DiscordAdapter } from './channels/discord/adapter.js';
 import { MemoryStore } from './memory/store.js';
 import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { ShardManager } from './shards/manager.js';
-import { ApiServer } from './channels/api/server.js';
 import {
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
   toActiveProbeMeta,
 } from './channels/api/active-health-probe.js';
-import type { ChannelAdapter } from './channels/types.js';
+import type {
+  ChannelAdapter,
+} from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { applySettings, loadSettings, saveSettings, splitSettingsByDomain } from './settings.js';
-import { loadModelsConfigWithLegacyMigration } from './config/models-config.js';
-import { resolveRuntimeSchedulerConfig } from './config/scheduler-runtime.js';
-import {
-  CAPABILITY_TIER_FILE_NAME,
-  loadCapabilityTierConfig,
-  saveCapabilityTierConfig,
-} from './config/capability-tier-config.js';
-import {
-  SCHEDULER_FILE_NAME,
-  loadSchedulerConfig,
-  saveSchedulerConfig,
-} from './config/scheduler-config.js';
-import { loadTrustPolicyConfig } from './config/trust-policy-config.js';
-import { setRuntimeTrustPolicy } from './trust/runtime-policy.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
 import { registerScheduledBackupTask } from './backup/service.js';
 import {
@@ -68,6 +55,7 @@ import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
 import { MemoryWriter } from './memory/writer.js';
+import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
 import {
   createMemoryWriteTool,
   createMemoryImportTool,
@@ -80,12 +68,20 @@ import {
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
+import {
+  createIntentionAppraisalHooks,
+  createIntentionBehavioralPatternHooks,
+  wireIntentionRuntime,
+} from './intention/runtime-wiring.js';
+import { createBehavioralPatternMemoryPromotionHook } from './intention/patterns.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
   composeIdentity,
   composeSessionRuntime,
-  createEmbeddingProviderFromEnv,
+  createEmbeddingProviderFromConfig,
   composeSubstrateAgent,
+  wireSelfModelRuntime,
+  wireCoreMemoryRuntime,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
@@ -108,14 +104,13 @@ import { createWyomingServiceRegistry } from './channels/wyoming/services/index.
 import { createWyomingHandleServiceAdapter } from './channels/wyoming/services/handle.js';
 import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.js';
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
-import { createStreamingSttConnector } from './voice/connectors/stt/index.js';
-import { createStreamingTtsConnector } from './voice/connectors/tts/index.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,
-  type EligibilityDecision,
+  EligibilityDeniedError,
 } from './capabilities/eligibility.js';
+import { REPO_ALLOWED_PATHS } from './security/policy-constants.js';
 import {
   createSafeguardAuditTrail,
   createIdentityCoolingOffManagerFromEnv,
@@ -125,6 +120,8 @@ import {
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { ModuleLoader } from './modules/loader.js';
 import {
+  resolveCharacterCardHistoryPath,
+  resolveConfiguredCompanionDataDir,
   resolveContactsDir,
   resolveNotesDir,
   resolveScratchpadMirrorPath,
@@ -132,16 +129,39 @@ import {
 } from './persistence/layout.js';
 import {
   buildRuntimeChannelsConfigOverrides,
+  createRuntimeVoiceSttConnector,
+  createRuntimeVoiceTtsConnector,
   createEmbeddingDimensionMismatchFatalMessage,
-  installPromotedToolsPersistenceHook,
+  hydrateCanonicalStartupConfig,
   resolveRuntimeVoiceSttProvider,
   resolveRuntimeVoiceTtsProvider,
+  type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
 import {
-  registerChannelAdapter as registerRuntimeChannelAdapter,
+  isExplicitTrue,
+  parseCommaSeparatedEnv,
+  parseExtractionDrainTimeoutMs,
+} from './runtime/env-parsing.js';
+import {
+  createStartupTextEmotionClassifier,
+  warmRuntimeMlServices,
+} from './runtime/ml-warmup.js';
+import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
+import {
+  buildChannelAdapterFactoryManifest,
+  loadChannelAdaptersFromManifest,
   startChannelAdapters,
   stopChannelAdapters,
 } from './runtime/channel-lifecycle.js';
+import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
+import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
+import {
+  createApiServerChannelAdapterFactoryEntry,
+  createDiscordChannelAdapterFactoryEntry,
+  createTelegramChannelAdapterFactoryEntry,
+  getOptionalChannelAdapter,
+  requireChannelAdapter,
+} from './bootstrap/channel-runtime.js';
 export {
   buildRuntimeChannelsConfigOverrides,
   createEmbeddingDimensionMismatchFatalMessage,
@@ -149,34 +169,66 @@ export {
 
 const log = createComponentLogger('Runtime');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
+const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
 
-function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecision): void {
-  eventBus.emit('capability.eligibility', {
-    operationKind: decision.operation.kind,
-    operationRef: JSON.stringify(decision.operation),
-    allowed: decision.allowed,
-    reasonCode: decision.reasonCode,
-    tier: decision.tier,
-    requiredTokens: decision.requiredTokens,
-    missingTokens: decision.missingTokens,
-    ...(decision.minimumTier ? { minimumTier: decision.minimumTier } : {}),
-    timestamp: Date.now(),
-  }).catch((error) => {
-    log.warn('Failed to emit capability eligibility telemetry', { error: String(error) });
-  });
+interface RuntimeStopOptions {
+  notifyShutdown?: boolean;
+  shutdownReason?: string;
 }
 
-function isExplicitTrue(value: string | undefined): boolean {
-  return value?.trim().toLowerCase() === 'true';
-}
+function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {
+  if (diagnostics.modelsMigratedFromLegacySettings) {
+    log.warn('Migrated legacy model settings from settings.json to models.json');
+  } else if (diagnostics.modelsLegacyDriftDetected) {
+    log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+  }
 
-function parseCommaSeparatedEnv(value: string | undefined): string[] {
-  if (!value) return [];
-  const entries = value
-    .split(',')
-    .map(entry => entry.trim())
-    .filter(Boolean);
-  return [...new Set(entries)];
+  if (diagnostics.maintenanceIntervalMigration.state === 'migrated') {
+    log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
+      maintenanceIntervalMs:
+        diagnostics.maintenanceIntervalMigration.storedValue
+        ?? diagnostics.maintenanceIntervalMigration.settingsValue,
+    });
+  } else if (diagnostics.maintenanceIntervalMigration.state === 'drift_detected') {
+    log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
+      settingsMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.settingsValue,
+      schedulerMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.storedValue,
+    });
+  } else if (diagnostics.maintenanceIntervalMigration.state === 'error') {
+    log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
+      error: diagnostics.maintenanceIntervalMigration.error ?? 'unknown',
+    });
+  }
+
+  if (diagnostics.capabilityTierMigration.state === 'migrated') {
+    log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
+      capabilityTier:
+        diagnostics.capabilityTierMigration.storedValue
+        ?? diagnostics.capabilityTierMigration.settingsValue,
+    });
+  } else if (diagnostics.capabilityTierMigration.state === 'drift_detected') {
+    log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
+      settingsCapabilityTier: diagnostics.capabilityTierMigration.settingsValue,
+      capabilityTier: diagnostics.capabilityTierMigration.storedValue,
+    });
+  } else if (diagnostics.capabilityTierMigration.state === 'error') {
+    log.warn('Failed to migrate legacy capabilityTier from settings.json', {
+      error: diagnostics.capabilityTierMigration.error ?? 'unknown',
+    });
+  }
+
+  if (diagnostics.removedLegacyKeys.length > 0) {
+    if (diagnostics.settingsRewriteError) {
+      log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
+        keys: diagnostics.removedLegacyKeys,
+        error: diagnostics.settingsRewriteError,
+      });
+    } else {
+      log.warn('Removed legacy cross-domain keys from settings.json', {
+        keys: diagnostics.removedLegacyKeys,
+      });
+    }
+  }
 }
 
 export class SubstrateRuntime implements Lifecycle {
@@ -216,14 +268,6 @@ export class SubstrateRuntime implements Lifecycle {
     this.startTime = Date.now();
   }
 
-  private registerChannelAdapter(adapter: ChannelAdapter): void {
-    registerRuntimeChannelAdapter(
-      this.channelRegistry,
-      adapter,
-      registry => this.agentLoop.setChannelRegistry(registry),
-    );
-  }
-
   private async startChannels(): Promise<void> {
     await startChannelAdapters(
       this.channelRegistry,
@@ -234,16 +278,6 @@ export class SubstrateRuntime implements Lifecycle {
 
   private async stopChannels(): Promise<void> {
     await stopChannelAdapters(this.channelRegistry);
-  }
-
-  private resolveExtractionDrainTimeoutMs(): number {
-    const raw = process.env.EXTRACTION_DRAIN_TIMEOUT_MS;
-    if (!raw) return DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS;
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      return DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS;
-    }
-    return parsed;
   }
 
   private seedCrashRecoveryRetryBacklog(candidates: CrashRecoveryExtractionCandidate[]): void {
@@ -342,11 +376,12 @@ export class SubstrateRuntime implements Lifecycle {
   }
 
   private restoreLatestSessionMetadata(): void {
+    const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
     const behavior = this.config.sessionRestartBehavior ?? 'reuse_latest_session';
     const resolved = this.sessionManager.resolveStartupSessionMetadata(behavior);
     if (!resolved) return;
 
-    writeLastActiveSession(this.config.dataDir, resolved);
+    writeLastActiveSession(companionDataDir, resolved);
     if (behavior === 'new_session') {
       log.info('Initialized fresh startup session metadata', {
         sessionId: resolved.sessionId,
@@ -365,6 +400,26 @@ export class SubstrateRuntime implements Lifecycle {
 
   async init(): Promise<void> {
     log.info('Initializing...');
+    const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
+    if (ignoredMutableEnvKeys.length > 0) {
+      log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
+        keys: ignoredMutableEnvKeys,
+      });
+    }
+
+    const startupHydration = hydrateCanonicalStartupConfig(this.config, {
+      env: process.env,
+    });
+    const {
+      systemDataDir,
+      companionDataDir,
+      runtimePathLayout,
+      settingsDomains,
+      trustPolicyConfig,
+      schedulerConfig,
+    } = startupHydration;
+    logStartupHydrationDiagnostics(startupHydration.diagnostics);
+
     const lifecycleRuntimeContract = resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SINGLE,
       runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
@@ -372,98 +427,6 @@ export class SubstrateRuntime implements Lifecycle {
     });
     const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
     log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
-
-    // Load persisted settings and apply runtime-owned domain over env defaults.
-    const savedSettings = loadSettings(this.config.dataDir);
-    const settingsDomains = splitSettingsByDomain(savedSettings);
-    applySettings(this.config, settingsDomains.runtime);
-    installPromotedToolsPersistenceHook(this.config);
-
-    const modelsLoadResult = loadModelsConfigWithLegacyMigration(this.config.dataDir, {
-      defaultContextWindow: this.config.defaultContextWindow,
-      legacySettings: settingsDomains.models,
-    });
-    if (modelsLoadResult.migratedFromLegacySettings) {
-      log.warn('Migrated legacy model settings from settings.json to models.json');
-    } else if (modelsLoadResult.legacyDriftDetected) {
-      log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
-    }
-    applySettings(this.config, modelsLoadResult.config);
-
-    if (settingsDomains.maintenanceIntervalMs !== undefined) {
-      try {
-        const schedulerPath = join(this.config.dataDir, SCHEDULER_FILE_NAME);
-        const schedulerFileExisted = existsSync(schedulerPath);
-        const persistedScheduler = loadSchedulerConfig(this.config.dataDir, {
-          seedDir: process.env.CONFIG_DIR,
-        });
-        if (!schedulerFileExisted) {
-          saveSchedulerConfig(this.config.dataDir, {
-            ...persistedScheduler,
-            salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
-          });
-          log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
-            maintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
-          });
-        } else if (persistedScheduler.salienceDecayIntervalMs !== settingsDomains.maintenanceIntervalMs) {
-          log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
-            settingsMaintenanceIntervalMs: settingsDomains.maintenanceIntervalMs,
-            schedulerMaintenanceIntervalMs: persistedScheduler.salienceDecayIntervalMs,
-          });
-        }
-      } catch (error) {
-        log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
-          error: String(error),
-        });
-      }
-    }
-
-    if (settingsDomains.capabilityTier !== undefined) {
-      try {
-        const capabilityPath = join(this.config.dataDir, CAPABILITY_TIER_FILE_NAME);
-        const capabilityFileExisted = existsSync(capabilityPath);
-        const persistedCapabilities = loadCapabilityTierConfig(this.config.dataDir, {
-          seedDir: process.env.CONFIG_DIR,
-        });
-        if (!capabilityFileExisted) {
-          saveCapabilityTierConfig(this.config.dataDir, {
-            ...persistedCapabilities,
-            tier: settingsDomains.capabilityTier,
-          });
-          log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
-            capabilityTier: settingsDomains.capabilityTier,
-          });
-        } else if (persistedCapabilities.tier !== settingsDomains.capabilityTier) {
-          log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
-            settingsCapabilityTier: settingsDomains.capabilityTier,
-            capabilityTier: persistedCapabilities.tier,
-          });
-        }
-      } catch (error) {
-        log.warn('Failed to migrate legacy capabilityTier from settings.json', {
-          error: String(error),
-        });
-      }
-    }
-
-    if (settingsDomains.legacyKeys.length > 0) {
-      try {
-        saveSettings(this.config.dataDir, settingsDomains.runtime);
-        log.warn('Removed legacy cross-domain keys from settings.json', {
-          keys: settingsDomains.legacyKeys,
-        });
-      } catch (error) {
-        log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
-          keys: settingsDomains.legacyKeys,
-          error: String(error),
-        });
-      }
-    }
-
-    const trustPolicyConfig = loadTrustPolicyConfig(this.config.dataDir, {
-      seedDir: process.env.CONFIG_DIR,
-    });
-    setRuntimeTrustPolicy(trustPolicyConfig);
     log.info('Loaded trust policy configuration', {
       exactOverrideCount: Object.keys(
         trustPolicyConfig.channelClassification.visibilityOverrides.exact,
@@ -472,23 +435,18 @@ export class SubstrateRuntime implements Lifecycle {
         trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
       ).length,
     });
-    const schedulerConfig = resolveRuntimeSchedulerConfig({
-      dataDir: this.config.dataDir,
-      seedDir: process.env.CONFIG_DIR,
-    });
     const backupConfig = resolveBackupRuntimeConfig({
-      dataDir: this.config.dataDir,
+      dataDir: companionDataDir,
+      defaultRootDir: runtimePathLayout.backupsDir,
     });
-    this.config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
     this.capabilityRuntime = new CapabilityRuntime({
-      dataDir: this.config.dataDir,
+      dataDir: systemDataDir,
       seedDir: process.env.CONFIG_DIR,
-      envTier: this.config.capabilityTier,
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
     const eligibilityGate = createEligibilityGate(
       () => this.capabilityRuntime,
-      (decision) => emitEligibilityDecision(this.eventBus, decision),
+      (decision) => emitEligibilityDecisionTelemetry(this.eventBus, decision, log),
     );
 
     // Open database
@@ -515,18 +473,28 @@ export class SubstrateRuntime implements Lifecycle {
     }
     const cardVersionStore = new CharacterCardVersionStore(
       this.config.characterCardPath,
-      join(this.config.dataDir, 'character-card-history.jsonl'),
+      resolveCharacterCardHistoryPath(companionDataDir),
     );
     log.info(`Loaded character: ${card.data.name}`);
     this.config.characterName = card.data.name;
-    const promptRegistry = wireStaticPromptRegistry(this.config.dataDir);
+    const promptRegistry = wireStaticPromptRegistry(companionDataDir);
     const cardProposalQueue = new ConfirmationQueue();
 
     // Initialize core components
     this.llmClient = new LLMClient(this.config, {
       eligibilityGate,
+      onBudgetBlocked: (event) => {
+        this.eventBus.emit('model.budget.blocked', event).catch((error) => {
+          log.error('Failed to emit model budget blocked telemetry', {
+            error: error instanceof Error ? error.message : String(error),
+            provider: event.provider,
+            model: event.model,
+            reason: event.reason,
+          });
+        });
+      },
     });
-    const sessionsDir = resolveSessionsDir(this.config.dataDir);
+    const sessionsDir = resolveSessionsDir(companionDataDir);
     const sessionHmacKeyring = buildSessionHmacKeyring({
       serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
       singleKey: process.env.GATEWAY_SESSION_HMAC_KEY,
@@ -563,16 +531,16 @@ export class SubstrateRuntime implements Lifecycle {
     this.restoreLatestSessionMetadata();
 
     // Embedding provider (selected by EMBEDDING_PROVIDER)
-    const embeddingProvider = createEmbeddingProviderFromEnv();
+    const embeddingProvider = createEmbeddingProviderFromConfig(this.config);
     log.info('Embedding provider initialized', {
       provider: embeddingProvider.kind,
       dims: embeddingProvider.dims,
     });
 
-    const notesDir = resolveNotesDir(this.config.dataDir);
+    const notesDir = resolveNotesDir(companionDataDir);
     this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims, {
       notesDir,
-      scratchpadMirrorPath: resolveScratchpadMirrorPath(this.config.dataDir),
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
     });
     const embeddingDimensionCheck = validateEmbeddingDimensions(
       this.db,
@@ -592,6 +560,22 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Agent loop
+    const textClassifier = createStartupTextEmotionClassifier({
+      model: this.config.textEmotionModel,
+      cacheDir: this.config.textEmotionCacheDir,
+      dtype: this.config.textEmotionDtype,
+    });
+    await warmRuntimeMlServices({
+      textClassifier,
+      embeddingService: embeddingProvider,
+      textEmotionModel: this.config.textEmotionModel!.trim(),
+      logger: log,
+    });
+    const emotionObserver = new EmotionObserver({
+      textClassifier,
+      audioClassifier: getSharedAudioEmotionClassifier(),
+    });
+    const emotionState = new EmotionState();
     this.agentLoop = composeSubstrateAgent({
       eventBus: this.eventBus,
       llmProvider: this.llmClient,
@@ -600,10 +584,15 @@ export class SubstrateRuntime implements Lifecycle {
       characterName: card.data.name,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       config: this.config,
+      emotionRuntime: {
+        observer: emotionObserver,
+        state: emotionState,
+        requireWiring: true,
+      },
     });
     this.agentLoop.scratchpadProvider = this.memoryStore;
     this.agentLoop.setCapabilityRuntime(this.capabilityRuntime);
-    const safeguardAuditTrail = createSafeguardAuditTrail(this.config.dataDir);
+    const safeguardAuditTrail = createSafeguardAuditTrail(companionDataDir);
     const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
       auditTrail: safeguardAuditTrail,
     });
@@ -615,7 +604,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     const skillsRuntime = wireSkillsRuntime(this.agentLoop, {
-      dataDir: this.config.dataDir,
+      dataDir: systemDataDir,
       seedDir: process.env.CONFIG_DIR,
       repoRoot: process.cwd(),
     });
@@ -623,7 +612,7 @@ export class SubstrateRuntime implements Lifecycle {
     // Prompt stack — layered, editable system prompt
     const promptStore = wirePromptRuntime(
       this.agentLoop,
-      this.config.dataDir,
+      companionDataDir,
       composeSystemPromptTemplate(),
       {
         identityCoolingOff,
@@ -635,7 +624,12 @@ export class SubstrateRuntime implements Lifecycle {
       confirmationQueue: cardProposalQueue,
     });
     wireSettingsRuntime(this.agentLoop, this.config);
-    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, this.config.dataDir);
+    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir, this.llmClient);
+    const coreMemoryStore = wireCoreMemoryRuntime({
+      agentLoop: this.agentLoop,
+      sessionManager: this.sessionManager,
+      config: this.config,
+    });
 
     // Contact store + tools — trust-gated privacy system
     const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
@@ -649,7 +643,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.db,
       primaryUserId,
       {
-        exportDir: resolveContactsDir(this.config.dataDir),
+        exportDir: resolveContactsDir(companionDataDir),
         ...(primaryTelegramUserId
           ? {
             bootstrapPrimaryIdentityLinks: [{
@@ -658,8 +652,14 @@ export class SubstrateRuntime implements Lifecycle {
               privacyLevel: 'private',
             }],
           }
-          : {}),
-      },
+        : {}),
+    },
+  );
+    const intentionRuntime = wireIntentionRuntime(this.agentLoop, this.db);
+    wireSelfModelRuntime(this.agentLoop);
+    const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionRuntime.concernStore);
+    const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
+      intentionRuntime.behavioralPatternTracker,
     );
 
     this.memoryExtractor = wireMemoryRuntime({
@@ -677,7 +677,7 @@ export class SubstrateRuntime implements Lifecycle {
 
     this.salienceDecay = new SalienceDecay(this.memoryStore);
 
-    // Scheduler — Purrsephone's internal clock
+    // Scheduler — the companion's internal clock
     this.scheduler = new Scheduler(this.eventBus, {
       tickIntervalMs: schedulerConfig.tickIntervalMs,
       heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,
@@ -693,6 +693,28 @@ export class SubstrateRuntime implements Lifecycle {
       eligibility: { requiredTokens: ['memory.write'] },
       state: 'idle',
     });
+    this.scheduler.register({
+      id: COMPACTION_GUIDELINE_REVIEW_TASK_ID,
+      name: 'Compression Guideline Review',
+      type: 'every',
+      intervalMs: this.config.maintenanceIntervalMs,
+      handler: async () => {
+        const result = await this.sessionManager.runPeriodicCompressionGuidelineUpdate(this.llmClient);
+        if (result.status === 'updated') {
+          log.info('Compression guideline updated from failure log review', {
+            version: result.version,
+            reviewedFailureCount: result.reviewedFailureCount,
+          });
+          return;
+        }
+        log.debug('Compression guideline review skipped', {
+          reason: result.reason,
+          reviewedFailureCount: result.reviewedFailureCount,
+        });
+      },
+      eligibility: { requiredTokens: ['memory.write'] },
+      state: 'idle',
+    });
     registerScheduledBackupTask({
       scheduler: this.scheduler,
       db: this.db,
@@ -704,6 +726,7 @@ export class SubstrateRuntime implements Lifecycle {
       intervalMs: backupConfig.intervalMs,
       retentionCount: backupConfig.retentionCount,
       backupRootDir: backupConfig.rootDir,
+      verifyRestore: backupConfig.verifyRestore,
     });
     this.scheduler.registerHeartbeat(async () => {
       const now = Date.now();
@@ -716,10 +739,22 @@ export class SubstrateRuntime implements Lifecycle {
       agentLoop: this.agentLoop,
       eligibilityGate,
     });
+    this.eventBus.on('agent.turn.end', ({ message, response }) => {
+      const captured = this.sessionManager.recordCompressionFailureFromResponse(
+        message.channelId,
+        message.id,
+        response.content,
+      );
+      if (!captured) return;
+      log.info('Captured compression failure signal for guideline evolution', {
+        channelId: message.channelId,
+        sourceMessageId: message.id,
+      });
+    });
 
     log.info(`Memory system enabled (${embeddingProvider.dims}d embeddings via ${embeddingProvider.kind})`);
 
-    // Shard manager — allows Purrsephone to spawn parallel sub-agents
+    // Shard manager — allows the companion to spawn parallel sub-agents
     this.moduleLoader = new ModuleLoader({
       eventBus: this.eventBus,
       registerTool: (tool, category) => this.agentLoop.registerTool(tool, category),
@@ -736,10 +771,12 @@ export class SubstrateRuntime implements Lifecycle {
       sessionManager: this.sessionManager,
       config: this.config,
       parentSystemPrompt: systemPrompt,
+      companionDataDir,
       scheduler: this.scheduler,
       replConfig,
       shardAuditTrail: safeguardAuditTrail,
       getCapabilityTier: () => this.capabilityRuntime.getTier(),
+      compositionalPolicy: this.config.compositionalPolicy,
       moduleInstallConfirmationQueue: cardProposalQueue,
       onModuleRegistryMutation: async (mutation) => {
         await this.moduleLoader?.applyRegistryMutation(mutation);
@@ -748,6 +785,9 @@ export class SubstrateRuntime implements Lifecycle {
 
     // Memory write/import tools — intentional memory creation
     const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
+    intentionRuntime.behavioralPatternTracker.setPromotionHook(
+      createBehavioralPatternMemoryPromotionHook(memoryWriter),
+    );
     this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
     this.agentLoop.registerTool(createMemoryRedactTool(memoryWriter));
@@ -755,11 +795,12 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.registerTool(createUndoMemoryDeleteTool(this.memoryStore));
     this.agentLoop.registerTool(createScratchpadReadTool(this.memoryStore));
     this.agentLoop.registerTool(createScratchpadWriteTool(this.memoryStore));
+    log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
     // Git tools — self-modification via git
     wireGitRuntime(this.agentLoop, {
       repoRoot: process.cwd(),
-      allowedPaths: ['src/', 'docs/', 'purrsephone/'],
+      allowedPaths: [...REPO_ALLOWED_PATHS],
     });
     log.info('Git self-modification tools enabled');
 
@@ -787,24 +828,34 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.validateToolWiring('single');
 
     const channelsConfig = loadRuntimeChannelsConfig(
-      this.config.dataDir,
+      systemDataDir,
       process.env,
-      buildRuntimeChannelsConfigOverrides(this.config, savedSettings),
+      buildRuntimeChannelsConfigOverrides(this.config, settingsDomains.runtime),
     );
 
-    // Discord adapter — setAgent enables steering (mid-stream message injection)
-    this.discord = new DiscordAdapter(this.config, this.eventBus, {
-      sessionStore: this.sessionStore,
-    });
-    this.discord.setAgent(this.agentLoop);
-    await this.discord.init();
-    this.registerChannelAdapter(this.discord);
-
-    if (channelsConfig.telegram.enabled) {
-      const telegram = new TelegramAdapter(channelsConfig.telegram, this.eventBus);
-      telegram.onMessage((message) => this.agentLoop.handleMessage(message));
-      await telegram.init();
-      this.registerChannelAdapter(telegram);
+    const channelFactoryManifest = buildChannelAdapterFactoryManifest([
+      createDiscordChannelAdapterFactoryEntry({
+        config: this.config,
+        eventBus: this.eventBus,
+        sessionStore: this.sessionStore,
+        agentLoop: this.agentLoop,
+        eligibilityGate,
+      }),
+      createTelegramChannelAdapterFactoryEntry({
+        config: channelsConfig.telegram,
+        eventBus: this.eventBus,
+        onMessage: (message) => this.agentLoop.handleMessage(message),
+      }),
+    ]);
+    await loadChannelAdaptersFromManifest(
+      this.channelRegistry,
+      channelFactoryManifest,
+      registry => this.agentLoop.setChannelRegistry(registry),
+      log,
+      eligibilityGate,
+    );
+    this.discord = requireChannelAdapter<DiscordAdapter>(this.channelRegistry, 'discord');
+    if (getOptionalChannelAdapter(this.channelRegistry, 'telegram')) {
       log.info('Telegram adapter configured', {
         mode: channelsConfig.telegram.mode,
         allowlistSize: channelsConfig.telegram.allowedUsers.length,
@@ -816,14 +867,14 @@ export class SubstrateRuntime implements Lifecycle {
     this.lifecycleNotifier = new DiscordLifecycleNotifier({
       sender: this.discord,
       heartbeatChannelId,
-      dataDir: this.config.dataDir,
+      dataDir: companionDataDir,
       startTime: this.startTime,
     });
 
     // Track last-active channel on every incoming message
     this.eventBus.on('message.received', ({ message }) => {
       const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
-      writeLastActiveSession(this.config.dataDir, {
+      writeLastActiveSession(companionDataDir, {
         sessionId,
         channelType: inferSessionChannelType(sessionId) ?? message.channelType,
         timestamp: message.timestamp instanceof Date
@@ -835,7 +886,10 @@ export class SubstrateRuntime implements Lifecycle {
     // Lifecycle tools — self_restart and self_rebuild
     this.agentLoop.registerTool(createRestartTool(
       this.lifecycleNotifier,
-      () => this.stop(),
+      () => this.stop({
+        notifyShutdown: false,
+        shutdownReason: 'restart requested',
+      }),
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
@@ -845,7 +899,10 @@ export class SubstrateRuntime implements Lifecycle {
     ));
     this.agentLoop.registerTool(createRebuildTool(
       this.lifecycleNotifier,
-      () => this.stop(),
+      () => this.stop({
+        notifyShutdown: false,
+        shutdownReason: 'rebuild restart requested',
+      }),
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
@@ -881,13 +938,22 @@ export class SubstrateRuntime implements Lifecycle {
       this.scheduler,
       this.agentLoop,
       this.discord,
-      this.config.dataDir,
+      companionDataDir,
       heartbeatChannelId,
       {
         eventBus: this.eventBus,
         llmProvider: this.llmClient,
+        capabilityTier: this.config.capabilityTier,
+        compositionalPolicy: this.config.compositionalPolicy,
         characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
         memoryWriter,
+        sessionManager: this.sessionManager,
+        emotionState,
+        contactStore,
+        getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
+        onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
+        onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
+        coreMemoryStore,
         postTurnActions,
         ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
       },
@@ -896,30 +962,39 @@ export class SubstrateRuntime implements Lifecycle {
     // API server — OpenAI-compatible endpoints
     const apiHost = process.env.API_HOST || undefined;
     const apiPort = parseOptionalPositiveIntEnv(process.env.API_PORT);
+    const adminHost = process.env.ADMIN_HOST || undefined;
+    const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
     if (apiPort) {
       const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
-      const corsAllowedOrigins = parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST);
+      const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
+        explicitAllowlist: parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST),
+        adminHost,
+        adminPort,
+      });
       const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
         agentLoop: this.agentLoop,
         eventBus: this.eventBus,
         config: this.config,
+        eligibilityGate,
       });
       const activeProbeConfig = resolveActiveHealthProbeConfig(process.env);
       const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
       const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
 
-      const apiServer = new ApiServer({
-        port: apiPort,
-        host: apiHost,
-        agentLoop: this.agentLoop,
-        eventBus: this.eventBus,
-        sessionManager: this.sessionManager,
-        contactStore,
-        apiKey: process.env.API_KEY || undefined,
-        allowInsecureWithoutAuth,
-        corsAllowedOrigins,
-        modelName: process.env.API_MODEL_NAME,
-        healthChecks: {
+      const apiServerManifest = buildChannelAdapterFactoryManifest([
+        createApiServerChannelAdapterFactoryEntry({
+          port: apiPort,
+          host: apiHost,
+          agentLoop: this.agentLoop,
+          eventBus: this.eventBus,
+          sessionManager: this.sessionManager,
+          contactStore,
+          apiKey: process.env.API_KEY || undefined,
+          adminToken: process.env.ADMIN_TOKEN || undefined,
+          allowInsecureWithoutAuth,
+          corsAllowedOrigins,
+          modelName: process.env.API_MODEL_NAME,
+          healthChecks: {
           memory: () => {
             const stats = this.memoryStore.getStats();
             return {
@@ -1027,7 +1102,8 @@ export class SubstrateRuntime implements Lifecycle {
             }
 
             const probeResult = await embeddingsActiveProbe.run(async (signal) => {
-              const vector = await embeddingProvider.embed('health probe', { signal });
+              void signal;
+              const vector = await embeddingProvider.embed('health probe');
               if (vector.length !== embeddingProvider.dims) {
                 throw new Error(
                   `Embedding probe dimension mismatch: expected ${embeddingProvider.dims}, got ${vector.length}`,
@@ -1068,25 +1144,32 @@ export class SubstrateRuntime implements Lifecycle {
             };
           },
         },
-        voiceWebSocketRuntime,
-      });
-      await apiServer.init();
-      this.registerChannelAdapter(apiServer);
+          voiceWebSocketRuntime,
+        }),
+      ]);
+      await loadChannelAdaptersFromManifest(
+        this.channelRegistry,
+        apiServerManifest,
+        registry => this.agentLoop.setChannelRegistry(registry),
+        log,
+        eligibilityGate,
+      );
       log.info(`API server configured on port ${apiPort}`);
     }
 
     // Model discovery (if LiteLLM is configured)
     const litellmBaseUrl = process.env.LITELLM_BASE_URL;
     const modelDiscovery = litellmBaseUrl
-      ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY)
+      ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY, {
+        openRouterModelsApiUrl: this.config.openRouterModelsApiUrl ?? '',
+      })
       : null;
 
-    // Admin GUI — Purrsephone's Garden
-    const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
+    // Admin GUI — Garden management surfaces
     if (adminPort) {
       this.adminServer = new AdminServer({
         port: adminPort,
-        host: process.env.ADMIN_HOST || undefined,
+        host: adminHost,
         token: process.env.ADMIN_TOKEN || undefined,
         apiBaseUrl: process.env.API_BASE_URL,
         apiHost,
@@ -1128,42 +1211,44 @@ export class SubstrateRuntime implements Lifecycle {
 
       const wyomingAdapters = [handleAdapter];
 
-      // ASR adapter — wired to Deepgram STT when selected and API key is available
-      const wyomingSttProvider = resolveRuntimeVoiceSttProvider(this.config);
-      const wyomingDeepgramKey = this.config.deepgramApiKey;
-      if (wyomingSttProvider === 'deepgram' && wyomingDeepgramKey) {
-        const sttConnector = createStreamingSttConnector('deepgram', {
-          apiKey: wyomingDeepgramKey,
-          model: this.config.deepgramModel,
-        });
-        wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
-        log.info('Wyoming ASR adapter enabled (deepgram)');
-      }
-
-      // TTS adapter — wired to the configured TTS provider (elevenlabs or echo)
-      const wyomingTtsProvider = resolveRuntimeVoiceTtsProvider(this.config);
       try {
-        let ttsConnector;
-        if (wyomingTtsProvider === 'echo' && this.config.echoTtsUrl && this.config.echoTtsVoice) {
-          ttsConnector = createStreamingTtsConnector('echo', {
-            url: this.config.echoTtsUrl,
-            voice: this.config.echoTtsVoice,
-            ...(this.config.echoTtsPreset ? { preset: this.config.echoTtsPreset } : {}),
-            ...(this.config.echoTtsModel ? { model: this.config.echoTtsModel } : {}),
-          });
-        } else if (wyomingTtsProvider === 'elevenlabs' && this.config.elevenLabsApiKey && this.config.elevenLabsVoiceId) {
-          ttsConnector = createStreamingTtsConnector('elevenlabs', {
-            apiKey: this.config.elevenLabsApiKey,
-            voiceId: this.config.elevenLabsVoiceId,
-            modelId: this.config.elevenLabsModelId,
-          });
-        }
-        if (ttsConnector) {
-          wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: ttsConnector }));
-          log.info('Wyoming TTS adapter enabled', { provider: wyomingTtsProvider });
+        const runtimeStt = createRuntimeVoiceSttConnector(this.config, {
+          eligibilityGate,
+        });
+        if (runtimeStt) {
+          const { provider, connector } = runtimeStt;
+          const sttConnector = connector;
+          wyomingAdapters.push(createWyomingAsrServiceAdapter({ stt: sttConnector }));
+          log.info('Wyoming ASR adapter enabled', { provider });
         }
       } catch (error) {
-        log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+        if (!(error instanceof EligibilityDeniedError)) {
+          throw error;
+        }
+        log.info('Wyoming ASR adapter disabled by eligibility gate', {
+          provider: resolveRuntimeVoiceSttProvider(this.config),
+          error: error.message,
+        });
+      }
+
+      try {
+        const runtimeTts = createRuntimeVoiceTtsConnector(this.config, {
+          requireElevenLabsVoiceId: true,
+          eligibilityGate,
+        });
+        if (runtimeTts) {
+          wyomingAdapters.push(createWyomingTtsServiceAdapter({ tts: runtimeTts.connector }));
+          log.info('Wyoming TTS adapter enabled', { provider: runtimeTts.provider });
+        }
+      } catch (error) {
+        if (error instanceof EligibilityDeniedError) {
+          log.info('Wyoming TTS adapter disabled by eligibility gate', {
+            provider: resolveRuntimeVoiceTtsProvider(this.config),
+            error: error.message,
+          });
+        } else {
+          log.warn('Wyoming TTS adapter could not be created', { error: String(error) });
+        }
       }
 
       const serviceRegistry = createWyomingServiceRegistry(wyomingAdapters);
@@ -1178,9 +1263,9 @@ export class SubstrateRuntime implements Lifecycle {
 
       this.wyomingRuntime = new WyomingRuntime({
         info: {
-          name: 'purrsephone',
+          name: DEFAULT_COMPANION_ID,
           version: '1.0.0',
-          description: 'Purrsephone Substrate Framework — Wyoming voice bridge',
+          description: 'Companion Substrate Framework — Wyoming voice bridge',
           services: serviceRegistry.services,
         } as WyomingInfoData,
         emitFrame: (session, frame) => this.wyomingTcpServer!.send(session, frame),
@@ -1215,21 +1300,27 @@ export class SubstrateRuntime implements Lifecycle {
     log.info('Ready');
   }
 
-  async stop(): Promise<void> {
+  async stop(options: RuntimeStopOptions = {}): Promise<void> {
     if (this.stopPromise) {
       await this.stopPromise;
       return;
     }
 
-    this.stopPromise = this.stopInternal();
+    this.stopPromise = this.stopInternal(options);
     await this.stopPromise;
   }
 
-  private async stopInternal(): Promise<void> {
+  private async stopInternal(options: RuntimeStopOptions): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
 
+    const shutdownReason = options.shutdownReason?.trim();
     log.info('Shutting down...');
+    if (options.notifyShutdown ?? true) {
+      await this.runShutdownStep('send graceful shutdown notification', () => this.lifecycleNotifier?.notifyShutdown(
+        shutdownReason && shutdownReason.length > 0 ? shutdownReason : undefined,
+      ));
+    }
     await this.runShutdownStep('emit system.shutdown event', () => this.eventBus.emit('system.shutdown', {}));
     await this.runShutdownStep('stop voice observers', () => {
       this.stopVoiceObservers?.();
@@ -1241,7 +1332,10 @@ export class SubstrateRuntime implements Lifecycle {
     });
     await this.runShutdownStep('stop scheduler', () => this.scheduler.stop());
 
-    const timeoutMs = this.resolveExtractionDrainTimeoutMs();
+    const timeoutMs = parseExtractionDrainTimeoutMs(
+      process.env,
+      DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+    );
     await this.runShutdownStep('drain memory extractor', async () => {
       const drained = await this.memoryExtractor.stop({ timeoutMs });
       if (drained === false) {
@@ -1281,35 +1375,6 @@ export class SubstrateRuntime implements Lifecycle {
     action: () => void | Promise<void>,
     maxAttempts = 2,
   ): Promise<void> {
-    const attempts = Math.max(1, Math.floor(maxAttempts));
-    for (let attempt = 1; attempt <= attempts; attempt++) {
-      try {
-        await action();
-        if (attempt > 1) {
-          log.info('Shutdown step recovered after retry', {
-            step,
-            attempt,
-            maxAttempts: attempts,
-          });
-        }
-        return;
-      } catch (error) {
-        if (attempt < attempts) {
-          log.warn('Shutdown step failed; retrying', {
-            step,
-            attempt,
-            maxAttempts: attempts,
-            error: String(error),
-          });
-          continue;
-        }
-        log.error('Shutdown step failed; continuing shutdown', {
-          step,
-          attempt,
-          maxAttempts: attempts,
-          error: String(error),
-        });
-      }
-    }
+    await runShutdownStepWithRetry(step, action, log, maxAttempts);
   }
 }

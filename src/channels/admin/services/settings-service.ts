@@ -4,6 +4,7 @@ import {
   type EditableSettings,
   hasModelSettings,
   loadSettings,
+  MOOD_CONGRUENCE_WEIGHT_RANGE,
   normalizeEditableSettings,
   splitSettingsByDomain,
   SETTINGS_VALIDATION,
@@ -28,24 +29,44 @@ import {
   saveCapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
 import {
-  CAPABILITY_TIER_VALUES,
-} from '../../../capabilities/tiers.js';
+  buildSettingsContractData,
+  IMPORT_PROCESSING_ROUTE_MODE_VALUES,
+  SESSION_RESTART_BEHAVIOR_VALUES,
+  SETTINGS_BOOLEAN_FIELDS,
+  SETTINGS_OWNER_FILE_BY_FIELD,
+  SETTINGS_STRING_ARRAY_FIELDS,
+} from '../../../config/settings-contract.js';
+import {
+  validateCompositionalPolicyConfig,
+} from '../../../compositional/policy.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
 import { toErrorMessage } from '../../../utils/errors.js';
+import {
+  getStreamingSttProviderMetadata,
+  isStreamingSttProvider,
+  isStreamingSttProviderConfigured,
+  listStreamingSttProviders,
+} from '../../../voice/connectors/stt/index.js';
+import {
+  getStreamingTtsProviderMetadata,
+  isStreamingTtsProvider,
+  isStreamingTtsProviderConfigured,
+  listStreamingTtsProviders,
+} from '../../../voice/connectors/tts/index.js';
 import type {
   AdminSettingsData,
   AdminSettingsService,
+  AdminVoiceProviderData,
+  AdminVoiceProviderOption,
   ConfigUpdateResult,
   SettingsValidationError,
   SettingsConfigEditors,
 } from './types.js';
 
-const IMPORT_ROUTE_MODE_VALUES = new Set(['background', 'openrouter_zdr', 'local_endpoint']);
-const SESSION_RESTART_BEHAVIOR_VALUES = new Set(['reuse_latest_session', 'new_session']);
-const TTS_PROVIDER_VALUES = new Set(['elevenlabs', 'echo', 'disabled']);
-const STT_PROVIDER_VALUES = new Set(['deepgram', 'disabled']);
+const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
+const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
 const log = createComponentLogger('AdminSettingsService');
 
 type SettingsMutationResult =
@@ -130,7 +151,6 @@ export function applyAdminSettingsMutation(options: {
   saveSettings(config.dataDir, mergedRuntimeSettings);
   applySettings(config, mergedRuntimeSettings);
 
-  let modelsRefreshed = false;
   if (hasModelSettings(domainSplit.models)) {
     try {
       const currentModels = loadModelsConfig(config.dataDir, {
@@ -155,7 +175,7 @@ export function applyAdminSettingsMutation(options: {
         || modelPatch.extractionProvider !== undefined
         || modelPatch.extractionMaxTokens !== undefined;
       if (hasExtractionAliasPatch) {
-        const currentExtraction = config.modelRoster.background ?? config.modelRoster.extraction ?? {
+        const currentExtraction = config.modelRoster.background ?? {
           model: config.extractionModel,
           provider: config.extractionProvider,
           maxTokens: config.extractionMaxTokens,
@@ -186,17 +206,12 @@ export function applyAdminSettingsMutation(options: {
           message: `Settings saved but models config update failed: ${modelMutation.message}`,
         };
       }
-      modelsRefreshed = true;
     } catch (error) {
       return {
         ok: false,
         message: `Settings saved but models config update failed: ${toErrorMessage(error)}`,
       };
     }
-  }
-
-  if (!modelsRefreshed) {
-    refreshModels(config);
   }
 
   if (domainSplit.maintenanceIntervalMs !== undefined) {
@@ -249,28 +264,6 @@ export function applyAdminSettingsMutation(options: {
   return { ok: true };
 }
 
-const BOOLEAN_SETTINGS_FIELDS = new Set([
-  'importProcessingStrictPolicy',
-  'webFetchAllowHttp',
-  'webFetchAllowInternalNetwork',
-  'webFetchLocalCrawlerEnabled',
-  'webFetchLocalCrawlerAllowHttp',
-  'discordEnabled',
-  'telegramEnabled',
-  'obsidianAutoPublish',
-  'moaEnabled',
-]);
-
-const STRING_ARRAY_SETTINGS_FIELDS = new Set([
-  'openRouterProviderOrder',
-  'webFetchDomainAllowlist',
-  'webFetchLocalCrawlerHostAllowlist',
-  'webFetchLocalCrawlerDomainAllowlist',
-  'webFetchTlsCaCertPaths',
-  'promotedExtendedTools',
-  'moaReferenceModels',
-]);
-
 export class AdminSettingsDataService implements AdminSettingsService {
   constructor(private readonly deps: {
     config: SubstrateConfig;
@@ -279,7 +272,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
   private getEnvInfo() {
     return {
       salienceFloor: Number(process.env.SALIENCE_FLOOR ?? MEMORY_CONFIG.salienceFloor),
-      maintenanceIntervalMs: Number(process.env.MAINTENANCE_INTERVAL_MS ?? this.deps.config.maintenanceIntervalMs),
+      maintenanceIntervalMs: this.deps.config.maintenanceIntervalMs,
       discordToken: process.env.DISCORD_TOKEN ? '[set]' : '[not set]',
       apiKey: process.env.API_KEY ? '[set]' : '[not set]',
       adminToken: process.env.ADMIN_TOKEN ? '[set]' : '[not set]',
@@ -299,6 +292,39 @@ export class AdminSettingsDataService implements AdminSettingsService {
       scheduler: loadSchedulerConfig(this.deps.config.dataDir),
       trustPolicy: loadTrustPolicyConfig(this.deps.config.dataDir),
       capabilities: loadCapabilityTierConfig(this.deps.config.dataDir),
+    };
+  }
+
+  private buildVoiceProviderOptionList(kind: 'stt' | 'tts'): AdminVoiceProviderOption[] {
+    if (kind === 'stt') {
+      return listStreamingSttProviders()
+        .map((providerId) => {
+          const metadata = getStreamingSttProviderMetadata(providerId);
+          return {
+            id: providerId,
+            configured: isStreamingSttProviderConfigured(providerId, this.deps.config),
+            requiredTokens: [...(metadata?.eligibility?.requiredTokens ?? [])],
+          };
+        })
+        .sort((a, b) => a.id.localeCompare(b.id));
+    }
+
+    return listStreamingTtsProviders()
+      .map((providerId) => {
+        const metadata = getStreamingTtsProviderMetadata(providerId);
+        return {
+          id: providerId,
+          configured: isStreamingTtsProviderConfigured(providerId, this.deps.config),
+          requiredTokens: [...(metadata?.eligibility?.requiredTokens ?? [])],
+        };
+      })
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  private loadVoiceProviderData(): AdminVoiceProviderData {
+    return {
+      stt: this.buildVoiceProviderOptionList('stt'),
+      tts: this.buildVoiceProviderOptionList('tts'),
     };
   }
 
@@ -352,6 +378,70 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateSttProviderField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('sttProvider' in payload)) return;
+    const value = payload.sttProvider;
+    if (typeof value !== 'string') {
+      this.pushFieldError(errors, 'sttProvider', 'sttProvider must be a string', 'invalid_type');
+      return;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      this.pushFieldError(
+        errors,
+        'sttProvider',
+        'sttProvider must be "disabled" or a registered STT provider id',
+        'invalid_stt_provider',
+      );
+      return;
+    }
+
+    if (normalized !== 'disabled' && !isStreamingSttProvider(normalized)) {
+      this.pushFieldError(
+        errors,
+        'sttProvider',
+        'sttProvider must be "disabled" or a registered STT provider id',
+        'invalid_stt_provider',
+      );
+    }
+  }
+
+  private validateTtsProviderField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('ttsProvider' in payload)) return;
+    const value = payload.ttsProvider;
+    if (typeof value !== 'string') {
+      this.pushFieldError(errors, 'ttsProvider', 'ttsProvider must be a string', 'invalid_type');
+      return;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      this.pushFieldError(
+        errors,
+        'ttsProvider',
+        'ttsProvider must be "disabled" or a registered TTS provider id',
+        'invalid_tts_provider',
+      );
+      return;
+    }
+
+    if (normalized !== 'disabled' && !isStreamingTtsProvider(normalized)) {
+      this.pushFieldError(
+        errors,
+        'ttsProvider',
+        'ttsProvider must be "disabled" or a registered TTS provider id',
+        'invalid_tts_provider',
+      );
+    }
+  }
+
   private validateStringArrayField(
     payload: Record<string, unknown>,
     field: string,
@@ -363,6 +453,22 @@ export class AdminSettingsDataService implements AdminSettingsService {
       && value.every(entry => typeof entry === 'string');
     if (!isValidArray) {
       this.pushFieldError(errors, field, `${field} must be an array of strings`, 'invalid_type');
+    }
+  }
+
+  private validateNonEmptyStringField(
+    payload: Record<string, unknown>,
+    field: string,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!(field in payload)) return;
+    const value = payload[field];
+    if (typeof value !== 'string') {
+      this.pushFieldError(errors, field, `${field} must be a string`, 'invalid_type');
+      return;
+    }
+    if (!value.trim()) {
+      this.pushFieldError(errors, field, `${field} cannot be empty`, 'required');
     }
   }
 
@@ -389,14 +495,89 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateCompositionalPolicyField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('compositionalPolicy' in payload)) return;
+    for (const message of validateCompositionalPolicyConfig(payload.compositionalPolicy)) {
+      const separatorIndex = message.indexOf(' ');
+      const field = separatorIndex > 0 ? message.slice(0, separatorIndex) : 'compositionalPolicy';
+      this.pushFieldError(
+        errors,
+        field,
+        message,
+        message.includes('must be') ? 'invalid_type' : 'invalid_value',
+      );
+    }
+  }
+
+  private validateModelCatalogRouting(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('modelCatalog' in payload)) return;
+    if (!this.isRecord(payload.modelCatalog)) return;
+
+    for (const [slotKey, rawEntry] of Object.entries(payload.modelCatalog)) {
+      if (!this.isRecord(rawEntry) || !('routing' in rawEntry)) continue;
+      const fieldPrefix = `modelCatalog.${slotKey}.routing`;
+      if (!this.isRecord(rawEntry.routing)) {
+        this.pushFieldError(errors, fieldPrefix, `${fieldPrefix} must be an object`, 'invalid_type');
+        continue;
+      }
+
+      if (!('providerOrder' in rawEntry.routing)) continue;
+      const providerOrder = rawEntry.routing.providerOrder;
+      const isValid = Array.isArray(providerOrder)
+        && providerOrder.every(entry => typeof entry === 'string');
+      if (!isValid) {
+        this.pushFieldError(
+          errors,
+          `${fieldPrefix}.providerOrder`,
+          `${fieldPrefix}.providerOrder must be an array of strings`,
+          'invalid_type',
+        );
+      }
+    }
+  }
+
+  private validateNumberRangeField(
+    payload: Record<string, unknown>,
+    field: string,
+    range: { min: number; max: number },
+    errors: SettingsValidationError[],
+  ): void {
+    if (!(field in payload)) return;
+    const value = payload[field];
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'invalid_number');
+      return;
+    }
+    if (value < range.min || value > range.max) {
+      this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'out_of_range');
+    }
+  }
+
   private validateSettingsPayload(
     payload: Record<string, unknown>,
     current: Partial<SubstrateConfig>,
   ): SettingsValidationError[] {
     const errors: SettingsValidationError[] = [];
 
+    for (const [field, owner] of SETTINGS_OWNER_FILE_BY_FIELD.entries()) {
+      if (!(field in payload)) continue;
+      this.pushFieldError(
+        errors,
+        field,
+        `${field} is owned by ${owner}; edit that canonical config instead`,
+        'wrong_owner',
+      );
+    }
+
     for (const [field, range] of Object.entries(SETTINGS_VALIDATION)) {
       if (!(field in payload)) continue;
+      if (SETTINGS_OWNER_FILE_BY_FIELD.has(field)) continue;
       const value = payload[field];
       if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
         this.pushFieldError(errors, field, `${field} must be ${range.min}-${range.max}`, 'invalid_number');
@@ -407,22 +588,26 @@ export class AdminSettingsDataService implements AdminSettingsService {
       }
     }
 
-    for (const field of BOOLEAN_SETTINGS_FIELDS) {
+    for (const field of SETTINGS_BOOLEAN_FIELDS) {
       this.validateBooleanField(payload, field, errors);
     }
 
     this.validateEnumField(payload, 'importProcessingRouteMode', IMPORT_ROUTE_MODE_VALUES, errors);
-    this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES, errors);
-    this.validateEnumField(payload, 'capabilityTier', new Set(CAPABILITY_TIER_VALUES), errors);
-    this.validateEnumField(payload, 'ttsProvider', TTS_PROVIDER_VALUES, errors);
-    this.validateEnumField(payload, 'sttProvider', STT_PROVIDER_VALUES, errors);
+    this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES_SET, errors);
+    this.validateTtsProviderField(payload, errors);
+    this.validateSttProviderField(payload, errors);
 
-    for (const field of STRING_ARRAY_SETTINGS_FIELDS) {
+    for (const field of SETTINGS_STRING_ARRAY_FIELDS) {
       this.validateStringArrayField(payload, field, errors);
     }
 
+    this.validateNonEmptyStringField(payload, 'uiThemeId', errors);
+
     this.validateHttpUrlField(payload, 'importProcessingLocalEndpointUrl', errors);
     this.validateHttpUrlField(payload, 'chatApiBaseUrl', errors);
+    this.validateCompositionalPolicyField(payload, errors);
+    this.validateModelCatalogRouting(payload, errors);
+    this.validateNumberRangeField(payload, 'moodCongruenceWeight', MOOD_CONGRUENCE_WEIGHT_RANGE, errors);
 
     const effectiveRouteMode = typeof payload.importProcessingRouteMode === 'string'
       ? payload.importProcessingRouteMode
@@ -464,14 +649,21 @@ export class AdminSettingsDataService implements AdminSettingsService {
   }
 
   async getSettingsData(): Promise<AdminSettingsData> {
-    await loadSettings(this.deps.config.dataDir);
-    const normalizedConfig = normalizeEditableSettings(this.deps.config);
-    normalizedConfig.sessionRestartBehavior ??= 'reuse_latest_session';
+    const runtimeConfig = splitSettingsByDomain(loadSettings(this.deps.config.dataDir)).runtime;
+    runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     return {
-      config: normalizedConfig as SubstrateConfig,
+      config: runtimeConfig,
       env: this.getEnvInfo(),
       editors: this.loadSettingsConfigEditors(),
+      voiceProviders: this.loadVoiceProviderData(),
     };
+  }
+
+  getSettingsContractData() {
+    return buildSettingsContractData({
+      sttProviderIds: listStreamingSttProviders(),
+      ttsProviderIds: listStreamingTtsProviders(),
+    });
   }
 
   updateSettings(body: string): ConfigUpdateResult {

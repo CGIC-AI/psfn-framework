@@ -10,6 +10,7 @@ import type {
   ModelCatalogEntry,
   SubstrateConfig,
 } from '../../../types.js';
+import { DEFAULT_COMPANION_ID } from '../../../identity/companion-naming.js';
 import { isBootstrapStarterCard, loadCharacterCard } from '../../../identity/loader.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type {
@@ -172,9 +173,9 @@ export class AdminChatBootstrapService {
         chatCompletionsUrl,
       },
       defaultRoomId: DEFAULT_MODEL_ROOM_ID,
-      purrsephone: {
-        id: 'purrsephone',
-        displayName: 'Purrsephone',
+      companion: {
+        id: DEFAULT_COMPANION_ID,
+        displayName: this.resolveAssistantName(),
         defaultSystemPromptMode: 'default',
       },
       participants,
@@ -186,8 +187,16 @@ export class AdminChatBootstrapService {
   }
 
   private applySelectionInput(input: AdminChatBootstrapUpdateInput): void {
+    const previousCanonicalContactId = this.selection.canonicalContactId;
+    const previousChannel = this.selection.channel;
+    const previousUserId = this.selection.userId;
+    let selectedTargetChanged = false;
+
     if (input.canonicalContactId !== undefined) {
       this.selection.canonicalContactId = normalizeTrimmed(input.canonicalContactId);
+      if (this.selection.canonicalContactId !== previousCanonicalContactId) {
+        selectedTargetChanged = true;
+      }
     }
 
     if (input.defaultAuthorName !== undefined) {
@@ -208,7 +217,17 @@ export class AdminChatBootstrapService {
       throw new Error('Both channel and userId are required to update selected identity');
     }
 
-    if (!hasChannelField || !hasUserIdField) return;
+    if (!hasChannelField || !hasUserIdField) {
+      if (selectedTargetChanged) {
+        if (input.defaultAuthorName === undefined) {
+          this.selection.defaultAuthorName = undefined;
+        }
+        if (input.defaultAuthorId === undefined) {
+          this.selection.defaultAuthorId = undefined;
+        }
+      }
+      return;
+    }
 
     const normalizedChannel = normalizeTrimmed(input.channel);
     const normalizedUserId = normalizeTrimmed(input.userId);
@@ -218,6 +237,21 @@ export class AdminChatBootstrapService {
 
     this.selection.channel = normalizeChannel(normalizedChannel);
     this.selection.userId = normalizedUserId;
+    if (
+      this.selection.channel !== previousChannel
+      || this.selection.userId !== previousUserId
+    ) {
+      selectedTargetChanged = true;
+    }
+
+    if (selectedTargetChanged) {
+      if (input.defaultAuthorName === undefined) {
+        this.selection.defaultAuthorName = undefined;
+      }
+      if (input.defaultAuthorId === undefined) {
+        this.selection.defaultAuthorId = undefined;
+      }
+    }
   }
 
   private persistSelectionMapping(input: AdminChatBootstrapUpdateInput): void {

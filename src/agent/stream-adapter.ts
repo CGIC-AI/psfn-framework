@@ -7,18 +7,32 @@ import { streamSimple, getEnvApiKey } from '@mariozechner/pi-ai';
 import type { Model } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type {
+  ModelBudgetBlockedEvent,
   MessageModelOverride,
   ModelPurpose,
+  CorrelationMetadata,
   SubstrateConfig,
 } from '../types.js';
 import { createModel, resolveRegisteredModel } from '../llm/models.js';
-import { withRetry } from '../llm/retry.js';
+import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../llm/routing.js';
+import { markErrorAsNonRetryable, withRetry } from '../llm/retry.js';
 import { llmRetryConfig } from '../llm/retry-config.js';
 import { createComponentLogger } from '../logger.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { toCorrelationLogFields } from '../llm/correlation.js';
+import {
+  findRegistryEntryByModelId,
+  findRegistryEntryByProviderModel,
+  ModelBudgetController,
+  ModelBudgetExceededError,
+  normalizeModelIdForProvider,
+} from '../llm/model-budget.js';
 
 const log = createComponentLogger('StreamAdapter');
+
+export interface SubstrateStreamRuntimeOptions {
+  onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+}
 
 /**
  * Create a StreamFn for pi-agent-core's Agent.
@@ -29,24 +43,74 @@ const log = createComponentLogger('StreamAdapter');
  * The model is passed in by the Agent — use `resolveModel()` to create it
  * from SubstrateConfig and set it via `agent.setModel()`.
  */
-export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
+export function createSubstrateStreamFn(
+  config: SubstrateConfig,
+  runtimeOptions: SubstrateStreamRuntimeOptions = {},
+): StreamFn {
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
+  const budgetController = new ModelBudgetController(config);
 
-  return (model, context, options) => {
-    const correlationFields = toCorrelationLogFields(getRequestContext());
+  const wrappedStreamFn: StreamFn = (model, context, options) => {
+    const requestContext = getRequestContext();
+    const correlationFields = toCorrelationLogFields(requestContext);
     const modelProvider = resolveModelProvider(model);
+    const effectiveProvider = (modelProvider ?? config.primaryProvider).trim().toLowerCase();
+    const rawModelId = String(model.id);
+    const normalizedModelId = normalizeModelIdForProvider(effectiveProvider, rawModelId);
+    const resolvedMaxTokens = resolveStreamMaxTokens(model, options?.maxTokens, config.primaryMaxTokens);
+    const registryEntry = findRegistryEntryByProviderModel(config, effectiveProvider, normalizedModelId)
+      ?? (effectiveProvider === 'litellm'
+        ? findRegistryEntryByModelId(config, normalizedModelId)
+        : undefined);
+    const candidate: RoutingCandidate = {
+      provider: registryEntry?.identity.provider ?? effectiveProvider,
+      model: registryEntry?.identity.model ?? normalizedModelId,
+      maxTokens: resolvedMaxTokens,
+      ...(registryEntry ? { slotKey: registryEntry.id } : {}),
+    };
+    const purpose = resolveStreamBudgetPurpose(requestContext);
+    const processName = requestContext?.originStage ?? requestContext?.purpose ?? 'agent.stream.prompt';
+    const service = requestContext?.callType ?? 'chat';
+    const estimatedInputTokens = estimateContextInputTokens(context);
+    const preflight = budgetController.evaluatePreflight({
+      candidate,
+      purpose,
+      service,
+      process: processName,
+      estimatedInputTokens,
+      correlation: requestContext,
+    });
+    if (!preflight.allowed && preflight.blockedEvent) {
+      runtimeOptions.onBudgetBlocked?.(preflight.blockedEvent);
+      throw markErrorAsNonRetryable(new ModelBudgetExceededError(preflight.blockedEvent));
+    }
+
     // Resolve API key: prefer caller's, then LiteLLM key, then provider env key
     const apiKey = options?.apiKey
       ?? (litellmBaseUrl ? process.env.LITELLM_API_KEY : undefined)
-      ?? (modelProvider ? getEnvApiKey(modelProvider) : undefined)
+      ?? (modelProvider ? getEnvApiKey(modelProvider as any) : undefined)
       ?? getEnvApiKey(config.primaryProvider)
       ?? undefined;
 
     return withRetry(
-      async () => streamSimple(model, context, {
-        ...options,
-        apiKey,
-      }),
+      async () => {
+        const stream = streamSimple(model, context, {
+          ...options,
+          apiKey,
+        });
+
+        return wrapStreamWithUsageRecording(stream, (inputTokens, outputTokens) => {
+          budgetController.recordUsage({
+            candidate,
+            purpose,
+            service,
+            process: processName,
+            inputTokens,
+            outputTokens,
+            correlation: requestContext,
+          });
+        });
+      },
       llmRetryConfig(config),
       {
         onRetry: ({ attempt, maxRetries, delayMs, error }) => {
@@ -60,8 +124,64 @@ export function createSubstrateStreamFn(config: SubstrateConfig): StreamFn {
           });
         },
       },
-    );
+    ) as any;
   };
+  return wrappedStreamFn;
+}
+
+function resolveStreamMaxTokens(model: Model<any>, optionsMaxTokens: unknown, fallback: number): number {
+  if (typeof optionsMaxTokens === 'number' && Number.isFinite(optionsMaxTokens) && optionsMaxTokens > 0) {
+    return Math.floor(optionsMaxTokens);
+  }
+  if (typeof model.maxTokens === 'number' && Number.isFinite(model.maxTokens) && model.maxTokens > 0) {
+    return Math.floor(model.maxTokens);
+  }
+  return fallback;
+}
+
+function resolveStreamBudgetPurpose(context: Partial<CorrelationMetadata> | undefined): RoutingPurpose {
+  const raw = context?.purpose?.toLowerCase() ?? '';
+  if (raw.includes('vision')) return 'vision';
+  if (raw.includes('reasoning')) return 'reasoning';
+  if (raw.includes('summary')) return 'summary';
+  if (raw.includes('extraction')) return 'extraction';
+  if (raw.includes('import')) return 'import_processing';
+  if (raw.includes('background')) return 'background';
+  if (raw.includes('context')) return 'context';
+  if (raw.includes('longcontext') || raw.includes('long_context')) return 'context';
+  return 'chat';
+}
+
+function estimateContextInputTokens(context: unknown): number {
+  const countChars = (value: unknown): number => {
+    if (typeof value === 'string') return value.length;
+    if (Array.isArray(value)) return value.reduce((sum, entry) => sum + countChars(entry), 0);
+    if (value && typeof value === 'object') {
+      return Object.values(value as Record<string, unknown>).reduce<number>(
+        (sum, entry) => sum + countChars(entry),
+        0,
+      );
+    }
+    return 0;
+  };
+  const charCount = countChars(context);
+  return Math.max(1, Math.ceil(charCount / 4));
+}
+
+function wrapStreamWithUsageRecording(
+  stream: AsyncIterable<any>,
+  onDone: (inputTokens: number, outputTokens: number) => void,
+): AsyncIterable<any> {
+  return (async function* streamWithUsage() {
+    for await (const event of stream) {
+      if (event?.type === 'done') {
+        const inputTokens = Number.isFinite(event?.message?.usage?.input) ? Math.floor(event.message.usage.input) : 0;
+        const outputTokens = Number.isFinite(event?.message?.usage?.output) ? Math.floor(event.message.usage.output) : 0;
+        onDone(inputTokens, outputTokens);
+      }
+      yield event;
+    }
+  })();
 }
 
 function resolveModelProvider(model: Model<any>): string | undefined {
@@ -82,33 +202,40 @@ export function resolveModel(
   purpose: ModelPurpose = 'chat',
 ): Model<any> {
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
-
-  // Resolve slot with fallback chains: background→chat, reasoning→chat, longContext→chat
-  const slot = config.modelRoster[purpose]
-    ?? (purpose !== 'chat' ? config.modelRoster.chat : undefined);
-
-  if (!slot) {
-    throw new Error(
-      `No model configured for purpose '${purpose}'. Set model roster in config or .env.`,
-    );
-  }
+  const selection = resolveModelSelection(config, purpose);
 
   if (litellmBaseUrl) {
-    const modelId = normalizeLiteLLMModelId(slot.provider, slot.model);
-    const model = createModel(litellmBaseUrl, modelId, slot.maxTokens);
+    const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
+    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
     return ensurePurposeInputCapabilities(model, purpose);
   }
 
   // Direct provider mode — use pi-ai's built-in registry.
   // resolveRegisteredModel() handles the string→KnownProvider type boundary safely.
-  const model = resolveRegisteredModel(slot.provider, slot.model);
+  const model = resolveRegisteredModel(selection.provider, selection.model);
   if (!model) {
     throw new Error(
-      `Unknown model "${slot.model}" for provider "${slot.provider}". ` +
-      `Set LITELLM_BASE_URL or check model roster config.`,
+      `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
+      'Set LITELLM_BASE_URL or update the canonical model config in models.json.',
     );
   }
   return ensurePurposeInputCapabilities(model, purpose);
+}
+
+export function resolveModelSelection(
+  config: SubstrateConfig,
+  purpose: ModelPurpose = 'chat',
+): RoutingCandidate {
+  const routingPurpose = toRoutingPurpose(purpose);
+  const candidates = resolveRoutingCandidates(config, routingPurpose) as RoutingCandidate[];
+  if (candidates.length > 0) {
+    return candidates[0]!;
+  }
+
+  throw new Error(
+    `No eligible model configured for purpose '${purpose}'. ` +
+    'Add a primary model for this purpose in config.modelRegistry.',
+  );
 }
 
 export function resolveExplicitModel(
@@ -118,7 +245,7 @@ export function resolveExplicitModel(
 
   if (litellmBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
-    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens);
+    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
     return ensurePurposeInputCapabilities(model, selection.purpose);
   }
 
@@ -157,6 +284,13 @@ function ensurePurposeInputCapabilities(
     ...model,
     input: nextInput,
   };
+}
+
+function toRoutingPurpose(purpose: ModelPurpose): RoutingPurpose {
+  if (purpose === 'context') {
+    return 'context';
+  }
+  return purpose;
 }
 
 function normalizeLiteLLMModelId(provider: string, modelId: string): string {

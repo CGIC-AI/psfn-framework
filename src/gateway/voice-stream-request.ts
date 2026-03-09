@@ -101,13 +101,13 @@ export async function requestAgentVoiceStream({
     metadata: options.metadata,
   } as const;
 
-  const invokeWithTimeout = async <T>(request: () => Promise<T>): Promise<T> => {
+  const invokeWithTimeout = async <T>(request: () => PromiseLike<T>): Promise<T> => {
     if (options.signal?.aborted) {
       throw new Error('Voice stream aborted before dispatch');
     }
 
     return await Promise.race([
-      request(),
+      Promise.resolve(request()),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Agent voice stream timed out')), timeoutMs),
       ),

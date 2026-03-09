@@ -10,6 +10,7 @@ import type {
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
+  LLMModelHint,
   LLMResponse,
   StreamCallbacks,
   SubstrateMessage,
@@ -30,7 +31,12 @@ import type {
   DiscordSendResult,
   WebFetchResult,
   WebFetchBinaryResult,
+  WebFetchLane,
   ShellExecResult,
+  VaultWriteResult,
+  VaultReadResult,
+  VaultSearchResult,
+  VaultDailyResult,
   FsReadResult,
   FsWriteResult,
   FsListResult,
@@ -73,6 +79,8 @@ import { toErrorMessage } from '../utils/errors.js';
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';
 const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
+const DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS = 30_000;
+const GATEWAY_KEEPALIVE_CHANNEL_ID = 'internal:gateway-keepalive';
 const SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES = 64 * 1024;
 
 const SESSION_INTEGRITY_WORKER_SOURCE = `
@@ -263,6 +271,7 @@ export interface GatewayClientOptions {
   voiceStreamOverflowPolicy?: QueueOverflowPolicy;
   sessionIntegritySocketPath?: string;
   sessionIntegrityRpcTimeoutMs?: number;
+  keepaliveIntervalMs?: number;
 }
 
 interface VoiceStreamState {
@@ -296,6 +305,9 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
   private readonly sessionIntegritySocketPath: string | null;
   private readonly sessionIntegrityRpcTimeoutMs: number;
+  private readonly keepaliveIntervalMs: number;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private keepaliveInFlight = false;
   private sessionIntegrityWorker: Worker | null = null;
   private sessionIntegrityRequestCounter = 0;
   private closedNotified = false;
@@ -308,6 +320,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     this.voiceStreamOverflowPolicy = options.voiceStreamOverflowPolicy ?? DEFAULT_VOICE_STREAM_OVERFLOW_POLICY;
     this.sessionIntegritySocketPath = options.sessionIntegritySocketPath ?? null;
     this.sessionIntegrityRpcTimeoutMs = options.sessionIntegrityRpcTimeoutMs ?? DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS;
+    this.keepaliveIntervalMs = options.keepaliveIntervalMs ?? DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS;
 
     if (!Number.isInteger(this.voiceStreamQueueSize) || this.voiceStreamQueueSize <= 0) {
       throw new Error(`voiceStreamQueueSize must be a positive integer, got ${this.voiceStreamQueueSize}`);
@@ -316,6 +329,9 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       throw new Error(
         `sessionIntegrityRpcTimeoutMs must be a positive integer, got ${this.sessionIntegrityRpcTimeoutMs}`,
       );
+    }
+    if (!Number.isInteger(this.keepaliveIntervalMs) || this.keepaliveIntervalMs <= 0) {
+      throw new Error(`keepaliveIntervalMs must be a positive integer, got ${this.keepaliveIntervalMs}`);
     }
 
     // Create bidirectional RPC instance (client sends requests to gateway,
@@ -354,6 +370,8 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       const normalized = error instanceof Error ? error : new Error(String(error));
       this.emitConnectionClose({ source: 'error', error: normalized });
     });
+
+    this.startKeepalive();
   }
 
   static async connect(
@@ -379,6 +397,12 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     const purpose = context.correlation?.purpose
       ?? context.correlation?.originStage
       ?? 'chat';
+    const modelHint = normalizeGatewayModelHint(context.modelHint);
+    const hintedModel = normalizeCorrelationText(modelHint?.model);
+    const hintedProvider = normalizeCorrelationText(modelHint?.provider);
+    const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
+    const model = qualifiedHint?.model ?? hintedModel ?? '';
+    const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
 
     // Register chunk handler before sending the RPC so no chunks are missed
     if (callbacks?.onText) {
@@ -387,11 +411,20 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
     try {
       const result = await this.rpcInstance.request('llm.chat', {
-        model: '',  // gateway uses its own config
-        provider: '',
+        model,  // gateway resolves roster defaults when hint fields are unset
+        provider,
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         stream: !!callbacks?.onText,
+        ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
+        ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
+        ...(modelHint?.thinkingEnabled !== undefined ? { thinkingEnabled: modelHint.thinkingEnabled } : {}),
+        ...(modelHint?.thinkingEffort !== undefined ? { thinkingEffort: modelHint.thinkingEffort } : {}),
+        ...(modelHint?.temperature !== undefined ? { temperature: modelHint.temperature } : {}),
+        ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
+        ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
+        ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
+        ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         requestId,
         ...(context.correlation?.turnId ? { turnId: context.correlation.turnId } : {}),
         ...(context.correlation?.channelId ? { channelId: context.correlation.channelId } : {}),
@@ -429,7 +462,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     purpose: CompletionPurpose,
     options: {
       signal?: AbortSignal;
-      modelHint?: { model?: string; provider?: string; maxTokens?: number };
+      modelHint?: LLMModelHint;
       correlation?: Partial<CorrelationMetadata>;
     } = {},
   ): Promise<LLMResponse> {
@@ -437,11 +470,12 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       ...(context.correlation ?? {}),
       ...(options.correlation ?? {}),
     };
-    const hintedModel = normalizeCorrelationText(options.modelHint?.model);
-    const hintedProvider = normalizeCorrelationText(options.modelHint?.provider);
+    const modelHint = mergeGatewayModelHints(context.modelHint, options.modelHint);
+    const hintedModel = normalizeCorrelationText(modelHint?.model);
+    const hintedProvider = normalizeCorrelationText(modelHint?.provider);
     const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
     const model = qualifiedHint?.model ?? hintedModel ?? '';
-    const provider = hintedProvider ?? qualifiedHint?.provider ?? '';
+    const provider = (hintedProvider ?? qualifiedHint?.provider ?? '').trim().toLowerCase();
 
     const result = await this.requestWithAbortSignal<LLMCompleteResult>(
       'llm.complete',
@@ -451,7 +485,15 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         purpose,
-        ...(options.modelHint?.maxTokens !== undefined ? { maxTokens: options.modelHint.maxTokens } : {}),
+        ...(modelHint?.maxTokens !== undefined ? { maxTokens: modelHint.maxTokens } : {}),
+        ...(modelHint?.contextWindow !== undefined ? { contextWindow: modelHint.contextWindow } : {}),
+        ...(modelHint?.thinkingEnabled !== undefined ? { thinkingEnabled: modelHint.thinkingEnabled } : {}),
+        ...(modelHint?.thinkingEffort !== undefined ? { thinkingEffort: modelHint.thinkingEffort } : {}),
+        ...(modelHint?.temperature !== undefined ? { temperature: modelHint.temperature } : {}),
+        ...(modelHint?.topP !== undefined ? { topP: modelHint.topP } : {}),
+        ...(modelHint?.topK !== undefined ? { topK: modelHint.topK } : {}),
+        ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
+        ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         ...(correlation.turnId ? { turnId: correlation.turnId } : {}),
         ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
         ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
@@ -518,7 +560,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   async webFetch(
     url: string,
     prompt?: string,
-    lane: 'default' | 'local_crawler' = 'default',
+    lane: WebFetchLane = 'default',
   ): Promise<string> {
     const result = await this.rpcInstance.request('web.fetch', {
       url,
@@ -531,8 +573,9 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   async webFetchBinary(
     url: string,
     options: {
-      lane?: 'default' | 'local_crawler';
+      lane?: WebFetchLane;
       maxBytes?: number;
+      headers?: Record<string, string>;
     } = {},
   ): Promise<WebFetchBinaryResult> {
     return await this.rpcInstance.request('web.fetch_binary', {
@@ -541,6 +584,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       ...(typeof options.maxBytes === 'number' && Number.isFinite(options.maxBytes)
         ? { maxBytes: Math.max(1, Math.floor(options.maxBytes)) }
         : {}),
+      ...(options.headers ? { headers: options.headers } : {}),
     }) as WebFetchBinaryResult;
   }
 
@@ -558,6 +602,63 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       args,
       ...options,
     }) as ShellExecResult;
+  }
+
+  async vaultWrite(
+    name: string,
+    content: string,
+    options: {
+      folder?: string;
+      mode?: 'create' | 'append' | 'prepend';
+    } = {},
+  ): Promise<VaultWriteResult> {
+    return await this.rpcInstance.request('vault.write', {
+      name,
+      content,
+      ...options,
+    }) as VaultWriteResult;
+  }
+
+  async vaultRead(name: string): Promise<VaultReadResult> {
+    return await this.rpcInstance.request('vault.read', { name }) as VaultReadResult;
+  }
+
+  async vaultSearch(query: string, limit?: number): Promise<VaultSearchResult> {
+    return await this.rpcInstance.request('vault.search', {
+      query,
+      ...(typeof limit === 'number' && Number.isFinite(limit)
+        ? { limit: Math.max(1, Math.floor(limit)) }
+        : {}),
+    }) as VaultSearchResult;
+  }
+
+  async vaultDaily(content?: string): Promise<VaultDailyResult> {
+    return await this.rpcInstance.request('vault.daily', {
+      ...(typeof content === 'string' ? { content } : {}),
+    }) as VaultDailyResult;
+  }
+
+  async ['vault.write'](
+    name: string,
+    content: string,
+    options?: {
+      folder?: string;
+      mode?: 'create' | 'append' | 'prepend';
+    },
+  ): Promise<VaultWriteResult> {
+    return await this.vaultWrite(name, content, options);
+  }
+
+  async ['vault.read'](name: string): Promise<VaultReadResult> {
+    return await this.vaultRead(name);
+  }
+
+  async ['vault.search'](query: string, limit?: number): Promise<VaultSearchResult> {
+    return await this.vaultSearch(query, limit);
+  }
+
+  async ['vault.daily'](content?: string): Promise<VaultDailyResult> {
+    return await this.vaultDaily(content);
   }
 
   // ── Filesystem ──
@@ -749,6 +850,40 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       const idx = handlers.indexOf(handler);
       if (idx !== -1) handlers.splice(idx, 1);
     };
+  }
+
+  private startKeepalive(): void {
+    if (this.keepaliveTimer || this.isDestroying) {
+      return;
+    }
+    this.keepaliveTimer = setInterval(() => {
+      void this.sendKeepalive();
+    }, this.keepaliveIntervalMs);
+    this.keepaliveTimer.unref();
+  }
+
+  private stopKeepalive(): void {
+    if (!this.keepaliveTimer) {
+      return;
+    }
+    clearInterval(this.keepaliveTimer);
+    this.keepaliveTimer = null;
+  }
+
+  private async sendKeepalive(): Promise<void> {
+    if (this.isDestroying || this.keepaliveInFlight) {
+      return;
+    }
+    this.keepaliveInFlight = true;
+    try {
+      await this.rpcInstance.request('discord.typing', {
+        channelId: GATEWAY_KEEPALIVE_CHANNEL_ID,
+      });
+    } catch (error) {
+      log.debug('Gateway keepalive RPC failed', { error: toErrorMessage(error) });
+    } finally {
+      this.keepaliveInFlight = false;
+    }
   }
 
   /** Register a handler for reverse RPC calls from gateway (e.g. voice messages) */
@@ -977,6 +1112,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       return;
     }
     this.closedNotified = true;
+    this.stopKeepalive();
     for (const handler of this.connectionCloseHandlers) {
       try {
         handler(event);
@@ -1058,6 +1194,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
   destroy(): void {
     if (this.isDestroying) return;
     this.isDestroying = true;
+    this.stopKeepalive();
     this.voiceStreams.clear();
     this.connectionCloseHandlers.clear();
     if (this.sessionIntegrityWorker) {
@@ -1083,6 +1220,94 @@ function parseProviderQualifiedModel(value: string): { provider: string; model: 
   const model = value.slice(separator + 1).trim();
   if (!provider || !model) return null;
   return { provider, model };
+}
+
+function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMModelHint | undefined {
+  if (!modelHint) return undefined;
+  const model = normalizeCorrelationText(modelHint.model);
+  const provider = normalizeCorrelationText(modelHint.provider)?.toLowerCase();
+  const maxTokens = toPositiveInteger(modelHint.maxTokens);
+  const contextWindow = toPositiveInteger(modelHint.contextWindow);
+  const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
+    ? modelHint.thinkingEnabled
+    : undefined;
+  const thinkingEffort = toThinkingEffort(modelHint.thinkingEffort);
+  const temperature = toFiniteNumber(modelHint.temperature);
+  const topP = toUnitInterval(modelHint.topP);
+  const topK = toPositiveInteger(modelHint.topK);
+  const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
+  const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
+  if (
+    !model
+    && !provider
+    && maxTokens === undefined
+    && contextWindow === undefined
+    && thinkingEnabled === undefined
+    && thinkingEffort === undefined
+    && temperature === undefined
+    && topP === undefined
+    && topK === undefined
+    && frequencyPenalty === undefined
+    && repetitionPenalty === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(model ? { model } : {}),
+    ...(provider ? { provider } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+    ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(topP !== undefined ? { topP } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+    ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
+    ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
+  };
+}
+
+function mergeGatewayModelHints(
+  contextHint: LLMModelHint | undefined,
+  optionHint: LLMModelHint | undefined,
+): LLMModelHint | undefined {
+  const normalizedContext = normalizeGatewayModelHint(contextHint);
+  const normalizedOption = normalizeGatewayModelHint(optionHint);
+  if (!normalizedContext && !normalizedOption) return undefined;
+  return {
+    ...(normalizedContext ?? {}),
+    ...(normalizedOption ?? {}),
+  };
+}
+
+function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function toPositiveInteger(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric <= 0) return undefined;
+  return Math.floor(numeric);
+}
+
+function toUnitInterval(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
+  return numeric;
+}
+
+function toThinkingEffort(value: unknown): LLMModelHint['thinkingEffort'] | undefined {
+  switch (value) {
+    case 'minimal':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh':
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function createAbortError(reason?: unknown): Error {

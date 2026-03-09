@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../logger.js';
+import { getIgnoredTelegramChannelEnvKeys } from '../config/legacy-env.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { parseBooleanEnv } from '../utils/env.js';
 import { isRecord } from '../utils/types.js';
 
 const log = createComponentLogger('ChannelConfig');
@@ -77,11 +79,7 @@ function interpolateEnvTokens(value: unknown, env: NodeJS.ProcessEnv): unknown {
 function parseBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
   if (typeof value !== 'string') return undefined;
-
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'true') return true;
-  if (normalized === 'false') return false;
-  return undefined;
+  return parseBooleanEnv(value);
 }
 
 function parsePositiveInteger(value: unknown): number | undefined {
@@ -109,14 +107,6 @@ function parseStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((entry): entry is string => typeof entry === 'string')
-    .map(entry => entry.trim())
-    .filter(entry => entry.length > 0);
-}
-
-function parseAllowlistFromEnv(value: string | undefined): string[] | undefined {
-  if (value === undefined) return undefined;
-  return value
-    .split(',')
     .map(entry => entry.trim())
     .filter(entry => entry.length > 0);
 }
@@ -164,6 +154,13 @@ export function loadRuntimeChannelsConfig(
   env: NodeJS.ProcessEnv = process.env,
   overrides: RuntimeChannelsConfigOverrides = {},
 ): RuntimeChannelsConfig {
+  const ignoredTelegramEnvKeys = getIgnoredTelegramChannelEnvKeys(env);
+  if (ignoredTelegramEnvKeys.length > 0) {
+    log.warn('Ignoring legacy Telegram env overrides; use channels.json/settings.json for mutable channel settings', {
+      keys: ignoredTelegramEnvKeys,
+    });
+  }
+
   const rawConfig = loadRawChannelsConfig(dataDir);
   const interpolated = interpolateEnvTokens(rawConfig, env);
   const root = isRecord(interpolated) ? interpolated : {};
@@ -179,8 +176,7 @@ export function loadRuntimeChannelsConfig(
     ? parseStringArray(telegramOverride.allowedUsers)
     : undefined;
 
-  const enabled = parseBoolean(env.TELEGRAM_ENABLED)
-    ?? enabledOverride
+  const enabled = enabledOverride
     ?? parseBoolean(telegramConfig.enabled)
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.enabled;
 
@@ -189,18 +185,13 @@ export function loadRuntimeChannelsConfig(
     : DEFAULT_TELEGRAM_CHANNEL_CONFIG.token;
   const token = (env.TELEGRAM_BOT_TOKEN ?? tokenFromFile).trim();
 
-  const allowedUsers = parseAllowlistFromEnv(
-    env.TELEGRAM_ALLOWED_USERS ?? env.TELEGRAM_AUTHORIZED_USERS,
-  )
-    ?? allowedUsersOverride
+  const allowedUsers = allowedUsersOverride
     ?? parseStringArray(telegramConfig.allowedUsers);
 
-  const mode = parseTelegramMode(env.TELEGRAM_MODE)
-    ?? parseTelegramMode(telegramConfig.mode)
+  const mode = parseTelegramMode(telegramConfig.mode)
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.mode;
 
-  const pollIntervalMs = parsePositiveInteger(env.TELEGRAM_POLL_INTERVAL_MS)
-    ?? parsePositiveInteger(telegramConfig.pollIntervalMs)
+  const pollIntervalMs = parsePositiveInteger(telegramConfig.pollIntervalMs)
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.pollIntervalMs;
 
   const webhookConfig = isRecord(telegramConfig.webhook)

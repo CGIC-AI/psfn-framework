@@ -8,9 +8,12 @@ import type {
   LLMContext,
   LLMResponse,
   StreamCallbacks,
+  TurnID,
 } from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
+import type { TurnMemorySnapshot } from '../turns/snapshot.js';
+import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
 
 export interface LLMProvider {
   stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
@@ -25,18 +28,43 @@ export interface EmbeddingService {
   readonly dims: number;
 }
 
+export interface RetrievalVADInput {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
+
 export interface MemoryProvider {
+  captureTurnMemorySnapshot?(
+    contextText: string,
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+  ): Promise<TurnMemorySnapshot>;
   retrieve(
     contextText: string,
     channelId: string,
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
+    turnSnapshot?: TurnMemorySnapshot,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    currentVAD?: RetrievalVADInput,
+  ): Promise<string>;
+  retrieveProactiveRecall?(
+    channelId: string,
+    trustLevel?: TrustLevel,
+    channelMeta?: ChannelMeta,
+    canonicalContactId?: string,
+    turnSnapshot?: TurnMemorySnapshot,
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<string>;
 }
 
 export interface MemoryExtractor {
-  maybeExtract(channelId: string, canonicalContactId?: string): Promise<void>;
+  maybeExtract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void>;
 }
 
 export interface ScratchpadEntry {

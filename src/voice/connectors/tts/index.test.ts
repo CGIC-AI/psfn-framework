@@ -3,7 +3,11 @@ import { ElevenLabsStreamingTtsConnector } from './elevenlabs-stream.js';
 import { EchoStreamingTtsConnector } from './echo-stream.js';
 import {
   createStreamingTtsConnector,
+  getStreamingTtsProviderEligibility,
+  getStreamingTtsProviderMetadata,
   registerStreamingTtsConnectorFactory,
+  registerStreamingTtsProvider,
+  resolveStreamingTtsRuntimeConfig,
   type EchoStreamingTtsConfig,
 } from './index.js';
 import type { StreamingTtsConnector, TtsAudioChunk } from './types.js';
@@ -24,6 +28,8 @@ describe('createStreamingTtsConnector', () => {
     const connector = createStreamingTtsConnector('elevenlabs', {
       apiKey: 'test-key',
       voiceId: 'test-voice',
+      modelId: 'eleven_turbo_v2_5',
+      endpointBase: 'https://api.elevenlabs.io/v1',
     });
 
     expect(connector).toBeInstanceOf(ElevenLabsStreamingTtsConnector);
@@ -74,5 +80,104 @@ describe('createStreamingTtsConnector', () => {
     expect(() => createStreamingTtsConnector('invalid-provider' as never, {} as never)).toThrow(
       'Unsupported streaming TTS provider: invalid-provider',
     );
+  });
+
+  it('dispatches to a registered provider without core switch edits', () => {
+    const connector = createStubConnector('plugin-test');
+    const factory = vi.fn((config: { endpoint: string }) => {
+      expect(config).toEqual({ endpoint: 'https://plugin-tts.invalid' });
+      return connector;
+    });
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: factory,
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+    });
+
+    try {
+      const result = createStreamingTtsConnector('plugin-test', {
+        endpoint: 'https://plugin-tts.invalid',
+      });
+
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(result).toBe(connector);
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('exposes provider metadata without runtime auto-selection', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => createStubConnector('plugin-test')),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: {},
+      },
+    });
+
+    try {
+      expect(getStreamingTtsProviderMetadata('elevenlabs')?.isConfigured({
+        elevenLabsApiKey: 'elevenlabs-key',
+      })).toBe(true);
+      expect(getStreamingTtsProviderEligibility('elevenlabs')).toEqual({
+        requiredTokens: ['external.web'],
+      });
+      expect(getStreamingTtsProviderMetadata('plugin-test')?.isConfigured({ pluginTtsToken: 'plugin-key' })).toBe(true);
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('resolves built-in runtime config without entrypoint switch logic', () => {
+    expect(resolveStreamingTtsRuntimeConfig('echo', {
+      echoTtsUrl: 'http://127.0.0.1:5050/v1/audio/speech',
+      echoTtsVoice: 'echo-voice-1',
+      echoTtsPreset: 'normal',
+      echoTtsModel: 'echo-v1',
+    })).toEqual({
+      url: 'http://127.0.0.1:5050/v1/audio/speech',
+      voice: 'echo-voice-1',
+      preset: 'normal',
+      model: 'echo-v1',
+    });
+  });
+
+  it('resolves registered provider runtime config without core switch edits', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => createStubConnector('plugin-test')),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+      resolveRuntimeConfig: (config) => ({ endpoint: String(config.pluginTtsEndpoint) }),
+    });
+
+    try {
+      expect(resolveStreamingTtsRuntimeConfig('plugin-test', {
+        pluginTtsToken: 'plugin-key',
+        pluginTtsEndpoint: 'https://plugin-tts.invalid',
+      })).toEqual({
+        endpoint: 'https://plugin-tts.invalid',
+      });
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('fails closed when a provider lacks runtime bootstrap config', () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => createStubConnector('plugin-test')),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+    });
+
+    try {
+      expect(() => resolveStreamingTtsRuntimeConfig('plugin-test', {
+        pluginTtsToken: 'plugin-key',
+      })).toThrow('Streaming TTS provider "plugin-test" does not expose runtime bootstrap config');
+    } finally {
+      restoreProvider();
+    }
   });
 });

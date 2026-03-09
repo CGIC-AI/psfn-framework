@@ -1,12 +1,14 @@
 import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from './types.js';
+import type { TurnRecord } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 import {
   buildExtractionMarkerJournalEntry,
   buildCompactionJournalEntry,
   buildGracefulShutdownMarkerJournalEntry,
   buildMessageJournalEntry,
+  buildTurnTombstoneJournalEntry,
 } from './journal-utils.js';
 import { SessionSearchIndex, type SessionSearchHit } from './search-index.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -25,7 +27,6 @@ import {
   type LegacyChatImportRequest,
   type LegacyChatImportResult,
   type SessionFileSeed,
-  type SessionIntegrityProvider,
   type SessionStoreOptions,
 } from './store-primitives.js';
 import { inferSessionChannelType } from './session-id.js';
@@ -52,7 +53,10 @@ import {
   readImportManifests,
   runLegacyChatImport,
 } from './store/legacy-import.js';
+import { appendTurnRecord, readRecentTurnRecords } from './turn-records.js';
 import { SessionJournalRuntime } from './store/journal-runtime.js';
+import { resolveSessionEntryTurnContext } from './turn-provenance.js';
+import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
 const log = createComponentLogger('SessionStore');
 export {
   sanitizeChannelId,
@@ -63,6 +67,7 @@ export type {
   LegacyChatImportManifest,
   LegacyChatImportManifestFilter,
   LegacyChatImportRequest,
+  LegacyChatImportRange,
   LegacyChatImportResult,
   SessionIntegrityProvider,
   SessionStoreOptions,
@@ -214,6 +219,8 @@ export class SessionStore {
     const cache: ChannelCache = {
       entries: [],
       compactions: [],
+      turnTombstones: new Set(),
+      activeTurnTombstoneCount: 0,
       nextId: 1,
       lastHmac: null,
       lastExtractionCoveredUpTo: 0,
@@ -236,6 +243,22 @@ export class SessionStore {
   }
   private readRecentEntriesFromTail(channelId: string, filePath: string, limit: number): SessionEntry[] {
     return this.journalRuntime.readRecentEntriesFromTail(channelId, filePath, limit);
+  }
+  private applyTurnTombstonesToEntries(entries: readonly SessionEntry[], tombstones: ReadonlySet<string>): SessionEntry[] {
+    if (tombstones.size === 0) return [...entries];
+    return entries.filter((entry) => {
+      let turnId: string;
+      try {
+        turnId = resolveSessionEntryTurnContext(entry).turnId;
+      } catch {
+        turnId = backfillLegacyTurnId(`legacy-turn:${entry.channelId}:${entry.id}:${entry.timestamp}:${entry.role}`);
+      }
+      return !tombstones.has(turnId);
+    });
+  }
+  private syncSearchIndexForChannel(channelId: string, entries: readonly SessionEntry[]): void {
+    if (!this.searchIndex) return;
+    this.searchIndex.replaceChannelEntries(channelId, entries);
   }
   listLegacyImportManifests(filters: LegacyChatImportManifestFilter = {}): LegacyChatImportManifest[] {
     return listLegacyImportManifests(this.importManifestPath, filters);
@@ -305,6 +328,31 @@ export class SessionStore {
     this.indexSessionEntry(full);
     return id;
   }
+  appendTurnRecord(record: TurnRecord): void {
+    appendTurnRecord(this.sessionsDir, record);
+  }
+  getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
+    const cached = this.channels.get(channelId) ?? this.loadExistingChannelCache(channelId);
+    const hasTombstones = (cached?.activeTurnTombstoneCount ?? 0) > 0;
+    const records = readRecentTurnRecords(
+      this.sessionsDir,
+      channelId,
+      hasTombstones ? Number.MAX_SAFE_INTEGER : limit,
+    );
+    if (!hasTombstones) {
+      return records;
+    }
+
+    const loaded = this.ensureChannelFullyLoaded(channelId);
+    if (!loaded || loaded.turnTombstones.size === 0) {
+      if (records.length <= limit) return records;
+      return records.slice(-limit);
+    }
+
+    const filtered = records.filter(record => !loaded.turnTombstones.has(record.turnId));
+    if (filtered.length <= limit) return filtered;
+    return filtered.slice(-limit);
+  }
   searchByKeywords(query: string, limit = 10): SessionSearchHit[] {
     if (!this.searchIndex) return [];
     return this.searchIndex.searchByKeywords(query, limit);
@@ -319,11 +367,23 @@ export class SessionStore {
       if (cached.entries.length <= limit) return [...cached.entries];
       return cached.entries.slice(-limit);
     }
+    if (cached && cached.activeTurnTombstoneCount > 0) {
+      const full = this.ensureChannelFullyLoaded(channelId);
+      if (!full) return [];
+      if (full.entries.length <= limit) return [...full.entries];
+      return full.entries.slice(-limit);
+    }
     const resolvedPath = cached?.resolvedPath ?? this.resolveExistingPath(channelId);
     if (!resolvedPath) return [];
     const indexEntry = this.ensureChannelIndexEntry(channelId, resolvedPath);
     const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
     if (messageCount === 0) return [];
+    if ((normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0) > 0) {
+      const full = this.ensureChannelFullyLoaded(channelId);
+      if (!full) return [];
+      if (full.entries.length <= limit) return [...full.entries];
+      return full.entries.slice(-limit);
+    }
     if (messageCount <= limit) {
       const full = this.ensureChannelFullyLoaded(channelId);
       if (!full) return [];
@@ -470,6 +530,65 @@ export class SessionStore {
       cache.nextId = previousNextId;
       throw error;
     }
+  }
+  private appendTurnTombstone(
+    channelId: string,
+    turnId: string,
+    action: 'redact' | 'restore',
+    options: { actor?: string; reason?: string; timestamp?: number } = {},
+  ): void {
+    const parsedTurnId = parseTurnId(turnId, 'turnId');
+    if (!parsedTurnId) {
+      throw new Error('Turn tombstone requires a valid TurnID');
+    }
+
+    const timestamp = options.timestamp ?? Date.now();
+    const cache = this.ensureChannelForWrite(channelId, {
+      timestamp,
+      authorId: options.actor,
+      authorName: options.actor,
+    });
+    const id = cache.nextId;
+    const previousNextId = cache.nextId;
+    cache.nextId = id + 1;
+
+    const journal = buildTurnTombstoneJournalEntry(id, channelId, {
+      turnId: parsedTurnId,
+      action,
+      timestamp,
+      actor: options.actor,
+      reason: options.reason,
+    });
+
+    try {
+      this.writeJournalEntry(cache, journal);
+    } catch (error) {
+      cache.nextId = previousNextId;
+      throw error;
+    }
+
+    const full = cache.fullyLoaded ? cache : this.ensureChannelFullyLoaded(channelId);
+    if (full) {
+      full.entries = this.applyTurnTombstonesToEntries(full.entries, full.turnTombstones);
+      full.messageCount = full.entries.length;
+      full.activeTurnTombstoneCount = full.turnTombstones.size;
+      this.upsertChannelIndex(channelId, snapshotIndexEntry(full));
+      this.syncSearchIndexForChannel(channelId, full.entries);
+    }
+  }
+  redactTurn(
+    channelId: string,
+    turnId: string,
+    options: { actor?: string; reason?: string; timestamp?: number } = {},
+  ): void {
+    this.appendTurnTombstone(channelId, turnId, 'redact', options);
+  }
+  restoreTurn(
+    channelId: string,
+    turnId: string,
+    options: { actor?: string; reason?: string; timestamp?: number } = {},
+  ): void {
+    this.appendTurnTombstone(channelId, turnId, 'restore', options);
   }
   markGracefulShutdownForActiveChannels(
     timestamp = Date.now(),

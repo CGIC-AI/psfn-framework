@@ -18,12 +18,18 @@ import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
-import { applySettings, loadSettings, splitSettingsByDomain } from '../../settings.js';
-import { loadModelsConfig } from '../../config/models-config.js';
-import { loadCapabilityTierConfig } from '../../config/capability-tier-config.js';
+import { loadSettings } from '../../settings.js';
+import { saveCapabilityTierConfig } from '../../config/capability-tier-config.js';
+import { loadModelsConfig, saveModelsConfig } from '../../config/models-config.js';
+import { saveSchedulerConfig } from '../../config/scheduler-config.js';
+import { saveSkillsConfig } from '../../config/skills-config.js';
+import { saveTrustPolicyConfig } from '../../config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
+import type { ScheduledTask } from '../../scheduler/types.js';
+import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
 
 function request(
   port: number,
@@ -95,6 +101,186 @@ function buildMultipartBody(
   }
   chunks.push(Buffer.from(`--${boundary}--\r\n`));
   return Buffer.concat(chunks);
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function schemaMetadataCandidates(entry: Record<string, unknown>): Record<string, unknown>[] {
+  const candidates = [entry];
+  for (const key of ['schema', 'metadata', 'validation', 'ownership']) {
+    const nested = entry[key];
+    if (isObjectRecord(nested)) {
+      candidates.push(nested);
+    }
+  }
+  return candidates;
+}
+
+function entryNameMatches(entry: Record<string, unknown>, name: string): boolean {
+  return ['id', 'name', 'key', 'slug', 'field'].some((key) => entry[key] === name);
+}
+
+function findNamedSchemaEntry(
+  collection: unknown,
+  name: string,
+): Record<string, unknown> | undefined {
+  if (Array.isArray(collection)) {
+    return collection.find((entry): entry is Record<string, unknown> => (
+      isObjectRecord(entry) && entryNameMatches(entry, name)
+    ));
+  }
+
+  if (!isObjectRecord(collection)) return undefined;
+
+  const direct = collection[name];
+  if (isObjectRecord(direct)) {
+    return direct;
+  }
+
+  return Object.entries(collection).find(([, entry]) => (
+    isObjectRecord(entry) && entryNameMatches(entry, name)
+  ))?.[1] as Record<string, unknown> | undefined;
+}
+
+function getSchemaRoot(payload: unknown): Record<string, unknown> {
+  if (!isObjectRecord(payload)) {
+    throw new Error('Expected settings schema payload to be an object');
+  }
+  return isObjectRecord(payload.schema)
+    ? payload.schema
+    : payload;
+}
+
+function getNamedSchemaEntry(
+  root: Record<string, unknown>,
+  collectionKeys: readonly string[],
+  name: string,
+): Record<string, unknown> {
+  for (const collectionKey of collectionKeys) {
+    const entry = findNamedSchemaEntry(root[collectionKey], name);
+    if (entry) {
+      return entry;
+    }
+  }
+
+  throw new Error(`Expected schema entry for ${name}`);
+}
+
+function readStringMetadata(
+  entry: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of keys) {
+      const value = candidate[key];
+      if (typeof value === 'string') {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function readBooleanMetadata(
+  entry: Record<string, unknown>,
+  keys: readonly string[],
+): boolean | undefined {
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of keys) {
+      const value = candidate[key];
+      if (typeof value === 'boolean') {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function readNumberMetadata(
+  entry: Record<string, unknown>,
+  keys: readonly string[],
+): number | undefined {
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of keys) {
+      const value = candidate[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+function collectSchemaStrings(
+  rawValue: unknown,
+  values: string[],
+  seen: Set<string>,
+): void {
+  if (typeof rawValue === 'string') {
+    const trimmed = rawValue.trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      values.push(trimmed);
+    }
+    return;
+  }
+
+  if (Array.isArray(rawValue)) {
+    rawValue.forEach((value) => collectSchemaStrings(value, values, seen));
+    return;
+  }
+
+  if (!isObjectRecord(rawValue)) return;
+
+  for (const key of ['id', 'value', 'name', 'file', 'path', 'ownerFile']) {
+    if (typeof rawValue[key] === 'string') {
+      collectSchemaStrings(rawValue[key], values, seen);
+      return;
+    }
+  }
+
+  for (const [key, value] of Object.entries(rawValue)) {
+    if (isObjectRecord(value) || Array.isArray(value)) {
+      collectSchemaStrings(key, values, seen);
+    }
+  }
+}
+
+function readOwnerFiles(entry: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of ['owner', 'ownerFile', 'ownerPath', 'file', 'jsonFile', 'ownerFiles', 'owners']) {
+      collectSchemaStrings(candidate[key], values, seen);
+    }
+  }
+
+  return values.map((value) => value.split(/[\\/]/).at(-1) ?? value);
+}
+
+function readEnumLikeValues(entry: Record<string, unknown>): string[] {
+  const values: string[] = [];
+  const seen = new Set<string>();
+
+  for (const candidate of schemaMetadataCandidates(entry)) {
+    for (const key of ['enum', 'enumValues', 'values', 'options', 'allowedValues']) {
+      collectSchemaStrings(candidate[key], values, seen);
+    }
+  }
+
+  return values;
+}
+
+function isRawOnlySchemaSubsystem(entry: Record<string, unknown>): boolean {
+  if (readBooleanMetadata(entry, ['rawOnly']) === true) {
+    return true;
+  }
+
+  const mode = readStringMetadata(entry, ['exposure', 'mode', 'uiExposure', 'gardenExposure']);
+  return mode === 'raw-only' || mode === 'raw_only';
 }
 
 function allocatePort(): Promise<number> {
@@ -386,6 +572,449 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
   });
 
+  it('returns period-bounded dashboard cost windows and honors costWindow selection', async () => {
+    type UsageSample = {
+      timestampMs: number;
+      llmCalls: number;
+      toolCalls: number;
+      estimatedCostUsd?: number;
+    };
+
+    const nowMs = Date.now();
+    const samples: UsageSample[] = [
+      { timestampMs: nowMs - (1 * 60 * 60 * 1000), llmCalls: 2, toolCalls: 1, estimatedCostUsd: 0.1111 },
+      { timestampMs: nowMs - (3 * 24 * 60 * 60 * 1000), llmCalls: 1, toolCalls: 2, estimatedCostUsd: 0.2222 },
+      { timestampMs: nowMs - (15 * 24 * 60 * 60 * 1000), llmCalls: 4, toolCalls: 3, estimatedCostUsd: 0.3333 },
+      { timestampMs: nowMs - (45 * 24 * 60 * 60 * 1000), llmCalls: 9, toolCalls: 9, estimatedCostUsd: 0.9999 },
+      { timestampMs: Number.NaN, llmCalls: 8, toolCalls: 8, estimatedCostUsd: 0.7777 },
+      { timestampMs: nowMs - (2 * 60 * 60 * 1000), llmCalls: 3, toolCalls: 0 },
+    ];
+
+    for (const [index, sample] of samples.entries()) {
+      await eventBus.emit('agent.turn.usage', {
+        message: {
+          id: `dashboard-cost-${index}`,
+          channelId: 'api-session',
+          channelType: 'api',
+          authorId: 'operator',
+          authorName: 'Operator',
+          content: 'dashboard cost sample',
+          timestamp: new Date(sample.timestampMs),
+        },
+        usage: {
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: 10,
+          llmCalls: sample.llmCalls,
+          toolCalls: sample.toolCalls,
+          contextUtilization: 10,
+          estimatedCostUsd: sample.estimatedCostUsd,
+        },
+      });
+    }
+
+    const now = new Date(nowMs);
+    const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const weekOffsetDays = (now.getUTCDay() + 6) % 7;
+    const weekStartMs = dayStartMs - (weekOffsetDays * 86_400_000);
+    const monthStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+
+    const expected = {
+      today: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
+      week: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
+      month: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
+    };
+
+    for (const sample of samples) {
+      if (!Number.isFinite(sample.timestampMs) || sample.timestampMs < monthStartMs) {
+        continue;
+      }
+      expected.month.turns += 1;
+      expected.month.llmCalls += sample.llmCalls;
+      expected.month.toolCalls += sample.toolCalls;
+      expected.month.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
+
+      if (sample.timestampMs >= weekStartMs) {
+        expected.week.turns += 1;
+        expected.week.llmCalls += sample.llmCalls;
+        expected.week.toolCalls += sample.toolCalls;
+        expected.week.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
+      }
+
+      if (sample.timestampMs >= dayStartMs) {
+        expected.today.turns += 1;
+        expected.today.llmCalls += sample.llmCalls;
+        expected.today.toolCalls += sample.toolCalls;
+        expected.today.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
+      }
+    }
+
+    const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=week', undefined, authHeaders);
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as {
+      stats: {
+        sessionUsage: {
+          costWindows: {
+            selected: string;
+            byWindow: {
+              today: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
+              week: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
+              month: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
+            };
+          };
+        };
+      };
+    };
+
+    expect(payload.stats.sessionUsage.costWindows.selected).toBe('week');
+    expect(payload.stats.sessionUsage.costWindows.byWindow.today.turns).toBe(expected.today.turns);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.today.llmCalls).toBe(expected.today.llmCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.today.toolCalls).toBe(expected.today.toolCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.today.estimatedCostUsd).toBeCloseTo(expected.today.estimatedCostUsd, 8);
+
+    expect(payload.stats.sessionUsage.costWindows.byWindow.week.turns).toBe(expected.week.turns);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.week.llmCalls).toBe(expected.week.llmCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.week.toolCalls).toBe(expected.week.toolCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.week.estimatedCostUsd).toBeCloseTo(expected.week.estimatedCostUsd, 8);
+
+    expect(payload.stats.sessionUsage.costWindows.byWindow.month.turns).toBe(expected.month.turns);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.month.llmCalls).toBe(expected.month.llmCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.month.toolCalls).toBe(expected.month.toolCalls);
+    expect(payload.stats.sessionUsage.costWindows.byWindow.month.estimatedCostUsd).toBeCloseTo(expected.month.estimatedCostUsd, 8);
+  });
+
+  it('returns active-session context pressure and fails closed when active-session telemetry is missing', async () => {
+    sessionManager.setActiveContextSession('discord:active-session');
+
+    await eventBus.emit('agent.turn.usage', {
+      message: {
+        id: 'active-session-pressure',
+        channelId: 'api:operator',
+        channelType: 'api',
+        authorId: 'operator',
+        authorName: 'Operator',
+        content: 'session pressure sample',
+        timestamp: new Date(),
+      },
+      usage: {
+        inputTokens: 120,
+        outputTokens: 40,
+        cacheReadTokens: 5,
+        llmCalls: 1,
+        toolCalls: 0,
+        contextUtilization: 61.7,
+        estimatedCostUsd: 0.001,
+      },
+    });
+
+    let res = await request(port, 'GET', '/api/admin/dashboard', undefined, authHeaders);
+    expect(res.status).toBe(200);
+    let payload = JSON.parse(res.body) as {
+      stats: {
+        sessionUsage: {
+          activeSessionContextPressure: {
+            sessionId: string | null;
+            utilizationPct: number;
+            hasTelemetry: boolean;
+          };
+        };
+      };
+    };
+    expect(payload.stats.sessionUsage.activeSessionContextPressure).toEqual({
+      sessionId: 'discord:active-session',
+      utilizationPct: 61.7,
+      hasTelemetry: true,
+    });
+
+    sessionManager.setActiveContextSession('discord:no-telemetry');
+    res = await request(port, 'GET', '/api/admin/dashboard', undefined, authHeaders);
+    expect(res.status).toBe(200);
+    payload = JSON.parse(res.body) as {
+      stats: {
+        sessionUsage: {
+          activeSessionContextPressure: {
+            sessionId: string | null;
+            utilizationPct: number;
+            hasTelemetry: boolean;
+          };
+        };
+      };
+    };
+    expect(payload.stats.sessionUsage.activeSessionContextPressure).toEqual({
+      sessionId: 'discord:no-telemetry',
+      utilizationPct: 0,
+      hasTelemetry: false,
+    });
+  });
+
+  it('rejects invalid dashboard costWindow query values', async () => {
+    const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=all-time', undefined, authHeaders);
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as { error: string };
+    expect(payload.error).toContain('Invalid costWindow query parameter');
+  });
+
+  it('includes cadence fields for recurring tasks in /api/admin/scheduler', async () => {
+    scheduler.register({
+      id: 'cadence-hourly',
+      name: 'Cadence Hourly Task',
+      type: 'every',
+      intervalMs: 60_000,
+      handler: () => {},
+      state: 'idle',
+      cadence: {
+        kind: 'hourly',
+        minute: 15,
+        timezone: 'utc',
+      },
+    } as Parameters<Scheduler['register']>[0] & {
+      cadence: { kind: 'hourly'; minute: number; timezone: string };
+    });
+
+    const res = await request(port, 'GET', '/api/admin/scheduler', undefined, authHeaders);
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as {
+      tasks: Array<{
+        id: string;
+        type: string;
+        cadence?: { kind: string; hour?: number; minute: number; timezone?: string };
+      }>;
+    };
+
+    expect(payload.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'cadence-hourly',
+        type: 'every',
+        cadence: {
+          kind: 'hourly',
+          minute: 15,
+          timezone: 'utc',
+        },
+      }),
+    ]));
+  });
+
+  it('accepts cadence updates on PATCH /api/admin/scheduler/tasks/:taskId', async () => {
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/scheduler/tasks/test-task',
+      JSON.stringify({
+        cadence: {
+          kind: 'daily',
+          hour: 6,
+          minute: 30,
+          timezone: 'utc',
+        },
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(true);
+    expect(payload.message).toContain('updated');
+  });
+
+  it('round-trips recurring cadence on POST /api/admin/scheduler/tasks + GET /api/admin/scheduler', async () => {
+    const createRes = await request(
+      port,
+      'POST',
+      '/api/admin/scheduler/tasks',
+      JSON.stringify({
+        id: 'cadence-created-task',
+        name: 'Cadence Created Task',
+        type: 'every',
+        intervalMs: 120_000,
+        cadence: {
+          kind: 'daily',
+          hour: 9,
+          minute: 5,
+          timezone: 'utc',
+        },
+      }),
+      authHeaders,
+    );
+    expect(createRes.status).toBe(201);
+    const createPayload = JSON.parse(createRes.body) as { ok: boolean; message: string };
+    expect(createPayload.ok).toBe(true);
+
+    const getRes = await request(port, 'GET', '/api/admin/scheduler', undefined, authHeaders);
+    expect(getRes.status).toBe(200);
+    const getPayload = JSON.parse(getRes.body) as {
+      tasks: Array<{
+        id: string;
+        type: string;
+        cadence?: { kind: string; hour?: number; minute: number; timezone?: string };
+      }>;
+    };
+
+    expect(getPayload.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'cadence-created-task',
+        type: 'every',
+        cadence: {
+          kind: 'daily',
+          hour: 9,
+          minute: 5,
+          timezone: 'utc',
+        },
+      }),
+    ]));
+  });
+
+  it('rejects invalid cadence payloads on PATCH /api/admin/scheduler/tasks/:taskId', async () => {
+    const invalidCadenceCases: Array<[cadence: Record<string, unknown>, errorFragment: string]> = [
+      [{ kind: 'weekly', minute: 0 }, 'cadence.kind'],
+      [{ kind: 'daily', hour: 24, minute: 0, timezone: 'utc' }, 'cadence.hour'],
+      [{ kind: 'hourly', minute: 60, timezone: 'utc' }, 'cadence.minute'],
+      [{ kind: 'daily', hour: 8, minute: 0, timezone: 'Not/AZone' }, 'cadence.timezone'],
+    ];
+
+    for (const [cadence, errorFragment] of invalidCadenceCases) {
+      const res = await request(
+        port,
+        'PATCH',
+        '/api/admin/scheduler/tasks/test-task',
+        JSON.stringify({ cadence }),
+        authHeaders,
+      );
+
+      expect(res.status).toBe(400);
+      const payload = JSON.parse(res.body) as { ok: boolean; message: string };
+      expect(payload.ok).toBe(false);
+      expect(payload.message).toContain(errorFragment);
+    }
+  });
+
+  it('rejects invalid cadence payloads on POST /api/admin/scheduler/tasks', async () => {
+    const invalidCadenceCases: Array<[cadence: Record<string, unknown>, errorFragment: string]> = [
+      [{ kind: 'weekly', minute: 0 }, 'cadence.kind'],
+      [{ kind: 'daily', hour: 24, minute: 0, timezone: 'utc' }, 'cadence.hour'],
+      [{ kind: 'hourly', minute: 60, timezone: 'utc' }, 'cadence.minute'],
+      [{ kind: 'daily', hour: 8, minute: 0, timezone: 'Not/AZone' }, 'cadence.timezone'],
+    ];
+
+    for (const [index, [cadence, errorFragment]] of invalidCadenceCases.entries()) {
+      const res = await request(
+        port,
+        'POST',
+        '/api/admin/scheduler/tasks',
+        JSON.stringify({
+          id: `invalid-cadence-task-${index}`,
+          name: `Invalid cadence task ${index}`,
+          type: 'every',
+          intervalMs: 60_000,
+          cadence,
+        }),
+        authHeaders,
+      );
+
+      expect(res.status).toBe(400);
+      const payload = JSON.parse(res.body) as { ok: boolean; message: string };
+      expect(payload.ok).toBe(false);
+      expect(payload.message).toContain(errorFragment);
+    }
+  });
+
+  it('persists reflection cadence updates from task PATCH into heartbeat policy', async () => {
+    scheduler.register({
+      id: 'reflection:whisper',
+      name: 'Whisper',
+      type: 'every',
+      intervalMs: 3_600_000,
+      handler: () => {},
+      state: 'idle',
+      cadence: {
+        kind: 'hourly',
+        minute: 0,
+        timezone: 'local',
+      },
+    } as Parameters<Scheduler['register']>[0]);
+
+    const patchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/scheduler/tasks/reflection%3Awhisper',
+      JSON.stringify({
+        intervalMs: 86_400_000,
+        enabled: false,
+        cadence: {
+          kind: 'daily',
+          hour: 7,
+          minute: 15,
+          timezone: 'utc',
+        },
+      }),
+      authHeaders,
+    );
+    expect(patchRes.status).toBe(200);
+    const patchPayload = JSON.parse(patchRes.body) as { ok: boolean; message: string };
+    expect(patchPayload.ok).toBe(true);
+
+    const task = scheduler.getTask('reflection:whisper') as (ScheduledTask & {
+      cadence?: { kind: string; hour?: number; minute?: number; timezone?: string };
+    }) | undefined;
+    expect(task?.state).toBe('paused');
+    expect(task?.intervalMs).toBe(86_400_000);
+    expect(task?.cadence).toEqual({
+      kind: 'daily',
+      hour: 7,
+      minute: 15,
+      timezone: 'utc',
+    });
+
+    const getRes = await request(port, 'GET', '/api/admin/scheduler', undefined, authHeaders);
+    expect(getRes.status).toBe(200);
+    const getPayload = JSON.parse(getRes.body) as {
+      reflections: Array<{
+        id: string;
+        enabled: boolean;
+        intervalMs: number;
+        cadence?: { kind: string; hour?: number; minute?: number; timezone?: string };
+      }>;
+    };
+    const whisper = getPayload.reflections.find(reflection => reflection.id === 'whisper');
+    expect(whisper).toMatchObject({
+      id: 'whisper',
+      enabled: false,
+      intervalMs: 86_400_000,
+      cadence: {
+        kind: 'daily',
+        hour: 7,
+        minute: 15,
+        timezone: 'utc',
+      },
+    });
+  });
+
+  it('fails closed when reflection task has no matching policy template', async () => {
+    scheduler.register({
+      id: 'reflection:missing-template',
+      name: 'Missing Template',
+      type: 'every',
+      intervalMs: 60_000,
+      handler: () => {},
+      state: 'idle',
+    });
+
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/scheduler/tasks/reflection%3Amissing-template',
+      JSON.stringify({ intervalMs: 120_000 }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as { ok: boolean; message: string };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain('Reflection template "missing-template" not found');
+
+    const task = scheduler.getTask('reflection:missing-template');
+    expect(task?.intervalMs).toBe(60_000);
+  });
+
   it('returns adaptive tool runtime state and recent adaptive telemetry', async () => {
     await eventBus.emit('agent.tools.adaptive.decision', {
       turnId: 'turn-adaptive-1',
@@ -508,11 +1137,27 @@ describe('AdminServer JSON API routes', () => {
       tags: ['api'],
       sensitivity: 'confidential',
     }, new Float32Array([0.2, 0.3, 0.4]));
+    memoryStore.insertMemory({
+      id: 'api-mem-cf',
+      text: 'Context feedback for turn test-turn. Score=0.88 bucket=high.',
+      type: 'procedural',
+      importance: 0.3,
+      confidence: 0.4,
+      emotionalValence: 0,
+      salience: 0.1,
+      sourceRef: 'source:context_feedback|turn:test-turn|score:0.88|model:test-model',
+      extractedAt: Date.UTC(2026, 1, 25, 10, 0, 0),
+      lastAccessed: Date.UTC(2026, 1, 25, 10, 0, 0),
+      accessCount: 0,
+      tags: ['context_feedback', 'procedural_learning'],
+      sensitivity: 'public',
+    }, new Float32Array([0.3, 0.2, 0.1]));
 
     const listRes = await request(port, 'GET', '/api/admin/memory?limit=1&offset=1', undefined, authHeaders);
     expect(listRes.status).toBe(200);
     const listPayload = JSON.parse(listRes.body) as { memories: Array<{ id: string }> };
     expect(listPayload.memories).toHaveLength(1);
+    expect(listPayload.memories.some(memory => memory.id === 'api-mem-cf')).toBe(false);
 
     const filteredRes = await request(port, 'GET', '/api/admin/memory?type=semantic', undefined, authHeaders);
     expect(filteredRes.status).toBe(200);
@@ -558,6 +1203,7 @@ describe('AdminServer JSON API routes', () => {
     expect(searchRes.status).toBe(200);
     const searchPayload = JSON.parse(searchRes.body) as { results: Array<{ id: string }> };
     expect(searchPayload.results.length).toBeGreaterThan(0);
+    expect(searchPayload.results.some(memory => memory.id === 'api-mem-cf')).toBe(false);
 
     const deleteRes = await request(port, 'DELETE', '/api/admin/memory/api-mem-2', undefined, authHeaders);
     expect(deleteRes.status).toBe(200);
@@ -705,7 +1351,7 @@ describe('AdminServer JSON API routes', () => {
     expect(memoryStore.listActiveMemories({ limit: 10, offset: 0 }).map(memory => memory.id)).not.toContain('bulk-mem-3');
   });
 
-  it('renders memory page with bulk and link UI wiring', async () => {
+  it('removes legacy memory page and keeps canonical /api/admin memory data', async () => {
     memoryStore.insertMemory({
       id: 'ui-memory-1',
       text: 'UI memory one',
@@ -722,26 +1368,25 @@ describe('AdminServer JSON API routes', () => {
       sensitivity: 'personal',
     }, new Float32Array([0.3, 0.1, 0.2]));
 
-    const pageRes = await request(
+    const legacyRes = await request(
       port,
       'GET',
       '/legacy/memory',
       undefined,
       { Authorization: `Bearer ${token}` },
     );
+    expect(legacyRes.status).toBe(404);
 
-    expect(pageRes.status).toBe(200);
-    expect(pageRes.body).toContain('id="memory-admin-actions"');
-    expect(pageRes.body).toContain('data-memory-select-all');
-    expect(pageRes.body).toContain('data-memory-select value="ui-memory-1"');
-    expect(pageRes.body).toContain('data-memory-bulk-delete');
-    expect(pageRes.body).toContain('data-memory-bulk-update');
-    expect(pageRes.body).toContain('data-memory-link-form');
-    expect(pageRes.body).toContain('data-memory-links-load-form');
-    expect(pageRes.body).toContain('/api/admin/memory/bulk-delete');
-    expect(pageRes.body).toContain('/api/admin/memory/bulk-update');
-    expect(pageRes.body).toContain('/api/admin/memory/link');
-    expect(pageRes.body).toContain('/api/admin/memory/');
+    const apiRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory',
+      undefined,
+      { Authorization: `Bearer ${token}` },
+    );
+    expect(apiRes.status).toBe(200);
+    const payload = JSON.parse(apiRes.body) as { memories: Array<{ id: string }> };
+    expect(payload.memories.some(memory => memory.id === 'ui-memory-1')).toBe(true);
   });
 
   it('supports session list and messages endpoints', async () => {
@@ -759,7 +1404,7 @@ describe('AdminServer JSON API routes', () => {
       role: 'assistant',
       content: 'world',
       authorId: 'assistant',
-      authorName: 'Purrsephone',
+      authorName: 'Companion',
       timestamp: Date.now() + 1,
       channelVisibility: 'direct',
     });
@@ -836,10 +1481,40 @@ describe('AdminServer JSON API routes', () => {
     const settingsRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsRes.status).toBe(200);
     const settingsPayload = JSON.parse(settingsRes.body) as {
-      config: { sessionMessageLimit: number; sessionRestartBehavior: string };
+      config: {
+        sessionMessageLimit: number;
+        sessionRestartBehavior: string;
+        primaryModel?: string;
+        maintenanceIntervalMs?: number;
+        capabilityTier?: string;
+      };
+      editors: {
+        models: {
+          modelCatalog: Record<string, { model?: string }>;
+        };
+        scheduler: {
+          salienceDecayIntervalMs: number;
+        };
+        capabilities: {
+          tier: string;
+        };
+      };
     };
     expect(settingsPayload.config.sessionMessageLimit).toBe(testConfig.sessionMessageLimit);
     expect(settingsPayload.config.sessionRestartBehavior).toBe('reuse_latest_session');
+    expect(settingsPayload.config.primaryModel).toBeUndefined();
+    expect(settingsPayload.config.maintenanceIntervalMs).toBeUndefined();
+    expect(settingsPayload.config.capabilityTier).toBeUndefined();
+    const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
+      schemaVersion: number;
+      models: Array<{ id: string; identity?: { model?: string } }>;
+    };
+    expect(persistedModels.schemaVersion).toBe(1);
+    const persistedPrimaryModel = persistedModels.models.find((entry) => entry.id === 'primary')?.identity?.model;
+    expect(typeof persistedPrimaryModel).toBe('string');
+    expect(settingsPayload.editors.models.modelCatalog.primary.model).toBe(persistedPrimaryModel);
+    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.maintenanceIntervalMs);
+    expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
     const settingsPatchRes = await request(
       port,
@@ -849,133 +1524,79 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(settingsPatchRes.status).toBe(200);
-    expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
     const settingsAfterPatchRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
     expect(settingsAfterPatchRes.status).toBe(200);
     const settingsAfterPatch = JSON.parse(settingsAfterPatchRes.body) as {
-      config: { sessionMessageLimit: number; sessionRestartBehavior: string };
+      config: {
+        sessionMessageLimit: number;
+        sessionRestartBehavior: string;
+        primaryModel?: string;
+      };
     };
     expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
     expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
-    const settingsAuditRes = await request(
-      port,
-      'GET',
-      '/legacy/events?actionType=settings_change&timeRange=all',
-      undefined,
-      authHeaders,
-    );
-    expect(settingsAuditRes.status).toBe(200);
-    expect(settingsAuditRes.body).toContain('data-action-type="settings_change"');
-    expect(settingsAuditRes.body).toContain('/api/admin/settings');
-    expect(settingsAuditRes.body).toContain('fields=sessionMessageLimit,sessionRestartBehavior');
+    expect(settingsAfterPatch.config.primaryModel).toBeUndefined();
 
-    const rosterPatchRes = await request(
+    const ownerPatchRes = await request(
       port,
       'PATCH',
       '/api/admin/settings',
       JSON.stringify({
+        primaryModel: 'z-ai/glm-5',
         modelCatalog: {
           primary: {
             model: 'z-ai/glm-5',
             provider: 'openrouter',
-            defaults: { maxTokens: 16384, contextWindow: 128000 },
-          },
-          extraction: {
-            model: 'deepseek/deepseek-v3.2',
-            provider: 'openrouter',
-            defaults: { maxTokens: 8192, contextWindow: 128000 },
-          },
-          vision: {
-            model: 'moonshotai/kimi-k2.5',
-            provider: 'openrouter',
-            overrides: { maxTokens: 16384, contextWindow: 128000 },
           },
         },
-        modelRoleAssignments: {
-          chat: 'primary',
-          background: 'extraction',
-          extraction: 'extraction',
-          summary: 'primary',
-          reasoning: 'primary',
-          longContext: 'primary',
-          import_processing: 'extraction',
-          vision: 'vision',
-        },
-      }),
-      authHeaders,
-    );
-    expect(rosterPatchRes.status).toBe(200);
-    expect(refreshModelsSpy).toHaveBeenCalledTimes(2);
-    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
-    const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
-      modelCatalog: Record<string, unknown>;
-      modelRoleAssignments: Record<string, string>;
-    };
-    expect(persistedModels.modelCatalog.vision).toBeDefined();
-    expect(persistedModels.modelRoleAssignments.vision).toBe('vision');
-    const persistedSettingsAfterModels = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
-      modelCatalog?: unknown;
-      modelRoleAssignments?: unknown;
-      primaryModel?: string;
-      extractionModel?: string;
-    };
-    expect(persistedSettingsAfterModels.modelCatalog).toBeUndefined();
-    expect(persistedSettingsAfterModels.modelRoleAssignments).toBeUndefined();
-    expect(persistedSettingsAfterModels.primaryModel).toBeUndefined();
-    expect(persistedSettingsAfterModels.extractionModel).toBeUndefined();
-
-    const capabilityPatchRes = await request(
-      port,
-      'PATCH',
-      '/api/admin/settings',
-      JSON.stringify({
+        maintenanceIntervalMs: 240000,
         capabilityTier: 'custom',
         customTokens: ['identity.read', 'git.read'],
       }),
       authHeaders,
     );
-    expect(capabilityPatchRes.status).toBe(200);
-    expect(refreshModelsSpy).toHaveBeenCalledTimes(3);
-    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
-    const persistedCapabilities = JSON.parse(readFileSync(join(tempDir, 'capability-tier.json'), 'utf8')) as {
-      tier: string;
-      customTokens: string[];
+    expect(ownerPatchRes.status).toBe(400);
+    const ownerPatchPayload = JSON.parse(ownerPatchRes.body) as {
+      ok: boolean;
+      message: string;
+      validationErrors?: Array<{ field: string; message: string; code?: string }>;
     };
-    expect(persistedCapabilities.tier).toBe('custom');
-    expect(persistedCapabilities.customTokens).toEqual(['identity.read', 'git.read']);
-    expect(testConfig.capabilityTier).toBe('custom');
-    const persistedSettingsAfterCapability = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as {
-      capabilityTier?: string;
-      sessionMessageLimit?: number;
-    };
-    expect(persistedSettingsAfterCapability.capabilityTier).toBeUndefined();
-    expect(persistedSettingsAfterCapability.sessionMessageLimit).toBe(55);
-
-    const restartedConfig: SubstrateConfig = {
-      ...testConfig,
-      primaryModel: 'test-model',
-      primaryProvider: 'test',
-      primaryMaxTokens: 16384,
-      extractionModel: 'test-extract',
-      extractionProvider: 'test',
-      extractionMaxTokens: 8192,
-      modelCatalog: undefined,
-      modelRoleAssignments: undefined,
-      modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
-      },
-      capabilityTier: undefined,
-    };
-    const restartSettings = splitSettingsByDomain(loadSettings(tempDir));
-    applySettings(restartedConfig, restartSettings.runtime);
-    applySettings(restartedConfig, loadModelsConfig(tempDir, {
-      defaultContextWindow: restartedConfig.defaultContextWindow,
-    }));
-    restartedConfig.capabilityTier = loadCapabilityTierConfig(tempDir).tier;
-    expect(restartedConfig.primaryModel).toBe('z-ai/glm-5');
-    expect(restartedConfig.modelRoleAssignments?.vision).toBe('vision');
-    expect(restartedConfig.capabilityTier).toBe('custom');
+    expect(ownerPatchPayload.ok).toBe(false);
+    expect(ownerPatchPayload.message).toContain('primaryModel is owned by models.json');
+    expect(ownerPatchPayload.message).toContain('maintenanceIntervalMs is owned by scheduler.json');
+    expect(ownerPatchPayload.message).toContain('capabilityTier is owned by capability-tier.json');
+    expect(ownerPatchPayload.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'primaryModel',
+        message: 'primaryModel is owned by models.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'modelCatalog',
+        message: 'modelCatalog is owned by models.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'maintenanceIntervalMs',
+        message: 'maintenanceIntervalMs is owned by scheduler.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'capabilityTier',
+        message: 'capabilityTier is owned by capability-tier.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'customTokens',
+        message: 'customTokens is owned by capability-tier.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+    ]));
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
+    expect(loadSettings(tempDir).sessionMessageLimit).toBe(55);
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);
@@ -1030,7 +1651,25 @@ describe('AdminServer JSON API routes', () => {
     const promptsPayload = JSON.parse(promptsRes.body) as { layers: Array<{ id: string }> };
     expect(promptsPayload.layers.length).toBeGreaterThan(0);
 
-    const layerId = promptsPayload.layers[0].id;
+    const foundationLayerId = promptsPayload.layers[0].id;
+    const foundationPatchRes = await request(
+      port,
+      'PATCH',
+      `/api/admin/prompts/${foundationLayerId}`,
+      JSON.stringify({ content: 'Updated API prompt content' }),
+      authHeaders,
+    );
+    expect(foundationPatchRes.status).toBe(400);
+    expect(JSON.parse(foundationPatchRes.body)).toEqual({
+      error: 'Character Foundation is derived from the character card and must be edited through Identity.',
+    });
+
+    const editableLayer = promptStore.create({
+      type: 'runtime',
+      name: 'API Editable Runtime Layer',
+      content: 'Original API prompt content',
+    });
+    const layerId = editableLayer.id;
     const promptDetailRes = await request(port, 'GET', `/api/admin/prompts/${layerId}`, undefined, authHeaders);
     expect(promptDetailRes.status).toBe(200);
 
@@ -1123,6 +1762,318 @@ describe('AdminServer JSON API routes', () => {
     expect(missingPrompt.status).toBe(404);
   });
 
+  it('supports constitution snapshot and mutable-layer round-trip with immutable fail-closed edits', async () => {
+    const runtimeA = promptStore.create({
+      type: 'runtime',
+      name: 'Constitution Runtime A',
+      content: 'constitution-runtime-a',
+      updatedBy: 'admin',
+    });
+    const runtimeB = promptStore.create({
+      type: 'runtime',
+      name: 'Constitution Runtime B',
+      content: 'constitution-runtime-b',
+      updatedBy: 'admin',
+    });
+
+    const snapshotRes = await request(port, 'GET', '/api/admin/prompts/constitution', undefined, authHeaders);
+    expect(snapshotRes.status).toBe(200);
+    const snapshotPayload = JSON.parse(snapshotRes.body) as {
+      immutableBlocks: Array<{ id: string; editable: boolean }>;
+      mutableLayers: Array<{
+        id: string;
+        content: string;
+        enabled: boolean;
+        identifier?: string;
+        role?: string;
+        promptOrder?: number;
+      }>;
+      preview: { text: string };
+    };
+    expect(snapshotPayload.immutableBlocks).toHaveLength(3);
+    expect(snapshotPayload.immutableBlocks.every(block => block.editable === false)).toBe(true);
+    expect(snapshotPayload.preview.text).toContain('[Immutable Human-Safety Amendments]');
+
+    const mutableLayers = snapshotPayload.mutableLayers.map(layer => ({
+      id: layer.id,
+      content: layer.content,
+      enabled: layer.enabled,
+      identifier: layer.identifier ?? null,
+      role: layer.role ?? null,
+      promptOrder: layer.promptOrder ?? null,
+    }));
+    const aIndex = mutableLayers.findIndex(layer => layer.id === runtimeA.id);
+    const bIndex = mutableLayers.findIndex(layer => layer.id === runtimeB.id);
+    expect(aIndex).toBeGreaterThanOrEqual(0);
+    expect(bIndex).toBeGreaterThanOrEqual(0);
+    if (aIndex >= 0 && bIndex >= 0) {
+      const [moved] = mutableLayers.splice(bIndex, 1);
+      mutableLayers.splice(aIndex, 0, moved);
+      const runtimeBPayload = mutableLayers.find(layer => layer.id === runtimeB.id);
+      if (runtimeBPayload) runtimeBPayload.content = 'constitution-runtime-b-updated';
+    }
+
+    const saveRes = await request(
+      port,
+      'PUT',
+      '/api/admin/prompts/constitution',
+      JSON.stringify({ mutableLayers }),
+      authHeaders,
+    );
+    expect(saveRes.status).toBe(200);
+    const savePayload = JSON.parse(saveRes.body) as {
+      ok: boolean;
+      snapshot?: { preview: { text: string } };
+    };
+    expect(savePayload.ok).toBe(true);
+    expect(promptStore.getById(runtimeB.id)?.content).toBe('constitution-runtime-b-updated');
+    expect(savePayload.snapshot?.preview.text).toContain('constitution-runtime-b-updated');
+    for (const [index, layer] of mutableLayers.entries()) {
+      expect(promptStore.getById(layer.id)?.priority).toBe(index);
+    }
+
+    const immutableAttemptPayload = mutableLayers.map((layer, index) => (
+      index === 0
+        ? { ...layer, id: 'constitution:immutable:1', content: 'forbidden immutable edit' }
+        : layer
+    ));
+    const immutableAttemptRes = await request(
+      port,
+      'PUT',
+      '/api/admin/prompts/constitution',
+      JSON.stringify({ mutableLayers: immutableAttemptPayload }),
+      authHeaders,
+    );
+    expect(immutableAttemptRes.status).toBe(400);
+    expect(JSON.parse(immutableAttemptRes.body)).toEqual({
+      error: 'Immutable constitution layers are read-only and cannot be edited',
+    });
+  });
+
+  it('supports onboarding setup actions for keep starter and identity edits', async () => {
+    const current = cardVersionStore.getCurrent().card;
+    cardVersionStore.update({
+      ...current,
+      data: {
+        ...current.data,
+        creator: 'system',
+        tags: ['bootstrap'],
+        name: 'Companion',
+        personality: 'Starter personality',
+      },
+    }, 'test:seed', 'Seed onboarding starter state');
+
+    const keepStarterRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/onboarding',
+      JSON.stringify({ action: 'keep_starter' }),
+      authHeaders,
+    );
+    expect(keepStarterRes.status).toBe(200);
+    const keepStarterPayload = JSON.parse(keepStarterRes.body) as {
+      ok: boolean;
+      action?: string;
+      onboardingRequired: boolean;
+    };
+    expect(keepStarterPayload.ok).toBe(true);
+    expect(keepStarterPayload.action).toBe('keep_starter');
+    expect(keepStarterPayload.onboardingRequired).toBe(false);
+    const afterKeepStarter = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
+    expect(afterKeepStarter.status).toBe(200);
+    expect((JSON.parse(afterKeepStarter.body) as { card: { data: { tags?: string[] } } }).card.data.tags ?? [])
+      .not.toContain('bootstrap');
+
+    const reset = cardVersionStore.getCurrent().card;
+    cardVersionStore.update({
+      ...reset,
+      data: {
+        ...reset.data,
+        creator: 'system',
+        tags: ['bootstrap'],
+        name: 'Companion',
+        personality: 'Starter personality',
+      },
+    }, 'test:seed', 'Reset onboarding starter state');
+
+    const editRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/onboarding',
+      JSON.stringify({
+        action: 'edit_identity',
+        fields: {
+          name: 'Canopy Guide',
+          personality: 'Grounded and practical.',
+          description: 'Garden onboarding identity',
+        },
+      }),
+      authHeaders,
+    );
+    expect(editRes.status).toBe(200);
+    const editPayload = JSON.parse(editRes.body) as {
+      ok: boolean;
+      action?: string;
+      onboardingRequired: boolean;
+      updatedFields?: string[];
+    };
+    expect(editPayload.ok).toBe(true);
+    expect(editPayload.action).toBe('edit_identity');
+    expect(editPayload.onboardingRequired).toBe(false);
+    expect(editPayload.updatedFields).toEqual(expect.arrayContaining(['name', 'personality', 'description']));
+    const identityAfterEditRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
+    expect(identityAfterEditRes.status).toBe(200);
+    const identityAfterEdit = JSON.parse(identityAfterEditRes.body) as {
+      card: {
+        data: {
+          name: string;
+          personality: string;
+          description: string;
+          tags?: string[];
+        };
+      };
+    };
+    expect(identityAfterEdit.card.data.name).toBe('Canopy Guide');
+    expect(identityAfterEdit.card.data.personality).toBe('Grounded and practical.');
+    expect(identityAfterEdit.card.data.description).toBe('Garden onboarding identity');
+    expect(identityAfterEdit.card.data.tags ?? []).not.toContain('bootstrap');
+  });
+
+  it('fails closed on invalid onboarding setup payloads', async () => {
+    const current = cardVersionStore.getCurrent().card;
+    cardVersionStore.update({
+      ...current,
+      data: {
+        ...current.data,
+        creator: 'system',
+        tags: ['bootstrap'],
+      },
+    }, 'test:seed', 'Seed onboarding starter state for validation test');
+
+    const invalidFieldRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/onboarding',
+      JSON.stringify({
+        action: 'edit_identity',
+        fields: {
+          tags: 'bootstrap',
+        },
+      }),
+      authHeaders,
+    );
+    expect(invalidFieldRes.status).toBe(400);
+    const invalidFieldPayload = JSON.parse(invalidFieldRes.body) as { error: string; onboardingRequired?: boolean };
+    expect(invalidFieldPayload.error).toContain('Unsupported onboarding identity field');
+    expect(invalidFieldPayload.onboardingRequired).toBe(true);
+
+    const extraFieldRes = await request(
+      port,
+      'POST',
+      '/api/admin/identity/onboarding',
+      JSON.stringify({
+        action: 'keep_starter',
+        reason: 'extra-key-not-allowed',
+      }),
+      authHeaders,
+    );
+    expect(extraFieldRes.status).toBe(400);
+    const extraFieldPayload = JSON.parse(extraFieldRes.body) as { error: string };
+    expect(extraFieldPayload.error).toContain('keep_starter does not accept additional fields');
+  });
+
+  it('round-trips runtime settings PATCH/GET without drifting subsystem-owned editors', async () => {
+    const beforeRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
+    expect(beforeRes.status).toBe(200);
+    const beforePayload = JSON.parse(beforeRes.body) as {
+      config: Record<string, unknown>;
+      editors: Record<string, unknown>;
+    };
+
+    const patch = {
+      sessionHistoryBudgetPct: 9,
+      memoryRetrievalBudgetPct: 4,
+      sessionMessageLimit: 44,
+      sessionRestartBehavior: 'new_session',
+      memoryRetrievalLimit: 12,
+      extractionInterval: 6,
+      defaultContextWindow: 196000,
+      memoryBudgetPct: 24,
+      extractionThresholdPct: 34,
+      compactionThresholdPct: 76,
+      compactionEmotionalSalienceThresholdPct: 83,
+      retryMaxAttempts: 4,
+      retryBaseDelayMs: 2500,
+      openRouterProviderOrder: ['parasail', 'openai'],
+      importProcessingRouteMode: 'local_endpoint',
+      importProcessingStrictPolicy: true,
+      importProcessingLocalEndpointUrl: 'http://127.0.0.1:4000/v1',
+      importProcessingLocalModel: 'llama.cpp/local',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api', 'discord'],
+        allowedPurposes: ['retrieval', 'think'],
+      },
+      webFetchAllowHttp: true,
+      webFetchDomainAllowlist: ['example.com', 'internal.local'],
+      webFetchAllowInternalNetwork: true,
+      webFetchTlsCaCertPaths: ['/tmp/root-ca.pem'],
+      ttsProvider: 'echo',
+      voiceId: 'voice-123',
+      echoTtsUrl: 'http://127.0.0.1:8001/v1/audio/speech',
+      echoTtsVoice: 'allison',
+      echoTtsPreset: 'wide',
+      sttProvider: 'deepgram',
+      deepgramModel: 'nova-3',
+      discordEnabled: true,
+      discordHeartbeatChannel: '1234567890',
+      discordTriggerWords: 'pixie, hello companion',
+      discordTriggerReactions: '👆, 🔥',
+      discordTriggerListenWindowMs: 180000,
+      telegramEnabled: true,
+      telegramAuthorizedUsers: '123, 456',
+      obsidianVaultName: 'companion',
+      obsidianCliPath: '/usr/local/bin/obsidian',
+      obsidianAutoPublish: true,
+      obsidianTimeoutMs: 12000,
+      moaEnabled: true,
+      moaReferenceModels: ['openai/gpt-4.1-mini', 'moonshotai/kimi-k2.5'],
+      moaAggregatorModel: 'openai/gpt-4.1-mini',
+      moaMaxRounds: 3,
+      moaMaxTokensPerRound: 2048,
+      moaTimeoutMs: 30000,
+    };
+
+    const patchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify(patch),
+      authHeaders,
+    );
+    expect(patchRes.status).toBe(200);
+
+    const afterRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
+    expect(afterRes.status).toBe(200);
+    const afterPayload = JSON.parse(afterRes.body) as {
+      config: Record<string, unknown>;
+      editors: Record<string, unknown>;
+    };
+
+    expect(afterPayload.config).toEqual(expect.objectContaining(patch));
+    expect(afterPayload.config.primaryModel).toBeUndefined();
+    expect(afterPayload.config.maintenanceIntervalMs).toBeUndefined();
+    expect(afterPayload.config.capabilityTier).toBeUndefined();
+    expect(afterPayload.editors).toEqual(beforePayload.editors);
+
+    const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as Record<string, unknown>;
+    expect(persistedSettings).toEqual(expect.objectContaining(patch));
+    expect(persistedSettings.primaryModel).toBeUndefined();
+    expect(persistedSettings.maintenanceIntervalMs).toBeUndefined();
+    expect(persistedSettings.capabilityTier).toBeUndefined();
+  });
+
   it('keeps /api/admin/settings PATCH reachable through the canonical JSON handler', async () => {
     const malformedPatch = await request(
       port,
@@ -1136,15 +2087,6 @@ describe('AdminServer JSON API routes', () => {
     expect(JSON.parse(malformedPatch.body)).toEqual({
       error: 'Invalid JSON payload',
     });
-    const settingsAuditRes = await request(
-      port,
-      'GET',
-      '/legacy/events?actionType=settings_change&decision=denied&timeRange=all',
-      undefined,
-      authHeaders,
-    );
-    expect(settingsAuditRes.status).toBe(200);
-    expect(settingsAuditRes.body).toContain('/api/admin/settings failed: invalid JSON payload');
   });
 
   it('returns field-level validation details for invalid settings payloads', async () => {
@@ -1157,6 +2099,12 @@ describe('AdminServer JSON API routes', () => {
         importProcessingRouteMode: 'local_endpoint',
         importProcessingLocalEndpointUrl: '',
         importProcessingLocalModel: '',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: [],
+          allowedChannelTypes: [],
+          allowedPurposes: [],
+        },
       }),
       authHeaders,
     );
@@ -1169,7 +2117,7 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(payload.ok).toBe(false);
     expect(payload.message).toContain('sessionMessageLimit must be 5-200');
-    expect(payload.validationErrors).toEqual(expect.arrayContaining([
+      expect(payload.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
         field: 'sessionMessageLimit',
         message: 'sessionMessageLimit must be 5-200',
@@ -1182,7 +2130,551 @@ describe('AdminServer JSON API routes', () => {
         field: 'importProcessingLocalModel',
         message: 'importProcessingLocalModel is required when importProcessingRouteMode=local_endpoint',
       }),
+      expect.objectContaining({
+        field: 'compositionalPolicy.allowedTiers',
+        message: 'compositionalPolicy.allowedTiers must list at least one value when compositionalPolicy.enabled=true',
+      }),
+      expect.objectContaining({
+        field: 'compositionalPolicy.allowedChannelTypes',
+        message: 'compositionalPolicy.allowedChannelTypes must list at least one value when compositionalPolicy.enabled=true',
+      }),
+      expect.objectContaining({
+        field: 'compositionalPolicy.allowedPurposes',
+        message: 'compositionalPolicy.allowedPurposes must list at least one value when compositionalPolicy.enabled=true',
+      }),
     ]));
+  });
+
+  it('rejects model-owned settings fields on the generic admin settings route', async () => {
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        modelCatalog: {
+          primary: {
+            model: 'z-ai/glm-5',
+            provider: 'openrouter',
+            routing: {
+              providerOrder: 'parasail',
+            },
+          },
+        },
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as {
+      ok: boolean;
+      message: string;
+      validationErrors?: Array<{ field: string; message: string; code?: string }>;
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.message).toContain('modelCatalog is owned by models.json');
+    expect(payload.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'modelCatalog',
+        message: 'modelCatalog is owned by models.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+    ]));
+  });
+
+  it('returns schema metadata for subsystem ownership and schema-driven settings editors', async () => {
+    const restoreSttProvider = registerStreamingSttProvider('schema-plugin-stt', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in schema metadata');
+      }),
+      metadata: {
+        isConfigured: () => false,
+      },
+    });
+    const restoreTtsProvider = registerStreamingTtsProvider('schema-plugin-tts', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in schema metadata');
+      }),
+      metadata: {
+        isConfigured: () => false,
+      },
+    });
+
+    try {
+      const res = await request(
+        port,
+        'GET',
+        '/api/admin/settings/schema',
+        undefined,
+        authHeaders,
+      );
+
+      expect(res.status).toBe(200);
+      const schemaRoot = getSchemaRoot(JSON.parse(res.body));
+
+      const runtimeSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'runtime');
+      const modelsSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'models');
+      const schedulerSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'scheduler');
+      const capabilitiesSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'capabilities');
+      const skillsSubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'skills');
+      const trustPolicySubsystem = getNamedSchemaEntry(schemaRoot, ['subsystems', 'subsystemSchemas'], 'trustPolicy');
+
+      expect(readOwnerFiles(runtimeSubsystem)).toContain('settings.json');
+      expect(readOwnerFiles(modelsSubsystem)).toContain('models.json');
+      expect(readOwnerFiles(schedulerSubsystem)).toContain('scheduler.json');
+      expect(readOwnerFiles(capabilitiesSubsystem)).toContain('capability-tier.json');
+      expect(isRawOnlySchemaSubsystem(skillsSubsystem)).toBe(true);
+      expect(isRawOnlySchemaSubsystem(trustPolicySubsystem)).toBe(true);
+
+      const sessionMessageLimitField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sessionMessageLimit');
+      const primaryModelField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'primaryModel');
+      const modelCatalogField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelCatalog');
+      const modelRoleAssignmentsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoleAssignments');
+      const modelRosterField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoster');
+      const maintenanceIntervalMsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'maintenanceIntervalMs');
+      const capabilityTierField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'capabilityTier');
+      const compositionalPolicyField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'compositionalPolicy');
+      const sttProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sttProvider');
+      const ttsProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'ttsProvider');
+      const textEmotionModelField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'textEmotionModel');
+      const textEmotionCacheDirField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'textEmotionCacheDir');
+      const textEmotionDtypeField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'textEmotionDtype');
+
+      expect(['number', 'integer']).toContain(
+        readStringMetadata(sessionMessageLimitField, ['type', 'kind', 'valueType', 'inputType']),
+      );
+      expect(readNumberMetadata(sessionMessageLimitField, ['min', 'minimum'])).toBe(5);
+      expect(readNumberMetadata(sessionMessageLimitField, ['max', 'maximum'])).toBe(200);
+
+      expect(readOwnerFiles(primaryModelField)).toContain('models.json');
+      expect(readOwnerFiles(modelCatalogField)).toContain('models.json');
+      expect(readOwnerFiles(modelRoleAssignmentsField)).toContain('models.json');
+      expect(readOwnerFiles(modelRosterField)).toContain('models.json');
+      expect(readStringMetadata(modelCatalogField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
+      expect(readStringMetadata(modelRoleAssignmentsField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
+      expect(readStringMetadata(modelRosterField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
+      expect(readOwnerFiles(maintenanceIntervalMsField)).toContain('scheduler.json');
+      expect(readOwnerFiles(capabilityTierField)).toContain('capability-tier.json');
+      expect(readOwnerFiles(compositionalPolicyField)).toContain('settings.json');
+      expect(readStringMetadata(compositionalPolicyField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
+      expect(readOwnerFiles(textEmotionModelField)).toContain('settings.json');
+      expect(readOwnerFiles(textEmotionCacheDirField)).toContain('settings.json');
+      expect(readOwnerFiles(textEmotionDtypeField)).toContain('settings.json');
+      expect(readStringMetadata(textEmotionModelField, ['type', 'kind', 'valueType', 'inputType'])).toBe('string');
+      expect(readStringMetadata(textEmotionCacheDirField, ['type', 'kind', 'valueType', 'inputType'])).toBe('string');
+      expect(readStringMetadata(textEmotionDtypeField, ['type', 'kind', 'valueType', 'inputType'])).toBe('enum');
+      expect(readEnumLikeValues(textEmotionDtypeField)).toEqual(expect.arrayContaining([
+        'auto',
+        'fp32',
+        'q8',
+      ]));
+
+      expect(readEnumLikeValues(sttProviderField)).toEqual(expect.arrayContaining([
+        'disabled',
+        'deepgram',
+        'schema-plugin-stt',
+      ]));
+      expect(readEnumLikeValues(ttsProviderField)).toEqual(expect.arrayContaining([
+        'disabled',
+        'echo',
+        'elevenlabs',
+        'schema-plugin-tts',
+      ]));
+    } finally {
+      restoreSttProvider();
+      restoreTtsProvider();
+    }
+  });
+
+  it('round-trips runtime settings and subsystem owner files through the canonical admin settings payload', async () => {
+    const runtimePatch = {
+      sessionMessageLimit: 44,
+      sessionRestartBehavior: 'new_session',
+      openRouterProviderOrder: ['parasail', 'openai'],
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['retrieval'],
+      },
+      webFetchDomainAllowlist: ['example.com', 'internal.local'],
+      promotedExtendedTools: ['memory.search', 'contacts.lookup'],
+      chatApiBaseUrl: 'https://admin.example.test/api',
+      uiThemeId: 'generic-light',
+      ttsProvider: 'disabled',
+      sttProvider: 'disabled',
+      textEmotionModel: 'SamLowe/roberta-base-go_emotions-onnx',
+      textEmotionCacheDir: '/tmp/admin-text-emotion-cache',
+      textEmotionDtype: 'q8',
+      moaEnabled: true,
+      moaReferenceModels: ['openai/gpt-4.1-mini', 'moonshotai/kimi-k2.5'],
+      moaAggregatorModel: 'openai/gpt-4.1-mini',
+      moaMaxRounds: 3,
+      moaMaxTokensPerRound: 2048,
+      moaTimeoutMs: 30000,
+    } as const;
+
+    const runtimePatchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify(runtimePatch),
+      authHeaders,
+    );
+    expect(runtimePatchRes.status).toBe(200);
+
+    const expectedModels = saveModelsConfig(tempDir, {
+      schemaVersion: 1,
+      models: [
+        {
+          id: 'primary',
+          rank: 100,
+          identity: {
+            provider: 'openrouter',
+            model: 'openai/gpt-4.1-mini',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'chat', primary: true },
+            { purpose: 'summary', primary: true },
+            { purpose: 'reasoning', primary: true },
+            { purpose: 'longContext', primary: true },
+            { purpose: 'vision', primary: true },
+            { purpose: 'moa', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
+        },
+        {
+          id: 'extraction',
+          rank: 80,
+          identity: {
+            provider: 'openrouter',
+            model: 'deepseek/deepseek-v3.2',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'background', primary: true },
+            { purpose: 'extraction', primary: true },
+            { purpose: 'import_processing', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 2048 },
+        },
+      ],
+    }, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    const expectedScheduler = saveSchedulerConfig(tempDir, {
+      tickIntervalMs: 1500,
+      heartbeatIntervalMs: 9000,
+      salienceDecayIntervalMs: 12000,
+    });
+    const expectedSkills = saveSkillsConfig(tempDir, {
+      enabled: true,
+      directories: ['skills'],
+      extraDirectories: ['history/skills'],
+      maxLoadedSkills: 16,
+      maxSkillChars: 12000,
+      disabledSkills: ['git-ops'],
+    });
+    const expectedTrustPolicy = saveTrustPolicyConfig(tempDir, {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        semi_private: ['public', 'personal'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: ['custom:'],
+        broadcastPrefixes: ['social:'],
+        defaultVisibility: 'public',
+        visibilityOverrides: {
+          exact: {
+            'custom:exact-room': 'broadcast',
+          },
+          prefix: {
+            'custom:': 'private',
+          },
+        },
+      },
+    });
+    const expectedCapabilities = saveCapabilityTierConfig(tempDir, {
+      tier: 'custom',
+      customTokens: ['identity.read', 'git.read'],
+    });
+
+    const res = await request(
+      port,
+      'GET',
+      '/api/admin/settings',
+      undefined,
+      authHeaders,
+    );
+
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as {
+      config: Record<string, unknown>;
+      editors: {
+        models: unknown;
+        scheduler: unknown;
+        skills: unknown;
+        trustPolicy: unknown;
+        capabilities: unknown;
+      };
+    };
+
+    expect(payload.config).toEqual(expect.objectContaining(runtimePatch));
+    expect(payload.editors.models).toEqual(expectedModels);
+    expect(payload.editors.scheduler).toEqual(expectedScheduler);
+    expect(payload.editors.skills).toEqual(expectedSkills);
+    expect(payload.editors.trustPolicy).toEqual(expectedTrustPolicy);
+    expect(payload.editors.capabilities).toEqual(expectedCapabilities);
+    expect(loadSettings(tempDir)).toEqual(expect.objectContaining(runtimePatch));
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it('round-trips model-control runtime fields via /api/admin/settings with persistence and reload coverage', async () => {
+    const beforeModels = loadModelsConfig(tempDir, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    const beforeModelsFile = readFileSync(join(tempDir, 'models.json'), 'utf8');
+    const runtimeModelControls = {
+      thinkMaxTokens: 64000,
+      thinkMaxWallTimeMs: 120000,
+      thinkMaxSubQueries: 8,
+      openRouterProviderOrder: ['parasail', 'openai'],
+      uiThemeId: 'generic-dark',
+    };
+
+    const patchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify(runtimeModelControls),
+      authHeaders,
+    );
+    expect(patchRes.status).toBe(200);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
+
+    const getRes = await request(port, 'GET', '/api/admin/settings', undefined, authHeaders);
+    expect(getRes.status).toBe(200);
+    const payload = JSON.parse(getRes.body) as {
+      config: Record<string, unknown>;
+      editors: {
+        models: ReturnType<typeof loadModelsConfig>;
+      };
+    };
+    expect(payload.config).toEqual(expect.objectContaining(runtimeModelControls));
+    expect(payload.config.primaryModel).toBeUndefined();
+
+    const reloadedModels = loadModelsConfig(tempDir, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    expect(payload.editors.models).toEqual(beforeModels);
+    expect(reloadedModels).toEqual(beforeModels);
+    expect(readFileSync(join(tempDir, 'models.json'), 'utf8')).toBe(beforeModelsFile);
+
+    const persistedSettings = loadSettings(tempDir);
+    expect(persistedSettings).toEqual(expect.objectContaining(runtimeModelControls));
+  });
+
+  it('returns field-level validation errors for malformed and out-of-range model-control payloads', async () => {
+    const modelsBefore = loadModelsConfig(tempDir, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    const settingsBefore = loadSettings(tempDir);
+
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        thinkMaxTokens: 999,
+        thinkMaxWallTimeMs: 1000,
+        thinkMaxSubQueries: 0,
+        modelCatalog: {
+          primary: {
+            routing: {
+              providerOrder: ['openrouter', 99],
+            },
+          },
+        },
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    const payload = JSON.parse(res.body) as {
+      ok: boolean;
+      message: string;
+      validationErrors?: Array<{ field: string; message: string; code?: string }>;
+    };
+    expect(payload.ok).toBe(false);
+    expect(payload.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'thinkMaxTokens',
+        message: 'thinkMaxTokens must be 1000-1000000',
+        code: 'out_of_range',
+      }),
+      expect.objectContaining({
+        field: 'thinkMaxWallTimeMs',
+        message: 'thinkMaxWallTimeMs must be 5000-600000',
+        code: 'out_of_range',
+      }),
+      expect.objectContaining({
+        field: 'thinkMaxSubQueries',
+        message: 'thinkMaxSubQueries must be 1-100',
+        code: 'out_of_range',
+      }),
+      expect.objectContaining({
+        field: 'modelCatalog',
+        message: 'modelCatalog is owned by models.json; edit that canonical config instead',
+        code: 'wrong_owner',
+      }),
+      expect.objectContaining({
+        field: 'modelCatalog.primary.routing.providerOrder',
+        message: 'modelCatalog.primary.routing.providerOrder must be an array of strings',
+        code: 'invalid_type',
+      }),
+    ]));
+    expect(payload.message).toContain('modelCatalog is owned by models.json');
+
+    const modelsAfter = loadModelsConfig(tempDir, {
+      defaultContextWindow: testConfig.defaultContextWindow,
+    });
+    expect(modelsAfter).toEqual(modelsBefore);
+    expect(loadSettings(tempDir).thinkMaxTokens).toBe(settingsBefore.thinkMaxTokens);
+    expect(loadSettings(tempDir).thinkMaxWallTimeMs).toBe(settingsBefore.thinkMaxWallTimeMs);
+    expect(loadSettings(tempDir).thinkMaxSubQueries).toBe(settingsBefore.thinkMaxSubQueries);
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it('accepts registered STT provider ids through admin settings patch', async () => {
+    const restoreProvider = registerStreamingSttProvider('plugin-test', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in admin settings validation');
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+      },
+    });
+
+    try {
+      const res = await request(
+        port,
+        'PATCH',
+        '/api/admin/settings',
+        JSON.stringify({
+          sttProvider: 'plugin-test',
+        }),
+        authHeaders,
+      );
+
+      expect(res.status).toBe(200);
+      expect(loadSettings(tempDir).sttProvider).toBe('plugin-test');
+      expect((testConfig as SubstrateConfig & { sttProvider?: string }).sttProvider).toBe('plugin-test');
+    } finally {
+      restoreProvider();
+    }
+  });
+
+  it('lists registered STT/TTS provider ids in admin settings payload for registry-backed Garden suggestions', async () => {
+    const restoreSttProvider = registerStreamingSttProvider('plugin-stt', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in admin settings payload');
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginSttToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+    });
+    const restoreTtsProvider = registerStreamingTtsProvider('plugin-tts', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in admin settings payload');
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+        eligibility: { requiredTokens: ['external.web'] },
+      },
+    });
+
+    try {
+      (testConfig as SubstrateConfig & { pluginSttToken?: string; pluginTtsToken?: string }).pluginSttToken = 'stt-token';
+      (testConfig as SubstrateConfig & { pluginSttToken?: string; pluginTtsToken?: string }).pluginTtsToken = 'tts-token';
+
+      const res = await request(
+        port,
+        'GET',
+        '/api/admin/settings',
+        undefined,
+        authHeaders,
+      );
+
+      expect(res.status).toBe(200);
+      const payload = JSON.parse(res.body) as {
+        voiceProviders?: {
+          stt?: Array<{ id: string; configured: boolean; requiredTokens: string[] }>;
+          tts?: Array<{ id: string; configured: boolean; requiredTokens: string[] }>;
+        };
+      };
+      expect(payload.voiceProviders?.stt).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'plugin-stt',
+          configured: true,
+          requiredTokens: ['external.web'],
+        }),
+      ]));
+      expect(payload.voiceProviders?.tts).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'plugin-tts',
+          configured: true,
+          requiredTokens: ['external.web'],
+        }),
+      ]));
+    } finally {
+      delete (testConfig as SubstrateConfig & { pluginSttToken?: string; pluginTtsToken?: string }).pluginSttToken;
+      delete (testConfig as SubstrateConfig & { pluginSttToken?: string; pluginTtsToken?: string }).pluginTtsToken;
+      restoreSttProvider();
+      restoreTtsProvider();
+    }
+  });
+
+  it('accepts registered TTS provider ids through admin settings patch', async () => {
+    const restoreProvider = registerStreamingTtsProvider('plugin-test', {
+      createConnector: vi.fn(() => {
+        throw new Error('not used in admin settings validation');
+      }),
+      metadata: {
+        isConfigured: (config) => Boolean(config.pluginTtsToken),
+      },
+    });
+
+    try {
+      const res = await request(
+        port,
+        'PATCH',
+        '/api/admin/settings',
+        JSON.stringify({
+          ttsProvider: 'plugin-test',
+        }),
+        authHeaders,
+      );
+
+      expect(res.status).toBe(200);
+      expect(loadSettings(tempDir).ttsProvider).toBe('plugin-test');
+      expect((testConfig as SubstrateConfig & { ttsProvider?: string }).ttsProvider).toBe('plugin-test');
+    } finally {
+      restoreProvider();
+    }
   });
 
   it('imports uploaded identity cards authoritatively and refreshes Character Foundation prompt', async () => {
@@ -1357,7 +2849,7 @@ describe('AdminServer JSON API routes', () => {
     expect(hostileNamePayload.message).not.toContain('<script>');
   });
 
-  it('records operator-attributed audit entries for /api/admin/identity mutation routes and renders actor labels', async () => {
+  it('supports /api/admin/identity mutation routes without legacy audit page dependencies', async () => {
     const fieldPatchRes = await request(
       port,
       'PATCH',
@@ -1394,13 +2886,7 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(uploadDeniedRes.status).toBeGreaterThanOrEqual(400);
 
-    const eventsRes = await request(port, 'GET', '/legacy/events?timeRange=all', undefined, authHeaders);
-    expect(eventsRes.status).toBe(200);
-    expect(eventsRes.body).toContain('Actor: Operator');
-    expect(eventsRes.body).toContain('/api/admin/identity/fields');
-    expect(eventsRes.body).toContain('/api/admin/identity/rollback');
-    expect(eventsRes.body).toContain('/api/admin/identity/import');
-    expect(eventsRes.body).toContain('/api/admin/identity/upload');
+    expect(uploadDeniedRes.status).toBeLessThan(500);
   });
 
   it('streams telemetry over websocket and enforces websocket auth', async () => {

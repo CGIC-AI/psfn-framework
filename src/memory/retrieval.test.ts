@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRetriever, __retrieval_internals } from './retrieval.js';
+import {
+  MemoryRetriever,
+  RetrievalIntegrityError,
+  __retrieval_internals,
+} from './retrieval.js';
 import type { MemoryStore } from './store.js';
-import type { EmbeddingService } from '../agent/contracts.js';
+import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
 import type { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
+import { runWithRequestContext } from '../llm/request-context.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
 
 // ── Helpers ──
@@ -59,6 +64,19 @@ function makeMockEventBus(): EventBus {
   return {
     emit: vi.fn().mockResolvedValue(undefined),
   } as unknown as EventBus;
+}
+
+function makeMockLLMProvider(responses: Array<{ content: string }>): LLMProvider {
+  return {
+    stream: vi.fn(),
+    complete: vi.fn().mockImplementation(async () => {
+      const next = responses.shift();
+      if (!next) {
+        throw new Error('No mocked LLM response available');
+      }
+      return next;
+    }),
+  };
 }
 
 function makeRuntimeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -158,6 +176,36 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Personal detail');
     expect(result).not.toContain('Intimate memory');
     expect(result).not.toContain('Confidential secret');
+  });
+
+  it('excludes context_feedback artifacts from retrieval candidates', async () => {
+    const memories = [
+      makeMemory({
+        id: 'normal-memory',
+        text: 'V likes oolong tea.',
+        sensitivity: 'public',
+        similarity: 0.95,
+        sourceRef: 'api:test:normal',
+        tags: ['preference'],
+      }),
+      makeMemory({
+        id: 'context-feedback-memory',
+        text: 'Context feedback for turn abc. Score=0.88 bucket=high.',
+        type: 'procedural',
+        sensitivity: 'public',
+        similarity: 0.99,
+        sourceRef: 'source:context_feedback|turn:abc|score:0.88|model:test',
+        tags: ['context_feedback', 'procedural_learning'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('what does V like?', 'api:test', 'primary');
+
+    expect(result).toContain('V likes oolong tea.');
+    expect(result).not.toContain('Context feedback for turn abc');
   });
 
   it('broadcast channels stay public_only unless explicit approval token is present', async () => {
@@ -362,6 +410,179 @@ describe('MemoryRetriever trust-gated filtering', () => {
     );
   });
 
+  it('boosts recently revisited memories over stale one-off matches', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Stale one-off high similarity memory',
+        sensitivity: 'public',
+        similarity: 0.94,
+        importance: 0.85,
+        salience: 0.85,
+        extractedAt: now - 90 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 90 * 24 * 60 * 60 * 1000,
+        accessCount: 1,
+      }),
+      makeMemory({
+        text: 'Recently revisited reinforced memory',
+        sensitivity: 'public',
+        similarity: 0.88,
+        importance: 0.85,
+        salience: 0.85,
+        extractedAt: now - 90 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 2 * 60 * 60 * 1000,
+        accessCount: 14,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    expect(result.indexOf('Recently revisited reinforced memory')).toBeLessThan(
+      result.indexOf('Stale one-off high similarity memory'),
+    );
+  });
+
+  it('uses lastAccessed freshness to break ties when reinforcement counts match', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Older access memory',
+        sensitivity: 'public',
+        similarity: 0.92,
+        importance: 0.85,
+        salience: 0.85,
+        extractedAt: now - 100 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 80 * 24 * 60 * 60 * 1000,
+        accessCount: 6,
+      }),
+      makeMemory({
+        text: 'Freshly accessed memory',
+        sensitivity: 'public',
+        similarity: 0.9,
+        importance: 0.85,
+        salience: 0.85,
+        extractedAt: now - 100 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 60 * 60 * 1000,
+        accessCount: 6,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('test query', 'api:test', 'primary');
+
+    expect(result.indexOf('Freshly accessed memory')).toBeLessThan(
+      result.indexOf('Older access memory'),
+    );
+  });
+
+  it('downranks low-confidence single-source memory unless explicitly queried', async () => {
+    const fragileMemory = makeMemory({
+      text: 'Nebularkite protocol keyphrase marker',
+      sensitivity: 'public',
+      sourceRef: 'api:single',
+      provenanceRefs: [],
+      similarity: 0.99,
+      importance: 0.95,
+      salience: 0.95,
+      confidence: 0.2,
+    });
+    const stableMemory = makeMemory({
+      text: 'Stable corroborated memory',
+      sensitivity: 'public',
+      sourceRef: 'api:stable',
+      provenanceRefs: ['discord:stable', 'telegram:stable'],
+      similarity: 0.62,
+      importance: 0.9,
+      salience: 0.9,
+      confidence: 0.92,
+    });
+    const memories = [fragileMemory, stableMemory];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const genericResult = await retriever.retrieve('general checkin question', 'api:test', 'primary');
+    expect(genericResult.indexOf('Stable corroborated memory')).toBeLessThan(
+      genericResult.indexOf('Nebularkite protocol keyphrase marker'),
+    );
+
+    const explicitResult = await retriever.retrieve(
+      'can you recall nebularkite protocol keyphrase?',
+      'api:test',
+      'primary',
+    );
+    expect(explicitResult.indexOf('Nebularkite protocol keyphrase marker')).toBeLessThan(
+      explicitResult.indexOf('Stable corroborated memory'),
+    );
+  });
+
+  it('downranks contradicted memories relative to supported alternatives', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Contradicted memory candidate',
+        sensitivity: 'public',
+        tags: ['contradicted'],
+        similarity: 0.97,
+        confidence: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+      makeMemory({
+        text: 'Supported stable memory candidate',
+        sensitivity: 'public',
+        provenanceRefs: ['discord:stable', 'telegram:stable'],
+        similarity: 0.9,
+        confidence: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('memory check', 'api:test', 'primary');
+    expect(result.indexOf('Supported stable memory candidate')).toBeLessThan(
+      result.indexOf('Contradicted memory candidate'),
+    );
+  });
+
+  it('downranks superseded memories relative to supported alternatives', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Superseded memory candidate',
+        sensitivity: 'public',
+        supersededBy: 'mem-replacement',
+        similarity: 0.98,
+        confidence: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+      makeMemory({
+        text: 'Current stable memory candidate',
+        sensitivity: 'public',
+        provenanceRefs: ['discord:stable', 'telegram:stable'],
+        similarity: 0.9,
+        confidence: 0.95,
+        importance: 0.9,
+        salience: 0.9,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('memory check', 'api:test', 'primary');
+    expect(result.indexOf('Current stable memory candidate')).toBeLessThan(
+      result.indexOf('Superseded memory candidate'),
+    );
+  });
+
   it('returns empty string when all memories are filtered out by trust', async () => {
     const memories = [
       makeMemory({ text: 'Secret stuff', sensitivity: 'confidential', similarity: 0.95 }),
@@ -500,6 +721,45 @@ describe('MemoryRetriever basic behavior', () => {
     });
   });
 
+  it('fails closed when selected-memory access stat persistence fails', async () => {
+    const memories = [
+      makeMemory({
+        id: 'integrity-retrieval-memory',
+        text: 'Persistent memory',
+        sensitivity: 'public',
+        similarity: 0.95,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const persistenceFailure = new Error('simulated retrieval access stat failure');
+    (store.updateMemory as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw persistenceFailure;
+    });
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    const retrievalPromise = retriever.retrieve('remember this', 'api:test', 'primary');
+    await expect(retrievalPromise).rejects.toBeInstanceOf(RetrievalIntegrityError);
+    await expect(retrievalPromise).rejects.toMatchObject({
+      context: {
+        stage: 'selected_access_update',
+        channelId: 'api:test',
+        trustLevel: 'primary',
+        memoryId: 'integrity-retrieval-memory',
+      },
+      cause: persistenceFailure,
+    });
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      reason: 'error',
+      channelId: 'api:test',
+    });
+  });
+
   it('scales retrieval count with context-window budgets when no hard limit is set', async () => {
     const memories = Array.from({ length: 12 }, (_, idx) => makeMemory({
       text: `Budget memory ${idx} ` + 'x'.repeat(260),
@@ -542,6 +802,50 @@ describe('MemoryRetriever basic behavior', () => {
     const largeResult = await largeRetriever.retrieve('budget query', 'api:test', 'primary');
 
     expect(countRenderedMemories(largeResult)).toBeGreaterThan(countRenderedMemories(smallResult));
+  });
+
+  it('adapts retrieval budgets per turn when adaptive context budgets are enabled', async () => {
+    const memories = Array.from({ length: 10 }, (_, idx) => makeMemory({
+      text: `Adaptive memory ${idx} ` + 'x'.repeat(900),
+      sensitivity: 'public',
+      similarity: 0.99 - idx * 0.01,
+    }));
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const config = makeRuntimeConfig({
+      adaptiveContextBudgetsEnabled: true,
+      memoryRetrievalLimit: undefined,
+      memoryRetrievalBudgetPct: 2,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 20_000,
+          contextBudget: { memoryRetrievalMinTokens: 1 },
+        },
+      },
+    });
+    const retriever = new MemoryRetriever(store, embedding, config, eventBus);
+
+    const recallResult = await retriever.retrieve(
+      'Can you remember what we talked about before?',
+      'api:test',
+      'primary',
+    );
+    const taskResult = await retriever.retrieve(
+      'Please implement this step-by-step refactor plan.',
+      'api:test',
+      'primary',
+    );
+
+    expect(countRenderedMemories(recallResult)).toBeGreaterThan(countRenderedMemories(taskResult));
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    const telemetryPayloads = calls.map(([, payload]) => payload as Record<string, unknown>);
+    expect(telemetryPayloads[0].retrievalBudgetPct).toBe(8);
+    expect(telemetryPayloads[1].retrievalBudgetPct).toBe(2);
   });
 
   it('uses hard retrieval limit override when provided', async () => {
@@ -854,6 +1158,51 @@ describe('MemoryRetriever basic behavior', () => {
     }
   });
 
+  it('fails closed when proactive recall access stat persistence fails', async () => {
+    const now = Date.now();
+    const memory = makeMemory({
+      id: 'proactive-integrity-memory',
+      text: 'Proactive recall memory',
+      type: 'emotional',
+      emotionalValence: 0.9,
+      salience: 0.9,
+      importance: 0.9,
+      lastAccessed: now,
+      extractedAt: now,
+      sensitivity: 'public',
+      similarity: 0.5,
+    });
+    const store = makeMockStore([]);
+    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([memory]);
+    const persistenceFailure = new Error('simulated proactive access stat failure');
+    (store.updateMemory as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw persistenceFailure;
+    });
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, {
+      retrievalLimit: 20,
+      proactiveRecallProbability: 1,
+      proactiveRecallMinTurnsBetween: 0,
+    });
+
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    try {
+      const proactivePromise = retriever.retrieveProactiveRecall('api:test', 'primary');
+      await expect(proactivePromise).rejects.toBeInstanceOf(RetrievalIntegrityError);
+      await expect(proactivePromise).rejects.toMatchObject({
+        context: {
+          stage: 'proactive_access_update',
+          channelId: 'api:test',
+          trustLevel: 'primary',
+          memoryId: 'proactive-integrity-memory',
+        },
+        cause: persistenceFailure,
+      });
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('respects configurable proactive recall frequency across turns', async () => {
     const now = Date.now();
     const memory = makeMemory({
@@ -892,6 +1241,51 @@ describe('MemoryRetriever basic behavior', () => {
     }
   });
 
+  it('reuses a captured turn snapshot for retrieval and proactive recall after store drift', async () => {
+    const stableMemory = makeMemory({
+      id: 'snapshot-stable',
+      text: 'Stable snapshot memory.',
+      sensitivity: 'public',
+      similarity: 0.96,
+    });
+    const driftMemory = makeMemory({
+      id: 'snapshot-drift',
+      text: 'Late drift memory.',
+      sensitivity: 'public',
+      similarity: 0.99,
+    });
+    const store = makeMockStore([stableMemory]);
+    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([stableMemory]);
+
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), {
+      retrievalLimit: 10,
+      proactiveRecallProbability: 1,
+      proactiveRecallMinTurnsBetween: 0,
+    });
+
+    const snapshot = await retriever.captureTurnMemorySnapshot('snapshot query', 'api:test', 'primary');
+
+    (store.searchByEmbedding as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
+    (store.searchByText as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
+    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
+    (store.getAllActiveMemories as ReturnType<typeof vi.fn>).mockReturnValue([driftMemory]);
+
+    const randomSpy = vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.1);
+    try {
+      const result = await retriever.retrieve('snapshot query', 'api:test', 'primary', undefined, undefined, snapshot);
+      const proactive = await retriever.retrieveProactiveRecall('api:test', 'primary', undefined, undefined, snapshot);
+
+      expect(result).toContain('Stable snapshot memory.');
+      expect(result).not.toContain('Late drift memory.');
+      expect(proactive).toContain('Stable snapshot memory.');
+      expect(proactive).not.toContain('Late drift memory.');
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('emits structured retrieval telemetry event when event bus is provided', async () => {
     const memories = [
       makeMemory({ text: 'Public A', sensitivity: 'public', similarity: 0.95 }),
@@ -910,10 +1304,59 @@ describe('MemoryRetriever basic behavior', () => {
     expect(calls[0][1]).toMatchObject({
       channelId: 'api:test',
       count: 2,
+      candidates: 2,
+      ranked: 2,
+      returned: 2,
       reason: 'ok',
       candidateCount: 2,
       rankedCount: 2,
       returnedCount: 2,
+      selectedTypes: { semantic: 2 },
+      budgetCappedCount: 0,
+      compositionalMode: 'disabled_policy',
+      compositionalCandidateCount: 2,
+      compositionalEvaluationBatchCount: 1,
+      compositionalFinalistCount: 2,
+    });
+  });
+
+  it('emits request-scoped retrieval telemetry for manifest seeding', async () => {
+    const memories = [
+      makeMemory({ text: 'Public A', sensitivity: 'public', similarity: 0.95 }),
+      makeMemory({ text: 'Public B', sensitivity: 'public', similarity: 0.9 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await runWithRequestContext(
+      {
+        turnId: 'turn-1',
+        requestId: 'req-1',
+        channelId: 'api:test',
+        callType: 'chat',
+        purpose: 'agent.turn.memory',
+        originType: 'chat',
+        originStage: 'agent.turn.memory',
+      },
+      async () => retriever.retrieve('test query', 'api:test', 'primary'),
+    );
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      requestId: 'req-1',
+      turnId: 'turn-1',
+      callType: 'chat',
+      purpose: 'memory.retrieval',
+      originType: 'chat',
+      originStage: 'agent.turn.memory',
+      candidates: 2,
+      ranked: 2,
+      returned: 2,
+      selectedTypes: { semantic: 2 },
+      budgetCappedCount: 0,
     });
   });
 
@@ -1099,6 +1542,8 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(typeof telemetry.topScore).toBe('number');
     expect(typeof telemetry.bottomScore).toBe('number');
     expect((telemetry.topScore as number)).toBeGreaterThan(0);
+    expect(typeof telemetry.evidenceSupportAverage).toBe('number');
+    expect(telemetry.contradictionAdjustedCount).toBe(0);
   });
 
   it('emits scoreGuaranteedCount in telemetry when memories are rescued', async () => {
@@ -1126,6 +1571,67 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(telemetry.scoreGuaranteedCount).toBeGreaterThan(0);
   });
 
+  it('emits contradiction/suppression diagnostics in telemetry', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Contradicted memory with low confidence',
+        sensitivity: 'public',
+        similarity: 0.98,
+        confidence: 0.2,
+        tags: ['contradicted'],
+      }),
+      makeMemory({
+        text: 'Stable memory with stronger support',
+        sensitivity: 'public',
+        similarity: 0.85,
+        confidence: 0.9,
+        provenanceRefs: ['discord:stable', 'telegram:stable'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await retriever.retrieve('general status', 'api:test', 'primary');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    const telemetry = calls[0][1] as Record<string, unknown>;
+    expect(telemetry.contradictionAdjustedCount).toBeGreaterThanOrEqual(1);
+    expect(telemetry.lowConfidenceSuppressedCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('counts superseded memories in contradiction diagnostics telemetry', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Superseded memory with stale details',
+        sensitivity: 'public',
+        similarity: 0.97,
+        confidence: 0.95,
+        supersededBy: 'mem-replacement',
+      }),
+      makeMemory({
+        text: 'Current memory with stronger support',
+        sensitivity: 'public',
+        similarity: 0.87,
+        confidence: 0.9,
+        provenanceRefs: ['discord:stable', 'telegram:stable'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    await retriever.retrieve('general status', 'api:test', 'primary');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    const telemetry = calls[0][1] as Record<string, unknown>;
+    expect(telemetry.contradictionAdjustedCount).toBeGreaterThanOrEqual(1);
+  });
+
   it('emits telemetry with pipeline stage counts for trust-filtered scenario', async () => {
     const memories = [
       makeMemory({ text: 'Secret A', sensitivity: 'confidential', similarity: 0.95 }),
@@ -1145,6 +1651,191 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(telemetry.candidateCount).toBe(2);
     expect(telemetry.sensitivityRejectedCount).toBe(1);
     expect(telemetry.returnedCount).toBe(1);
+  });
+});
+
+describe('MemoryRetriever compositional retrieval rerank', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('uses batch-evaluate-and-compose reranking when compositional retrieval policy allows it', async () => {
+    const memories = [
+      makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.92, importance: 0.8 }),
+      makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
+      makeMemory({ id: 'mem-charlie', text: 'Charlie filler detail', similarity: 0.8, importance: 0.7 }),
+      makeMemory({ id: 'mem-delta', text: 'Delta best continuity anchor', similarity: 0.8, importance: 0.85 }),
+      makeMemory({ id: 'mem-echo', text: 'Echo low-value detail', similarity: 0.7, importance: 0.6 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const llmProvider = makeMockLLMProvider([
+      {
+        content: `<response>
+<candidate><id>mem-alpha</id><relevance>0.2</relevance></candidate>
+<candidate><id>mem-bravo</id><relevance>0.95</relevance></candidate>
+<candidate><id>mem-charlie</id><relevance>0.05</relevance></candidate>
+<candidate><id>mem-delta</id><relevance>0.7</relevance></candidate>
+</response>`,
+      },
+      {
+        content: `<response>
+<candidate><id>mem-echo</id><relevance>0.1</relevance></candidate>
+</response>`,
+      },
+      {
+        content: `<response>
+<ranking>
+<id>mem-delta</id>
+<id>mem-bravo</id>
+<id>mem-alpha</id>
+<id>mem-charlie</id>
+<id>mem-echo</id>
+</ranking>
+</response>`,
+      },
+    ]);
+    const runtimeConfig = makeRuntimeConfig({
+      capabilityTier: 'autonomous',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['retrieval'],
+      },
+    });
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      runtimeConfig,
+      eventBus,
+      null,
+      llmProvider,
+    );
+
+    const result = await retriever.retrieve('which memory best answers the question?', 'api:test', 'primary');
+
+    expect(result.indexOf('Delta best continuity anchor')).toBeLessThan(
+      result.indexOf('Alpha baseline memory'),
+    );
+    expect(result.indexOf('Bravo directly answers the question')).toBeLessThan(
+      result.indexOf('Alpha baseline memory'),
+    );
+    expect(llmProvider.complete).toHaveBeenCalledTimes(3);
+    const llmCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls;
+    expect(llmCalls.every((call) => call[1] === 'context')).toBe(true);
+    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt).toContain('Alpha baseline memory');
+    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[2][0].systemPrompt).toContain('Delta best continuity anchor');
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      compositionalMode: 'applied',
+      compositionalCandidateCount: 5,
+      compositionalEvaluationBatchCount: 2,
+      compositionalFinalistCount: 5,
+    });
+  });
+
+  it('fails closed to deterministic retrieval when compositional retrieval is not allowed by policy', async () => {
+    const memories = [
+      makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.98, importance: 0.95 }),
+      makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const llmProvider = makeMockLLMProvider([
+      { content: '<response></response>' },
+    ]);
+    const runtimeConfig = makeRuntimeConfig({
+      capabilityTier: 'autonomous',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['extraction'],
+      },
+    });
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      runtimeConfig,
+      eventBus,
+      null,
+      llmProvider,
+    );
+
+    const result = await retriever.retrieve('which memory best answers the question?', 'api:test', 'primary');
+
+    expect(result.indexOf('Alpha baseline memory')).toBeLessThan(
+      result.indexOf('Bravo directly answers the question'),
+    );
+    expect(llmProvider.complete).not.toHaveBeenCalled();
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      compositionalMode: 'disabled_policy',
+      compositionalCandidateCount: 2,
+      compositionalEvaluationBatchCount: 1,
+      compositionalFinalistCount: 2,
+    });
+  });
+
+  it('fails closed to deterministic retrieval when compositional rerank responses are malformed', async () => {
+    const memories = [
+      makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.98, importance: 0.95 }),
+      makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
+      makeMemory({ id: 'mem-delta', text: 'Delta best continuity anchor', similarity: 0.74, importance: 0.7 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const llmProvider = makeMockLLMProvider([
+      { content: '<response><candidate><id>unknown</id><relevance>0.9</relevance></candidate></response>' },
+    ]);
+    const runtimeConfig = makeRuntimeConfig({
+      capabilityTier: 'autonomous',
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['autonomous'],
+        allowedChannelTypes: ['api'],
+        allowedPurposes: ['retrieval'],
+      },
+    });
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      runtimeConfig,
+      eventBus,
+      null,
+      llmProvider,
+    );
+
+    const result = await retriever.retrieve('which memory best answers the question?', 'api:test', 'primary');
+
+    expect(result.indexOf('Alpha baseline memory')).toBeLessThan(
+      result.indexOf('Bravo directly answers the question'),
+    );
+    expect(result.indexOf('Bravo directly answers the question')).toBeLessThan(
+      result.indexOf('Delta best continuity anchor'),
+    );
+    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      compositionalMode: 'malformed_or_failed',
+      compositionalCandidateCount: 3,
+      compositionalEvaluationBatchCount: 1,
+      compositionalFinalistCount: 3,
+    });
   });
 });
 
@@ -1276,5 +1967,87 @@ describe('MemoryRetriever low-salience but high-similarity surfacing', () => {
     // Even if score is tiny but positive, it should still appear.
     // With the guarantee, we expect it to surface.
     expect(result.length).toBeGreaterThan(0);
+  });
+});
+
+describe('MemoryRetriever mood-congruent retrieval bias', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('boosts memories formed in a congruent mood when currentVAD is provided', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Higher baseline similarity but mood-incongruent memory',
+        similarity: 0.9,
+        formationVAD: { valence: 1, arousal: 1, dominance: 1 },
+      }),
+      makeMemory({
+        text: 'Lower baseline similarity but mood-congruent memory',
+        similarity: 0.8,
+        formationVAD: { valence: -1, arousal: -1, dominance: -1 },
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, makeRuntimeConfig({
+      moodCongruenceWeight: 0.15,
+    }));
+
+    const result = await retriever.retrieve(
+      'which memory should lead?',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { valence: -1, arousal: -1, dominance: -1 },
+    );
+
+    expect(result.indexOf('Lower baseline similarity but mood-congruent memory')).toBeLessThan(
+      result.indexOf('Higher baseline similarity but mood-incongruent memory'),
+    );
+  });
+
+  it('keeps baseline ranking neutral when currentVAD is omitted', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Higher baseline similarity but mood-incongruent memory',
+        similarity: 0.9,
+        formationVAD: { valence: 1, arousal: 1, dominance: 1 },
+      }),
+      makeMemory({
+        text: 'Lower baseline similarity but mood-congruent memory',
+        similarity: 0.8,
+        formationVAD: { valence: -1, arousal: -1, dominance: -1 },
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, makeRuntimeConfig({
+      moodCongruenceWeight: 0.15,
+    }));
+
+    const result = await retriever.retrieve('which memory should lead?', 'api:test', 'primary');
+
+    expect(result.indexOf('Higher baseline similarity but mood-incongruent memory')).toBeLessThan(
+      result.indexOf('Lower baseline similarity but mood-congruent memory'),
+    );
+  });
+
+  it('fails closed when moodCongruenceWeight is outside [0, 1]', () => {
+    const store = makeMockStore([]);
+    const embedding = makeMockEmbedding();
+
+    expect(() => {
+      new MemoryRetriever(store, embedding, makeRuntimeConfig({
+        moodCongruenceWeight: 1.5,
+      }));
+    }).toThrow('moodCongruenceWeight must be a finite number between 0 and 1');
   });
 });

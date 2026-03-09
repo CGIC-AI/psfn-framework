@@ -5,7 +5,12 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
 import type { MemoryStore } from './store.js';
-import type { MemoryType, SensitivityLevel, MemoryRedactionOperation } from './types.js';
+import type {
+  MemoryType,
+  SensitivityLevel,
+  MemoryRedactionOperation,
+  MemoryFormationVAD,
+} from './types.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_SENSITIVITY_LEVELS,
@@ -62,7 +67,14 @@ function formatScratchpadList(
   return lines.join('\n');
 }
 
-export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
+export interface MemoryWriteToolOptions {
+  getFormationVAD?: () => MemoryFormationVAD | undefined;
+}
+
+export function createMemoryWriteTool(
+  writer: MemoryWriter,
+  options: MemoryWriteToolOptions = {},
+): AgentTool<any> {
   return {
     name: 'memory_write',
     description:
@@ -130,12 +142,14 @@ export function createMemoryWriteTool(writer: MemoryWriter): AgentTool<any> {
         const tags = params.tags
           ? params.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
           : undefined;
+        const formationVAD = options.getFormationVAD?.();
 
         const result = await writer.write({
           text: text.trim(),
           type,
           importance,
           emotionalValence,
+          formationVAD,
           confidence,
           tags,
           sourceRef: buildToolSourceRef('memory_write', toolCallId, internalSource),

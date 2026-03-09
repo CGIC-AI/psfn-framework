@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { UserMessage, AssistantMessage } from '@mariozechner/pi-ai';
+import type { UserMessage, AssistantMessage, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import {
   convertToLlm,
@@ -15,6 +15,7 @@ import {
   type ContinuityMessage,
   type MirrorMessage,
 } from './messages.js';
+import { DEFAULT_COMPANION_NAME } from '../identity/companion-naming.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 
 const NOW = Date.now();
@@ -156,6 +157,12 @@ describe('convertToLlm', () => {
     expect(text.endsWith('...')).toBe(true);
   });
 
+  it('uses the neutral companion label for assistant mirrors without a source author name', () => {
+    const result = convertToLlm([makeMirror('hello from another channel')]);
+    expect(result).toHaveLength(1);
+    expect((result[0] as UserMessage).content).toContain(`${DEFAULT_COMPANION_NAME}: hello from another channel`);
+  });
+
   it('handles empty message array', () => {
     expect(convertToLlm([])).toEqual([]);
   });
@@ -200,7 +207,7 @@ describe('sessionEntryToMessage', () => {
       id: 4,
       channelId: 'api:target',
       role: 'system',
-      content: 'Purrsephone [from api:origin]: hi',
+      content: `${DEFAULT_COMPANION_NAME} [from api:origin]: hi`,
       timestamp: NOW,
       metadata: JSON.stringify({
         type: 'mirror',
@@ -214,6 +221,31 @@ describe('sessionEntryToMessage', () => {
     const mirror = msg as MirrorMessage;
     expect(mirror.originChannelId).toBe('api:origin');
     expect(mirror.sourceRole).toBe('assistant');
+  });
+
+  it('converts tool entry to ToolResultMessage', () => {
+    const entry: SessionEntry = {
+      id: 5,
+      channelId: 'ch1',
+      role: 'tool',
+      content: 'matched 2 files',
+      timestamp: NOW,
+      metadata: JSON.stringify({
+        toolObservation: {
+          schemaVersion: 1,
+          toolName: 'search_files',
+          toolCallId: 'tool-1',
+          truncated: false,
+          originalCharLength: 15,
+        },
+      }),
+    };
+    const msg = sessionEntryToMessage(entry) as ToolResultMessage;
+    expect(msg.role).toBe('toolResult');
+    expect(msg.toolName).toBe('search_files');
+    expect(msg.toolCallId).toBe('tool-1');
+    expect(msg.content).toEqual([{ type: 'text', text: 'matched 2 files' }]);
+    expect(msg.isError).toBe(false);
   });
 });
 

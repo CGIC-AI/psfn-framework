@@ -28,6 +28,68 @@ export interface ToolWiringMeta {
    * Validated against a provided set of available service names.
    */
   requiredServices?: string[];
+
+  /**
+   * Required tool-concurrency metadata for bounded scheduler execution.
+   * When concurrency metadata enforcement is enabled, tools missing this
+   * metadata are disabled (fail-closed).
+   */
+  concurrency?: ToolConcurrencyMeta;
+}
+
+export type ToolConcurrencyClass =
+  | 'exclusive'
+  | 'read_only'
+  | 'spawn_shard';
+
+export type ToolExclusivityKeyPolicy =
+  | 'none'
+  | 'category_tool_name'
+  | 'static_key';
+
+export type ToolInterruptibility =
+  | 'cooperative'
+  | 'non_interruptible';
+
+export interface ToolExecutionEligibility {
+  foreground: boolean;
+  background: boolean;
+}
+
+export interface ToolConcurrencyMeta {
+  /**
+   * Concurrency execution class used by scheduler logic.
+   */
+  class: ToolConcurrencyClass;
+
+  /**
+   * Explicit policy that explains how exclusivityKey was derived.
+   * - none: tool is not serialized via exclusivity key
+   * - category_tool_name: key is generated from <category>:<toolName>
+   * - static_key: key is explicitly authored in metadata
+   */
+  exclusivityKeyPolicy: ToolExclusivityKeyPolicy;
+
+  /**
+   * Required for exclusive class to serialize conflicting operations.
+   */
+  exclusivityKey?: string;
+
+  /**
+   * Optional upper bound for parallel classes.
+   */
+  maxParallel?: number;
+
+  /**
+   * Whether the tool is safe to interrupt when turn control changes.
+   */
+  interruptibility: ToolInterruptibility;
+
+  /**
+   * Whether the tool can be scheduled in foreground and/or background turns.
+   * At least one lane must be enabled.
+   */
+  eligibility: ToolExecutionEligibility;
 }
 
 /** An AgentTool that optionally carries wiring metadata */
@@ -67,6 +129,7 @@ export interface ToolValidationResult {
   missingGatewayMethods: string[];
   missingServices: string[];
   missingGatewayMetadataCoverage: string[];
+  missingConcurrencyMetadata: string[];
 }
 
 export interface ValidationReport {
@@ -151,6 +214,8 @@ export interface ValidateToolsOptions {
   requiredGatewayMetadataCoverage?: GatewayToolMetadataCoverage;
   /** Available service names */
   availableServices?: Set<string>;
+  /** Require per-tool concurrency metadata (fail-closed when missing/invalid) */
+  requireConcurrencyMetadata?: boolean;
 }
 
 /**
@@ -164,6 +229,7 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
     gatewayClientMethods,
     requiredGatewayMetadataCoverage,
     availableServices,
+    requireConcurrencyMetadata = false,
   } = options;
   const results: ToolValidationResult[] = [];
 
@@ -173,6 +239,7 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
     const missingGatewayMethods: string[] = [];
     const missingServices: string[] = [];
     const missingGatewayMetadataCoverage: string[] = [];
+    const missingConcurrencyMetadata: string[] = [];
 
     // Check gateway method dependencies
     if (mode === 'gateway' && meta?.requiredGatewayMethods && gatewayClientMethods) {
@@ -214,10 +281,102 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
       }
     }
 
+    if (requireConcurrencyMetadata) {
+      const concurrency = meta?.concurrency;
+      if (!concurrency) {
+        missingConcurrencyMetadata.push('concurrency metadata missing');
+      } else {
+        const concurrencyClass = (concurrency as { class?: unknown }).class;
+        if (
+          concurrencyClass !== 'exclusive'
+          && concurrencyClass !== 'read_only'
+          && concurrencyClass !== 'spawn_shard'
+        ) {
+          missingConcurrencyMetadata.push(
+            `invalid concurrency.class "${String(concurrencyClass)}"`,
+          );
+        }
+
+        const exclusivityKeyPolicy = (
+          concurrency as { exclusivityKeyPolicy?: unknown }
+        ).exclusivityKeyPolicy;
+        if (
+          exclusivityKeyPolicy !== 'none'
+          && exclusivityKeyPolicy !== 'category_tool_name'
+          && exclusivityKeyPolicy !== 'static_key'
+        ) {
+          missingConcurrencyMetadata.push(
+            `invalid concurrency.exclusivityKeyPolicy "${String(exclusivityKeyPolicy)}"`,
+          );
+        }
+
+        if (
+          concurrency.class === 'exclusive'
+          && (!concurrency.exclusivityKey || concurrency.exclusivityKey.trim().length === 0)
+        ) {
+          missingConcurrencyMetadata.push('exclusive tools require non-empty concurrency.exclusivityKey');
+        }
+
+        if (
+          concurrency.class === 'exclusive'
+          && concurrency.exclusivityKeyPolicy === 'none'
+        ) {
+          missingConcurrencyMetadata.push('exclusive tools require non-none concurrency.exclusivityKeyPolicy');
+        }
+
+        if (
+          concurrency.class !== 'exclusive'
+          && concurrency.exclusivityKeyPolicy !== 'none'
+        ) {
+          missingConcurrencyMetadata.push('non-exclusive tools must use concurrency.exclusivityKeyPolicy "none"');
+        }
+
+        if (
+          concurrency.class !== 'exclusive'
+          && concurrency.exclusivityKey !== undefined
+        ) {
+          missingConcurrencyMetadata.push('non-exclusive tools must not set concurrency.exclusivityKey');
+        }
+
+        if (
+          concurrency.maxParallel !== undefined
+          && (!Number.isInteger(concurrency.maxParallel) || concurrency.maxParallel <= 0)
+        ) {
+          missingConcurrencyMetadata.push('concurrency.maxParallel must be a positive integer when provided');
+        }
+
+        const interruptibility = (concurrency as { interruptibility?: unknown }).interruptibility;
+        if (
+          interruptibility !== 'cooperative'
+          && interruptibility !== 'non_interruptible'
+        ) {
+          missingConcurrencyMetadata.push(
+            `invalid concurrency.interruptibility "${String(interruptibility)}"`,
+          );
+        }
+
+        const eligibility = (concurrency as { eligibility?: unknown }).eligibility;
+        if (!eligibility || typeof eligibility !== 'object') {
+          missingConcurrencyMetadata.push('concurrency.eligibility metadata missing');
+        } else {
+          const { foreground, background } = eligibility as {
+            foreground?: unknown;
+            background?: unknown;
+          };
+          if (typeof foreground !== 'boolean' || typeof background !== 'boolean') {
+            missingConcurrencyMetadata.push('concurrency.eligibility must include boolean foreground/background flags');
+          } else if (!foreground && !background) {
+            missingConcurrencyMetadata.push('concurrency.eligibility must enable at least one lane');
+          }
+        }
+      }
+    }
+
     if (
       missingGatewayMethods.length > 0
       || missingServices.length > 0
       || missingGatewayMetadataCoverage.length > 0
+      || missingConcurrencyMetadata.length > 0
     ) {
       results.push({
         toolName: tool.name,
@@ -225,6 +384,7 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
         missingGatewayMethods,
         missingServices,
         missingGatewayMetadataCoverage,
+        missingConcurrencyMetadata,
       });
     }
   }
@@ -266,11 +426,15 @@ export function validateAndLogToolWiring(options: ValidateToolsOptions): string[
         `missing gateway metadata coverage: ${invalid.missingGatewayMetadataCoverage.join(', ')}`,
       );
     }
+    if (invalid.missingConcurrencyMetadata.length > 0) {
+      reasons.push(`missing concurrency metadata: ${invalid.missingConcurrencyMetadata.join(', ')}`);
+    }
     log.warn(`Tool "${invalid.toolName}" disabled — ${reasons.join('; ')}`, {
       tool: invalid.toolName,
       missingGatewayMethods: invalid.missingGatewayMethods,
       missingServices: invalid.missingServices,
       missingGatewayMetadataCoverage: invalid.missingGatewayMetadataCoverage,
+      missingConcurrencyMetadata: invalid.missingConcurrencyMetadata,
     });
     disabledNames.push(invalid.toolName);
   }

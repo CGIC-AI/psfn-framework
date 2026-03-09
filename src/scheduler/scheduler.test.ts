@@ -148,6 +148,114 @@ describe('Scheduler', () => {
     });
   });
 
+  describe('tick — wall-clock cadence', () => {
+    it('aligns hourly cadence to wall-clock minute slots', async () => {
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(new Date('2026-03-07T10:15:00.000Z').getTime());
+        scheduler.register({
+          id: 'hourly-top',
+          name: 'Hourly Top',
+          type: 'every',
+          intervalMs: 60 * 60_000,
+          cadence: { kind: 'hourly', minute: 0, timezone: 'utc' },
+          handler: fn,
+          state: 'idle',
+        });
+
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(new Date('2026-03-07T10:59:59.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(new Date('2026-03-07T11:00:00.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledTimes(1);
+
+        nowSpy.mockReturnValue(new Date('2026-03-07T11:25:00.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledTimes(1);
+
+        nowSpy.mockReturnValue(new Date('2026-03-07T12:00:00.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledTimes(2);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('fires daily cadence at fixed hour:minute slots', async () => {
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(new Date('2026-03-07T04:00:00.000Z').getTime());
+        scheduler.register({
+          id: 'daily-fixed',
+          name: 'Daily Fixed',
+          type: 'every',
+          intervalMs: 24 * 60 * 60_000,
+          cadence: { kind: 'daily', hour: 6, minute: 30, timezone: 'utc' },
+          handler: fn,
+          state: 'idle',
+        });
+
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(new Date('2026-03-07T06:29:59.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(new Date('2026-03-07T06:30:00.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledTimes(1);
+
+        nowSpy.mockReturnValue(new Date('2026-03-08T06:29:59.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledTimes(1);
+
+        nowSpy.mockReturnValue(new Date('2026-03-08T06:30:00.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledTimes(2);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('does not fire wall-clock tasks immediately on startup', async () => {
+      const fn = vi.fn();
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(new Date('2026-03-07T10:05:00.000Z').getTime());
+        scheduler.register({
+          id: 'startup-hourly',
+          name: 'Startup Hourly',
+          type: 'every',
+          intervalMs: 60 * 60_000,
+          cadence: { kind: 'hourly', minute: 0, timezone: 'utc' },
+          handler: fn,
+          state: 'idle',
+        });
+
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(new Date('2026-03-07T10:59:59.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).not.toHaveBeenCalled();
+
+        nowSpy.mockReturnValue(new Date('2026-03-07T11:00:00.000Z').getTime());
+        await scheduler.tick();
+        expect(fn).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
   describe('tick — one-shot tasks', () => {
     it('runs a one-shot task when runAt is in the past', async () => {
       const fn = vi.fn();

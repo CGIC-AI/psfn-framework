@@ -28,6 +28,11 @@ export type MemoryType =
   | 'reflection'
   | 'relational';
 export type MemoryRetentionClass = 'standard' | 'durable';
+export interface MemoryFormationVAD {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
 
 export const DURABLE_RETENTION_TAG = 'durable';
 export const CORE_DURABLE_MEMORY_TAGS = [
@@ -88,6 +93,7 @@ export interface PurrMemory {
   importance: number;
   confidence: number;
   emotionalValence: number;
+  formationVAD?: MemoryFormationVAD;
   salience: number;
   embedding?: Float32Array;
   sourceRef: string;
@@ -185,11 +191,17 @@ export const MEMORY_CONFIG = {
   extractionInterval: 5,
   maxRetrievalCount: 15,
   retrievalThreshold: 0.3,
+  retrievalAccessFreshnessDays: 21,
+  retrievalAccessCountCap: 8,
+  retrievalAccessFreshnessWeight: 0.65,
+  retrievalAccessReinforcementMaxBoost: 0.25,
   privacyRiskPenaltyWeight: 0.45,
   maintenanceIntervalMs: 60_000,
   salienceFloor: 0.05,
   durableSalienceFloor: 0.25,
   durableHalflifeMultiplier: 8,
+  emotionalIntensityPersistenceMinMultiplier: 1,
+  emotionalIntensityPersistenceMaxMultiplier: 1.8,
   durableAutoImportanceThreshold: 0.75,
   contradictionThresholdOffset: 0.15,
   salienceBumpOnAccess: 0.05,
@@ -213,6 +225,29 @@ export function normalizeMemoryTags(tags: readonly string[]): string[] {
 function clampUnit(value: number, fallback = 0.5): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(0, Math.min(1, value));
+}
+
+function clampSigned(value: number, fallback = 0): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(-1, Math.min(1, value));
+}
+
+export function normalizeFormationVAD(
+  value: Partial<MemoryFormationVAD> | undefined,
+): MemoryFormationVAD | undefined {
+  if (!value) return undefined;
+  const hasAnyDimension = (
+    value.valence !== undefined
+    || value.arousal !== undefined
+    || value.dominance !== undefined
+  );
+  if (!hasAnyDimension) return undefined;
+
+  return {
+    valence: clampSigned(value.valence ?? 0),
+    arousal: clampSigned(value.arousal ?? 0),
+    dominance: clampSigned(value.dominance ?? 0),
+  };
 }
 
 export function getSensitivityWriteThreshold(sensitivity: SensitivityLevel): SensitivityWriteThreshold {
@@ -390,24 +425,57 @@ export function inferMemoryRetentionClass(input: {
   return 'standard';
 }
 
-export function getMemoryDecayProfile(memory: Pick<PurrMemory, 'type' | 'tags' | 'retentionClass'>): MemoryDecayProfile {
+type MemoryDecayProfileInput = Pick<PurrMemory, 'type' | 'tags' | 'retentionClass'> & Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>;
+
+export function computeMemoryEmotionalIntensity(
+  memory: Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>,
+): number {
+  const valenceIntensity = Math.abs(clampSigned(memory.emotionalValence ?? 0, 0));
+  const formationVAD = normalizeFormationVAD(memory.formationVAD);
+  if (!formationVAD) return valenceIntensity;
+
+  const vadIntensity = clampUnit(
+    (Math.abs(formationVAD.arousal) * 0.7) + (Math.abs(formationVAD.valence) * 0.3),
+    valenceIntensity,
+  );
+  return Math.max(valenceIntensity, vadIntensity);
+}
+
+export function getEmotionalIntensityPersistenceMultiplier(
+  memory: Partial<Pick<PurrMemory, 'emotionalValence' | 'formationVAD'>>,
+): number {
+  const minMultiplier = Math.max(0.1, MEMORY_CONFIG.emotionalIntensityPersistenceMinMultiplier);
+  const maxMultiplier = Math.max(
+    minMultiplier,
+    MEMORY_CONFIG.emotionalIntensityPersistenceMaxMultiplier,
+  );
+  const intensity = computeMemoryEmotionalIntensity(memory);
+  return minMultiplier + ((maxMultiplier - minMultiplier) * intensity);
+}
+
+export function getMemoryDecayProfile(memory: MemoryDecayProfileInput): MemoryDecayProfile {
   const retentionClass = inferMemoryRetentionClass({
     type: memory.type,
     tags: memory.tags,
     retentionClass: memory.retentionClass,
   });
+  const retentionHalflifeMultiplier = retentionClass === 'durable'
+    ? MEMORY_CONFIG.durableHalflifeMultiplier
+    : 1;
+  const emotionalPersistenceMultiplier = getEmotionalIntensityPersistenceMultiplier(memory);
+  const halflifeMultiplier = retentionHalflifeMultiplier * emotionalPersistenceMultiplier;
 
   if (retentionClass === 'durable') {
     return {
       retentionClass,
       salienceFloor: MEMORY_CONFIG.durableSalienceFloor,
-      halflifeMultiplier: MEMORY_CONFIG.durableHalflifeMultiplier,
+      halflifeMultiplier,
     };
   }
 
   return {
     retentionClass,
     salienceFloor: MEMORY_CONFIG.salienceFloor,
-    halflifeMultiplier: 1,
+    halflifeMultiplier,
   };
 }

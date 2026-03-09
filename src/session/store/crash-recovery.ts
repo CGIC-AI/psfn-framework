@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   buildGracefulShutdownMarkerJournalEntry,
   journalToMarkerEntry,
+  journalToTurnTombstoneEntry,
 } from '../journal-utils.js';
 import type { JournalEntry } from '../types.js';
 import type {
@@ -23,6 +24,16 @@ export function applyJournalState(cache: ChannelCache, entry: JournalEntry): voi
   const marker = journalToMarkerEntry(entry);
   if (marker?.marker === 'extraction' && typeof marker.coveredUpTo === 'number') {
     cache.lastExtractionCoveredUpTo = Math.max(cache.lastExtractionCoveredUpTo, marker.coveredUpTo);
+  }
+
+  const tombstone = journalToTurnTombstoneEntry(entry);
+  if (tombstone) {
+    if (tombstone.action === 'redact') {
+      cache.turnTombstones.add(tombstone.targetId);
+    } else {
+      cache.turnTombstones.delete(tombstone.targetId);
+    }
+    cache.activeTurnTombstoneCount = cache.turnTombstones.size;
   }
 }
 

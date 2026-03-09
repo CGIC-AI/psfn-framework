@@ -2,7 +2,9 @@ import { createComponentLogger } from '../../logger.js';
 import type { LLMProvider } from '../../agent/contracts.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
+import { resolveLatestTurnContext } from '../../session/turn-provenance.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { TurnID } from '../../types.js';
 import {
   EXTRACTION_PROMPT_KEY,
   getDefaultPromptText,
@@ -14,6 +16,11 @@ import type { MemoryStore } from '../store.js';
 import type { ExtractedFact } from '../types.js';
 import type { WriteResult } from '../writer.js';
 import { parseFactsXml } from './parser.js';
+import {
+  buildExtractionEntryChunks,
+  formatExtractionTranscript,
+  mergeExtractedFactGroups,
+} from './chunk-compose.js';
 import {
   applyChannelImportanceCaps,
   buildExtractionSourceRef,
@@ -33,10 +40,35 @@ import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
 
 const log = createComponentLogger('Extraction');
 
+type ExtractionIntegrityErrorStage = 'orchestration' | 'fact_processing';
+
+export interface ExtractionIntegrityErrorContext {
+  stage: ExtractionIntegrityErrorStage;
+  channelId: string;
+  triggerReason: ExtractionTriggerReason;
+  turnId?: TurnID;
+  factIndex?: number;
+  factType?: ExtractedFact['type'];
+  sourceRef?: string;
+}
+
+export class ExtractionIntegrityError extends Error {
+  readonly context: ExtractionIntegrityErrorContext;
+  readonly cause: unknown;
+
+  constructor(message: string, context: ExtractionIntegrityErrorContext, cause: unknown) {
+    super(message);
+    this.name = 'ExtractionIntegrityError';
+    this.context = context;
+    this.cause = cause;
+  }
+}
+
 export interface ExtractionRunOptions {
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId?: string;
+  turnId?: TurnID;
   recoveredEntries?: SessionEntry[];
   llmClient: LLMProvider;
   sessionManager: SessionManager;
@@ -45,9 +77,15 @@ export interface ExtractionRunOptions {
   gateConfig: ExtractionGateConfig;
   maxWrites: number;
   telemetryEnabled: boolean;
+  useCompositionalExtraction: boolean;
   isAcceptingExtractions: () => boolean;
+  adjustFactForWrite?: (fact: ExtractedFact) => ExtractedFact;
   processFact: (fact: ExtractedFact, sourceRef: string, canonicalContactId?: string) => Promise<WriteResult>;
-  emitExtractionStart: (channelId: string, triggerReason: ExtractionTriggerReason) => Promise<void>;
+  emitExtractionStart: (
+    channelId: string,
+    triggerReason: ExtractionTriggerReason,
+    turnId?: TurnID,
+  ) => Promise<void>;
   emitExtractionEnd: (telemetry: ExtractionEndTelemetry) => Promise<void>;
   resolveCoveredUpToMessageId: (channelId: string, entries: SessionEntry[]) => number | null;
   recordExtractionMarker: (channelId: string, coveredUpToMessageId: number | null) => void;
@@ -65,18 +103,20 @@ export interface ExtractionRunOptions {
 }
 
 export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
-  await options.emitExtractionStart(options.channelId, options.triggerReason);
-
+  let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
     const recentEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
       ? options.recoveredEntries
       : options.sessionManager.getRecentMessages(options.channelId, 10)
     ).slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+    const latestTurnContext = resolveLatestTurnContext(recentEntries);
+    const turnId = options.turnId ?? latestTurnContext?.turnId;
+    resolvedTurnId = turnId;
+    const requestId = latestTurnContext?.requestId ?? `memory-extraction:${options.channelId}:${options.triggerReason}`;
+    await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
+
     const channelVisibility = classifyChannel(options.channelId);
-    const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility);
-    const recentMessages = recentEntries
-      .map(e => `${e.authorName ?? e.role}: ${e.content}`)
-      .join('\n');
+    const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility, turnId);
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
 
     const existing = options.memoryStore.getMemoriesByChannel(options.channelId, 30);
@@ -87,28 +127,44 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
     const extractionPrompt = options.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
       ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
-    const prompt = injectPromptRuntimeTokens(extractionPrompt)
-      .replace('{existing_facts}', existingFacts)
-      .replace('{recent_messages}', recentMessages);
+    const entryChunks = options.useCompositionalExtraction
+      ? buildExtractionEntryChunks(recentEntries)
+      : [recentEntries];
+    const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'legacy';
+    const parsedFactGroups: ExtractedFact[][] = [];
+    for (const [index, chunkEntries] of entryChunks.entries()) {
+      const prompt = injectPromptRuntimeTokens(extractionPrompt)
+        .replace('{existing_facts}', existingFacts)
+        .replace('{recent_messages}', formatExtractionTranscript(chunkEntries));
+      const chunkRequestId = entryChunks.length > 1
+        ? `${requestId}:chunk:${index + 1}`
+        : requestId;
 
-    const response = await options.llmClient.complete(
-      {
-        systemPrompt: prompt,
-        messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
-        correlation: {
-          requestId: `memory-extraction:${options.channelId}:${options.triggerReason}`,
-          channelId: options.channelId,
-          callType: 'memory',
-          purpose: 'memory.extraction',
+      const response = await options.llmClient.complete(
+        {
+          systemPrompt: prompt,
+          messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
+          correlation: {
+            requestId: chunkRequestId,
+            ...(turnId ? { turnId } : {}),
+            channelId: options.channelId,
+            callType: 'memory',
+            purpose: 'memory.extraction',
+          },
         },
-      },
-      'background',
-    );
+        'background',
+      );
 
-    const parsedFacts = parseFactsXml(response.content);
+      parsedFactGroups.push(parseFactsXml(response.content));
+    }
+    const rawParsedFactCount = parsedFactGroups
+      .reduce((total, group) => total + group.length, 0);
+    const parsedFacts = mergeExtractedFactGroups(parsedFactGroups);
+    const crossChunkDeduplicatedCount = Math.max(0, rawParsedFactCount - parsedFacts.length);
     const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
-    const facts = [...parsedFacts, ...inferredBoundaryFacts]
-      .map(fact => applyChannelImportanceCaps(fact, channelVisibility));
+    const adjustFactForWrite = options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact);
+    const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts])
+      .map(fact => applyChannelImportanceCaps(adjustFactForWrite(fact), channelVisibility));
 
     if (inferredBoundaryFacts.length > 0 && options.telemetryEnabled) {
       log.info('Detected refusal-boundary facts from conversation transcript', {
@@ -127,6 +183,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       await options.emitExtractionEnd({
         channelId: options.channelId,
         count: 0,
+        ...(turnId ? { turnId } : {}),
         triggerReason: options.triggerReason,
         parsedCount: facts.length,
         acceptedCount: 0,
@@ -141,6 +198,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
           low_signal: 0,
           write_cap: 0,
         },
+        compositionalMode,
+        chunkCount: entryChunks.length,
+        mergedFactCount: parsedFacts.length,
+        crossChunkDeduplicatedCount,
+        boundaryFactCount: inferredBoundaryFacts.length,
       });
       return;
     }
@@ -234,8 +296,20 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             deduplicatedCount++;
             break;
         }
-      } catch (err) {
-        log.error('Error processing fact', { error: String(err) });
+      } catch (error) {
+        throw new ExtractionIntegrityError(
+          `Failed to process extracted fact at index ${candidate.index}`,
+          {
+            stage: 'fact_processing',
+            channelId: options.channelId,
+            triggerReason: options.triggerReason,
+            ...(turnId ? { turnId } : {}),
+            factIndex: candidate.index,
+            factType: fact.type,
+            sourceRef,
+          },
+          error,
+        );
       }
     }
 
@@ -243,6 +317,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const telemetry: ExtractionEndTelemetry = {
       channelId: options.channelId,
       count: acceptedCount,
+      ...(turnId ? { turnId } : {}),
       triggerReason: options.triggerReason,
       coveredUpToMessageId: coveredUpToMessageId ?? undefined,
       parsedCount: facts.length,
@@ -252,6 +327,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       deduplicatedCount,
       supersededCount,
       rejectionBreakdown,
+      compositionalMode,
+      chunkCount: entryChunks.length,
+      mergedFactCount: parsedFacts.length,
+      crossChunkDeduplicatedCount,
+      boundaryFactCount: inferredBoundaryFacts.length,
     };
 
     if (options.telemetryEnabled) {
@@ -270,7 +350,28 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       options.canonicalContactId,
       acceptedWrites,
     );
-  } catch (err) {
-    log.error('Extraction error', { error: String(err), triggerReason: options.triggerReason });
+  } catch (error) {
+    const wrapped = error instanceof ExtractionIntegrityError
+      ? error
+      : new ExtractionIntegrityError(
+        'Extraction orchestration failed',
+        {
+          stage: 'orchestration',
+          channelId: options.channelId,
+          triggerReason: options.triggerReason,
+          ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
+        },
+        error,
+      );
+    log.error('Extraction integrity failure', {
+      context: wrapped.context,
+      error: toErrorMessage(wrapped),
+      cause: toErrorMessage(wrapped.cause),
+    });
+    throw wrapped;
   }
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

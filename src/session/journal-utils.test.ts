@@ -15,9 +15,11 @@ import {
   buildExtractionMarkerJournalEntry,
   buildGracefulShutdownMarkerJournalEntry,
   buildMessageJournalEntry,
+  buildTurnTombstoneJournalEntry,
   journalToCompactionSummary,
   journalToMarkerEntry,
   journalToSessionEntry,
+  journalToTurnTombstoneEntry,
   quarantineSidecarPath,
   parseJournalText,
   parseLegacyChatSource,
@@ -135,6 +137,27 @@ describe('journal utils', () => {
     });
   });
 
+  it('builds and maps turn tombstone entries', () => {
+    const tombstone = buildTurnTombstoneJournalEntry(6, 'ch1', {
+      turnId: '019a7e30-c4f4-72b6-b2b7-28fdd4dd7f76',
+      action: 'redact',
+      timestamp: 8_000,
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+
+    expect(journalToTurnTombstoneEntry(tombstone)).toEqual({
+      id: 6,
+      channelId: 'ch1',
+      targetType: 'turn',
+      targetId: '019a7e30-c4f4-72b6-b2b7-28fdd4dd7f76',
+      action: 'redact',
+      timestamp: 8_000,
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+  });
+
   it('appends and reads journal files', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-journal-utils-'));
     dirs.push(dir);
@@ -196,13 +219,24 @@ describe('journal utils', () => {
       content: 'b',
       timestamp: 1300,
     }));
+    appendJournalEntry(filePath, buildTurnTombstoneJournalEntry(5, 'ch1', {
+      turnId: '019a7e30-c4f4-72b6-b2b7-28fdd4dd7f76',
+      action: 'redact',
+      timestamp: 1400,
+    }));
+    appendJournalEntry(filePath, buildTurnTombstoneJournalEntry(6, 'ch1', {
+      turnId: '019a7e30-c4f4-72b6-b2b7-28fdd4dd7f76',
+      action: 'restore',
+      timestamp: 1500,
+    }));
 
     const metadata = scanJournalFileMetadata(filePath);
-    expect(metadata.maxId).toBe(4);
+    expect(metadata.maxId).toBe(6);
     expect(metadata.messageCount).toBe(2);
-    expect(metadata.lastTimestamp).toBe(1300);
+    expect(metadata.activeTurnTombstoneCount).toBe(0);
+    expect(metadata.lastTimestamp).toBe(1500);
     expect(metadata.lastExtractionCoveredUpTo).toBe(1);
-    expect(metadata.lastEntry?.type).toBe('message');
+    expect(metadata.lastEntry?.type).toBe('tombstone');
   });
 
   it('reads tail entries by message window and includes boundary entry', () => {
@@ -243,7 +277,7 @@ describe('journal utils', () => {
     const filePath = join(dir, 'broken.jsonl');
     const quarantinePath = quarantineSidecarPath(filePath);
 
-    writeFileSync(filePath, '{"type":"message","id":1,"channelId":"ch1","timestamp":1}\n{bad\n', 'utf-8');
+    writeFileSync(filePath, '{"type":"message","id":1,"channelId":"ch1","role":"user","content":"ok","timestamp":1}\n{bad\n', 'utf-8');
     const withCorruption = readJournalFile(filePath);
     expect(withCorruption.quarantined).toHaveLength(1);
     expect(existsSync(quarantinePath)).toBe(true);
@@ -252,7 +286,7 @@ describe('journal utils', () => {
     expect(quarantineLines).toHaveLength(1);
     expect(JSON.parse(quarantineLines[0]).lineNumber).toBe(2);
 
-    writeFileSync(filePath, '{"type":"message","id":1,"channelId":"ch1","timestamp":1}\n', 'utf-8');
+    writeFileSync(filePath, '{"type":"message","id":1,"channelId":"ch1","role":"user","content":"ok","timestamp":1}\n', 'utf-8');
     const repaired = readJournalFile(filePath);
     expect(repaired.quarantined).toEqual([]);
     expect(existsSync(quarantinePath)).toBe(false);

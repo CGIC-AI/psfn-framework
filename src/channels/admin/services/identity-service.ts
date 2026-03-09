@@ -5,6 +5,7 @@ import { extractCardPatchFromRecord } from '../../../identity/card-versioning.js
 import {
   normalizeImportedCard,
 } from '../../../identity/importer.js';
+import { buildCharacterMacroMap } from '../../../identity/character-macro-map.js';
 import type { PromptLayerStore } from '../../../identity/prompt-store.js';
 import { syncCharacterFoundationPromptFromCard } from '../../../identity/prompt-sync.js';
 import type { CCv3Data } from '@character-foundry/character-foundry/loader';
@@ -16,8 +17,48 @@ import type {
   ImportResult,
   IntakeCommitResult,
   IntakeStageResult,
+  OnboardingActionResult,
   RollbackResult,
 } from './types.js';
+
+type OnboardingEditableField =
+  | 'name'
+  | 'description'
+  | 'personality'
+  | 'scenario'
+  | 'first_mes'
+  | 'mes_example'
+  | 'system_prompt'
+  | 'post_history_instructions';
+
+const ONBOARDING_EDITABLE_FIELDS: ReadonlySet<OnboardingEditableField> = new Set<OnboardingEditableField>([
+  'name',
+  'description',
+  'personality',
+  'scenario',
+  'first_mes',
+  'mes_example',
+  'system_prompt',
+  'post_history_instructions',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeTags(tags: unknown): string[] {
+  if (!Array.isArray(tags)) return [];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of tags) {
+    if (typeof tag !== 'string') continue;
+    const trimmed = tag.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
 
 function extractSettingsResultMessage(html: string): ImportResult {
   const successMatch = html.match(/<span class="form-success">([\s\S]*?)<\/span>/i);
@@ -42,6 +83,28 @@ function extractSettingsResultMessage(html: string): ImportResult {
   };
 }
 
+function resolveMissingRequiredIdentityField(card: CharacterCardV2): 'name' | 'personality' | null {
+  const macroMap = buildCharacterMacroMap(card);
+  if (!macroMap.name.trim()) return 'name';
+  if (!macroMap.personality.trim()) return 'personality';
+  return null;
+}
+
+function isOnboardingRequired(card: CharacterCardV2): boolean {
+  return card.data.creator === 'system' && normalizeTags(card.data.tags).includes('bootstrap');
+}
+
+function clearOnboardingMarker(card: CharacterCardV2): CharacterCardV2 {
+  const normalizedTags = normalizeTags(card.data.tags).filter(tag => tag !== 'bootstrap');
+  return {
+    ...card,
+    data: {
+      ...card.data,
+      tags: normalizedTags,
+    },
+  };
+}
+
 export class AdminIdentityDataService implements AdminIdentityService {
   constructor(private readonly deps: {
     characterCard: CharacterCardV2;
@@ -50,6 +113,45 @@ export class AdminIdentityDataService implements AdminIdentityService {
     importIdentityCardHtml?: (body: string) => Promise<string>;
     promptStore?: PromptLayerStore | null;
   }) {}
+
+  private syncCharacterFoundationWithOutcome(
+    card: CharacterCardV2,
+    updatedBy: string,
+    reason: string,
+  ): { ok: true; warningSuffix: string } | { ok: false; error: string } {
+    const promptSync = syncCharacterFoundationPromptFromCard(
+      this.deps.promptStore,
+      card,
+      updatedBy,
+      reason,
+    );
+    if (promptSync.ok) {
+      return { ok: true, warningSuffix: '' };
+    }
+    if (promptSync.errorCode === 'missing_required_fields') {
+      return {
+        ok: false,
+        error: promptSync.error ?? 'Missing required identity fields for Character Foundation sync',
+      };
+    }
+    return {
+      ok: true,
+      warningSuffix: ` (Character Foundation sync warning: ${promptSync.error})`,
+    };
+  }
+
+  private onboardingRequiredFromCurrent(): boolean {
+    const current = this.deps.cardVersionStore?.getCurrent().card ?? this.deps.characterCard;
+    return isOnboardingRequired(current);
+  }
+
+  private onboardingFailure(message: string): OnboardingActionResult {
+    return {
+      ok: false,
+      message,
+      onboardingRequired: this.onboardingRequiredFromCurrent(),
+    };
+  }
 
   getIdentityData(): AdminIdentityData {
     const snapshot = this.deps.cardVersionStore?.getCurrent();
@@ -152,24 +254,37 @@ export class AdminIdentityDataService implements AdminIdentityService {
         return { ok: false, message: 'Uploaded card data must have a "data" object or a "name" field' };
       }
 
+      normalizedCard = clearOnboardingMarker(normalizedCard);
+
+      const missingRequiredField = resolveMissingRequiredIdentityField(normalizedCard);
+      if (missingRequiredField) {
+        return {
+          ok: false,
+          message: `Import failed: required identity field "${missingRequiredField}" cannot be empty`,
+        };
+      }
+
       // Apply full-card replacement so missing fields are cleared.
       const snapshot = cardVersionStore.update(normalizedCard, 'admin:upload', 'File upload import');
 
       // Update in-memory reference
       Object.assign(this.deps.characterCard, snapshot.card);
 
-      const promptSync = syncCharacterFoundationPromptFromCard(
-        this.deps.promptStore,
+      const promptSyncOutcome = this.syncCharacterFoundationWithOutcome(
         snapshot.card,
         'admin:upload',
+        'Sync Character Foundation prompt from uploaded character card',
       );
-      const promptWarning = !promptSync.ok
-        ? ` (Character Foundation sync warning: ${promptSync.error})`
-        : '';
+      if (!promptSyncOutcome.ok) {
+        return {
+          ok: false,
+          message: `Import failed: ${promptSyncOutcome.error}`,
+        };
+      }
 
       return {
         ok: true,
-        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}${promptWarning}`,
+        message: `Imported "${normalizedCard.data.name}" as v${snapshot.version}${promptSyncOutcome.warningSuffix}`,
       };
     } catch (error) {
       return {
@@ -210,19 +325,35 @@ export class AdminIdentityDataService implements AdminIdentityService {
     if (!Number.isInteger(version) || version <= 0) {
       return { ok: false, message: 'version must be a positive integer' };
     }
+    const targetEntry = cardVersionStore.getHistoryEntry(version);
+    if (!targetEntry) {
+      return { ok: false, message: `version ${version} is not available` };
+    }
+    const missingRequiredField = resolveMissingRequiredIdentityField(targetEntry.newCard);
+    if (missingRequiredField) {
+      return {
+        ok: false,
+        message: `Rollback blocked: required identity field "${missingRequiredField}" is empty in version ${version}`,
+      };
+    }
 
     try {
       const snapshot = cardVersionStore.rollback(version, 'admin:api');
       Object.assign(this.deps.characterCard, snapshot.card);
-      syncCharacterFoundationPromptFromCard(
-        this.deps.promptStore,
+      const promptSyncOutcome = this.syncCharacterFoundationWithOutcome(
         snapshot.card,
         'admin:rollback',
         `Sync Character Foundation prompt after rollback to version ${version}`,
       );
+      if (!promptSyncOutcome.ok) {
+        return {
+          ok: false,
+          message: `Rollback failed: ${promptSyncOutcome.error}`,
+        };
+      }
       return {
         ok: true,
-        message: `Rolled back to version ${version}`,
+        message: `Rolled back to version ${version}${promptSyncOutcome.warningSuffix}`,
         snapshot,
       };
     } catch (error) {
@@ -305,26 +436,179 @@ export class AdminIdentityDataService implements AdminIdentityService {
     }
 
     const patch = extractCardPatchFromRecord(patchRecord);
+    const nextCard: CharacterCardV2 = {
+      ...this.deps.characterCard,
+      data: {
+        ...this.deps.characterCard.data,
+        ...patch,
+      },
+    };
+    const missingRequiredField = resolveMissingRequiredIdentityField(nextCard);
+    if (missingRequiredField) {
+      return {
+        ok: false,
+        message: `required identity field "${missingRequiredField}" cannot be empty`,
+      };
+    }
     try {
       const snapshot = cardVersionStore.updateData(patch, 'admin:api', `Admin edited field: ${field}`);
       // Also update the in-memory character card reference
       const current = snapshot.card;
       Object.assign(this.deps.characterCard, current);
-      const promptSync = syncCharacterFoundationPromptFromCard(
-        this.deps.promptStore,
+      const promptSyncOutcome = this.syncCharacterFoundationWithOutcome(
         current,
         'admin:api',
         `Sync Character Foundation prompt after field update: ${field}`,
       );
-      const promptWarning = !promptSync.ok
-        ? ` (Character Foundation sync warning: ${promptSync.error})`
-        : '';
+      if (!promptSyncOutcome.ok) {
+        return {
+          ok: false,
+          message: `Update failed: ${promptSyncOutcome.error}`,
+        };
+      }
       return {
         ok: true,
-        message: `Updated "${field}" to v${snapshot.version}${promptWarning}`,
+        message: `Updated "${field}" to v${snapshot.version}${promptSyncOutcome.warningSuffix}`,
       };
     } catch (error) {
       return { ok: false, message: String(error) };
     }
+  }
+
+  async applyOnboardingAction(body: string): Promise<OnboardingActionResult> {
+    const cardVersionStore = this.deps.cardVersionStore;
+    if (!cardVersionStore) {
+      return this.onboardingFailure('Card versioning store is not configured');
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(body) as unknown;
+    } catch {
+      return this.onboardingFailure('Request body must be valid JSON');
+    }
+
+    if (!isRecord(payload)) {
+      return this.onboardingFailure('Request body must be a JSON object');
+    }
+
+    const action = typeof payload.action === 'string' ? payload.action.trim() : '';
+    if (action === 'keep_starter') {
+      const extraKeys = Object.keys(payload).filter(key => key !== 'action');
+      if (extraKeys.length > 0) {
+        return this.onboardingFailure('keep_starter does not accept additional fields');
+      }
+
+      const current = cardVersionStore.getCurrent().card;
+      const nextCard = clearOnboardingMarker(current);
+      const snapshot = cardVersionStore.update(
+        nextCard,
+        'admin:onboarding',
+        'Keep starter identity and complete onboarding',
+      );
+      Object.assign(this.deps.characterCard, snapshot.card);
+      const promptSyncOutcome = this.syncCharacterFoundationWithOutcome(
+        snapshot.card,
+        'admin:onboarding',
+        'Sync Character Foundation prompt after onboarding keep starter action',
+      );
+      if (!promptSyncOutcome.ok) {
+        return {
+          ok: false,
+          message: `Onboarding failed: ${promptSyncOutcome.error}`,
+          onboardingRequired: isOnboardingRequired(snapshot.card),
+          action: 'keep_starter',
+        };
+      }
+      return {
+        ok: true,
+        message: `Starter identity confirmed as v${snapshot.version}${promptSyncOutcome.warningSuffix}`,
+        onboardingRequired: isOnboardingRequired(snapshot.card),
+        action: 'keep_starter',
+      };
+    }
+
+    if (action === 'edit_identity') {
+      const extraKeys = Object.keys(payload).filter(key => key !== 'action' && key !== 'fields');
+      if (extraKeys.length > 0) {
+        return this.onboardingFailure('edit_identity only accepts action and fields');
+      }
+
+      if (!isRecord(payload.fields)) {
+        return this.onboardingFailure('fields is required for edit_identity');
+      }
+      const fields = payload.fields as Record<string, unknown>;
+      const fieldEntries = Object.entries(fields);
+      if (fieldEntries.length === 0) {
+        return this.onboardingFailure('fields must include at least one editable identity field');
+      }
+
+      const patchData: Partial<CharacterCardV2['data']> = {};
+      const updatedFields: string[] = [];
+
+      for (const [rawField, rawValue] of fieldEntries) {
+        if (!ONBOARDING_EDITABLE_FIELDS.has(rawField as OnboardingEditableField)) {
+          return this.onboardingFailure(`Unsupported onboarding identity field "${rawField}"`);
+        }
+        if (typeof rawValue !== 'string') {
+          return this.onboardingFailure(`Field "${rawField}" must be a string`);
+        }
+        if ((rawField === 'name' || rawField === 'personality') && rawValue.trim().length === 0) {
+          return this.onboardingFailure(`Field "${rawField}" cannot be empty`);
+        }
+        patchData[rawField as OnboardingEditableField] = rawValue;
+        updatedFields.push(rawField);
+      }
+
+      if (updatedFields.length === 0) {
+        return this.onboardingFailure('fields must include at least one editable identity field');
+      }
+
+      const current = cardVersionStore.getCurrent().card;
+      const nextCard: CharacterCardV2 = clearOnboardingMarker({
+        ...current,
+        data: {
+          ...current.data,
+          ...patchData,
+        },
+      });
+
+      const missingRequiredField = resolveMissingRequiredIdentityField(nextCard);
+      if (missingRequiredField) {
+        return this.onboardingFailure(`required identity field "${missingRequiredField}" cannot be empty`);
+      }
+
+      const snapshot = cardVersionStore.update(
+        nextCard,
+        'admin:onboarding',
+        `Onboarding identity edit: ${updatedFields.join(', ')}`,
+      );
+      Object.assign(this.deps.characterCard, snapshot.card);
+
+      const promptSyncOutcome = this.syncCharacterFoundationWithOutcome(
+        snapshot.card,
+        'admin:onboarding',
+        'Sync Character Foundation prompt after onboarding identity edit',
+      );
+      if (!promptSyncOutcome.ok) {
+        return {
+          ok: false,
+          message: `Onboarding failed: ${promptSyncOutcome.error}`,
+          onboardingRequired: isOnboardingRequired(snapshot.card),
+          action: 'edit_identity',
+          updatedFields,
+        };
+      }
+
+      return {
+        ok: true,
+        message: `Onboarding identity updated to v${snapshot.version}${promptSyncOutcome.warningSuffix}`,
+        onboardingRequired: isOnboardingRequired(snapshot.card),
+        action: 'edit_identity',
+        updatedFields,
+      };
+    }
+
+    return this.onboardingFailure('action must be one of: keep_starter, edit_identity');
   }
 }

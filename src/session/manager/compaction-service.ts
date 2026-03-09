@@ -31,12 +31,19 @@ export interface CompactionParams {
   recent: SessionEntry[];
   channelVisibility: ChannelVisibility;
   systemTokens: number;
+  compactionPromptText?: string;
   llmProvider: LLMProvider;
   store: SessionStore;
   config: SubstrateConfig;
   eventBus: EventBus | null;
   promptRegistry: PromptRegistryStore | null;
   preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
+  onCompactionComplete?: (event: {
+    channelId: string;
+    originalContext: string;
+    compressedContext: string;
+    capturedAt: number;
+  }) => void;
   userId?: string;
 }
 
@@ -45,6 +52,8 @@ export interface CompactionResult {
   recent: SessionEntry[];
   /** Whether compaction was executed. */
   compacted: boolean;
+  /** The summary text appended during this compaction run, when compaction succeeds. */
+  compactionSummaryText?: string;
 }
 
 /**
@@ -144,7 +153,8 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
     ? `${requestContext.requestId}:compaction`
     : `compaction:${params.channelId}:${Date.now()}`;
   try {
-    const compactionPrompt = params.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
+    const compactionPrompt = params.compactionPromptText
+      ?? params.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
     const runtimeCompactionPrompt = injectPromptRuntimeTokens(compactionPrompt);
     const summaryResponse = await withRetry(
@@ -207,9 +217,25 @@ export async function runAutoCompaction(params: CompactionParams): Promise<Compa
       before: totalTokens,
       after: tokensAfter,
     });
+    if (params.onCompactionComplete) {
+      const capturedAt = Date.now();
+      try {
+        params.onCompactionComplete({
+          channelId: params.channelId,
+          originalContext: compactText,
+          compressedContext: compactionSummary,
+          capturedAt,
+        });
+      } catch (error) {
+        log.warn('Compaction completion hook failed', {
+          channelId: params.channelId,
+          error: toErrorMessage(error),
+        });
+      }
+    }
     log.info('Compaction complete', { compacted: toCompact.length, kept: toKeep.length });
 
-    return { recent: toKeep, compacted: true };
+    return { recent: toKeep, compacted: true, compactionSummaryText: compactionSummary };
   } catch (err) {
     if (sawRetry) {
       await params.eventBus?.emit('agent.retry.end', {

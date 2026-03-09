@@ -16,7 +16,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
     expect(() => resolveRuntimeSchedulerConfig({ dataDir: '' })).toThrow('requires options.dataDir');
   });
 
-  it('loads persisted config when env overrides are absent', () => {
+  it('loads persisted config when runtime env overrides are absent', () => {
     const root = mkdtempSync(join(tmpdir(), 'scheduler-runtime-config-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'seed');
@@ -38,7 +38,6 @@ describe('resolveRuntimeSchedulerConfig', () => {
       const resolved = resolveRuntimeSchedulerConfig({
         dataDir,
         seedDir,
-        env: {},
       });
 
       expect(resolved).toEqual({
@@ -51,7 +50,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
     }
   });
 
-  it('applies env overrides above persisted values', () => {
+  it('ignores legacy env overrides and keeps persisted scheduler values authoritative', () => {
     const root = mkdtempSync(join(tmpdir(), 'scheduler-runtime-env-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'seed');
@@ -73,17 +72,12 @@ describe('resolveRuntimeSchedulerConfig', () => {
       const resolved = resolveRuntimeSchedulerConfig({
         dataDir,
         seedDir,
-        env: {
-          SCHEDULER_TICK_INTERVAL_MS: '4000',
-          SCHEDULER_HEARTBEAT_INTERVAL_MS: '5000',
-          MAINTENANCE_INTERVAL_MS: '6000',
-        },
       });
 
       expect(resolved).toEqual({
-        tickIntervalMs: 4_000,
-        heartbeatIntervalMs: 5_000,
-        salienceDecayIntervalMs: 6_000,
+        tickIntervalMs: 10_000,
+        heartbeatIntervalMs: 20_000,
+        salienceDecayIntervalMs: 30_000,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

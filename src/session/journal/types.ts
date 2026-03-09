@@ -24,6 +24,7 @@ export interface JournalFileMetadata {
   entryCount: number;
   maxId: number;
   messageCount: number;
+  activeTurnTombstoneCount: number;
   lastTimestamp: number;
   lastHmac: string | null;
   lastEntry: JournalEntry | null;
@@ -66,6 +67,17 @@ export interface JournalMarkerEntry {
   marker: JournalMarkerType;
   timestamp: number;
   coveredUpTo?: number;
+}
+
+export interface JournalTurnTombstoneEntry {
+  id: number;
+  channelId: string;
+  targetType: 'turn';
+  targetId: string;
+  action: 'redact' | 'restore';
+  timestamp: number;
+  actor?: string;
+  reason?: string;
 }
 
 export interface LegacyChatSourceRecord {

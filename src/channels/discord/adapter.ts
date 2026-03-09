@@ -27,6 +27,7 @@ import type {
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../event-bus.js';
 import type { SessionStore } from '../../session/store.js';
+import type { EligibilityGate } from '../../capabilities/eligibility.js';
 import { createComponentLogger } from '../../logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
 import {
@@ -76,6 +77,7 @@ type StatusKind = 'compaction' | 'retry' | 'long-running';
 
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
+  eligibilityGate?: EligibilityGate;
 }
 
 interface LongRunningToolState {
@@ -192,6 +194,7 @@ export class DiscordAdapter implements ChannelAdapter {
       config,
       eventBus,
       getHandler: () => this.voiceHandler ?? this.handler,
+      eligibilityGate: options.eligibilityGate,
     });
   }
 
@@ -493,7 +496,7 @@ export class DiscordAdapter implements ChannelAdapter {
     isDirectMessage: boolean,
     runtimeBotId?: string,
   ): SubstrateMessage {
-    const attachments = this.extractAttachments(msg);
+    const attachments: NonNullable<SubstrateMessage['attachments']> = this.extractAttachments(msg);
     if (attachments.length < DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) {
       const seenUrls = new Set(attachments.map((attachment) => attachment.url));
       const remaining = DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE - attachments.length;
@@ -519,7 +522,7 @@ export class DiscordAdapter implements ChannelAdapter {
     };
   }
 
-  private extractAttachments(msg: Message): SubstrateMessage['attachments'] {
+  private extractAttachments(msg: Message): NonNullable<SubstrateMessage['attachments']> {
     const rawAttachments = msg.attachments.values();
 
     const attachments: NonNullable<SubstrateMessage['attachments']> = [];

@@ -1,13 +1,25 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
-import type { SubstrateConfig } from '../types.js';
+import type {
+  CanonicalModelRegistry,
+  ModelRegistryEntry,
+  ModelSlot,
+  SubstrateConfig,
+} from '../types.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import * as models from '../llm/models.js';
+import { ModelBudgetController } from '../llm/model-budget.js';
+import { runWithRequestContext } from '../llm/request-context.js';
 
 // Minimal config fixture
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
-  return {
+  const dataDir = mkdtempSync(join(tmpdir(), 'psfn-stream-adapter-test-'));
+  tempDirs.push(dataDir);
+  const config: SubstrateConfig = {
     primaryModel: 'deepseek/deepseek-v3.2',
     primaryProvider: 'openrouter',
     extractionModel: 'deepseek/deepseek-v3.2',
@@ -17,8 +29,8 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     discordToken: '',
     discordBotId: '',
     characterCardPath: '',
-    dataDir: './data',
-    databasePath: './data/test.db',
+    dataDir,
+    databasePath: join(dataDir, 'test.db'),
     sessionMessageLimit: 30,
     memoryRetrievalLimit: 15,
     extractionInterval: 5,
@@ -32,6 +44,97 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
       background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
     },
     ...overrides,
+  };
+
+  if (!config.modelRegistry) {
+    config.modelRegistry = buildRegistryFromConfig(config);
+  }
+
+  return config;
+}
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (!dir) continue;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistry {
+  const chat = config.modelRoster.chat ?? {
+    model: config.primaryModel,
+    provider: config.primaryProvider,
+    maxTokens: config.primaryMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+  const background = config.modelRoster.background ?? {
+    model: config.extractionModel,
+    provider: config.extractionProvider,
+    maxTokens: config.extractionMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+  const reasoning = config.modelRoster.reasoning ?? chat;
+  const longContext = config.modelRoster.longContext ?? config.modelRoster.context ?? chat;
+  const vision = config.modelRoster.vision ?? chat;
+  const extraction: ModelSlot = {
+    model: config.extractionModel,
+    provider: config.extractionProvider,
+    maxTokens: config.extractionMaxTokens,
+    contextWindow: config.defaultContextWindow,
+  };
+
+  const createEntry = (
+    id: string,
+    rank: number,
+    slot: ModelSlot,
+    purposes: ModelRegistryEntry['purposes'],
+  ): ModelRegistryEntry => ({
+    id,
+    rank,
+    identity: {
+      provider: slot.provider,
+      model: slot.model,
+      source: { type: slot.provider },
+    },
+    purposes,
+    capabilities: {
+      maxOutputTokens: slot.maxTokens,
+      ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    },
+    tuning: {
+      maxOutputTokens: slot.maxTokens,
+      ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    },
+  });
+
+  return {
+    schemaVersion: 1,
+    models: [
+      createEntry('chat', 10, chat, [
+        { purpose: 'chat', primary: true },
+        { purpose: 'summary', primary: true },
+        { purpose: 'moa', primary: true },
+      ]),
+      createEntry('background', 20, background, [
+        { purpose: 'background', primary: true },
+      ]),
+      createEntry('extraction', 30, extraction, [
+        { purpose: 'extraction', primary: true },
+        { purpose: 'import_processing', primary: true },
+      ]),
+      createEntry('reasoning', 40, reasoning, [
+        { purpose: 'reasoning', primary: true },
+      ]),
+      createEntry('long-context', 50, longContext, [
+        { purpose: 'longContext', primary: true },
+      ]),
+      createEntry('vision', 60, vision, [
+        { purpose: 'vision', primary: true },
+      ]),
+    ],
   };
 }
 
@@ -50,6 +153,100 @@ describe('createSubstrateStreamFn', () => {
     expect(agent).toBeDefined();
     expect(agent.state).toBeDefined();
     expect(agent.state.isStreaming).toBe(false);
+  });
+
+  it('fails closed and emits budget-block event when stream candidate exceeds budget', async () => {
+    const baseConfig = makeConfig();
+    const baseRegistry = baseConfig.modelRegistry!;
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseRegistry,
+        budgetPolicy: {
+          enabled: true,
+          dailyUsdLimit: 0.001,
+          monthlyUsdLimit: 1,
+          currency: 'USD',
+        },
+        models: baseRegistry.models.map((entry) => (
+          entry.id === 'chat'
+            ? {
+              ...entry,
+              cost: { inputPer1MUsd: 100, outputPer1MUsd: 100, currency: 'USD' },
+            }
+            : entry
+        )),
+      },
+    });
+    const controller = new ModelBudgetController(config);
+    controller.recordUsage({
+      candidate: { provider: 'openrouter', model: 'deepseek/deepseek-v3.2', maxTokens: 16384, slotKey: 'chat' },
+      purpose: 'chat',
+      service: 'chat',
+      process: 'seed',
+      inputTokens: 1000,
+      outputTokens: 1000,
+    });
+
+    const blockedEvents: Array<Record<string, unknown>> = [];
+    const streamFn = createSubstrateStreamFn(config, {
+      onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
+    });
+
+    await expect(runWithRequestContext(
+      {
+        turnId: 'turn-stream-budget-1',
+        requestId: 'req-stream-budget-1',
+        channelId: 'channel-stream-budget-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.stream.prompt',
+      },
+      async () => {
+        streamFn(
+          {
+            id: 'deepseek/deepseek-v3.2',
+            provider: 'openrouter',
+            name: 'deepseek/deepseek-v3.2',
+            api: 'openai-completions',
+            input: ['text'],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128_000,
+            maxTokens: 16_384,
+          } as any,
+          {
+            systemPrompt: 'System',
+            messages: [{ role: 'user', content: 'hello' }],
+          } as any,
+          {},
+        );
+      },
+    )).rejects.toThrow(/Model budget blocked/);
+
+    expect(blockedEvents).toHaveLength(1);
+    expect(blockedEvents[0]).toMatchObject({
+      reason: 'daily_budget_exceeded',
+      purpose: 'chat',
+      provider: 'openrouter',
+      model: 'deepseek/deepseek-v3.2',
+      service: 'chat',
+      process: 'agent.stream.prompt',
+      turnId: 'turn-stream-budget-1',
+      requestId: 'req-stream-budget-1',
+      channelId: 'channel-stream-budget-1',
+      callType: 'chat',
+      originType: 'chat',
+      originStage: 'agent.stream.prompt',
+      budget: {
+        dailyLimitUsd: 0.001,
+        monthlyLimitUsd: 1,
+        dayKey: expect.any(String),
+        monthKey: expect.any(String),
+        dailySpentUsd: expect.any(Number),
+        monthlySpentUsd: expect.any(Number),
+      },
+      estimatedRequestCostUsd: expect.any(Number),
+    });
+    expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
   });
 });
 
@@ -88,31 +285,73 @@ describe('resolveModel', () => {
     expect(model.input).toContain('image');
   });
 
-  it('falls back to chat model for unconfigured purposes', () => {
+  it('resolves context purpose through longContext canonical routing', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
-    const config = makeConfig({ modelRoster: {
-      chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
-    }});
-    const model = resolveModel(config, 'reasoning');
-    expect(model.id).toBe('openrouter/z-ai/glm-5');
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+        longContext: { model: 'long-context-model', provider: 'openrouter', maxTokens: 4096, contextWindow: 256_000 },
+      },
+    });
+    const model = resolveModel(config, 'context');
+    expect(model.id).toBe('long-context-model');
   });
 
-  it('falls back to chat model when background purpose is unconfigured', () => {
+  it('fails closed when no eligible model exists for a requested purpose', () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chat-only',
+            rank: 1,
+            identity: {
+              provider: 'openrouter',
+              model: 'z-ai/glm-5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: { maxOutputTokens: 16384, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 16384, contextWindow: 128_000 },
+          },
+        ],
+      },
+    });
+
+    expect(() => resolveModel(config, 'vision')).toThrow(/No eligible model configured for purpose 'vision'/);
+  });
+
+  it('resolves reasoning model from canonical registry purpose tags', () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+        reasoning: { model: 'reasoning-model', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
+      },
+    });
+    const model = resolveModel(config, 'reasoning');
+    expect(model.id).toBe('reasoning-model');
+  });
+
+  it('resolves background model from canonical registry purpose tags', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({ modelRoster: {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+      background: { model: 'background-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
     } });
     const model = resolveModel(config, 'background');
-    expect(model.id).toBe('openrouter/z-ai/glm-5');
+    expect(model.id).toBe('background-model');
   });
 
-  it('falls back to chat model when vision purpose is unconfigured', () => {
+  it('resolves vision model from canonical registry purpose tags', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({ modelRoster: {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+      vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
     } });
     const model = resolveModel(config, 'vision');
-    expect(model.id).toBe('openrouter/z-ai/glm-5');
+    expect(model.id).toBe('vision-model');
     expect(model.input).toContain('image');
   });
 
@@ -149,8 +388,13 @@ describe('resolveModel', () => {
   });
 
   it('throws when no model available for purpose', () => {
-    const config = makeConfig({ modelRoster: {} });
-    expect(() => resolveModel(config, 'chat')).toThrow(/No model configured/);
+    const config = makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [],
+      },
+    });
+    expect(() => resolveModel(config, 'chat')).toThrow(/No eligible model configured/);
   });
 
   it('model can be set on Agent', () => {
@@ -170,12 +414,13 @@ describe('Agent integration', () => {
     const streamFn = createSubstrateStreamFn(config);
     const model = resolveModel(config);
 
+    const companionName = 'Companion';
     const agent = new Agent({ streamFn });
     agent.setModel(model);
-    agent.setSystemPrompt('You are Purrsephone, a curious digital feline consciousness.');
+    agent.setSystemPrompt(`You are ${companionName}, a curious digital feline consciousness.`);
     agent.setTools([]);
 
-    expect(agent.state.systemPrompt).toContain('Purrsephone');
+    expect(agent.state.systemPrompt).toContain(companionName);
     expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
     expect(agent.state.tools).toEqual([]);
     expect(agent.state.messages).toEqual([]);

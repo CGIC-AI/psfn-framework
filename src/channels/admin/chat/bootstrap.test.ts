@@ -2,6 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { Contact } from '../../../contacts/types.js';
+import type { ContactStore } from '../../../contacts/store.js';
 import type { SubstrateConfig } from '../../../types.js';
 import { AdminChatBootstrapService } from './bootstrap.js';
 
@@ -33,6 +35,23 @@ function makeRuntimeConfig(characterCardPath: string, characterName = ''): Subst
     compactionThresholdPct: 70,
     modelRoster: {},
     characterName,
+  };
+}
+
+function makeContact(id: string, displayName: string): Contact {
+  const now = new Date().toISOString();
+  return {
+    id,
+    displayName,
+    trustLevel: 'regular',
+    relationshipType: 'friend',
+    firstSeen: now,
+    lastSeen: now,
+    channels: [{
+      channel: 'api',
+      userId: 'admin-user',
+      privacyLevel: 'private',
+    }],
   };
 }
 
@@ -101,6 +120,30 @@ describe('AdminChatBootstrapService', () => {
     expect(JSON.stringify(modelRoomPayload)).not.toContain('bootstrap-test-secret');
   });
 
+  it('resets default author identity when switching contacts without explicit overrides', () => {
+    const contactStore = {
+      listAll: () => [
+        makeContact('contact-api-principal', 'API Principal'),
+        makeContact('contact-v', 'V'),
+      ],
+    } as unknown as ContactStore;
+    const service = new AdminChatBootstrapService(contactStore, {
+      resolveGlobalDefaultSessionId: () => null,
+    });
+
+    const initial = service.buildBootstrap();
+    expect(initial.defaultAuthorName).toBe('API Principal');
+
+    const updated = service.updateSelection({
+      canonicalContactId: 'contact-v',
+      channel: 'api',
+      userId: 'admin-user',
+    });
+    expect(updated.displayName).toBe('V');
+    expect(updated.defaultAuthorName).toBe('V');
+    expect(updated.defaultAuthorId).toBe('admin-user');
+  });
+
   it('reports onboarding required when starter bootstrap card is active', () => {
     const root = makeTempDir();
     const characterCardPath = join(root, 'character.json');
@@ -154,7 +197,7 @@ describe('AdminChatBootstrapService', () => {
     }), 'utf-8');
 
     const service = new AdminChatBootstrapService(null, {
-      config: makeRuntimeConfig(characterCardPath, 'Purrsephone'),
+      config: makeRuntimeConfig(characterCardPath, 'Configured Companion'),
       resolveGlobalDefaultSessionId: () => null,
     });
 

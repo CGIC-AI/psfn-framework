@@ -1,0 +1,93 @@
+name: psfn-production
+
+services:
+  # Dedicated production runtime container profile with isolated mutable mounts.
+  # Do not point any of these directories at continuous/dev roots.
+  psfn-agent-production:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.agent
+    container_name: psfn-agent-production
+    network_mode: "none"
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ${PSFN_GATEWAY_SOCKET_DIR:-/run/psfn}
+        target: /run/psfn
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../scripts/ops
+        target: /app/scripts/ops
+        read_only: true
+        bind:
+          create_host_path: false
+      # Production-isolated mutable roots
+      - type: bind
+        source: ${PSFN_PRODUCTION_SYSTEM_DATA_DIR:-../runtime/production/system-data}
+        target: /app/system-data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_COMPANION_DATA_DIR:-../runtime/production/companion-data}
+        target: /app/companion-data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_WORKSPACE_DIR:-../runtime/production/workspace}
+        target: /app/workspace
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_LOGS_DIR:-../runtime/production/logs}
+        target: /app/logs
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_TEMP_DIR:-../runtime/production/tmp}
+        target: /app/tmp
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PSFN_PRODUCTION_BACKUPS_DIR:-../runtime/production/backups}
+        target: /app/backups
+        bind:
+          create_host_path: false
+      # Character card + identity (RO)
+      - type: bind
+        source: ${CHARACTER_CARD_DIR:-/home/user/.openclaw/agents/main}
+        target: /app/identity
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      GATEWAY_SOCKET: /run/psfn/gateway.sock
+      API_PORT: ${API_PORT:-3000}
+      API_HOST: 127.0.0.1
+      API_KEY: "${API_KEY:-}"
+      ALLOW_INSECURE_LOCAL_API: "${ALLOW_INSECURE_LOCAL_API:-false}"
+      API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS: ${API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS:-3900000}
+      CONTINUITY_WATCHDOG_ENDPOINT: http://127.0.0.1:${API_PORT:-3000}/health
+      CONTINUITY_WATCHDOG_API_KEY: "${CONTINUITY_WATCHDOG_API_KEY:-}"
+      CONTINUITY_WATCHDOG_TIMEOUT_MS: ${CONTINUITY_WATCHDOG_TIMEOUT_MS:-5000}
+      CONTINUITY_WATCHDOG_MAX_FAILURES: ${CONTINUITY_WATCHDOG_MAX_FAILURES:-5}
+      CONTINUITY_WATCHDOG_STATE_FILE: /tmp/psfn-continuity-watchdog-state.json
+      CONTINUITY_WATCHDOG_RESTART_PID: "1"
+      PSFN_RUNTIME_LAYOUT_MODE: production
+      PSFN_RUNTIME_ROOT: /app/runtime-root
+      SYSTEM_DATA_DIR: /app/system-data
+      COMPANION_DATA_DIR: /app/companion-data
+      DATA_DIR: /app/system-data
+      WORKSPACE_PATH: /app/workspace
+      PSFN_LOGS_DIR: /app/logs
+      PSFN_TEMP_DIR: /app/tmp
+      BACKUP_ROOT_DIR: /app/backups
+      DATABASE_PATH: /app/companion-data/purrsephone.db
+      CHARACTER_CARD_PATH: /app/identity/character.json
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-1024}
+    healthcheck:
+      test: ["CMD", "node", "/app/scripts/ops/continuity-watchdog-healthcheck.mjs"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 90s

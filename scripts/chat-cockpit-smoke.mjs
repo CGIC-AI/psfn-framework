@@ -202,7 +202,7 @@ async function runChatCompletionCheck(options, bootstrap) {
       ...createAuthHeaders(bootstrap?.api?.apiKey),
     },
     body: JSON.stringify({
-      model: 'purrsephone',
+      model: bootstrap?.runtime?.model?.id || 'companion',
       messages: [{ role: 'user', content: options.message }],
       stream: false,
     }),

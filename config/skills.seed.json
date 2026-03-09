@@ -1,7 +1,7 @@
 {
   "enabled": true,
   "directories": [
-    "purrsephone/skills",
+    "companion/skills",
     "skills"
   ],
   "extraDirectories": [],

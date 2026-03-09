@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GitOps, type GitOpsConfig } from './ops.js';
 import { REPO_ALLOWED_PATHS } from '../security/policy-constants.js';
 
@@ -15,7 +15,7 @@ vi.mock('node:fs', () => ({
 }));
 
 import { execSync } from 'node:child_process';
-import { writeFileSync, appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, appendFileSync, readFileSync } from 'node:fs';
 
 const mockedExecSync = vi.mocked(execSync);
 const mockedWriteFileSync = vi.mocked(writeFileSync);
@@ -320,7 +320,7 @@ describe('GitOps', () => {
       const commitCall = mockedExecSync.mock.calls[1][0] as string;
       expect(commitCall).toContain('[Intent] add feature');
       expect(commitCall).toContain('[Scope] module');
-      expect(commitCall).toContain('[Agent] Purrsephone');
+      expect(commitCall).toContain('[Agent] Companion');
     });
 
     it('blocks on protected branch', () => {
@@ -334,7 +334,9 @@ describe('GitOps', () => {
 
   describe('openPR', () => {
     it('calls gh pr create and returns URL', () => {
-      mockedExecSync.mockReturnValue('https://github.com/owner/repo/pull/42\n');
+      mockedExecSync
+        .mockReturnValueOnce('feature/pr-work\n')
+        .mockReturnValueOnce('https://github.com/owner/repo/pull/42\n');
       const ops = createGitOps();
       const url = ops.openPR('Fix bug', 'Bug fix description');
 
@@ -346,7 +348,9 @@ describe('GitOps', () => {
     });
 
     it('includes base branch when specified', () => {
-      mockedExecSync.mockReturnValue('https://github.com/owner/repo/pull/43\n');
+      mockedExecSync
+        .mockReturnValueOnce('feature/pr-work\n')
+        .mockReturnValueOnce('https://github.com/owner/repo/pull/43\n');
       const ops = createGitOps();
       ops.openPR('Title', 'Body', 'develop');
 
@@ -354,6 +358,18 @@ describe('GitOps', () => {
         expect.stringContaining('--base'),
         expect.any(Object),
       );
+    });
+
+    it('blocks on protected branch', () => {
+      mockedExecSync.mockReturnValueOnce('main\n');
+      const ops = createGitOps();
+
+      expect(() => ops.openPR('Title', 'Body')).toThrow('protected branch');
+      expect(mockedExecSync).toHaveBeenCalledTimes(2);
+      expect(mockedExecSync.mock.calls.every(([cmd]) =>
+        String(cmd).includes('git rev-parse --abbrev-ref HEAD'),
+      )).toBe(true);
+      expect(mockedAppendFileSync).toHaveBeenCalled();
     });
 
     it('throws and audits on failure', () => {

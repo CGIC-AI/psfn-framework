@@ -28,6 +28,11 @@ function createMessage(id: string): SubstrateMessage {
   };
 }
 
+async function flushAsyncWork() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 const TEST_INTERNAL_STATE: InternalState = {
   emotional: {
     vad: { valence: 0, arousal: 0, dominance: 0 },
@@ -63,10 +68,21 @@ function createRuntime(params: {
   awaitPendingAutoCompaction: ReturnType<typeof vi.fn>;
   recordUserMessage: ReturnType<typeof vi.fn>;
   recordAssistantMessage: ReturnType<typeof vi.fn>;
+  memoryProvider?: TurnExecutionRuntime['memoryProvider'];
+  emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
 }) {
   const agentState = {
     messages: [] as any[],
     model: { id: 'test-model' },
+  };
+  const emotionSelfModelRuntime = {
+    assertSelfModelRuntimeConfigured: vi.fn(),
+    observeEmotionState: vi.fn(async () => null),
+    getEmotionAppraisalChain: vi.fn(() => []),
+    computeInternalStateForTurn: vi.fn(() => TEST_INTERNAL_STATE),
+    computeMetacognitiveFlagsForTurn: vi.fn(() => []),
+    triggerEmotionAppraisal: vi.fn(async () => undefined),
+    ...params.emotionSelfModelRuntimeOverrides,
   };
   const runtime = {
     eventBus: params.eventBus,
@@ -106,18 +122,11 @@ function createRuntime(params: {
       clearChannel: vi.fn(),
     },
     systemPrompt: 'System prompt',
-    memoryProvider: null,
+    memoryProvider: params.memoryProvider ?? null,
     memoryExtractor: null,
     skillsRuntime: null,
     evaluateReflectionNudge: vi.fn(() => null),
-    emotionSelfModelRuntime: {
-      assertSelfModelRuntimeConfigured: vi.fn(),
-      observeEmotionState: vi.fn(async () => null),
-      getEmotionAppraisalChain: vi.fn(() => []),
-      computeInternalStateForTurn: vi.fn(() => TEST_INTERNAL_STATE),
-      computeMetacognitiveFlagsForTurn: vi.fn(() => []),
-      triggerEmotionAppraisal: vi.fn(async () => undefined),
-    },
+    emotionSelfModelRuntime,
     pinDeferredContinuationSessionContext: vi.fn(() => () => undefined),
     resolveTaskKind: vi.fn(() => undefined),
     buildTurnBudgetCharacteristics: vi.fn(() => ({ mode: 'default' })),
@@ -235,5 +244,148 @@ describe('handleMessageForTurn compaction scheduling', () => {
 
     deferredCompaction.resolve();
     await deferredCompaction.promise;
+  });
+});
+
+describe('handleMessageForTurn pre-response concurrency', () => {
+  it('starts emotion observation and memory snapshot capture in parallel, and waits for both before retrieval', async () => {
+    const eventBus = new EventBus();
+    const emotionDeferred = createDeferred<null>();
+    const memorySnapshotDeferred = createDeferred<{ snapshot: string }>();
+    const retrieveDeferred = createDeferred<string>();
+    const proactiveRecallDeferred = createDeferred<string>();
+    const observeEmotionState = vi.fn(() => emotionDeferred.promise);
+    const captureTurnMemorySnapshot = vi.fn(() => memorySnapshotDeferred.promise);
+    const retrieve = vi.fn(() => retrieveDeferred.promise);
+    const retrieveProactiveRecall = vi.fn(() => proactiveRecallDeferred.promise);
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        captureTurnMemorySnapshot,
+        retrieve,
+        retrieveProactiveRecall,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+      emotionSelfModelRuntimeOverrides: {
+        observeEmotionState,
+      },
+    });
+
+    const responsePromise = handleMessageForTurn(runtime, createMessage('msg-parallel-setup'));
+
+    await flushAsyncWork();
+
+    expect(observeEmotionState).toHaveBeenCalledTimes(1);
+    expect(captureTurnMemorySnapshot).toHaveBeenCalledTimes(1);
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(buildContext).not.toHaveBeenCalled();
+
+    emotionDeferred.resolve(null);
+    await flushAsyncWork();
+
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(buildContext).not.toHaveBeenCalled();
+
+    memorySnapshotDeferred.resolve({ snapshot: 'memory' });
+    await vi.waitFor(() => {
+      expect(retrieve).toHaveBeenCalledTimes(1);
+      expect(retrieveProactiveRecall).toHaveBeenCalledTimes(1);
+    });
+    expect(buildContext).not.toHaveBeenCalled();
+
+    retrieveDeferred.resolve('memories');
+    proactiveRecallDeferred.resolve('proactive');
+
+    await expect(responsePromise).resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+  });
+
+  it('runs memory retrieval and proactive recall concurrently, and waits for both before building context', async () => {
+    const eventBus = new EventBus();
+    const retrieveDeferred = createDeferred<string>();
+    const proactiveRecallDeferred = createDeferred<string>();
+    const retrieve = vi.fn(() => retrieveDeferred.promise);
+    const retrieveProactiveRecall = vi.fn(() => proactiveRecallDeferred.promise);
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
+        retrieve,
+        retrieveProactiveRecall,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    const responsePromise = handleMessageForTurn(runtime, createMessage('msg-parallel-memory'));
+
+    await vi.waitFor(() => {
+      expect(retrieve).toHaveBeenCalledTimes(1);
+      expect(retrieveProactiveRecall).toHaveBeenCalledTimes(1);
+    });
+    expect(buildContext).not.toHaveBeenCalled();
+
+    retrieveDeferred.resolve('memories');
+    await flushAsyncWork();
+
+    expect(buildContext).not.toHaveBeenCalled();
+
+    proactiveRecallDeferred.resolve('proactive');
+    await vi.waitFor(() => {
+      expect(buildContext).toHaveBeenCalledTimes(1);
+    });
+
+    await expect(responsePromise).resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+  });
+
+  it('fails closed when proactive recall rejects before the response is built', async () => {
+    const eventBus = new EventBus();
+    const proactiveRecallError = new Error('proactive recall failed');
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
+        retrieve: vi.fn(async () => 'memories'),
+        retrieveProactiveRecall: vi.fn(async () => {
+          throw proactiveRecallError;
+        }),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-proactive-error'))).rejects.toThrow(
+      'proactive recall failed',
+    );
+    expect(buildContext).not.toHaveBeenCalled();
   });
 });

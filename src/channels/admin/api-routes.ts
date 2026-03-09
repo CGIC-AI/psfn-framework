@@ -39,6 +39,7 @@ import type { ValuesJournalEntry } from '../../values/store.js';
 import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
 import { applyAdminModelsConfigMutation } from './services/settings-service.js';
+import { loadModelsConfig } from '../../config/models-config.js';
 
 export type AdminTaskCadence = RecurringCadence;
 
@@ -778,10 +779,14 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath(ADMIN_SETTINGS_MODELS_API_PATH),
       handle: (_req, res) => {
-        settingsService.getSettingsData().then(
-          data => sendJson(res, 200, data.editors.models),
-          error => sendJson(res, 500, { error: String(error) }),
-        );
+        try {
+          const models = loadModelsConfig(config.dataDir, {
+            defaultContextWindow: config.defaultContextWindow,
+          });
+          sendJson(res, 200, models.modelRegistry);
+        } catch (error) {
+          sendJson(res, 500, { error: String(error) });
+        }
       },
     },
     {

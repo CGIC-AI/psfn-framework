@@ -13,7 +13,6 @@ import { MemoryStore } from './memory/store.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
 import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
-import { TextEmotionClassifier } from './emotion/text-classifier.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
@@ -139,6 +138,10 @@ import {
 } from './runtime/bootstrap-helpers.js';
 import { wireContextFeedbackRuntime } from './context-feedback/runtime.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from './runtime/env-parsing.js';
+import {
+  createStartupTextEmotionClassifier,
+  warmRuntimeMlServices,
+} from './runtime/ml-warmup.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
 import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
@@ -428,16 +431,19 @@ async function main(): Promise<void> {
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
-  const textEmotionModel = config.textEmotionModel?.trim();
-  if (!textEmotionModel) {
-    throw new Error('textEmotionModel runtime setting is required');
-  }
+  const textClassifier = createStartupTextEmotionClassifier({
+    model: config.textEmotionModel,
+    cacheDir: config.textEmotionCacheDir,
+    dtype: config.textEmotionDtype,
+  });
+  await warmRuntimeMlServices({
+    textClassifier,
+    embeddingService: gateway,
+    textEmotionModel: config.textEmotionModel!.trim(),
+    logger: log,
+  });
   const emotionObserver = new EmotionObserver({
-    textClassifier: new TextEmotionClassifier({
-      model: textEmotionModel,
-      cacheDir: config.textEmotionCacheDir,
-      dtype: config.textEmotionDtype,
-    }),
+    textClassifier,
     audioClassifier: getSharedAudioEmotionClassifier(),
   });
   const emotionState = new EmotionState();

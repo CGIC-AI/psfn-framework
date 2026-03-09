@@ -24,6 +24,21 @@ describe('startup entrypoint parity wiring', () => {
     expect(gatewayMainSource).toContain('logStartupHydrationDiagnostics(startupHydration.diagnostics)');
   });
 
+  it('warms startup ML services before runtime readiness in the long-running agent entrypoints', () => {
+    const runtimeWarmupIndex = runtimeSource.indexOf('await warmRuntimeMlServices(');
+    const runtimeInitIndex = runtimeSource.indexOf("await this.eventBus.emit('system.init', {})");
+    const agentWarmupIndex = agentMainSource.indexOf('await warmRuntimeMlServices(');
+    const agentInitIndex = agentMainSource.indexOf("await eventBus.emit('system.init', {})");
+
+    expect(runtimeWarmupIndex).toBeGreaterThan(-1);
+    expect(runtimeInitIndex).toBeGreaterThan(-1);
+    expect(runtimeWarmupIndex).toBeLessThan(runtimeInitIndex);
+
+    expect(agentWarmupIndex).toBeGreaterThan(-1);
+    expect(agentInitIndex).toBeGreaterThan(-1);
+    expect(agentWarmupIndex).toBeLessThan(agentInitIndex);
+  });
+
   it('hydrates chat-cli before constructing model/session runtime dependencies', () => {
     const hydrateIndex = chatCliSource.indexOf('hydrateCanonicalStartupConfig(config, { env: process.env });');
     const llmClientIndex = chatCliSource.indexOf('const llmClient = new LLMClient(config);');

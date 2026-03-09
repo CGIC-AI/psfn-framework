@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
 import {
   DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR,
+  STARTUP_EMBEDDING_WARMUP_TEXT,
   OllamaEmbeddingProvider,
   TransformersEmbeddingProvider,
   createEmbeddingProviderFromEnv,
+  warmupEmbeddingService,
 } from './embedding.js';
 
 const fetchMock = vi.fn();
@@ -358,6 +360,30 @@ describe('embedding providers', () => {
 
     expect(() => createEmbeddingProviderFromEnv()).toThrow(
       'EMBEDDING_API_URL must be set when EMBEDDING_PROVIDER=api',
+    );
+  });
+
+  it('warms the embedding service with the startup probe text', async () => {
+    const embeddingService = {
+      dims: 3,
+      embedBatch: vi.fn(),
+      embed: vi.fn().mockResolvedValue(new Float32Array([1, 2, 3])),
+    };
+
+    await warmupEmbeddingService(embeddingService);
+
+    expect(embeddingService.embed).toHaveBeenCalledWith(STARTUP_EMBEDDING_WARMUP_TEXT);
+  });
+
+  it('fails closed when warmup returns the wrong embedding dimensions', async () => {
+    const embeddingService = {
+      dims: 3,
+      embedBatch: vi.fn(),
+      embed: vi.fn().mockResolvedValue(new Float32Array([1, 2])),
+    };
+
+    await expect(warmupEmbeddingService(embeddingService)).rejects.toThrow(
+      'embedding service startup warmup failed: embedding warmup dimension mismatch: expected 3, got 2',
     );
   });
 });

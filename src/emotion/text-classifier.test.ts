@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   TEXT_EMOTION_TOP_K,
   TEXT_EMOTION_DTYPE_VALUES,
+  TEXT_EMOTION_WARMUP_TEXT,
   TextEmotionClassifier,
   type TextEmotionClassification,
   type TextEmotionPipeline,
@@ -76,6 +77,17 @@ describe('TextEmotionClassifier', () => {
     expect(pipeline).toHaveBeenCalledTimes(2);
   });
 
+  it('preloads the model with the startup warmup input', async () => {
+    const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(sampleScores());
+    const pipelineFactory: TextEmotionPipelineFactory = vi.fn().mockResolvedValue(pipeline);
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+
+    await classifier.preload();
+
+    expect(pipelineFactory).toHaveBeenCalledTimes(1);
+    expect(pipeline).toHaveBeenCalledWith(TEXT_EMOTION_WARMUP_TEXT, { top_k: TEXT_EMOTION_TOP_K });
+  });
+
   it('retries lazy initialization after a load failure', async () => {
     const pipeline: TextEmotionPipeline = vi.fn().mockResolvedValue(sampleScores());
     const pipelineFactory: TextEmotionPipelineFactory = vi.fn()
@@ -88,6 +100,16 @@ describe('TextEmotionClassifier', () => {
 
     expect(pipelineFactory).toHaveBeenCalledTimes(2);
     expect(pipeline).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces startup warmup failures with explicit classifier context', async () => {
+    const pipelineFactory: TextEmotionPipelineFactory = vi.fn()
+      .mockRejectedValue(new Error('load failed'));
+    const classifier = new TextEmotionClassifier({ model: TEST_MODEL, pipelineFactory });
+
+    await expect(classifier.preload()).rejects.toThrow(
+      'text emotion classifier warmup failed: Error: load failed',
+    );
   });
 
   it('accepts variable label counts from model outputs', async () => {

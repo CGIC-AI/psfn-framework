@@ -343,8 +343,61 @@ describe('AdminServer legacy UI removal', () => {
 
       const modelsConfigRes = await request(harness.port, 'GET', '/api/admin/settings/models');
       expect(modelsConfigRes.status).toBe(200);
-      const modelsConfigPayload = JSON.parse(modelsConfigRes.body) as { modelCatalog: unknown };
-      expect(modelsConfigPayload.modelCatalog).toBeTypeOf('object');
+      const modelsConfigPayload = JSON.parse(modelsConfigRes.body) as {
+        schemaVersion: number;
+        models: unknown[];
+      };
+      expect(modelsConfigPayload.schemaVersion).toBe(1);
+      expect(Array.isArray(modelsConfigPayload.models)).toBe(true);
+    });
+
+    it('accepts canonical models.json payloads via /api/admin/settings/models POST', async () => {
+      const currentRes = await request(harness.port, 'GET', '/api/admin/settings/models');
+      expect(currentRes.status).toBe(200);
+      const currentPayload = JSON.parse(currentRes.body) as {
+        schemaVersion: number;
+        models: Array<{ id: string; rank: number }>;
+      };
+      expect(currentPayload.schemaVersion).toBe(1);
+      expect(currentPayload.models.length).toBeGreaterThan(0);
+
+      const targetModel = currentPayload.models[0];
+      if (!targetModel) {
+        throw new Error('Expected at least one model in canonical registry payload');
+      }
+      const nextRank = targetModel.rank + 7;
+      const nextPayload = {
+        ...currentPayload,
+        models: currentPayload.models.map((entry, index) => (
+          index === 0
+            ? { ...entry, rank: nextRank }
+            : entry
+        )),
+      };
+      const postBody = new URLSearchParams();
+      postBody.set('configJson', JSON.stringify(nextPayload));
+      const postRes = await request(
+        harness.port,
+        'POST',
+        '/api/admin/settings/models',
+        postBody.toString(),
+        {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      );
+      expect(postRes.status).toBe(200);
+      const postPayload = JSON.parse(postRes.body) as { ok: boolean; message: string };
+      expect(postPayload.ok).toBe(true);
+      expect(postPayload.message).toBe('models.json saved');
+
+      const updatedRes = await request(harness.port, 'GET', '/api/admin/settings/models');
+      expect(updatedRes.status).toBe(200);
+      const updatedPayload = JSON.parse(updatedRes.body) as {
+        schemaVersion: number;
+        models: Array<{ id: string; rank: number }>;
+      };
+      expect(updatedPayload.schemaVersion).toBe(1);
+      expect(updatedPayload.models.find((entry) => entry.id === targetModel.id)?.rank).toBe(nextRank);
     });
 
     it('fails closed for canonical model discovery routes when backend is unavailable', async () => {

@@ -162,7 +162,6 @@ import {
   getOptionalChannelAdapter,
   requireChannelAdapter,
 } from './bootstrap/channel-runtime.js';
-import { wireContextFeedbackRuntime } from './context-feedback/runtime.js';
 export {
   buildRuntimeChannelsConfigOverrides,
   createEmbeddingDimensionMismatchFatalMessage,
@@ -796,13 +795,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.registerTool(createUndoMemoryDeleteTool(this.memoryStore));
     this.agentLoop.registerTool(createScratchpadReadTool(this.memoryStore));
     this.agentLoop.registerTool(createScratchpadWriteTool(this.memoryStore));
-    wireContextFeedbackRuntime({
-      agentLoop: this.agentLoop,
-      postTurnActions,
-      llmProvider: this.llmClient,
-      sessionStore: this.sessionStore,
-      eventBus: this.eventBus,
-    });
+    log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
     // Git tools — self-modification via git
     wireGitRuntime(this.agentLoop, {

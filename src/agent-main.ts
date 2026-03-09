@@ -136,7 +136,6 @@ import {
   hydrateCanonicalStartupConfig,
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
-import { wireContextFeedbackRuntime } from './context-feedback/runtime.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from './runtime/env-parsing.js';
 import {
   createStartupTextEmotionClassifier,
@@ -660,13 +659,7 @@ async function main(): Promise<void> {
   agentLoop.registerTool(createUndoMemoryDeleteTool(memoryStore));
   agentLoop.registerTool(createScratchpadReadTool(memoryStore));
   agentLoop.registerTool(createScratchpadWriteTool(memoryStore));
-  wireContextFeedbackRuntime({
-    agentLoop,
-    postTurnActions,
-    llmProvider: gateway,
-    sessionStore,
-    eventBus,
-  });
+  log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
   // Git tools — self-modification via gateway-hosted git ops
   registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });

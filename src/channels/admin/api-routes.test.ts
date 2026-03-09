@@ -1137,11 +1137,27 @@ describe('AdminServer JSON API routes', () => {
       tags: ['api'],
       sensitivity: 'confidential',
     }, new Float32Array([0.2, 0.3, 0.4]));
+    memoryStore.insertMemory({
+      id: 'api-mem-cf',
+      text: 'Context feedback for turn test-turn. Score=0.88 bucket=high.',
+      type: 'procedural',
+      importance: 0.3,
+      confidence: 0.4,
+      emotionalValence: 0,
+      salience: 0.1,
+      sourceRef: 'source:context_feedback|turn:test-turn|score:0.88|model:test-model',
+      extractedAt: Date.UTC(2026, 1, 25, 10, 0, 0),
+      lastAccessed: Date.UTC(2026, 1, 25, 10, 0, 0),
+      accessCount: 0,
+      tags: ['context_feedback', 'procedural_learning'],
+      sensitivity: 'public',
+    }, new Float32Array([0.3, 0.2, 0.1]));
 
     const listRes = await request(port, 'GET', '/api/admin/memory?limit=1&offset=1', undefined, authHeaders);
     expect(listRes.status).toBe(200);
     const listPayload = JSON.parse(listRes.body) as { memories: Array<{ id: string }> };
     expect(listPayload.memories).toHaveLength(1);
+    expect(listPayload.memories.some(memory => memory.id === 'api-mem-cf')).toBe(false);
 
     const filteredRes = await request(port, 'GET', '/api/admin/memory?type=semantic', undefined, authHeaders);
     expect(filteredRes.status).toBe(200);
@@ -1187,6 +1203,7 @@ describe('AdminServer JSON API routes', () => {
     expect(searchRes.status).toBe(200);
     const searchPayload = JSON.parse(searchRes.body) as { results: Array<{ id: string }> };
     expect(searchPayload.results.length).toBeGreaterThan(0);
+    expect(searchPayload.results.some(memory => memory.id === 'api-mem-cf')).toBe(false);
 
     const deleteRes = await request(port, 'DELETE', '/api/admin/memory/api-mem-2', undefined, authHeaders);
     expect(deleteRes.status).toBe(200);

@@ -1272,9 +1272,12 @@ describe('ApiServer', () => {
       const res = await request(port, 'OPTIONS', '/v1/chat/completions', undefined, {
         Origin: 'http://psfn.local:3001',
         'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'Authorization, Content-Type, X-Session-ID, X-User-ID, X-User-Name',
       });
       expect(res.status).toBe(204);
       expect(res.headers['access-control-allow-origin']).toBe('http://psfn.local:3001');
+      expect(res.headers['access-control-allow-headers']).toContain('X-User-ID');
+      expect(res.headers['access-control-allow-headers']).toContain('X-User-Name');
       expect(res.headers.vary).toContain('Origin');
     });
 

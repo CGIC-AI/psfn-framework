@@ -14,6 +14,7 @@ import { SessionStore } from '../../session/store.js';
 import { SessionManager } from '../../session/manager.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
+import { formatPossessiveCompanionName } from '../../identity/companion-naming.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { LLMProvider } from '../../agent/contracts.js';
@@ -495,7 +496,10 @@ describe('AdminServer legacy UI removal', () => {
     it('keeps login page reachable and sets auth cookie on successful login', async () => {
       const loginPageRes = await request(harness.port, 'GET', '/login');
       expect(loginPageRes.status).toBe(200);
-      expect(loginPageRes.body).toContain('Login - Purrsephone\'s Garden');
+      const expectedGardenTitle = `${formatPossessiveCompanionName(testCard.data.name)} Garden`;
+      const escapedExpectedGardenTitle = expectedGardenTitle.replaceAll('\'', '&#39;');
+      expect(loginPageRes.body).toContain(`Login - ${escapedExpectedGardenTitle}`);
+      expect(loginPageRes.body).not.toContain('Purrsephone\'s Garden');
 
       const loginBody = new URLSearchParams({ token }).toString();
       const loginRes = await request(harness.port, 'POST', '/login', loginBody, {

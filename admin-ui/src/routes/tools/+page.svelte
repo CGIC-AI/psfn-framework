@@ -7,6 +7,7 @@
     name: string;
     description: string;
     category: string;
+    availability?: string;
   }
 
   const CATEGORY_BADGE: Record<string, string> = {
@@ -56,9 +57,8 @@
     { name: 'values_list',         description: 'List values journal entries',                                     category: 'core' },
     { name: 'issue_ready',         description: 'List beads issues ready to work on',                              category: 'core' },
     { name: 'issue_show',          description: 'Show a beads issue by id',                                        category: 'core' },
-    { name: 'memory_write',        description: 'Write a single memory directly to L2 store',                     category: 'memory' },
+    { name: 'memory_write',        description: 'Write a single memory directly to L2 store',                     category: 'memory', availability: 'Direct agent tool; also callable inside think' },
     { name: 'scratchpad_read',     description: 'Read from the agent scratchpad (ephemeral key-value)',           category: 'scratchpad' },
-    { name: 'scratchpad_write',    description: 'Write to the agent scratchpad (ephemeral key-value)',            category: 'scratchpad' },
     { name: 'contact_lookup',      description: 'Look up a contact by name or Discord ID',                        category: 'contact' },
     { name: 'contact_list',        description: 'List all known contacts with trust levels',                      category: 'contact' },
     { name: 'load_tools',          description: 'Hot-swap active tool set to include extended tools',              category: 'core' },
@@ -71,10 +71,11 @@
     { name: 'self_rebuild',           description: 'Trigger a rebuild and restart cycle',                    category: 'lifecycle' },
     { name: 'notify_operator',        description: 'Send a notification to the operator via ntfy',           category: 'lifecycle' },
     // Memory (extended)
-    { name: 'memory_import_batch',    description: 'Import multiple memories in a single batch',             category: 'memory' },
-    { name: 'memory_redact',          description: 'Redact sensitive content from a memory',                 category: 'memory' },
+    { name: 'memory_import_batch',    description: 'Import multiple memories in a single batch',             category: 'memory', availability: 'Extended agent tool; also callable inside think' },
+    { name: 'memory_redact',          description: 'Redact sensitive content from a memory',                 category: 'memory', availability: 'Extended agent tool; also callable inside think' },
     { name: 'memory_delete',          description: 'Soft-delete a memory',                                   category: 'memory' },
     { name: 'undo_memory_delete',     description: 'Restore a previously deleted memory',                    category: 'memory' },
+    { name: 'scratchpad_write',       description: 'Write to the agent scratchpad (ephemeral key-value)',    category: 'scratchpad' },
     // Git
     { name: 'repo_apply_patch',       description: 'Apply a patch to files in allowed paths',               category: 'git' },
     { name: 'repo_commit',            description: 'Stage and commit changes with audit metadata',          category: 'git' },
@@ -115,6 +116,37 @@
   const trustTools = EXTENDED_TOOLS.filter(t => t.category === 'trust');
   const skillsTools = EXTENDED_TOOLS.filter(t => t.category === 'skills');
   const gatewayTools = EXTENDED_TOOLS.filter(t => t.category === 'gateway');
+
+  const REPL_ONLY_TOOLS: ToolInfo[] = [
+    { name: 'read_file',           description: 'Read file content inside think through gateway fs policy checks', category: 'gateway' },
+    { name: 'write_file',          description: 'Write file content inside think through gateway fs policy checks', category: 'gateway' },
+    { name: 'list_files',          description: 'List workspace files inside think through gateway glob policy', category: 'gateway' },
+    { name: 'llm_query',           description: 'Ask a sub-LM question from inside think', category: 'core' },
+    { name: 'llm_query_strict',    description: 'Validated sub-LM query helper only inside think', category: 'core' },
+    { name: 'llm_query_json',      description: 'JSON sub-LM helper only inside think', category: 'core' },
+    { name: 'memory_search',       description: 'Semantic memory lookup inside think', category: 'memory' },
+    { name: 'memory_count',        description: 'Read total active memories inside think', category: 'memory' },
+    { name: 'memory_upsert',       description: 'Upsert or supersede memory inside think', category: 'memory' },
+    { name: 'memory_get_by_id',    description: 'Get a memory by id inside think', category: 'memory' },
+    { name: 'session_messages',    description: 'Read recent session messages inside think', category: 'core' },
+    { name: 'session_search',      description: 'Keyword-search transcript history inside think', category: 'core' },
+    { name: 'session_append_note', description: 'Inject a system note into a session inside think', category: 'core' },
+    { name: 'schedule_list',       description: 'Inspect scheduler state inside think', category: 'heartbeat' },
+    { name: 'schedule_add_every',  description: 'Create recurring tasks inside think', category: 'heartbeat' },
+    { name: 'schedule_add_once',   description: 'Create one-shot tasks inside think', category: 'heartbeat' },
+    { name: 'schedule_update',     description: 'Update scheduled tasks inside think', category: 'heartbeat' },
+    { name: 'event_emit',          description: 'Emit allowlisted events inside think', category: 'heartbeat' },
+    { name: 'module_list',         description: 'List modules inside think', category: 'lifecycle' },
+    { name: 'module_install',      description: 'Install or update modules inside think', category: 'lifecycle' },
+    { name: 'module_enable',       description: 'Enable a module inside think', category: 'lifecycle' },
+    { name: 'module_disable',      description: 'Disable a module inside think', category: 'lifecycle' },
+    { name: 'module_health',       description: 'Inspect module health inside think', category: 'lifecycle' },
+    { name: 'web_fetch',           description: 'Guarded web fetch helper inside think', category: 'gateway' },
+    { name: 'crawler_fetch',       description: 'Crawler fetch helper inside think', category: 'gateway' },
+    { name: 'web_research',        description: 'Research helper inside think', category: 'gateway' },
+    { name: 'shell_exec',          description: 'Capability-gated shell runner inside think', category: 'gateway' },
+    { name: 'sub_think',           description: 'Nested think helper when enabled', category: 'core' },
+  ];
 
   interface ExtendedGroup {
     id: string;
@@ -269,6 +301,7 @@
       </svg>
       <div class="text-sm text-shadow-800">
         <p><strong class="text-shadow-900">Lazy loading:</strong> Only <strong>{CORE_TOOLS.length} core tools</strong> are active by default. The agent calls <code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">load_tools</code> to activate the <strong>{EXTENDED_TOOLS.length} extended tools</strong> when needed; loaded tools stay active for the current session.</p>
+        <p class="mt-2"><strong class="text-shadow-900">Surface split:</strong> This page distinguishes direct agent tools from helpers that only exist inside <code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">think</code>. REPL-only helpers are not normal agent tools, so direct tool calls, promotion, and <code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">load_tools</code> do not apply to them.</p>
       </div>
     </div>
   </div>
@@ -288,6 +321,9 @@
             <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
           </div>
           <p class="text-sm text-shadow-700 leading-relaxed pl-[18px]">{tool.description}</p>
+          {#if tool.availability}
+            <p class="text-sm text-shadow-500 leading-relaxed pl-[18px] mt-2">{tool.availability}</p>
+          {/if}
         </div>
       {/each}
     </div>
@@ -315,11 +351,35 @@
                 <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
               </div>
               <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
+              {#if tool.availability}
+                <p class="text-sm text-shadow-500 leading-relaxed mt-2">{tool.availability}</p>
+              {/if}
             </div>
           {/each}
         </div>
       </div>
     {/each}
+  </div>
+
+  <div>
+    <div class="flex items-baseline gap-3 mb-4">
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">REPL-Only Helpers</h2>
+      <span class="text-sm font-sans text-shadow-600">{REPL_ONLY_TOOLS.length} helpers -- only available inside <code class="font-mono text-gold-600">think</code></span>
+    </div>
+    <div class="card-garden p-4 mb-4">
+      <p class="text-sm text-shadow-800">These functions live only inside the RLM sandbox opened by <code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">think</code>. They are not part of the direct agent tool catalog.</p>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+      {#each REPL_ONLY_TOOLS as tool}
+        <div class="card-garden p-4">
+          <div class="flex items-center gap-2.5 mb-2">
+            <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
+            <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
+          </div>
+          <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
+        </div>
+      {/each}
+    </div>
   </div>
 
   <!-- Service Health -->

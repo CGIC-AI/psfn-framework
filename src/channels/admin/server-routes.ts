@@ -1,10 +1,18 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { buildAdminApiRoutes, type AdminSchedulerApi, type AdminSkillsApi, type AdminValuesJournalApi } from './api-routes.js';
+import {
+  buildAdminApiRoutes,
+  type AdminChatBootstrapApi,
+  type AdminModelDiscoveryApi,
+  type AdminSchedulerApi,
+  type AdminSkillsApi,
+  type AdminValuesJournalApi,
+} from './api-routes.js';
 import {
   exactPath,
   type RouteMatcher,
   type RouteParams,
 } from './route-matchers.js';
+import type { SubstrateConfig } from '../../types.js';
 import type {
   AdminAdaptiveToolsService,
   AdminContactsService,
@@ -39,6 +47,9 @@ interface AdminRouteDependencies {
   skillsRuntime: AdminSkillsApi | null;
   confirmationQueueApi: ConfirmationQueueAdminApi | null;
   valuesJournal: AdminValuesJournalApi;
+  config: SubstrateConfig;
+  modelDiscovery: AdminModelDiscoveryApi | null;
+  chatBootstrapService: AdminChatBootstrapApi;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }
 
@@ -170,6 +181,9 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       skillsRuntime: deps.skillsRuntime,
       confirmationQueueApi: deps.confirmationQueueApi,
       valuesJournal: deps.valuesJournal,
+      config: deps.config,
+      modelDiscovery: deps.modelDiscovery,
+      chatBootstrapService: deps.chatBootstrapService,
       withBody: deps.withBody,
     }),
   ];

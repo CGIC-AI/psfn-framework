@@ -9,7 +9,6 @@ import type { EventBus } from '../../event-bus.js';
 import type { EmbeddingService } from '../../agent/contracts.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
-import type { ModelDiscovery } from '../../llm/discovery.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';
@@ -30,6 +29,11 @@ export interface AdaptiveToolsStateProvider {
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState;
 }
 
+export interface AdminModelDiscoveryBackend {
+  getAvailableModels(): Promise<unknown[]>;
+  invalidateCache(): void;
+}
+
 export interface AdminServerConfig {
   port: number;
   host?: string;
@@ -46,7 +50,7 @@ export interface AdminServerConfig {
   characterCard: CharacterCardV2;
   config: SubstrateConfig;
   embeddingService: EmbeddingService | null;
-  modelDiscovery?: ModelDiscovery | null;
+  modelDiscovery?: AdminModelDiscoveryBackend | null;
   promptStore?: PromptLayerStore | null;
   promptRegistry?: PromptRegistryStore | null;
   cardVersionStore?: CharacterCardVersionStore | null;

@@ -33,6 +33,7 @@ import { checkAdminRequestAuth, checkAdminUpgradeAuth } from './server-auth.js';
 import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
+import { AdminChatBootstrapService } from './chat/bootstrap.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -57,6 +58,7 @@ export class AdminServer implements Lifecycle {
   private scheduler!: import('../../scheduler/scheduler.js').Scheduler;
   private skillsRuntimeRef!: import('../../skills/runtime.js').SkillsRuntime | null;
   private confirmationQueueApiRef!: import('./types.js').ConfirmationQueueAdminApi | null;
+  private chatBootstrapService: AdminChatBootstrapService;
   private routes: AdminRoute[];
   private transport: AdminServerTransport;
   private telemetryTransport: AdminServerTelemetryTransport;
@@ -121,6 +123,13 @@ export class AdminServer implements Lifecycle {
       eventBus: config.eventBus,
       stateProvider: config.adaptiveToolsStateProvider ?? null,
     });
+    this.chatBootstrapService = new AdminChatBootstrapService(config.contactStore, {
+      apiBaseUrl: config.apiBaseUrl,
+      apiHost: config.apiHost,
+      apiPort: config.apiPort,
+      config: config.config,
+      resolveGlobalDefaultSessionId: () => config.sessionStore.getLatestSessionByTimestamp()?.sessionId ?? null,
+    });
     this.scheduler = config.scheduler;
     this.schedulerService = new AdminSchedulerService(config.scheduler, config.config.dataDir);
     this.skillsRuntimeRef = config.skillsRuntime ?? null;
@@ -144,6 +153,9 @@ export class AdminServer implements Lifecycle {
       skillsRuntime: this.skillsRuntimeRef,
       confirmationQueueApi: this.confirmationQueueApiRef,
       valuesJournal: this.valuesJournal,
+      config: config.config,
+      modelDiscovery: config.modelDiscovery ?? null,
+      chatBootstrapService: this.chatBootstrapService,
       withBody: (req, res, cb) => this.withBody(req, res, cb),
     });
     this.server = createServer((req, res) => this.handleRequest(req, res));

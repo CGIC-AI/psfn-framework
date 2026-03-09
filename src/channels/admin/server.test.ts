@@ -175,7 +175,14 @@ interface ServerHarness {
   port: number;
 }
 
-async function createHarness(options: { token?: string; allowInsecureWithoutToken?: boolean }): Promise<ServerHarness> {
+async function createHarness(options: {
+  token?: string;
+  allowInsecureWithoutToken?: boolean;
+  modelDiscovery?: {
+    getAvailableModels: () => Promise<unknown[]>;
+    invalidateCache: () => void;
+  } | null;
+}): Promise<ServerHarness> {
   const tempDir = mkdtempSync(join(tmpdir(), 'admin-server-test-'));
   const characterCardPath = join(tempDir, 'character.json');
   const sessionsDir = join(tempDir, 'sessions');
@@ -243,6 +250,7 @@ async function createHarness(options: { token?: string; allowInsecureWithoutToke
     characterCard: testCard,
     config,
     embeddingService: null,
+    modelDiscovery: options.modelDiscovery ?? null,
   });
   await server.init();
   await server.start();
@@ -298,6 +306,115 @@ describe('AdminServer legacy UI removal', () => {
       expect(res.status).toBe(200);
       const payload = JSON.parse(res.body) as { stats: { sessionCount: number } };
       expect(payload.stats.sessionCount).toBeTypeOf('number');
+    });
+
+    it('keeps canonical /api/admin chat and models routes aligned', async () => {
+      const bootstrapRes = await request(harness.port, 'GET', '/api/admin/chat/bootstrap');
+      expect(bootstrapRes.status).toBe(200);
+      const bootstrapPayload = JSON.parse(bootstrapRes.body) as { defaultSessionId: string };
+      expect(bootstrapPayload.defaultSessionId).toBeTypeOf('string');
+
+      const patchRes = await request(
+        harness.port,
+        'PATCH',
+        '/api/admin/chat/bootstrap',
+        JSON.stringify({
+          channel: 'api',
+          userId: 'admin-user',
+          privacyLevel: 'private',
+        }),
+        {
+          'Content-Type': 'application/json',
+        },
+      );
+      expect(patchRes.status).toBe(200);
+      const patchPayload = JSON.parse(patchRes.body) as {
+        ok: boolean;
+        bootstrap?: { selectedIdentity?: { channel: string; userId: string } };
+      };
+      expect(patchPayload.ok).toBe(true);
+      expect(patchPayload.bootstrap?.selectedIdentity?.channel).toBe('api');
+      expect(patchPayload.bootstrap?.selectedIdentity?.userId).toBe('admin-user');
+
+      const modelRoomRes = await request(harness.port, 'GET', '/api/admin/chat/model-room/bootstrap');
+      expect(modelRoomRes.status).toBe(200);
+      const modelRoomPayload = JSON.parse(modelRoomRes.body) as { defaultRoomId: string };
+      expect(modelRoomPayload.defaultRoomId).toBeTypeOf('string');
+
+      const modelsConfigRes = await request(harness.port, 'GET', '/api/admin/settings/models');
+      expect(modelsConfigRes.status).toBe(200);
+      const modelsConfigPayload = JSON.parse(modelsConfigRes.body) as { modelCatalog: unknown };
+      expect(modelsConfigPayload.modelCatalog).toBeTypeOf('object');
+    });
+
+    it('fails closed for canonical model discovery routes when backend is unavailable', async () => {
+      const listRes = await request(harness.port, 'GET', '/api/admin/models');
+      expect(listRes.status).toBe(503);
+      const listPayload = JSON.parse(listRes.body) as { error: string };
+      expect(listPayload.error).toBe('Model discovery backend unavailable');
+
+      const refreshRes = await request(harness.port, 'POST', '/api/admin/models/refresh');
+      expect(refreshRes.status).toBe(503);
+      const refreshPayload = JSON.parse(refreshRes.body) as { error: string };
+      expect(refreshPayload.error).toBe('Model discovery backend unavailable');
+    });
+
+    it('does not expose stale non-admin chat/models API paths', async () => {
+      const legacyBootstrap = await request(harness.port, 'GET', '/api/chat/bootstrap');
+      expect(legacyBootstrap.status).toBe(404);
+
+      const legacyModelRoom = await request(harness.port, 'GET', '/api/chat/model-room/bootstrap');
+      expect(legacyModelRoom.status).toBe(404);
+
+      const legacyModels = await request(harness.port, 'GET', '/api/models');
+      expect(legacyModels.status).toBe(404);
+
+      const legacyRefresh = await request(harness.port, 'POST', '/api/models/refresh');
+      expect(legacyRefresh.status).toBe(404);
+    });
+  });
+
+  describe('canonical model discovery endpoints with backend configured', () => {
+    let harness: ServerHarness;
+    const getAvailableModels = vi.fn<() => Promise<unknown[]>>(async () => [
+      { id: 'openai/gpt-4.1-mini' },
+      { id: 'anthropic/claude-3.7-sonnet' },
+    ]);
+    const invalidateCache = vi.fn<() => void>(() => {});
+
+    beforeEach(async () => {
+      getAvailableModels.mockClear();
+      invalidateCache.mockClear();
+      harness = await createHarness({
+        allowInsecureWithoutToken: true,
+        modelDiscovery: {
+          getAvailableModels,
+          invalidateCache,
+        },
+      });
+    });
+
+    afterEach(async () => {
+      await destroyHarness(harness);
+    });
+
+    it('serves /api/admin/models and /api/admin/models/refresh', async () => {
+      const listRes = await request(harness.port, 'GET', '/api/admin/models');
+      expect(listRes.status).toBe(200);
+      const listPayload = JSON.parse(listRes.body) as Array<{ id: string }>;
+      expect(listPayload.map(model => model.id)).toEqual([
+        'openai/gpt-4.1-mini',
+        'anthropic/claude-3.7-sonnet',
+      ]);
+      expect(getAvailableModels).toHaveBeenCalledTimes(1);
+
+      const refreshRes = await request(harness.port, 'POST', '/api/admin/models/refresh');
+      expect(refreshRes.status).toBe(200);
+      expect(invalidateCache).toHaveBeenCalledTimes(1);
+      expect(getAvailableModels).toHaveBeenCalledTimes(2);
+      expect(invalidateCache.mock.invocationCallOrder[0]).toBeLessThan(
+        getAvailableModels.mock.invocationCallOrder[1],
+      );
     });
   });
 

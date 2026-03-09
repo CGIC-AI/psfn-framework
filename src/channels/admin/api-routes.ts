@@ -4,7 +4,7 @@ import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
 import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';
 import { parseAdminJsonBody } from './request-body.js';
-import { parseRequestUrl } from './request-url.js';
+import { parseRequestUrl, resolveRequestOrigin } from './request-url.js';
 import {
   exactPath,
   paramWithSuffix,
@@ -28,6 +28,7 @@ import {
 } from './services/dashboard-cost-windows.js';
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../scheduler/types.js';
 import type { SkillSnapshot } from '../../skills/types.js';
+import type { SubstrateConfig } from '../../types.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -36,6 +37,8 @@ import type {
 } from './types.js';
 import type { ValuesJournalEntry } from '../../values/store.js';
 import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
+import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
+import { applyAdminModelsConfigMutation } from './services/settings-service.js';
 
 export type AdminTaskCadence = RecurringCadence;
 
@@ -110,6 +113,23 @@ export interface AdminValuesJournalApi {
   list(options?: { limit?: number }): ValuesJournalEntry[];
 }
 
+export interface AdminModelDiscoveryApi {
+  getAvailableModels(): Promise<unknown[]>;
+  invalidateCache(): void;
+}
+
+export interface AdminChatBootstrapApi {
+  buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): unknown;
+  updateSelection(
+    input: AdminChatBootstrapUpdateInput,
+    options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
+  ): unknown;
+  buildModelRoomBootstrap(
+    config: SubstrateConfig,
+    options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
+  ): unknown;
+}
+
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
@@ -180,8 +200,15 @@ function toDateFilter(value: string | null, boundary: 'start' | 'end'): number |
 }
 
 const ADMIN_SETTINGS_API_PATH = '/api/admin/settings';
+const ADMIN_SETTINGS_MODELS_API_PATH = '/api/admin/settings/models';
+const ADMIN_MODELS_API_PATH = '/api/admin/models';
+const ADMIN_MODELS_REFRESH_API_PATH = '/api/admin/models/refresh';
+const ADMIN_CHAT_BOOTSTRAP_API_PATH = '/api/admin/chat/bootstrap';
+const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/bootstrap';
+const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 
 export function buildAdminApiRoutes(options: {
+  config: SubstrateConfig;
   dashboardService: AdminDashboardService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
@@ -190,6 +217,8 @@ export function buildAdminApiRoutes(options: {
   settingsService: AdminSettingsService;
   identityService: AdminIdentityService;
   promptsService: AdminPromptsService;
+  modelDiscovery?: AdminModelDiscoveryApi | null;
+  chatBootstrapService: AdminChatBootstrapApi;
   scheduler?: AdminSchedulerApi | null;
   skillsRuntime?: AdminSkillsApi | null;
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
@@ -204,6 +233,7 @@ export function buildAdminApiRoutes(options: {
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AdminApiRoute[] {
   const {
+    config,
     dashboardService,
     adaptiveToolsService,
     memoryService,
@@ -212,6 +242,8 @@ export function buildAdminApiRoutes(options: {
     settingsService,
     identityService,
     promptsService,
+    modelDiscovery,
+    chatBootstrapService,
     scheduler,
     skillsRuntime,
     confirmationQueueApi,
@@ -252,6 +284,53 @@ export function buildAdminApiRoutes(options: {
     });
   };
 
+  const handleDiscoveredModels = (res: ServerResponse, refresh: boolean): void => {
+    if (!modelDiscovery) {
+      sendJson(res, 503, { error: MODEL_DISCOVERY_UNAVAILABLE_ERROR });
+      return;
+    }
+
+    if (refresh) {
+      modelDiscovery.invalidateCache();
+    }
+
+    modelDiscovery.getAvailableModels().then(
+      models => sendJson(res, 200, models),
+      error => sendJson(res, 502, {
+        error: toSanitizedMessage(error, 'Model discovery failed'),
+      }),
+    );
+  };
+
+  const handleChatBootstrapUpdate = (req: IncomingMessage, res: ServerResponse): void => {
+    withBody(req, res, (body) => {
+      const parsed = parseAdminJsonBody(body);
+      if (!parsed.ok) {
+        sendJson(res, 400, { error: parsed.error });
+        return;
+      }
+      if (
+        parsed.value !== null
+        && (typeof parsed.value !== 'object' || Array.isArray(parsed.value))
+      ) {
+        sendJson(res, 400, { error: 'Chat bootstrap payload must be a JSON object' });
+        return;
+      }
+
+      try {
+        const bootstrap = chatBootstrapService.updateSelection(
+          (parsed.value ?? {}) as AdminChatBootstrapUpdateInput,
+          { requestOrigin: resolveRequestOrigin(req) },
+        );
+        sendJson(res, 200, { ok: true, bootstrap });
+      } catch (error) {
+        sendJson(res, 400, {
+          error: toSanitizedMessage(error, 'Failed to update chat bootstrap'),
+        });
+      }
+    });
+  };
+
   return [
     {
       method: 'GET',
@@ -279,6 +358,64 @@ export function buildAdminApiRoutes(options: {
           return;
         }
         sendJson(res, 200, adaptiveToolsService.getAdaptiveToolsData());
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_CHAT_BOOTSTRAP_API_PATH),
+      handle: (req, res) => {
+        try {
+          sendJson(res, 200, chatBootstrapService.buildBootstrap({
+            requestOrigin: resolveRequestOrigin(req),
+          }));
+        } catch (error) {
+          sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to build chat bootstrap'),
+          });
+        }
+      },
+    },
+    {
+      method: 'PATCH',
+      match: exactPath(ADMIN_CHAT_BOOTSTRAP_API_PATH),
+      handle: (req, res) => {
+        handleChatBootstrapUpdate(req, res);
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(ADMIN_CHAT_BOOTSTRAP_API_PATH),
+      handle: (req, res) => {
+        handleChatBootstrapUpdate(req, res);
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH),
+      handle: (req, res) => {
+        try {
+          sendJson(res, 200, chatBootstrapService.buildModelRoomBootstrap(config, {
+            requestOrigin: resolveRequestOrigin(req),
+          }));
+        } catch (error) {
+          sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to build model room bootstrap'),
+          });
+        }
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_MODELS_API_PATH),
+      handle: (_req, res) => {
+        handleDiscoveredModels(res, false);
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(ADMIN_MODELS_REFRESH_API_PATH),
+      handle: (_req, res) => {
+        handleDiscoveredModels(res, true);
       },
     },
     {
@@ -635,6 +772,49 @@ export function buildAdminApiRoutes(options: {
       match: exactPath(`${ADMIN_SETTINGS_API_PATH}/schema`),
       handle: (_req, res) => {
         sendJson(res, 200, settingsService.getSettingsContractData());
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_SETTINGS_MODELS_API_PATH),
+      handle: (_req, res) => {
+        settingsService.getSettingsData().then(
+          data => sendJson(res, 200, data.editors.models),
+          error => sendJson(res, 500, { error: String(error) }),
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(ADMIN_SETTINGS_MODELS_API_PATH),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const params = new URLSearchParams(body);
+          const configJson = params.get('configJson');
+          if (typeof configJson !== 'string' || configJson.trim().length === 0) {
+            sendJson(res, 400, { error: 'Missing configJson form field' });
+            return;
+          }
+
+          let payload: unknown;
+          try {
+            payload = JSON.parse(configJson);
+          } catch {
+            sendJson(res, 400, { error: 'configJson must be valid JSON' });
+            return;
+          }
+
+          const result = applyAdminModelsConfigMutation({ config, payload });
+          if (!result.ok) {
+            sendJson(res, 400, {
+              error: result.message,
+              ...result,
+            });
+            return;
+          }
+
+          sendJson(res, 200, { ok: true, message: 'models.json saved' });
+        });
       },
     },
     {

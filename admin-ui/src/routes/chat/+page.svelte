@@ -177,8 +177,8 @@
   let messagesContainer: HTMLDivElement | undefined = $state(undefined);
   let inputEl: HTMLTextAreaElement | undefined = $state(undefined);
 
-  // SSE debug stream
-  let debugEventSource: EventSource | null = null;
+  // Debug telemetry stream
+  let debugWebSocket: WebSocket | null = null;
 
   // Health check
   let healthInterval: ReturnType<typeof setInterval> | undefined;
@@ -192,7 +192,7 @@
 
   // ── Constants ──
   const MAX_CONTEXT_MESSAGES = 40;
-  const DEBUG_SSE_PATH = '/api/chat/events/stream';
+  const DEBUG_TELEMETRY_WS_PATH = '/api/admin/events';
 
   // ── Lifecycle ──
 
@@ -291,31 +291,40 @@
     return `${h}h ${m}m`;
   }
 
-  // ── Debug SSE stream for tool/thinking events ──
+  // ── Debug telemetry stream for tool/thinking events ──
 
   function connectDebugStream() {
-    if (debugEventSource) return;
-    const url = new URL(DEBUG_SSE_PATH, window.location.origin);
-    const source = new EventSource(url, { withCredentials: true });
-    source.addEventListener('chat-debug', (event: MessageEvent) => {
+    if (debugWebSocket && (
+      debugWebSocket.readyState === WebSocket.CONNECTING
+      || debugWebSocket.readyState === WebSocket.OPEN
+    )) {
+      return;
+    }
+    const url = new URL(DEBUG_TELEMETRY_WS_PATH, window.location.origin);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(url.toString());
+    socket.addEventListener('message', (event) => {
+      if (typeof event.data !== 'string') return;
       let payload: Record<string, unknown>;
       try { payload = JSON.parse(event.data); } catch { return; }
       if (!payload || typeof payload !== 'object' || !isStreaming) return;
-      switch (payload.event) {
+      const eventType = typeof payload.type === 'string' ? payload.type : '';
+      const details = typeof payload.data === 'object' && payload.data !== null
+        ? payload.data as Record<string, unknown>
+        : {};
+      switch (eventType) {
         case 'agent.stream.thinking': {
-          const text = typeof payload.message === 'string' ? payload.message : '';
+          const text = typeof details.text === 'string' ? details.text : '';
           if (text) streamingThinking += text;
           break;
         }
         case 'agent.tool.start': {
-          const details = (payload.details || {}) as Record<string, unknown>;
           const toolCallId = (details.toolCallId || `tool-${Date.now()}`) as string;
           const toolName = (details.toolName || 'unknown') as string;
           pendingToolCalls = [...pendingToolCalls, { name: toolName, id: toolCallId, args: '' }];
           break;
         }
         case 'agent.tool.end': {
-          const details = (payload.details || {}) as Record<string, unknown>;
           const toolCallId = (details.toolCallId || '') as string;
           const toolName = (details.toolName || 'unknown') as string;
           const isError = details.isError === true || details.isError === 'true';
@@ -328,12 +337,20 @@
         }
       }
     });
-    source.onerror = () => {};
-    debugEventSource = source;
+    socket.addEventListener('close', () => {
+      if (debugWebSocket === socket) {
+        debugWebSocket = null;
+      }
+    });
+    socket.addEventListener('error', () => {});
+    debugWebSocket = socket;
   }
 
   function disconnectDebugStream() {
-    if (debugEventSource) { debugEventSource.close(); debugEventSource = null; }
+    if (debugWebSocket) {
+      debugWebSocket.close();
+      debugWebSocket = null;
+    }
   }
 
   // ── SSE parsing ──

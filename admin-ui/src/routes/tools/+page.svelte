@@ -190,7 +190,7 @@
 
     // Check LLM proxy by attempting models list
     try {
-      const res = await fetch('/api/models');
+      const res = await fetch('/api/admin/models');
       if (res.ok) {
         const data = await res.json() as Array<{ id: string; description?: string }>;
         const modelList = Array.isArray(data) ? data : [];

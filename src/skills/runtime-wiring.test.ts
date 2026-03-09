@@ -40,6 +40,10 @@ describe('skills runtime wiring', () => {
         .map(call => call[0]?.name)
         .sort();
       expect(names).toEqual(['skill_create', 'skill_list', 'skill_update', 'skill_view']);
+      expect(registerTool.mock.calls.find(call => call[0]?.name === 'skill_list')?.[1]).toBeUndefined();
+      expect(registerTool.mock.calls.find(call => call[0]?.name === 'skill_view')?.[1]).toBeUndefined();
+      expect(registerTool.mock.calls.find(call => call[0]?.name === 'skill_create')?.[1]).toBe('extended');
+      expect(registerTool.mock.calls.find(call => call[0]?.name === 'skill_update')?.[1]).toBe('extended');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

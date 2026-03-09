@@ -27,7 +27,7 @@ class FakeTarget implements GitRuntimeTarget {
 }
 
 describe('wireGitRuntime', () => {
-  it('registers all 6 git tools', () => {
+  it('registers git read tools as core and git write tools as extended', () => {
     const target = new FakeTarget();
     wireGitRuntime(target, {
       repoRoot: '/test',
@@ -42,6 +42,18 @@ describe('wireGitRuntime', () => {
       'repo_open_pr',
       'repo_status',
     ]);
+    const registerTool = vi.spyOn(target, 'registerTool');
+    wireGitRuntime(target, {
+      repoRoot: '/test',
+      allowedPaths: ['src/'],
+    });
+    const categories = registerTool.mock.calls.map(([tool, category]) => [tool.name, category]);
+    expect(categories).toEqual(expect.arrayContaining([
+      ['repo_status', 'core'],
+      ['repo_diff', 'core'],
+      ['repo_apply_patch', 'extended'],
+      ['repo_commit', 'extended'],
+    ]));
   });
 
   it('returns a GitOps instance', () => {

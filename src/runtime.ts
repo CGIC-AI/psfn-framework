@@ -86,6 +86,7 @@ import {
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
 import {
+  wireFilesystemToolsRuntime,
   wirePromptRuntime,
   wireCharacterCardRuntime,
   wireStaticPromptRegistry,
@@ -608,6 +609,7 @@ export class SubstrateRuntime implements Lifecycle {
       seedDir: process.env.CONFIG_DIR,
       repoRoot: process.cwd(),
     });
+    wireFilesystemToolsRuntime(this.agentLoop, process.cwd());
 
     // Prompt stack — layered, editable system prompt
     const promptStore = wirePromptRuntime(

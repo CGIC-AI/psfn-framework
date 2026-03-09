@@ -59,9 +59,9 @@ describe('extended-tool-autoload-policy', () => {
     const devCandidates = policy.getCandidatesForIntent('dev');
     expect(devCandidates).toEqual(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.dev);
     expect(devCandidates.slice(0, policy.maxPreloadCount)).toHaveLength(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
-    expect(devCandidates[0]).toBe('repo_status');
-    expect(devCandidates[1]).toBe('repo_diff');
-    expect(devCandidates[2]).toBe('repo_apply_patch');
+    expect(devCandidates[0]).toBe('repo_apply_patch');
+    expect(devCandidates[1]).toBe('repo_commit');
+    expect(devCandidates[2]).toBe('repo_create_branch');
   });
 
   it('supports disabling preloads by setting max count to zero', () => {
@@ -86,15 +86,15 @@ describe('extended-tool-autoload-policy', () => {
 
   it('selects bounded overlay tools deterministically from registered candidates', () => {
     const selection = selectBoundedOverlayCandidates(
-      ['repo_status', 'repo_diff', 'repo_apply_patch', 'repo_commit'],
-      ['repo_status', 'repo_diff', 'repo_apply_patch', 'repo_commit'],
+      ['repo_apply_patch', 'repo_commit', 'repo_create_branch', 'repo_open_pr'],
+      ['repo_apply_patch', 'repo_commit', 'repo_create_branch', 'repo_open_pr'],
       3,
     );
     expect(selection.maxCount).toBe(3);
-    expect(selection.selected).toEqual(['repo_status', 'repo_diff', 'repo_apply_patch']);
+    expect(selection.selected).toEqual(['repo_apply_patch', 'repo_commit', 'repo_create_branch']);
     expect(selection.skipped).toEqual([
       {
-        toolName: 'repo_commit',
+        toolName: 'repo_open_pr',
         reason: 'budget_exhausted',
       },
     ]);
@@ -146,14 +146,13 @@ describe('extended-tool-autoload-policy', () => {
   it('exposes policy-level overlay selection for turn intent', () => {
     const policy = createDefaultExtendedToolAutoloadPolicy(2);
     const selection = policy.selectOverlayCandidates('ops', [
-      'settings_get',
-      'heartbeat_get_policy',
+      'heartbeat_update_policy',
       'heartbeat_run_template',
       'schedule_task',
-      'session_list',
+      'issue_sync',
     ]);
     expect(selection.maxCount).toBe(2);
-    expect(selection.selected).toEqual(['settings_get', 'heartbeat_get_policy']);
+    expect(selection.selected).toEqual(['heartbeat_update_policy', 'issue_sync']);
     expect(selection.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({
         toolName: 'heartbeat_run_template',
@@ -162,10 +161,6 @@ describe('extended-tool-autoload-policy', () => {
       expect.objectContaining({
         toolName: 'schedule_task',
         reason: 'not_overlay_eligible',
-      }),
-      expect.objectContaining({
-        toolName: 'session_list',
-        reason: 'budget_exhausted',
       }),
     ]));
   });

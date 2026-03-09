@@ -42,7 +42,20 @@
   };
 
   const CORE_TOOLS: ToolInfo[] = [
-    { name: 'think',               description: 'RLM+REPL sandbox for multi-step reasoning with code execution',  category: 'core' },
+    { name: 'think',               description: 'RLM+REPL sandbox for multi-step reasoning after direct tools are insufficient',  category: 'core' },
+    { name: 'fs_list',             description: 'List workspace files with a bounded glob for quick discovery',   category: 'gateway' },
+    { name: 'fs_read',             description: 'Read a workspace text file directly for bounded inspection',      category: 'gateway' },
+    { name: 'repo_status',         description: 'Show working tree status of the substrate repo',                  category: 'git' },
+    { name: 'repo_diff',           description: 'Show file diffs in the working tree',                             category: 'git' },
+    { name: 'prompt_layer_list',   description: 'List all prompt layers in the stack',                             category: 'prompt' },
+    { name: 'prompt_layer_get',    description: 'Get content of a specific prompt layer',                          category: 'prompt' },
+    { name: 'identity_diff',       description: 'Show identity changes between versions',                          category: 'identity' },
+    { name: 'settings_get',        description: 'Read current runtime settings',                                   category: 'settings' },
+    { name: 'session_list',        description: 'List recent sessions and active context',                         category: 'core' },
+    { name: 'heartbeat_get_policy', description: 'View heartbeat reflection templates and schedules',              category: 'heartbeat' },
+    { name: 'values_list',         description: 'List values journal entries',                                     category: 'core' },
+    { name: 'issue_ready',         description: 'List beads issues ready to work on',                              category: 'core' },
+    { name: 'issue_show',          description: 'Show a beads issue by id',                                        category: 'core' },
     { name: 'memory_write',        description: 'Write a single memory directly to L2 store',                     category: 'memory' },
     { name: 'scratchpad_read',     description: 'Read from the agent scratchpad (ephemeral key-value)',           category: 'scratchpad' },
     { name: 'scratchpad_write',    description: 'Write to the agent scratchpad (ephemeral key-value)',            category: 'scratchpad' },
@@ -63,30 +76,22 @@
     { name: 'memory_delete',          description: 'Soft-delete a memory',                                   category: 'memory' },
     { name: 'undo_memory_delete',     description: 'Restore a previously deleted memory',                    category: 'memory' },
     // Git
-    { name: 'repo_status',            description: 'Show working tree status of the substrate repo',        category: 'git' },
-    { name: 'repo_diff',              description: 'Show file diffs in the working tree',                   category: 'git' },
     { name: 'repo_apply_patch',       description: 'Apply a patch to files in allowed paths',               category: 'git' },
     { name: 'repo_commit',            description: 'Stage and commit changes with audit metadata',          category: 'git' },
     { name: 'repo_create_branch',     description: 'Create or switch branches',                             category: 'git' },
     { name: 'repo_open_pr',           description: 'Create a pull request from current branch',             category: 'git' },
     // Prompt
-    { name: 'prompt_layer_list',      description: 'List all prompt layers in the stack',                   category: 'prompt' },
-    { name: 'prompt_layer_get',       description: 'Get content of a specific prompt layer',                category: 'prompt' },
     { name: 'prompt_layer_update',    description: 'Update a prompt layer (agent blocks base/operator)',    category: 'prompt' },
     { name: 'prompt_layer_toggle',    description: 'Enable or disable a prompt layer',                      category: 'prompt' },
     // Identity
-    { name: 'identity_diff',          description: 'Show identity changes between versions',                category: 'identity' },
     { name: 'identity_changelog',     description: 'View the identity change history',                      category: 'identity' },
     { name: 'character_card_update',  description: 'Update character card fields',                           category: 'identity' },
-    // Settings
-    { name: 'settings_get',           description: 'Read current runtime settings',                          category: 'settings' },
     // Trust & Contacts
     { name: 'contact_set_trust',      description: 'Change trust level for a contact',                      category: 'trust' },
     { name: 'contact_set_channel_privacy', description: 'Set privacy level for a contact channel link',     category: 'trust' },
     { name: 'contact_note',           description: 'Add or update notes on a contact',                      category: 'trust' },
     { name: 'contact_link_identity',  description: 'Link two channel identities to the same contact',       category: 'trust' },
     // Heartbeat & Scheduler
-    { name: 'heartbeat_get_policy',   description: 'View heartbeat reflection templates and schedules',     category: 'heartbeat' },
     { name: 'heartbeat_run_template', description: 'Run a reflection template immediately on demand',        category: 'heartbeat' },
     { name: 'heartbeat_update_policy', description: 'Modify reflection templates or intervals',             category: 'heartbeat' },
     { name: 'schedule_task',          description: 'Create one-shot or recurring scheduled tasks',           category: 'heartbeat' },

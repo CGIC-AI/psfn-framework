@@ -1791,7 +1791,7 @@ describe('AdminServer JSON API routes', () => {
     expect(bIndex).toBeGreaterThanOrEqual(0);
     if (aIndex >= 0 && bIndex >= 0) {
       const [moved] = mutableLayers.splice(bIndex, 1);
-      if (moved) mutableLayers.splice(aIndex, 0, moved);
+      mutableLayers.splice(aIndex, 0, moved);
       const runtimeBPayload = mutableLayers.find(layer => layer.id === runtimeB.id);
       if (runtimeBPayload) runtimeBPayload.content = 'constitution-runtime-b-updated';
     }

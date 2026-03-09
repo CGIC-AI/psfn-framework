@@ -243,6 +243,8 @@ function makeMockSessionManager(): SessionManager {
     recordAssistantMessage: vi.fn().mockReturnValue(102),
     recordTurn: vi.fn(),
     appendSystemNote: vi.fn(),
+    awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
+    scheduleAutoCompactionBetweenTurns: vi.fn().mockResolvedValue(undefined),
     buildContext: vi.fn<any>().mockResolvedValue({
       systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [

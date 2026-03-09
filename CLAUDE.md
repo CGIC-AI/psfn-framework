@@ -271,7 +271,7 @@ Implemented runtime surfaces:
 Notes:
 
 - `/garden` is the primary admin surface.
-- Legacy admin routes still exist and emit deprecation warnings.
+- Admin request routing is `/login`, `/garden`, and `/api/admin/*`.
 - The admin API surface under `/api/admin/*` is extensive and actively used by the Garden UI.
 
 ## Tools And Agent Surfaces

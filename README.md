@@ -217,7 +217,7 @@ For additional bootstrap examples, see [`.env.example`](./.env.example).
 - Primary admin surface is `/garden`
 - Backed by `/api/admin/*` and `/api/admin/events`
 - Schema-aware settings editor, memory/session/contact views, chat cockpit, prompt and identity management, scheduler, confirmations, skills, and values
-- Legacy admin routes still exist, but `/garden` is the primary surface
+- Admin request routing is `/login`, `/garden`, and `/api/admin/*`; unknown legacy admin paths are not preserved as first-class routes
 
 ### Wyoming
 
@@ -247,6 +247,12 @@ For additional bootstrap examples, see [`.env.example`](./.env.example).
 - Deferred background continuation delivery queue
 - Shard lifecycle and routing hardening
 - Capability tier gating, safeguards, and confirmations
+
+Current extended tool surfaces called out explicitly in runtime/docs parity tests:
+
+| Area | Tool surface |
+| --- | --- |
+| **Values** | `values_list`, `values_add`, `values_update` |
 
 ### Modules and self-modification
 

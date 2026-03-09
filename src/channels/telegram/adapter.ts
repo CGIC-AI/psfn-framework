@@ -1043,7 +1043,8 @@ export class TelegramAdapter implements ChannelAdapter {
 
     await this.queueStreamResponseUpdate(state, finalContent, true);
     await state.pending.catch(() => undefined);
-    if (state.failure) throw state.failure;
+    const failure = this.streamResponses.get(channelId)?.failure;
+    if (failure instanceof Error) throw failure;
     return state.sentMessageId !== undefined;
   }
 

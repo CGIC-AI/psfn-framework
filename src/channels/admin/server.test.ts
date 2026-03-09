@@ -361,10 +361,7 @@ describe('AdminServer legacy UI removal', () => {
       expect(currentPayload.schemaVersion).toBe(1);
       expect(currentPayload.models.length).toBeGreaterThan(0);
 
-      const targetModel = currentPayload.models[0];
-      if (!targetModel) {
-        throw new Error('Expected at least one model in canonical registry payload');
-      }
+      const targetModel = currentPayload.models[0]!;
       const nextRank = targetModel.rank + 7;
       const nextPayload = {
         ...currentPayload,

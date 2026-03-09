@@ -14,9 +14,9 @@ describe('injectPromptRuntimeTokens', () => {
 
     const output = injectPromptRuntimeTokens(input, { now: fixedNow });
 
-    expect(output).toContain('Now: 2026-02-20T13:45:27.000Z');
+    expect(output).toContain('Now: 2026-02-20T08:45:27.000-05:00');
     expect(output).toContain('Date: 2026-02-20');
-    expect(output).toContain('Time: 13:45:27Z');
+    expect(output).toContain('Time: 08:45:27-05:00');
     expect(output).toContain('Unix: 1771595127');
   });
 
@@ -24,7 +24,7 @@ describe('injectPromptRuntimeTokens', () => {
     const input = 'A={{now()}} B={{date()}} C={{time()}} D={{timestamp()}}';
     const output = injectPromptRuntimeTokens(input, { now: fixedNow });
 
-    expect(output).toBe('A=2026-02-20T13:45:27.000Z B=2026-02-20 C=13:45:27Z D=1771595127');
+    expect(output).toBe('A=2026-02-20T08:45:27.000-05:00 B=2026-02-20 C=08:45:27-05:00 D=1771595127');
   });
 
   it('leaves unknown placeholders untouched', () => {

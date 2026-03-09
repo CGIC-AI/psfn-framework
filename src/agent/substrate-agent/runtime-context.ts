@@ -23,6 +23,7 @@ import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js'
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { formatSignedDecimal } from '../substrate-agent-helpers.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import { formatActiveDateTimeIso, formatActiveDateTimeLabel } from '../../time/active-timezone.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
@@ -87,7 +88,7 @@ export function buildPromptTemplateVariables(input: {
       canonical_contact_id: input.canonicalContactKey ?? input.message.authorId,
       model: input.modelId,
       model_id: input.modelId,
-      now_iso: input.now.toISOString(),
+      now_iso: formatActiveDateTimeIso(input.now),
     },
     runtimeCharacterName,
   };
@@ -142,7 +143,7 @@ export function buildRuntimeContext(input: {
 
   const lines = [
     '[Runtime Context]',
-    `Current time: ${now.toISOString()}`,
+    `Current time: ${formatActiveDateTimeLabel(now)}`,
     `Channel: ${input.message.channelId} (type: ${input.channelType ?? 'unknown'}, visibility: ${visibility})`,
     `Speaking with: ${input.resolvedUserName} (userId: ${input.message.authorId}, canonicalId: ${input.canonicalContactKey ?? input.message.authorId}, trust: ${input.trustLevel})`,
     `Model: ${input.modelId}`,

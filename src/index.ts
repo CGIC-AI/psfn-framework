@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { ensureActiveTimezone } from './time/active-timezone.js';
 import { loadConfig } from './types.js';
 import { SubstrateRuntime } from './runtime.js';
 import { createComponentLogger } from './logger.js';
@@ -6,6 +7,7 @@ import { createComponentLogger } from './logger.js';
 const log = createComponentLogger('Main');
 
 async function main(): Promise<void> {
+  ensureActiveTimezone();
   const config = loadConfig();
   const runtime = new SubstrateRuntime(config);
 

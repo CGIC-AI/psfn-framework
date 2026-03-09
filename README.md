@@ -249,12 +249,19 @@ For additional bootstrap examples, see [`.env.example`](./.env.example).
 - Deferred background continuation delivery queue
 - Shard lifecycle and routing hardening
 - Capability tier gating, safeguards, and confirmations
+- `think` opens a separate REPL sandbox surface; not every helper in that sandbox is a direct agent tool
 
 Current extended tool surfaces called out explicitly in runtime/docs parity tests:
 
 | Area | Tool surface |
 | --- | --- |
 | **Values** | `values_list`, `values_add`, `values_update` |
+
+Tool surface split:
+
+- Direct agent tools: registered on the agent as `core` or `extended`, visible to `load_tools`, and subject to promotion/autoload rules.
+- REPL-only helpers: only available after entering `think`; these include helpers like `read_file`, `list_files`, `llm_query`, `session_search`, scheduler helpers, and module helpers.
+- Shared names can exist on both surfaces. Example: `memory_import_batch` is a direct agent tool and is also callable from inside `think`, but REPL-only helpers are never promotable direct tools.
 
 ### Modules and self-modification
 

@@ -295,6 +295,12 @@ Current implemented tool families include:
 - shard and think tools
 - promoted-tool management tools
 
+Tool surface split:
+
+- direct agent tools are registered as `core` or `extended` and participate in `load_tools`, promotion, and adaptive-tool telemetry
+- REPL-only helpers exist only inside `think` / `sub_think` sandbox execution and are not direct tool-catalog entries
+- shared names can appear in both places, so docs and Garden should call out whether a tool is direct, REPL-only, or both
+
 Main wiring locations:
 
 - `src/bootstrap/composition.ts`

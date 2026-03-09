@@ -56,15 +56,7 @@ import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
 import { MemoryWriter } from './memory/writer.js';
 import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
-import {
-  createMemoryWriteTool,
-  createMemoryImportTool,
-  createMemoryRedactTool,
-  createMemoryDeleteTool,
-  createUndoMemoryDeleteTool,
-  createScratchpadReadTool,
-  createScratchpadWriteTool,
-} from './memory/tools.js';
+import { registerMemoryTools } from './memory/runtime-wiring.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
@@ -790,13 +782,10 @@ export class SubstrateRuntime implements Lifecycle {
     intentionRuntime.behavioralPatternTracker.setPromotionHook(
       createBehavioralPatternMemoryPromotionHook(memoryWriter),
     );
-    this.agentLoop.registerTool(createMemoryWriteTool(memoryWriter));
-    this.agentLoop.registerTool(createMemoryImportTool(memoryWriter));
-    this.agentLoop.registerTool(createMemoryRedactTool(memoryWriter));
-    this.agentLoop.registerTool(createMemoryDeleteTool(this.memoryStore));
-    this.agentLoop.registerTool(createUndoMemoryDeleteTool(this.memoryStore));
-    this.agentLoop.registerTool(createScratchpadReadTool(this.memoryStore));
-    this.agentLoop.registerTool(createScratchpadWriteTool(this.memoryStore));
+    registerMemoryTools(this.agentLoop, {
+      writer: memoryWriter,
+      memoryStore: this.memoryStore,
+    });
     log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
     // Git tools — self-modification via git

@@ -42,6 +42,12 @@ describe('wireIntentionRuntime', () => {
       'list_concerns',
       'resolve_concern',
     ]);
+    const createTool = target.tools.find(tool => tool.name === 'create_concern') as any;
+    const listTool = target.tools.find(tool => tool.name === 'list_concerns') as any;
+    const resolveTool = target.tools.find(tool => tool.name === 'resolve_concern') as any;
+    expect(createTool).toBeDefined();
+    expect(listTool).toBeDefined();
+    expect(resolveTool).toBeDefined();
     expect(target.intentionHooks).toHaveLength(1);
   });
 

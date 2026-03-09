@@ -105,6 +105,8 @@ export type WirableTool = AgentTool<any> & {
 export type GatewayToolMetadataCoverage = Readonly<Record<string, readonly string[]>>;
 
 export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage = Object.freeze({
+  fs_read: Object.freeze(['fs.read']),
+  fs_list: Object.freeze(['fs.list']),
   repo_status: Object.freeze(['git.status']),
   repo_diff: Object.freeze(['git.diff']),
   repo_apply_patch: Object.freeze(['git.apply_patch']),

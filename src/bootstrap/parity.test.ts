@@ -10,6 +10,7 @@ import { readLastActiveSession } from '../lifecycle/notifications.js';
 import { createDefaultExtendedToolAutoloadPolicy } from '../agent/extended-tool-autoload-policy.js';
 import { buildInternalStateSnapshotRef, InternalStateComputer } from '../self-model/state.js';
 import {
+  wireFilesystemToolsRuntime,
   wireExtendedToolAutoloadPolicy,
   wireHeartbeatRuntime,
   wirePromptRuntime,
@@ -65,7 +66,7 @@ describe('wireSessionToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers session tools as extended tools and wires session_new state updates', async () => {
+  it('registers session tools with session_list in core and session mutations in extended', async () => {
     const target = {
       registerTool: vi.fn(),
     };
@@ -108,7 +109,12 @@ describe('wireSessionToolsRuntime', () => {
       'session_resume',
       'start_focus',
     ]);
-    expect(calls.every(([, category]) => category === 'extended')).toBe(true);
+    expect(calls.find(([tool]) => tool.name === 'session_list')?.[1]).toBe('core');
+    expect(
+      calls
+        .filter(([tool]) => tool.name !== 'session_list')
+        .every(([, category]) => category === 'extended'),
+    ).toBe(true);
 
     const sessionNewTool = calls.find(([tool]) => tool.name === 'session_new')?.[0] as {
       execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ details: Record<string, unknown> }>;
@@ -135,7 +141,7 @@ describe('wireSessionToolsRuntime', () => {
 });
 
 describe('wireSettingsRuntime', () => {
-  it('registers settings and promoted-tool runtime helpers when target supports promotions', () => {
+  it('registers settings_get as core and promoted-tool helpers as extended', () => {
     const target = {
       registerTool: vi.fn(),
       getPromotedExtendedToolsLimit: () => 4,
@@ -170,7 +176,12 @@ describe('wireSettingsRuntime', () => {
       'promoted_tools_swap',
       'settings_get',
     ]);
-    expect(calls.every(([, category]) => category === 'extended')).toBe(true);
+    expect(calls.find(([tool]) => tool.name === 'settings_get')?.[1]).toBe('core');
+    expect(
+      calls
+        .filter(([tool]) => tool.name !== 'settings_get')
+        .every(([, category]) => category === 'extended'),
+    ).toBe(true);
   });
 });
 
@@ -185,7 +196,7 @@ describe('wirePromptRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers prompt tools including prompt rollback as extended tools', () => {
+  it('registers read-only prompt tools in core and prompt mutations in extended', () => {
     const target = {
       promptComposer: null,
       registerTool: vi.fn(),
@@ -194,7 +205,14 @@ describe('wirePromptRuntime', () => {
     wirePromptRuntime(target as any, tempDir, 'Base prompt');
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.every(([, category]) => category === 'extended')).toBe(true);
+    expect(calls.find(([tool]) => tool.name === 'prompt_layer_list')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'prompt_layer_get')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'identity_diff')?.[1]).toBe('core');
+    expect(
+      calls
+        .filter(([tool]) => !['prompt_layer_list', 'prompt_layer_get', 'identity_diff'].includes(tool.name))
+        .every(([, category]) => category === 'extended'),
+    ).toBe(true);
     expect(calls.map(([tool]) => tool.name)).toEqual(expect.arrayContaining([
       'prompt_layer_list',
       'prompt_layer_get',
@@ -204,6 +222,30 @@ describe('wirePromptRuntime', () => {
       'prompt_layer_rollback',
       'prompt_layer_toggle',
     ]));
+  });
+});
+
+describe('wireFilesystemToolsRuntime', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'filesystem-tools-runtime-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('registers fs_list and fs_read as core tools', () => {
+    const target = {
+      registerTool: vi.fn(),
+    };
+
+    wireFilesystemToolsRuntime(target as any, tempDir);
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    expect(calls.map(([tool]) => tool.name).sort()).toEqual(['fs_list', 'fs_read']);
+    expect(calls.every(([, category]) => category === 'core')).toBe(true);
   });
 });
 
@@ -286,7 +328,7 @@ describe('wireHeartbeatRuntime', () => {
     expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
   });
 
-  it('registers values tool surface as extended tools', () => {
+  it('registers values_list in core and values mutations in extended tools', () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -317,9 +359,10 @@ describe('wireHeartbeatRuntime', () => {
       'values_add',
       'values_update',
     ]));
+    expect(calls.find(([tool]) => tool.name === 'values_list')?.[1]).toBe('core');
     expect(
       calls
-        .filter(([tool]) => ['values_list', 'values_add', 'values_update'].includes(tool.name))
+        .filter(([tool]) => ['values_add', 'values_update'].includes(tool.name))
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
   });

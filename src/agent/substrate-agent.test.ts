@@ -3406,10 +3406,10 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
 
-    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
     agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
     agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_create_branch'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_open_pr'), 'extended');
 
     const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
 
@@ -3421,17 +3421,17 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toContain('repo_status');
-    expect(toolNames).toContain('repo_diff');
     expect(toolNames).toContain('repo_apply_patch');
-    expect(toolNames).not.toContain('repo_commit');
+    expect(toolNames).toContain('repo_commit');
+    expect(toolNames).toContain('repo_create_branch');
+    expect(toolNames).not.toContain('repo_open_pr');
 
-    const statusIndex = toolNames.indexOf('repo_status');
-    const diffIndex = toolNames.indexOf('repo_diff');
     const patchIndex = toolNames.indexOf('repo_apply_patch');
-    expect(statusIndex).toBeGreaterThanOrEqual(0);
-    expect(diffIndex).toBeGreaterThan(statusIndex);
-    expect(patchIndex).toBeGreaterThan(diffIndex);
+    const commitIndex = toolNames.indexOf('repo_commit');
+    const branchIndex = toolNames.indexOf('repo_create_branch');
+    expect(patchIndex).toBeGreaterThanOrEqual(0);
+    expect(commitIndex).toBeGreaterThan(patchIndex);
+    expect(branchIndex).toBeGreaterThan(commitIndex);
   });
 
   it('skips capability-denied autoload candidates and emits skip telemetry', async () => {
@@ -3445,9 +3445,8 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
 
-    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_diff'), 'extended');
     agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
 
     const autoloadSummaries: any[] = [];
     const autoloadSkips: any[] = [];
@@ -3464,15 +3463,18 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toContain('repo_status');
-    expect(toolNames).toContain('repo_diff');
     expect(toolNames).not.toContain('repo_apply_patch');
+    expect(toolNames).not.toContain('repo_commit');
 
     const summary = autoloadSummaries.at(-1);
     expect(summary?.intent).toBe('dev');
     expect(summary?.skippedDenied).toEqual([
       {
         toolName: 'repo_apply_patch',
+        missingTokens: ['git.write'],
+      },
+      {
+        toolName: 'repo_commit',
         missingTokens: ['git.write'],
       },
     ]);
@@ -3497,7 +3499,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    agent.registerTool(makeExtendedProbeTool('prompt_layer_list'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('prompt_layer_update'), 'extended');
 
     const autoloadSummaries: any[] = [];
     (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
@@ -3507,7 +3509,7 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-fallback',
       channelType: 'terminal',
-      content: 'Please check repo status for me',
+      content: 'Please apply a repo patch for me',
     }));
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
@@ -3518,9 +3520,9 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(summary?.intent).toBe('dev');
     expect(summary?.activated).toEqual([]);
     expect(summary?.unavailable).toEqual(expect.arrayContaining([
-      'repo_status',
-      'repo_diff',
       'repo_apply_patch',
+      'repo_commit',
+      'repo_create_branch',
     ]));
     expect(summary?.unavailable.length).toBeGreaterThanOrEqual(3);
   });
@@ -3536,9 +3538,10 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
 
-    agent.registerTool(makeExtendedProbeTool('settings_get'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('heartbeat_update_policy'), 'extended');
     agent.registerTool(makeExtendedProbeTool('heartbeat_run_template'), 'extended');
     agent.registerTool(makeExtendedProbeTool('schedule_task'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('issue_sync'), 'extended');
 
     const autoloadSummaries: any[] = [];
     const autoloadSkips: any[] = [];
@@ -3555,14 +3558,14 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toContain('settings_get');
+    expect(toolNames).toContain('heartbeat_update_policy');
     expect(toolNames).not.toContain('heartbeat_run_template');
     expect(toolNames).not.toContain('schedule_task');
 
     const summary = autoloadSummaries.at(-1);
     expect(summary?.intent).toBe('ops');
-    expect(summary?.overlayCandidates).toEqual(['settings_get', 'heartbeat_get_policy']);
-    expect(summary?.skippedBackgroundOnly).toEqual(['heartbeat_run_template']);
+    expect(summary?.overlayCandidates).toEqual(['heartbeat_update_policy']);
+    expect(summary?.skippedBackgroundOnly).toEqual(['heartbeat_run_template', 'schedule_task']);
     expect(autoloadSkips).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'heartbeat_run_template', reason: 'background_only' }),
     ]));
@@ -3626,7 +3629,6 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(snapshot?.tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'load_tools', source: 'core' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
-      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded' }),
       expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred' }),
     ]));
@@ -3634,21 +3636,22 @@ describe('SubstrateAgent.handleMessage', () => {
       expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'ghost_tool', source: 'promoted', reason: 'not_registered' }),
       expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'repo_commit', source: 'autoload', reason: 'capability_denied' }),
     ]));
     expect(snapshot?.counts).toMatchObject({
       core: 1,
       promoted: 1,
-      autoload: 1,
+      autoload: 0,
       extendedLoaded: 1,
       deferred: 1,
-      total: 5,
+      total: 4,
     });
 
     expect(adaptiveDecisions).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded', decision: 'activated' }),
       expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred', decision: 'activated' }),
-      expect.objectContaining({ toolName: 'repo_diff', source: 'autoload', decision: 'activated' }),
       expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'repo_commit', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'load_tools', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),

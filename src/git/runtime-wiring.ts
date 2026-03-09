@@ -58,7 +58,10 @@ export function registerGitTools(
       const methods = GIT_TOOL_GATEWAY_METHODS[tool.name];
       attachWiringMeta(tool, { requiredGatewayMethods: methods });
     }
-    target.registerTool(tool, 'extended');
+    const category = tool.name === 'repo_status' || tool.name === 'repo_diff'
+      ? 'core'
+      : 'extended';
+    target.registerTool(tool, category);
   }
 }
 

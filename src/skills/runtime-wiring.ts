@@ -20,7 +20,7 @@ export function wireSkillsRuntime(
   target.skillsRuntime = runtime;
   target.registerTool(createSkillListTool(runtime));
   target.registerTool(createSkillViewTool(runtime));
-  target.registerTool(createSkillCreateTool(runtime));
-  target.registerTool(createSkillUpdateTool(runtime));
+  target.registerTool(createSkillCreateTool(runtime), 'extended');
+  target.registerTool(createSkillUpdateTool(runtime), 'extended');
   return runtime;
 }

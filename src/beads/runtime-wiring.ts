@@ -53,6 +53,9 @@ export function registerBeadsTools(
       const methods = BEADS_TOOL_GATEWAY_METHODS[tool.name];
       attachWiringMeta(tool, { requiredGatewayMethods: methods });
     }
-    target.registerTool(tool, 'extended');
+    const category = tool.name === 'issue_ready' || tool.name === 'issue_show'
+      ? 'core'
+      : 'extended';
+    target.registerTool(tool, category);
   }
 }

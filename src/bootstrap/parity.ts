@@ -32,6 +32,7 @@ import {
   createSettingsGetTool,
   type PromotedExtendedToolsManager,
 } from '../settings-tools.js';
+import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../filesystem/runtime-wiring.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../core-memory/store.js';
 import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
@@ -229,6 +230,8 @@ export interface ExtendedToolAutoloadRuntimeTarget {
   setExtendedToolAutoloadPolicy: (policy: ExtendedToolAutoloadPolicy | null) => void;
 }
 
+export type FilesystemToolRuntimeTarget = ToolRegistrarTarget & FilesystemRuntimeTarget;
+
 export function wireExtendedToolAutoloadPolicy(
   target: ExtendedToolAutoloadRuntimeTarget,
   policy: ExtendedToolAutoloadPolicy = createDefaultExtendedToolAutoloadPolicy(),
@@ -259,9 +262,9 @@ export function wirePromptRuntime(
     enableConstitution: true,
     companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
   });
-  target.registerTool(createPromptLayerListTool(promptStore), 'extended');
-  target.registerTool(createPromptLayerGetTool(promptStore), 'extended');
-  target.registerTool(createIdentityDiffTool(promptStore), 'extended');
+  target.registerTool(createPromptLayerListTool(promptStore), 'core');
+  target.registerTool(createPromptLayerGetTool(promptStore), 'core');
+  target.registerTool(createIdentityDiffTool(promptStore), 'core');
   target.registerTool(createIdentityChangelogTool(promptStore), 'extended');
   target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
   target.registerTool(createPromptLayerRollbackTool(promptStore, options), 'extended');
@@ -317,7 +320,7 @@ export function wireSettingsRuntime(
   target: ToolRegistrarTarget,
   config: SubstrateConfig,
 ): void {
-  target.registerTool(createSettingsGetTool(config), 'extended');
+  target.registerTool(createSettingsGetTool(config), 'core');
   if (!hasPromotedToolsManager(target)) {
     return;
   }
@@ -343,10 +346,17 @@ export function wireSessionToolsRuntime(
       );
     },
   }), 'extended');
-  target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'extended');
+  target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'core');
   target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
   target.registerTool(createStartFocusTool(sessionManager), 'extended');
   target.registerTool(createCompleteFocusTool(sessionManager, llmProvider), 'extended');
+}
+
+export function wireFilesystemToolsRuntime(
+  target: FilesystemToolRuntimeTarget,
+  workspacePath: string,
+): void {
+  wireFilesystemRuntime(target, workspacePath);
 }
 
 /**
@@ -1529,11 +1539,11 @@ export function wireHeartbeatRuntime(
   syncReflectionTasks();
 
   // Register tools
-  target.registerTool(createHeartbeatGetPolicyTool(store), 'extended');
+  target.registerTool(createHeartbeatGetPolicyTool(store), 'core');
   target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
   target.registerTool(createHeartbeatRunTemplateTool(store, runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
-  target.registerTool(createValuesListTool(valuesJournal), 'extended');
+  target.registerTool(createValuesListTool(valuesJournal), 'core');
   target.registerTool(createValuesAddTool(valuesJournal), 'extended');
   target.registerTool(createValuesUpdateTool(valuesJournal), 'extended');
 

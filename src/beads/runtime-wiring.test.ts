@@ -29,7 +29,7 @@ describe('registerBeadsTools', () => {
     target = createMockTarget();
   });
 
-  it('registers all beads tools as extended', () => {
+  it('registers read-only beads tools as core and mutation beads tools as extended', () => {
     registerBeadsTools(target, createMockOps());
     expect(target.registerTool).toHaveBeenCalledTimes(6);
 
@@ -44,7 +44,9 @@ describe('registerBeadsTools', () => {
       'issue_sync',
     ]);
 
-    for (const call of target.registerTool.mock.calls) {
+    expect(target.registerTool.mock.calls.find((call: any[]) => call[0].name === 'issue_ready')?.[1]).toBe('core');
+    expect(target.registerTool.mock.calls.find((call: any[]) => call[0].name === 'issue_show')?.[1]).toBe('core');
+    for (const call of target.registerTool.mock.calls.filter((entry: any[]) => !['issue_ready', 'issue_show'].includes(entry[0].name))) {
       expect(call[1]).toBe('extended');
     }
   });

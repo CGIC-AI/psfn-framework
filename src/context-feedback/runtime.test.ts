@@ -120,7 +120,7 @@ function toInferredAction(
 }
 
 describe('wireContextFeedbackRuntime', () => {
-  it('infers context-feedback actions and persists procedural memory without waiting for idle', async () => {
+  it('infers context-feedback actions and emits scored telemetry without waiting for idle', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -162,12 +162,6 @@ describe('wireContextFeedbackRuntime', () => {
         stopReason: 'stop',
       }),
     };
-    const memoryWriter = {
-      write: vi.fn().mockResolvedValue({
-        action: 'created',
-        memory: { id: 'mem-context-1' },
-      }),
-    };
     const sessionStore = {
       getRecent: vi.fn().mockReturnValue([{
         id: 99,
@@ -187,7 +181,6 @@ describe('wireContextFeedbackRuntime', () => {
       agentLoop,
       postTurnActions,
       llmProvider: llmProvider as any,
-      memoryWriter: memoryWriter as any,
       sessionStore: sessionStore as any,
       eventBus,
     });
@@ -219,17 +212,6 @@ describe('wireContextFeedbackRuntime', () => {
 
     expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
     expect(llmProvider.complete).toHaveBeenCalledWith(expect.anything(), 'context');
-    expect(memoryWriter.write).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'procedural',
-      contactId: 'contact:primary',
-      tags: expect.arrayContaining([
-        'context_feedback',
-        'context_composition',
-        'signal:good',
-        'follow_up:present',
-      ]),
-    }));
-    expect(memoryWriter.write.mock.calls[0]?.[0]?.text).toContain('Observed follow-up: Thanks, that seems right.');
     expect(telemetryPhases).toEqual(expect.arrayContaining(['started', 'scored', 'persisted']));
   });
 
@@ -255,9 +237,6 @@ describe('wireContextFeedbackRuntime', () => {
       intervalMs: 10,
     });
 
-    const memoryWriter = {
-      write: vi.fn(),
-    };
     const contextPhases: string[] = [];
     const postTurnPhases: string[] = [];
     eventBus.on('context.feedback.telemetry', ({ phase }) => {
@@ -276,7 +255,6 @@ describe('wireContextFeedbackRuntime', () => {
         stream: vi.fn(),
         complete: vi.fn(),
       } as any,
-      memoryWriter: memoryWriter as any,
       sessionStore: {
         getRecent: vi.fn().mockReturnValue([]),
       } as any,
@@ -303,7 +281,6 @@ describe('wireContextFeedbackRuntime', () => {
 
     await scheduler.tick();
 
-    expect(memoryWriter.write).not.toHaveBeenCalled();
     expect(contextPhases).toContain('failed');
     expect(postTurnPhases).toContain('failed');
   });

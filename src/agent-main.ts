@@ -664,7 +664,6 @@ async function main(): Promise<void> {
     agentLoop,
     postTurnActions,
     llmProvider: gateway,
-    memoryWriter,
     sessionStore,
     eventBus,
   });

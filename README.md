@@ -165,6 +165,8 @@ npm install
 cp .env.example .env
 ```
 
+The root `npm install` also runs the nested `admin-ui` install step, so Garden build dependencies are provisioned during bootstrap.
+
 Set secrets/bootstrap wiring in `.env`, then start the runtime once so canonical config files seed into the active data root.
 
 Common first-run commands:

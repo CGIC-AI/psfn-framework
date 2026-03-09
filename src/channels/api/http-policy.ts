@@ -75,14 +75,21 @@ export interface CorsWildcardHostPattern {
   port: string;
 }
 
+interface CorsSameRequestHostPattern {
+  protocol: 'http:' | 'https:';
+  port: string;
+}
+
 export interface CorsAllowedOrigins {
   exactOrigins: ReadonlySet<string>;
   wildcardHostPatterns: readonly CorsWildcardHostPattern[];
+  sameRequestHostPatterns: readonly CorsSameRequestHostPattern[];
 }
 
 const DEFAULT_ADMIN_HOST = '127.0.0.1';
 const UNSAFE_ADMIN_BIND_HOSTS = new Set(['*', '0.0.0.0', '::', '[::]']);
 const LOOPBACK_ADMIN_HOST_ALIASES = ['localhost', '127.0.0.1', '[::1]'] as const;
+const SAME_REQUEST_HOST_ORIGIN_TOKEN_PREFIX = 'psfn+same-request-host://';
 
 function parseHttpOrigin(value: string): ParsedCorsOrigin | null {
   let parsed: URL;
@@ -119,7 +126,80 @@ function matchesWildcardHostPattern(origin: ParsedCorsOrigin, pattern: CorsWildc
   return origin.hostname.endsWith(`.${pattern.hostnameSuffix}`);
 }
 
-function isCorsOriginAllowlisted(origin: ParsedCorsOrigin, allowlist: CorsAllowedOrigins): boolean {
+function parseRequestHostHeader(
+  hostHeader: string,
+  protocol: 'http:' | 'https:',
+): ParsedCorsOrigin | null {
+  const trimmed = hostHeader.trim();
+  if (!trimmed) return null;
+
+  if (
+    trimmed.includes('://')
+    || trimmed.includes('/')
+    || trimmed.includes('?')
+    || trimmed.includes('#')
+    || trimmed.includes('@')
+  ) {
+    return null;
+  }
+
+  return parseHttpOrigin(`${protocol}//${trimmed}`);
+}
+
+function parseSameRequestHostOriginToken(value: string): CorsSameRequestHostPattern | null {
+  if (!value.startsWith(SAME_REQUEST_HOST_ORIGIN_TOKEN_PREFIX)) {
+    return null;
+  }
+
+  const payload = value.slice(SAME_REQUEST_HOST_ORIGIN_TOKEN_PREFIX.length);
+  const separatorIndex = payload.indexOf(':');
+  if (separatorIndex <= 0) {
+    return null;
+  }
+
+  const protocolToken = payload.slice(0, separatorIndex);
+  const portToken = payload.slice(separatorIndex + 1);
+  if ((protocolToken !== 'http' && protocolToken !== 'https') || !/^\d+$/.test(portToken)) {
+    return null;
+  }
+
+  const port = Number.parseInt(portToken, 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    return null;
+  }
+
+  return {
+    protocol: `${protocolToken}:`,
+    port: String(port),
+  };
+}
+
+function buildSameRequestHostOriginToken(protocol: 'http:' | 'https:', port: number): string {
+  return `${SAME_REQUEST_HOST_ORIGIN_TOKEN_PREFIX}${protocol.slice(0, -1)}:${port}`;
+}
+
+function matchesSameRequestHostPattern(
+  req: IncomingMessage,
+  origin: ParsedCorsOrigin,
+  pattern: CorsSameRequestHostPattern,
+): boolean {
+  if (pattern.protocol !== origin.protocol) return false;
+  if (pattern.port !== origin.port) return false;
+
+  const hostHeader = clampHttpHeader(singleHeader(req.headers.host), 512);
+  if (!hostHeader) return false;
+
+  const parsedHost = parseRequestHostHeader(hostHeader, origin.protocol);
+  if (!parsedHost) return false;
+
+  return parsedHost.hostname === origin.hostname;
+}
+
+function isCorsOriginAllowlisted(
+  req: IncomingMessage,
+  origin: ParsedCorsOrigin,
+  allowlist: CorsAllowedOrigins,
+): boolean {
   if (allowlist.exactOrigins.has(origin.origin)) {
     return true;
   }
@@ -130,24 +210,46 @@ function isCorsOriginAllowlisted(origin: ParsedCorsOrigin, allowlist: CorsAllowe
     }
   }
 
+  for (const pattern of allowlist.sameRequestHostPatterns) {
+    if (matchesSameRequestHostPattern(req, origin, pattern)) {
+      return true;
+    }
+  }
+
   return false;
 }
 
 export function corsAllowlistIsEmpty(allowlist: CorsAllowedOrigins): boolean {
-  return allowlist.exactOrigins.size === 0 && allowlist.wildcardHostPatterns.length === 0;
+  return (
+    allowlist.exactOrigins.size === 0
+    && allowlist.wildcardHostPatterns.length === 0
+    && allowlist.sameRequestHostPatterns.length === 0
+  );
 }
 
 export function normalizeCorsAllowedOrigins(origins: readonly string[] | undefined): CorsAllowedOrigins {
   const exactOrigins = new Set<string>();
   const wildcardHostPatterns: CorsWildcardHostPattern[] = [];
+  const sameRequestHostPatterns: CorsSameRequestHostPattern[] = [];
   const wildcardPatternKeys = new Set<string>();
+  const sameRequestHostPatternKeys = new Set<string>();
   if (!origins) {
-    return { exactOrigins, wildcardHostPatterns };
+    return { exactOrigins, wildcardHostPatterns, sameRequestHostPatterns };
   }
 
   for (const origin of origins) {
     const trimmed = origin.trim();
     if (!trimmed || trimmed === '*') continue;
+
+    const sameRequestHostPattern = parseSameRequestHostOriginToken(trimmed);
+    if (sameRequestHostPattern) {
+      const patternKey = `${sameRequestHostPattern.protocol}//$request-host:${sameRequestHostPattern.port}`;
+      if (!sameRequestHostPatternKeys.has(patternKey)) {
+        sameRequestHostPatternKeys.add(patternKey);
+        sameRequestHostPatterns.push(sameRequestHostPattern);
+      }
+      continue;
+    }
 
     const parsed = parseHttpOrigin(trimmed);
     if (!parsed || parsed.hostname === '*') continue;
@@ -175,6 +277,7 @@ export function normalizeCorsAllowedOrigins(origins: readonly string[] | undefin
   return {
     exactOrigins,
     wildcardHostPatterns,
+    sameRequestHostPatterns,
   };
 }
 
@@ -222,6 +325,11 @@ function deriveAdminOriginHosts(adminHost: string | undefined): string[] {
   return Array.from(new Set(hosts));
 }
 
+function isUnsafeAdminBindHost(adminHost: string | undefined): boolean {
+  const normalized = (adminHost ?? DEFAULT_ADMIN_HOST).trim().toLowerCase();
+  return UNSAFE_ADMIN_BIND_HOSTS.has(normalized);
+}
+
 export function resolveApiCorsAllowedOrigins(
   options: ResolveApiCorsAllowedOriginsOptions,
 ): string[] {
@@ -239,7 +347,12 @@ export function resolveApiCorsAllowedOrigins(
     addOrigin(explicitOrigin);
   }
 
-  if (!options.adminPort || !Number.isInteger(options.adminPort) || options.adminPort <= 0) {
+  if (
+    !options.adminPort
+    || !Number.isInteger(options.adminPort)
+    || options.adminPort <= 0
+    || options.adminPort > 65_535
+  ) {
     return mergedOrigins;
   }
 
@@ -247,6 +360,10 @@ export function resolveApiCorsAllowedOrigins(
     const parsed = parseHttpOrigin(`http://${host}:${options.adminPort}`);
     if (!parsed) continue;
     addOrigin(parsed.origin);
+  }
+
+  if (mergedOrigins.length === 0 && isUnsafeAdminBindHost(options.adminHost)) {
+    addOrigin(buildSameRequestHostOriginToken('http:', options.adminPort));
   }
 
   return mergedOrigins;
@@ -301,7 +418,7 @@ export function evaluateCorsPolicy(
   }
 
   const parsedOrigin = parseHttpOrigin(origin);
-  if (!parsedOrigin || !isCorsOriginAllowlisted(parsedOrigin, corsAllowedOrigins)) {
+  if (!parsedOrigin || !isCorsOriginAllowlisted(req, parsedOrigin, corsAllowedOrigins)) {
     return {
       ok: false,
       error: {

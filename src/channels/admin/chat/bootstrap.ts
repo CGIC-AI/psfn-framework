@@ -187,8 +187,16 @@ export class AdminChatBootstrapService {
   }
 
   private applySelectionInput(input: AdminChatBootstrapUpdateInput): void {
+    const previousCanonicalContactId = this.selection.canonicalContactId;
+    const previousChannel = this.selection.channel;
+    const previousUserId = this.selection.userId;
+    let selectedTargetChanged = false;
+
     if (input.canonicalContactId !== undefined) {
       this.selection.canonicalContactId = normalizeTrimmed(input.canonicalContactId);
+      if (this.selection.canonicalContactId !== previousCanonicalContactId) {
+        selectedTargetChanged = true;
+      }
     }
 
     if (input.defaultAuthorName !== undefined) {
@@ -209,7 +217,17 @@ export class AdminChatBootstrapService {
       throw new Error('Both channel and userId are required to update selected identity');
     }
 
-    if (!hasChannelField || !hasUserIdField) return;
+    if (!hasChannelField || !hasUserIdField) {
+      if (selectedTargetChanged) {
+        if (input.defaultAuthorName === undefined) {
+          this.selection.defaultAuthorName = undefined;
+        }
+        if (input.defaultAuthorId === undefined) {
+          this.selection.defaultAuthorId = undefined;
+        }
+      }
+      return;
+    }
 
     const normalizedChannel = normalizeTrimmed(input.channel);
     const normalizedUserId = normalizeTrimmed(input.userId);
@@ -219,6 +237,21 @@ export class AdminChatBootstrapService {
 
     this.selection.channel = normalizeChannel(normalizedChannel);
     this.selection.userId = normalizedUserId;
+    if (
+      this.selection.channel !== previousChannel
+      || this.selection.userId !== previousUserId
+    ) {
+      selectedTargetChanged = true;
+    }
+
+    if (selectedTargetChanged) {
+      if (input.defaultAuthorName === undefined) {
+        this.selection.defaultAuthorName = undefined;
+      }
+      if (input.defaultAuthorId === undefined) {
+        this.selection.defaultAuthorId = undefined;
+      }
+    }
   }
 
   private persistSelectionMapping(input: AdminChatBootstrapUpdateInput): void {

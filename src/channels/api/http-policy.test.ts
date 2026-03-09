@@ -254,6 +254,24 @@ describe('resolveApiRequestPrincipal', () => {
     expect(result.principal.id).toBe(deriveApiKeyPrincipalId('test-secret-key'));
   });
 
+  it('accepts alternate admin token when api key auth is configured', () => {
+    const result = resolveApiRequestPrincipal(
+      requestWithHeaders({ authorization: 'Bearer test-admin-token' }),
+      {
+        apiKey: 'test-secret-key',
+        alternateApiToken: 'test-admin-token',
+        allowInsecureWithoutAuth: false,
+        isTelemetryIngest: false,
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error('Expected alternate auth token to pass');
+    }
+    expect(result.principal.mode).toBe('api_key');
+    expect(result.principal.id).toBe(deriveApiKeyPrincipalId('test-admin-token'));
+  });
+
   it('denies telemetry ingestion when api auth is not configured', () => {
     const result = resolveApiRequestPrincipal(requestWithHeaders({}), {
       allowInsecureWithoutAuth: true,

@@ -577,6 +577,7 @@ export class SubstrateRuntime implements Lifecycle {
       characterName: card.data.name,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       config: this.config,
+      runtimeMode: 'single',
       emotionRuntime: {
         observer: emotionObserver,
         state: emotionState,
@@ -765,6 +766,7 @@ export class SubstrateRuntime implements Lifecycle {
       sessionManager: this.sessionManager,
       config: this.config,
       parentSystemPrompt: systemPrompt,
+      runtimeMode: 'single',
       companionDataDir,
       scheduler: this.scheduler,
       replConfig,

@@ -40,6 +40,7 @@ import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import type { ShardAuditTrail } from '../shards/manager.js';
 import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
+import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
 import {
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
@@ -126,6 +127,7 @@ export interface SubstrateAgentCompositionOptions {
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
   config: SubstrateConfig;
+  runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
 }
 
@@ -142,6 +144,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.characterPromptVariablesProvider
         ? { characterPromptVariablesProvider: options.characterPromptVariablesProvider }
         : {}),
+      ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
       ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
     },
   );
@@ -255,6 +258,7 @@ export interface ToolRuntimeOptions {
   scheduler?: Scheduler | null;
   replConfig?: REPLConfig;
   shardAuditTrail?: ShardAuditTrail | null;
+  runtimeMode?: RuntimeMode;
   getCapabilityTier?: () => CapabilityTier;
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
@@ -272,6 +276,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     parentSystemPrompt: options.parentSystemPrompt,
     toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
     auditTrail: options.shardAuditTrail ?? undefined,
+    runtimeMode: options.runtimeMode,
     shardSessionMemorySyncAuditPath: options.companionDataDir
       ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
       : undefined,

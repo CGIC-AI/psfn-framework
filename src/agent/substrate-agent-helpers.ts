@@ -1,6 +1,3 @@
-import type { LLMProvider } from './contracts.js';
-import type { RuntimeMode } from './tool-wiring-validator.js';
-
 const VISION_ATTACHMENT_EXTENSION_TO_MIME: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -17,30 +14,8 @@ const VISION_ATTACHMENT_EXTENSION_TO_MIME: Record<string, string> = {
 
 const VISION_ATTACHMENT_FORMAT_QUERY_KEYS = ['format', 'fm'] as const;
 
-interface GatewayRuntimeInferenceCandidate {
-  discordSend?: (channelId: string, content: string) => Promise<void>;
-  fsRead?: (path: string) => Promise<string>;
-  webFetch?: (
-    url: string,
-    prompt?: string,
-    lane?: 'default' | 'local_crawler',
-  ) => Promise<string>;
-}
-
 export function formatSignedDecimal(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
-}
-
-export function inferRuntimeModeFromProvider(provider: LLMProvider): RuntimeMode {
-  const candidate = provider as unknown as GatewayRuntimeInferenceCandidate;
-  if (
-    typeof candidate.discordSend === 'function'
-    || typeof candidate.fsRead === 'function'
-    || typeof candidate.webFetch === 'function'
-  ) {
-    return 'gateway';
-  }
-  return 'single';
 }
 
 export function inferImageMimeTypeFromAttachmentCandidate(candidate: string | null | undefined): string | null {

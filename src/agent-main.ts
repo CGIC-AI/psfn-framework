@@ -216,7 +216,21 @@ async function runShutdownStep(
 }
 
 async function enforceNetworkIsolationOnStartup(): Promise<void> {
+  const allowOutboundNetwork = isExplicitTrue(process.env.ALLOW_AGENT_OUTBOUND_NETWORK);
+  if (allowOutboundNetwork) {
+    log.warn(
+      'ALLOW_AGENT_OUTBOUND_NETWORK=true set; startup network-isolation guard is bypassed by explicit operator override.',
+    );
+    return;
+  }
+
   const requireIsolation = isExplicitTrue(process.env.REQUIRE_NETWORK_ISOLATION);
+  if (process.env.REQUIRE_NETWORK_ISOLATION && !requireIsolation) {
+    log.warn(
+      'REQUIRE_NETWORK_ISOLATION=false is ignored; network-isolation now fails closed by default. ' +
+      'Set ALLOW_AGENT_OUTBOUND_NETWORK=true only for explicit temporary override.',
+    );
+  }
   const timeoutMs = parsePositiveIntEnv(
     process.env.NETWORK_ISOLATION_PROBE_TIMEOUT_MS,
     NETWORK_ISOLATION_PROBE_TIMEOUT_MS,
@@ -240,12 +254,10 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
     `(probe=${NETWORK_ISOLATION_PROBE_URL}, status=${probeResult.status}).`,
   );
   log.error(`CRITICAL: ${error.message}`, {
-    requireNetworkIsolation: requireIsolation,
+    requireNetworkIsolation: true,
+    requireNetworkIsolationEnv: process.env.REQUIRE_NETWORK_ISOLATION,
   });
-
-  if (requireIsolation) {
-    throw error;
-  }
+  throw error;
 }
 
 async function main(): Promise<void> {
@@ -450,6 +462,7 @@ async function main(): Promise<void> {
     characterName: card.data.name,
     characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
+    runtimeMode: 'gateway',
     emotionRuntime: {
       observer: emotionObserver,
       state: emotionState,
@@ -633,6 +646,7 @@ async function main(): Promise<void> {
     sessionManager,
     config,
     parentSystemPrompt: systemPrompt,
+    runtimeMode: 'gateway',
     scheduler,
     replConfig,
     shardAuditTrail: safeguardAuditTrail,

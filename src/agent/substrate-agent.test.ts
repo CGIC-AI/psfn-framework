@@ -4822,6 +4822,26 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
+  it('followUp skips recordUserMessage for system-originated messages', () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
+    );
+
+    const followUpSpy = vi.spyOn(Agent.prototype, 'followUp').mockImplementation(() => {});
+
+    agent.followUp(makeMessage({
+      authorId: 'system:intention',
+      authorName: 'Intention Appraisal',
+      content: 'internal follow-up',
+    }));
+
+    expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+    expect(followUpSpy).toHaveBeenCalled();
+
+    followUpSpy.mockRestore();
+  });
+
   it('waitForIdle delegates to agent.waitForIdle', async () => {
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', makeConfig(),

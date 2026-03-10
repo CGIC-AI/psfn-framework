@@ -585,22 +585,32 @@ export class SubstrateAgent {
   /**
    * Queue a follow-up message processed after the agent finishes current work.
    * Non-interrupting — waits for idle before delivery.
+   *
+   * System-originated follow-ups (authorId starting with "system:") are NOT
+   * recorded in the session journal to prevent internal reasoning traces from
+   * appearing as user messages in the conversation history.
    */
   followUp(message: SubstrateMessage): void {
-    const authorContext = this.resolveAuthorContext(message);
-    this.turnSupportRuntime.recordUserMessage(
-      message,
-      createTurnId(),
-      message.id,
-      authorContext.trustLevel,
-      authorContext.canonicalContactKey,
-    );
+    const isSystemOriginated = message.authorId.startsWith('system:');
+    if (!isSystemOriginated) {
+      const authorContext = this.resolveAuthorContext(message);
+      this.turnSupportRuntime.recordUserMessage(
+        message,
+        createTurnId(),
+        message.id,
+        authorContext.trustLevel,
+        authorContext.canonicalContactKey,
+      );
+    }
     this.agent.followUp({
       role: 'user',
       content: message.content,
       timestamp: Date.now(),
     } satisfies UserMessage);
-    log.debug('Queued follow-up', { channelId: message.channelId });
+    log.debug('Queued follow-up', {
+      channelId: message.channelId,
+      systemOriginated: isSystemOriginated,
+    });
   }
 
   /** Wait for the agent to finish all pending work (prompt + steering + follow-ups) */

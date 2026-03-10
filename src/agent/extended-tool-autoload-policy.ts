@@ -43,7 +43,7 @@ export interface ExtendedToolAutoloadPolicy {
 }
 
 const DEV_PATTERN = /\b(git|repo|branch|commit|diff|patch|pr|pull request|code|test|build|lint|debug|bug|issue|ticket|beads|refactor|typescript|javascript|python|npm|pnpm|yarn)\b/i;
-const MEMORY_PATTERN = /\b(memory|remember|recall|journal|scratchpad|profile|contact|trust|archive|history)\b/i;
+const MEMORY_PATTERN = /\b(memory|remember|recall|journal|scratchpad|profile|contact|trust|archive|history|vault|obsidian|note|daily note)\b/i;
 const OPS_PATTERN = /\b(schedule|heartbeat|policy|runtime|settings|restart|rebuild|maintenance|incident|ops|operation)\b/i;
 const OPS_TASK_KINDS = new Set(['heartbeat', 'reflection', 'planning', 'maintenance']);
 
@@ -65,6 +65,10 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'issue_sync',
   ],
   memory: [
+    'vault_write',
+    'vault_read',
+    'vault_search',
+    'vault_daily',
     'session_resume',
     'session_new',
     'identity_changelog',
@@ -78,7 +82,10 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'schedule_task',
     'issue_sync',
   ],
-  social: [],
+  social: [
+    'vault_write',
+    'vault_daily',
+  ],
 };
 
 function hasToolName(

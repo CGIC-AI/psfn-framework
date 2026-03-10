@@ -3,6 +3,10 @@ import type { LLMProvider } from '../agent/contracts.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
+import {
+  formatActiveDateTimeLabel,
+  resolveActiveTimezone,
+} from '../time/active-timezone.js';
 import type {
   ChannelType,
   CompletionPurpose,
@@ -536,6 +540,13 @@ function parseOptionalDueAt(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
+function formatPromptTimestamp(value: number | undefined): string | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return formatActiveDateTimeLabel(new Date(Math.floor(value)));
+}
+
 function parseDecisionType(value: unknown): IntentionDecisionType | null {
   if (value === 'followUp' || value === 'concern' || value === 'schedule' || value === 'noop') {
     return value;
@@ -1006,6 +1017,26 @@ export class IntentionAppraisal {
       return [buildNoopDecision('no appraisal trigger matched')];
     }
 
+    const promptRecentMessages = normalized.recentMessages.map((message) => {
+      const timestampLabel = formatPromptTimestamp(message.timestamp);
+      return {
+        role: message.role,
+        content: message.content,
+        ...(timestampLabel ? { at: timestampLabel } : {}),
+      };
+    });
+    const promptActiveConcerns = normalized.activeConcerns.map((concern) => {
+      const dueAtLabel = formatPromptTimestamp(concern.dueAt);
+      return {
+        ...(concern.id ? { id: concern.id } : {}),
+        ...(concern.title ? { title: concern.title } : {}),
+        ...(concern.summary ? { summary: concern.summary } : {}),
+        ...(concern.status ? { status: concern.status } : {}),
+        ...(concern.priority !== undefined ? { priority: concern.priority } : {}),
+        ...(dueAtLabel ? { dueAt: dueAtLabel } : {}),
+      };
+    });
+
     const promptPayload = {
       trigger,
       sessionId: normalized.sessionId,
@@ -1037,11 +1068,12 @@ export class IntentionAppraisal {
         }
         : null,
       contactEmotionalSnapshot: normalized.contactEmotionalSnapshot,
-      activeConcerns: normalized.activeConcerns,
+      activeConcerns: promptActiveConcerns,
       conversationTrajectory: normalized.conversationTrajectory,
       ...(normalized.motivationSignals.length > 0 ? { motivationSignals: normalized.motivationSignals } : {}),
-      recentMessages: normalized.recentMessages,
-      now: normalized.now,
+      recentMessages: promptRecentMessages,
+      now: formatPromptTimestamp(normalized.now) ?? null,
+      timezone: resolveActiveTimezone(),
     };
 
     const completionPurpose: CompletionPurpose = 'background';

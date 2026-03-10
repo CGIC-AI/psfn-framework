@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ensureActiveTimezone,
   formatActiveDate,
+  formatActiveDateTimeCompact,
   formatActiveDateTimeIso,
   formatActiveDateTimeLabel,
   formatActiveTime,
@@ -24,9 +25,10 @@ describe('active-timezone', () => {
 
     expect(ensureActiveTimezone()).toBe('America/New_York');
     expect(formatActiveDateTimeIso(now)).toBe('2026-02-20T08:45:27.123-05:00');
+    expect(formatActiveDateTimeCompact(now)).toBe('02-20-26 08:45');
     expect(formatActiveDate(now)).toBe('2026-02-20');
     expect(formatActiveTime(now)).toBe('08:45:27-05:00');
-    expect(formatActiveDateTimeLabel(now)).toBe('2026-02-20T08:45:27.123-05:00 (America/New_York)');
+    expect(formatActiveDateTimeLabel(now)).toBe('02-20-26 08:45 America/New_York');
   });
 
   it('tracks daylight-saving transitions for Eastern Time', () => {

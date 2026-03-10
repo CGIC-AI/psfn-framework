@@ -212,6 +212,58 @@ describe('IntentionAppraisal', () => {
     expect(promptPayload.motivationSignals).toEqual(['sustained_negative_valence']);
   });
 
+  it('serializes prompt timestamps as formatted active-timezone labels (no unix epoch)', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'noop',
+          priority: 'low',
+          reason: 'No action required',
+          timing: 'none',
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:timestamp-format',
+      currentEmotion: makeEmotionSnapshot(),
+      activeConcerns: [{
+        id: 'concern-1',
+        title: 'Follow up tomorrow',
+        dueAt: Date.parse('2026-03-11T14:00:00.000Z'),
+      }],
+      recentMessages: [{
+        role: 'user',
+        content: 'Can we pick this up tomorrow?',
+        timestamp: Date.parse('2026-03-10T15:30:00.000Z'),
+      }],
+      now: Date.parse('2026-03-10T16:00:00.000Z'),
+    });
+
+    const promptBody = String(complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '');
+    expect(promptBody).not.toContain('"timestamp":');
+
+    const promptPayload = JSON.parse(promptBody) as {
+      now?: unknown;
+      timezone?: unknown;
+      recentMessages?: Array<Record<string, unknown>>;
+      activeConcerns?: Array<Record<string, unknown>>;
+    };
+    expect(typeof promptPayload.now).toBe('string');
+    expect(String(promptPayload.now)).toMatch(/^\d{2}-\d{2}-\d{2} \d{2}:\d{2} [A-Za-z_/\-]+$/);
+    expect(promptPayload.timezone).toBe('America/New_York');
+
+    expect(promptPayload.recentMessages?.[0]?.at).toBeTypeOf('string');
+    expect(promptPayload.recentMessages?.[0]?.timestamp).toBeUndefined();
+
+    expect(promptPayload.activeConcerns?.[0]?.dueAt).toBeTypeOf('string');
+  });
+
   it('fails closed when model output is malformed', async () => {
     const { provider } = makeProvider(['not valid json']);
     const onEvaluationError = vi.fn();

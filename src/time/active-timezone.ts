@@ -88,6 +88,12 @@ export function formatActiveTime(now: Date): string {
   return `${parts.hour}:${parts.minute}:${parts.second}${offset}`;
 }
 
+export function formatActiveDateTimeCompact(now: Date): string {
+  const parts = resolveFormatterParts(now, resolveActiveTimezone());
+  const shortYear = parts.year.slice(-2);
+  return `${parts.month}-${parts.day}-${shortYear} ${parts.hour}:${parts.minute}`;
+}
+
 export function formatActiveDateTimeLabel(now: Date): string {
-  return `${formatActiveDateTimeIso(now)} (${resolveActiveTimezone()})`;
+  return `${formatActiveDateTimeCompact(now)} ${resolveActiveTimezone()}`;
 }

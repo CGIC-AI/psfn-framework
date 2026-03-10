@@ -23,7 +23,10 @@ import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js'
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { formatSignedDecimal } from '../substrate-agent-helpers.js';
 import { toErrorMessage } from '../../utils/errors.js';
-import { formatActiveDateTimeIso, formatActiveDateTimeLabel } from '../../time/active-timezone.js';
+import {
+  formatActiveDateTimeIso,
+  formatActiveDateTimeLabel,
+} from '../../time/active-timezone.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
@@ -248,7 +251,7 @@ export function buildRuntimeContext(input: {
     lines.push('[Emotion Appraisal Chain]');
     for (const entry of emotionAppraisalChain.slice(-3)) {
       const summary = entry.summary.replace(/\s+/g, ' ').trim();
-      lines.push(`- ${new Date(entry.timestamp).toISOString()} (${entry.trigger}): ${summary}`);
+      lines.push(`- ${formatActiveDateTimeLabel(new Date(entry.timestamp))} (${entry.trigger}): ${summary}`);
     }
   }
 

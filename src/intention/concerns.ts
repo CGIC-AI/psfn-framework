@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import { formatActiveDateTimeLabel } from '../time/active-timezone.js';
 
 export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
 export type ActiveConcernPriority = typeof ACTIVE_CONCERN_PRIORITIES[number];
@@ -282,8 +283,12 @@ export function formatActiveConcernsContextBlock(
       ? `${concern.text.slice(0, MAX_RUNTIME_CONTEXT_TEXT_CHARS - 3)}...`
       : concern.text;
     const contactDescriptor = concern.contactId ? `contact=${concern.contactId}` : 'contact=global';
+    const expiresAtMs = Date.parse(concern.expiresAt);
+    const expiresAtLabel = Number.isFinite(expiresAtMs)
+      ? formatActiveDateTimeLabel(new Date(expiresAtMs))
+      : concern.expiresAt;
     lines.push(
-      `- (${concern.priority}, ${concern.source}, ${contactDescriptor}, expires=${concern.expiresAt}) ${text}`,
+      `- (${concern.priority}, ${concern.source}, ${contactDescriptor}, expires=${expiresAtLabel}) ${text}`,
     );
   }
 

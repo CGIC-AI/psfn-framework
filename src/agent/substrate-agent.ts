@@ -595,11 +595,12 @@ export class SubstrateAgent {
     const isSystemOriginated = message.authorId.startsWith('system:');
     const turnId = createTurnId();
     if (isSystemOriginated) {
+      const tag = message.authorName?.trim() || 'System';
       this.turnSupportRuntime.recordAssistantMessage(
         message,
         turnId,
         message.id,
-        message.content,
+        `[${tag}] ${message.content}`,
         'regular',
       );
     } else {

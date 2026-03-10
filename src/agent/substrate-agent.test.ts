@@ -4839,7 +4839,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
       'test-channel',
-      'internal follow-up',
+      '[Intention Appraisal] internal follow-up',
       'system:intention',
       undefined,
       undefined,

@@ -4822,7 +4822,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
-  it('followUp skips recordUserMessage for system-originated messages', () => {
+  it('followUp records system-originated messages as assistant instead of user', () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -4837,6 +4837,18 @@ describe('SubstrateAgent steering + follow-up', () => {
     }));
 
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
+      'test-channel',
+      'internal follow-up',
+      'system:intention',
+      undefined,
+      undefined,
+      expect.objectContaining({
+        trustLevel: 'regular',
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
+    );
     expect(followUpSpy).toHaveBeenCalled();
 
     followUpSpy.mockRestore();

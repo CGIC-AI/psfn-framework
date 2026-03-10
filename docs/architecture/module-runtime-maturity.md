@@ -12,7 +12,7 @@ Runtime and module-system behavior is intentionally different by entrypoint. Thi
 
 | Entrypoint | Startup hydration parity | Module registry file handling | Module activation behavior |
 | --- | --- | --- | --- |
-| `src/runtime.ts` (single-process) | Yes (`hydrateCanonicalStartupConfig`) | Resolved from workspace policy defaults | Loads enabled modules at startup (`ModuleLoader.loadEnabledModules`) |
+| `src/index.ts` (monolithic guard) | N/A | N/A | Fails closed (single-process runtime removed) |
 | `src/agent-main.ts` (split agent) | Yes (`hydrateCanonicalStartupConfig`) | Uses deterministic workspace-root registry path | Loads enabled modules at startup and applies install/update mutations |
 | `src/gateway-main.ts` (split gateway) | Yes (`hydrateCanonicalStartupConfig`) | Always ensures registry file exists before runtime services start | Does not activate modules (gateway role is host/policy/router) |
 | `src/chat-cli.ts` | Yes (`hydrateCanonicalStartupConfig`) | N/A | No module lifecycle hooks by design |
@@ -24,7 +24,7 @@ Current maturity level is **operational** for runtime loading and mutation handl
 - Registry persistence: `src/modules/registry.ts`
 - Runtime loader lifecycle (`validate -> init -> activate -> start`): `src/modules/loader.ts`
 - Split-mode runtime wiring and post-load tool validation: `src/agent-main.ts`
-- Single-process runtime wiring and post-load tool validation: `src/runtime.ts`
+- Historical monolithic runtime wiring (no longer a supported startup path): `src/runtime.ts`
 - Tier-aware install controls via REPL/module tools: `src/bootstrap/composition.ts`, `src/modules/loader.test.ts`
 
 What is intentionally not claimed as complete:
@@ -47,4 +47,4 @@ Expected outcomes:
 
 - All commands pass.
 - No entrypoint drifts from startup hydration contract.
-- Module install/load behavior remains deterministic in single and split runtime paths.
+- Module install/load behavior remains deterministic in split runtime paths.

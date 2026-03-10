@@ -348,7 +348,7 @@ LIFECYCLE_RESTART_COMMAND=npm run yolo      # preserve YOLO across restarts
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CAPABILITY_TIER` | `nursery` | First-boot tier (ignored after config file exists) |
-| `PSFN_RUNTIME_MODE` | `split` | Runtime mode (`split`, `yolo`, `single`) |
+| `PSFN_RUNTIME_MODE` | `split` | Runtime mode (`split`, `yolo`, `gateway`, `gateway-agent`) |
 | `SAFEGUARD_IDENTITY_COOLDOWN_MS` | `300000` | Identity edit cooling-off period (ms) |
 | `SAFEGUARD_RESTART_COOLDOWN_MS` | `60000` | Minimum time between restarts (ms) |
 | `SAFEGUARD_MAX_RESTARTS_PER_HOUR` | `5` | Max restart count per rolling hour |

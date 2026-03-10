@@ -25,17 +25,13 @@ The codebase currently ships the following architecture layers:
 | Trust & Privacy | Implemented (honne/tatemae policy, trust tiers, sensitivity tiers, channel visibility) |
 | Identity & Prompts | Implemented (layered prompt stack + editable admin surfaces) |
 | Git Self-Modification | Implemented (`GitOps` + path allowlist + protected branch rules + audit logging) |
-| Module System | Implemented (registry + loader in single/split agent runtime, tier-gated install flow) |
+| Module System | Implemented (registry + loader in split runtime paths, tier-gated install flow) |
 | Channel Layer | Implemented (Discord, OpenAI-compatible API, admin GUI, websocket voice transport) |
 | Scheduler | Implemented (heartbeat, cron, one-shot, maintenance workers) |
 
 ## Runtime Modes
 
-### Single-process
-
-- Entry: `src/index.ts`
-- Typical command: `npm run dev`
-- Useful for local development and fast iteration.
+Monolithic single-process startup is removed. `src/index.ts` now fails closed with split/yolo guidance.
 
 ### Gateway + agent split
 

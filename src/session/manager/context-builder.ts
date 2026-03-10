@@ -212,7 +212,8 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     const roleNames = { charName: params.characterName };
     const continuityBlock = crossChannel
       .map(e => {
-        const origin = e.originChannelId ? ` [from ${e.originChannelId}]` : '';
+        const sourceChannelId = (e.originChannelId ?? e.channelId).trim();
+        const origin = sourceChannelId ? ` [from ${sourceChannelId}]` : '';
         const speaker = e.role === 'user'
           ? (e.authorName ?? resolveRoleName('user', roleNames))
           : resolveRoleName('assistant', roleNames);

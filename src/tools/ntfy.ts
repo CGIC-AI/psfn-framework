@@ -8,6 +8,7 @@ import type {
 import { textResult, textResultWithError } from './results.js';
 import { parsePositiveIntEnv } from '../utils/env.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { getRequestContext } from '../llm/request-context.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
@@ -209,6 +210,22 @@ export function createNotifyOperatorTool(
       if (!message) {
         return textResultWithError('notify_operator: failure (message is required).', true);
       }
+
+      const requestContext = getRequestContext();
+      const requestChannelId = typeof requestContext?.channelId === 'string'
+        ? requestContext.channelId.trim()
+        : '';
+      const requestCallType = requestContext?.callType;
+      if (requestChannelId.startsWith('internal:') || requestCallType === 'scheduled') {
+        const contextLabel = requestCallType === 'scheduled'
+          ? 'scheduled'
+          : `internal channel (${requestChannelId || 'unknown'})`;
+        return textResultWithError(
+          `notify_operator: blocked (not allowed from ${contextLabel} execution context).`,
+          true,
+        );
+      }
+
       const channel = params.channel ?? defaultChannel;
       const topic = params.topic?.trim();
 

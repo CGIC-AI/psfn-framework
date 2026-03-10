@@ -280,4 +280,46 @@ describe('registerGatewayMessageHandlers', () => {
     });
     expect(harness.gateway.discordSend).not.toHaveBeenCalled();
   });
+
+  it('drops duplicate discord notifications by message id within dedupe window', async () => {
+    const harness = createHarness({
+      handleMessage: async () => makeResponse('discord response'),
+    });
+    const message = makeMessage({
+      id: 'msg-dup-1',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+    await harness.onDiscordMessage(message);
+
+    expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+    expect(harness.gateway.discordSend).toHaveBeenCalledTimes(1);
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
+      route: 'discord',
+      channelId: 'discord:general',
+      messageId: 'msg-dup-1',
+      disposition: 'cached',
+    });
+  });
+
+  it('reuses cached response for duplicate reverse-RPC handle messages', async () => {
+    const harness = createHarness();
+    const message = makeMessage({ id: 'msg-dup-2' });
+
+    const first = await harness.onHandleMessage(message);
+    const second = await harness.onHandleMessage(message);
+
+    expect(first).toEqual(second);
+    expect(harness.trackSessionActivity).toHaveBeenCalledTimes(1);
+    expect(harness.shardManager.delegateWyomingSession).toHaveBeenCalledTimes(1);
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
+      route: 'handle',
+      channelId: message.channelId,
+      messageId: 'msg-dup-2',
+      disposition: 'cached',
+    });
+  });
 });

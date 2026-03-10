@@ -123,7 +123,7 @@ export class UserContinuityStore {
     let entries = cache.entries;
 
     if (excludeChannelId) {
-      entries = entries.filter(e => e.originChannelId !== excludeChannelId);
+      entries = entries.filter((entry) => (entry.originChannelId ?? entry.channelId) !== excludeChannelId);
     }
 
     // If currentChannelId is provided, filter by visibility compatibility

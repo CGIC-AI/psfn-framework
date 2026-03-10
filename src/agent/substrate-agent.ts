@@ -586,17 +586,27 @@ export class SubstrateAgent {
    * Queue a follow-up message processed after the agent finishes current work.
    * Non-interrupting — waits for idle before delivery.
    *
-   * System-originated follow-ups (authorId starting with "system:") are NOT
-   * recorded in the session journal to prevent internal reasoning traces from
-   * appearing as user messages in the conversation history.
+   * System-originated follow-ups (authorId starting with "system:") are
+   * recorded as assistant messages (internal thoughts not visible to the user)
+   * rather than user messages, so conversation context correctly attributes
+   * them to the companion's own reasoning.
    */
   followUp(message: SubstrateMessage): void {
     const isSystemOriginated = message.authorId.startsWith('system:');
-    if (!isSystemOriginated) {
+    const turnId = createTurnId();
+    if (isSystemOriginated) {
+      this.turnSupportRuntime.recordAssistantMessage(
+        message,
+        turnId,
+        message.id,
+        message.content,
+        'regular',
+      );
+    } else {
       const authorContext = this.resolveAuthorContext(message);
       this.turnSupportRuntime.recordUserMessage(
         message,
-        createTurnId(),
+        turnId,
         message.id,
         authorContext.trustLevel,
         authorContext.canonicalContactKey,

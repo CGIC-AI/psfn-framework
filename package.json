@@ -7,8 +7,8 @@
   "scripts": {
     "build": "tsup",
     "postinstall": "npm install --prefix admin-ui",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "./scripts/start-gateway-agent.sh",
+    "start": "./scripts/start-gateway-agent.sh",
     "gateway": "tsx src/gateway-main.ts",
     "gateway:start": "node dist/gateway-main.js",
     "agent": "tsx src/agent-main.ts",

@@ -12,7 +12,7 @@ This playbook is for live validation against a running PSFN stack. It is intenti
 
 ## Required Runtime Mode
 
-Use **gateway + agent** mode (not `npm run dev`) for full coverage.
+Use **gateway + agent** mode (`npm run split`, `npm run yolo`, or manual gateway+agent startup) for full coverage.
 
 Reason: `module_*`, `repo_*`, `crawler_fetch`, `web_research` in REPL require gateway RPC capabilities (`fs*`, `git*`, `web.fetch`) and gateway audit logs.
 

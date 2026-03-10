@@ -1,34 +1,23 @@
 import 'dotenv/config';
-import { ensureActiveTimezone } from './time/active-timezone.js';
-import { loadConfig } from './types.js';
-import { SubstrateRuntime } from './runtime.js';
 import { createComponentLogger } from './logger.js';
+import { RUNTIME_MODE, resolveRuntimeModeContract } from './lifecycle/runtime-mode.js';
 
 const log = createComponentLogger('Main');
 
-async function main(): Promise<void> {
-  ensureActiveTimezone();
-  const config = loadConfig();
-  const runtime = new SubstrateRuntime(config);
-
-  // Graceful shutdown
-  const shutdown = async (signal: string) => {
-    log.info(`Received ${signal}, shutting down...`);
-    await runtime.stop();
-    process.exit(0);
-  };
-
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-
+function main(): never {
   try {
-    await runtime.init();
-    await runtime.start();
+    resolveRuntimeModeContract({
+      entrypoint: RUNTIME_MODE.SINGLE,
+      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
+      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
+    });
   } catch (error) {
-    log.error('Fatal error', { error: String(error) });
-    await runtime.stop().catch(() => {});
+    log.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
+
+  log.error('Monolithic runtime mode is unavailable.');
+  process.exit(1);
 }
 
 main();

@@ -15,7 +15,7 @@ Usage: ./scripts/self/restart.sh --mode <continuous|production> [pid_file] [star
 Examples:
   ./scripts/self/restart.sh --mode continuous
   ./scripts/self/restart.sh --mode production ./runtime/production/companion-data/psfn.pid
-  ./scripts/self/restart.sh --mode production ./runtime/production/companion-data/psfn.pid "PSFN_RUNTIME_LAYOUT_MODE=production npm run start"
+  ./scripts/self/restart.sh --mode production ./runtime/production/companion-data/psfn.pid "PSFN_RUNTIME_LAYOUT_MODE=production npm run split"
 EOF
 }
 
@@ -75,7 +75,7 @@ case "$RUNTIME_MODE" in
 esac
 
 PID_FILE="${1:-$DEFAULT_PID_FILE}"
-START_CMD="${2:-PSFN_RUNTIME_LAYOUT_MODE=${RUNTIME_MODE} npm run start}"
+START_CMD="${2:-PSFN_RUNTIME_LAYOUT_MODE=${RUNTIME_MODE} npm run split}"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] [Restart] $*"
@@ -125,7 +125,7 @@ validate_mode_guards
 if [ -f "$PID_FILE" ]; then
   PID=$(cat "$PID_FILE")
 elif command -v pgrep &>/dev/null; then
-  PID=$(pgrep -f 'node.*dist/index.js' || echo "")
+  PID=$(pgrep -f 'scripts/start-gateway-agent\.sh' | head -n 1 || echo "")
 else
   PID=""
 fi

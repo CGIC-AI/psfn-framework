@@ -8,7 +8,7 @@ The current `phase-v` branch is not just a planning branch. It already includes 
 
 Implemented on this branch today:
 
-- Split runtime with `src/index.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`
+- Split runtime with `src/gateway-main.ts` and `src/agent-main.ts` (`src/index.ts` is a fail-closed guard)
 - Registry-driven channel/STT/TTS bootstrap with fail-closed eligibility checks
 - Canonical JSON-owned config domains for runtime, models, scheduler, capability tier, channel config, skills, and trust policy
 - Two-root persistence topology separating `system-data` from `companion-data`
@@ -28,7 +28,7 @@ Open Phase V work still remains. Use [PHASE_V.md](./PHASE_V.md) as the execution
 
 When docs and code disagree, prefer this order:
 
-1. Entrypoints and runtime wiring in `src/index.ts`, `src/runtime.ts`, `src/gateway-main.ts`, and `src/agent-main.ts`
+1. Entrypoints and runtime wiring in `src/gateway-main.ts`, `src/agent-main.ts`, `src/runtime.ts`, and `src/lifecycle/runtime-mode.ts`
 2. Config and ownership contracts in `src/types.ts`, `src/settings.ts`, `src/config/settings-contract.ts`, and `src/persistence/layout.ts`
 3. Branch status in `PHASE_V.md`
 4. `.env.example` as a bootstrap template only
@@ -37,17 +37,9 @@ When docs and code disagree, prefer this order:
 
 ## Runtime Model
 
-PSFN supports three practical startup patterns:
+PSFN supports four practical startup patterns (all split-runtime variants):
 
-### Single process
-
-```bash
-npm run dev
-```
-
-- Loads dotenv in-process
-- Uses `src/index.ts` -> `SubstrateRuntime`
-- Best for local iteration and debugging
+Monolithic single-process startup is removed. Invoking `src/index.ts` fails closed with guidance to use split mode.
 
 ### Split runtime
 
@@ -174,7 +166,7 @@ Common first-run commands:
 ```bash
 npm run dev
 # or
-npm run split
+npm run yolo
 ```
 
 ### Common bootstrap variables
@@ -314,10 +306,10 @@ npm run walkthrough
 
 ```text
 src/
-  index.ts                 single-process entrypoint
+  index.ts                 monolithic runtime guard (fails closed)
   gateway-main.ts          host-side gateway entrypoint
   agent-main.ts            isolated agent entrypoint
-  runtime.ts               shared single-process runtime
+  runtime.ts               shared runtime composition used by runtime tests/parity code
 
   agent/                   substrate agent loop and tool/runtime orchestration
   backup/                  scheduled backup and restore verification

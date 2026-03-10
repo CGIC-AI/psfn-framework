@@ -115,7 +115,7 @@ Production:
 Optional explicit PID file / start command:
 
 ```bash
-./scripts/self/restart.sh --mode production ./runtime/production/companion-data/psfn.pid "PSFN_RUNTIME_LAYOUT_MODE=production npm run start"
+./scripts/self/restart.sh --mode production ./runtime/production/companion-data/psfn.pid "PSFN_RUNTIME_LAYOUT_MODE=production npm run split"
 ```
 
 Production-mode safeguards now enforced by scripts:
@@ -186,14 +186,14 @@ Example:
 ```bash
 ./scripts/self/restart.sh --mode production ./runtime/production/companion-data/psfn.pid "echo rollback-stop"
 tar -xzf ./runtime/production/backups/<backup-file>.tgz -C .
-./scripts/self/restart.sh --mode production ./runtime/production/companion-data/psfn.pid "PSFN_RUNTIME_LAYOUT_MODE=production npm run start"
+./scripts/self/restart.sh --mode production ./runtime/production/companion-data/psfn.pid "PSFN_RUNTIME_LAYOUT_MODE=production npm run split"
 ```
 
 When using watchdog auto-rollback, ensure restart command keeps production layout mode:
 
 ```bash
 export AUTO_ROLLBACK=true
-export ROLLBACK_RESTART_CMD="PSFN_RUNTIME_LAYOUT_MODE=production npm run start"
+export ROLLBACK_RESTART_CMD="PSFN_RUNTIME_LAYOUT_MODE=production npm run split"
 ```
 
 If rollback is invoked, verify:

@@ -104,6 +104,31 @@ describe('UserContinuityStore', () => {
     expect(filtered[0].originChannelId).toBe('ch2');
   });
 
+  it('excludes entries from a specific channel when originChannelId is missing', () => {
+    store.append('user1', {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'Legacy entry without origin channel',
+      authorId: 'user1',
+      authorName: 'Alice',
+      timestamp: 1000,
+    });
+
+    store.append('user1', {
+      channelId: 'ch2',
+      role: 'user',
+      content: 'In ch2',
+      authorId: 'user1',
+      authorName: 'Alice',
+      timestamp: 2000,
+      originChannelId: 'ch2',
+    });
+
+    const filtered = store.getRecent('user1', 10, 'ch1');
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].content).toBe('In ch2');
+  });
+
   it('limits the number of returned entries', () => {
     for (let i = 0; i < 10; i++) {
       store.append('user1', {
@@ -605,6 +630,24 @@ describe('SessionManager with continuity', () => {
 
     // Build context for api:ch1 — continuity should NOT include api:ch1 messages
     const ctx = await mgr.buildContext('api:ch1', 'System prompt', '', undefined, 'user1');
+    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+  });
+
+  it('does not duplicate legacy continuity entries missing originChannelId', async () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    continuityStore.append('user1', {
+      channelId: 'api:ch1',
+      role: 'assistant',
+      content: 'Legacy continuity without explicit origin',
+      timestamp: Date.now(),
+      channelVisibility: 'private',
+    });
+    mgr.recordUserMessage('api:ch1', 'Current channel message', 'user1', 'Alice');
+
+    const ctx = await mgr.buildContext('api:ch1', 'System prompt', '', undefined, 'user1');
+    expect(ctx.systemPrompt).not.toContain('Legacy continuity without explicit origin');
     expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
   });
 

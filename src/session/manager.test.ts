@@ -597,6 +597,13 @@ describe('SessionManager', () => {
       originChannelId: 'api:origin-2',
       channelVisibility: 'private',
     });
+    continuityStore.append('legacy-discord-id', {
+      channelId: 'api:origin-3',
+      role: 'assistant',
+      content: 'Fallback channel attribution message',
+      timestamp: 3000,
+      channelVisibility: 'private',
+    });
 
     mgr.recordUserMessage('api:current', 'Current turn', 'legacy-discord-id', 'User');
 
@@ -612,6 +619,9 @@ describe('SessionManager', () => {
 
     expect(ctx.systemPrompt).toContain('Canonical continuity message');
     expect(ctx.systemPrompt).toContain('Legacy continuity message');
+    expect(ctx.systemPrompt).toContain('[from api:origin-1]');
+    expect(ctx.systemPrompt).toContain('[from api:origin-2]');
+    expect(ctx.systemPrompt).toContain('[from api:origin-3]');
   });
 
   it('buildContext reuses a captured turn snapshot when live session state drifts', async () => {

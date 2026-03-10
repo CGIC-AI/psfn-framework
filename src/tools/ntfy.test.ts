@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createNotifyOperatorTool, type NtfyNotifier } from './ntfy.js';
 import { ExternalCommunicationRateLimiter } from '../capabilities/safeguards.js';
+import { runWithRequestContext } from '../llm/request-context.js';
 
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
@@ -106,5 +107,27 @@ describe('notify_operator tool', () => {
     const afterWindow = await tool.execute('call-7', { message: 'Third alert' });
     expect(resultText(afterWindow as any)).toContain('notify_operator: success');
     expect(notifier.notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('blocks scheduled/internal execution contexts to prevent heartbeat ntfy bleed', async () => {
+    const notifier: NtfyNotifier = {
+      notify: vi.fn(),
+    };
+    const tool = createNotifyOperatorTool(notifier);
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'scheduled',
+        channelId: 'internal:reflection:whisper',
+        purpose: 'agent.turn.prompt',
+      },
+      async () => tool.execute('call-8', {
+        message: 'Heartbeat alert',
+      }),
+    );
+
+    expect(resultText(result as any)).toContain('notify_operator: blocked');
+    expect((result.details as any).isError).toBe(true);
+    expect(notifier.notify).not.toHaveBeenCalled();
   });
 });

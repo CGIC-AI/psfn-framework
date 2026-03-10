@@ -38,9 +38,6 @@ import type { ComposeContext } from '../identity/prompt-types.js';
 import {
   createSubstrateStreamFn,
 } from './stream-adapter.js';
-import {
-  inferRuntimeModeFromProvider,
-} from './substrate-agent-helpers.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
@@ -265,7 +262,7 @@ export class SubstrateAgent {
     this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
     this.config = config;
-    this.runtimeMode = options?.runtimeMode ?? inferRuntimeModeFromProvider(llmClient);
+    this.runtimeMode = options?.runtimeMode ?? 'single';
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,

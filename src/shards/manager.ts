@@ -14,6 +14,7 @@ import type {
 import type { EventBus } from '../event-bus.js';
 import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent/contracts.js';
 import { SubstrateAgent } from '../agent/substrate-agent.js';
+import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../capabilities/tiers.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import type { SessionStore } from '../session/store.js';
@@ -98,6 +99,7 @@ export interface ShardManagerDeps {
   shardToolsets?: ShardToolsetConfig;
   toolCatalogProvider?: () => ShardToolCatalog;
   auditTrail?: ShardAuditTrail;
+  runtimeMode?: RuntimeMode;
   shardSessionMemorySyncAuditPath?: string;
 }
 
@@ -319,6 +321,9 @@ export class ShardManager {
         sessionManager,
         systemPrompt,
         this.deps.config,
+        {
+          runtimeMode: this.deps.runtimeMode ?? 'single',
+        },
       );
 
       // Shards can READ memory but don't extract or archive (ephemeral)

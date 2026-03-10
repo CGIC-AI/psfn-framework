@@ -2200,7 +2200,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(response.metadata.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('routes Discord image turns through vision model slot and forwards image blocks', async () => {
+  it('fails closed for Discord image turns when gateway binary fetch is unavailable', async () => {
     const config = makeConfig({
       modelRoster: {
         chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
@@ -2209,18 +2209,7 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     });
     const originalFetch = (globalThis as any).fetch;
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      headers: {
-        get: (name: string) => {
-          if (name === 'content-type') return 'image/png';
-          if (name === 'content-length') return '3';
-          return null;
-        },
-      },
-      arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer,
-    }));
+    const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
     try {
@@ -2239,11 +2228,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toEqual([
-        { type: 'text', text: TEST_USER_GREETING },
-        { type: 'image', data: 'AQID', mimeType: 'image/png' },
-      ]);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(promptInput.content).toBe(TEST_USER_GREETING);
+      expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       (globalThis as any).fetch = originalFetch;
     }

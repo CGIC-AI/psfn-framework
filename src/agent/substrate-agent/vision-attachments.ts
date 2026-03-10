@@ -26,7 +26,6 @@ interface VisionLogger {
 
 const VISION_ATTACHMENT_MAX_COUNT = 4;
 const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
-const VISION_ATTACHMENT_FETCH_TIMEOUT_MS = 12_000;
 const DISCORD_VISION_ATTACHMENT_HOSTS = new Set([
   'cdn.discordapp.com',
   'media.discordapp.net',
@@ -177,67 +176,12 @@ async function resolveVisionAttachmentContent(input: {
     }
   }
 
-  if (input.runtimeMode === 'gateway') {
-    input.logger.warn('Skipping Discord image attachment because direct egress is disabled in gateway mode', {
-      channelId: input.message.channelId,
-      url: attachmentUrl.toString(),
-    });
-    return null;
-  }
-
-  const abortController = new AbortController();
-  const timeout = setTimeout(() => abortController.abort(), VISION_ATTACHMENT_FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(attachmentUrl.toString(), {
-      signal: abortController.signal,
-    });
-    if (!response.ok) {
-      input.logger.debug('Skipping Discord image attachment due to fetch failure', {
-        channelId: input.message.channelId,
-        status: response.status,
-        url: attachmentUrl.toString(),
-      });
-      return null;
-    }
-
-    const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
-    if (Number.isFinite(reportedLength) && reportedLength > VISION_ATTACHMENT_MAX_BYTES) {
-      input.logger.debug('Skipping Discord image attachment over byte budget', {
-        channelId: input.message.channelId,
-        size: reportedLength,
-        url: attachmentUrl.toString(),
-      });
-      return null;
-    }
-
-    const responseMimeType = (response.headers.get('content-type') ?? input.inferredContentType)
-      .split(';')[0]
-      .trim()
-      .toLowerCase();
-    if (!responseMimeType.startsWith('image/')) {
-      return null;
-    }
-
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (bytes.length === 0 || bytes.length > VISION_ATTACHMENT_MAX_BYTES) {
-      return null;
-    }
-
-    return {
-      type: 'image',
-      data: bytes.toString('base64'),
-      mimeType: responseMimeType,
-    };
-  } catch (error) {
-    input.logger.debug('Skipping Discord image attachment due to retrieval error', {
-      channelId: input.message.channelId,
-      url: attachmentUrl.toString(),
-      error: toErrorMessage(error),
-    });
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  input.logger.warn('Skipping Discord image attachment because gateway binary fetch capability is unavailable', {
+    channelId: input.message.channelId,
+    url: attachmentUrl.toString(),
+    runtimeMode: input.runtimeMode,
+  });
+  return null;
 }
 
 function isAllowedDiscordVisionAttachmentHost(hostname: string): boolean {

@@ -523,6 +523,10 @@ export function resolveHeartbeatPolicyPath(companionDataDir: string): string {
   return join(companionDataDir, 'heartbeat-policy.json');
 }
 
+export function resolvePostTurnActionQueuePath(companionDataDir: string): string {
+  return join(companionDataDir, 'post-turn-actions.queue.json');
+}
+
 export function resolveSafeguardAuditTrailPath(companionDataDir: string): string {
   return join(companionDataDir, 'safeguards-audit.jsonl');
 }

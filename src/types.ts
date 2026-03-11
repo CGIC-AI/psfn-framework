@@ -200,6 +200,7 @@ export interface PostTurnActionCandidate {
   payload?: Record<string, unknown>;
   dedupeKey?: string;
   maxRetries?: number;
+  runAt?: number;
 }
 
 export interface InferredPostTurnAction {
@@ -211,6 +212,7 @@ export interface InferredPostTurnAction {
   sourceMessageId: string;
   inferredAt: number;
   maxRetries?: number;
+  runAt?: number;
 }
 
 export interface ResponseMetadata {

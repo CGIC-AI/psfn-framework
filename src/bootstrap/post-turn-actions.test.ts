@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../types.js';
 import { EventBus } from '../event-bus.js';
@@ -49,6 +52,10 @@ function makeAction(overrides: Partial<InferredPostTurnAction> = {}): InferredPo
     inferredAt: Date.now(),
     ...overrides,
   };
+}
+
+function readPersistedQueue(path: string): { version: number; entries: unknown[] } {
+  return JSON.parse(readFileSync(path, 'utf-8')) as { version: number; entries: unknown[] };
 }
 
 describe('wirePostTurnActionRuntime', () => {
@@ -237,6 +244,178 @@ describe('wirePostTurnActionRuntime', () => {
       expect(phases).toContain('failed');
     } finally {
       nowSpy.mockRestore();
+    }
+  });
+
+  it('defers execution until runAt is due', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_100_000);
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const agentLoop = {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      };
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop,
+        intervalMs: 1,
+      });
+      const handler = vi.fn().mockResolvedValue(undefined);
+      runtime.registerHandler('heartbeat.run_template', handler);
+
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [
+          makeAction({
+            id: 'scheduled-action',
+            dedupeKey: 'scheduled:key',
+            runAt: 1_700_000_100_500,
+          }),
+        ],
+      });
+
+      expect(runtime.listQueued()[0]?.nextRunAt).toBe(1_700_000_100_500);
+
+      nowSpy.mockReturnValue(1_700_000_100_499);
+      await scheduler.tick();
+      expect(handler).toHaveBeenCalledTimes(0);
+      expect(runtime.listQueued()).toHaveLength(1);
+
+      nowSpy.mockReturnValue(1_700_000_100_550);
+      await scheduler.tick();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(runtime.listQueued()).toHaveLength(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('persists queued actions and reloads them on runtime restart', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-actions-'));
+    const persistencePath = join(tempDir, 'queue.json');
+
+    try {
+      nowSpy.mockReturnValue(1_700_000_200_000);
+      const firstBus = new EventBus();
+      const firstScheduler = new Scheduler(firstBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const firstRuntime = wirePostTurnActionRuntime({
+        eventBus: firstBus,
+        scheduler: firstScheduler,
+        agentLoop: {
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+        },
+        intervalMs: 1,
+        persistencePath,
+      });
+      firstRuntime.registerHandler('heartbeat.run_template', vi.fn().mockResolvedValue(undefined));
+
+      await firstBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [
+          makeAction({
+            id: 'persisted-action',
+            dedupeKey: 'persisted:key',
+            runAt: 1_700_000_200_300,
+          }),
+        ],
+      });
+
+      const persistedBeforeRestart = readPersistedQueue(persistencePath);
+      expect(persistedBeforeRestart.version).toBe(1);
+      expect(persistedBeforeRestart.entries).toHaveLength(1);
+
+      const secondBus = new EventBus();
+      const secondScheduler = new Scheduler(secondBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const secondRuntime = wirePostTurnActionRuntime({
+        eventBus: secondBus,
+        scheduler: secondScheduler,
+        agentLoop: {
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+        },
+        intervalMs: 1,
+        persistencePath,
+      });
+      const secondHandler = vi.fn().mockResolvedValue(undefined);
+      secondRuntime.registerHandler('heartbeat.run_template', secondHandler);
+
+      expect(secondRuntime.listQueued()).toHaveLength(1);
+      expect(secondRuntime.listQueued()[0]?.nextRunAt).toBe(1_700_000_200_300);
+
+      nowSpy.mockReturnValue(1_700_000_200_250);
+      await secondScheduler.tick();
+      expect(secondHandler).toHaveBeenCalledTimes(0);
+
+      nowSpy.mockReturnValue(1_700_000_200_301);
+      await secondScheduler.tick();
+      expect(secondHandler).toHaveBeenCalledTimes(1);
+
+      const persistedAfterDrain = readPersistedQueue(persistencePath);
+      expect(persistedAfterDrain.entries).toHaveLength(0);
+    } finally {
+      nowSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when persisted queue entries are invalid', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-actions-invalid-'));
+    const persistencePath = join(tempDir, 'queue.json');
+    writeFileSync(persistencePath, JSON.stringify({
+      version: 1,
+      entries: [{
+        action: {
+          id: 'invalid-action',
+          kind: 'heartbeat.run_template',
+          payload: { templateId: 'whisper' },
+          dedupeKey: 'invalid:key',
+          channelId: 'test-channel',
+          sourceMessageId: 'msg-1',
+          inferredAt: 1_700_000_300_000,
+        },
+        attempt: 0,
+        nextRunAt: 'not-a-timestamp',
+        maxRetries: 1,
+      }],
+    }), 'utf-8');
+
+    try {
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const agentLoop = {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      };
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop,
+        intervalMs: 10,
+        persistencePath,
+      });
+      const handler = vi.fn().mockResolvedValue(undefined);
+      runtime.registerHandler('heartbeat.run_template', handler);
+
+      expect(runtime.listQueued()).toHaveLength(0);
+      await scheduler.tick();
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

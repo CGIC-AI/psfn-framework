@@ -133,6 +133,7 @@ export function normalizePostTurnActionCandidate(
   )
     ? Math.floor(candidate.maxRetries)
     : undefined;
+  const normalizedRunAt = normalizeActionRunAt(candidate.runAt);
 
   return {
     id,
@@ -143,6 +144,7 @@ export function normalizePostTurnActionCandidate(
     sourceMessageId: message.id,
     inferredAt,
     ...(normalizedMaxRetries !== undefined ? { maxRetries: normalizedMaxRetries } : {}),
+    ...(normalizedRunAt !== undefined ? { runAt: normalizedRunAt } : {}),
   };
 }
 
@@ -153,6 +155,13 @@ function normalizePostTurnPayload(
     return {};
   }
   return payload;
+}
+
+function normalizeActionRunAt(runAt: unknown): number | undefined {
+  if (typeof runAt !== 'number' || !Number.isFinite(runAt) || runAt <= 0) {
+    return undefined;
+  }
+  return Math.floor(runAt);
 }
 
 function hashPostTurnPayload(payload: Record<string, unknown>): string {

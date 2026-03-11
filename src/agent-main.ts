@@ -124,6 +124,7 @@ import {
   resolveCharacterCardHistoryPath,
   resolveContactsDir,
   resolveNotesDir,
+  resolvePostTurnActionQueuePath,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
@@ -612,6 +613,7 @@ async function main(): Promise<void> {
     scheduler,
     agentLoop,
     eligibilityGate,
+    persistencePath: resolvePostTurnActionQueuePath(companionDataDir),
   });
   eventBus.on('agent.turn.end', ({ message, response }) => {
     const captured = sessionManager.recordCompressionFailureFromResponse(

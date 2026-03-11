@@ -117,6 +117,7 @@ import {
   resolveConfiguredCompanionDataDir,
   resolveContactsDir,
   resolveNotesDir,
+  resolvePostTurnActionQueuePath,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
@@ -733,6 +734,7 @@ export class SubstrateRuntime implements Lifecycle {
       scheduler: this.scheduler,
       agentLoop: this.agentLoop,
       eligibilityGate,
+      persistencePath: resolvePostTurnActionQueuePath(companionDataDir),
     });
     this.eventBus.on('agent.turn.end', ({ message, response }) => {
       const captured = this.sessionManager.recordCompressionFailureFromResponse(

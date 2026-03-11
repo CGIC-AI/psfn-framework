@@ -766,6 +766,21 @@ function hashString(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 20);
 }
 
+function normalizeActionRunAt(value: unknown): number | undefined {
+  return parseOptionalDueAt(value);
+}
+
+function resolveFollowUpRunAt(decision: IntentionActionDecision, now: number): number | undefined {
+  if (decision.timing !== 'soon' && decision.timing !== 'scheduled') {
+    return undefined;
+  }
+  const runAt = normalizeActionRunAt(decision.dueAt);
+  if (runAt === undefined) {
+    return undefined;
+  }
+  return Math.max(now, runAt);
+}
+
 function normalizeCandidatePayload(payload: PostTurnActionCandidate['payload']): Record<string, unknown> {
   if (!isRecord(payload)) return {};
   const normalizedEntries = Object.entries(payload)
@@ -784,6 +799,7 @@ export function decisionsToPostTurnActionCandidates(
     if (decision.type === 'followUp') {
       const content = decision.followUp?.content.trim() ?? '';
       if (!content) continue;
+      const runAt = resolveFollowUpRunAt(decision, Date.now());
       const channelId = decision.followUp?.channelId?.trim() || context.message.channelId;
       const channelType = decision.followUp?.channelType ?? context.message.channelType;
       const authorId = decision.followUp?.authorId?.trim() || context.fallbackAuthorId || 'system:intention';
@@ -800,6 +816,7 @@ export function decisionsToPostTurnActionCandidates(
           content,
         } satisfies IntentionFollowUpActionPayload,
         maxRetries: 1,
+        ...(runAt !== undefined ? { runAt } : {}),
       });
       continue;
     }
@@ -880,6 +897,7 @@ export function toInferredPostTurnActions(
     )
       ? Math.floor(candidate.maxRetries)
       : undefined;
+    const runAt = normalizeActionRunAt(candidate.runAt);
 
     inferred.push({
       id,
@@ -890,6 +908,7 @@ export function toInferredPostTurnActions(
       sourceMessageId: message.id,
       inferredAt: Date.now(),
       ...(maxRetries !== undefined ? { maxRetries } : {}),
+      ...(runAt !== undefined ? { runAt } : {}),
     });
   }
 

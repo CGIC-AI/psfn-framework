@@ -1085,6 +1085,7 @@ async function main(): Promise<void> {
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       coreMemoryStore,
       postTurnActions,
+      intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
     },
   );

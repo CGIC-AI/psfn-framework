@@ -948,6 +948,7 @@ export class SubstrateRuntime implements Lifecycle {
         onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
         coreMemoryStore,
         postTurnActions,
+        intentionAppraisalEnabled: this.config.intentionAppraisalEnabled !== false,
         ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
       },
     );

@@ -192,6 +192,7 @@ interface HeartbeatRuntimeOptions {
   }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
+  intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;
   vaultAutoPublisher?: { publishReflection(input: {
     templateId: string;
@@ -413,8 +414,10 @@ export function wireHeartbeatRuntime(
       cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
     })
     : null;
+  const intentionAppraisalEnabled = runtimeOptions.intentionAppraisalEnabled !== false;
   const intentionAppraisal = (
-    runtimeOptions.postTurnActions
+    intentionAppraisalEnabled
+    && runtimeOptions.postTurnActions
     && runtimeOptions.llmProvider
     && telemetryEventBus
   )

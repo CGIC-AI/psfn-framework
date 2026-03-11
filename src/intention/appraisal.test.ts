@@ -327,55 +327,64 @@ describe('IntentionAppraisal', () => {
 
 describe('intention appraisal action mapping', () => {
   it('maps actionable decisions into inferred post-turn actions', () => {
-    const decisions: IntentionActionDecision[] = [{
-      type: 'followUp',
-      priority: 'high',
-      reason: 'Needs proactive support.',
-      timing: 'soon',
-      followUp: {
-        content: 'Checking in after our last conversation.',
-      },
-    }, {
-      type: 'schedule',
-      priority: 'medium',
-      reason: 'Run structured check-in template later.',
-      timing: 'scheduled',
-      schedule: {
-        templateId: 'emotional-check',
-      },
-    }, {
-      type: 'concern',
-      priority: 'medium',
-      reason: 'Track recurring stressor.',
-      timing: 'soon',
-      concern: {
-        title: 'Watch stress trend',
-      },
-    }];
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_400_000);
+      const decisions: IntentionActionDecision[] = [{
+        type: 'followUp',
+        priority: 'high',
+        reason: 'Needs proactive support.',
+        timing: 'soon',
+        dueAt: 1_700_000_460_000,
+        followUp: {
+          content: 'Checking in after our last conversation.',
+        },
+      }, {
+        type: 'schedule',
+        priority: 'medium',
+        reason: 'Run structured check-in template later.',
+        timing: 'scheduled',
+        schedule: {
+          templateId: 'emotional-check',
+        },
+      }, {
+        type: 'concern',
+        priority: 'medium',
+        reason: 'Track recurring stressor.',
+        timing: 'soon',
+        concern: {
+          title: 'Watch stress trend',
+        },
+      }];
 
-    const candidates = decisionsToPostTurnActionCandidates(decisions, {
-      message: {
+      const candidates = decisionsToPostTurnActionCandidates(decisions, {
+        message: {
+          id: 'msg-intention-1',
+          channelId: 'api:test',
+          channelType: 'api',
+        },
+      });
+      expect(candidates).toHaveLength(2);
+      expect(candidates[0]?.kind).toBe(INTENTION_FOLLOW_UP_ACTION_KIND);
+      expect(candidates[0]?.runAt).toBe(1_700_000_460_000);
+      expect(candidates[1]).toMatchObject({
+        kind: 'heartbeat.run_template',
+        payload: { templateId: 'emotional-check' },
+      });
+
+      const inferred = toInferredPostTurnActions(candidates, {
         id: 'msg-intention-1',
         channelId: 'api:test',
+      });
+      expect(inferred).toHaveLength(2);
+      expect(normalizeIntentionFollowUpActionPayload(inferred[0]?.payload)).toMatchObject({
+        channelId: 'api:test',
         channelType: 'api',
-      },
-    });
-    expect(candidates).toHaveLength(2);
-    expect(candidates[0]?.kind).toBe(INTENTION_FOLLOW_UP_ACTION_KIND);
-    expect(candidates[1]).toMatchObject({
-      kind: 'heartbeat.run_template',
-      payload: { templateId: 'emotional-check' },
-    });
-
-    const inferred = toInferredPostTurnActions(candidates, {
-      id: 'msg-intention-1',
-      channelId: 'api:test',
-    });
-    expect(inferred).toHaveLength(2);
-    expect(normalizeIntentionFollowUpActionPayload(inferred[0]?.payload)).toMatchObject({
-      channelId: 'api:test',
-      channelType: 'api',
-      content: 'Checking in after our last conversation.',
-    });
+        content: 'Checking in after our last conversation.',
+      });
+      expect(inferred[0]?.runAt).toBe(1_700_000_460_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

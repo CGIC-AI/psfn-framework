@@ -19,7 +19,7 @@ export type ChannelType = typeof CHANNEL_TYPES[number];
 export type { TurnID } from './turns/types.js';
 
 export interface TurnRecordMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
   sessionEntryId?: number;

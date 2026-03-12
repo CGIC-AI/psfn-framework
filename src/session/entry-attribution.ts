@@ -59,13 +59,23 @@ function stripBracketedPrefix(content: string, label: string): string {
 }
 
 export function normalizeSessionEntryAttribution(
-  entry: Pick<SessionEntry, 'role' | 'content' | 'authorId' | 'authorName' | 'metadata' | 'channelId'>,
+  entry: Pick<SessionEntry, 'role' | 'content' | 'authorId' | 'authorName' | 'metadata' | 'channelId'>
+    & Partial<ParsedTurnMetadata>,
 ): NormalizedSessionEntryAttribution {
   if (entry.role === 'tool') {
     return { role: 'tool', authorName: entry.authorName };
   }
 
-  const turn = parseTurnMetadata(entry.metadata);
+  const parsedTurn = parseTurnMetadata(entry.metadata);
+  const turn: ParsedTurnMetadata = {
+    ...parsedTurn,
+    ...(typeof entry.requestId === 'string' && entry.requestId.trim().length > 0
+      ? { requestId: entry.requestId.trim() }
+      : {}),
+    ...(typeof entry.sourceMessageId === 'string' && entry.sourceMessageId.trim().length > 0
+      ? { sourceMessageId: entry.sourceMessageId.trim() }
+      : {}),
+  };
   const authorId = entry.authorId?.trim() ?? '';
   const authorName = entry.authorName?.trim() ?? '';
   const content = entry.content.trimStart();

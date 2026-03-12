@@ -28,6 +28,7 @@
     "test:watch": "vitest",
     "chat": "tsx src/chat-cli.ts",
     "session:repair": "tsx src/session-repair.ts",
+    "session:repair:attribution": "tsx src/session-attribution-repair.ts",
     "migrate:embeddings": "tsx src/migrate-embeddings.ts",
     "prefetch:hf-models": "tsx scripts/prefetch-hf-models.ts",
     "migrate:persistence-layout": "tsx src/migrate-persistence-layout.ts",

@@ -61,8 +61,8 @@ function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMe
   }
 
   const role = parseRequiredString(value.role, `${fieldName}.role`);
-  if (role !== 'user' && role !== 'assistant') {
-    throw new Error(`TurnRecord field \"${fieldName}.role\" must be \"user\" or \"assistant\"`);
+  if (role !== 'user' && role !== 'assistant' && role !== 'system') {
+    throw new Error(`TurnRecord field \"${fieldName}.role\" must be \"user\", \"assistant\", or \"system\"`);
   }
 
   const content = parseRequiredString(value.content, `${fieldName}.content`);

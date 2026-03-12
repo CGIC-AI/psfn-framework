@@ -125,6 +125,44 @@ describe('SessionStore', () => {
     });
   });
 
+  it('accepts system-attributed turn records for internal scheduler prompts', () => {
+    const turnId = createTurnId();
+
+    store.appendTurnRecord({
+      schemaVersion: 1,
+      turnId,
+      requestId: 'reflection-whisper-1',
+      channelId: 'internal:reflection:whisper',
+      channelType: 'terminal',
+      startedAt: 100,
+      completedAt: 200,
+      status: 'completed',
+      userMessage: {
+        role: 'system',
+        content: 'heartbeat prompt',
+        timestamp: 100,
+        authorId: 'scheduler',
+        authorName: 'Whisper',
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: 'heartbeat reply',
+        timestamp: 200,
+      },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: { model: 'test/model' },
+      provenanceRefs: [],
+    });
+
+    const records = store.getRecentTurnRecords('internal:reflection:whisper', 5);
+    expect(records).toHaveLength(1);
+    expect(records[0].userMessage.role).toBe('system');
+    expect(records[0].userMessage.authorId).toBe('scheduler');
+  });
+
   it('backfills deterministic TurnID values for legacy turn records missing turnId', () => {
     const channelId = 'api:legacy-turn-record';
     const turnDir = join(dir, '_turn_records');

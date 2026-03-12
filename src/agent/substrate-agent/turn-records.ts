@@ -16,6 +16,13 @@ import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
 
+function resolveIncomingMessageRole(message: SubstrateMessage): 'user' | 'system' {
+  if (message.authorId.startsWith('system:') || message.authorId === 'scheduler') {
+    return 'system';
+  }
+  return 'user';
+}
+
 export function recordUserMessage(input: {
   sessionManager: SessionManager;
   message: SubstrateMessage;
@@ -170,7 +177,7 @@ export function buildTurnRecord(input: {
     completedAt: Math.max(input.startedAt, input.completedAt),
     status: 'completed',
     userMessage: {
-      role: 'user',
+      role: resolveIncomingMessageRole(input.message),
       content: input.message.content,
       timestamp: input.message.timestamp.getTime(),
       sourceMessageId: input.message.id,

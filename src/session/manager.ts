@@ -578,6 +578,57 @@ export class SessionManager {
     return entryId;
   }
 
+  recordSystemMessage(
+    channelId: string,
+    content: string,
+    authorId: string,
+    authorName: string,
+    isDirectMessage?: boolean,
+    continuityUserId?: string,
+    options: SessionMessageRecordOptions = {},
+  ): number | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
+    const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
+    const channelVisibility = classifyChannel(resolvedChannelId, meta);
+    const timestamp = Date.now();
+    const metadata = options.turnId
+      ? buildSessionMetadataWithTurn(options.metadata, {
+        turnId: options.turnId,
+        requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
+        sourceMessageId: options.sourceMessageId,
+        role: 'system',
+      })
+      : options.metadata;
+    const entryId = this.store.append({
+      channelId: resolvedChannelId,
+      role: 'system',
+      content,
+      authorId,
+      authorName,
+      timestamp,
+      channelVisibility,
+      ...(metadata ? { metadata } : {}),
+    });
+
+    const continuityKey = continuityUserId ?? authorId;
+    if (this.continuityStore && continuityKey) {
+      this.continuityStore.append(continuityKey, {
+        channelId: resolvedChannelId,
+        role: 'system',
+        content,
+        authorId,
+        authorName,
+        timestamp,
+        originChannelId: resolvedChannelId,
+        channelVisibility,
+        ...(metadata ? { metadata } : {}),
+      });
+    }
+
+    return entryId;
+  }
+
   scheduleAutoCompactionBetweenTurns(params: AutoCompactionBetweenTurnsParams): Promise<void> {
     const resolvedChannelId = this.resolveSessionChannelId(params.channelId);
     if (!shouldPersistSessionChannel(resolvedChannelId)) {

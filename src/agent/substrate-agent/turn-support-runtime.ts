@@ -338,6 +338,27 @@ export class TurnSupportRuntime {
     });
   }
 
+  recordSystemMessage(
+    message: SubstrateMessage,
+    turnId: TurnID,
+    requestId: string,
+    content: string,
+  ): number | null {
+    return this.sessionManager.recordSystemMessage(
+      message.channelId,
+      content,
+      message.authorId,
+      message.authorName,
+      message.isDirectMessage,
+      undefined,
+      {
+        turnId,
+        requestId,
+        sourceMessageId: message.id,
+      },
+    );
+  }
+
   recordToolObservations(
     message: SubstrateMessage,
     turnId: TurnID,

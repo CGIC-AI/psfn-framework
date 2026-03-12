@@ -13,6 +13,7 @@ import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
+import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import type {
   AgentResponse,
   CapabilityTier,
@@ -587,21 +588,21 @@ export class SubstrateAgent {
    * Non-interrupting — waits for idle before delivery.
    *
    * System-originated follow-ups (authorId starting with "system:") are
-   * recorded as assistant messages (internal thoughts not visible to the user)
-   * rather than user messages, so conversation context correctly attributes
-   * them to the companion's own reasoning.
+   * recorded as system messages and queued back into the model with an explicit
+   * system wrapper so they are never mistaken for partner-authored chat.
    */
   followUp(message: SubstrateMessage): void {
     const isSystemOriginated = message.authorId.startsWith('system:');
     const turnId = createTurnId();
+    const systemContent = isSystemOriginated
+      ? formatAttributedSystemContent(message.content, message.authorName)
+      : message.content;
     if (isSystemOriginated) {
-      const tag = message.authorName?.trim() || 'System';
-      this.turnSupportRuntime.recordAssistantMessage(
+      this.turnSupportRuntime.recordSystemMessage(
         message,
         turnId,
         message.id,
-        `[${tag}] ${message.content}`,
-        'regular',
+        systemContent,
       );
     } else {
       const authorContext = this.resolveAuthorContext(message);
@@ -615,7 +616,7 @@ export class SubstrateAgent {
     }
     this.agent.followUp({
       role: 'user',
-      content: message.content,
+      content: systemContent,
       timestamp: Date.now(),
     } satisfies UserMessage);
     log.debug('Queued follow-up', {

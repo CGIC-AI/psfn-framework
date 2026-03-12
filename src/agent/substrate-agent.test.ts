@@ -241,6 +241,7 @@ function makeMockSessionManager(): SessionManager {
     recordUserMessage: vi.fn().mockReturnValue(101),
     recordToolObservation: vi.fn().mockReturnValue(102),
     recordAssistantMessage: vi.fn().mockReturnValue(102),
+    recordSystemMessage: vi.fn().mockReturnValue(103),
     recordTurn: vi.fn(),
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
@@ -4822,7 +4823,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
-  it('followUp records system-originated messages as assistant instead of user', () => {
+  it('followUp records system-originated messages as system instead of user or assistant', () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -4837,19 +4838,23 @@ describe('SubstrateAgent steering + follow-up', () => {
     }));
 
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
-    expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
+    expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
+    expect(sessionManager.recordSystemMessage).toHaveBeenCalledWith(
       'test-channel',
-      '[Intention Appraisal] internal follow-up',
+      '[SYSTEM: Intention Appraisal] internal follow-up',
       'system:intention',
+      'Intention Appraisal',
       undefined,
       undefined,
       expect.objectContaining({
-        trustLevel: 'regular',
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
       }),
     );
-    expect(followUpSpy).toHaveBeenCalled();
+    expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'user',
+      content: '[SYSTEM: Intention Appraisal] internal follow-up',
+    }));
 
     followUpSpy.mockRestore();
   });

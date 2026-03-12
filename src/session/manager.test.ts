@@ -314,6 +314,35 @@ describe('SessionManager', () => {
     expect(store.listChannels().some(channel => channel.channelId === reflectionChannel)).toBe(false);
   });
 
+  it('records system messages with system turn metadata', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const turnId = createTurnId();
+
+    mgr.recordSystemMessage(
+      'api:main',
+      '[SYSTEM: Intention Appraisal] internal follow-up',
+      'system:intention',
+      'Intention Appraisal',
+      undefined,
+      undefined,
+      {
+        turnId,
+        requestId: 'intention-follow-up:test',
+        sourceMessageId: 'intention-follow-up:test',
+      },
+    );
+
+    const recent = store.getRecent('api:main', 1);
+    expect(recent).toHaveLength(1);
+    expect(recent[0]).toMatchObject({
+      role: 'system',
+      authorId: 'system:intention',
+      authorName: 'Intention Appraisal',
+    });
+    expect(recent[0].metadata).toContain('"role":"system"');
+  });
+
   it('resolves startup metadata from latest session when reusing latest', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

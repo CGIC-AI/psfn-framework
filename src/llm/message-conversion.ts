@@ -8,7 +8,7 @@ export function contextMessagesToPiMessages(
   timestamp: () => number = () => Date.now(),
 ): PiChatMessage[] {
   return messages.map((message): PiChatMessage => {
-    if (message.role === 'user') {
+    if (message.role === 'user' || message.role === 'system') {
       return {
         role: 'user',
         content: message.content,

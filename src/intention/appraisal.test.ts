@@ -5,8 +5,11 @@ import { InternalStateComputer } from '../self-model/state.js';
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
+  INTENTION_FOLLOW_UP_AUTHOR_ID,
+  INTENTION_FOLLOW_UP_AUTHOR_NAME,
   decisionsToPostTurnActionCandidates,
   normalizeIntentionFollowUpActionPayload,
+  sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
   type IntentionActionDecision,
 } from './appraisal.js';
@@ -380,11 +383,69 @@ describe('intention appraisal action mapping', () => {
       expect(normalizeIntentionFollowUpActionPayload(inferred[0]?.payload)).toMatchObject({
         channelId: 'api:test',
         channelType: 'api',
+        authorId: INTENTION_FOLLOW_UP_AUTHOR_ID,
+        authorName: INTENTION_FOLLOW_UP_AUTHOR_NAME,
         content: 'Checking in after our last conversation.',
       });
       expect(inferred[0]?.runAt).toBe(1_700_000_460_000);
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('forces intention follow-ups to system attribution even if the model supplies user authors', () => {
+    const candidates = decisionsToPostTurnActionCandidates([{
+      type: 'followUp',
+      priority: 'medium',
+      reason: 'Needs a check-in.',
+      timing: 'soon',
+      followUp: {
+        content: 'Checking in.',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+      },
+    }], {
+      message: {
+        id: 'msg-intention-2',
+        channelId: 'discord:test',
+        channelType: 'discord',
+      },
+    });
+
+    expect(normalizeIntentionFollowUpActionPayload(candidates[0]?.payload)).toMatchObject({
+      channelId: 'discord:test',
+      channelType: 'discord',
+      authorId: INTENTION_FOLLOW_UP_AUTHOR_ID,
+      authorName: INTENTION_FOLLOW_UP_AUTHOR_NAME,
+      content: 'Checking in.',
+    });
+  });
+});
+
+describe('sessionEntriesToIntentionMessages', () => {
+  it('reclassifies intention artifacts as system messages', () => {
+    const messages = sessionEntriesToIntentionMessages([{
+      role: 'user',
+      content: '[Intention Appraisal] I am investigating the logs.',
+      timestamp: 1_700_000_000_000,
+      authorId: 'user-1',
+      authorName: 'Intention Appraisal',
+      channelId: 'discord:test',
+      metadata: JSON.stringify({
+        turn: {
+          schemaVersion: 1,
+          turnId: 'turn-1',
+          requestId: 'intention-follow-up:abc123',
+          sourceMessageId: 'intention-follow-up:abc123',
+          role: 'user',
+        },
+      }),
+    }]);
+
+    expect(messages).toEqual([{
+      role: 'system',
+      content: '[SYSTEM: Intention Appraisal] I am investigating the logs.',
+      timestamp: 1_700_000_000_000,
+    }]);
   });
 });

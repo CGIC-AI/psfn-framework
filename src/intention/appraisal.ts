@@ -7,6 +7,10 @@ import {
   formatActiveDateTimeLabel,
   resolveActiveTimezone,
 } from '../time/active-timezone.js';
+import {
+  formatAttributedSystemContent,
+  normalizeSessionEntryAttribution,
+} from '../session/entry-attribution.js';
 import type {
   ChannelType,
   CompletionPurpose,
@@ -29,13 +33,16 @@ const DEFAULT_SYSTEM_PROMPT = [
   'Consider unresolved concerns, emotional needs, scheduled commitments, and relationship maintenance.',
   'Most turns should return noop unless concrete action is warranted.',
   'Return JSON only, no markdown, with shape:',
-  '{"decisions":[{"type":"followUp|concern|schedule|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?","authorId":"string?","authorName":"string?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?}}]}',
+  '{"decisions":[{"type":"followUp|concern|schedule|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?}}]}',
   'For followUp decisions, include followUp.content.',
+  'Never set authorId or authorName for followUp decisions. They are always system-originated internal messages.',
   'For schedule decisions, include schedule.templateId.',
   'For concern decisions, include concern.title and/or concern.summary.',
 ].join('\n');
 
 export const INTENTION_FOLLOW_UP_ACTION_KIND = 'intention.follow_up';
+export const INTENTION_FOLLOW_UP_AUTHOR_ID = 'system:intention';
+export const INTENTION_FOLLOW_UP_AUTHOR_NAME = 'Intention Appraisal';
 
 export type IntentionDecisionType = 'followUp' | 'concern' | 'schedule' | 'noop';
 export type IntentionDecisionPriority = 'low' | 'medium' | 'high';
@@ -802,8 +809,6 @@ export function decisionsToPostTurnActionCandidates(
       const runAt = resolveFollowUpRunAt(decision, Date.now());
       const channelId = decision.followUp?.channelId?.trim() || context.message.channelId;
       const channelType = decision.followUp?.channelType ?? context.message.channelType;
-      const authorId = decision.followUp?.authorId?.trim() || context.fallbackAuthorId || 'system:intention';
-      const authorName = decision.followUp?.authorName?.trim() || context.fallbackAuthorName || 'Intention Appraisal';
       const dedupeKey = `${INTENTION_FOLLOW_UP_ACTION_KIND}:${context.message.id}:${hashString(content)}`;
       candidates.push({
         kind: INTENTION_FOLLOW_UP_ACTION_KIND,
@@ -811,8 +816,8 @@ export function decisionsToPostTurnActionCandidates(
         payload: {
           channelId,
           channelType,
-          authorId,
-          authorName,
+          authorId: INTENTION_FOLLOW_UP_AUTHOR_ID,
+          authorName: INTENTION_FOLLOW_UP_AUTHOR_NAME,
           content,
         } satisfies IntentionFollowUpActionPayload,
         maxRetries: 1,
@@ -920,6 +925,10 @@ export function sessionEntriesToIntentionMessages(
     role: string;
     content: string;
     timestamp: number;
+    authorId?: string;
+    authorName?: string;
+    metadata?: string;
+    channelId?: string;
   }>,
 ): IntentionAppraisalMessage[] {
   const messages: IntentionAppraisalMessage[] = [];
@@ -927,11 +936,30 @@ export function sessionEntriesToIntentionMessages(
     if (typeof entry.role !== 'string' || typeof entry.content !== 'string') {
       continue;
     }
-    const role = entry.role;
+    const normalized = normalizeSessionEntryAttribution({
+      role: (
+        entry.role === 'assistant'
+        || entry.role === 'system'
+        || entry.role === 'tool'
+        || entry.role === 'user'
+      )
+        ? entry.role
+        : 'user',
+      content: entry.content,
+      authorId: entry.authorId,
+      authorName: entry.authorName,
+      metadata: entry.metadata,
+      channelId: entry.channelId ?? '',
+    });
+    const role = normalized.role;
     if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') {
       continue;
     }
-    const content = entry.content.trim();
+    const content = (
+      role === 'system'
+        ? formatAttributedSystemContent(entry.content, normalized.authorName)
+        : entry.content
+    ).trim();
     if (!content) continue;
     messages.push({
       role,

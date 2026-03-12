@@ -264,7 +264,7 @@ export interface ToolSchema {
 
 // ── LLM types ──
 
-export type Role = 'user' | 'assistant';
+export type Role = 'user' | 'assistant' | 'system';
 
 export interface ContextMessage {
   role: Role;

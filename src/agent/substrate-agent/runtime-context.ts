@@ -466,10 +466,17 @@ export function resolveAuthorContext(input: {
   logger: RuntimeContextLogger;
 }): ResolvedAuthorContext {
   if (input.message.channelId.startsWith('internal:')) {
+    // Reflection channels have no real user contact — the authorId is 'scheduler'.
+    // Setting canonicalContactKey='scheduler' causes violatesHighIntimacyContactScope
+    // to filter every high-intimacy memory (contactId !== 'scheduler'), leaving the
+    // companion with no access to her memories during heartbeat turns.
+    // Leave canonicalContactKey undefined for reflection channels so the contact
+    // scope filter does not fire and all memories remain accessible.
+    const isReflectionChannel = input.message.channelId.startsWith('internal:reflection:');
     return {
       trustLevel: 'primary',
       resolvedUserName: resolvePromptUserName(input.message),
-      canonicalContactKey: input.message.authorId,
+      ...(isReflectionChannel ? {} : { canonicalContactKey: input.message.authorId }),
       continuityFallbackKeys: [],
     };
   }

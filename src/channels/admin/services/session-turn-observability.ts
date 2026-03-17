@@ -1,4 +1,5 @@
 import type { EventMap, EventBus } from '../../../event-bus.js';
+import { cloneMemoryWithheldSummary } from '../../../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
 import type { SessionEntry } from '../../../session/types.js';
@@ -95,7 +96,16 @@ function cloneObservedScoredMemory(memory: AdminObservedScoredMemory): AdminObse
   };
 }
 
+function filterObservedMemories<T extends PurrMemory>(
+  memories: readonly T[],
+  withheldIds: ReadonlySet<string>,
+): T[] {
+  if (withheldIds.size === 0) return [...memories];
+  return memories.filter(memory => !withheldIds.has(memory.id));
+}
+
 function sanitizeSnapshot(snapshot: TurnSnapshot): AdminTurnSnapshotData {
+  const withheldIds = new Set(snapshot.memory?.withheldCandidateIds ?? []);
   return {
     turnId: snapshot.turnId,
     requestId: snapshot.requestId,
@@ -131,10 +141,25 @@ function sanitizeSnapshot(snapshot: TurnSnapshot): AdminTurnSnapshotData {
           channelId: snapshot.memory.channelId,
           ...(snapshot.memory.profile ? { profile: cloneContactProfileArtifact(snapshot.memory.profile) } : {}),
           ...(snapshot.memory.emotionalSnapshot ? { emotionalSnapshot: { ...snapshot.memory.emotionalSnapshot } } : {}),
-          contactEmotionalMemories: snapshot.memory.contactEmotionalMemories.map(sanitizeObservedMemory),
-          semanticCandidates: snapshot.memory.semanticCandidates.map(sanitizeObservedScoredMemory),
-          lexicalCandidates: snapshot.memory.lexicalCandidates.map(sanitizeObservedScoredMemory),
-          proactiveCandidates: snapshot.memory.proactiveCandidates.map(sanitizeObservedMemory),
+          contactEmotionalMemories: filterObservedMemories(
+            snapshot.memory.contactEmotionalMemories,
+            withheldIds,
+          ).map(sanitizeObservedMemory),
+          semanticCandidates: filterObservedMemories(
+            snapshot.memory.semanticCandidates,
+            withheldIds,
+          ).map(sanitizeObservedScoredMemory),
+          lexicalCandidates: filterObservedMemories(
+            snapshot.memory.lexicalCandidates,
+            withheldIds,
+          ).map(sanitizeObservedScoredMemory),
+          proactiveCandidates: filterObservedMemories(
+            snapshot.memory.proactiveCandidates,
+            withheldIds,
+          ).map(sanitizeObservedMemory),
+          ...(snapshot.memory.withheldSummary
+            ? { withheldSummary: cloneMemoryWithheldSummary(snapshot.memory.withheldSummary) }
+            : {}),
           versionPointer: snapshot.memory.versionPointer,
         },
       }
@@ -171,6 +196,9 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
           semanticCandidates: snapshot.memory.semanticCandidates.map(cloneObservedScoredMemory),
           lexicalCandidates: snapshot.memory.lexicalCandidates.map(cloneObservedScoredMemory),
           proactiveCandidates: snapshot.memory.proactiveCandidates.map(cloneObservedMemory),
+          ...(snapshot.memory.withheldSummary
+            ? { withheldSummary: cloneMemoryWithheldSummary(snapshot.memory.withheldSummary) }
+            : {}),
           versionPointer: snapshot.memory.versionPointer,
         },
       }

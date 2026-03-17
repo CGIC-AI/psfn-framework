@@ -10,6 +10,7 @@ import type {
 import type { PromptHistoryEntry, PromptLayer } from '../../../identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { EmotionalSnapshot } from '../../../contacts/store/emotional-baseline.js';
+import type { MemoryWithheldSummary } from '../../../memory/withheld-summary.js';
 import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
 import type { SessionEntry } from '../../../session/types.js';
@@ -196,6 +197,7 @@ export interface AdminTurnMemorySnapshotData {
   semanticCandidates: AdminObservedScoredMemory[];
   lexicalCandidates: AdminObservedScoredMemory[];
   proactiveCandidates: AdminObservedMemory[];
+  withheldSummary?: MemoryWithheldSummary;
   versionPointer: string;
 }
 

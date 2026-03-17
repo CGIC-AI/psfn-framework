@@ -1497,9 +1497,69 @@ describe('AdminServer JSON API routes', () => {
               sensitivity: 'personal',
             },
           ],
-          semanticCandidates: [],
+          semanticCandidates: [
+            {
+              id: 'mem-2',
+              text: 'Allowed candidate',
+              type: 'semantic',
+              importance: 0.8,
+              confidence: 0.8,
+              emotionalValence: 0.05,
+              salience: 0.7,
+              embedding: new Float32Array([0.3, 0.4, 0.5]),
+              sourceRef: 'source:api-session',
+              extractedAt: Date.now(),
+              lastAccessed: Date.now(),
+              accessCount: 1,
+              tags: ['api'],
+              sensitivity: 'public',
+              similarity: 0.88,
+            },
+            {
+              id: 'mem-3',
+              text: 'Withheld candidate should not leak',
+              type: 'semantic',
+              importance: 0.9,
+              confidence: 0.9,
+              emotionalValence: 0.2,
+              salience: 0.8,
+              embedding: new Float32Array([0.6, 0.7, 0.8]),
+              sourceRef: 'source:api-session',
+              extractedAt: Date.now(),
+              lastAccessed: Date.now(),
+              accessCount: 1,
+              tags: ['private_boundary'],
+              sensitivity: 'personal',
+              similarity: 0.92,
+            },
+          ],
           lexicalCandidates: [],
-          proactiveCandidates: [],
+          proactiveCandidates: [
+            {
+              id: 'mem-4',
+              text: 'Withheld proactive recall should not leak',
+              type: 'semantic',
+              importance: 0.7,
+              confidence: 0.75,
+              emotionalValence: 0.0,
+              salience: 0.6,
+              embedding: new Float32Array([0.9, 0.1, 0.2]),
+              sourceRef: 'source:api-session',
+              extractedAt: Date.now(),
+              lastAccessed: Date.now(),
+              accessCount: 1,
+              tags: [],
+              sensitivity: 'confidential',
+            },
+          ],
+          withheldSummary: {
+            totalCount: 2,
+            reasonCounts: {
+              'boundary.withhold': 1,
+              'trust.ceiling_exceeded': 1,
+            },
+          },
+          withheldCandidateIds: ['mem-3', 'mem-4'],
           versionPointer: 'memory-v1',
         },
       },
@@ -1527,6 +1587,11 @@ describe('AdminServer JSON API routes', () => {
       candidateCount: 3,
       returnedCount: 1,
       retrievalLimit: 5,
+      withheldCount: 2,
+      withheldReasonCounts: {
+        'boundary.withhold': 1,
+        'trust.ceiling_exceeded': 1,
+      },
       provenanceRefs: ['memory:mem-1'],
     });
 
@@ -1546,11 +1611,18 @@ describe('AdminServer JSON API routes', () => {
       turns: Array<{
         record: { turnId: string; versionPointers: { memoryState?: string } };
         stages: Array<{ stage: string; data: { memoryChars?: number } }>;
-        retrievals: Array<{ count: number; retrievalSource?: string; data: { candidateCount?: number } }>;
+        retrievals: Array<{
+          count: number;
+          retrievalSource?: string;
+          data: { candidateCount?: number; withheldCount?: number; withheldReasonCounts?: Record<string, number> };
+        }>;
         snapshot: {
           memory?: {
             versionPointer: string;
             contactEmotionalMemories: Array<Record<string, unknown>>;
+            semanticCandidates: Array<Record<string, unknown>>;
+            proactiveCandidates: Array<Record<string, unknown>>;
+            withheldSummary?: { totalCount?: number; reasonCounts?: Record<string, number> };
           };
           sessionContext?: { compactionPromptText?: string };
         } | null;
@@ -1572,11 +1644,27 @@ describe('AdminServer JSON API routes', () => {
       retrievalSource: 'embedding',
       data: {
         candidateCount: 3,
+        withheldCount: 2,
+        withheldReasonCounts: {
+          'boundary.withhold': 1,
+          'trust.ceiling_exceeded': 1,
+        },
       },
     });
     expect(messagesPayload.turns[0]?.snapshot?.memory?.versionPointer).toBe('memory-v1');
     expect(messagesPayload.turns[0]?.snapshot?.sessionContext?.compactionPromptText).toBe('Compaction prompt snapshot');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.contactEmotionalMemories[0]).not.toHaveProperty('embedding');
+    expect(messagesPayload.turns[0]?.snapshot?.memory?.semanticCandidates).toHaveLength(1);
+    expect(messagesPayload.turns[0]?.snapshot?.memory?.semanticCandidates[0]?.text).toBe('Allowed candidate');
+    expect(messagesPayload.turns[0]?.snapshot?.memory?.semanticCandidates[0]?.text).not.toContain('Withheld candidate');
+    expect(messagesPayload.turns[0]?.snapshot?.memory?.proactiveCandidates).toHaveLength(0);
+    expect(messagesPayload.turns[0]?.snapshot?.memory?.withheldSummary).toMatchObject({
+      totalCount: 2,
+      reasonCounts: {
+        'boundary.withhold': 1,
+        'trust.ceiling_exceeded': 1,
+      },
+    });
   });
 
   it('supports contact list/detail/update endpoints', async () => {

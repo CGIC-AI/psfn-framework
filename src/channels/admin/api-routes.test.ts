@@ -28,6 +28,7 @@ import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
 import type { ScheduledTask } from '../../scheduler/types.js';
+import { createTurnId } from '../../turns/id.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
 
@@ -1390,6 +1391,7 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('supports session list and messages endpoints', async () => {
+    const turnId = createTurnId();
     sessionStore.append({
       channelId: 'api-session',
       role: 'user',
@@ -1408,6 +1410,125 @@ describe('AdminServer JSON API routes', () => {
       timestamp: Date.now() + 1,
       channelVisibility: 'direct',
     });
+    sessionManager.recordTurn({
+      schemaVersion: 1,
+      turnId,
+      requestId: 'api-session-turn-1',
+      channelId: 'api-session',
+      channelType: 'api',
+      startedAt: Date.now(),
+      completedAt: Date.now() + 50,
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: 'hello',
+        timestamp: Date.now(),
+        sourceMessageId: 'api-session-msg-1',
+        authorId: 'user-1',
+        authorName: 'User',
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: 'world',
+        timestamp: Date.now() + 1,
+        sourceMessageId: 'api-session-msg-1',
+      },
+      toolCalls: [],
+      contextManifestRef: 'session:api-session|messages:2|memory_chars:12',
+      internalStateSnapshotRef: 'trust:regular|contact:none|prompt:prompt-v1|memory:memory-v1|session:session-v1|self:self-v1',
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: {
+        model: 'test-model',
+        promptMode: 'default',
+        promptHash: 'prompt-hash',
+        promptStack: 'prompt-v1',
+        memoryState: 'memory-v1',
+        sessionState: 'session-v1',
+      },
+      provenanceRefs: [`turn:${turnId}`],
+    });
+
+    await eventBus.emit('agent.turn.snapshot', {
+      turnId,
+      requestId: 'api-session-turn-1',
+      channelId: 'api-session',
+      callType: 'chat',
+      purpose: 'agent.turn.snapshot',
+      snapshot: {
+        turnId,
+        requestId: 'api-session-turn-1',
+        channelId: 'api-session',
+        capturedAt: Date.now() + 2,
+        trustLevel: 'regular',
+        prompt: {
+          staticPrefixTemplate: 'Static prefix',
+          dynamicSuffixTemplate: 'Dynamic suffix',
+          staticHash: 'static-hash',
+          versionPointer: 'prompt-v1',
+        },
+        sessionContext: {
+          channelId: 'api-session',
+          recentEntries: [],
+          compactionSummaryTexts: ['summary-1'],
+          focusKnowledgeTexts: ['focus-1'],
+          continuityEntries: [],
+          compactionPromptText: 'Compaction prompt snapshot',
+          versionPointer: 'session-v1',
+        },
+        memory: {
+          channelId: 'api-session',
+          contactEmotionalMemories: [
+            {
+              id: 'mem-1',
+              text: 'Observed memory',
+              type: 'semantic',
+              importance: 0.7,
+              confidence: 0.8,
+              emotionalValence: 0.1,
+              salience: 0.9,
+              embedding: new Float32Array([0.1, 0.2, 0.3]),
+              sourceRef: 'source:api-session',
+              extractedAt: Date.now(),
+              lastAccessed: Date.now(),
+              accessCount: 2,
+              tags: ['api'],
+              sensitivity: 'personal',
+            },
+          ],
+          semanticCandidates: [],
+          lexicalCandidates: [],
+          proactiveCandidates: [],
+          versionPointer: 'memory-v1',
+        },
+      },
+    });
+    await eventBus.emit('agent.turn.stage', {
+      turnId,
+      requestId: 'api-session-turn-1',
+      channelId: 'api-session',
+      callType: 'chat',
+      purpose: 'agent.turn.stage.memory',
+      stage: 'memory',
+      elapsedMs: 25,
+      memoryChars: 128,
+      proactiveRecallIncluded: true,
+    });
+    await eventBus.emit('memory.retrieval', {
+      turnId,
+      requestId: 'api-session-turn-1',
+      channelId: 'api-session',
+      callType: 'chat',
+      purpose: 'memory.retrieval',
+      count: 1,
+      reason: 'ok',
+      retrievalSource: 'embedding',
+      candidateCount: 3,
+      returnedCount: 1,
+      retrievalLimit: 5,
+      provenanceRefs: ['memory:mem-1'],
+    });
 
     const sessionsRes = await request(port, 'GET', '/api/admin/sessions', undefined, authHeaders);
     expect(sessionsRes.status).toBe(200);
@@ -1420,9 +1541,42 @@ describe('AdminServer JSON API routes', () => {
 
     const messagesRes = await request(port, 'GET', '/api/admin/sessions/api-session', undefined, authHeaders);
     expect(messagesRes.status).toBe(200);
-    const messagesPayload = JSON.parse(messagesRes.body) as { messages: Array<{ content: string }> };
+    const messagesPayload = JSON.parse(messagesRes.body) as {
+      messages: Array<{ content: string }>;
+      turns: Array<{
+        record: { turnId: string; versionPointers: { memoryState?: string } };
+        stages: Array<{ stage: string; data: { memoryChars?: number } }>;
+        retrievals: Array<{ count: number; retrievalSource?: string; data: { candidateCount?: number } }>;
+        snapshot: {
+          memory?: {
+            versionPointer: string;
+            contactEmotionalMemories: Array<Record<string, unknown>>;
+          };
+          sessionContext?: { compactionPromptText?: string };
+        } | null;
+      }>;
+    };
     expect(messagesPayload.messages.map(message => message.content)).toContain('hello');
     expect(messagesPayload.messages.map(message => message.content)).toContain('world');
+    expect(messagesPayload.turns).toHaveLength(1);
+    expect(messagesPayload.turns[0]?.record.turnId).toBe(turnId);
+    expect(messagesPayload.turns[0]?.record.versionPointers.memoryState).toBe('memory-v1');
+    expect(messagesPayload.turns[0]?.stages[0]).toMatchObject({
+      stage: 'memory',
+      data: {
+        memoryChars: 128,
+      },
+    });
+    expect(messagesPayload.turns[0]?.retrievals[0]).toMatchObject({
+      count: 1,
+      retrievalSource: 'embedding',
+      data: {
+        candidateCount: 3,
+      },
+    });
+    expect(messagesPayload.turns[0]?.snapshot?.memory?.versionPointer).toBe('memory-v1');
+    expect(messagesPayload.turns[0]?.snapshot?.sessionContext?.compactionPromptText).toBe('Compaction prompt snapshot');
+    expect(messagesPayload.turns[0]?.snapshot?.memory?.contactEmotionalMemories[0]).not.toHaveProperty('embedding');
   });
 
   it('supports contact list/detail/update endpoints', async () => {

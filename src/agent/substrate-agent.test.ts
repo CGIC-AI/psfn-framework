@@ -1954,6 +1954,8 @@ describe('SubstrateAgent.handleMessage', () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const sessionManager = makeMockSessionManager() as any;
+    let snapshotPayload: any = null;
+    eventBus.on('agent.turn.snapshot', (payload) => { snapshotPayload = payload; });
     sessionManager.captureTurnContextSnapshot = vi.fn().mockReturnValue({
       channelId: 'test-channel',
       recentEntries: [],
@@ -2001,6 +2003,24 @@ describe('SubstrateAgent.handleMessage', () => {
     });
     expect(record.internalStateSnapshotRef).toContain('memory:memory-snapshot-v1');
     expect(record.internalStateSnapshotRef).toContain('session:session-snapshot-v1');
+    expect(snapshotPayload).toMatchObject({
+      turnId: record.turnId,
+      requestId: 'msg-snapshot-record',
+      channelId: 'test-channel',
+      purpose: 'agent.turn.snapshot',
+      snapshot: {
+        turnId: record.turnId,
+        requestId: 'msg-snapshot-record',
+        channelId: 'test-channel',
+        memory: {
+          versionPointer: 'memory-snapshot-v1',
+        },
+        sessionContext: {
+          versionPointer: 'session-snapshot-v1',
+          compactionPromptText: 'Compaction prompt snapshot',
+        },
+      },
+    });
   });
 
   it('uses canonical contact key for continuity indexing and context lookup', async () => {

@@ -272,6 +272,25 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Confidential secret');
   });
 
+  it('uses explicit channel privacy overrides for private-prefix channels', async () => {
+    const memories = makeAllSensitivities();
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'test query',
+      'api:test',
+      'primary',
+      { privacyLevel: 'public' },
+    );
+
+    expect(result).toContain('Public fact');
+    expect(result).not.toContain('Personal detail');
+    expect(result).not.toContain('Intimate memory');
+    expect(result).not.toContain('Confidential secret');
+  });
+
   it('primary trust + Discord DM metadata returns full private ceiling', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);

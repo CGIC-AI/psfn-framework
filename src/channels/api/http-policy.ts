@@ -15,6 +15,7 @@ export const API_CORS_ALLOWED_HEADERS = [
   'X-Session-ID',
   'X-User-ID',
   'X-User-Name',
+  'X-Channel-Privacy',
   'X-Channel-ID',
   'X-Broadcast-Approval-Token',
   'X-Broadcast-Visibility-Scope',

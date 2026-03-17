@@ -4636,6 +4636,50 @@ describe('SubstrateAgent.handleMessage', () => {
     ]);
   });
 
+  it('applies routed channel privacy to retrieval, context building, and outbound broadcast safety', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus,
+      makeMockLLMProvider(),
+      sessionManager,
+      'test',
+      config,
+    );
+    const retrieve = vi.fn().mockResolvedValue('');
+    agent.memoryProvider = {
+      retrieve,
+    };
+    mockAssistantResponse('My private number is +1 (555) 123-4567.');
+
+    const response = await agent.handleMessage(makeMessage({
+      channelId: 'api:admin-broadcast',
+      channelType: 'api',
+      content: 'Draft a broadcast post',
+      routing: {
+        source: 'api',
+        channelPrivacy: 'broadcast',
+      },
+    }));
+
+    expect(retrieve).toHaveBeenCalled();
+    expect(retrieve.mock.calls[0][3]).toEqual({ privacyLevel: 'broadcast' });
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[5]).toEqual({ privacyLevel: 'broadcast' });
+    expect(response.content).toBe('');
+    expect(response.metadata.broadcastSafety).toMatchObject({
+      visibilityScope: 'public_only',
+      approvalRequired: true,
+      operatorApproval: false,
+    });
+    expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
+    expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
+      'api:admin-broadcast',
+      expect.stringContaining('held for approval'),
+    );
+  });
+
   it('allows risky broadcast drafts when explicit approval token is present', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

@@ -26,6 +26,20 @@ export const MOOD_CONGRUENCE_WEIGHT_RANGE = {
   min: 0,
   max: 1,
 } as const;
+export const EXTRACTION_THRESHOLD_PCT_RANGE = {
+  min: 10,
+  max: 80,
+} as const;
+export const COMPACTION_THRESHOLD_PCT_RANGE = {
+  min: 30,
+  max: 90,
+} as const;
+export const REMOVED_RUNTIME_SETTINGS_KEYS = [
+  'memoryBudgetPct',
+  'defaultContextWindow',
+  'discordEnabled',
+  'discordHeartbeatChannel',
+] as const;
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
 
@@ -69,8 +83,6 @@ export interface EditableSettings {
   memoryRetrievalLimit?: number;
   extractionInterval?: number;
   maintenanceIntervalMs?: number;
-  defaultContextWindow?: number;
-  memoryBudgetPct?: number;
   extractionThresholdPct?: number;
   compactionThresholdPct?: number;
   observationMaskingWindow?: number;
@@ -150,8 +162,6 @@ export interface EditableSettings {
   elevenLabsEndpointBase?: string;
 
   // Channel configuration (non-secret — bot tokens stay in .env)
-  discordEnabled?: boolean;
-  discordHeartbeatChannel?: string;
   discordTriggerWords?: string;
   discordTriggerReactions?: string;
   discordTriggerListenWindowMs?: number;
@@ -189,8 +199,6 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryRetrievalLimit',
   'extractionInterval',
   'maintenanceIntervalMs',
-  'defaultContextWindow',
-  'memoryBudgetPct',
   'extractionThresholdPct',
   'compactionThresholdPct',
   'observationMaskingWindow',
@@ -260,8 +268,6 @@ export const RUNTIME_SETTINGS_KEYS = [
   'elevenLabsModelId',
   'elevenLabsEndpointBase',
   // Channels
-  'discordEnabled',
-  'discordHeartbeatChannel',
   'discordTriggerWords',
   'discordTriggerReactions',
   'discordTriggerListenWindowMs',

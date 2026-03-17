@@ -67,8 +67,6 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     memoryRetrievalLimit: config.memoryRetrievalLimit ?? null,
     extractionInterval: config.extractionInterval,
     maintenanceIntervalMs: config.maintenanceIntervalMs,
-    defaultContextWindow: config.defaultContextWindow,
-    memoryBudgetPct: config.memoryBudgetPct,
     extractionThresholdPct: config.extractionThresholdPct,
     compactionThresholdPct: config.compactionThresholdPct,
     observationMaskingWindow: config.observationMaskingWindow ?? 10,
@@ -142,8 +140,6 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     elevenLabsModelId: config.elevenLabsModelId ?? null,
     elevenLabsEndpointBase: config.elevenLabsEndpointBase ?? null,
     // Channels
-    discordEnabled: Boolean(config.discordToken),
-    discordHeartbeatChannel: null,
     discordTriggerWords: config.discordTriggerWords?.join(', ') ?? null,
     discordTriggerReactions: config.discordTriggerReactions?.join(', ') ?? '👆',
     discordTriggerListenWindowMs: config.discordTriggerListenWindowMs ?? 120_000,
@@ -185,6 +181,12 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
   if (settings.memoryRetrievalLimit !== undefined) config.memoryRetrievalLimit = settings.memoryRetrievalLimit;
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
+  if (settings.extractionThresholdPct !== undefined) {
+    config.extractionThresholdPct = settings.extractionThresholdPct;
+  }
+  if (settings.compactionThresholdPct !== undefined) {
+    config.compactionThresholdPct = settings.compactionThresholdPct;
+  }
   if (settings.observationMaskingWindow !== undefined) {
     config.observationMaskingWindow = settings.observationMaskingWindow;
   }

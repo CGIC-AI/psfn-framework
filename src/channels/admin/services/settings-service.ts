@@ -6,6 +6,7 @@ import {
   loadSettings,
   MOOD_CONGRUENCE_WEIGHT_RANGE,
   normalizeEditableSettings,
+  REMOVED_RUNTIME_SETTINGS_KEYS,
   splitSettingsByDomain,
   SETTINGS_VALIDATION,
   saveSettings,
@@ -67,6 +68,10 @@ import type {
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
+const REMOVED_RUNTIME_SETTINGS_MESSAGES: Partial<Record<string, string>> = {
+  memoryBudgetPct:
+    'memoryBudgetPct has been removed; use sessionHistoryBudgetPct, memoryRetrievalBudgetPct, and extractionThresholdPct instead',
+};
 const log = createComponentLogger('AdminSettingsService');
 
 type SettingsMutationResult =
@@ -572,6 +577,17 @@ export class AdminSettingsDataService implements AdminSettingsService {
         field,
         `${field} is owned by ${owner}; edit that canonical config instead`,
         'wrong_owner',
+      );
+    }
+
+    for (const field of REMOVED_RUNTIME_SETTINGS_KEYS) {
+      if (!(field in payload)) continue;
+      this.pushFieldError(
+        errors,
+        field,
+        REMOVED_RUNTIME_SETTINGS_MESSAGES[field]
+          ?? `${field} has been removed from runtime settings`,
+        'removed_field',
       );
     }
 

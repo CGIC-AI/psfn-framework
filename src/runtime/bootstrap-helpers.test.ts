@@ -937,6 +937,8 @@ describe('hydrateCanonicalStartupConfig', () => {
     saveSettings(systemDataDir, {
       sessionMessageLimit: 44,
       memoryRetrievalLimit: 11,
+      extractionThresholdPct: 34,
+      compactionThresholdPct: 76,
     });
     saveModelsConfig(systemDataDir, makeCanonicalModelsConfigForChatOverride(
       'openai/gpt-4.1-mini',
@@ -964,6 +966,8 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(result.runtimePathLayout.systemDataDir).toBe(systemDataDir);
     expect(config.sessionMessageLimit).toBe(44);
     expect(config.memoryRetrievalLimit).toBe(11);
+    expect(config.extractionThresholdPct).toBe(34);
+    expect(config.compactionThresholdPct).toBe(76);
     expect(config.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(result.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
     expect(config.maintenanceIntervalMs).toBe(123_000);

@@ -141,7 +141,7 @@ describe('context-budget', () => {
       messageText: 'Can you remember what I said yesterday?',
     })).toBe('recall');
     expect(classifyContextBudgetTurn({
-      taskKind: 'heartbeat',
+      taskKind: 'planning',
     })).toBe('task');
     expect(classifyContextBudgetTurn({
       messageText: 'I feel anxious and need support today.',
@@ -155,6 +155,33 @@ describe('context-budget', () => {
     expect(classifyContextBudgetTurn({
       messageText: 'hello there',
     })).toBe('default');
+  });
+
+  it('classifies heartbeat and reflection turns using normal companion-context heuristics', () => {
+    expect(classifyContextBudgetTurn({
+      channelId: 'internal:heartbeat',
+      channelType: 'internal',
+      taskKind: 'heartbeat',
+      messageText: 'I feel anxious and need support today.',
+    })).toBe('emotional');
+    expect(classifyContextBudgetTurn({
+      channelId: 'internal:reflection:values-reflection',
+      channelType: 'internal',
+      taskKind: 'reflection',
+      messageText: 'Can you remember what mattered most last week?',
+    })).toBe('recall');
+    expect(classifyContextBudgetTurn({
+      channelId: 'internal:reflection:whisper',
+      channelType: 'internal',
+      taskKind: 'reflection',
+      messageText: 'just checking in',
+    })).toBe('default');
+    expect(classifyContextBudgetTurn({
+      channelId: 'internal:planning:daily',
+      channelType: 'internal',
+      taskKind: 'planning',
+      messageText: 'just checking in',
+    })).toBe('task');
   });
 
   it('fails closed to base percentages when adaptive budgets are disabled', () => {

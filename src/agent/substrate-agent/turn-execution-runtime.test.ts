@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../event-bus.js';
+import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
@@ -16,7 +17,7 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-function createMessage(id: string): SubstrateMessage {
+function createMessage(id: string, overrides: Partial<SubstrateMessage> = {}): SubstrateMessage {
   return {
     id,
     channelId: 'ch1',
@@ -25,6 +26,7 @@ function createMessage(id: string): SubstrateMessage {
     authorName: 'User',
     content: 'Hello there',
     timestamp: new Date('2026-03-08T12:00:00Z'),
+    ...overrides,
   };
 }
 
@@ -244,6 +246,72 @@ describe('handleMessageForTurn compaction scheduling', () => {
 
     deferredCompaction.resolve();
     await deferredCompaction.promise;
+  });
+
+  it.each([
+    { channelId: 'internal:heartbeat', taskKind: 'heartbeat' as const },
+    { channelId: 'internal:reflection:whisper', taskKind: 'reflection' as const },
+  ])('routes %s turns through the companion subject identity', async ({ channelId, taskKind }) => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
+    const awaitPendingAutoCompaction = vi.fn(async () => undefined);
+    const recordUserMessage = vi.fn(() => null);
+    const recordAssistantMessage = vi.fn(() => null);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns,
+      awaitPendingAutoCompaction,
+      recordUserMessage,
+      recordAssistantMessage,
+    });
+    runtime.resolveTaskKind = vi.fn(() => taskKind);
+    runtime.resolveAuthorContext = vi.fn(() => ({
+      trustLevel: 'primary',
+      resolvedUserName: 'Companion',
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      continuityFallbackKeys: [],
+    }));
+
+    await handleMessageForTurn(runtime, createMessage(`msg-${taskKind}`, {
+      channelId,
+      channelType: 'terminal',
+      authorId: 'scheduler',
+      authorName: taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper',
+      content: `${taskKind} run`,
+    }));
+
+    const buildPromptTemplateVariablesMock = runtime.buildPromptTemplateVariables as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const buildRuntimeContextMock = runtime.buildRuntimeContext as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    const buildPromptPrefixCacheKeyMock = runtime.buildPromptPrefixCacheKey as unknown as {
+      mock: { calls: unknown[][] };
+    };
+
+    expect(recordUserMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.any(String),
+      'primary',
+      DEFAULT_COMPANION_ID,
+    );
+    expect(buildPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildRuntimeContextMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildPromptPrefixCacheKeyMock.mock.calls[0]?.[3]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildContext.mock.calls[0]?.[4]).toBe(DEFAULT_COMPANION_ID);
+    expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({
+      channelId,
+      userId: DEFAULT_COMPANION_ID,
+    }));
   });
 });
 

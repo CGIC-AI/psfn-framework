@@ -20,6 +20,7 @@ import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import { isTurnId } from '../turns/id.js';
 import { EmotionState } from '../emotion/state.js';
 import { parseSessionEmotionState } from '../emotion/session-metadata.js';
+import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -2131,7 +2132,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[2]).toContain('User felt proud after the release');
   });
 
-  it('uses primary trust for internal channels', async () => {
+  it('uses primary trust and leaves self-directed heartbeat memory unscoped by scheduler identity', async () => {
     const config = makeConfig();
     const mockMemory: MemoryProvider = {
       retrieve: vi.fn<any>().mockResolvedValue('Internal memories'),
@@ -2154,7 +2155,7 @@ describe('SubstrateAgent.handleMessage', () => {
       'internal:heartbeat',
       'primary',
       { isDirectMessage: undefined },
-      'scheduler',
+      undefined,
       undefined,
       {
         channelId: 'internal:heartbeat',
@@ -2164,6 +2165,43 @@ describe('SubstrateAgent.handleMessage', () => {
         taskKind: 'heartbeat',
       },
     );
+  });
+
+  it.each([
+    { channelId: 'internal:heartbeat', authorName: 'Scheduler', taskKind: 'heartbeat' },
+    { channelId: 'internal:reflection:whisper', authorName: 'Whisper', taskKind: 'reflection' },
+  ])('uses companion subject identity for scheduled internal $taskKind turns', async ({ channelId, authorName }) => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      TEST_SYSTEM_PROMPT,
+      config,
+    );
+
+    await agent.handleMessage(makeMessage({
+      channelId,
+      authorId: 'scheduler',
+      authorName,
+      content: `${authorName} run`,
+    }));
+
+    expect((sessionManager.recordUserMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
+    expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
+    expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
+    expect((sessionManager.scheduleAutoCompactionBetweenTurns as any).mock.calls[0][0]).toMatchObject({
+      channelId,
+      userId: DEFAULT_COMPANION_ID,
+    });
+
+    const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
+    expect(prompt).toContain(
+      `Speaking with: ${TEST_COMPANION_NAME} `
+      + `(userId: ${DEFAULT_COMPANION_ID}, canonicalId: ${DEFAULT_COMPANION_ID}, trust: primary)`,
+    );
+    expect(prompt).not.toContain('userId: scheduler');
   });
 
   it('triggers memory extraction after response', async () => {

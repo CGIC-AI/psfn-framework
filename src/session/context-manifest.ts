@@ -1,3 +1,7 @@
+import type {
+  AdaptiveContextBudgetProfile,
+  ContextBudgetTurnCategory,
+} from '../context-budget.js';
 import type { MemoryWithheldReasonCounts } from '../memory/withheld-summary.js';
 
 export type ContextManifestCompositionalMode =
@@ -51,6 +55,11 @@ export interface ContextManifestBudgetSummary {
   hardLimit?: number;
   actualCount: number;
   actualTokenCount: number;
+}
+
+export interface ContextManifestAdaptiveBudgetSummary
+  extends Pick<AdaptiveContextBudgetProfile, 'enabled' | 'source'> {
+  category: ContextBudgetTurnCategory;
 }
 
 export interface ContextManifestMemorySummary {
@@ -108,6 +117,7 @@ export interface ContextManifest {
   memory: ContextManifestMemorySummary;
   budgets: {
     contextWindow: number;
+    adaptive: ContextManifestAdaptiveBudgetSummary;
     sessionHistory: ContextManifestBudgetSummary;
     memoryRetrieval: ContextManifestBudgetSummary;
     sections: ContextManifestSectionUsage[];

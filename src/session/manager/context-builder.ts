@@ -292,6 +292,11 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     },
     budgets: {
       contextWindow: historyBudget.contextWindow,
+      adaptive: {
+        enabled: adaptiveBudgetProfile.enabled,
+        source: adaptiveBudgetProfile.source,
+        category: adaptiveBudgetProfile.category,
+      },
       sessionHistory: {
         mode: historyBudget.mode,
         budgetPct: historyBudget.budgetPct,

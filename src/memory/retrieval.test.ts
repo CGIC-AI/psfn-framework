@@ -163,6 +163,33 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Confidential secret');
   });
 
+  it('explains withheld memories with abstract reasons in the memory context block', async () => {
+    const memories = [
+      makeMemory({ text: 'Public fact', sensitivity: 'public', similarity: 0.95 }),
+      makeMemory({ text: 'Personal detail', sensitivity: 'personal', similarity: 0.9 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const snapshot = await retriever.captureTurnMemorySnapshot('test query', '1234567890', 'regular');
+    expect(snapshot.withheldSummary).toMatchObject({
+      totalCount: 1,
+      reasonCounts: {
+        'trust.ceiling_exceeded': 1,
+      },
+    });
+    expect(snapshot.withheldCandidateIds).toContain(memories[1].id);
+
+    const result = await retriever.retrieve('test query', '1234567890', 'regular', undefined, undefined, snapshot);
+
+    expect(result).toContain('Public fact');
+    expect(result).not.toContain('Personal detail');
+    expect(result).toContain('Memory access note:');
+    expect(result).toContain('1 candidate memory was withheld');
+    expect(result).toContain('trust ceiling');
+  });
+
   it('public trust + broadcast channel returns only public memories', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
@@ -1649,7 +1676,12 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(calls).toHaveLength(1);
     const telemetry = calls[0][1] as Record<string, unknown>;
     expect(telemetry.candidateCount).toBe(2);
+    expect(telemetry.contactScopeRejectedCount).toBe(0);
     expect(telemetry.sensitivityRejectedCount).toBe(1);
+    expect(telemetry.withheldCount).toBe(1);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'trust.ceiling_exceeded': 1,
+    });
     expect(telemetry.returnedCount).toBe(1);
   });
 });

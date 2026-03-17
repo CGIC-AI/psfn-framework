@@ -102,7 +102,6 @@
 
   function computeSnapshot(): string {
     return JSON.stringify({
-      memoryBudgetPct,
       memoryRetrievalLimit, sessionMessageLimit,
       sessionRestartBehavior,
       compositionalPolicy: configValue('compositionalPolicy') ?? null,
@@ -157,7 +156,6 @@
   }
 
   // ── Simple mode fields ──
-  let memoryBudgetPct = $state(20);
   let memoryRetrievalLimit = $state<number | null>(null);
   let sessionMessageLimit = $state<number | null>(null);
   let sessionRestartBehavior = $state<'reuse_latest_session' | 'new_session'>('reuse_latest_session');
@@ -318,7 +316,7 @@
     {
       id: 'memory', title: 'Memory & Extraction', icon: 'E',
       keys: SETTINGS_GARDEN_SECTION_FIELDS.memory,
-      summary: () => `Budget ${memoryBudgetPct}%, Extract at ${extractionThresholdPct}%`,
+      summary: () => `Extract at ${extractionThresholdPct}% every ${extractionInterval} turn${extractionInterval === 1 ? '' : 's'}`,
     },
     {
       id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
@@ -730,7 +728,6 @@
     const scheduler = settingsData.editors?.scheduler as SchedulerEditorConfig | undefined;
     const capabilities = settingsData.editors?.capabilities as CapabilitiesEditorConfig | undefined;
     const maxOutputTokensFromConfig = Number(config.primaryMaxTokens ?? config.extractionMaxTokens ?? 4096);
-    memoryBudgetPct = Number(config.memoryBudgetPct ?? 20);
     memoryRetrievalLimit = config.memoryRetrievalLimit != null ? Number(config.memoryRetrievalLimit) : null;
     sessionMessageLimit = config.sessionMessageLimit != null ? Number(config.sessionMessageLimit) : null;
     sessionRestartBehavior = config.sessionRestartBehavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
@@ -1015,7 +1012,6 @@
     ) * 1000;
 
     return {
-      memoryBudgetPct,
       ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
       ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
       sessionRestartBehavior,
@@ -1646,17 +1642,6 @@
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory & Extraction</h2>
         <hr class="divider-filigree" />
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <label class={LABEL_CLS}>
-              Memory Budget %
-              <span class="text-shadow-400 font-normal ml-1">({getSource('memoryBudgetPct')})</span>
-            </label>
-            <div class="flex items-center gap-3">
-              <input type="range" min="5" max="50" step="1" bind:value={memoryBudgetPct} class={SLIDER_CLS} />
-              <input type="number" min="5" max="50" bind:value={memoryBudgetPct} class={COMPACT_INPUT_CLS} />
-            </div>
-            <p class="text-sm text-shadow-500 mt-1">Legacy % of context window reserved for memory (see budget % above)</p>
-          </div>
           <div>
             <label class={LABEL_CLS}>
               Extraction Threshold %

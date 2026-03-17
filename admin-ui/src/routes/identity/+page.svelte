@@ -421,7 +421,6 @@
       ['characterCardPath', 'Character Card Path'],
       ['sessionHistoryBudgetPct', 'Session History Budget %'],
       ['sessionMessageLimit', 'Session Message Hard Override'],
-      ['memoryBudgetPct', 'Memory Retrieval Budget %'],
       ['memoryRetrievalLimit', 'Memory Retrieval Hard Override'],
     ];
     for (const [key, label] of map) {

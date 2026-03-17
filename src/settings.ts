@@ -8,6 +8,7 @@ export { createDefaultCompositionalPolicyConfig } from './compositional/policy.j
 export {
   SETTINGS_FILE_NAME,
   MOOD_CONGRUENCE_WEIGHT_RANGE,
+  REMOVED_RUNTIME_SETTINGS_KEYS,
   MODEL_SLOT_KEY_PATTERN,
   DEFAULT_MODEL_ROLE_ASSIGNMENTS,
   RUNTIME_SETTINGS_KEYS,

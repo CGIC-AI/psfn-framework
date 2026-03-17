@@ -7,8 +7,6 @@
   "sessionRestartBehavior": "reuse_latest_session",
   "memoryRetrievalLimit": 15,
   "extractionInterval": 5,
-  "defaultContextWindow": 128000,
-  "memoryBudgetPct": 20,
   "extractionThresholdPct": 30,
   "compactionThresholdPct": 70,
   "observationMaskingWindow": 10,

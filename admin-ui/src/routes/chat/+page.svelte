@@ -394,9 +394,7 @@
       const headers: Record<string, string> = {
         'Accept': 'text/event-stream',
         'Content-Type': 'application/json',
-        'X-Session-ID': bootstrap.defaultSessionId,
-        'X-User-ID': bootstrap.defaultAuthorId,
-        'X-User-Name': bootstrap.defaultAuthorName,
+        ...bootstrap.runtime.transportHeaders,
       };
       if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 

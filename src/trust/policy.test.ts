@@ -337,6 +337,15 @@ describe('classifyChannel', () => {
     expect(classifyChannel('1234567890')).toBe('semi_private');
   });
 
+  it('uses explicit privacy metadata for non-broadcast heuristic channels', () => {
+    expect(classifyChannel('api:session123', { privacyLevel: 'public' })).toBe('public');
+    expect(classifyChannel('1234567890', { privacyLevel: 'private' })).toBe('private');
+  });
+
+  it('does not let explicit privacy metadata weaken hard broadcast channels', () => {
+    expect(classifyChannel('twitter:timeline', { privacyLevel: 'private' })).toBe('broadcast');
+  });
+
   it('classifies API channels as private', () => {
     expect(classifyChannel('api:session123')).toBe('private');
   });
@@ -413,6 +422,17 @@ describe('resolveChannelResponseStyle', () => {
     expect(resolveChannelResponseStyle('openwebui:chat-1', {
       channelType: 'webui',
     })).toBe('expressive');
+  });
+
+  it('uses explicit privacy metadata to keep API response style aligned with visibility', () => {
+    expect(resolveChannelResponseStyle('api:session123', {
+      channelType: 'api',
+      meta: { privacyLevel: 'public' },
+    })).toBe('concise');
+    expect(resolveChannelResponseStyle('api:session123', {
+      channelType: 'api',
+      meta: { privacyLevel: 'broadcast' },
+    })).toBe('concise');
   });
 
   it('resolves Telegram and internal channels as concise', () => {

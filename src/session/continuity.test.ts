@@ -713,6 +713,25 @@ describe('SessionManager with continuity', () => {
     expect(continuity[0].channelVisibility).toBe('semi_private');
   });
 
+  it('records explicit channel privacy overrides into continuity visibility', () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    mgr.recordUserMessage(
+      'api:admin-broadcast',
+      'Prepare the broadcast draft',
+      'user1',
+      'Alice',
+      undefined,
+      undefined,
+      { channelMeta: { privacyLevel: 'broadcast' } },
+    );
+
+    const continuity = continuityStore.getRecent('user1', 10);
+    expect(continuity).toHaveLength(1);
+    expect(continuity[0].channelVisibility).toBe('broadcast');
+  });
+
   it('records assistant DM response as private visibility', () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;

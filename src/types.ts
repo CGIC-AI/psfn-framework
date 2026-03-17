@@ -8,6 +8,7 @@ import type { ContextManifest } from './session/context-manifest.js';
 import type { TurnID } from './turns/types.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
+import type { ChannelVisibility } from './trust/types.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
 import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './config/seed-defaults.js';
 import { parseOptionalStringEnv } from './utils/env.js';
@@ -163,6 +164,7 @@ export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'unknown';
   wyoming?: WyomingRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
+  channelPrivacy?: ChannelVisibility;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;

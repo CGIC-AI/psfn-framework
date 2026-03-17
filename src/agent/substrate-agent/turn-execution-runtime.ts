@@ -22,7 +22,7 @@ import {
 import type { SkillsRuntime } from '../../skills/runtime.js';
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
 import { classifyChannel, type ChannelMeta } from '../../trust/policy.js';
-import type { TrustLevel } from '../../trust/types.js';
+import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
 import type {
   AgentResponse,
   CorrelationMetadata,
@@ -304,14 +304,6 @@ export async function handleMessageForTurn(
   const turnBudgetCharacteristics = runtime.buildTurnBudgetCharacteristics(message, taskKind);
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
   const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
-  const channelMeta: ChannelMeta = {
-    isDirectMessage: message.isDirectMessage,
-    ...(message.routing?.broadcast?.approvalToken
-      ? { broadcastApprovalToken: message.routing.broadcast.approvalToken }
-      : {}),
-  };
-  const channelVisibility = classifyChannel(message.channelId, channelMeta);
-  const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
   let retrievalProvenanceRefs: string[] = [];
   let memoryManifestSeed: ContextManifestMemorySeed | undefined;
   const unsubscribeRetrieval = runtime.eventBus.on('memory.retrieval', (telemetry) => {
@@ -352,13 +344,29 @@ export async function handleMessageForTurn(
     retrievalProvenanceRefs = [...new Set(refs.map(ref => ref.trim()).filter(Boolean))];
   });
 
+  const trustStageStart = Date.now();
+  const authorContext = runtime.resolveAuthorContext(message);
+  const resolvedChannelPrivacy = normalizeChannelVisibility(message.routing?.channelPrivacy)
+    ?? authorContext.channelPrivacyLevel;
+  if (resolvedChannelPrivacy) {
+    message.routing = {
+      ...(message.routing ?? {}),
+      channelPrivacy: resolvedChannelPrivacy,
+    };
+  }
+  const channelMeta: ChannelMeta = {
+    ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
+    ...(message.routing?.broadcast?.approvalToken
+      ? { broadcastApprovalToken: message.routing.broadcast.approvalToken }
+      : {}),
+    ...(resolvedChannelPrivacy ? { privacyLevel: resolvedChannelPrivacy } : {}),
+  };
+  const channelVisibility = classifyChannel(message.channelId, channelMeta);
+  const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
   await runtime.eventBus.emit('agent.turn.start', {
     message,
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
   });
-
-  const trustStageStart = Date.now();
-  const authorContext = runtime.resolveAuthorContext(message);
   const subjectIdentityKey = authorContext.subjectIdentityKey
     ?? authorContext.canonicalContactKey
     ?? message.authorId;

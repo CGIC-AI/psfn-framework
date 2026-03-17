@@ -236,9 +236,12 @@ export interface EventMap {
     operatorApproval?: boolean;
     provenanceRefs?: string[];
     policyAllowedCount?: number;
+    contactScopeRejectedCount?: number;
     sensitivityRejectedCount?: number;
     policyRejectedCount?: number;
     policyRejectedReasonTags?: Record<string, number>;
+    withheldCount?: number;
+    withheldReasonCounts?: Record<string, number>;
     scoreRejectedCount?: number;
     retrievalLimit?: number;
     retrievalBudgetPct?: number;

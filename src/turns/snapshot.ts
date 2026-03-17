@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+import type { MemoryWithheldSummary } from '../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../memory/store.js';
 import type { PurrMemory } from '../memory/types.js';
 import type { SessionEntry } from '../session/types.js';
@@ -31,6 +32,8 @@ export interface TurnMemorySnapshot {
   semanticCandidates: Array<PurrMemory & { similarity: number }>;
   lexicalCandidates: Array<PurrMemory & { similarity: number }>;
   proactiveCandidates: PurrMemory[];
+  withheldSummary?: MemoryWithheldSummary;
+  withheldCandidateIds?: string[];
   versionPointer: string;
 }
 

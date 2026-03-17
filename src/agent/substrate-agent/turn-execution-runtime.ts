@@ -328,12 +328,19 @@ export async function handleMessageForTurn(
       ...(telemetry.retrievalBudgetPct !== undefined ? { retrievalBudgetPct: telemetry.retrievalBudgetPct } : {}),
       ...(telemetry.retrievalTokenBudget !== undefined ? { retrievalTokenBudget: telemetry.retrievalTokenBudget } : {}),
       ...(telemetry.retrievalLimitMode ? { retrievalLimitMode: telemetry.retrievalLimitMode } : {}),
+      ...(telemetry.contactScopeRejectedCount !== undefined
+        ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }
+        : {}),
       ...(telemetry.sensitivityRejectedCount !== undefined
         ? { sensitivityRejectedCount: telemetry.sensitivityRejectedCount }
         : {}),
       ...(telemetry.policyRejectedCount !== undefined ? { policyRejectedCount: telemetry.policyRejectedCount } : {}),
       ...(telemetry.policyRejectedReasonTags
         ? { policyRejectedReasonTags: { ...telemetry.policyRejectedReasonTags } }
+        : {}),
+      ...(telemetry.withheldCount !== undefined ? { withheldCount: telemetry.withheldCount } : {}),
+      ...(telemetry.withheldReasonCounts
+        ? { withheldReasonCounts: { ...telemetry.withheldReasonCounts } }
         : {}),
       ...(telemetry.scoreRejectedCount !== undefined ? { scoreRejectedCount: telemetry.scoreRejectedCount } : {}),
       ...(telemetry.budgetCappedCount !== undefined ? { budgetCappedCount: telemetry.budgetCappedCount } : {}),

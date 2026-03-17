@@ -305,7 +305,7 @@ export class TurnSupportRuntime {
     turnId: TurnID,
     requestId: string,
     trustLevel: TrustLevel,
-    canonicalContactKey?: string,
+    continuityUserId?: string,
   ): number | null {
     return recordUserMessageForTurn({
       sessionManager: this.sessionManager,
@@ -313,7 +313,7 @@ export class TurnSupportRuntime {
       turnId,
       requestId,
       trustLevel,
-      canonicalContactKey,
+      continuityUserId,
     });
   }
 
@@ -323,7 +323,7 @@ export class TurnSupportRuntime {
     requestId: string,
     responseText: string,
     trustLevel: TrustLevel,
-    canonicalContactKey?: string,
+    continuityUserId?: string,
     emotionSnapshot?: EmotionStateSnapshot | null,
   ): number | null {
     return recordAssistantMessageForTurn({
@@ -333,7 +333,7 @@ export class TurnSupportRuntime {
       requestId,
       responseText,
       trustLevel,
-      canonicalContactKey,
+      continuityUserId,
       emotionSnapshot,
     });
   }

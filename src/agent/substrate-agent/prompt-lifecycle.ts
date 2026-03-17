@@ -79,11 +79,12 @@ export function buildPromptPrefixCacheKey(
   message: SubstrateMessage,
   channelType: string | undefined,
   canonicalContactKey: string | undefined,
+  subjectIdentityKey?: string,
 ): string {
   return [
     message.channelId,
     channelType ?? 'unknown',
-    canonicalContactKey ?? message.authorId,
+    subjectIdentityKey ?? canonicalContactKey ?? message.authorId,
   ].join('::');
 }
 

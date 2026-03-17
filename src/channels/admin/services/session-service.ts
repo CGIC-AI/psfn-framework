@@ -1,4 +1,5 @@
 import type { ContactStore } from '../../../contacts/store.js';
+import type { EventBus } from '../../../event-bus.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
 import type { CompactionSummary } from '../../../session/types.js';
@@ -13,13 +14,23 @@ import type {
   AdminSessionService,
 } from './types.js';
 import { getLinkedContactForSession } from './contact-session-linker.js';
+import { AdminSessionTurnObservabilityStore } from './session-turn-observability.js';
+
+const DEFAULT_ADMIN_TURN_LIMIT = 50;
 
 export class AdminSessionDataService implements AdminSessionService {
+  private readonly turnObservability: AdminSessionTurnObservabilityStore;
+
   constructor(private readonly deps: {
     sessionStore: SessionStore;
     sessionManager: SessionManager;
+    eventBus: EventBus;
     contactStore?: ContactStore | null;
-  }) {}
+  }) {
+    this.turnObservability = new AdminSessionTurnObservabilityStore({
+      eventBus: deps.eventBus,
+    });
+  }
 
   private verifyCompactionSummary(channelId: string, summary: CompactionSummary) {
     const parsed = parseCompactionSourceHashTag(summary.summary);
@@ -129,6 +140,9 @@ export class AdminSessionDataService implements AdminSessionService {
 
   getSessionMessages(channelId: string): AdminSessionMessagesData {
     const messages = this.deps.sessionManager.getRecentMessages(channelId, 100);
+    const turns = this.deps.sessionStore
+      .getRecentTurnRecords(channelId, DEFAULT_ADMIN_TURN_LIMIT)
+      .map(record => this.turnObservability.buildTurnData(record));
     const compactionAuditViews = this.deps.sessionStore
       .getCompactionSummaries(channelId)
       .slice()
@@ -138,6 +152,7 @@ export class AdminSessionDataService implements AdminSessionService {
       channelId,
       messages,
       compactionAuditViews,
+      turns,
     };
   }
 }

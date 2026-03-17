@@ -39,11 +39,14 @@ import {
   toStringList,
 } from './coercion.js';
 import {
+  COMPACTION_THRESHOLD_PCT_RANGE,
   EXTRACTION_MODEL_SLOT_KEY,
+  EXTRACTION_THRESHOLD_PCT_RANGE,
   KNOWN_MODEL_PURPOSES,
   MODEL_SLOT_KEY_PATTERN,
   MOOD_CONGRUENCE_WEIGHT_RANGE,
   PRIMARY_MODEL_SLOT_KEY,
+  REMOVED_RUNTIME_SETTINGS_KEYS,
   type EditableSettings,
   type SettingsDomainSplit,
 } from './contracts.js';
@@ -978,6 +981,9 @@ function _resolvePurposeSlot(
 
 function normalizeContextControlSettings(settings: EditableSettings): EditableSettings {
   const normalized: EditableSettings = { ...settings };
+  for (const key of REMOVED_RUNTIME_SETTINGS_KEYS) {
+    delete (normalized as Record<string, unknown>)[key];
+  }
 
   const sessionLimit = toIntegerInRange(settings.sessionMessageLimit, 5, 200);
   if (sessionLimit !== undefined) {
@@ -1013,6 +1019,28 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.memoryRetrievalBudgetPct = retrievalBudgetPct;
   } else {
     delete normalized.memoryRetrievalBudgetPct;
+  }
+
+  const extractionThresholdPct = toIntegerInRange(
+    settings.extractionThresholdPct,
+    EXTRACTION_THRESHOLD_PCT_RANGE.min,
+    EXTRACTION_THRESHOLD_PCT_RANGE.max,
+  );
+  if (extractionThresholdPct !== undefined) {
+    normalized.extractionThresholdPct = extractionThresholdPct;
+  } else {
+    delete normalized.extractionThresholdPct;
+  }
+
+  const compactionThresholdPct = toIntegerInRange(
+    settings.compactionThresholdPct,
+    COMPACTION_THRESHOLD_PCT_RANGE.min,
+    COMPACTION_THRESHOLD_PCT_RANGE.max,
+  );
+  if (compactionThresholdPct !== undefined) {
+    normalized.compactionThresholdPct = compactionThresholdPct;
+  } else {
+    delete normalized.compactionThresholdPct;
   }
 
   const moodCongruenceWeight = toNumberInRange(
@@ -1286,13 +1314,6 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
   }
 
   // Channels
-  if ('discordEnabled' in settings) {
-    normalized.discordEnabled = toBoolean(settings.discordEnabled) ?? false;
-  }
-  if ('discordHeartbeatChannel' in settings) {
-    const trimmed = typeof settings.discordHeartbeatChannel === 'string' ? settings.discordHeartbeatChannel.trim() : '';
-    normalized.discordHeartbeatChannel = trimmed || undefined;
-  }
   if ('discordTriggerWords' in settings) {
     const trimmed = typeof settings.discordTriggerWords === 'string' ? settings.discordTriggerWords.trim() : '';
     normalized.discordTriggerWords = trimmed || undefined;

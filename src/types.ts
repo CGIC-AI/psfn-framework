@@ -543,7 +543,6 @@ export interface SubstrateConfig {
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;
-  memoryBudgetPct: number;
   extractionThresholdPct: number;
   compactionThresholdPct: number;
   observationMaskingWindow?: number;
@@ -683,7 +682,6 @@ const DEFAULT_MEMORY_RETRIEVAL_LIMIT = 15;
 export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 const DEFAULT_EXTRACTION_INTERVAL = 5;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 300_000;
-const DEFAULT_MEMORY_BUDGET_PCT = 20;
 const DEFAULT_EXTRACTION_THRESHOLD_PCT = 30;
 const DEFAULT_COMPACTION_THRESHOLD_PCT = 70;
 const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
@@ -862,7 +860,6 @@ export function loadConfig(): SubstrateConfig {
     extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
     maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
     defaultContextWindow,
-    memoryBudgetPct: DEFAULT_MEMORY_BUDGET_PCT,
     extractionThresholdPct: DEFAULT_EXTRACTION_THRESHOLD_PCT,
     compactionThresholdPct: DEFAULT_COMPACTION_THRESHOLD_PCT,
     observationMaskingWindow: DEFAULT_OBSERVATION_MASKING_WINDOW,

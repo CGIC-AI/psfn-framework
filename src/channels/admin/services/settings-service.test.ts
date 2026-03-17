@@ -166,4 +166,50 @@ describe('AdminSettingsDataService', () => {
     expect(settingsAfter.thinkMaxWallTimeMs).toBe(settingsBefore.thinkMaxWallTimeMs);
     expect(settingsAfter.thinkMaxSubQueries).toBe(settingsBefore.thinkMaxSubQueries);
   });
+
+  it('applies live context controls through the canonical admin settings mutation path', () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = new AdminSettingsDataService({ config });
+
+    const result = service.updateSettings(JSON.stringify({
+      extractionThresholdPct: 34,
+      compactionThresholdPct: 76,
+    }));
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'Settings updated',
+    });
+    expect(config.extractionThresholdPct).toBe(34);
+    expect(config.compactionThresholdPct).toBe(76);
+
+    const persistedSettings = loadSettings(root);
+    expect(persistedSettings.extractionThresholdPct).toBe(34);
+    expect(persistedSettings.compactionThresholdPct).toBe(76);
+  });
+
+  it('rejects removed runtime settings instead of silently persisting dead knobs', () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = new AdminSettingsDataService({ config });
+    const settingsBefore = loadSettings(root);
+
+    const result = service.updateSettings(JSON.stringify({
+      memoryBudgetPct: 24,
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('memoryBudgetPct has been removed');
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'memoryBudgetPct',
+        code: 'removed_field',
+      }),
+    ]));
+
+    const settingsAfter = loadSettings(root);
+    expect((settingsAfter as Record<string, unknown>).memoryBudgetPct).toBeUndefined();
+    expect(settingsAfter).toEqual(settingsBefore);
+  });
 });

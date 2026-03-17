@@ -20,6 +20,8 @@ import {
   normalizeEditableSettings,
 } from './schema.js';
 import {
+  COMPACTION_THRESHOLD_PCT_RANGE,
+  EXTRACTION_THRESHOLD_PCT_RANGE,
   MOOD_CONGRUENCE_WEIGHT_RANGE,
   type EditableSettings,
 } from './contracts.js';
@@ -39,6 +41,14 @@ export const SETTINGS_VALIDATION = {
   sessionMessageLimit: { min: 5, max: 200 },
   memoryRetrievalLimit: { min: 1, max: 50 },
   extractionInterval: { min: 1, max: 50 },
+  extractionThresholdPct: {
+    min: EXTRACTION_THRESHOLD_PCT_RANGE.min,
+    max: EXTRACTION_THRESHOLD_PCT_RANGE.max,
+  },
+  compactionThresholdPct: {
+    min: COMPACTION_THRESHOLD_PCT_RANGE.min,
+    max: COMPACTION_THRESHOLD_PCT_RANGE.max,
+  },
   observationMaskingWindow: { min: 0, max: 200 },
   compactionEmotionalSalienceThresholdPct: { min: 0, max: 100 },
   thinkMaxTokens: { min: 1000, max: 1000000 },
@@ -428,7 +438,6 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     validateHttpUrl('elevenLabsEndpointBase', endpointUrl);
   }
 
-  // Channels
   const discordEnabledRaw = params.get('discordEnabled');
   if (discordEnabledRaw !== null) {
     const enabled = toBoolean(discordEnabledRaw);

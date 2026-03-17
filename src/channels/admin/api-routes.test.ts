@@ -2151,8 +2151,6 @@ describe('AdminServer JSON API routes', () => {
       sessionRestartBehavior: 'new_session',
       memoryRetrievalLimit: 12,
       extractionInterval: 6,
-      defaultContextWindow: 196000,
-      memoryBudgetPct: 24,
       extractionThresholdPct: 34,
       compactionThresholdPct: 76,
       compactionEmotionalSalienceThresholdPct: 83,
@@ -2180,8 +2178,6 @@ describe('AdminServer JSON API routes', () => {
       echoTtsPreset: 'wide',
       sttProvider: 'deepgram',
       deepgramModel: 'nova-3',
-      discordEnabled: true,
-      discordHeartbeatChannel: '1234567890',
       discordTriggerWords: 'pixie, hello companion',
       discordTriggerReactions: '👆, 🔥',
       discordTriggerListenWindowMs: 180000,
@@ -2241,6 +2237,32 @@ describe('AdminServer JSON API routes', () => {
     expect(JSON.parse(malformedPatch.body)).toEqual({
       error: 'Invalid JSON payload',
     });
+  });
+
+  it('rejects removed runtime settings over the canonical JSON handler', async () => {
+    const res = await request(
+      port,
+      'PATCH',
+      '/api/admin/settings',
+      JSON.stringify({
+        memoryBudgetPct: 24,
+        defaultContextWindow: 196000,
+        discordEnabled: true,
+        discordHeartbeatChannel: '1234567890',
+      }),
+      authHeaders,
+    );
+
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body)).toEqual(expect.objectContaining({
+      ok: false,
+      validationErrors: expect.arrayContaining([
+        expect.objectContaining({ field: 'memoryBudgetPct', code: 'removed_field' }),
+        expect.objectContaining({ field: 'defaultContextWindow', code: 'removed_field' }),
+        expect.objectContaining({ field: 'discordEnabled', code: 'removed_field' }),
+        expect.objectContaining({ field: 'discordHeartbeatChannel', code: 'removed_field' }),
+      ]),
+    }));
   });
 
   it('returns field-level validation details for invalid settings payloads', async () => {

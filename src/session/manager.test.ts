@@ -566,10 +566,84 @@ describe('SessionManager', () => {
 
     expect(recallContext.messages.length).toBeGreaterThan(0);
     expect(taskContext.messages.length).toBeGreaterThan(0);
+    expect(recallContext.manifest?.budgets.adaptive).toEqual({
+      enabled: true,
+      source: 'adaptive',
+      category: 'recall',
+    });
     expect(recallContext.manifest?.budgets.sessionHistory.budgetPct).toBe(4);
     expect(recallContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(8);
+    expect(taskContext.manifest?.budgets.adaptive).toEqual({
+      enabled: true,
+      source: 'adaptive',
+      category: 'task',
+    });
     expect(taskContext.manifest?.budgets.sessionHistory.budgetPct).toBe(12);
     expect(taskContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(2);
+  });
+
+  it('classifies heartbeat and reflection turns with companion-context adaptive budgets', async () => {
+    const config = makeConfig({
+      adaptiveContextBudgetsEnabled: true,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 100_000 },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+
+    const heartbeatTurn = {
+      channelId: 'internal:heartbeat',
+      channelType: 'internal',
+      taskKind: 'heartbeat',
+      messageText: 'I feel anxious and need support today.',
+    };
+    const heartbeatContext = await mgr.buildContext(
+      'internal:heartbeat',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      heartbeatTurn,
+    );
+
+    expect(heartbeatContext.manifest?.budgets.adaptive).toEqual({
+      enabled: true,
+      source: 'adaptive',
+      category: 'emotional',
+    });
+    expect(heartbeatContext.manifest?.budgets.sessionHistory.budgetPct).toBe(7);
+    expect(heartbeatContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(4);
+
+    const reflectionTurn = {
+      channelId: 'internal:reflection:values-reflection',
+      channelType: 'internal',
+      taskKind: 'reflection',
+      messageText: 'Can you remember what mattered most last week?',
+    };
+    const reflectionContext = await mgr.buildContext(
+      'internal:reflection:values-reflection',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      reflectionTurn,
+    );
+
+    expect(reflectionContext.manifest?.budgets.adaptive).toEqual({
+      enabled: true,
+      source: 'adaptive',
+      category: 'recall',
+    });
+    expect(reflectionContext.manifest?.budgets.sessionHistory.budgetPct).toBe(4);
+    expect(reflectionContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(8);
   });
 
   it('prefers hard session limit over budget percentage', async () => {

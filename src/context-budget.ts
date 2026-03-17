@@ -64,7 +64,8 @@ export const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
 export const MEMORY_RETRIEVAL_MAX_ITEMS = 200;
 
 const DEFAULT_CONTEXT_WINDOW_FALLBACK = 128_000;
-const TASK_KIND_TASK_SET = new Set(['heartbeat', 'reflection', 'planning', 'maintenance', 'deferred_tool_handoff']);
+const TASK_KIND_TASK_SET = new Set(['planning', 'maintenance', 'deferred_tool_handoff']);
+const COMPANION_CONTEXT_TASK_KIND_SET = new Set(['heartbeat', 'reflection']);
 const CHANNEL_TASK_TYPE_SET = new Set(['terminal', 'internal']);
 const MEMORY_RECALL_PATTERN = /\b(remember|recall|memory|memories|journal|scratchpad|what do you know about|what did i (?:say|mention|tell)|last time|previous conversation)\b/i;
 const TASK_PATTERN = /\b(step(?:-by-step)?|plan|roadmap|implement|fix|debug|build|refactor|investigate|analy[sz]e|tests?|deploy|terminal|shell|command|script)\b/i;
@@ -94,6 +95,20 @@ function clamp(value: number, min: number, max: number): number {
 
 function normalizeTurnText(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? '';
+}
+
+function isCompanionContextBudgetTurn(
+  turn: ContextBudgetTurnCharacteristics | undefined,
+): boolean {
+  const taskKind = turn?.taskKind?.trim().toLowerCase();
+  if (taskKind && COMPANION_CONTEXT_TASK_KIND_SET.has(taskKind)) {
+    return true;
+  }
+
+  const channelId = turn?.channelId?.trim().toLowerCase() ?? '';
+  return channelId === 'internal:heartbeat'
+    || channelId.startsWith('internal:heartbeat:')
+    || channelId.startsWith('internal:reflection:');
 }
 
 function resolvePct(value: number | undefined, fallback: number, range: PercentageRange): number {
@@ -151,18 +166,20 @@ export function classifyContextBudgetTurn(
   turn: ContextBudgetTurnCharacteristics | undefined,
 ): ContextBudgetTurnCategory {
   const taskKind = turn?.taskKind?.trim().toLowerCase();
-  if (taskKind && TASK_KIND_TASK_SET.has(taskKind)) {
-    return 'task';
-  }
-
   const channelType = turn?.channelType?.trim().toLowerCase();
-  if (channelType && CHANNEL_TASK_TYPE_SET.has(channelType)) {
-    return 'task';
-  }
-
   const channelId = turn?.channelId?.trim().toLowerCase() ?? '';
-  if (channelId.startsWith('internal:') || channelId.startsWith('terminal:')) {
-    return 'task';
+  if (!isCompanionContextBudgetTurn(turn)) {
+    if (taskKind && TASK_KIND_TASK_SET.has(taskKind)) {
+      return 'task';
+    }
+
+    if (channelType && CHANNEL_TASK_TYPE_SET.has(channelType)) {
+      return 'task';
+    }
+
+    if (channelId.startsWith('internal:') || channelId.startsWith('terminal:')) {
+      return 'task';
+    }
   }
 
   const messageText = normalizeTurnText(turn?.messageText);

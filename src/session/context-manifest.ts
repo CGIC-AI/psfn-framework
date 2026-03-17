@@ -1,3 +1,8 @@
+import type {
+  AdaptiveContextBudgetProfile,
+  ContextBudgetTurnCategory,
+} from '../context-budget.js';
+
 export type ContextManifestCompositionalMode =
   | 'disabled_policy'
   | 'llm_unavailable'
@@ -46,6 +51,11 @@ export interface ContextManifestBudgetSummary {
   hardLimit?: number;
   actualCount: number;
   actualTokenCount: number;
+}
+
+export interface ContextManifestAdaptiveBudgetSummary
+  extends Pick<AdaptiveContextBudgetProfile, 'enabled' | 'source'> {
+  category: ContextBudgetTurnCategory;
 }
 
 export interface ContextManifestMemorySummary {
@@ -100,6 +110,7 @@ export interface ContextManifest {
   memory: ContextManifestMemorySummary;
   budgets: {
     contextWindow: number;
+    adaptive: ContextManifestAdaptiveBudgetSummary;
     sessionHistory: ContextManifestBudgetSummary;
     memoryRetrieval: ContextManifestBudgetSummary;
     sections: ContextManifestSectionUsage[];

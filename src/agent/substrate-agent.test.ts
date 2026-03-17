@@ -314,6 +314,11 @@ function makeContextManifest(): ContextManifest {
     },
     budgets: {
       contextWindow: 128_000,
+      adaptive: {
+        enabled: true,
+        source: 'default',
+        category: 'default',
+      },
       sessionHistory: {
         mode: 'budget',
         budgetPct: 6,

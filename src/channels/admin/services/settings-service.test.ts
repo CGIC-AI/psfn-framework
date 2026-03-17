@@ -44,7 +44,6 @@ function buildConfig(
     extractionInterval: 5,
     maintenanceIntervalMs: 300_000,
     defaultContextWindow,
-    memoryBudgetPct: 20,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
     capabilityTier: 'nursery',
@@ -197,19 +196,40 @@ describe('AdminSettingsDataService', () => {
 
     const result = service.updateSettings(JSON.stringify({
       memoryBudgetPct: 24,
+      defaultContextWindow: 196_000,
+      discordEnabled: true,
+      discordHeartbeatChannel: '1234567890',
     }));
 
     expect(result.ok).toBe(false);
     expect(result.message).toContain('memoryBudgetPct has been removed');
+    expect(result.message).toContain('defaultContextWindow has been removed');
+    expect(result.message).toContain('discordEnabled has been removed');
+    expect(result.message).toContain('discordHeartbeatChannel has been removed');
     expect(result.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
         field: 'memoryBudgetPct',
+        code: 'removed_field',
+      }),
+      expect.objectContaining({
+        field: 'defaultContextWindow',
+        code: 'removed_field',
+      }),
+      expect.objectContaining({
+        field: 'discordEnabled',
+        code: 'removed_field',
+      }),
+      expect.objectContaining({
+        field: 'discordHeartbeatChannel',
         code: 'removed_field',
       }),
     ]));
 
     const settingsAfter = loadSettings(root);
     expect((settingsAfter as Record<string, unknown>).memoryBudgetPct).toBeUndefined();
+    expect((settingsAfter as Record<string, unknown>).defaultContextWindow).toBeUndefined();
+    expect((settingsAfter as Record<string, unknown>).discordEnabled).toBeUndefined();
+    expect((settingsAfter as Record<string, unknown>).discordHeartbeatChannel).toBeUndefined();
     expect(settingsAfter).toEqual(settingsBefore);
   });
 });

@@ -62,7 +62,6 @@ function makeStartupHydrationConfig(
     extractionInterval: 5,
     maintenanceIntervalMs: 300_000,
     defaultContextWindow: 128_000,
-    memoryBudgetPct: 20,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
     modelRoster: {
@@ -969,6 +968,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.extractionThresholdPct).toBe(34);
     expect(config.compactionThresholdPct).toBe(76);
     expect(config.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
+    expect(config.modelRoster.chat?.contextWindow).toBe(65_536);
     expect(result.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
     expect(config.maintenanceIntervalMs).toBe(123_000);
     expect(result.trustPolicyConfig.channelClassification.defaultVisibility).toBeTruthy();

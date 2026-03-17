@@ -205,7 +205,6 @@ export interface EnvInfo {
   openrouterApiKey: string;
   litellmBaseUrl: string;
   litellmApiKey: string;
-  ollamaUrl: string;
   importProcessingLocalApiKey: string;
   telegramBotToken: string;
 }

@@ -6,6 +6,7 @@ import type {
   InferredPostTurnAction,
   CorrelationMetadata,
 } from './types.js';
+import type { TurnSnapshot } from './turns/snapshot.js';
 import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,
@@ -34,6 +35,7 @@ export interface EventMap {
   'message.received': { message: SubstrateMessage } & EventCorrelationFields;
   'message.sent': { response: AgentResponse } & EventCorrelationFields;
   'agent.turn.start': { message: SubstrateMessage } & EventCorrelationFields;
+  'agent.turn.snapshot': { snapshot: TurnSnapshot } & EventCorrelationFields;
   'agent.turn.end': { message: SubstrateMessage; response: AgentResponse } & EventCorrelationFields;
   'agent.post_turn.actions.inferred': {
     message: SubstrateMessage;

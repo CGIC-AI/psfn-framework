@@ -91,6 +91,7 @@ export class AdminServer implements Lifecycle {
     this.sessionService = new AdminSessionDataService({
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
+      eventBus: config.eventBus,
       contactStore: config.contactStore,
     });
     this.contactsService = new AdminContactsDataService({

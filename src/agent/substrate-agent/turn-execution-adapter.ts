@@ -48,6 +48,7 @@ interface TurnExecutionAdapterCallbacks {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
     now: Date,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
@@ -61,6 +62,7 @@ interface TurnExecutionAdapterCallbacks {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
     responseStyle: ResponseStyle,
     now: Date,
     taskKind: string | undefined,
@@ -73,6 +75,7 @@ interface TurnExecutionAdapterCallbacks {
     message: SubstrateMessage,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
   ) => string;
   buildStaticPromptSettingsHash: (templateVariables: Record<string, string>) => string;
   resolveStaticPromptPrefix: (params: {
@@ -158,8 +161,8 @@ export function createTurnExecutionRuntimeAdapter(
       callType,
       payload,
     ),
-    recordUserMessage: (message, turnId, requestId, trustLevel, canonicalContactKey) => options.turnSupportRuntime
-      .recordUserMessage(message, turnId, requestId, trustLevel, canonicalContactKey),
+    recordUserMessage: (message, turnId, requestId, trustLevel, continuityUserId) => options.turnSupportRuntime
+      .recordUserMessage(message, turnId, requestId, trustLevel, continuityUserId),
     resolveSessionChannelId: (channelId) => options.turnSupportRuntime.resolveSessionChannelId(channelId),
     resolveChannelType: (message) => options.callbacks.resolveChannelType(message),
     ensureModel: (message) => options.callbacks.ensureModel(message),
@@ -174,6 +177,7 @@ export function createTurnExecutionRuntimeAdapter(
       trustLevel,
       channelType,
       canonicalContactKey,
+      subjectIdentityKey,
       now,
     ) => options.callbacks.buildPromptTemplateVariables(
       message,
@@ -181,6 +185,7 @@ export function createTurnExecutionRuntimeAdapter(
       trustLevel,
       channelType,
       canonicalContactKey,
+      subjectIdentityKey,
       now,
     ),
     setCurrentSelfModelState: (
@@ -194,6 +199,7 @@ export function createTurnExecutionRuntimeAdapter(
       trustLevel,
       channelType,
       canonicalContactKey,
+      subjectIdentityKey,
       responseStyle,
       now,
       taskKind,
@@ -207,6 +213,7 @@ export function createTurnExecutionRuntimeAdapter(
       trustLevel,
       channelType,
       canonicalContactKey,
+      subjectIdentityKey,
       responseStyle,
       now,
       taskKind,
@@ -215,8 +222,8 @@ export function createTurnExecutionRuntimeAdapter(
       metacognitiveFlags,
       emotionAppraisalChain,
     ),
-    buildPromptPrefixCacheKey: (message, channelType, canonicalContactKey) => options.callbacks
-      .buildPromptPrefixCacheKey(message, channelType, canonicalContactKey),
+    buildPromptPrefixCacheKey: (message, channelType, canonicalContactKey, subjectIdentityKey) => options.callbacks
+      .buildPromptPrefixCacheKey(message, channelType, canonicalContactKey, subjectIdentityKey),
     buildStaticPromptSettingsHash: (templateVariables) => options.callbacks
       .buildStaticPromptSettingsHash(templateVariables),
     resolveStaticPromptPrefix: (params) => options.callbacks.resolveStaticPromptPrefix(params),
@@ -254,7 +261,7 @@ export function createTurnExecutionRuntimeAdapter(
       requestId,
       responseText,
       trustLevel,
-      canonicalContactKey,
+      continuityUserId,
       emotionSnapshot,
     ) => options.turnSupportRuntime.recordAssistantMessage(
       message,
@@ -262,7 +269,7 @@ export function createTurnExecutionRuntimeAdapter(
       requestId,
       responseText,
       trustLevel,
-      canonicalContactKey,
+      continuityUserId,
       emotionSnapshot,
     ),
     buildTurnToolSummary: (turnMessages) => options.turnSupportRuntime.buildTurnToolSummary(turnMessages),

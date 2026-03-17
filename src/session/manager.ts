@@ -470,7 +470,6 @@ export class SessionManager {
     options: SessionMessageRecordOptions = {},
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
@@ -482,6 +481,29 @@ export class SessionManager {
         role: 'user',
       })
       : options.metadata;
+    const continuityKey = continuityUserId ?? authorId;
+
+    if (!shouldPersistSessionChannel(resolvedChannelId)) {
+      if (
+        this.continuityStore
+        && continuityKey
+        && resolvedChannelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX)
+      ) {
+        this.continuityStore.append(continuityKey, {
+          channelId: resolvedChannelId,
+          role: 'user',
+          content,
+          authorId,
+          authorName,
+          timestamp,
+          originChannelId: resolvedChannelId,
+          channelVisibility,
+          ...(metadata ? { metadata } : {}),
+        });
+      }
+      return null;
+    }
+
     const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'user',
@@ -493,7 +515,6 @@ export class SessionManager {
       ...(metadata ? { metadata } : {}),
     });
 
-    const continuityKey = continuityUserId ?? authorId;
     if (this.continuityStore && continuityKey) {
       this.continuityStore.append(continuityKey, {
         channelId: resolvedChannelId,
@@ -531,7 +552,6 @@ export class SessionManager {
     options: SessionMessageRecordOptions = {},
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
     const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
@@ -543,6 +563,27 @@ export class SessionManager {
         role: 'assistant',
       })
       : options.metadata;
+    const continuityKey = continuityUserId ?? forUserId;
+
+    if (!shouldPersistSessionChannel(resolvedChannelId)) {
+      if (
+        this.continuityStore
+        && continuityKey
+        && resolvedChannelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX)
+      ) {
+        this.continuityStore.append(continuityKey, {
+          channelId: resolvedChannelId,
+          role: 'assistant',
+          content,
+          timestamp,
+          originChannelId: resolvedChannelId,
+          channelVisibility,
+          ...(metadata ? { metadata } : {}),
+        });
+      }
+      return null;
+    }
+
     const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'assistant',
@@ -552,7 +593,6 @@ export class SessionManager {
       ...(metadata ? { metadata } : {}),
     });
 
-    const continuityKey = continuityUserId ?? forUserId;
     if (this.continuityStore && continuityKey) {
       this.continuityStore.append(continuityKey, {
         channelId: resolvedChannelId,

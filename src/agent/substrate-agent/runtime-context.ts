@@ -51,6 +51,7 @@ export interface ResolvedAuthorContext {
   trustLevel: TrustLevel;
   resolvedUserName: string;
   canonicalContactKey?: string;
+  subjectIdentityKey?: string;
   continuityFallbackKeys: string[];
 }
 
@@ -60,6 +61,7 @@ export function buildPromptTemplateVariables(input: {
   trustLevel: TrustLevel;
   channelType: string | undefined;
   canonicalContactKey: string | undefined;
+  subjectIdentityKey?: string;
   now: Date;
   characterPromptVariables: Record<string, string>;
   modelId: string;
@@ -72,13 +74,15 @@ export function buildPromptTemplateVariables(input: {
     input.characterPromptVariables,
     input.fallbackCharacterName,
   );
+  const subjectIdentityKey = input.subjectIdentityKey ?? input.message.authorId;
+  const canonicalIdentityKey = input.canonicalContactKey ?? input.subjectIdentityKey ?? input.message.authorId;
 
   return {
     templateVariables: {
       ...input.characterPromptVariables,
       user: input.resolvedUserName,
       user_name: input.resolvedUserName,
-      user_id: input.message.authorId,
+      user_id: subjectIdentityKey,
       char: runtimeCharacterName,
       char_name: runtimeCharacterName,
       character: runtimeCharacterName,
@@ -88,7 +92,7 @@ export function buildPromptTemplateVariables(input: {
       channel_type: input.channelType ?? 'unknown',
       channel_visibility: visibility,
       trust_level: input.trustLevel,
-      canonical_contact_id: input.canonicalContactKey ?? input.message.authorId,
+      canonical_contact_id: canonicalIdentityKey,
       model: input.modelId,
       model_id: input.modelId,
       now_iso: formatActiveDateTimeIso(input.now),
@@ -103,6 +107,7 @@ export function buildRuntimeContext(input: {
   trustLevel: TrustLevel;
   channelType: string | undefined;
   canonicalContactKey?: string;
+  subjectIdentityKey?: string;
   responseStyle?: ResponseStyle;
   now?: Date;
   taskKind?: string;
@@ -138,6 +143,8 @@ export function buildRuntimeContext(input: {
     deferred: deferredCount,
     total: activeCount,
   } = input.activeToolCounts;
+  const subjectIdentityKey = input.subjectIdentityKey ?? input.message.authorId;
+  const canonicalIdentityKey = input.canonicalContactKey ?? input.subjectIdentityKey ?? input.message.authorId;
   const extendedBreakdown = [
     extendedLoadedCount > 0 ? `${extendedLoadedCount} loaded` : null,
     autoloadCount > 0 ? `${autoloadCount} autoload` : null,
@@ -148,7 +155,7 @@ export function buildRuntimeContext(input: {
     '[Runtime Context]',
     `Current time: ${formatActiveDateTimeLabel(now)}`,
     `Channel: ${input.message.channelId} (type: ${input.channelType ?? 'unknown'}, visibility: ${visibility})`,
-    `Speaking with: ${input.resolvedUserName} (userId: ${input.message.authorId}, canonicalId: ${input.canonicalContactKey ?? input.message.authorId}, trust: ${input.trustLevel})`,
+    `Speaking with: ${input.resolvedUserName} (userId: ${subjectIdentityKey}, canonicalId: ${canonicalIdentityKey}, trust: ${input.trustLevel})`,
     `Model: ${input.modelId}`,
     `Response style preference: ${responseStyle}`,
     `Capability tier: ${input.capabilityTier}`,
@@ -464,19 +471,33 @@ export function resolveAuthorContext(input: {
   message: SubstrateMessage;
   contactStore: ContactStore | null | undefined;
   logger: RuntimeContextLogger;
+  companionIdentityKey?: string;
+  companionDisplayName?: string;
 }): ResolvedAuthorContext {
   if (input.message.channelId.startsWith('internal:')) {
-    // Reflection channels have no real user contact — the authorId is 'scheduler'.
-    // Setting canonicalContactKey='scheduler' causes violatesHighIntimacyContactScope
-    // to filter every high-intimacy memory (contactId !== 'scheduler'), leaving the
-    // companion with no access to her memories during heartbeat turns.
-    // Leave canonicalContactKey undefined for reflection channels so the contact
-    // scope filter does not fire and all memories remain accessible.
-    const isReflectionChannel = input.message.channelId.startsWith('internal:reflection:');
+    const isSelfSubjectChannel = (
+      input.message.channelId === 'internal:heartbeat'
+      || input.message.channelId.startsWith('internal:reflection:')
+    );
+    if (isSelfSubjectChannel) {
+      // Heartbeat/reflection turns are executed by the scheduler, but the subject
+      // of the turn is the companion. Keeping canonicalContactKey unset preserves
+      // access to self-directed/high-intimacy memories while subjectIdentityKey
+      // carries the continuity/prompt subject separately from executor identity.
+      const subjectIdentityKey = input.companionIdentityKey?.trim();
+      const resolvedUserName = input.companionDisplayName?.trim() || resolvePromptUserName(input.message);
+      return {
+        trustLevel: 'primary',
+        resolvedUserName,
+        ...(subjectIdentityKey ? { subjectIdentityKey } : {}),
+        continuityFallbackKeys: [],
+      };
+    }
+
     return {
       trustLevel: 'primary',
       resolvedUserName: resolvePromptUserName(input.message),
-      ...(isReflectionChannel ? {} : { canonicalContactKey: input.message.authorId }),
+      canonicalContactKey: input.message.authorId,
       continuityFallbackKeys: [],
     };
   }

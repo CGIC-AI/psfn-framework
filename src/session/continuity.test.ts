@@ -6,6 +6,7 @@ import { UserContinuityStore } from './continuity.js';
 import { SessionStore } from './store.js';
 import { SessionManager } from './manager.js';
 import type { SubstrateConfig } from '../types.js';
+import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import * as journalUtils from './journal-utils.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -586,6 +587,43 @@ describe('SessionManager with continuity', () => {
     // Should NOT contain the ch2 message in the continuity block (it's already in local)
     // but the ch2 entry will be in the continuity store, excluded by channelId
     expect(ctx.systemPrompt).not.toContain('[from sillytavern:ch2]');
+  });
+
+  it('keeps reflection channels out of session storage but preserves companion continuity', async () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+    mgr.characterName = 'Companion';
+
+    const heartbeatEntryId = mgr.recordAssistantMessage(
+      'internal:heartbeat',
+      'Earlier heartbeat summary',
+      DEFAULT_COMPANION_ID,
+      undefined,
+      DEFAULT_COMPANION_ID,
+    );
+    const reflectionEntryId = mgr.recordAssistantMessage(
+      'internal:reflection:whisper',
+      'Earlier reflection summary',
+      DEFAULT_COMPANION_ID,
+      undefined,
+      DEFAULT_COMPANION_ID,
+    );
+
+    expect(heartbeatEntryId).not.toBeNull();
+    expect(reflectionEntryId).toBeNull();
+    expect(sessionStore.getRecent('internal:reflection:whisper', 10)).toHaveLength(0);
+
+    const ctx = await mgr.buildContext(
+      'internal:reflection:daily',
+      'System prompt',
+      '',
+      undefined,
+      DEFAULT_COMPANION_ID,
+    );
+
+    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('Earlier heartbeat summary');
+    expect(ctx.systemPrompt).toContain('Earlier reflection summary');
   });
 
   it('buildContext works without continuity store (backward compat)', async () => {

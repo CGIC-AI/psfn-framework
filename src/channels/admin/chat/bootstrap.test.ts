@@ -30,7 +30,6 @@ function makeRuntimeConfig(characterCardPath: string, characterName = ''): Subst
     extractionInterval: 5,
     maintenanceIntervalMs: 60_000,
     defaultContextWindow: 8_192,
-    memoryBudgetPct: 20,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
     modelRoster: {},

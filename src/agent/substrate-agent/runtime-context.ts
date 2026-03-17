@@ -1,7 +1,8 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { SubstrateMessage, ResponseStyle, CapabilityTier } from '../../types.js';
-import type { TrustLevel } from '../../trust/types.js';
-import { classifyChannel, getResponseStylePromptGuidance } from '../../trust/policy.js';
+import type { ChannelVisibility, TrustLevel } from '../../trust/types.js';
+import { normalizeChannelVisibility } from '../../trust/types.js';
+import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } from '../../trust/policy.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
@@ -52,7 +53,17 @@ export interface ResolvedAuthorContext {
   resolvedUserName: string;
   canonicalContactKey?: string;
   subjectIdentityKey?: string;
+  channelPrivacyLevel?: ChannelVisibility;
   continuityFallbackKeys: string[];
+}
+
+function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {
+  const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
+  return {
+    ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
+    ...(privacyLevel ? { privacyLevel } : {}),
+  };
 }
 
 export function buildPromptTemplateVariables(input: {
@@ -67,9 +78,7 @@ export function buildPromptTemplateVariables(input: {
   modelId: string;
   fallbackCharacterName: string;
 }): { templateVariables: Record<string, string>; runtimeCharacterName: string } {
-  const visibility = classifyChannel(input.message.channelId, {
-    isDirectMessage: input.message.isDirectMessage,
-  });
+  const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
   const runtimeCharacterName = resolveRuntimeCharacterName(
     input.characterPromptVariables,
     input.fallbackCharacterName,
@@ -132,7 +141,7 @@ export function buildRuntimeContext(input: {
   const now = input.now ?? new Date();
   const metacognitiveFlags = input.metacognitiveFlags ?? [];
   const emotionAppraisalChain = input.emotionAppraisalChain ?? [];
-  const visibility = classifyChannel(input.message.channelId, { isDirectMessage: input.message.isDirectMessage });
+  const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
   const responseStyleGuidance = getResponseStylePromptGuidance(responseStyle);
   const extendedCount = input.extendedTools.length;
   const {
@@ -519,6 +528,11 @@ export function resolveAuthorContext(input: {
       ? maybeChannelResolver.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName)
       : input.contactStore.resolveUserId(input.message.authorId);
     const canonicalContactKey = contact.id;
+    const channelPrivacyLevel = normalizeChannelVisibility(
+      contact.channels?.find(link => (
+        link.channel === channel && link.userId === input.message.authorId
+      ))?.privacyLevel,
+    );
 
     const maybeActivityRecorder = input.contactStore as ContactStore & {
       recordChannelActivity?: (contactId: string, channel: string, channelId: string) => void;
@@ -534,6 +548,7 @@ export function resolveAuthorContext(input: {
       trustLevel: contact.trustLevel,
       resolvedUserName: resolvePromptUserName(input.message, contact),
       canonicalContactKey,
+      ...(channelPrivacyLevel ? { channelPrivacyLevel } : {}),
       continuityFallbackKeys: canonicalContactKey
         ? collectContinuityFallbackKeys(input.message.authorId, canonicalContactKey, contact)
         : [],

@@ -169,6 +169,7 @@ describe('evaluateCorsPolicy', () => {
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Session-ID');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-User-ID');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-User-Name');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Channel-Privacy');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Channel-ID');
   });
 

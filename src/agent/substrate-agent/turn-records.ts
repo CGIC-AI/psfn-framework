@@ -10,7 +10,8 @@ import type {
   TurnRecordToolCall,
   TurnUsage,
 } from '../../types.js';
-import type { TrustLevel } from '../../trust/types.js';
+import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
+import type { ChannelMeta } from '../../trust/policy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
@@ -21,6 +22,15 @@ function resolveIncomingMessageRole(message: SubstrateMessage): 'user' | 'system
     return 'system';
   }
   return 'user';
+}
+
+function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
+  const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
+  return {
+    ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
+    ...(privacyLevel ? { privacyLevel } : {}),
+  };
 }
 
 export function recordUserMessage(input: {
@@ -44,6 +54,7 @@ export function recordUserMessage(input: {
         turnId: input.turnId,
         requestId: input.requestId,
         sourceMessageId: input.message.id,
+        channelMeta: resolveSessionChannelMeta(input.message),
       },
     );
   }
@@ -60,6 +71,7 @@ export function recordUserMessage(input: {
       turnId: input.turnId,
       requestId: input.requestId,
       sourceMessageId: input.message.id,
+      channelMeta: resolveSessionChannelMeta(input.message),
     },
   );
 }
@@ -91,6 +103,7 @@ export function recordAssistantMessage(input: {
         requestId: input.requestId,
         sourceMessageId: input.message.id,
         ...(metadata ? { metadata } : {}),
+        channelMeta: resolveSessionChannelMeta(input.message),
       },
     );
   }
@@ -107,6 +120,7 @@ export function recordAssistantMessage(input: {
       requestId: input.requestId,
       sourceMessageId: input.message.id,
       ...(metadata ? { metadata } : {}),
+      channelMeta: resolveSessionChannelMeta(input.message),
     },
   );
 }
@@ -135,6 +149,7 @@ export function recordToolObservations(input: {
         turnId: input.turnId,
         requestId: input.requestId,
         sourceMessageId: input.message.id,
+        channelMeta: resolveSessionChannelMeta(input.message),
       },
     );
   }

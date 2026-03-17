@@ -29,16 +29,16 @@ export function recordUserMessage(input: {
   turnId: TurnID;
   requestId: string;
   trustLevel: TrustLevel;
-  canonicalContactKey?: string;
+  continuityUserId?: string;
 }): number | null {
-  if (input.canonicalContactKey) {
+  if (input.continuityUserId) {
     return input.sessionManager.recordUserMessage(
       input.message.channelId,
       input.message.content,
       input.message.authorId,
       input.message.authorName,
       input.message.isDirectMessage,
-      input.canonicalContactKey,
+      input.continuityUserId,
       {
         trustLevel: input.trustLevel,
         turnId: input.turnId,
@@ -71,20 +71,20 @@ export function recordAssistantMessage(input: {
   requestId: string;
   responseText: string;
   trustLevel: TrustLevel;
-  canonicalContactKey?: string;
+  continuityUserId?: string;
   emotionSnapshot?: EmotionStateSnapshot | null;
 }): number | null {
   const metadata = input.emotionSnapshot
     ? buildSessionMetadataWithEmotionState(undefined, input.emotionSnapshot)
     : undefined;
 
-  if (input.canonicalContactKey) {
+  if (input.continuityUserId) {
     return input.sessionManager.recordAssistantMessage(
       input.message.channelId,
       input.responseText,
       input.message.authorId,
       input.message.isDirectMessage,
-      input.canonicalContactKey,
+      input.continuityUserId,
       {
         trustLevel: input.trustLevel,
         turnId: input.turnId,

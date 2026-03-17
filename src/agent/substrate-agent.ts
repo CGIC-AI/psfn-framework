@@ -36,6 +36,7 @@ import {
   type PromptComposer,
 } from '../identity/prompt-composer.js';
 import type { ComposeContext } from '../identity/prompt-types.js';
+import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import {
   createSubstrateStreamFn,
 } from './stream-adapter.js';
@@ -573,7 +574,7 @@ export class SubstrateAgent {
       createTurnId(),
       message.id,
       authorContext.trustLevel,
-      authorContext.canonicalContactKey,
+      authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey,
     );
     this.agent.steer({
       role: 'user',
@@ -611,7 +612,7 @@ export class SubstrateAgent {
         turnId,
         message.id,
         authorContext.trustLevel,
-        authorContext.canonicalContactKey,
+        authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey,
       );
     }
     this.agent.followUp({
@@ -708,6 +709,7 @@ export class SubstrateAgent {
           trustLevel,
           channelType,
           canonicalContactKey,
+          subjectIdentityKey,
           now,
         ) => this.buildPromptTemplateVariables(
           turnMessage,
@@ -715,6 +717,7 @@ export class SubstrateAgent {
           trustLevel,
           channelType,
           canonicalContactKey,
+          subjectIdentityKey,
           now,
         ),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
@@ -728,6 +731,7 @@ export class SubstrateAgent {
           trustLevel,
           channelType,
           canonicalContactKey,
+          subjectIdentityKey,
           responseStyle,
           now,
           taskKind,
@@ -741,6 +745,7 @@ export class SubstrateAgent {
           trustLevel,
           channelType,
           canonicalContactKey,
+          subjectIdentityKey,
           responseStyle,
           now,
           taskKind,
@@ -749,10 +754,16 @@ export class SubstrateAgent {
           metacognitiveFlags,
           emotionAppraisalChain,
         ),
-        buildPromptPrefixCacheKey: (turnMessage, channelType, canonicalContactKey) => this.buildPromptPrefixCacheKey(
+        buildPromptPrefixCacheKey: (
           turnMessage,
           channelType,
           canonicalContactKey,
+          subjectIdentityKey,
+        ) => this.buildPromptPrefixCacheKey(
+          turnMessage,
+          channelType,
+          canonicalContactKey,
+          subjectIdentityKey,
         ),
         buildStaticPromptSettingsHash: (templateVariables) => this.buildStaticPromptSettingsHash(templateVariables),
         resolveStaticPromptPrefix: (params) => this.resolveStaticPromptPrefix(params),
@@ -795,8 +806,14 @@ export class SubstrateAgent {
     message: SubstrateMessage,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
+    subjectIdentityKey?: string,
   ): string {
-    return buildPromptPrefixCacheKeyForTurn(message, channelType, canonicalContactKey);
+    return buildPromptPrefixCacheKeyForTurn(
+      message,
+      channelType,
+      canonicalContactKey,
+      subjectIdentityKey,
+    );
   }
 
   private buildStaticPromptSettingsHash(templateVariables: Record<string, string>): string {
@@ -840,6 +857,7 @@ export class SubstrateAgent {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
     now: Date,
   ): Record<string, string> {
     const characterPromptVariables = this.resolveCharacterPromptVariables();
@@ -849,6 +867,7 @@ export class SubstrateAgent {
       trustLevel,
       channelType,
       canonicalContactKey,
+      subjectIdentityKey,
       now,
       characterPromptVariables,
       modelId: this.agent.state.model.id,
@@ -865,6 +884,7 @@ export class SubstrateAgent {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey?: string,
+    subjectIdentityKey?: string,
     responseStyle: ResponseStyle = 'concise',
     now: Date = new Date(),
     taskKind?: string,
@@ -880,6 +900,7 @@ export class SubstrateAgent {
       trustLevel,
       channelType,
       canonicalContactKey,
+      subjectIdentityKey,
       responseStyle,
       now,
       taskKind,
@@ -948,6 +969,8 @@ export class SubstrateAgent {
       message,
       contactStore: this.contactStore,
       logger: log,
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: this.characterName,
     });
   }
 }

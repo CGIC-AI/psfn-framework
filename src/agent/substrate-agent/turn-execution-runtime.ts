@@ -130,7 +130,7 @@ export interface TurnExecutionRuntime {
     turnId: TurnID,
     requestId: string,
     trustLevel: TrustLevel,
-    canonicalContactKey?: string,
+    continuityUserId?: string,
   ) => number | null;
   resolveSessionChannelId: (channelId: string) => string;
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
@@ -149,6 +149,7 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
     now: Date,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
@@ -162,6 +163,7 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
     responseStyle: ResponseStyle,
     now: Date,
     taskKind: string | undefined,
@@ -174,6 +176,7 @@ export interface TurnExecutionRuntime {
     message: SubstrateMessage,
     channelType: string | undefined,
     canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
   ) => string;
   buildStaticPromptSettingsHash: (templateVariables: Record<string, string>) => string;
   resolveStaticPromptPrefix: (params: {
@@ -227,7 +230,7 @@ export interface TurnExecutionRuntime {
     requestId: string,
     responseText: string,
     trustLevel: TrustLevel,
-    canonicalContactKey?: string,
+    continuityUserId?: string,
     emotionSnapshot?: import('../../emotion/state.js').EmotionStateSnapshot | null,
   ) => number | null;
   buildTurnToolSummary: (turnMessages: AgentMessage[]) => TurnToolSummary;
@@ -349,6 +352,10 @@ export async function handleMessageForTurn(
 
   const trustStageStart = Date.now();
   const authorContext = runtime.resolveAuthorContext(message);
+  const subjectIdentityKey = authorContext.subjectIdentityKey
+    ?? authorContext.canonicalContactKey
+    ?? message.authorId;
+  const continuityUserId = authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey;
   runtime.emitTurnStage(message, startTime, turnId, requestId, 'trust', turnCallType, {
     durationMs: Date.now() - trustStageStart,
     trustLevel: authorContext.trustLevel,
@@ -363,7 +370,7 @@ export async function handleMessageForTurn(
     turnId,
     requestId,
     authorContext.trustLevel,
-    authorContext.canonicalContactKey,
+    continuityUserId,
   );
   const emotionSessionId = runtime.resolveSessionChannelId(message.channelId);
 
@@ -378,7 +385,7 @@ export async function handleMessageForTurn(
     }).captureTurnContextSnapshot === 'function'
       ? runtime.sessionManager.captureTurnContextSnapshot(
         message.channelId,
-        authorContext.canonicalContactKey ?? message.authorId,
+        subjectIdentityKey,
         channelMeta,
         authorContext.continuityFallbackKeys,
         turnBudgetCharacteristics,
@@ -469,6 +476,7 @@ export async function handleMessageForTurn(
       trustLevel,
       channelType,
       authorContext.canonicalContactKey,
+      authorContext.subjectIdentityKey,
       runtimeNow,
     );
     const preTurnInternalState = runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
@@ -499,6 +507,7 @@ export async function handleMessageForTurn(
       trustLevel,
       channelType,
       authorContext.canonicalContactKey,
+      authorContext.subjectIdentityKey,
       responseStyle,
       runtimeNow,
       taskKind,
@@ -514,6 +523,7 @@ export async function handleMessageForTurn(
         message,
         channelType,
         authorContext.canonicalContactKey,
+        authorContext.subjectIdentityKey,
       );
       const staticSettingsHash = runtime.buildStaticPromptSettingsHash(templateVariables);
       const staticPrefix = runtime.resolveStaticPromptPrefix({
@@ -560,7 +570,7 @@ export async function handleMessageForTurn(
         fullPrompt,
         memoryContextBlock,
         undefined,
-        authorContext.canonicalContactKey ?? message.authorId,
+        subjectIdentityKey,
         channelMeta,
         authorContext.continuityFallbackKeys,
         turnSnapshot.sessionContext,
@@ -899,7 +909,7 @@ export async function handleMessageForTurn(
         requestId,
         safeResponseText,
         authorContext.trustLevel,
-        authorContext.canonicalContactKey,
+        continuityUserId,
         emotionSnapshot,
       );
     }
@@ -1074,7 +1084,7 @@ export async function handleMessageForTurn(
       memoriesBlock: memoryContextBlock,
       llmProvider: runtime.llmClient,
       channelMeta,
-      userId: authorContext.canonicalContactKey ?? message.authorId,
+      userId: subjectIdentityKey,
       compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
       turnBudgetCharacteristics,
     }).catch((error) => {

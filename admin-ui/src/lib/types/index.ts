@@ -207,6 +207,11 @@ export interface AdminTurnRetrievalTelemetry {
   data: Record<string, unknown>;
 }
 
+export interface MemoryWithheldSummary {
+  totalCount: number;
+  reasonCounts: Record<string, number>;
+}
+
 export interface AdminObservedMemory {
   id: string;
   text: string;
@@ -261,6 +266,7 @@ export interface AdminTurnMemorySnapshotData {
   semanticCandidates: AdminObservedScoredMemory[];
   lexicalCandidates: AdminObservedScoredMemory[];
   proactiveCandidates: AdminObservedMemory[];
+  withheldSummary?: MemoryWithheldSummary;
   versionPointer: string;
 }
 

@@ -1,3 +1,5 @@
+import type { MemoryWithheldReasonCounts } from '../memory/withheld-summary.js';
+
 export type ContextManifestCompositionalMode =
   | 'disabled_policy'
   | 'llm_unavailable'
@@ -16,9 +18,12 @@ export interface ContextManifestMemorySeed {
   retrievalBudgetPct?: number;
   retrievalTokenBudget?: number;
   retrievalLimitMode?: 'budget' | 'hard_limit';
+  contactScopeRejectedCount?: number;
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
   policyRejectedReasonTags?: Record<string, number>;
+  withheldCount?: number;
+  withheldReasonCounts?: MemoryWithheldReasonCounts;
   scoreRejectedCount?: number;
   budgetCappedCount?: number;
   selectedTypes?: Record<string, number>;
@@ -59,9 +64,12 @@ export interface ContextManifestMemorySummary {
   rankedCount: number;
   returnedCount: number;
   excluded: {
+    contactScopeRejectedCount?: number;
     sensitivityRejectedCount: number;
     policyRejectedCount: number;
     policyRejectedReasonTags?: Record<string, number>;
+    withheldCount?: number;
+    withheldReasonCounts?: MemoryWithheldReasonCounts;
     scoreRejectedCount: number;
     budgetCappedCount: number;
   };

@@ -263,10 +263,19 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       rankedCount: params.memoryManifestSeed?.rankedCount ?? 0,
       returnedCount: memoryIncludedCount,
       excluded: {
+        ...(params.memoryManifestSeed?.contactScopeRejectedCount !== undefined
+          ? { contactScopeRejectedCount: params.memoryManifestSeed.contactScopeRejectedCount }
+          : {}),
         sensitivityRejectedCount: params.memoryManifestSeed?.sensitivityRejectedCount ?? 0,
         policyRejectedCount: params.memoryManifestSeed?.policyRejectedCount ?? 0,
         ...(params.memoryManifestSeed?.policyRejectedReasonTags
           ? { policyRejectedReasonTags: { ...params.memoryManifestSeed.policyRejectedReasonTags } }
+          : {}),
+        ...(params.memoryManifestSeed?.withheldCount !== undefined
+          ? { withheldCount: params.memoryManifestSeed.withheldCount }
+          : {}),
+        ...(params.memoryManifestSeed?.withheldReasonCounts
+          ? { withheldReasonCounts: { ...params.memoryManifestSeed.withheldReasonCounts } }
           : {}),
         scoreRejectedCount: params.memoryManifestSeed?.scoreRejectedCount ?? 0,
         budgetCappedCount: params.memoryManifestSeed?.budgetCappedCount ?? 0,

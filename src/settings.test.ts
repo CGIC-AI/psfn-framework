@@ -194,6 +194,31 @@ describe('settings', () => {
       expect(readFileSync(path, 'utf-8')).toBe('[]');
     });
 
+    it('drops removed runtime settings from persisted settings payloads', () => {
+      const path = join(tempDir, 'settings.json');
+      writeFileSync(path, JSON.stringify({
+        sessionHistoryBudgetPct: 7,
+        memoryBudgetPct: 24,
+        defaultContextWindow: 196_000,
+        discordEnabled: true,
+        discordHeartbeatChannel: '1234567890',
+      }), 'utf-8');
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.sessionHistoryBudgetPct).toBe(7);
+      expect((loaded as Record<string, unknown>).memoryBudgetPct).toBeUndefined();
+      expect((loaded as Record<string, unknown>).defaultContextWindow).toBeUndefined();
+      expect((loaded as Record<string, unknown>).discordEnabled).toBeUndefined();
+      expect((loaded as Record<string, unknown>).discordHeartbeatChannel).toBeUndefined();
+      expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({
+        sessionHistoryBudgetPct: 7,
+        memoryBudgetPct: 24,
+        defaultContextWindow: 196_000,
+        discordEnabled: true,
+        discordHeartbeatChannel: '1234567890',
+      });
+    });
+
     it('returns cached settings on repeated reads without re-reading disk', () => {
       const path = join(tempDir, 'settings.json');
       saveSettings(tempDir, { extractionInterval: 6 });
@@ -615,9 +640,16 @@ describe('settings', () => {
   describe('applySettings', () => {
     it('mutates config with defined values', () => {
       const config = makeConfig();
-      applySettings(config, { extractionInterval: 9, sessionMessageLimit: 55 });
+      applySettings(config, {
+        extractionInterval: 9,
+        sessionMessageLimit: 55,
+        extractionThresholdPct: 34,
+        compactionThresholdPct: 76,
+      });
       expect(config.extractionInterval).toBe(9);
       expect(config.sessionMessageLimit).toBe(55);
+      expect(config.extractionThresholdPct).toBe(34);
+      expect(config.compactionThresholdPct).toBe(76);
     });
 
     it('does not modify values when settings are empty', () => {
@@ -960,8 +992,6 @@ describe('settings', () => {
         sessionRestartBehavior: 'new_session' as const,
         memoryRetrievalLimit: 11,
         extractionInterval: 6,
-        defaultContextWindow: 196_000,
-        memoryBudgetPct: 24,
         extractionThresholdPct: 34,
         compactionThresholdPct: 76,
         observationMaskingWindow: 12,
@@ -1011,8 +1041,6 @@ describe('settings', () => {
         echoTtsPreset: 'wide',
         sttProvider: 'disabled' as const,
         deepgramModel: '',
-        discordEnabled: true,
-        discordHeartbeatChannel: '1234567890',
         discordTriggerWords: 'pixie, hello companion',
         discordTriggerReactions: '👆, 🔥',
         discordTriggerListenWindowMs: 180_000,
@@ -1311,14 +1339,18 @@ describe('settings', () => {
         primaryMaxTokens: '100',
         sessionHistoryBudgetPct: '0',
         sessionMessageLimit: '999',
+        extractionThresholdPct: '101',
+        compactionThresholdPct: '0',
         retryBaseDelayMs: '100',
         moodCongruenceWeight: '1.2',
       });
       const [, errors] = parseSettingsForm(params);
-      expect(errors.length).toBe(5);
+      expect(errors.length).toBe(7);
       expect(errors.some(err => err.includes('primaryMaxTokens'))).toBe(true);
       expect(errors.some(err => err.includes('sessionHistoryBudgetPct'))).toBe(true);
       expect(errors.some(err => err.includes('sessionMessageLimit'))).toBe(true);
+      expect(errors.some(err => err.includes('extractionThresholdPct'))).toBe(true);
+      expect(errors.some(err => err.includes('compactionThresholdPct'))).toBe(true);
       expect(errors.some(err => err.includes('retryBaseDelayMs'))).toBe(true);
       expect(errors.some(err => err.includes('moodCongruenceWeight'))).toBe(true);
     });

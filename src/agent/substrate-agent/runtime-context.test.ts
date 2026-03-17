@@ -100,4 +100,63 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).not.toContain('userId: scheduler');
     expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
   });
+
+  it('uses routed channel privacy in prompt variables and runtime context', () => {
+    const message = makeMessage({
+      channelId: 'api:admin-broadcast',
+      channelType: 'api',
+      authorId: 'admin-user',
+      authorName: 'Admin User',
+      routing: {
+        source: 'api',
+        channelPrivacy: 'broadcast',
+      },
+    });
+
+    const { templateVariables } = buildPromptTemplateVariables({
+      message,
+      resolvedUserName: 'Admin User',
+      trustLevel: 'regular',
+      channelType: 'api',
+      canonicalContactKey: 'contact-admin',
+      subjectIdentityKey: undefined,
+      now: new Date('2026-03-17T12:00:00Z'),
+      characterPromptVariables: {
+        char_name: 'Companion',
+      },
+      modelId: 'test-model',
+      fallbackCharacterName: 'Companion',
+    });
+
+    expect(templateVariables.channel_visibility).toBe('broadcast');
+
+    const runtimeContext = buildRuntimeContext({
+      message,
+      resolvedUserName: 'Admin User',
+      trustLevel: 'regular',
+      channelType: 'api',
+      canonicalContactKey: 'contact-admin',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables,
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 0,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).toContain('Channel: api:admin-broadcast (type: api, visibility: broadcast)');
+  });
 });

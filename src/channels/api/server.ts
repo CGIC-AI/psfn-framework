@@ -19,6 +19,7 @@ import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import type { SessionManager } from '../../session/manager.js';
+import { isChannelVisibility, type ChannelVisibility } from '../../trust/types.js';
 import type {
   ChannelAdapter,
   ChannelCapabilities,
@@ -143,6 +144,16 @@ interface TurnRoutingOverrides {
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;
+}
+
+interface ChannelPrivacyResolution {
+  ok: true;
+  value?: ChannelVisibility;
+}
+
+interface ChannelPrivacyError {
+  ok: false;
+  error: string;
 }
 
 interface IdentityClaimHeaders {
@@ -1016,6 +1027,7 @@ export class ApiServer implements ChannelAdapter {
     authorName: string,
     req: IncomingMessage,
     overrides: TurnRoutingOverrides,
+    channelPrivacy?: ChannelVisibility,
   ): SubstrateMessage {
     const approvalToken = this.clampHeader(
       this.singleHeader(req.headers['x-broadcast-approval-token']),
@@ -1038,11 +1050,16 @@ export class ApiServer implements ChannelAdapter {
           },
         }
         : {}),
+      ...(channelPrivacy ? { channelPrivacy } : {}),
       ...(overrides.modelOverride ? { modelOverride: overrides.modelOverride } : {}),
       ...(overrides.promptOverride ? { promptOverride: overrides.promptOverride } : {}),
       ...(overrides.responseStyle ? { responseStyle: overrides.responseStyle } : {}),
     };
-    const hasRouting = routing.broadcast || routing.modelOverride || routing.promptOverride || routing.responseStyle;
+    const hasRouting = routing.broadcast
+      || routing.channelPrivacy
+      || routing.modelOverride
+      || routing.promptOverride
+      || routing.responseStyle;
 
     return {
       id: `api-${randomUUID()}`,
@@ -1073,6 +1090,7 @@ export class ApiServer implements ChannelAdapter {
     messages: ChatCompletionRequest['messages'],
     authorId: string,
     authorName: string,
+    channelPrivacy?: ChannelVisibility,
   ): void {
     // Only seed if this session has no prior messages
     const count = this.sessionManager.getMessageCount(channelId);
@@ -1082,12 +1100,56 @@ export class ApiServer implements ChannelAdapter {
     const prior = messages.slice(0, -1);
     for (const msg of prior) {
       if (msg.role === 'user') {
+        if (channelPrivacy) {
+          this.sessionManager.recordUserMessage(
+            channelId,
+            msg.content,
+            authorId,
+            msg.name ?? authorName,
+            undefined,
+            undefined,
+            {
+              channelMeta: { privacyLevel: channelPrivacy },
+            },
+          );
+          continue;
+        }
         this.sessionManager.recordUserMessage(channelId, msg.content, authorId, msg.name ?? authorName);
       } else if (msg.role === 'assistant') {
+        if (channelPrivacy) {
+          this.sessionManager.recordAssistantMessage(
+            channelId,
+            msg.content,
+            undefined,
+            undefined,
+            undefined,
+            {
+              channelMeta: { privacyLevel: channelPrivacy },
+            },
+          );
+          continue;
+        }
         this.sessionManager.recordAssistantMessage(channelId, msg.content);
       }
       // system messages are handled via systemPrompt, skip
     }
+  }
+
+  private resolveChannelPrivacy(req: IncomingMessage): ChannelPrivacyResolution | ChannelPrivacyError {
+    const rawValue = this.clampHeader(
+      this.singleHeader(req.headers['x-channel-privacy']),
+      64,
+    );
+    if (!rawValue) {
+      return { ok: true };
+    }
+    if (!isChannelVisibility(rawValue)) {
+      return {
+        ok: false,
+        error: 'X-Channel-Privacy must be one of: private, semi_private, public, broadcast',
+      };
+    }
+    return { ok: true, value: rawValue };
   }
 
   private deriveAuthor(principal: ApiAuthPrincipal): { authorId: string; authorName: string } {
@@ -1448,13 +1510,17 @@ export class ApiServer implements ChannelAdapter {
       this.sendError(res, 400, 'invalid_request', routingOverrides.error);
       return null;
     }
+    const channelPrivacy = this.resolveChannelPrivacy(req);
+    if (!channelPrivacy.ok) {
+      this.sendError(res, 400, 'invalid_request', channelPrivacy.error);
+      return null;
+    }
 
     const channelId = this.deriveChannelId(req, principal);
     const { authorId, authorName } = this.deriveAuthor(principal);
     if (!this.enforceIdentityClaim(req, res, authorId)) {
       return null;
     }
-    this.seedSession(channelId, request.messages, authorId, authorName);
 
     const lastUserMsg = this.getLastUserMessage(request.messages);
     const substrateMsg = this.buildSubstrateMessage(
@@ -1464,7 +1530,9 @@ export class ApiServer implements ChannelAdapter {
       authorName,
       req,
       routingOverrides.value,
+      channelPrivacy.value,
     );
+    this.seedSession(channelId, request.messages, authorId, authorName, channelPrivacy.value);
 
     const releaseChannel = await this.acquireChannel(channelId, req, res);
     if (!releaseChannel) return null;

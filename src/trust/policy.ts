@@ -18,7 +18,10 @@ import type {
   ChannelVisibility,
   ConsentFlags,
 } from './types.js';
-import { isHighTierTrustLevel } from './types.js';
+import {
+  isHighTierTrustLevel,
+  normalizeChannelVisibility,
+} from './types.js';
 import type { ResponseStyle, ResponseStyleOverrides } from '../types.js';
 import { getRuntimeTrustPolicy } from './runtime-policy.js';
 
@@ -26,6 +29,7 @@ export interface ChannelMeta {
   isDirectMessage?: boolean;
   broadcastApprovalToken?: string;
   disclosureConsentGranted?: boolean;
+  privacyLevel?: ChannelVisibility;
 }
 
 const RESPONSE_STYLE_BY_VISIBILITY: Record<ChannelVisibility, ResponseStyle> = {
@@ -289,15 +293,20 @@ export function classifyChannel(
     return prefixOverride;
   }
 
+  if (trustPolicy.channelClassification.broadcastPrefixes.some(prefix => channelId.startsWith(prefix))) {
+    return 'broadcast';
+  }
+
+  const explicitPrivacyLevel = normalizeChannelVisibility(meta?.privacyLevel);
+  if (explicitPrivacyLevel !== undefined) {
+    return explicitPrivacyLevel;
+  }
+
   // Discord DMs explicitly flagged by adapter — private (honne)
   if (meta?.isDirectMessage) return 'private';
 
   if (trustPolicy.channelClassification.privatePrefixes.some(prefix => channelId.startsWith(prefix))) {
     return 'private';
-  }
-
-  if (trustPolicy.channelClassification.broadcastPrefixes.some(prefix => channelId.startsWith(prefix))) {
-    return 'broadcast';
   }
 
   return trustPolicy.channelClassification.defaultVisibility;
@@ -378,6 +387,12 @@ export function resolveChannelResponseStyle(
   }
   if (normalizedChannelType === 'internal' || normalizedChannelId.startsWith('internal:')) {
     return 'concise';
+  }
+
+  const explicitPrivacyLevel = normalizeChannelVisibility(options.meta?.privacyLevel);
+  if (explicitPrivacyLevel) {
+    const visibility = classifyChannel(channelId, options.meta);
+    return overrides?.defaultStyle ?? RESPONSE_STYLE_BY_VISIBILITY[visibility];
   }
 
   if (options.meta?.isDirectMessage) return 'expressive';

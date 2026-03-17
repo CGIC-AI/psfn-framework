@@ -612,6 +612,45 @@ describe('ApiServer', () => {
       expect(call.routing?.responseStyle).toBe('concise');
     });
 
+    it('passes explicit channel privacy to substrate messages', async () => {
+      await server.stop();
+      const mockAgent = createMockAgentLoop(eventBus);
+      server = new ApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Prepare a public draft.' }],
+      }, {
+        'X-Channel-Privacy': 'broadcast',
+      });
+      expect(res.status).toBe(200);
+
+      const call = (mockAgent.handleMessage as any).mock.calls[0][0] as SubstrateMessage;
+      expect(call.routing?.channelPrivacy).toBe('broadcast');
+    });
+
+    it('rejects invalid channel privacy headers', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'test' }],
+      }, {
+        'X-Channel-Privacy': 'friends-only',
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('X-Channel-Privacy');
+    });
+
     it('rejects invalid response_style overrides', async () => {
       const res = await request(port, 'POST', '/v1/chat/completions', {
         model: DEFAULT_COMPANION_ID,
@@ -1249,6 +1288,7 @@ describe('ApiServer', () => {
       expect(res.headers['access-control-allow-origin']).toBe('https://console.example');
       expect(res.headers['access-control-allow-methods']).toContain('POST');
       expect(res.headers['access-control-allow-headers']).toContain('X-Session-ID');
+      expect(res.headers['access-control-allow-headers']).toContain('X-Channel-Privacy');
       expect(res.headers.vary).toContain('Origin');
     });
 

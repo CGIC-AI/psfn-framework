@@ -72,6 +72,7 @@ describe('AdminChatBootstrapService', () => {
 
     expect(payload.defaultSessionId).toBe('123456789012345678');
     expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('123456789012345678');
+    expect(payload.runtime.transportHeaders['X-Channel-Privacy']).toBe('private');
     // Global default should not force a Garden contact remap by itself.
     expect(payload.selectedIdentity.channel).toBe('api');
     expect(payload.selectedIdentity.userId).toBe('admin-user');
@@ -88,6 +89,7 @@ describe('AdminChatBootstrapService', () => {
 
     expect(payload.defaultSessionId).toBe('api:admin-user');
     expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('api:admin-user');
+    expect(payload.runtime.transportHeaders['X-Channel-Privacy']).toBe('private');
   });
 
   it('keeps explicit operator-selected identity as default session', () => {
@@ -102,6 +104,7 @@ describe('AdminChatBootstrapService', () => {
 
     expect(payload.defaultSessionId).toBe('api:operator-7');
     expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('api:operator-7');
+    expect(payload.runtime.transportHeaders['X-Channel-Privacy']).toBe('private');
   });
 
   it('does not expose raw api keys in bootstrap payloads', () => {

@@ -329,7 +329,12 @@ export class AdminChatBootstrapService {
       ? undefined
       : normalizeTrimmed(this.resolveGlobalDefaultSessionIdFn?.() ?? undefined);
     const defaultSessionId = globalDefaultSessionId ?? selectedIdentitySessionId;
-    const transportHeaders = this.buildTransportHeaders(defaultSessionId, defaultAuthorId, defaultAuthorName);
+    const transportHeaders = this.buildTransportHeaders(
+      defaultSessionId,
+      defaultAuthorId,
+      defaultAuthorName,
+      selectedIdentity.privacyLevel,
+    );
     const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);
     const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, apiBaseUrl);
     const openAiBaseUrl = buildAbsoluteAdminChatApiUrl(OPENAI_API_BASE_PATH, apiBaseUrl);
@@ -454,11 +459,13 @@ export class AdminChatBootstrapService {
     defaultSessionId: string,
     defaultAuthorId: string,
     defaultAuthorName: string,
+    privacyLevel: ChannelPrivacyLevel,
   ): Record<string, string> {
     return {
       'X-Session-ID': defaultSessionId,
       'X-User-ID': defaultAuthorId,
       'X-User-Name': defaultAuthorName,
+      'X-Channel-Privacy': privacyLevel,
     };
   }
 

@@ -30,6 +30,7 @@ export const LOW_TIER_TRUST_LEVELS: readonly LowTierTrustLevel[] = ['regular', '
 export const HIGH_INTIMACY_SENSITIVITY_LEVELS: readonly HighIntimacySensitivityLevel[] = ['intimate', 'confidential'];
 
 export const SENSITIVITY_LEVELS: readonly SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
+export const CHANNEL_VISIBILITIES: readonly ChannelVisibility[] = ['private', 'semi_private', 'public', 'broadcast'];
 
 export const VALID_SENSITIVITY_LEVELS: SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
 export const VALID_CONSENT_REDACTION_BEHAVIORS: ConsentRedactionBehavior[] = ['delete', 'abstract'];
@@ -88,6 +89,14 @@ export function isLowTierTrustLevel(level: TrustLevel): level is LowTierTrustLev
 
 export function isHighIntimacySensitivityLevel(level: SensitivityLevel): level is HighIntimacySensitivityLevel {
   return (HIGH_INTIMACY_SENSITIVITY_LEVELS as readonly SensitivityLevel[]).includes(level);
+}
+
+export function isChannelVisibility(value: unknown): value is ChannelVisibility {
+  return typeof value === 'string' && (CHANNEL_VISIBILITIES as readonly string[]).includes(value);
+}
+
+export function normalizeChannelVisibility(value: unknown): ChannelVisibility | undefined {
+  return isChannelVisibility(value) ? value : undefined;
 }
 
 export function sensitivityOrd(level: SensitivityLevel): number {

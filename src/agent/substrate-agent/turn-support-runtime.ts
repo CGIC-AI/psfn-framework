@@ -2,7 +2,7 @@ import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import { createComponentLogger } from '../../logger.js';
 import type { EventBus } from '../../event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { TrustLevel } from '../../trust/types.js';
+import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
 import type {
   AgentResponse,
   CorrelationMetadata,
@@ -56,8 +56,18 @@ import {
   type PostTurnInferenceContext,
 } from './post-turn-actions.js';
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
+import type { ChannelMeta } from '../../trust/policy.js';
 
 const log = createComponentLogger('SubstrateAgent');
+
+function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
+  const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
+  if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
+  return {
+    ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
+    ...(privacyLevel ? { privacyLevel } : {}),
+  };
+}
 
 export interface TurnSupportRuntimeOptions {
   eventBus: EventBus;
@@ -355,6 +365,7 @@ export class TurnSupportRuntime {
         turnId,
         requestId,
         sourceMessageId: message.id,
+        channelMeta: resolveSessionChannelMeta(message),
       },
     );
   }

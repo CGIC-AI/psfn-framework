@@ -2,6 +2,7 @@ import type { SubstrateConfig, TurnID } from '../types.js';
 import { countTokens } from '../llm/tokens.js';
 import { SESSION_HISTORY_MIN_MESSAGES } from '../context-budget.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../trust/types.js';
+import type { ChannelMeta } from '../trust/policy.js';
 import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../security/refusal-patterns.js';
 import type { SessionEntry } from './types.js';
 
@@ -102,6 +103,7 @@ export interface SessionMessageRecordOptions {
   requestId?: string;
   sourceMessageId?: string;
   metadata?: string;
+  channelMeta?: ChannelMeta;
 }
 
 export interface MirrorEntryMetadata {

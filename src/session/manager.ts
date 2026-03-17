@@ -470,7 +470,7 @@ export class SessionManager {
     options: SessionMessageRecordOptions = {},
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
+    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     const metadata = options.turnId
@@ -552,7 +552,7 @@ export class SessionManager {
     options: SessionMessageRecordOptions = {},
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
+    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     const metadata = options.turnId
@@ -629,7 +629,7 @@ export class SessionManager {
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
-    const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
+    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     const metadata = options.turnId
@@ -754,7 +754,7 @@ export class SessionManager {
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
-    const meta = isDirectMessage != null ? { isDirectMessage } : undefined;
+    const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
     const turnMetadata = options.turnId

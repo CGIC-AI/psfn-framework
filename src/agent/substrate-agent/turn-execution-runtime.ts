@@ -412,6 +412,10 @@ export async function handleMessageForTurn(
       ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
       ...(memorySnapshot ? { memory: memorySnapshot } : {}),
     };
+    await runtime.eventBus.emit('agent.turn.snapshot', {
+      snapshot: turnSnapshot,
+      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
+    });
 
     const memoryStageStart = Date.now();
     const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(

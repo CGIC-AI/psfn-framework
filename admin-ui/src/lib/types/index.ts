@@ -182,10 +182,130 @@ export interface AdminSessionListData {
   channels: ChannelInfo[];
 }
 
+export interface AdminTurnStageTelemetry {
+  observedAt: number;
+  turnId: string;
+  requestId?: string;
+  channelId: string;
+  callType?: string;
+  purpose?: string;
+  stage: string;
+  elapsedMs: number;
+  data: Record<string, unknown>;
+}
+
+export interface AdminTurnRetrievalTelemetry {
+  observedAt: number;
+  turnId: string;
+  requestId?: string;
+  channelId: string;
+  callType?: string;
+  purpose?: string;
+  count: number;
+  reason?: string;
+  retrievalSource?: 'embedding' | 'lexical_fallback';
+  data: Record<string, unknown>;
+}
+
+export interface AdminObservedMemory {
+  id: string;
+  text: string;
+  type: string;
+  importance: number;
+  confidence: number;
+  emotionalValence: number;
+  formationVAD?: Record<string, number>;
+  salience: number;
+  sourceRef: string;
+  extractedAt: number;
+  lastAccessed: number;
+  accessCount: number;
+  supersededBy?: string;
+  tags: string[];
+  provenanceRefs?: string[];
+  retentionClass?: string;
+  sensitivity: string;
+  consentFlags?: Record<string, boolean>;
+  contactId?: string;
+  deletedAt?: number;
+  deletedBy?: string;
+  deleteReason?: string;
+}
+
+export interface AdminObservedScoredMemory extends AdminObservedMemory {
+  similarity: number;
+}
+
+export interface AdminTurnPromptSnapshotData {
+  staticPrefixTemplate: string;
+  dynamicSuffixTemplate: string;
+  staticHash: string;
+  versionPointer: string;
+}
+
+export interface AdminTurnSessionContextSnapshotData {
+  channelId: string;
+  recentEntries: SessionEntry[];
+  compactionSummaryTexts: string[];
+  focusKnowledgeTexts: string[];
+  continuityEntries: SessionEntry[];
+  compactionPromptText?: string;
+  versionPointer: string;
+}
+
+export interface AdminTurnMemorySnapshotData {
+  channelId: string;
+  profile?: Record<string, unknown>;
+  emotionalSnapshot?: Record<string, number>;
+  contactEmotionalMemories: AdminObservedMemory[];
+  semanticCandidates: AdminObservedScoredMemory[];
+  lexicalCandidates: AdminObservedScoredMemory[];
+  proactiveCandidates: AdminObservedMemory[];
+  versionPointer: string;
+}
+
+export interface AdminTurnSnapshotData {
+  turnId: string;
+  requestId: string;
+  channelId: string;
+  capturedAt: number;
+  trustLevel: string;
+  canonicalContactKey?: string;
+  prompt?: AdminTurnPromptSnapshotData;
+  sessionContext?: AdminTurnSessionContextSnapshotData;
+  memory?: AdminTurnMemorySnapshotData;
+}
+
+export interface AdminSessionTurnData {
+  record: {
+    turnId: string;
+    requestId: string;
+    channelId: string;
+    channelType: string;
+    startedAt: number;
+    completedAt: number;
+    status: string;
+    userMessage: SessionEntry;
+    assistantMessage?: SessionEntry;
+    toolCalls: Array<Record<string, unknown>>;
+    contextManifestRef?: string;
+    internalStateSnapshotRef?: string;
+    extractedMemoryIds: string[];
+    concernDeltaRefs: string[];
+    contactDeltaRefs: string[];
+    versionPointers: Record<string, unknown>;
+    provenanceRefs: string[];
+  };
+  stages: AdminTurnStageTelemetry[];
+  retrievals: AdminTurnRetrievalTelemetry[];
+  snapshot: AdminTurnSnapshotData | null;
+}
+
 export interface AdminSessionMessagesData {
   channelId: string;
   messages: SessionEntry[];
   compactionAuditViews: CompactionAuditView[];
+  turns: AdminSessionTurnData[];
 }
 
 // Contacts

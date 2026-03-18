@@ -422,6 +422,7 @@ export interface Contact {
   conversationChannels?: Array<{
     channel: string;
     channelId: string;
+    privacyLevel?: ChannelPrivacyLevel;
     firstSeen: string;
     lastSeen: string;
   }>;

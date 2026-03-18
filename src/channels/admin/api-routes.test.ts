@@ -1871,6 +1871,7 @@ describe('AdminServer JSON API routes', () => {
     contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
       privacyLevel: 'semi_private',
     });
+    contactStore.recordChannelActivity(contact.id, 'discord', '1313001762793197678');
 
     const listRes = await request(port, 'GET', '/api/admin/contacts', undefined, authHeaders);
     expect(listRes.status).toBe(200);
@@ -1903,6 +1904,24 @@ describe('AdminServer JSON API routes', () => {
     expect(contactStore.getById(contact.id)?.nickname).toBe('Api Nick');
     expect(contactStore.getById(contact.id)?.notes).toBe('after put');
     expect(contactStore.getById(contact.id)?.channels?.find(channel => channel.channel === 'discord')?.privacyLevel).toBe('private');
+    expect(contactStore.getById(contact.id)?.conversationChannels?.find(channel => channel.channelId === '1313001762793197678')?.privacyLevel)
+      .toBeUndefined();
+
+    const directChannelRes = await request(
+      port,
+      'PUT',
+      `/api/admin/contacts/${contact.id}`,
+      JSON.stringify({
+        channelPrivacy: [{
+          channel: 'discord',
+          channelId: '1313001762793197678',
+          privacyLevel: 'broadcast',
+        }],
+      }),
+      authHeaders,
+    );
+    expect(directChannelRes.status).toBe(200);
+    expect(contactStore.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('broadcast');
 
     const patchRes = await request(
       port,

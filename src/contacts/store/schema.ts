@@ -18,6 +18,12 @@ function ensureChannelPrivacyColumn(db: Database.Database): void {
   }
 }
 
+function ensureConversationChannelPrivacyColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'contact_channel_activity', 'privacy_level')) {
+    db.exec('ALTER TABLE contact_channel_activity ADD COLUMN privacy_level TEXT');
+  }
+}
+
 function ensureNicknameColumn(db: Database.Database): void {
   if (!hasColumn(db, 'contacts', 'nickname')) {
     db.exec('ALTER TABLE contacts ADD COLUMN nickname TEXT');
@@ -65,6 +71,7 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       contact_id TEXT NOT NULL,
       channel TEXT NOT NULL,
       channel_id TEXT NOT NULL,
+      privacy_level TEXT,
       first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
       PRIMARY KEY (contact_id, channel, channel_id),
@@ -129,6 +136,7 @@ export function initializeContactStoreSchema(db: Database.Database): void {
 
   ensureNicknameColumn(db);
   ensureChannelPrivacyColumn(db);
+  ensureConversationChannelPrivacyColumn(db);
   migrateLegacyDiscordIdentities(db);
 }
 

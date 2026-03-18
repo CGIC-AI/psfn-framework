@@ -28,7 +28,8 @@ import type { SessionStore } from '../../../session/store.js';
 
 interface ChannelPrivacyUpdate {
   channel: string;
-  userId: string;
+  userId?: string;
+  channelId?: string;
   privacyLevel: ChannelPrivacyLevel;
 }
 
@@ -394,18 +395,31 @@ export class AdminContactsDataService implements AdminContactsService {
     // Apply channel privacy updates
     if (Array.isArray(payload.channelPrivacy)) {
       for (const cp of payload.channelPrivacy) {
-        if (!cp.channel.trim() || !cp.userId.trim()) continue;
+        if (!cp.channel.trim()) continue;
         if (!CHANNEL_PRIVACY_LEVELS.includes(cp.privacyLevel)) {
           return { ok: false, message: `Invalid privacy level: ${cp.privacyLevel}` };
         }
-        const updated = contactStore.setChannelPrivacy(
-          contactId,
-          cp.channel.trim(),
-          cp.userId.trim(),
-          cp.privacyLevel,
-        );
+        const normalizedChannel = cp.channel.trim();
+        const normalizedUserId = cp.userId?.trim();
+        const normalizedChannelId = cp.channelId?.trim();
+        const updated = normalizedChannelId
+          ? contactStore.setConversationChannelPrivacy(
+            contactId,
+            normalizedChannel,
+            normalizedChannelId,
+            cp.privacyLevel,
+          )
+          : normalizedUserId
+              ? contactStore.setChannelPrivacy(
+                contactId,
+                normalizedChannel,
+                normalizedUserId,
+                cp.privacyLevel,
+              )
+              : false;
         if (!updated) {
-          return { ok: false, message: `Unable to update privacy for ${cp.channel}:${cp.userId}` };
+          const target = normalizedChannelId ?? normalizedUserId ?? 'unknown';
+          return { ok: false, message: `Unable to update privacy for ${normalizedChannel}:${target}` };
         }
       }
     }

@@ -37,7 +37,7 @@
   let editRelationshipType = $state<RelationshipType>('acquaintance');
   let editNotes = $state('');
 
-  // Channel privacy edits (tracked per channel:userId key)
+  // Channel privacy edits (tracked per identity or conversation-channel key)
   let channelPrivacyEdits = $state<Record<string, ChannelPrivacyLevel>>({});
 
   // Add channel form
@@ -148,25 +148,41 @@
     return rt.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
 
-  function editableChannelKey(ch: ContactConversationChannelView): string | null {
-    if (!ch.userId) return null;
-    return `${ch.channel}:${ch.userId}`;
-  }
-
-  // Edit panel
-
   function contactChannelKey(ch: { channel: string; userId: string }): string {
-    return `${ch.channel}:${ch.userId}`;
+    return `identity:${ch.channel}:${ch.userId}`;
   }
+
+  function conversationChannelKey(ch: { channel: string; channelId: string }): string {
+    return `conversation:${ch.channel}:${ch.channelId}`;
+  }
+
+  type ChannelPrivacyChangeCandidate =
+    | {
+      key: string;
+      target: 'identity';
+      channel: string;
+      userId: string;
+      privacyLevel: ChannelPrivacyLevel;
+    }
+    | {
+      key: string;
+      target: 'conversation';
+      channel: string;
+      channelId: string;
+      privacyLevel: ChannelPrivacyLevel;
+    };
 
   function buildPrivacyChangeCandidates(
     contact: Contact,
     relatedChannels: ContactConversationChannelView[],
-  ): Array<{ channel: string; userId: string; privacyLevel: ChannelPrivacyLevel }> {
-    const candidates = new Map<string, { channel: string; userId: string; privacyLevel: ChannelPrivacyLevel }>();
+  ): ChannelPrivacyChangeCandidate[] {
+    const candidates = new Map<string, ChannelPrivacyChangeCandidate>();
 
     for (const ch of contact.channels ?? []) {
-      candidates.set(contactChannelKey(ch), {
+      const key = contactChannelKey(ch);
+      candidates.set(key, {
+        key,
+        target: 'identity',
         channel: ch.channel,
         userId: ch.userId,
         privacyLevel: ch.privacyLevel as ChannelPrivacyLevel,
@@ -174,12 +190,13 @@
     }
 
     for (const ch of relatedChannels) {
-      if (!ch.userId || !ch.privacyLevel) continue;
-      const key = contactChannelKey({ channel: ch.channel, userId: ch.userId });
-      if (candidates.has(key)) continue;
+      if (!ch.privacyLevel) continue;
+      const key = conversationChannelKey(ch);
       candidates.set(key, {
+        key,
+        target: 'conversation',
         channel: ch.channel,
-        userId: ch.userId,
+        channelId: ch.channelId,
         privacyLevel: ch.privacyLevel,
       });
     }
@@ -204,8 +221,8 @@
       channelPrivacyEdits[contactChannelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
     }
     for (const ch of getChannels(contact.id)) {
-      const key = editableChannelKey(ch);
-      if (!key || !ch.privacyLevel) continue;
+      const key = conversationChannelKey(ch);
+      if (!ch.privacyLevel) continue;
       channelPrivacyEdits[key] = ch.privacyLevel;
     }
   }
@@ -239,12 +256,20 @@
       }
 
       // Collect channel privacy changes from both linked identities and observed channels.
-      const privacyChanges: Array<{ channel: string; userId: string; privacyLevel: ChannelPrivacyLevel }> = [];
+      const privacyChanges: Array<{
+        channel: string;
+        userId?: string;
+        channelId?: string;
+        privacyLevel: ChannelPrivacyLevel;
+      }> = [];
       for (const ch of buildPrivacyChangeCandidates(contact, getChannels(contactId))) {
-        const key = contactChannelKey(ch);
-        const newPrivacy = channelPrivacyEdits[key];
+        const newPrivacy = channelPrivacyEdits[ch.key];
         if (newPrivacy && newPrivacy !== ch.privacyLevel) {
-          privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
+          if (ch.target === 'identity') {
+            privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
+          } else {
+            privacyChanges.push({ channel: ch.channel, channelId: ch.channelId, privacyLevel: newPrivacy });
+          }
         }
       }
       if (privacyChanges.length > 0) {
@@ -965,7 +990,7 @@
                   <p class="text-sm font-medium text-shadow-800 mb-2">Channel Privacy Levels</p>
                   <div class="space-y-2">
                     {#each channels as ch}
-                      {@const key = editableChannelKey(ch)}
+                      {@const key = conversationChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <div class="min-w-0">
                           <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.channelId}</span>
@@ -973,7 +998,7 @@
                             <p class="text-xs text-shadow-600">Linked identity {ch.userId}</p>
                           {/if}
                         </div>
-                        {#if key && ch.privacyLevel}
+                        {#if ch.privacyLevel}
                           <select
                             value={channelPrivacyEdits[key] ?? ch.privacyLevel}
                             onchange={(e) => {
@@ -985,8 +1010,6 @@
                               <option value={pl}>{pl.replace('_', ' ')}</option>
                             {/each}
                           </select>
-                        {:else}
-                          <span class="text-xs text-shadow-500 italic">No linked identity privacy to edit</span>
                         {/if}
                         {#if ch.lastSeen}
                           <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>
@@ -1002,7 +1025,7 @@
                   <p class="text-sm font-medium text-shadow-800 mb-2">Observed Conversation Channels</p>
                   <div class="space-y-2">
                     {#each channels as ch}
-                      {@const key = editableChannelKey(ch)}
+                      {@const key = conversationChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
                         <div class="min-w-0">
                           <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.channelId}</span>
@@ -1010,7 +1033,7 @@
                             <p class="text-xs text-shadow-600">Linked identity {ch.userId}</p>
                           {/if}
                         </div>
-                        {#if key && ch.privacyLevel}
+                        {#if ch.privacyLevel}
                           <select
                             value={channelPrivacyEdits[key] ?? ch.privacyLevel}
                             onchange={(e) => {
@@ -1022,8 +1045,6 @@
                               <option value={pl}>{pl.replace('_', ' ')}</option>
                             {/each}
                           </select>
-                        {:else}
-                          <span class="text-xs text-shadow-500 italic">No linked identity privacy to edit</span>
                         {/if}
                         {#if ch.lastSeen}
                           <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>

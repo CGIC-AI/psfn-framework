@@ -11,7 +11,12 @@ export interface ContactUpdatePayload {
   trustLevel?: string;
   relationshipType?: string;
   notes?: string;
-  channelPrivacy?: Array<{ channel: string; userId: string; privacyLevel: ChannelPrivacyLevel }>;
+  channelPrivacy?: Array<{
+    channel: string;
+    userId?: string;
+    channelId?: string;
+    privacyLevel: ChannelPrivacyLevel;
+  }>;
   addChannel?: { channel: string; userId: string; privacyLevel: ChannelPrivacyLevel };
 }
 

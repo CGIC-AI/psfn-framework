@@ -1,7 +1,7 @@
 import type { SubstrateConfig, TurnID } from '../types.js';
 import { countTokens } from '../llm/tokens.js';
 import { SESSION_HISTORY_MIN_MESSAGES } from '../context-budget.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../trust/types.js';
+import type { ChannelVisibility, TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
 import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../security/refusal-patterns.js';
 import type { SessionEntry } from './types.js';
@@ -388,18 +388,6 @@ export function normalizeMirrorText(content: string, maxChars: number): { text: 
   if (!normalized) return { text: '', truncated: false };
   if (normalized.length <= maxChars) return { text: normalized, truncated: false };
   return { text: `${normalized.slice(0, Math.max(1, maxChars - 3))}...`, truncated: true };
-}
-
-export function visibilityToMirrorSensitivity(visibility: ChannelVisibility): SensitivityLevel {
-  switch (visibility) {
-    case 'private':
-      return 'confidential';
-    case 'semi_private':
-      return 'personal';
-    case 'public':
-    case 'broadcast':
-      return 'public';
-  }
 }
 
 export function parseMirrorMetadata(value?: string): MirrorEntryMetadata | null {

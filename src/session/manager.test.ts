@@ -20,6 +20,7 @@ import {
   parseCompactionSourceHashTag,
 } from './compaction-audit.js';
 import { resolveRoleName } from './manager-primitives.js';
+import { resolveSessionEntryRoleEnvelopePreview } from './turn-provenance.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
@@ -243,6 +244,97 @@ describe('SessionManager', () => {
       content: '[Tool result: search_logs] Found 3 matching log entries.',
     });
     expect(ctx.messages[2]).toEqual({ role: 'assistant', content: 'I found the relevant logs.' });
+  });
+
+  it('stores role-envelope previews without leaking hidden body text into history or search', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const hiddenBody = 'forensic body that must never enter normal history';
+    const entryId = mgr.recordAssistantMessage(
+      'api:role-envelope-preview',
+      'Queued a quiet follow-up reminder.',
+      undefined,
+      undefined,
+      undefined,
+      {
+        turnId: createTurnId(),
+        requestId: 'role-envelope-preview-turn',
+        roleEnvelopePreview: {
+          schemaVersion: 1,
+          envelopeId: 'env_preview_1',
+          internalRole: 'outreach_candidate',
+          summary: 'Queued a quiet follow-up reminder.',
+          sourceStage: 'post_turn_appraisal',
+          promotionTarget: 'turn_record_summary',
+          promotedRef: 'turn_record_summary:env_preview_1',
+        },
+      },
+    );
+
+    expect(entryId).not.toBeNull();
+
+    const [entry] = store.getRecent('api:role-envelope-preview', 1);
+    expect(entry).toBeDefined();
+    expect(entry?.content).toBe('Queued a quiet follow-up reminder.');
+    expect(resolveSessionEntryRoleEnvelopePreview(entry!)).toEqual({
+      schemaVersion: 1,
+      envelopeId: 'env_preview_1',
+      internalRole: 'outreach_candidate',
+      summary: 'Queued a quiet follow-up reminder.',
+      sourceStage: 'post_turn_appraisal',
+      promotionTarget: 'turn_record_summary',
+      promotedRef: 'turn_record_summary:env_preview_1',
+    });
+    expect(entry?.metadata ?? '').not.toContain(hiddenBody);
+
+    expect(store.searchByKeywords('quiet follow-up', 10)).toHaveLength(1);
+    expect(store.searchByKeywords(hiddenBody, 10)).toHaveLength(0);
+  });
+
+  it('derives role-envelope refs from persisted preview metadata', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const turnId = createTurnId();
+    const requestId = 'role-envelope-refs-turn';
+
+    const userEntryId = mgr.recordUserMessage(
+      'api:role-envelope-refs',
+      'Keep an eye on tomorrow afternoon.',
+      'user-1',
+      'User',
+      undefined,
+      undefined,
+      {
+        turnId,
+        requestId,
+      },
+    );
+    const assistantEntryId = mgr.recordAssistantMessage(
+      'api:role-envelope-refs',
+      'Queued the follow-up note.',
+      undefined,
+      undefined,
+      undefined,
+      {
+        turnId,
+        requestId,
+        roleEnvelopePreview: {
+          schemaVersion: 1,
+          envelopeId: 'env_refs_1',
+          internalRole: 'concern_candidate',
+          summary: 'Queued the follow-up note.',
+          sourceStage: 'post_turn_appraisal',
+          promotionTarget: 'turn_record_summary',
+          promotedRef: 'turn_record_summary:env_refs_1',
+        },
+      },
+    );
+    expect(assistantEntryId).not.toBeNull();
+
+    expect(mgr.getRoleEnvelopeRefsForEntries(
+      'api:role-envelope-refs',
+      [userEntryId ?? 0, assistantEntryId ?? 0, assistantEntryId ?? 0],
+    )).toEqual(['turn_record_summary:env_refs_1']);
   });
 
   it('renders structured tool payloads as summaries instead of raw machine output', async () => {

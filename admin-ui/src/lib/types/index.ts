@@ -299,17 +299,35 @@ export interface AdminSessionTurnData {
     extractedMemoryIds: string[];
     concernDeltaRefs: string[];
     contactDeltaRefs: string[];
+    roleEnvelopeRefs?: string[];
     versionPointers: Record<string, unknown>;
     provenanceRefs: string[];
   };
+  roleEnvelopeRefs: string[];
   stages: AdminTurnStageTelemetry[];
   retrievals: AdminTurnRetrievalTelemetry[];
   snapshot: AdminTurnSnapshotData | null;
 }
 
+export interface SessionRoleEnvelopePreview {
+  schemaVersion: 1;
+  envelopeId: string;
+  internalRole: string;
+  summary: string;
+  sourceStage: string;
+  promotionTarget: string;
+  promotedRef?: string;
+}
+
+export interface AdminSessionRoleEnvelopePreview {
+  sessionEntryId: number;
+  preview: SessionRoleEnvelopePreview;
+}
+
 export interface AdminSessionMessagesData {
   channelId: string;
   messages: SessionEntry[];
+  roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
   compactionAuditViews: CompactionAuditView[];
   turns: AdminSessionTurnData[];
 }

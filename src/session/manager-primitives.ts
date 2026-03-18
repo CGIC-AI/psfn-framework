@@ -1,4 +1,5 @@
 import type { SubstrateConfig, TurnID } from '../types.js';
+import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
 import { countTokens } from '../llm/tokens.js';
 import { SESSION_HISTORY_MIN_MESSAGES } from '../context-budget.js';
 import type { ChannelVisibility, TrustLevel } from '../trust/types.js';
@@ -103,6 +104,7 @@ export interface SessionMessageRecordOptions {
   requestId?: string;
   sourceMessageId?: string;
   metadata?: string;
+  roleEnvelopePreview?: SessionRoleEnvelopePreview;
   channelMeta?: ChannelMeta;
 }
 

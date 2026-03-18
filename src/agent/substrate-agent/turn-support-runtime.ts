@@ -410,8 +410,16 @@ export class TurnSupportRuntime {
     turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
   }): TurnRecord {
+    const roleEnvelopeRefs = this.sessionManager.getRoleEnvelopeRefsForEntries(
+      input.message.channelId,
+      [
+        ...(input.userSessionEntryId != null ? [input.userSessionEntryId] : []),
+        ...(input.assistantSessionEntryId != null ? [input.assistantSessionEntryId] : []),
+      ],
+    );
     return buildTurnRecordForTurn({
       ...input,
+      roleEnvelopeRefs,
       hashPromptText: this.hashPromptText,
     });
   }

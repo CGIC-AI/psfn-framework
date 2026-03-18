@@ -387,7 +387,51 @@ describe('UserContinuityStore', () => {
       expect(entries).toHaveLength(0);
     });
 
-    it('broadcast channels get no continuity', () => {
+    it('private channels receive lower-sensitivity continuity from semi_private channels', () => {
+      store.append('user1', {
+        channelId: '1234567890',
+        role: 'user',
+        content: 'Guild planning thread',
+        timestamp: 1000,
+        originChannelId: '1234567890',
+      });
+
+      const entries = store.getRecent('user1', 10, undefined, 'api:session1');
+      expect(entries).toHaveLength(1);
+      expect(entries[0].content).toBe('Guild planning thread');
+      expect(entries[0].channelVisibility).toBe('semi_private');
+    });
+
+    it('public channels receive only public-ceiling continuity', () => {
+      store.append('user1', {
+        channelId: '1234567890',
+        role: 'user',
+        content: 'Semi-private guild thread',
+        timestamp: 1000,
+        originChannelId: '1234567890',
+      });
+      store.append('user1', {
+        channelId: 'api:public-feed',
+        role: 'assistant',
+        content: 'Public announcement',
+        timestamp: 2000,
+        originChannelId: 'api:public-feed',
+        channelVisibility: 'public',
+      });
+
+      const entries = store.getRecent(
+        'user1',
+        10,
+        undefined,
+        'api:public-room',
+        { privacyLevel: 'public' },
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0].content).toBe('Public announcement');
+      expect(entries[0].channelVisibility).toBe('public');
+    });
+
+    it('broadcast channels get no private continuity', () => {
       store.append('user1', {
         channelId: 'api:session1',
         role: 'user',
@@ -586,6 +630,22 @@ describe('SessionManager with continuity', () => {
     // Should NOT contain the ch2 message in the continuity block (it's already in local)
     // but the ch2 entry will be in the continuity store, excluded by channelId
     expect(ctx.systemPrompt).not.toContain('[from sillytavern:ch2]');
+  });
+
+  it('buildContext includes lower-sensitivity semi_private continuity in private channels', async () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+
+    mgr.recordUserMessage('1234567890', 'Guild follow-up', 'user1', 'Alice');
+    mgr.recordAssistantMessage('1234567890', 'Guild response', 'user1');
+    mgr.recordUserMessage('api:private-main', 'Private turn', 'user1', 'Alice');
+
+    const ctx = await mgr.buildContext('api:private-main', 'System prompt', '', undefined, 'user1');
+
+    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('Guild follow-up');
+    expect(ctx.systemPrompt).toContain('Guild response');
+    expect(ctx.systemPrompt).not.toContain('[from api:private-main]');
   });
 
   it('keeps reflection channels out of session storage but preserves companion continuity', async () => {

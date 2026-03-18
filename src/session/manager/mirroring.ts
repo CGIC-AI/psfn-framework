@@ -1,14 +1,17 @@
 import type { SubstrateConfig } from '../../types.js';
 import type { SessionStore } from '../store.js';
 import type { UserContinuityStore } from '../continuity.js';
-import { evaluateMemoryPolicy, visibilitiesShareContinuity } from '../../trust/policy.js';
+import {
+  evaluateMemoryPolicy,
+  getVisibilityDisclosureCeiling,
+  visibilitiesShareContinuity,
+} from '../../trust/policy.js';
 import type { ChannelVisibility, TrustLevel } from '../../trust/types.js';
 import {
   DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS,
   DEFAULT_SESSION_MIRROR_MAX_CHARS,
   normalizeMirrorText,
   resolveRoleName,
-  visibilityToMirrorSensitivity,
   type MirrorEntryMetadata,
 } from '../manager-primitives.js';
 
@@ -79,7 +82,7 @@ export function mirrorMessageToActiveSessions(params: {
   });
   if (targets.length === 0) return;
 
-  const sourceSensitivity = visibilityToMirrorSensitivity(params.sourceVisibility);
+  const sourceSensitivity = getVisibilityDisclosureCeiling(params.sourceVisibility);
   const roleNames = { charName: params.characterName };
   const sourceSpeaker = params.sourceRole === 'assistant'
     ? resolveRoleName('assistant', roleNames)

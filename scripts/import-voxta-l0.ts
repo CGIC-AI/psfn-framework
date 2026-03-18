@@ -13,6 +13,7 @@ interface CliArgs {
   profileDatabasePath?: string;
   profileAuthorId?: string;
   profileAuthorName?: string;
+  consolidateToSingleSession: boolean;
   chatIds: string[];
   dryRun: boolean;
 }
@@ -34,6 +35,7 @@ function printUsage(): void {
       '  --profile-db <path>           Profile attribution DB (default: ./data/purrsephone.db)',
       '  --profile-id <id>             Override imported user authorId',
       '  --profile-name <name>         Override imported user authorName',
+      '  --consolidate                 Write all matched Voxta chats into one L0 session file',
       '  --dry-run                     Inspect what would be written without writing any files',
       '  --help                        Show this help text',
       '',
@@ -49,6 +51,7 @@ function printUsage(): void {
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     chatIds: [],
+    consolidateToSingleSession: false,
     dryRun: false,
   };
 
@@ -60,6 +63,10 @@ function parseArgs(argv: string[]): CliArgs {
     }
     if (arg === '--dry-run') {
       args.dryRun = true;
+      continue;
+    }
+    if (arg === '--consolidate') {
+      args.consolidateToSingleSession = true;
       continue;
     }
     if (arg === '--db') {
@@ -147,6 +154,7 @@ function main(): void {
     profileDatabasePath: args.profileDatabasePath,
     profileAuthorId: args.profileAuthorId,
     profileAuthorName: args.profileAuthorName,
+    consolidateToSingleSession: args.consolidateToSingleSession,
     dryRun: args.dryRun,
   });
 
@@ -159,6 +167,8 @@ function main(): void {
     dryRun: result.dryRun,
     chatCount: result.chats.length,
     totalMessages: result.totalMessages,
+    writtenSessionCount: result.writtenSessionCount,
+    writtenFilePaths: result.writtenFilePaths,
     chats: result.chats,
   }, null, 2));
 }

@@ -129,7 +129,7 @@ function seedVoxtaDatabase(databasePath: string): void {
       'Other chat',
       '2025-01-02T00:00:00.0000000+00:00',
       '2025-01-02T00:03:00.0000000+00:00',
-      '{}',
+      '{"main":{"characterId":"cf0a06ea-5b6c-9a4d-945a-1c32ad4349bd","enabled":true}}',
       '{}',
     );
 
@@ -187,14 +187,14 @@ function seedVoxtaDatabase(databasePath: string): void {
       ROOT_USER_ID,
       'm4',
       'CHAT-TWO',
-      '4F57D1CD-D448-5B43-6CC0-B4D3A87719DB',
+      PURRSEPHONE_ID,
       '2025-01-02T00:00:01.0000000+00:00',
       1,
       1,
       1,
       2,
-      'Voxy',
-      'Not Purrsephone.',
+      'Purrsephone',
+      'Second chat.',
       null,
     );
   } finally {
@@ -228,6 +228,7 @@ describe('importVoxtaCharacterChats', () => {
       profileDatabasePath: profileDbPath,
       sessionsDir,
       characterId: 'cf0a06ea-5b6c-9a4d-945a-1c32ad4349bd',
+      chatIds: ['CHAT-ONE'],
     });
 
     expect(result.chats).toHaveLength(1);
@@ -260,11 +261,44 @@ describe('importVoxtaCharacterChats', () => {
       profileDatabasePath: profileDbPath,
       sessionsDir,
       characterId: PURRSEPHONE_ID,
+      chatIds: ['CHAT-ONE'],
       dryRun: true,
     });
 
     expect(result.dryRun).toBe(true);
     expect(result.chats).toHaveLength(1);
     expect(readdirSync(root)).not.toContain('sessions');
+  });
+
+  it('can consolidate multiple Voxta chats into one L0 session file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-voxta-import-'));
+    cleanupPaths.push(root);
+    const dbPath = join(root, 'Voxta.sqlite.db');
+    const profileDbPath = join(root, 'profile.sqlite.db');
+    const sessionsDir = join(root, 'sessions');
+    seedVoxtaDatabase(dbPath);
+    seedVoxtaDatabase(profileDbPath);
+
+    const result = importVoxtaCharacterChats({
+      dbPath,
+      profileDatabasePath: profileDbPath,
+      sessionsDir,
+      characterId: PURRSEPHONE_ID,
+      channelId: 'voxta:legacy:test',
+      consolidateToSingleSession: true,
+    });
+
+    expect(result.chats).toHaveLength(2);
+    expect(result.totalMessages).toBe(4);
+    expect(result.writtenSessionCount).toBe(1);
+
+    const files = readdirSync(sessionsDir).filter(name => name.endsWith('.jsonl'));
+    expect(files).toHaveLength(1);
+
+    const journal = readJournalFile(join(sessionsDir, files[0]!));
+    expect(journal.entries).toHaveLength(4);
+    expect(new Set(journal.entries.map(entry => entry.channelId))).toEqual(new Set(['voxta:legacy:test']));
+    expect(journal.entries[0]?.timestamp).toBe(1735689601000);
+    expect(journal.entries[3]?.content).toBe('Second chat.');
   });
 });

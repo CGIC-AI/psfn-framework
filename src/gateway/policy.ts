@@ -224,6 +224,7 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
     case 'llm.complete':
     case 'llm.embed':
     case 'discord.send':
+    case 'discord.sendMedia':
     case 'discord.typing':
     case 'notify.ntfy':
       return 'ALLOW';

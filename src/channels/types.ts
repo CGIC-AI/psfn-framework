@@ -97,7 +97,7 @@ export interface ChannelAdapterFactoryEntry {
 // Lightweight docks for shared call sites that only need a focused channel facet.
 export interface ChannelOutboundDock {
   id: string;
-  outbound: Pick<ChannelOutboundAdapter, 'textChunkLimit' | 'sendText'>;
+  outbound: Pick<ChannelOutboundAdapter, 'textChunkLimit' | 'sendText' | 'sendMedia'>;
 }
 
 export interface ChannelPromptDock {

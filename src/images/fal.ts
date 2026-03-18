@@ -129,7 +129,7 @@ export class FalImageClient {
     if (isNanoBananaModel(model)) {
       Object.assign(input, {
         ...(params.aspectRatio ? { aspect_ratio: params.aspectRatio } : {}),
-        ...(params.resolution ? { resolution: params.resolution } : {}),
+        resolution: params.resolution ?? '2K',
         safety_tolerance: '6',
       });
     } else {
@@ -157,7 +157,7 @@ export class FalImageClient {
     if (isNanoBananaModel(model)) {
       Object.assign(input, {
         ...(params.aspectRatio ? { aspect_ratio: params.aspectRatio } : {}),
-        ...(params.resolution ? { resolution: params.resolution } : {}),
+        resolution: params.resolution ?? '2K',
         safety_tolerance: '6',
       });
     } else {

@@ -57,6 +57,8 @@ export interface ResolvedAuthorContext {
   continuityFallbackKeys: string[];
 }
 
+const SELF_IMAGE_TOOL_NAMES = ['image_create', 'image_edit'] as const;
+
 function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {
   const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
@@ -137,6 +139,28 @@ export function buildRuntimeContext(input: {
   behavioralNotesBlock?: string;
   formatTopEmotions: (discrete: Record<string, number>) => string;
 }): string {
+  const resolveAppearanceContext = (): string => {
+    const promptVariables = input.templateVariables ?? {};
+    return (
+      promptVariables['character.visual_description']
+      || promptVariables.extensions_visual_description
+      || promptVariables.visual_description
+      || ''
+    ).trim();
+  };
+
+  const hasActiveSelfImageTool = (): boolean => {
+    for (const toolName of SELF_IMAGE_TOOL_NAMES) {
+      if (input.promotedExtendedToolNames.has(toolName)) {
+        return true;
+      }
+      if (input.loadedExtended.has(toolName)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const responseStyle = input.responseStyle ?? 'concise';
   const now = input.now ?? new Date();
   const metacognitiveFlags = input.metacognitiveFlags ?? [];
@@ -180,17 +204,10 @@ export function buildRuntimeContext(input: {
   const isScheduledTask = input.taskKind === 'heartbeat'
     || input.taskKind === 'reflection'
     || input.message.channelId.startsWith('internal:');
-  if (isScheduledTask) {
-    const promptVariables = input.templateVariables ?? {};
-    const appearance = (
-      promptVariables['character.visual_description']
-      || promptVariables.extensions_visual_description
-      || promptVariables.visual_description
-      || ''
-    ).trim();
-    if (appearance.length > 0) {
-      lines.push(`Appearance context: ${appearance}`);
-    }
+  const shouldIncludeAppearanceContext = isScheduledTask || hasActiveSelfImageTool();
+  if (shouldIncludeAppearanceContext) {
+    const appearance = resolveAppearanceContext();
+    if (appearance.length > 0) lines.push(`Appearance context: ${appearance}`);
   }
 
   if (extendedCount > 0) {

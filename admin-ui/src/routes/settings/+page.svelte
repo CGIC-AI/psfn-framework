@@ -21,6 +21,11 @@
     SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
     type GardenSettingsRawEditorKey,
   } from '$lib/settings-garden-contract';
+  import {
+    resolveBudgetContextWindowAuthority,
+    resolveSettingAuthority,
+  } from '$lib/settings/authority';
+  import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingsSidebarNav from '$lib/components/settings/SettingsSidebarNav.svelte';
   import {
     buildSettingsSimpleSectionGroups,
@@ -491,8 +496,6 @@
   }
 
   // ── Source attribution ──
-  type SettingSource = 'default' | string;
-
   function fieldContract(key: string): SettingsContractField | undefined {
     return settingsSchema?.fields?.[key];
   }
@@ -541,12 +544,16 @@
     return subsystemOwnerFile(subsystemId) ?? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY[key];
   }
 
-  function getSource(key: string): SettingSource {
-    if (!data) return 'default';
-    const ownerFile = fieldOwnerFile(key);
-    if (ownerFile) return ownerFile;
-    const config = data.config as Record<string, unknown>;
-    return config[key] !== undefined ? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY.settings : 'default';
+  function getSettingAuthority(key: string) {
+    return resolveSettingAuthority(data, settingsSchema, key);
+  }
+
+  function getSource(key: string): string {
+    return getSettingAuthority(key).sourceLabel;
+  }
+
+  function getBudgetContextWindowAuthority() {
+    return resolveBudgetContextWindowAuthority(data, budgetPreview);
   }
 
   function fieldEditorType(
@@ -1487,6 +1494,7 @@
         <div class="card-garden p-6 space-y-4">
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Context Window Allocation</h2>
           <hr class="divider-filigree" />
+          <SettingAuthorityHint info={getBudgetContextWindowAuthority()} />
 
           <!-- Visual bar chart -->
           <div class="space-y-2">
@@ -1716,6 +1724,7 @@
             </label>
             <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
+            <SettingAuthorityHint info={getSettingAuthority('maintenanceIntervalMs')} />
           </div>
           <div>
             <label class={LABEL_CLS}>
@@ -1958,6 +1967,7 @@
                   {/each}
                 </select>
                 <p class="text-sm text-shadow-500 mt-1">Controls agent autonomy level</p>
+                <SettingAuthorityHint info={getSettingAuthority('capabilityTier')} />
               </div>
               <div class="md:col-span-2">
                 <label class={LABEL_CLS}>
@@ -1974,6 +1984,7 @@
                 <p class="text-sm text-shadow-500 mt-1">
                   Comma-separated capability tokens for the <span class="font-mono">custom</span> tier. Saved to {rawEditorLabel('capabilities')}.
                 </p>
+                <SettingAuthorityHint info={getSettingAuthority('customTokens')} />
               </div>
             </div>
           </div>

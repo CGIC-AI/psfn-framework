@@ -18,6 +18,7 @@ import { cloneTurnObservabilityRecord } from '../../turns/observability.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
+import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 
 function resolveIncomingMessageRole(message: SubstrateMessage): 'user' | 'system' {
   if (message.authorId.startsWith('system:') || message.authorId === 'scheduler') {
@@ -174,12 +175,14 @@ export function buildTurnRecord(input: {
   trustLevel: TrustLevel;
   canonicalContactKey?: string;
   retrievalProvenanceRefs: string[];
+  roleEnvelopeRefs?: string[];
   turnSnapshot?: TurnSnapshot;
   turnObservability?: TurnObservabilityRecord;
   internalStateSnapshotRef?: string;
   hashPromptText: (text: string) => string;
 }): TurnRecord {
   const toolCalls = buildTurnToolCalls(input.turnMessages);
+  const roleEnvelopeRefs = normalizeRoleEnvelopeRefs(input.roleEnvelopeRefs);
   const provenanceRefs = [...new Set([
     `turn:${input.turnId}`,
     ...input.retrievalProvenanceRefs,
@@ -223,6 +226,7 @@ export function buildTurnRecord(input: {
     extractedMemoryIds: [],
     concernDeltaRefs: [],
     contactDeltaRefs: [],
+    ...(roleEnvelopeRefs.length > 0 ? { roleEnvelopeRefs } : {}),
     ...(input.turnObservability
       ? { observability: cloneTurnObservabilityRecord(input.turnObservability) }
       : {}),

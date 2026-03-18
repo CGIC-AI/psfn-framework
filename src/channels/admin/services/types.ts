@@ -12,6 +12,7 @@ import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { EditableSettings } from '../../../settings.js';
 import type { MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
+import type { SessionEntry } from '../../../session/types.js';
 import type { SubstrateConfig, TurnRecord } from '../../../types.js';
 import type {
   Contact,
@@ -55,6 +56,7 @@ import type {
   TurnSnapshotRecord,
   TurnStageTelemetryRecord,
 } from '../../../turns/observability.js';
+import type { SessionRoleEnvelopePreview } from '../../../internal-role-envelopes/projections.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;
@@ -181,6 +183,7 @@ export interface AdminSessionListData {
 export interface AdminSessionMessagesData {
   channelId: string;
   messages: SessionEntry[];
+  roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
   compactionAuditViews: CompactionAuditView[];
   turns: AdminSessionTurnData[];
 }
@@ -204,8 +207,14 @@ export type AdminTurnMemorySnapshotData = TurnMemorySnapshotRecord;
 
 export type AdminTurnSnapshotData = TurnSnapshotRecord;
 
+export interface AdminSessionRoleEnvelopePreview {
+  sessionEntryId: number;
+  preview: SessionRoleEnvelopePreview;
+}
+
 export interface AdminSessionTurnData {
   record: TurnRecord;
+  roleEnvelopeRefs: string[];
   stages: AdminTurnStageTelemetry[];
   retrievals: AdminTurnRetrievalTelemetry[];
   snapshot: AdminTurnSnapshotData | null;

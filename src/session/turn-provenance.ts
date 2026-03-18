@@ -1,4 +1,9 @@
 import type { TurnID } from '../types.js';
+import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
+import {
+  parseSessionRoleEnvelopePreview,
+  normalizeSessionRoleEnvelopePreview,
+} from '../internal-role-envelopes/projections.js';
 import type { SessionEntry } from './types.js';
 import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
 
@@ -12,6 +17,7 @@ interface SessionTurnEnvelope {
 
 interface SessionMetadataEnvelope {
   turn?: unknown;
+  roleEnvelopePreview?: unknown;
   [key: string]: unknown;
 }
 
@@ -88,6 +94,28 @@ export function buildSessionMetadataWithTurn(
   });
 }
 
+export function buildSessionMetadataWithRoleEnvelopePreview(
+  existingMetadata: string | undefined,
+  preview: SessionRoleEnvelopePreview,
+): string {
+  const base = parseMetadataEnvelope(existingMetadata);
+  return JSON.stringify({
+    ...base,
+    roleEnvelopePreview: normalizeSessionRoleEnvelopePreview(preview),
+  });
+}
+
+export function parseSessionRoleEnvelopePreviewFromMetadata(
+  metadata: string | undefined,
+): SessionRoleEnvelopePreview | null {
+  const envelope = parseMetadataEnvelope(metadata);
+  const rawPreview = envelope.roleEnvelopePreview;
+  if (rawPreview === undefined) {
+    return null;
+  }
+  return parseSessionRoleEnvelopePreview(rawPreview, 'metadata.roleEnvelopePreview');
+}
+
 export function resolveSessionEntryTurnContext(
   entry: Pick<SessionEntry, 'channelId' | 'id' | 'timestamp' | 'role' | 'metadata'>,
 ): SessionEntryTurnContext {
@@ -113,6 +141,12 @@ export function resolveSessionEntryTurnContext(
     ...(requestId ? { requestId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
   };
+}
+
+export function resolveSessionEntryRoleEnvelopePreview(
+  entry: Pick<SessionEntry, 'metadata'>,
+): SessionRoleEnvelopePreview | null {
+  return parseSessionRoleEnvelopePreviewFromMetadata(entry.metadata);
 }
 
 export function resolveLatestTurnContext(entries: readonly SessionEntry[]): SessionEntryTurnContext | null {

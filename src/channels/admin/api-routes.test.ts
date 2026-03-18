@@ -1868,6 +1868,9 @@ describe('AdminServer JSON API routes', () => {
       relationshipType: 'friend',
       notes: 'before',
     });
+    contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
+      privacyLevel: 'semi_private',
+    });
 
     const listRes = await request(port, 'GET', '/api/admin/contacts', undefined, authHeaders);
     expect(listRes.status).toBe(200);
@@ -1883,12 +1886,23 @@ describe('AdminServer JSON API routes', () => {
       port,
       'PUT',
       `/api/admin/contacts/${contact.id}`,
-      JSON.stringify({ trustLevel: 'trusted', notes: 'after put' }),
+      JSON.stringify({
+        nickname: 'Api Nick',
+        trustLevel: 'trusted',
+        notes: 'after put',
+        channelPrivacy: [{
+          channel: 'discord',
+          userId: 'api-contact-user',
+          privacyLevel: 'private',
+        }],
+      }),
       authHeaders,
     );
     expect(putRes.status).toBe(200);
     expect(contactStore.getById(contact.id)?.trustLevel).toBe('trusted');
+    expect(contactStore.getById(contact.id)?.nickname).toBe('Api Nick');
     expect(contactStore.getById(contact.id)?.notes).toBe('after put');
+    expect(contactStore.getById(contact.id)?.channels?.find(channel => channel.channel === 'discord')?.privacyLevel).toBe('private');
 
     const patchRes = await request(
       port,

@@ -1,6 +1,10 @@
 import type { ContactStore } from '../../../contacts/store.js';
 import type { SessionStore } from '../../../session/store.js';
-import type { Contact } from '../../../contacts/types.js';
+import type {
+  ChannelPrivacyLevel,
+  Contact,
+  ContactChannelLink,
+} from '../../../contacts/types.js';
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 
@@ -13,6 +17,8 @@ export interface ContactIdentityLinkView {
 export interface ContactConversationChannelView {
   channel: string;
   channelId: string;
+  userId?: string;
+  privacyLevel?: ChannelPrivacyLevel;
   lastSeen?: string;
 }
 
@@ -64,6 +70,66 @@ export function getPersistedConversationChannels(contact: Contact): ContactConve
     channelId: entry.channelId,
     lastSeen: entry.lastSeen,
   }));
+}
+
+function getContactChannelLinks(contact: Contact): ContactChannelLink[] {
+  return Array.isArray(contact.channels) ? contact.channels : [];
+}
+
+function findLinkedChannelForConversationChannel(options: {
+  channel: string;
+  channelId: string;
+  channelLinks: ContactChannelLink[];
+  sessionStore: SessionStore;
+}): ContactChannelLink | undefined {
+  const sameChannelLinks = options.channelLinks.filter(link => (
+    link.channel.trim().toLowerCase() === options.channel.trim().toLowerCase()
+  ));
+  if (sameChannelLinks.length === 1) {
+    return sameChannelLinks[0];
+  }
+
+  const directMatch = sameChannelLinks.find(link => (
+    sessionMatchesIdentity(options.channelId, link)
+    || sessionMatchesIdentity(`${options.channel}:${options.channelId}`, link)
+  ));
+  if (directMatch) {
+    return directMatch;
+  }
+
+  const lastEntry = options.sessionStore.getLastEntry(options.channelId)
+    ?? options.sessionStore.getLastEntry(`${options.channel}:${options.channelId}`);
+  const authorId = lastEntry?.authorId?.trim().toLowerCase();
+  if (!authorId) {
+    return undefined;
+  }
+
+  return sameChannelLinks.find(link => link.userId.trim().toLowerCase() === authorId);
+}
+
+function toConversationChannelView(options: {
+  channel: string;
+  channelId: string;
+  lastSeen?: string;
+  contact: Contact;
+  sessionStore: SessionStore;
+}): ContactConversationChannelView {
+  const linkedChannel = findLinkedChannelForConversationChannel({
+    channel: options.channel,
+    channelId: options.channelId,
+    channelLinks: getContactChannelLinks(options.contact),
+    sessionStore: options.sessionStore,
+  });
+
+  return {
+    channel: options.channel,
+    channelId: options.channelId,
+    ...(linkedChannel ? {
+      userId: linkedChannel.userId,
+      privacyLevel: linkedChannel.privacyLevel,
+    } : {}),
+    lastSeen: options.lastSeen,
+  };
 }
 
 export function splitSessionChannelId(channelId: string): { channel: string; channelId: string } {
@@ -171,7 +237,16 @@ export function buildRelatedConversationChannelMap(options: {
   for (const contact of contacts) {
     const persistedChannels = getPersistedConversationChannels(contact);
     if (persistedChannels.length > 0) {
-      map.set(contact.id, persistedChannels);
+      map.set(
+        contact.id,
+        persistedChannels.map(entry => toConversationChannelView({
+          channel: entry.channel,
+          channelId: entry.channelId,
+          lastSeen: entry.lastSeen,
+          contact,
+          sessionStore,
+        })),
+      );
       continue;
     }
 
@@ -188,11 +263,13 @@ export function buildRelatedConversationChannelMap(options: {
       seen.add(key);
 
       const lastEntry = sessionStore.getLastEntry(session.channelId);
-      relatedChannels.push({
+      relatedChannels.push(toConversationChannelView({
         channel: parsed.channel,
         channelId: parsed.channelId,
         lastSeen: lastEntry ? new Date(lastEntry.timestamp).toISOString() : undefined,
-      });
+        contact,
+        sessionStore,
+      }));
     }
 
     if (relatedChannels.length === 0) {
@@ -200,9 +277,14 @@ export function buildRelatedConversationChannelMap(options: {
         const key = `${identity.channel}:${identity.userId}`;
         if (seen.has(key)) continue;
         seen.add(key);
+        const linkedChannel = getContactChannelLinks(contact).find(link => (
+          link.channel === identity.channel && link.userId === identity.userId
+        ));
         relatedChannels.push({
           channel: identity.channel,
           channelId: identity.userId,
+          userId: identity.userId,
+          privacyLevel: linkedChannel?.privacyLevel,
           lastSeen: identity.lastSeen ?? contact.lastSeen,
         });
       }

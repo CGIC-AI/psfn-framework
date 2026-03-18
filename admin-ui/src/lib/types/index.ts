@@ -419,6 +419,12 @@ export interface Contact {
   relationshipType: string;
   channelIdentities?: ContactChannelIdentity[];
   channels?: ContactChannelLink[];
+  conversationChannels?: Array<{
+    channel: string;
+    channelId: string;
+    firstSeen: string;
+    lastSeen: string;
+  }>;
   emotionalBaseline?: Record<string, number>;
   firstSeen: string;
   lastSeen: string;
@@ -435,8 +441,10 @@ export interface ContactProfileArtifact {
 
 export interface ContactConversationChannelView {
   channel: string;
-  userId: string;
-  privacyLevel: string;
+  channelId: string;
+  userId?: string;
+  privacyLevel?: ChannelPrivacyLevel;
+  lastSeen?: string;
 }
 
 export interface AdminContactListData {

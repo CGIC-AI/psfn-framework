@@ -40,6 +40,7 @@ interface AddChannelLink {
 
 interface ContactUpdatePayload {
   displayName?: string;
+  nickname?: string;
   trustLevel?: TrustLevel;
   relationshipType?: RelationshipType;
   notes?: string;
@@ -151,21 +152,22 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  private updateIdentityProfile(contact: Contact, displayName: string): boolean {
+  private updateIdentityProfile(contact: Contact, displayName: string, nickname?: string): boolean {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return false;
 
     const storeWithIdentityProfile = contactStore as ContactStore & {
-      updateIdentityProfile?: (contactId: string, name: string) => boolean;
+      updateIdentityProfile?: (contactId: string, name: string, nickname?: string) => boolean;
     };
 
     if (typeof storeWithIdentityProfile.updateIdentityProfile === 'function') {
-      return storeWithIdentityProfile.updateIdentityProfile(contact.id, displayName);
+      return storeWithIdentityProfile.updateIdentityProfile(contact.id, displayName, nickname);
     }
 
     const updated = contactStore.upsert({
       id: contact.id,
       displayName,
+      nickname,
       trustLevel: contact.trustLevel,
       relationshipType: contact.relationshipType,
       notes: contact.notes,
@@ -357,13 +359,13 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Request body must be valid JSON' };
     }
 
-    if (payload.displayName !== undefined) {
-      const displayName = payload.displayName.trim();
+    if (payload.displayName !== undefined || payload.nickname !== undefined) {
+      const displayName = payload.displayName?.trim() ?? contact.displayName;
       if (!displayName) {
         return { ok: false, message: 'displayName cannot be empty' };
       }
-      if (!this.updateIdentityProfile(contact, displayName)) {
-        return { ok: false, message: 'Unable to update displayName' };
+      if (!this.updateIdentityProfile(contact, displayName, payload.nickname)) {
+        return { ok: false, message: 'Unable to update identity profile' };
       }
     }
 

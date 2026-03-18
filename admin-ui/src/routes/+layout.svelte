@@ -84,14 +84,12 @@
   }
 
   function isActive(navPath: string): boolean {
-    // navPath includes base (e.g., '/garden/memory'), but $page.url.pathname does not
-    // Strip the base prefix to compare
-    const stripped = navPath.startsWith(base) ? navPath.slice(base.length) || '/' : navPath;
+    // navPath is base-relative (e.g., '' or '/memory'); $page.url.pathname is also base-stripped
     const currentPath = $page.url.pathname;
-    if (stripped === '/') {
+    if (navPath === '') {
       return currentPath === '/';
     }
-    return currentPath.startsWith(stripped);
+    return currentPath.startsWith(navPath);
   }
 
   function isEditableTarget(target: EventTarget | null): boolean {
@@ -208,7 +206,7 @@
       <nav class="flex-1 overflow-y-auto py-2">
         {#each themedNavItems as item}
           <a
-            href={item.path}
+            href="{base}{item.path}"
             onclick={() => { if (!isDesktop) mobileNavOpen = false; }}
             class="flex items-start gap-3 px-4 py-2.5 mx-2 my-0.5 rounded-lg transition-colors group"
             class:bg-gold-50={isActive(item.path)}

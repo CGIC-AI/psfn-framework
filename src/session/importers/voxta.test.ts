@@ -1,9 +1,9 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SessionStore } from '../store.js';
+import { readJournalFile } from '../journal-utils.js';
 import { importVoxtaCharacterChats } from './voxta.js';
 
 const ROOT_USER_ID = '8A0E9879-F8C8-4C96-8B07-6B51E49987E2';
@@ -56,12 +56,52 @@ function seedVoxtaDatabase(databasePath: string): void {
         Tokens INTEGER NOT NULL,
         Attachments JSONB
       );
+      CREATE TABLE contacts (
+        id TEXT PRIMARY KEY,
+        discord_user_id TEXT,
+        display_name TEXT NOT NULL,
+        nickname TEXT,
+        trust_level TEXT NOT NULL,
+        relationship_type TEXT NOT NULL,
+        emotional_baseline TEXT,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        notes TEXT
+      );
+      CREATE TABLE contact_channel_ids (
+        contact_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        channel_user_id TEXT NOT NULL,
+        privacy_level TEXT NOT NULL,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL
+      );
     `);
 
     db.prepare(`
       INSERT INTO Users (Id, Role, DateCreated, UserName)
       VALUES (?, 'ADMIN', '2024-11-18T06:07:46.3920000+00:00', 'root')
     `).run(ROOT_USER_ID);
+
+    db.prepare(`
+      INSERT INTO contacts (
+        id, discord_user_id, display_name, nickname, trust_level, relationship_type,
+        emotional_baseline, first_seen, last_seen, notes
+      )
+      VALUES (
+        'contact-1', '388908766306893854', 'Vega', NULL, 'primary', 'partner',
+        '{}', '2026-03-18T00:00:00.000Z', '2026-03-18T00:00:00.000Z', NULL
+      )
+    `).run();
+    db.prepare(`
+      INSERT INTO contact_channel_ids (
+        contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+      )
+      VALUES (
+        'contact-1', 'discord', '388908766306893854', 'private',
+        '2026-03-18T00:00:00.000Z', '2026-03-18T00:00:00.000Z'
+      )
+    `).run();
 
     const insertCharacter = db.prepare(`
       INSERT INTO Characters (UserId, LocalId, Name, UserNameOverride, DateCreated, DateModified)
@@ -174,42 +214,50 @@ describe('importVoxtaCharacterChats', () => {
     }
   });
 
-  it('imports matching Voxta chats into PSFN L0 session journals', () => {
+  it('writes one raw L0 session file per matching Voxta chat on channel voxta', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-voxta-import-'));
     cleanupPaths.push(root);
     const dbPath = join(root, 'Voxta.sqlite.db');
+    const profileDbPath = join(root, 'profile.sqlite.db');
     const sessionsDir = join(root, 'sessions');
     seedVoxtaDatabase(dbPath);
+    seedVoxtaDatabase(profileDbPath);
 
     const result = importVoxtaCharacterChats({
       dbPath,
+      profileDatabasePath: profileDbPath,
       sessionsDir,
       characterId: 'cf0a06ea-5b6c-9a4d-945a-1c32ad4349bd',
     });
 
     expect(result.chats).toHaveLength(1);
     expect(result.totalMessages).toBe(3);
-    expect(result.chats[0]?.channelId).toBe('voxta:purrsephone:CHAT-ONE');
+    expect(result.chats[0]?.channelId).toBe('voxta');
 
-    const store = new SessionStore(sessionsDir, { disableSearchIndex: true });
-    const entries = store.getRecent('voxta:purrsephone:CHAT-ONE', 10);
-    expect(entries).toHaveLength(3);
-    expect(entries.map(entry => entry.role)).toEqual(['assistant', 'user', 'system']);
-    expect(entries.map(entry => entry.authorName)).toEqual(['Purrsephone', 'V', 'system']);
-    expect(entries[2]?.content).toContain('Voxta attachment-only message');
-    expect(entries[2]?.metadata).toContain('"source":"voxta"');
-    expect(store.listChannels().map(channel => channel.channelId)).toEqual(['voxta:purrsephone:CHAT-ONE']);
+    const files = readdirSync(sessionsDir).filter(name => name.endsWith('.jsonl'));
+    expect(files).toHaveLength(1);
+
+    const journal = readJournalFile(join(sessionsDir, files[0]!));
+    expect(journal.entries).toHaveLength(3);
+    expect(journal.entries.map(entry => entry.channelId)).toEqual(['voxta', 'voxta', 'voxta']);
+    expect(journal.entries.map(entry => entry.role)).toEqual(['assistant', 'user', 'system']);
+    expect(journal.entries[1]?.authorId).toBe('388908766306893854');
+    expect(journal.entries[1]?.authorName).toBe('Vega');
+    expect(journal.entries[2]?.content).toContain('Voxta attachment-only message');
   });
 
   it('reports imports in dry-run mode without writing files', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-voxta-import-'));
     cleanupPaths.push(root);
     const dbPath = join(root, 'Voxta.sqlite.db');
+    const profileDbPath = join(root, 'profile.sqlite.db');
     const sessionsDir = join(root, 'sessions');
     seedVoxtaDatabase(dbPath);
+    seedVoxtaDatabase(profileDbPath);
 
     const result = importVoxtaCharacterChats({
       dbPath,
+      profileDatabasePath: profileDbPath,
       sessionsDir,
       characterId: PURRSEPHONE_ID,
       dryRun: true,
@@ -217,8 +265,6 @@ describe('importVoxtaCharacterChats', () => {
 
     expect(result.dryRun).toBe(true);
     expect(result.chats).toHaveLength(1);
-
-    const store = new SessionStore(sessionsDir, { disableSearchIndex: true });
-    expect(store.listChannels()).toEqual([]);
+    expect(readdirSync(root)).not.toContain('sessions');
   });
 });

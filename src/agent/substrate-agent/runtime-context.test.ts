@@ -220,6 +220,8 @@ describe('runtime subject identity', () => {
     });
 
     expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
+    expect(runtimeContext).toContain('[Self-Image Tool Guidance]');
+    expect(runtimeContext).toContain('Use image_create for a brand new selfie, portrait, or scene featuring you.');
   });
 
   it('uses persisted conversation-channel privacy and records it on activity', () => {

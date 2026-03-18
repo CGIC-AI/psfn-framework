@@ -73,6 +73,9 @@ import type {
   BeadsCloseParams,
   BeadsSyncParams,
   BeadsActionResult,
+  ImageCreateParams,
+  ImageEditParams,
+  ImageGenerationRpcResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -736,6 +739,14 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   async beadsSync(params: BeadsSyncParams = {}): Promise<BeadsActionResult> {
     return await this.rpcInstance.request('beads.sync', params) as BeadsActionResult;
+  }
+
+  async imageCreate(params: ImageCreateParams): Promise<ImageGenerationRpcResult> {
+    return await this.rpcInstance.request('image.create', params) as ImageGenerationRpcResult;
+  }
+
+  async imageEdit(params: ImageEditParams): Promise<ImageGenerationRpcResult> {
+    return await this.rpcInstance.request('image.edit', params) as ImageGenerationRpcResult;
   }
 
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {

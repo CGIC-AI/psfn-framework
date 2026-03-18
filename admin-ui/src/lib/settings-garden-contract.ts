@@ -116,6 +116,8 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   telegramAuthorizedUsers: { sectionId: 'channels', surface: 'advanced' },
   promotedExtendedTools: { sectionId: 'channels', surface: 'advanced' },
   chatApiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
+  comfyUiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
+  imageWorkflows: { sectionId: 'channels', surface: 'advanced' },
   moaEnabled: { sectionId: 'channels', surface: 'advanced' },
   moaReferenceModels: { sectionId: 'channels', surface: 'advanced' },
   moaAggregatorModel: { sectionId: 'channels', surface: 'advanced' },

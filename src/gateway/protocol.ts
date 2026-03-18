@@ -9,6 +9,12 @@ import type {
   SubstrateMessage,
   ToolSchema,
 } from '../types.js';
+import type {
+  FalCreateModel,
+  FalEditModel,
+  ImageGenerationResult,
+  ImageProviderPreference,
+} from '../images/types.js';
 import type { JournalEntry } from '../session/types.js';
 import type { JournalIntegrityVerificationResult } from '../session/journal-utils.js';
 import type { RuntimeServiceHealthSnapshot } from '../tool-health/types.js';
@@ -166,6 +172,39 @@ export interface BeadsCloseParams extends BeadsBaseParams {
 }
 
 export interface BeadsSyncParams extends BeadsBaseParams {}
+
+export interface ImageCreateParams extends GatewayCorrelationParams {
+  prompt: string;
+  provider?: ImageProviderPreference;
+  model?: FalCreateModel;
+  numImages?: number;
+  width?: number;
+  height?: number;
+  aspectRatio?: string;
+  resolution?: string;
+  imageSize?: string;
+  background?: string;
+  outputFormat?: string;
+  seed?: number;
+}
+
+export interface ImageEditParams extends GatewayCorrelationParams {
+  prompt: string;
+  imageUrls: string[];
+  provider?: ImageProviderPreference;
+  model?: FalEditModel;
+  numImages?: number;
+  width?: number;
+  height?: number;
+  aspectRatio?: string;
+  resolution?: string;
+  imageSize?: string;
+  background?: string;
+  outputFormat?: string;
+  maskImageUrl?: string;
+  inputFidelity?: string;
+  seed?: number;
+}
 
 export interface ShellExecParams {
   command: string;
@@ -356,6 +395,8 @@ export interface BeadsActionResult {
   payload: unknown;
 }
 
+export type ImageGenerationRpcResult = ImageGenerationResult;
+
 export interface ShellExecResult {
   command: string;
   args: string[];
@@ -442,6 +483,8 @@ export interface GatewayMethods {
   'beads.update': [BeadsUpdateParams, BeadsActionResult];
   'beads.close': [BeadsCloseParams, BeadsActionResult];
   'beads.sync': [BeadsSyncParams, BeadsActionResult];
+  'image.create': [ImageCreateParams, ImageGenerationRpcResult];
+  'image.edit': [ImageEditParams, ImageGenerationRpcResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];

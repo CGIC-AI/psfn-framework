@@ -53,6 +53,8 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   issue_update: 'issue.write',
   issue_close: 'issue.close',
   issue_sync: 'issue.close',
+  image_create: 'external.web',
+  image_edit: 'external.web',
   schedule_task: 'identity.write.runtime',
   session_new: 'identity.write.runtime',
   session_list: 'identity.read',

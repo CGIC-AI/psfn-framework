@@ -31,6 +31,14 @@
     type SettingsSimpleSectionId,
   } from '$lib/components/settings/navigation';
   import { resolveVoiceProviderSelection } from './voice-provider-selection';
+  import {
+    DEFAULT_CONTEXT_WINDOW_FALLBACK,
+    MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM,
+    resolveMemoryRetrievalBudget,
+    resolveSessionHistoryBudget,
+    SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE,
+  } from '../../../../src/context-budget.js';
+  import type { ContextBudgetConfigLike } from '../../../../src/context-budget.js';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -66,15 +74,6 @@
     },
   };
 
-  // ── Budget constants (from context-budget.ts) ──
-  const SESSION_HISTORY_TOKENS_PER_MSG = 256;
-  const MEMORY_RETRIEVAL_TOKENS_PER_ITEM = 170;
-  const SESSION_HISTORY_MIN_MESSAGES = 5;
-  const SESSION_HISTORY_MAX_MESSAGES = 400;
-  const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
-  const MEMORY_RETRIEVAL_MAX_ITEMS = 200;
-  const SESSION_HISTORY_MIN_TOKENS_FLOOR = 4_000;
-  const MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR = 1_000;
   const SYSTEM_PROMPT_ESTIMATE_TOKENS = 2_500;
 
   // ── Core state ──
@@ -409,13 +408,7 @@
     salienceDecayIntervalMs?: number;
   };
 
-  type ModelsEditorConfig = {
-    modelRoster?: {
-      chat?: {
-        contextWindow?: number;
-      };
-    };
-  };
+  type ModelsEditorConfig = Pick<ContextBudgetConfigLike, 'modelCatalog' | 'modelRoleAssignments' | 'modelRoster'>;
 
   type CapabilitiesEditorConfig = {
     tier?: string;
@@ -426,15 +419,16 @@
     return (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
   }
 
+  const EMPTY_MODELS_EDITOR_CONFIG: ModelsEditorConfig = {
+    modelRoster: {},
+  };
+
   function getCapabilitiesEditorConfig(): CapabilitiesEditorConfig {
     return (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
   }
 
-  function getChatContextWindow(): number {
-    const chatContextWindow = Number(
-      (data?.editors?.models as ModelsEditorConfig | undefined)?.modelRoster?.chat?.contextWindow,
-    );
-    return Number.isFinite(chatContextWindow) && chatContextWindow > 0 ? chatContextWindow : 128000;
+  function getModelsEditorConfig(): ModelsEditorConfig {
+    return (data?.editors?.models as ModelsEditorConfig | undefined) ?? EMPTY_MODELS_EDITOR_CONFIG;
   }
 
   function fieldErrors(field: string): string[] {
@@ -672,31 +666,39 @@
     return Math.max(min, Math.min(max, value));
   }
 
-  let budgetPreview = $derived.by(() => {
+  function buildBudgetPreviewConfig(): ContextBudgetConfigLike | null {
     if (!data) return null;
-    const ctxWindow = getChatContextWindow();
+    const models = getModelsEditorConfig();
+    return {
+      defaultContextWindow: DEFAULT_CONTEXT_WINDOW_FALLBACK,
+      modelRoster: models.modelRoster ?? {},
+      ...(models.modelCatalog ? { modelCatalog: models.modelCatalog } : {}),
+      ...(models.modelRoleAssignments ? { modelRoleAssignments: models.modelRoleAssignments } : {}),
+      sessionHistoryBudgetPct,
+      memoryRetrievalBudgetPct,
+    };
+  }
 
-    const sessTokenBudget = Math.max(SESSION_HISTORY_MIN_TOKENS_FLOOR, Math.floor(ctxWindow * (sessionHistoryBudgetPct / 100)));
-    const sessBudgetMsgs = clamp(
-      Math.floor(sessTokenBudget / SESSION_HISTORY_TOKENS_PER_MSG),
-      SESSION_HISTORY_MIN_MESSAGES,
-      SESSION_HISTORY_MAX_MESSAGES,
-    );
+  let budgetPreview = $derived.by(() => {
+    const budgetConfig = buildBudgetPreviewConfig();
+    if (!budgetConfig) return null;
+
+    const sessionBudget = resolveSessionHistoryBudget(budgetConfig);
+    const memoryBudget = resolveMemoryRetrievalBudget(budgetConfig);
+    const ctxWindow = sessionBudget.contextWindow;
+    const sessTokenBudget = sessionBudget.tokenBudget;
+    const sessBudgetMsgs = sessionBudget.estimatedCount;
     const sessEffective = sessionMessageLimit != null
       ? Math.min(sessBudgetMsgs, sessionMessageLimit)
       : sessBudgetMsgs;
-    const sessEffectiveTokens = sessEffective * SESSION_HISTORY_TOKENS_PER_MSG;
+    const sessEffectiveTokens = sessEffective * SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE;
 
-    const memTokenBudget = Math.max(MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR, Math.floor(ctxWindow * (memoryRetrievalBudgetPct / 100)));
-    const memBudgetItems = clamp(
-      Math.floor(memTokenBudget / MEMORY_RETRIEVAL_TOKENS_PER_ITEM),
-      MEMORY_RETRIEVAL_MIN_ITEMS,
-      MEMORY_RETRIEVAL_MAX_ITEMS,
-    );
+    const memTokenBudget = memoryBudget.tokenBudget;
+    const memBudgetItems = memoryBudget.estimatedCount;
     const memEffective = memoryRetrievalLimit != null
       ? Math.min(memBudgetItems, memoryRetrievalLimit)
       : memBudgetItems;
-    const memEffectiveTokens = memEffective * MEMORY_RETRIEVAL_TOKENS_PER_ITEM;
+    const memEffectiveTokens = memEffective * MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM;
 
     const systemPromptTokens = SYSTEM_PROMPT_ESTIMATE_TOKENS;
     const allocated = systemPromptTokens + sessEffectiveTokens + memEffectiveTokens + maxResponseTokens;
@@ -715,12 +717,12 @@
       sessBudgetMsgs,
       sessEffectiveTokens,
       sessTokenBudget,
-      sessMode: sessionMessageLimit != null ? 'hard_limit' as const : 'budget' as const,
+      sessMode: sessionMessageLimit != null ? 'hard_limit' as const : sessionBudget.mode,
       memEffective,
       memBudgetItems,
       memEffectiveTokens,
       memTokenBudget,
-      memMode: memoryRetrievalLimit != null ? 'hard_limit' as const : 'budget' as const,
+      memMode: memoryRetrievalLimit != null ? 'hard_limit' as const : memoryBudget.mode,
       maxResponseTokens,
       allocated,
       remaining,

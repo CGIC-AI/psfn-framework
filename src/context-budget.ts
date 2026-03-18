@@ -1,8 +1,14 @@
-import type { ContextBudgetModelSlotLike } from './context-budget-contracts.js';
+import type {
+  ContextBudgetModelCatalogEntryLike,
+  ContextBudgetModelSelectionLike,
+  ContextBudgetModelSlotLike,
+} from './context-budget-contracts.js';
 
 export interface ContextBudgetConfigLike {
   defaultContextWindow: number;
-  modelRoster: Partial<Record<'chat', ContextBudgetModelSlotLike>>;
+  modelRoster: Partial<Record<string, ContextBudgetModelSlotLike>>;
+  modelCatalog?: Record<string, ContextBudgetModelCatalogEntryLike>;
+  modelRoleAssignments?: Record<string, string>;
   sessionMessageLimit?: number;
   memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;
@@ -30,6 +36,7 @@ export interface ContextBudgetTurnCharacteristics {
   isDirectMessage?: boolean;
   messageText?: string;
   taskKind?: string;
+  modelSelection?: ContextBudgetModelSelectionLike;
 }
 
 export type ContextBudgetTurnCategory = 'default' | 'recall' | 'task' | 'emotional' | 'creative' | 'factual';
@@ -63,7 +70,7 @@ export const SESSION_HISTORY_MAX_MESSAGES = 400;
 export const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
 export const MEMORY_RETRIEVAL_MAX_ITEMS = 200;
 
-const DEFAULT_CONTEXT_WINDOW_FALLBACK = 128_000;
+export const DEFAULT_CONTEXT_WINDOW_FALLBACK = 128_000;
 const TASK_KIND_TASK_SET = new Set(['planning', 'maintenance', 'deferred_tool_handoff']);
 const COMPANION_CONTEXT_TASK_KIND_SET = new Set(['heartbeat', 'reflection']);
 const CHANNEL_TASK_TYPE_SET = new Set(['terminal', 'internal']);
@@ -91,6 +98,36 @@ function toPositiveInteger(value: unknown): number | undefined {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeProvider(value: unknown): string | undefined {
+  return normalizeNonEmptyString(value)?.toLowerCase();
+}
+
+function normalizeModelId(value: unknown): string | undefined {
+  return normalizeNonEmptyString(value);
+}
+
+function normalizeModelPurpose(value: unknown): string | undefined {
+  const normalized = normalizeNonEmptyString(value);
+  if (!normalized) return undefined;
+
+  switch (normalized.toLowerCase()) {
+    case 'longcontext':
+    case 'long_context':
+      return 'longContext';
+    case 'importprocessing':
+    case 'import-processing':
+      return 'import_processing';
+    default:
+      return normalized;
+  }
 }
 
 function normalizeTurnText(value: string | undefined): string {
@@ -136,9 +173,145 @@ function estimateCountFromBudget(
   return clamp(rough, minCount, maxCount);
 }
 
-export function resolveChatContextWindow(config: Pick<ContextBudgetConfigLike, 'defaultContextWindow' | 'modelRoster'>): number {
-  const fromChatSlot = toPositiveInteger(config.modelRoster.chat?.contextWindow);
-  if (fromChatSlot !== undefined) return fromChatSlot;
+function resolvePurposeChain(purpose: string | undefined): string[] {
+  switch (purpose) {
+    case 'context':
+      return ['longContext', 'background', 'extraction', 'chat'];
+    case 'background':
+      return ['background', 'extraction', 'chat'];
+    case 'extraction':
+      return ['extraction', 'background', 'chat'];
+    case 'summary':
+      return ['summary', 'background', 'chat'];
+    case 'reasoning':
+      return ['reasoning', 'chat'];
+    case 'import_processing':
+      return ['import_processing', 'extraction', 'background', 'chat'];
+    case 'longContext':
+      return ['longContext', 'background', 'chat'];
+    case 'vision':
+      return ['vision', 'chat'];
+    case 'moa':
+      return ['moa', 'chat'];
+    case 'chat':
+    case undefined:
+      return ['chat'];
+    default:
+      return [purpose, 'chat'];
+  }
+}
+
+function modelSlotFromCatalogEntry(entry: ContextBudgetModelCatalogEntryLike | undefined): ContextBudgetModelSlotLike | undefined {
+  if (!entry) return undefined;
+
+  const maxTokens = toPositiveInteger(entry.overrides?.maxTokens)
+    ?? toPositiveInteger(entry.defaults?.maxTokens);
+  const contextWindow = toPositiveInteger(entry.overrides?.contextWindow)
+    ?? toPositiveInteger(entry.defaults?.contextWindow);
+  const contextBudget = entry.overrides?.contextBudget
+    ?? entry.defaults?.contextBudget;
+
+  return {
+    ...(normalizeModelId(entry.model) ? { model: entry.model } : {}),
+    ...(normalizeProvider(entry.provider) ? { provider: entry.provider.trim().toLowerCase() } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(contextBudget !== undefined ? { contextBudget } : {}),
+  };
+}
+
+function matchesCatalogEntryByProviderModel(
+  entry: ContextBudgetModelCatalogEntryLike | undefined,
+  provider: string | undefined,
+  model: string | undefined,
+): boolean {
+  const entryProvider = normalizeProvider(entry?.provider);
+  const entryModel = normalizeModelId(entry?.model);
+  return entryProvider !== undefined
+    && entryModel !== undefined
+    && provider !== undefined
+    && model !== undefined
+    && entryProvider === provider
+    && entryModel === model;
+}
+
+function resolveModelRosterSlot(
+  modelRoster: Partial<Record<string, ContextBudgetModelSlotLike>>,
+  purpose: string | undefined,
+): ContextBudgetModelSlotLike | undefined {
+  for (const candidate of resolvePurposeChain(purpose)) {
+    const slot = modelRoster[candidate];
+    if (slot) return slot;
+  }
+  return modelRoster.chat;
+}
+
+function resolveCatalogSlotKey(
+  catalog: Record<string, ContextBudgetModelCatalogEntryLike>,
+  assignments: Record<string, string> | undefined,
+  purpose: string | undefined,
+): string | undefined {
+  for (const candidate of resolvePurposeChain(purpose)) {
+    const slotKey = assignments?.[candidate];
+    if (slotKey && catalog[slotKey]) return slotKey;
+    if (catalog[candidate]) return candidate;
+  }
+  return undefined;
+}
+
+export function resolveContextBudgetModelSlot(
+  config: Pick<
+    ContextBudgetConfigLike,
+    'defaultContextWindow' | 'modelRoster' | 'modelCatalog' | 'modelRoleAssignments'
+  >,
+  options: Pick<ContextBudgetResolutionOptions, 'turn'> = {},
+): ContextBudgetModelSlotLike {
+  const selection = options.turn?.modelSelection;
+  const normalizedPurpose = normalizeModelPurpose(selection?.purpose) ?? 'chat';
+  const catalog = config.modelCatalog ?? {};
+  const assignedSlotKey = resolveCatalogSlotKey(catalog, config.modelRoleAssignments, normalizedPurpose);
+  const assignedEntry = assignedSlotKey ? catalog[assignedSlotKey] : undefined;
+  const normalizedProvider = normalizeProvider(selection?.provider);
+  const normalizedModel = normalizeModelId(selection?.model);
+
+  let resolvedSlot = modelSlotFromCatalogEntry(
+    selection?.slotKey ? catalog[selection.slotKey] : undefined,
+  );
+  if (!resolvedSlot && normalizedProvider && normalizedModel) {
+    if (matchesCatalogEntryByProviderModel(assignedEntry, normalizedProvider, normalizedModel)) {
+      resolvedSlot = modelSlotFromCatalogEntry(assignedEntry);
+    }
+    if (!resolvedSlot) {
+      const matchingEntry = Object.values(catalog).find(entry => (
+        matchesCatalogEntryByProviderModel(entry, normalizedProvider, normalizedModel)
+      ));
+      resolvedSlot = modelSlotFromCatalogEntry(matchingEntry);
+    }
+  }
+  if (!resolvedSlot) {
+    resolvedSlot = modelSlotFromCatalogEntry(assignedEntry)
+      ?? resolveModelRosterSlot(config.modelRoster, normalizedPurpose);
+  }
+
+  const contextWindow = toPositiveInteger(selection?.contextWindow);
+  return {
+    ...(resolvedSlot ?? {}),
+    ...(normalizedProvider !== undefined ? { provider: normalizedProvider } : {}),
+    ...(normalizedModel !== undefined ? { model: normalizedModel } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+  };
+}
+
+export function resolveChatContextWindow(
+  config: Pick<
+    ContextBudgetConfigLike,
+    'defaultContextWindow' | 'modelRoster' | 'modelCatalog' | 'modelRoleAssignments'
+  >,
+  options: Pick<ContextBudgetResolutionOptions, 'turn'> = {},
+): number {
+  const resolvedSlot = resolveContextBudgetModelSlot(config, options);
+  const fromResolvedSlot = toPositiveInteger(resolvedSlot.contextWindow);
+  if (fromResolvedSlot !== undefined) return fromResolvedSlot;
   return toPositiveInteger(config.defaultContextWindow) ?? DEFAULT_CONTEXT_WINDOW_FALLBACK;
 }
 
@@ -261,11 +434,14 @@ export function resolveSessionHistoryBudget(
   options: ContextBudgetResolutionOptions = {},
 ): ResolvedContextBudget {
   const hardLimit = toPositiveInteger(config.sessionMessageLimit);
-  const contextWindow = resolveChatContextWindow(config);
+  const resolvedSlot = resolveContextBudgetModelSlot(config, options);
+  const contextWindow = toPositiveInteger(resolvedSlot.contextWindow)
+    ?? toPositiveInteger(config.defaultContextWindow)
+    ?? DEFAULT_CONTEXT_WINDOW_FALLBACK;
   const adaptiveProfile = options.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(config, options.turn);
   const budgetPct = adaptiveProfile.sessionHistoryBudgetPct;
   const minTokenFloor = resolveTokenFloor(
-    config.modelRoster.chat?.contextBudget?.sessionHistoryMinTokens,
+    resolvedSlot.contextBudget?.sessionHistoryMinTokens,
     SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT,
     contextWindow,
   );
@@ -292,11 +468,14 @@ export function resolveMemoryRetrievalBudget(
   options: ContextBudgetResolutionOptions = {},
 ): ResolvedContextBudget {
   const hardLimit = toPositiveInteger(config.memoryRetrievalLimit);
-  const contextWindow = resolveChatContextWindow(config);
+  const resolvedSlot = resolveContextBudgetModelSlot(config, options);
+  const contextWindow = toPositiveInteger(resolvedSlot.contextWindow)
+    ?? toPositiveInteger(config.defaultContextWindow)
+    ?? DEFAULT_CONTEXT_WINDOW_FALLBACK;
   const adaptiveProfile = options.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(config, options.turn);
   const budgetPct = adaptiveProfile.memoryRetrievalBudgetPct;
   const minTokenFloor = resolveTokenFloor(
-    config.modelRoster.chat?.contextBudget?.memoryRetrievalMinTokens,
+    resolvedSlot.contextBudget?.memoryRetrievalMinTokens,
     MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT,
     contextWindow,
   );

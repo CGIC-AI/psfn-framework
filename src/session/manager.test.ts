@@ -595,6 +595,101 @@ describe('SessionManager', () => {
     expect(taskContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(2);
   });
 
+  it('recomputes effective context budgets from canonical per-turn model metadata', async () => {
+    const config = makeConfig({
+      sessionMessageLimit: undefined,
+      memoryRetrievalLimit: undefined,
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 128_000,
+          contextBudget: {
+            sessionHistoryMinTokens: 4_000,
+            memoryRetrievalMinTokens: 1_000,
+          },
+        },
+      },
+      modelCatalog: {
+        primary: {
+          model: 'test-model',
+          provider: 'test',
+          defaults: {
+            maxTokens: 16384,
+            contextWindow: 128_000,
+            contextBudget: {
+              sessionHistoryMinTokens: 4_000,
+              memoryRetrievalMinTokens: 1_000,
+            },
+          },
+        },
+        vision: {
+          model: 'vision-model',
+          provider: 'test',
+          defaults: {
+            maxTokens: 8192,
+            contextWindow: 20_000,
+            contextBudget: {
+              sessionHistoryMinTokens: 1_500,
+              memoryRetrievalMinTokens: 500,
+            },
+          },
+        },
+      },
+      modelRoleAssignments: {
+        chat: 'primary',
+        vision: 'vision',
+      },
+    });
+    const mgr = new SessionManager(store, config);
+
+    for (let i = 0; i < 20; i++) {
+      mgr.recordUserMessage('ch-model-budget', `Turn ${i} ` + 'x'.repeat(200), 'u1', 'User');
+    }
+
+    const chatContext = await mgr.buildContext(
+      'ch-model-budget',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      {
+        modelSelection: {
+          purpose: 'chat',
+        },
+      },
+    );
+    const visionContext = await mgr.buildContext(
+      'ch-model-budget',
+      'Sys',
+      '',
+      undefined,
+      undefined,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      {
+        modelSelection: {
+          purpose: 'vision',
+        },
+      },
+    );
+
+    expect(chatContext.manifest?.budgets.contextWindow).toBe(128_000);
+    expect(chatContext.manifest?.budgets.sessionHistory.tokenBudget).toBe(7_680);
+    expect(visionContext.manifest?.budgets.contextWindow).toBe(20_000);
+    expect(visionContext.manifest?.budgets.sessionHistory.tokenBudget).toBe(1_500);
+    expect(visionContext.manifest?.budgets.memoryRetrieval.tokenBudget).toBe(500);
+  });
+
   it('classifies heartbeat and reflection turns with companion-context adaptive budgets', async () => {
     const config = makeConfig({
       adaptiveContextBudgetsEnabled: true,

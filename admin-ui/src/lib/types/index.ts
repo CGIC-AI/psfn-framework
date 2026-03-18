@@ -248,6 +248,22 @@ export interface AdminTurnPromptSnapshotData {
   versionPointer: string;
 }
 
+export interface AdminTurnPromptContextMessage {
+  role: string;
+  content: string;
+}
+
+export interface AdminTurnPromptContextSnapshotData {
+  renderedStaticPrefix: string;
+  renderedDynamicSuffix: string;
+  runtimeContext: string;
+  memoryContextBlock: string;
+  scratchpadContext: string;
+  assembledPrompt: string;
+  finalSystemPrompt: string;
+  messages: AdminTurnPromptContextMessage[];
+}
+
 export interface AdminTurnSessionContextSnapshotData {
   channelId: string;
   recentEntries: SessionEntry[];
@@ -278,6 +294,7 @@ export interface AdminTurnSnapshotData {
   trustLevel: string;
   canonicalContactKey?: string;
   prompt?: AdminTurnPromptSnapshotData;
+  promptContext?: AdminTurnPromptContextSnapshotData;
   sessionContext?: AdminTurnSessionContextSnapshotData;
   memory?: AdminTurnMemorySnapshotData;
 }

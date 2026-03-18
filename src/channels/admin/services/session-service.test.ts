@@ -149,6 +149,19 @@ describe('AdminSessionDataService', () => {
             staticHash: 'static-hash',
             versionPointer: 'prompt-v1',
           },
+          promptContext: {
+            renderedStaticPrefix: 'Rendered static prefix',
+            renderedDynamicSuffix: 'Rendered dynamic suffix',
+            runtimeContext: 'Runtime context',
+            memoryContextBlock: 'Memory block',
+            scratchpadContext: 'Scratchpad block',
+            assembledPrompt: 'Rendered static prefix\n\nRendered dynamic suffix',
+            finalSystemPrompt: 'Final system prompt',
+            messages: [
+              { role: 'user', content: 'hello' },
+              { role: 'assistant', content: 'world' },
+            ],
+          },
           sessionContext: {
             channelId,
             recentEntries: [],
@@ -261,6 +274,13 @@ describe('AdminSessionDataService', () => {
           expect.objectContaining({
             text: 'Allowed candidate',
           }),
+        ],
+      },
+      promptContext: {
+        finalSystemPrompt: 'Final system prompt',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'world' },
         ],
       },
       sessionContext: {

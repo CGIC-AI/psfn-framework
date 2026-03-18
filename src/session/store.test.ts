@@ -95,6 +95,84 @@ describe('SessionStore', () => {
       extractedMemoryIds: [],
       concernDeltaRefs: [],
       contactDeltaRefs: [],
+      observability: {
+        stages: [
+          {
+            observedAt: 1_700_000_000_050,
+            turnId,
+            requestId: 'req-turn-record',
+            channelId: 'api:turn-record',
+            callType: 'chat',
+            purpose: 'agent.turn.stage.memory',
+            stage: 'memory',
+            elapsedMs: 50,
+            data: {
+              memoryChars: 120,
+            },
+          },
+        ],
+        retrievals: [
+          {
+            observedAt: 1_700_000_000_100,
+            turnId,
+            requestId: 'req-turn-record',
+            channelId: 'api:turn-record',
+            callType: 'chat',
+            purpose: 'memory.retrieval',
+            count: 1,
+            retrievalSource: 'embedding',
+            data: {
+              candidateCount: 2,
+              withheldCount: 1,
+            },
+          },
+        ],
+        snapshot: {
+          turnId,
+          requestId: 'req-turn-record',
+          channelId: 'api:turn-record',
+          capturedAt: 1_700_000_000_125,
+          trustLevel: 'regular',
+          prompt: {
+            staticPrefixTemplate: 'Static prefix',
+            dynamicSuffixTemplate: 'Dynamic suffix',
+            staticHash: 'prompt-hash',
+            versionPointer: 'prompt-snapshot-v1',
+          },
+          sessionContext: {
+            channelId: 'api:turn-record',
+            recentEntries: [],
+            compactionSummaryTexts: ['summary-1'],
+            focusKnowledgeTexts: [],
+            continuityEntries: [],
+            versionPointer: 'session-snapshot-v1',
+          },
+          memory: {
+            channelId: 'api:turn-record',
+            contactEmotionalMemories: [
+              {
+                id: 'mem-1',
+                text: 'Stored memory',
+                type: 'semantic',
+                importance: 0.7,
+                confidence: 0.9,
+                emotionalValence: 0.1,
+                salience: 0.8,
+                sourceRef: 'memory:test',
+                extractedAt: 1_700_000_000_010,
+                lastAccessed: 1_700_000_000_020,
+                accessCount: 1,
+                tags: ['test'],
+                sensitivity: 'personal',
+              },
+            ],
+            semanticCandidates: [],
+            lexicalCandidates: [],
+            proactiveCandidates: [],
+            versionPointer: 'memory-snapshot-v1',
+          },
+        },
+      },
       versionPointers: {
         model: 'openrouter/test-model',
         promptMode: 'default',
@@ -117,6 +195,32 @@ describe('SessionStore', () => {
       status: 'completed',
       userMessage: expect.objectContaining({ content: 'hello' }),
       assistantMessage: expect.objectContaining({ content: 'hi' }),
+      observability: expect.objectContaining({
+        stages: [
+          expect.objectContaining({
+            stage: 'memory',
+            callType: 'chat',
+            data: expect.objectContaining({
+              memoryChars: 120,
+            }),
+          }),
+        ],
+        retrievals: [
+          expect.objectContaining({
+            retrievalSource: 'embedding',
+            data: expect.objectContaining({
+              candidateCount: 2,
+              withheldCount: 1,
+            }),
+          }),
+        ],
+        snapshot: expect.objectContaining({
+          trustLevel: 'regular',
+          memory: expect.objectContaining({
+            versionPointer: 'memory-snapshot-v1',
+          }),
+        }),
+      }),
       versionPointers: expect.objectContaining({
         promptStack: 'prompt-snapshot-v1',
         memoryState: 'memory-snapshot-v1',

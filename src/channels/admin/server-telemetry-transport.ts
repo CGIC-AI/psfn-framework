@@ -2,6 +2,11 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { EventBus, EventMap, EventName } from '../../event-bus.js';
+import {
+  sanitizeTurnRetrievalTelemetry,
+  sanitizeTurnSnapshot,
+  sanitizeTurnStageTelemetry,
+} from '../../turns/observability.js';
 import { resolveTelemetryCorrelation } from './telemetry-correlation.js';
 import { parseRequestUrl } from './request-url.js';
 
@@ -41,9 +46,12 @@ export class AdminServerTelemetryTransport {
   private attachTelemetryWebSocket(ws: WebSocket): void {
     const telemetryEvents: EventName[] = [
       'agent.turn.usage',
+      'agent.turn.snapshot',
+      'agent.turn.stage',
       'agent.think.trace',
       'agent.tool.start',
       'agent.tool.end',
+      'memory.retrieval',
       'memory.extraction.end',
       'message.sent',
       'broadcast.approval.required',
@@ -61,11 +69,12 @@ export class AdminServerTelemetryTransport {
       const unsub = this.eventBus.on(eventName, (data: EventMap[typeof eventName]) => {
         if (ws.readyState !== WebSocket.OPEN) return;
         const correlation = resolveTelemetryCorrelation(eventName, data);
+        const sanitized = sanitizeAdminTelemetryPayload(eventName, data);
         ws.send(JSON.stringify({
           type: eventName,
           timestamp: Date.now(),
           correlation,
-          data,
+          data: sanitized,
         }));
       });
       unsubscribers.push(unsub);
@@ -80,4 +89,28 @@ export class AdminServerTelemetryTransport {
     ws.on('close', cleanup);
     ws.on('error', cleanup);
   }
+}
+
+function sanitizeAdminTelemetryPayload<E extends EventName>(
+  eventName: E,
+  data: EventMap[E],
+): Record<string, unknown> {
+  if (eventName === 'agent.turn.snapshot') {
+    const payload = data as EventMap['agent.turn.snapshot'] & Record<string, unknown>;
+    return {
+      ...payload,
+      snapshot: sanitizeTurnSnapshot(payload.snapshot),
+    };
+  }
+
+  if (eventName === 'agent.turn.stage') {
+    return sanitizeTurnStageTelemetry(data as EventMap['agent.turn.stage']);
+  }
+
+  if (eventName === 'memory.retrieval') {
+    return sanitizeTurnRetrievalTelemetry(data as EventMap['memory.retrieval'])
+      ?? (data as Record<string, unknown>);
+  }
+
+  return data as Record<string, unknown>;
 }

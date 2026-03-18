@@ -25,7 +25,7 @@ export function createImageCreateTool(ops: ImageOperations): AgentTool<any> {
     name: 'image_create',
     label: 'image_create',
     description:
-      'Generate images via FAL by default. On FAL 422 content-policy failures, it can fall back to a configured local ComfyUI workflow.',
+      'Generate images via FAL by default. On FAL 422 content-policy failures, it can fall back to a configured local ComfyUI workflow. For self-portraits or selfies, reuse the runtime Appearance context as the companion\'s canonical look when writing the prompt.',
     parameters: Type.Object({
       prompt: Type.String({ description: 'Generation prompt.' }),
       provider: providerPreferenceSchema(),
@@ -85,7 +85,7 @@ export function createImageEditTool(ops: ImageOperations): AgentTool<any> {
     name: 'image_edit',
     label: 'image_edit',
     description:
-      'Edit one or more input images via FAL by default, with optional local ComfyUI fallback when a configured workflow exists.',
+      'Edit one or more input images via FAL by default, with optional local ComfyUI fallback when a configured workflow exists. For edits of the companion\'s own image, keep the runtime Appearance context aligned with the prompt so her look stays consistent.',
     parameters: Type.Object({
       prompt: Type.String({ description: 'Edit instruction prompt.' }),
       image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),

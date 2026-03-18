@@ -13,6 +13,7 @@ import type {
 import type {
   FalCreateModel,
   FalEditModel,
+  ImageAspectRatio,
   ImageGenerationResult,
   ImageProviderPreference,
 } from '../images/types.js';
@@ -186,7 +187,7 @@ export interface ImageCreateParams extends GatewayCorrelationParams {
   numImages?: number;
   width?: number;
   height?: number;
-  aspectRatio?: string;
+  aspectRatio?: ImageAspectRatio;
   resolution?: string;
   imageSize?: string;
   background?: string;
@@ -202,7 +203,7 @@ export interface ImageEditParams extends GatewayCorrelationParams {
   numImages?: number;
   width?: number;
   height?: number;
-  aspectRatio?: string;
+  aspectRatio?: ImageAspectRatio;
   resolution?: string;
   imageSize?: string;
   background?: string;

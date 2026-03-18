@@ -57,7 +57,7 @@ export interface ResolvedAuthorContext {
   continuityFallbackKeys: string[];
 }
 
-const SELF_IMAGE_TOOL_NAMES = ['image_create', 'image_edit'] as const;
+const SELF_IMAGE_TOOL_NAMES = ['image_create', 'image_edit', 'image_analyze'] as const;
 
 function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {
   const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
@@ -214,7 +214,9 @@ export function buildRuntimeContext(input: {
     lines.push('[Self-Image Tool Guidance]');
     lines.push('Use image_create for a brand new selfie, portrait, or scene featuring you.');
     lines.push('Use image_edit when modifying an existing image while keeping your identity consistent.');
+    lines.push('Use image_analyze to inspect generated or incoming images so you can see what is actually there.');
     lines.push('Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.');
+    lines.push('Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.');
   }
 
   if (extendedCount > 0) {

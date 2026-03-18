@@ -10,12 +10,31 @@ export const FAL_EDIT_MODELS = [
   'fal-ai/gpt-image-1.5/edit',
 ] as const;
 
+export const IMAGE_ASPECT_RATIO_VALUES = [
+  'auto',
+  '21:9',
+  '16:9',
+  '3:2',
+  '4:3',
+  '5:4',
+  '1:1',
+  '4:5',
+  '3:4',
+  '2:3',
+  '9:16',
+  '4:1',
+  '1:4',
+  '8:1',
+  '1:8',
+] as const;
+
 export const IMAGE_PROVIDER_VALUES = ['fal', 'comfyui'] as const;
 export const IMAGE_PROVIDER_PREFERENCE_VALUES = ['auto', ...IMAGE_PROVIDER_VALUES] as const;
 
 export type FalCreateModel = typeof FAL_CREATE_MODELS[number];
 export type FalEditModel = typeof FAL_EDIT_MODELS[number];
 export type FalImageModel = FalCreateModel | FalEditModel;
+export type ImageAspectRatio = typeof IMAGE_ASPECT_RATIO_VALUES[number];
 export type ImageProvider = typeof IMAGE_PROVIDER_VALUES[number];
 export type ImageProviderPreference = typeof IMAGE_PROVIDER_PREFERENCE_VALUES[number];
 export type ImageMode = 'create' | 'edit';
@@ -57,6 +76,8 @@ export interface ImageGenerationResult {
 export interface ImageToolResultDetails {
   isError?: boolean;
   imageResult?: ImageGenerationResult;
+  visionReview?: ImageVisionReview;
+  visionReviewError?: string;
 }
 
 export interface ImageCreateParams {
@@ -66,7 +87,7 @@ export interface ImageCreateParams {
   numImages?: number;
   width?: number;
   height?: number;
-  aspectRatio?: string;
+  aspectRatio?: ImageAspectRatio;
   resolution?: string;
   imageSize?: string;
   background?: string;
@@ -82,12 +103,32 @@ export interface ImageEditParams {
   numImages?: number;
   width?: number;
   height?: number;
+  aspectRatio?: ImageAspectRatio;
+  resolution?: string;
   maskImageUrl?: string;
   inputFidelity?: string;
   imageSize?: string;
   background?: string;
   outputFormat?: string;
   seed?: number;
+}
+
+export interface ImageVisionReview {
+  question: string;
+  summary: string;
+  model: string;
+  imageCount: number;
+}
+
+export interface ImageVisionReviewRequest {
+  imageUrls: string[];
+  question?: string;
+  prompt?: string;
+  mode?: ImageMode;
+}
+
+export interface ImageVisionReviewer {
+  analyze(input: ImageVisionReviewRequest): Promise<ImageVisionReview>;
 }
 
 const WORKFLOW_TEMPLATE_KEYS = ['create', 'edit'] as const;

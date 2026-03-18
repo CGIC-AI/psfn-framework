@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type {
   Contact,
   ContactChannel,
+  ChannelPrivacyLevel,
   ContactIdentityLinkVerification,
 } from '../types.js';
 import type { TrustLevel } from '../../trust/types.js';
@@ -13,6 +14,7 @@ import { hydrateContact } from './hydration.js';
 import {
   LEGACY_DISCORD_CHANNEL,
   normalizeIdentity,
+  normalizePrivacyLevel,
   toIdentityLinkVerification,
 } from './identity-utils.js';
 import { upsertIdentityLink } from './upsert.js';
@@ -110,4 +112,25 @@ export function getCanonicalContactKey(
 ): string | undefined {
   const contact = getContactByChannelIdentity(db, channel, channelUserId);
   return contact?.id;
+}
+
+export function getConversationChannelPrivacy(
+  db: Database.Database,
+  contactId: string,
+  channel: ContactChannel,
+  channelId: string,
+): ChannelPrivacyLevel | undefined {
+  const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
+  const trimmedChannelId = channelId.trim();
+  if (!trimmedChannelId) return undefined;
+
+  const row = db.prepare(`
+    SELECT privacy_level
+    FROM contact_channel_activity
+    WHERE contact_id = ? AND channel = ? AND channel_id = ?
+    LIMIT 1
+  `).get(contactId, normalizedChannel, trimmedChannelId) as { privacy_level?: string | null } | undefined;
+
+  if (!row?.privacy_level) return undefined;
+  return normalizePrivacyLevel(row.privacy_level as ChannelPrivacyLevel, normalizedChannel);
 }

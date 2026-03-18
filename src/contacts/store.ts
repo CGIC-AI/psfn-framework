@@ -49,6 +49,7 @@ import {
   recordContactChannelActivity,
   setContactTrustLevel,
   unlinkChannelIdentity as unlinkChannelIdentityOperation,
+  updateConversationChannelPrivacy,
   updateContactChannelPrivacy,
   updateContactEmotionalBaseline,
   updateContactIdentityProfile,
@@ -59,6 +60,7 @@ import {
 import {
   getCanonicalContactKey,
   getContactByChannelIdentity,
+  getConversationChannelPrivacy,
   getContactByDiscordUserId,
   getContactById,
   getContactsByTrustLevel,
@@ -489,8 +491,13 @@ export class ContactStore {
     return updated;
   }
 
-  recordChannelActivity(contactId: string, channel: ContactChannel, channelId: string): void {
-    recordContactChannelActivity(this.db, contactId, channel, channelId);
+  recordChannelActivity(
+    contactId: string,
+    channel: ContactChannel,
+    channelId: string,
+    privacyLevel?: ChannelPrivacyLevel,
+  ): void {
+    recordContactChannelActivity(this.db, contactId, channel, channelId, privacyLevel);
     this.syncContactExports();
   }
 
@@ -578,6 +585,28 @@ export class ContactStore {
       this.syncContactExports();
     }
     return updated;
+  }
+
+  setConversationChannelPrivacy(
+    contactId: string,
+    channel: ContactChannel,
+    channelId: string,
+    privacyLevel: ChannelPrivacyLevel,
+  ): boolean {
+    if (!isValidChannelPrivacyLevel(privacyLevel)) return false;
+    const updated = updateConversationChannelPrivacy(this.db, contactId, channel, channelId, privacyLevel);
+    if (updated) {
+      this.syncContactExports();
+    }
+    return updated;
+  }
+
+  getConversationChannelPrivacy(
+    contactId: string,
+    channel: ContactChannel,
+    channelId: string,
+  ): ChannelPrivacyLevel | undefined {
+    return getConversationChannelPrivacy(this.db, contactId, channel, channelId);
   }
 
   createIdentityLinkChallenge(

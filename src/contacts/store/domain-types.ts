@@ -24,6 +24,7 @@ export interface ContactChannelActivityRow {
   contact_id: string;
   channel: string;
   channel_id: string;
+  privacy_level: string | null;
   first_seen: string;
   last_seen: string;
 }

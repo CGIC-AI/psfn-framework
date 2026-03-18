@@ -90,7 +90,7 @@ export function mergeChannelActivityRows(
   targetContactId: string,
 ): void {
   const sourceRows = db.prepare(`
-    SELECT contact_id, channel, channel_id, first_seen, last_seen
+    SELECT contact_id, channel, channel_id, privacy_level, first_seen, last_seen
     FROM contact_channel_activity
     WHERE contact_id = ?
     ORDER BY channel ASC, channel_id ASC
@@ -98,14 +98,14 @@ export function mergeChannelActivityRows(
   if (sourceRows.length === 0) return;
 
   const getTargetRow = db.prepare(`
-    SELECT contact_id, channel, channel_id, first_seen, last_seen
+    SELECT contact_id, channel, channel_id, privacy_level, first_seen, last_seen
     FROM contact_channel_activity
     WHERE contact_id = ? AND channel = ? AND channel_id = ?
     LIMIT 1
   `);
   const updateTargetRow = db.prepare(`
     UPDATE contact_channel_activity
-    SET first_seen = ?, last_seen = ?
+    SET privacy_level = ?, first_seen = ?, last_seen = ?
     WHERE contact_id = ? AND channel = ? AND channel_id = ?
   `);
   const moveActivity = db.prepare(`
@@ -135,7 +135,25 @@ export function mergeChannelActivityRows(
       continue;
     }
 
+    const sourceHasExplicitPrivacy = typeof sourceRow.privacy_level === 'string' && sourceRow.privacy_level.trim().length > 0;
+    const targetHasExplicitPrivacy = typeof targetRow.privacy_level === 'string' && targetRow.privacy_level.trim().length > 0;
+    const mergedPrivacy = sourceHasExplicitPrivacy && !targetHasExplicitPrivacy
+      ? normalizePrivacyLevel(sourceRow.privacy_level as ChannelPrivacyLevel, sourceRow.channel)
+      : (!sourceHasExplicitPrivacy && targetHasExplicitPrivacy)
+          ? normalizePrivacyLevel(targetRow.privacy_level as ChannelPrivacyLevel, targetRow.channel)
+          : (sourceHasExplicitPrivacy && targetHasExplicitPrivacy)
+              ? normalizePrivacyLevel(
+                (compareIsoTimestamps(sourceRow.last_seen, targetRow.last_seen) >= 0
+                  ? sourceRow.privacy_level
+                  : targetRow.privacy_level) as ChannelPrivacyLevel,
+                compareIsoTimestamps(sourceRow.last_seen, targetRow.last_seen) >= 0
+                  ? sourceRow.channel
+                  : targetRow.channel,
+              )
+              : null;
+
     updateTargetRow.run(
+      mergedPrivacy,
       earliestTimestamp(sourceRow.first_seen, targetRow.first_seen),
       latestTimestamp(sourceRow.last_seen, targetRow.last_seen),
       targetContactId,

@@ -20,6 +20,7 @@ export interface ContactConversationChannel {
   channelId: string;
   firstSeen: string;
   lastSeen: string;
+  privacyLevel?: ChannelPrivacyLevel;
 }
 
 export interface ContactIdentityLinkOptions {

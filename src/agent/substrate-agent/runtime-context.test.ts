@@ -159,4 +159,55 @@ describe('runtime subject identity', () => {
 
     expect(runtimeContext).toContain('Channel: api:admin-broadcast (type: api, visibility: broadcast)');
   });
+
+  it('uses persisted conversation-channel privacy and records it on activity', () => {
+    const recordedCalls: Array<{
+      contactId: string;
+      channel: string;
+      channelId: string;
+      privacyLevel?: string;
+    }> = [];
+    const authorContext = resolveAuthorContext({
+      message: makeMessage({
+        channelId: '1313001762793197678',
+        channelType: 'discord',
+        authorId: '388908766306893854',
+        authorName: 'Vega',
+        content: 'hi',
+      }),
+      contactStore: {
+        resolveChannelIdentity: () => ({
+          id: 'contact-vega',
+          displayName: 'Vega',
+          trustLevel: 'trusted',
+          relationshipType: 'partner',
+          firstSeen: '2026-03-18T00:00:00.000Z',
+          lastSeen: '2026-03-18T00:00:00.000Z',
+        }),
+        getConversationChannelPrivacy: () => 'private',
+        recordChannelActivity: (
+          contactId: string,
+          channel: string,
+          channelId: string,
+          privacyLevel?: string,
+        ) => {
+          recordedCalls.push({ contactId, channel, channelId, privacyLevel });
+        },
+      } as any,
+      logger: {
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext.channelPrivacyLevel).toBe('private');
+    expect(recordedCalls).toEqual([{
+      contactId: 'contact-vega',
+      channel: 'discord',
+      channelId: '1313001762793197678',
+      privacyLevel: 'private',
+    }]);
+  });
 });

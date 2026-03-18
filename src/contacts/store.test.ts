@@ -452,6 +452,29 @@ describe('ContactStore', () => {
       expect(hydrated?.conversationChannels?.[0].firstSeen).toBeDefined();
       expect(hydrated?.conversationChannels?.[0].lastSeen).toBeDefined();
     });
+
+    it('records explicit conversation-channel privacy and persists direct channel edits', () => {
+      const contact = store.upsert({ displayName: 'DM User', discordUserId: 'dm-user-1' });
+      store.recordChannelActivity(contact.id, 'Discord', '1313001762793197678', 'private');
+
+      expect(store.getById(contact.id)?.conversationChannels).toEqual([
+        expect.objectContaining({
+          channel: 'discord',
+          channelId: '1313001762793197678',
+          privacyLevel: 'private',
+        }),
+      ]);
+
+      expect(store.setConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678', 'public')).toBe(true);
+      expect(store.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('public');
+      expect(store.getById(contact.id)?.conversationChannels).toEqual([
+        expect.objectContaining({
+          channel: 'discord',
+          channelId: '1313001762793197678',
+          privacyLevel: 'public',
+        }),
+      ]);
+    });
   });
 
   describe('mergeContacts', () => {

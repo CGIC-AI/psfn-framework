@@ -5,6 +5,7 @@ import type {
   Contact,
   ContactChannelLink,
 } from '../../../contacts/types.js';
+import { defaultPrivacyForChannel } from '../../../contacts/store/identity-utils.js';
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 
@@ -68,6 +69,7 @@ export function getPersistedConversationChannels(contact: Contact): ContactConve
   return contact.conversationChannels.map(entry => ({
     channel: entry.channel,
     channelId: entry.channelId,
+    ...(entry.privacyLevel ? { privacyLevel: entry.privacyLevel } : {}),
     lastSeen: entry.lastSeen,
   }));
 }
@@ -111,6 +113,7 @@ function toConversationChannelView(options: {
   channel: string;
   channelId: string;
   lastSeen?: string;
+  privacyLevel?: ChannelPrivacyLevel;
   contact: Contact;
   sessionStore: SessionStore;
 }): ContactConversationChannelView {
@@ -124,9 +127,11 @@ function toConversationChannelView(options: {
   return {
     channel: options.channel,
     channelId: options.channelId,
+    privacyLevel: options.privacyLevel
+      ?? linkedChannel?.privacyLevel
+      ?? defaultPrivacyForChannel(options.channel),
     ...(linkedChannel ? {
       userId: linkedChannel.userId,
-      privacyLevel: linkedChannel.privacyLevel,
     } : {}),
     lastSeen: options.lastSeen,
   };
@@ -236,23 +241,23 @@ export function buildRelatedConversationChannelMap(options: {
 
   for (const contact of contacts) {
     const persistedChannels = getPersistedConversationChannels(contact);
-    if (persistedChannels.length > 0) {
-      map.set(
-        contact.id,
-        persistedChannels.map(entry => toConversationChannelView({
-          channel: entry.channel,
-          channelId: entry.channelId,
-          lastSeen: entry.lastSeen,
-          contact,
-          sessionStore,
-        })),
-      );
-      continue;
-    }
-
     const identities = getContactIdentityLinks(contact);
     const relatedChannels: ContactConversationChannelView[] = [];
     const seen = new Set<string>();
+
+    for (const entry of persistedChannels) {
+      const key = `${entry.channel}:${entry.channelId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      relatedChannels.push(toConversationChannelView({
+        channel: entry.channel,
+        channelId: entry.channelId,
+        lastSeen: entry.lastSeen,
+        privacyLevel: entry.privacyLevel,
+        contact,
+        sessionStore,
+      }));
+    }
 
     for (const session of sessions) {
       if (!identities.some(identity => sessionMatchesIdentity(session.channelId, identity))) continue;
@@ -267,6 +272,9 @@ export function buildRelatedConversationChannelMap(options: {
         channel: parsed.channel,
         channelId: parsed.channelId,
         lastSeen: lastEntry ? new Date(lastEntry.timestamp).toISOString() : undefined,
+        privacyLevel: persistedChannels.find(entry => (
+          entry.channel === parsed.channel && entry.channelId === parsed.channelId
+        ))?.privacyLevel,
         contact,
         sessionStore,
       }));

@@ -528,20 +528,39 @@ export function resolveAuthorContext(input: {
       ? maybeChannelResolver.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName)
       : input.contactStore.resolveUserId(input.message.authorId);
     const canonicalContactKey = contact.id;
-    const channelPrivacyLevel = normalizeChannelVisibility(
-      contact.channels?.find(link => (
-        link.channel === channel && link.userId === input.message.authorId
-      ))?.privacyLevel,
-    );
+    const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
+    const maybeChannelPrivacyReader = input.contactStore as ContactStore & {
+      getConversationChannelPrivacy?: (contactId: string, channel: string, channelId: string) => ChannelVisibility | undefined;
+    };
+    const channelPrivacyLevel = explicitChannelPrivacy
+      ?? (typeof maybeChannelPrivacyReader.getConversationChannelPrivacy === 'function'
+        ? normalizeChannelVisibility(
+          maybeChannelPrivacyReader.getConversationChannelPrivacy(
+            canonicalContactKey,
+            channel,
+            input.message.channelId,
+          ),
+        )
+        : undefined);
 
     const maybeActivityRecorder = input.contactStore as ContactStore & {
-      recordChannelActivity?: (contactId: string, channel: string, channelId: string) => void;
+      recordChannelActivity?: (
+        contactId: string,
+        channel: string,
+        channelId: string,
+        privacyLevel?: ChannelVisibility,
+      ) => void;
     };
     if (
       canonicalContactKey
       && typeof maybeActivityRecorder.recordChannelActivity === 'function'
     ) {
-      maybeActivityRecorder.recordChannelActivity(canonicalContactKey, channel, input.message.channelId);
+      maybeActivityRecorder.recordChannelActivity(
+        canonicalContactKey,
+        channel,
+        input.message.channelId,
+        channelPrivacyLevel,
+      );
     }
 
     return {

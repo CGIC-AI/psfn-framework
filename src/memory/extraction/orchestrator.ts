@@ -135,7 +135,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     for (const [index, chunkEntries] of entryChunks.entries()) {
       const prompt = injectPromptRuntimeTokens(extractionPrompt)
         .replace('{existing_facts}', existingFacts)
-        .replace('{recent_messages}', formatExtractionTranscript(chunkEntries));
+        .replace('{recent_messages}', formatExtractionTranscript(chunkEntries, {
+          charName: options.sessionManager.characterName,
+        }));
       const chunkRequestId = entryChunks.length > 1
         ? `${requestId}:chunk:${index + 1}`
         : requestId;

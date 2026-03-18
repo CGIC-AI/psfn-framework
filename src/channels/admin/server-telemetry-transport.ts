@@ -49,6 +49,7 @@ export class AdminServerTelemetryTransport {
       'agent.turn.snapshot',
       'agent.turn.stage',
       'agent.think.trace',
+      'agent.stream.thinking',
       'agent.tool.start',
       'agent.tool.end',
       'memory.retrieval',

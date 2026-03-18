@@ -15,6 +15,7 @@ export const navItems: NavItem[] = [
   { id: 'contacts', path: '/garden/contacts', defaultLabel: 'Contacts', icon: '\u{1F6AA}' },
   { id: 'identity', path: '/garden/identity', defaultLabel: 'Identity', icon: '\u{1F331}' },
   { id: 'prompts', path: '/garden/prompts', defaultLabel: 'Prompts', icon: '\u{1FAB4}' },
+  { id: 'prompt-monitor', path: '/garden/prompt-monitor', defaultLabel: 'Prompt Monitor', icon: '\u{1F9F5}' },
   { id: 'settings', path: '/garden/settings', defaultLabel: 'Settings', icon: '\u{2600}\u{FE0F}' },
   { id: 'theme', path: '/garden/theme', defaultLabel: 'Theme', icon: '\u{1F3A8}' },
   { id: 'telemetry', path: '/garden/telemetry', defaultLabel: 'Events', icon: '\u{1F4A7}' },

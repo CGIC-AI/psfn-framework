@@ -1,5 +1,10 @@
 import type { ContactStore } from '../../../contacts/store.js';
 import type { MemoryStore } from '../../../memory/store.js';
+import {
+  CHANNEL_PRIVACY_LEVELS,
+  CONTACT_MUTATION_AUDIT_FIELDS,
+  VALID_RELATIONSHIP_TYPES,
+} from '../../../contacts/types.js';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -11,10 +16,6 @@ import type {
 } from '../../../contacts/types.js';
 import type { TrustLevel } from '../../../trust/types.js';
 import { TRUST_LEVELS } from '../../../trust/types.js';
-import {
-  CHANNEL_PRIVACY_LEVELS,
-  VALID_RELATIONSHIP_TYPES,
-} from '../../../contacts/types.js';
 import {
   buildRelatedConversationChannelMap,
 } from './contact-session-linker.js';
@@ -58,13 +59,9 @@ export class AdminContactsDataService implements AdminContactsService {
 
   private normalizeContactMutationAuditField(value: string | null): ContactMutationAuditField | undefined {
     const trimmed = value?.trim();
-    switch (trimmed) {
-      case 'trust_level':
-      case 'notes':
-        return trimmed;
-      default:
-        return undefined;
-    }
+    return trimmed && (CONTACT_MUTATION_AUDIT_FIELDS as readonly string[]).includes(trimmed)
+      ? trimmed as ContactMutationAuditField
+      : undefined;
   }
 
   private parseContactMutationAuditQuery(params?: URLSearchParams): ContactMutationAuditQuery {
@@ -153,16 +150,21 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  private updateIdentityProfile(contact: Contact, displayName: string, nickname?: string): boolean {
+  private updateIdentityProfile(
+    contact: Contact,
+    displayName: string,
+    nickname?: string,
+    actor?: string,
+  ): boolean {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return false;
 
     const storeWithIdentityProfile = contactStore as ContactStore & {
-      updateIdentityProfile?: (contactId: string, name: string, nickname?: string) => boolean;
+      updateIdentityProfile?: (contactId: string, name: string, nickname?: string, actor?: string) => boolean;
     };
 
     if (typeof storeWithIdentityProfile.updateIdentityProfile === 'function') {
-      return storeWithIdentityProfile.updateIdentityProfile(contact.id, displayName, nickname);
+      return storeWithIdentityProfile.updateIdentityProfile(contact.id, displayName, nickname, actor);
     }
 
     const updated = contactStore.upsert({
@@ -324,7 +326,7 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Contact not found' };
     }
 
-    if (!contactStore.unlinkChannelIdentity(contactId, channel, userId)) {
+    if (!contactStore.unlinkChannelIdentity(contactId, channel, userId, 'admin:api')) {
       return { ok: false, message: 'Channel identity not found or already unlinked' };
     }
 
@@ -365,7 +367,7 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!displayName) {
         return { ok: false, message: 'displayName cannot be empty' };
       }
-      if (!this.updateIdentityProfile(contact, displayName, payload.nickname)) {
+      if (!this.updateIdentityProfile(contact, displayName, payload.nickname, 'admin:api')) {
         return { ok: false, message: 'Unable to update identity profile' };
       }
     }
@@ -383,7 +385,7 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!VALID_RELATIONSHIP_TYPES.includes(payload.relationshipType)) {
         return { ok: false, message: `Invalid relationship type: ${payload.relationshipType}` };
       }
-      if (!contactStore.updateRelationshipType(contactId, payload.relationshipType)) {
+      if (!contactStore.updateRelationshipType(contactId, payload.relationshipType, 'admin:api')) {
         return { ok: false, message: 'Unable to update relationship type' };
       }
     }
@@ -408,6 +410,7 @@ export class AdminContactsDataService implements AdminContactsService {
             normalizedChannel,
             normalizedChannelId,
             cp.privacyLevel,
+            'admin:api',
           )
           : normalizedUserId
               ? contactStore.setChannelPrivacy(
@@ -415,6 +418,7 @@ export class AdminContactsDataService implements AdminContactsService {
                 normalizedChannel,
                 normalizedUserId,
                 cp.privacyLevel,
+                'admin:api',
               )
               : false;
         if (!updated) {
@@ -438,6 +442,7 @@ export class AdminContactsDataService implements AdminContactsService {
         ch.channel.trim(),
         ch.userId.trim(),
         { privacyLevel: ch.privacyLevel },
+        'admin:api',
       );
       if (linkResult === 'identity_conflict') {
         return { ok: false, message: `Identity ${ch.channel}:${ch.userId} is already linked to another contact` };

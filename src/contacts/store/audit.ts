@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { CONTACT_MUTATION_AUDIT_FIELDS } from '../types.js';
 import type {
   ContactMutationAuditEntry,
   ContactMutationAuditField,
@@ -7,13 +8,9 @@ import type {
 import type { ContactMutationAuditRow } from './domain-types.js';
 
 function normalizeMutationAuditField(value: string): ContactMutationAuditField | undefined {
-  switch (value) {
-    case 'trust_level':
-    case 'notes':
-      return value;
-    default:
-      return undefined;
-  }
+  return (CONTACT_MUTATION_AUDIT_FIELDS as readonly string[]).includes(value)
+    ? value as ContactMutationAuditField
+    : undefined;
 }
 
 function toMutationAuditEntry(row: ContactMutationAuditRow): ContactMutationAuditEntry | undefined {

@@ -71,6 +71,12 @@ const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VAL
 const REMOVED_RUNTIME_SETTINGS_MESSAGES: Partial<Record<string, string>> = {
   memoryBudgetPct:
     'memoryBudgetPct has been removed; use sessionHistoryBudgetPct, memoryRetrievalBudgetPct, and extractionThresholdPct instead',
+  defaultContextWindow:
+    'defaultContextWindow has been removed from runtime settings; set per-model context windows in models.json instead',
+  discordEnabled:
+    'discordEnabled has been removed from runtime settings; Discord activation is controlled by DISCORD_TOKEN and DISCORD_BOT_ID',
+  discordHeartbeatChannel:
+    'discordHeartbeatChannel has been removed from runtime settings; use DISCORD_HEARTBEAT_CHANNEL at startup instead',
 };
 const log = createComponentLogger('AdminSettingsService');
 
@@ -284,7 +290,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
       openrouterApiKey: process.env.OPENROUTER_API_KEY ? '[set]' : '[not set]',
       litellmBaseUrl: process.env.LITELLM_BASE_URL ? '[set]' : '[not set]',
       litellmApiKey: process.env.LITELLM_API_KEY ? '[set]' : '[not set]',
-      ollamaUrl: process.env.OLLAMA_URL ? '[set]' : '[not set]',
       importProcessingLocalApiKey: process.env.IMPORT_PROCESSING_LOCAL_API_KEY ? '[set]' : '[not set]',
       telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ? '[set]' : '[not set]',
     };

@@ -273,7 +273,6 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
     extractionInterval: 5,
     maintenanceIntervalMs: 60_000,
     defaultContextWindow: 10_000,
-    memoryBudgetPct: 20,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
     modelRoster: {

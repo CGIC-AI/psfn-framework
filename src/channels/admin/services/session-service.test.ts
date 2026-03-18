@@ -131,6 +131,9 @@ describe('AdminSessionDataService', () => {
             data: {
               candidateCount: 3,
               withheldCount: 1,
+              withheldReasonCounts: {
+                'trust.ceiling_exceeded': 1,
+              },
             },
           },
         ],
@@ -194,6 +197,12 @@ describe('AdminSessionDataService', () => {
             ],
             lexicalCandidates: [],
             proactiveCandidates: [],
+            withheldSummary: {
+              totalCount: 1,
+              reasonCounts: {
+                'trust.ceiling_exceeded': 1,
+              },
+            },
             versionPointer: 'memory-v1',
           },
         },
@@ -232,6 +241,9 @@ describe('AdminSessionDataService', () => {
         data: expect.objectContaining({
           candidateCount: 3,
           withheldCount: 1,
+          withheldReasonCounts: {
+            'trust.ceiling_exceeded': 1,
+          },
         }),
       }),
     ]);
@@ -239,6 +251,12 @@ describe('AdminSessionDataService', () => {
       trustLevel: 'regular',
       memory: {
         versionPointer: 'memory-v1',
+        withheldSummary: {
+          totalCount: 1,
+          reasonCounts: {
+            'trust.ceiling_exceeded': 1,
+          },
+        },
         semanticCandidates: [
           expect.objectContaining({
             text: 'Allowed candidate',

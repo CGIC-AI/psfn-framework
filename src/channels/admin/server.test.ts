@@ -718,6 +718,13 @@ describe('AdminServer legacy UI removal', () => {
                 sensitivity: 'confidential',
               },
             ],
+            withheldSummary: {
+              totalCount: 2,
+              reasonCounts: {
+                'trust.ceiling_exceeded': 1,
+                'visibility.channel_restricted': 1,
+              },
+            },
             withheldCandidateIds: ['mem-withheld', 'mem-proactive-withheld'],
             versionPointer: 'memory-v1',
           },
@@ -729,6 +736,13 @@ describe('AdminServer legacy UI removal', () => {
       expect(snapshotMessage.data.snapshot.memory?.semanticCandidates).toHaveLength(1);
       expect(snapshotMessage.data.snapshot.memory?.semanticCandidates[0]?.text).toBe('Allowed candidate');
       expect(snapshotMessage.data.snapshot.memory?.proactiveCandidates).toHaveLength(0);
+      expect(snapshotMessage.data.snapshot.memory?.withheldSummary).toMatchObject({
+        totalCount: 2,
+        reasonCounts: {
+          'trust.ceiling_exceeded': 1,
+          'visibility.channel_restricted': 1,
+        },
+      });
 
       const stageMessagePromise = readWebSocketMessage<{
         type: string;
@@ -765,7 +779,11 @@ describe('AdminServer legacy UI removal', () => {
         data: {
           retrievalSource?: string;
           count: number;
-          data: { candidateCount?: number; withheldCount?: number };
+          data: {
+            candidateCount?: number;
+            withheldCount?: number;
+            withheldReasonCounts?: Record<string, number>;
+          };
         };
       }>(ws);
       await harness.eventBus.emit('memory.retrieval', {
@@ -778,6 +796,10 @@ describe('AdminServer legacy UI removal', () => {
         retrievalSource: 'embedding',
         candidateCount: 3,
         withheldCount: 2,
+        withheldReasonCounts: {
+          'trust.ceiling_exceeded': 1,
+          'visibility.channel_restricted': 1,
+        },
       });
       const retrievalMessage = await retrievalMessagePromise;
       expect(retrievalMessage.type).toBe('memory.retrieval');
@@ -787,6 +809,10 @@ describe('AdminServer legacy UI removal', () => {
         data: {
           candidateCount: 3,
           withheldCount: 2,
+          withheldReasonCounts: {
+            'trust.ceiling_exceeded': 1,
+            'visibility.channel_restricted': 1,
+          },
         },
       });
 

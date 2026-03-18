@@ -31,14 +31,8 @@
     type SettingsSimpleSectionId,
   } from '$lib/components/settings/navigation';
   import { resolveVoiceProviderSelection } from './voice-provider-selection';
-  import {
-    DEFAULT_CONTEXT_WINDOW_FALLBACK,
-    MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM,
-    resolveMemoryRetrievalBudget,
-    resolveSessionHistoryBudget,
-    SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE,
-  } from '../../../../src/context-budget.js';
   import type { ContextBudgetConfigLike } from '../../../../src/context-budget.js';
+  import { buildContextBudgetPreview } from '$lib/settings/context-budget-preview';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -681,58 +675,25 @@
     if (!data) return null;
     const models = getModelsEditorConfig();
     return {
-      defaultContextWindow: DEFAULT_CONTEXT_WINDOW_FALLBACK,
+      defaultContextWindow: 128_000,
       modelRoster: models.modelRoster ?? {},
       ...(models.modelCatalog ? { modelCatalog: models.modelCatalog } : {}),
       ...(models.modelRoleAssignments ? { modelRoleAssignments: models.modelRoleAssignments } : {}),
       sessionHistoryBudgetPct,
       memoryRetrievalBudgetPct,
+      ...(data.config.adaptiveContextBudgetsEnabled !== undefined
+        ? { adaptiveContextBudgetsEnabled: data.config.adaptiveContextBudgetsEnabled === true }
+        : {}),
     };
   }
 
   let budgetPreview = $derived.by(() => {
     const budgetConfig = buildBudgetPreviewConfig();
     if (!budgetConfig) return null;
-
-    const sessionBudget = resolveSessionHistoryBudget(budgetConfig);
-    const memoryBudget = resolveMemoryRetrievalBudget(budgetConfig);
-    const ctxWindow = sessionBudget.contextWindow;
-    const sessTokenBudget = sessionBudget.tokenBudget;
-    const sessEstimatedCount = sessionBudget.estimatedCount;
-    const sessEstimatedTokens = sessEstimatedCount * SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE;
-
-    const memTokenBudget = memoryBudget.tokenBudget;
-    const memEstimatedCount = memoryBudget.estimatedCount;
-    const memEstimatedTokens = memEstimatedCount * MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM;
-
-    const systemPromptTokens = SYSTEM_PROMPT_ESTIMATE_TOKENS;
-    const allocated = systemPromptTokens + sessEstimatedTokens + memEstimatedTokens + maxResponseTokens;
-    const remaining = Math.max(0, ctxWindow - allocated);
-
-    const sysPct = (systemPromptTokens / ctxWindow) * 100;
-    const sessPct = (sessEstimatedTokens / ctxWindow) * 100;
-    const memPct = (memEstimatedTokens / ctxWindow) * 100;
-    const respPct = (maxResponseTokens / ctxWindow) * 100;
-    const remainPct = (remaining / ctxWindow) * 100;
-
-    return {
-      contextWindow: ctxWindow,
-      systemPromptTokens,
-      sessEstimatedCount,
-      sessEstimatedTokens,
-      sessTokenBudget,
-      memEstimatedCount,
-      memEstimatedTokens,
-      memTokenBudget,
+    return buildContextBudgetPreview(budgetConfig, {
+      systemPromptTokens: SYSTEM_PROMPT_ESTIMATE_TOKENS,
       maxResponseTokens,
-      allocated,
-      remaining,
-      sysPct,
-      sessPct,
-      memPct,
-      respPct,
-      remainPct,
-    };
+    });
   });
 
   // ── Helpers ──
@@ -1593,16 +1554,31 @@
               <span class="text-shadow-600 block mb-1">Context Window</span>
               <span class="text-shadow-900 font-mono font-semibold">{budgetPreview.contextWindow.toLocaleString()}</span>
               <span class="text-shadow-600"> tokens</span>
+              {#if budgetPreview.resolvedChatProvider || budgetPreview.resolvedChatModel}
+                <span class="text-shadow-500 block text-sm mt-1">
+                  {budgetPreview.resolvedChatProvider ?? 'unknown'} / {budgetPreview.resolvedChatModel ?? 'unknown'}
+                </span>
+              {/if}
             </div>
             <div class="bg-moss-50 rounded-lg p-3 border border-moss-200">
               <span class="text-shadow-600 block mb-1">Session History</span>
               <span class="text-shadow-900 font-semibold">~{budgetPreview.sessEstimatedCount} messages</span>
-              <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.sessTokenBudget)} token budget, trimmed on whole messages</span>
+              <span class="text-shadow-500 block text-sm">
+                ~{fmtTokens(budgetPreview.sessTokenBudget)} token budget, trimmed on whole messages
+                {#if budgetPreview.sessionHistoryMinTokens}
+                  · floor {fmtTokens(budgetPreview.sessionHistoryMinTokens)}
+                {/if}
+              </span>
             </div>
             <div class="bg-gold-50 rounded-lg p-3 border border-gold-200">
               <span class="text-shadow-600 block mb-1">Memory Retrieval</span>
               <span class="text-shadow-900 font-semibold">~{budgetPreview.memEstimatedCount} memories</span>
-              <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.memTokenBudget)} token budget, trimmed on whole memories</span>
+              <span class="text-shadow-500 block text-sm">
+                ~{fmtTokens(budgetPreview.memTokenBudget)} token budget, trimmed on whole memories
+                {#if budgetPreview.memoryRetrievalMinTokens}
+                  · floor {fmtTokens(budgetPreview.memoryRetrievalMinTokens)}
+                {/if}
+              </span>
             </div>
             <div class="rounded-lg p-3 border {budgetPreview.remaining < 0 ? 'bg-wilt-50 border-wilt-400' : 'bg-bark-100 border-bark-200'}">
               <span class="text-shadow-600 block mb-1">Remaining</span>
@@ -1611,6 +1587,29 @@
               {#if budgetPreview.remaining < 0}
                 <span class="text-wilt-600 block text-sm font-medium">Over budget!</span>
               {/if}
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-bark-200 bg-bark-50 p-4 space-y-3">
+            <div>
+              <h3 class="text-sm font-medium text-shadow-800">Adaptive Turn Profiles</h3>
+              <p class="text-sm text-shadow-600">
+                Garden now previews the effective chat slot context window and the same adaptive budget table the runtime uses. Heartbeat and reflection stay on the default companion budget unless their content classifies differently.
+              </p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 text-sm">
+              {#each budgetPreview.variants as variant}
+                <div class="rounded-lg border border-bark-200 bg-white p-3">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-medium text-shadow-800">{variant.label}</span>
+                    <span class="text-xs uppercase tracking-[0.12em] text-shadow-500">{variant.source}</span>
+                  </div>
+                  <div class="mt-2 space-y-1 text-shadow-600">
+                    <div>Session {variant.sessionBudget.budgetPct}% · ~{variant.sessionBudget.estimatedCount} msgs</div>
+                    <div>Memory {variant.memoryBudget.budgetPct}% · ~{variant.memoryBudget.estimatedCount} items</div>
+                  </div>
+                </div>
+              {/each}
             </div>
           </div>
         </div>

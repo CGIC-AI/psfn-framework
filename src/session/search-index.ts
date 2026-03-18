@@ -175,10 +175,11 @@ export class SessionSearchIndex {
     `);
   }
 
-  upsertSessionEntry(entry: SessionEntry): void {
+  upsertSessionEntry(entry: SessionEntry, options: { channelId?: string } = {}): void {
+    const channelId = options.channelId ?? entry.channelId;
     const visibility = normalizeChannelVisibility(entry.channelVisibility, entry.channelId);
     this.upsertStmt.run(
-      entry.channelId,
+      channelId,
       entry.id,
       entry.role,
       entry.authorId ?? null,
@@ -193,7 +194,7 @@ export class SessionSearchIndex {
     const tx = this.db.transaction((targetChannelId: string, replacementEntries: readonly SessionEntry[]) => {
       this.deleteChannelStmt.run(targetChannelId);
       for (const entry of replacementEntries) {
-        this.upsertSessionEntry(entry);
+        this.upsertSessionEntry(entry, { channelId: targetChannelId });
       }
     });
     tx(channelId, entries);

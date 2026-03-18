@@ -267,7 +267,7 @@ export function buildRelatedConversationChannelMap(options: {
       if (seen.has(key)) continue;
       seen.add(key);
 
-      const lastEntry = sessionStore.getLastEntry(session.channelId);
+      const lastEntry = sessionStore.getLastEntry(session.sessionId);
       relatedChannels.push(toConversationChannelView({
         channel: parsed.channel,
         channelId: parsed.channelId,

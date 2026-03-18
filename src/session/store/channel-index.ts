@@ -29,6 +29,12 @@ import {
   makeReadableFilePath,
   readChannelIdFromFile,
 } from './channel-filenames.js';
+import {
+  deriveSessionIndexId,
+  indexedChannelId,
+  resolvePrimarySessionId,
+  sessionIdForChannelFile,
+} from './session-index-keys.js';
 
 const log = createComponentLogger('SessionStore');
 
@@ -40,6 +46,10 @@ export function parseChannelIndexEntry(raw: unknown): ChannelIndexEntry | null {
   const entry: ChannelIndexEntry = {
     filename: row.filename,
   };
+
+  if (typeof row.channelId === 'string' && row.channelId.trim().length > 0) {
+    entry.channelId = row.channelId.trim();
+  }
 
   const messageCount = normalizeOptionalNonNegativeNumber(row.messageCount);
   if (messageCount !== undefined) entry.messageCount = messageCount;
@@ -81,7 +91,7 @@ export function loadChannelIndex(
     const parsed = JSON.parse(raw) as ChannelIndexFile;
     const version = (parsed as { version?: unknown }).version;
 
-    if ((version !== 1 && version !== CHANNEL_INDEX_VERSION) || typeof parsed.channels !== 'object') {
+    if ((version !== 1 && version !== 2 && version !== CHANNEL_INDEX_VERSION) || typeof parsed.channels !== 'object') {
       log.warn('Ignoring invalid channel index payload', {
         path: channelIndexPath,
         version,
@@ -164,6 +174,7 @@ export function buildIndexEntry(
   const marker = metadata.lastEntry ? journalToMarkerEntry(metadata.lastEntry) : null;
 
   return {
+    channelId,
     filename,
     messageCount: metadata.messageCount,
     activeTurnTombstoneCount: metadata.activeTurnTombstoneCount,
@@ -177,6 +188,7 @@ export function buildIndexEntry(
 }
 
 export function ensureChannelIndexEntry(params: {
+  sessionId: string;
   channelId: string;
   filePath: string;
   channelIndexPath: string;
@@ -189,9 +201,14 @@ export function ensureChannelIndexEntry(params: {
   ) => void;
 }): ChannelIndexEntry {
   const filename = basename(params.filePath);
-  const existing = params.channelIndex.get(params.channelId);
+  const existing = params.channelIndex.get(params.sessionId);
 
-  if (existing && existing.filename === filename && isIndexEntryComplete(existing)) {
+  if (
+    existing
+    && existing.filename === filename
+    && indexedChannelId(params.sessionId, existing) === params.channelId
+    && isIndexEntryComplete(existing)
+  ) {
     return existing;
   }
 
@@ -201,7 +218,7 @@ export function ensureChannelIndexEntry(params: {
     params.warnAboutQuarantinedEntries,
   );
   upsertChannelIndex(
-    params.channelId,
+    params.sessionId,
     rebuilt,
     params.channelIndexPath,
     params.channelIndex,
@@ -213,6 +230,7 @@ export function snapshotIndexEntry(cache: ChannelCache): ChannelIndexEntry {
   const marker = cache.lastJournalEntry ? journalToMarkerEntry(cache.lastJournalEntry) : null;
 
   return {
+    channelId: cache.channelId,
     filename: basename(cache.resolvedPath),
     messageCount: cache.messageCount,
     activeTurnTombstoneCount: cache.activeTurnTombstoneCount,
@@ -225,22 +243,47 @@ export function snapshotIndexEntry(cache: ChannelCache): ChannelIndexEntry {
   };
 }
 
-export function resolveExistingPath(
+export interface ResolvedIndexedSession {
+  sessionId: string;
+  channelId: string;
+  filePath: string;
+}
+
+export function resolveExistingSession(
   sessionsDir: string,
-  channelId: string,
+  lookupKey: string,
   channelIndex: Map<string, ChannelIndexEntry>,
-): string | null {
-  const indexed = channelIndex.get(channelId);
+): ResolvedIndexedSession | null {
+  const primarySessionId = resolvePrimarySessionId(lookupKey, channelIndex) ?? lookupKey;
+  const indexed = channelIndex.get(primarySessionId);
   if (indexed) {
     const indexedPath = join(sessionsDir, indexed.filename);
-    if (existsSync(indexedPath)) return indexedPath;
+    if (existsSync(indexedPath)) {
+      return {
+        sessionId: primarySessionId,
+        channelId: indexedChannelId(primarySessionId, indexed),
+        filePath: indexedPath,
+      };
+    }
   }
 
-  const encodedPath = encodedFilePath(sessionsDir, channelId);
-  if (existsSync(encodedPath)) return encodedPath;
+  const encodedPath = encodedFilePath(sessionsDir, lookupKey);
+  if (existsSync(encodedPath)) {
+    return {
+      sessionId: lookupKey,
+      channelId: lookupKey,
+      filePath: encodedPath,
+    };
+  }
 
-  const legacyPath = legacyFilePath(sessionsDir, channelId);
-  if (existsSync(legacyPath)) return legacyPath;
+  const legacyPath = legacyFilePath(sessionsDir, lookupKey);
+  if (existsSync(legacyPath)) {
+    return {
+      sessionId: lookupKey,
+      channelId: lookupKey,
+      filePath: legacyPath,
+    };
+  }
 
   return null;
 }
@@ -308,6 +351,7 @@ export function createLightweightCache(
   const lastTimestamp = normalizeOptionalNonNegativeNumber(indexEntry.lastTimestamp) ?? 0;
 
   return {
+    channelId,
     entries: [],
     compactions: [],
     turnTombstones: new Set(),
@@ -355,17 +399,19 @@ export function migrateLegacyFilenames(params: {
       authorName,
     });
     if (newPath === oldPath) {
+      const sessionId = deriveSessionIndexId(channelId, basename(oldPath), params.channelIndex);
       const entry = ensureChannelIndexEntry({
+        sessionId,
         channelId,
         filePath: oldPath,
         channelIndexPath: params.channelIndexPath,
         channelIndex: params.channelIndex,
         warnAboutQuarantinedEntries: params.warnAboutQuarantinedEntries,
       });
-      if (entry.filename !== basename(oldPath)) {
+      if (entry.filename !== basename(oldPath) || indexedChannelId(sessionId, entry) !== channelId) {
         upsertChannelIndex(
-          channelId,
-          { ...entry, filename: basename(oldPath) },
+          sessionId,
+          { ...entry, channelId, filename: basename(oldPath) },
           params.channelIndexPath,
           params.channelIndex,
         );
@@ -375,7 +421,8 @@ export function migrateLegacyFilenames(params: {
 
     renameSync(oldPath, newPath);
     const entry = buildIndexEntry(channelId, newPath, params.warnAboutQuarantinedEntries);
-    upsertChannelIndex(channelId, entry, params.channelIndexPath, params.channelIndex);
+    const sessionId = deriveSessionIndexId(channelId, basename(newPath), params.channelIndex);
+    upsertChannelIndex(sessionId, entry, params.channelIndexPath, params.channelIndex);
   }
 }
 
@@ -390,21 +437,58 @@ export function primeChannelIndexFromDisk(params: {
     loadedCount: number,
   ) => void;
 }): void {
-  const files = readdirSync(params.sessionsDir)
-    .filter(isSessionJournalFilename);
+  const scannedSessions = readdirSync(params.sessionsDir)
+    .filter(isSessionJournalFilename)
+    .map((filename) => {
+      const filePath = join(params.sessionsDir, filename);
+      const channelId = readChannelIdFromFile(filePath);
+      return channelId ? { filename, filePath, channelId } : null;
+    })
+    .filter((entry): entry is { filename: string; filePath: string; channelId: string } => entry !== null)
+    .sort((left, right) => left.filename.localeCompare(right.filename));
 
-  for (const filename of files) {
-    const filePath = join(params.sessionsDir, filename);
-    const channelId = readChannelIdFromFile(filePath);
-    if (!channelId) continue;
+  const sessionCountsByChannel = new Map<string, number>();
+  for (const session of scannedSessions) {
+    sessionCountsByChannel.set(session.channelId, (sessionCountsByChannel.get(session.channelId) ?? 0) + 1);
+  }
 
-    const indexed = params.channelIndex.get(channelId);
-    if (indexed && indexed.filename === filename && isIndexEntryComplete(indexed)) {
+  const indexedSessions = scannedSessions.map((session) => ({
+    ...session,
+    sessionId: sessionIdForChannelFile(
+      session.channelId,
+      session.filename,
+      (sessionCountsByChannel.get(session.channelId) ?? 0) > 1,
+    ),
+  }));
+
+  const expectedByFilename = new Map(
+    indexedSessions.map(session => [session.filename, session]),
+  );
+  let removedStaleEntries = false;
+  for (const [sessionId, entry] of [...params.channelIndex.entries()]) {
+    const expected = expectedByFilename.get(entry.filename);
+    if (!expected || expected.sessionId !== sessionId || indexedChannelId(sessionId, entry) !== expected.channelId) {
+      params.channelIndex.delete(sessionId);
+      removedStaleEntries = true;
+    }
+  }
+  if (removedStaleEntries) {
+    saveChannelIndex(params.channelIndexPath, params.channelIndex);
+  }
+
+  for (const session of indexedSessions) {
+    const indexed = params.channelIndex.get(session.sessionId);
+    if (
+      indexed
+      && indexed.filename === session.filename
+      && indexedChannelId(session.sessionId, indexed) === session.channelId
+      && isIndexEntryComplete(indexed)
+    ) {
       continue;
     }
 
-    const entry = buildIndexEntry(channelId, filePath, params.warnAboutQuarantinedEntries);
-    upsertChannelIndex(channelId, entry, params.channelIndexPath, params.channelIndex);
+    const entry = buildIndexEntry(session.channelId, session.filePath, params.warnAboutQuarantinedEntries);
+    upsertChannelIndex(session.sessionId, entry, params.channelIndexPath, params.channelIndex);
   }
 }
 

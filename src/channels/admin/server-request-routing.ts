@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendRedirect, sendText } from '../http/primitives.js';
+import { sendText } from '../http/primitives.js';
 import { parseRequestUrl } from './request-url.js';
 
 export const GARDEN_PREFIX = '/garden';
@@ -27,36 +27,33 @@ export function handleAdminRequest(
   const url = parseRequestUrl(req);
   const requestPath = url.pathname;
 
-  // Skip auth for OPTIONS, static files, and login page.
+  // Skip auth for OPTIONS, static files, SvelteKit built assets, and login page.
   const skipAuth = req.method === 'OPTIONS'
     || requestPath.startsWith('/static/')
+    || requestPath.startsWith('/_app/')
     || requestPath === '/login';
 
   if (!skipAuth && deps.token && !deps.checkAuth(req, res)) return;
-
-  if (requestPath === '/') {
-    sendRedirect(res, `${GARDEN_PREFIX}${url.search}`);
-    return;
-  }
 
   if (deps.tryServeStaticAsset(requestPath, res)) {
     return;
   }
 
-  // Serve SvelteKit garden UI static files.
-  if (requestPath === GARDEN_PREFIX || requestPath.startsWith(GARDEN_PREFIX + '/')) {
-    if (deps.isGardenUiEnabled()) {
-      deps.serveGardenAsset(requestPath, res);
-    } else {
-      sendText(res, 404, `Not found: ${requestPath}`);
+  // API and login routes go to the route dispatcher.
+  if (requestPath === '/login' || requestPath.startsWith('/api/')) {
+    try {
+      deps.route(req.method ?? 'GET', requestPath, req, res);
+    } catch (err) {
+      deps.onRequestError(requestPath, err);
+      sendText(res, 500, 'Internal Server Error');
     }
     return;
   }
 
-  try {
-    deps.route(req.method ?? 'GET', requestPath, req, res);
-  } catch (err) {
-    deps.onRequestError(requestPath, err);
-    sendText(res, 500, 'Internal Server Error');
+  // All other paths: serve Garden SPA (UI routes, /_app/*, root).
+  if (deps.isGardenUiEnabled()) {
+    deps.serveGardenAsset(requestPath, res);
+  } else {
+    sendText(res, 404, `Not found: ${requestPath}`);
   }
 }

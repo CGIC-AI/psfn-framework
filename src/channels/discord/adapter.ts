@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import {
   Client,
   Events,
@@ -283,8 +284,9 @@ export class DiscordAdapter implements ChannelAdapter {
     if (!channel?.isTextBased()) return;
 
     const fileName = media.name?.trim() || 'attachment';
-    const file = media.localPath?.trim()
-      ? media.localPath.trim()
+    const localPath = media.localPath?.trim();
+    const file = localPath && existsSync(localPath)
+      ? localPath
       : await this.fetchRemoteMediaAttachment(media.url, fileName);
 
     await (channel as TextChannel).send({

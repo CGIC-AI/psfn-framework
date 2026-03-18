@@ -1,13 +1,15 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
+import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
-import { textResult, textResultWithError } from '../tools/results.js';
+import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import {
   FAL_CREATE_MODELS,
   FAL_EDIT_MODELS,
   IMAGE_PROVIDER_PREFERENCE_VALUES,
   type ImageGenerationResult,
+  type ImageToolResultDetails,
 } from './types.js';
 
 function formatResult(result: ImageGenerationResult): string {
@@ -59,7 +61,7 @@ export function createImageCreateTool(ops: ImageOperations): AgentTool<any> {
         output_format?: string;
         seed?: number;
       },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
         const result = await ops.create({
           prompt: params.prompt,
@@ -75,7 +77,10 @@ export function createImageCreateTool(ops: ImageOperations): AgentTool<any> {
           outputFormat: params.output_format,
           seed: params.seed,
         });
-        return textResult(formatResult(result));
+        return {
+          content: [{ type: 'text', text: formatResult(result) }] satisfies TextContent[],
+          details: { imageResult: result },
+        };
       } catch (error) {
         return textResultWithError(`image_create failed: ${toErrorMessage(error)}`, true);
       }
@@ -128,7 +133,7 @@ export function createImageEditTool(ops: ImageOperations): AgentTool<any> {
         input_fidelity?: string;
         seed?: number;
       },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
         const result = await ops.edit({
           prompt: params.prompt,
@@ -147,7 +152,10 @@ export function createImageEditTool(ops: ImageOperations): AgentTool<any> {
           inputFidelity: params.input_fidelity,
           seed: params.seed,
         });
-        return textResult(formatResult(result));
+        return {
+          content: [{ type: 'text', text: formatResult(result) }] satisfies TextContent[],
+          details: { imageResult: result },
+        };
       } catch (error) {
         return textResultWithError(`image_edit failed: ${toErrorMessage(error)}`, true);
       }

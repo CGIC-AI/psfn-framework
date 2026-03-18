@@ -32,6 +32,10 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy({ method: 'discord.send', params: {} }, policyConfig)).toBe('ALLOW');
   });
 
+  it('allows discord.sendMedia', () => {
+    expect(evaluatePolicy({ method: 'discord.sendMedia', params: {} }, policyConfig)).toBe('ALLOW');
+  });
+
   it('allows notify.ntfy', () => {
     expect(evaluatePolicy({ method: 'notify.ntfy', params: {} }, policyConfig)).toBe('ALLOW');
   });

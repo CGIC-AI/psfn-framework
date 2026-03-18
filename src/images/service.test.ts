@@ -30,6 +30,10 @@ describe('ImageService', () => {
       const url = String(input);
       if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
         expect(init?.method).toBe('POST');
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        expect(body.resolution).toBe('2K');
+        expect(body.enable_safety_checker).toBe(false);
+        expect(body.safety_tolerance).toBe('6');
         return jsonResponse({
           status: 'COMPLETED',
           request_id: 'fal-req-1',
@@ -74,6 +78,66 @@ describe('ImageService', () => {
           url: 'https://cdn.example.test/output.png',
           contentType: 'image/png',
           fileName: 'output.png',
+        },
+      ],
+    });
+  });
+
+  it('defaults FAL nano-banana edits to 2K resolution', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/edit') {
+        expect(init?.method).toBe('POST');
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        expect(body.resolution).toBe('2K');
+        expect(body.enable_safety_checker).toBe(false);
+        expect(body.safety_tolerance).toBe('6');
+        expect(body.image_urls).toEqual(['https://example.test/source.png']);
+        return jsonResponse({
+          status: 'COMPLETED',
+          request_id: 'fal-edit-req-1',
+          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/edit/requests/fal-edit-req-1',
+        });
+      }
+
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/edit/requests/fal-edit-req-1') {
+        return jsonResponse({
+          images: [
+            {
+              url: 'https://cdn.example.test/edited.png',
+              content_type: 'image/png',
+              file_name: 'edited.png',
+            },
+          ],
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.edit({
+      prompt: 'turn this into a sunset selfie',
+      imageUrls: ['https://example.test/source.png'],
+    });
+
+    expect(result).toEqual({
+      provider: 'fal',
+      mode: 'edit',
+      model: 'fal-ai/nano-banana-2/edit',
+      fallbackUsed: false,
+      requestId: 'fal-edit-req-1',
+      images: [
+        {
+          url: 'https://cdn.example.test/edited.png',
+          contentType: 'image/png',
+          fileName: 'edited.png',
         },
       ],
     });
@@ -233,6 +297,9 @@ describe('ImageService', () => {
                   class_type: 'TextEncode',
                   inputs: {
                     text: '{{prompt}}',
+                    width: '{{width}}',
+                    height: '{{height}}',
+                    resolution: '{{resolution}}',
                   },
                 },
               },
@@ -253,6 +320,9 @@ describe('ImageService', () => {
 
     expect(submitBody).toContain('uploaded-input.png');
     expect(submitBody).toContain('turn the chair blue');
+    expect(submitBody).toContain('"width":2048');
+    expect(submitBody).toContain('"height":2048');
+    expect(submitBody).toContain('"resolution":"2K"');
     expect(result.provider).toBe('comfyui');
     expect(result.images[0]?.url).toBe(
       'https://comfy.example.test/view?filename=edited.png&subfolder=&type=output',

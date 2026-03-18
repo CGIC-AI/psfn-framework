@@ -5,7 +5,11 @@ import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { Attachment } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 import { resolveGeneratedImagesDir } from '../persistence/layout.js';
-import type { ImageGenerationResult, ImageResultAsset } from './types.js';
+import type {
+  ImageGenerationResult,
+  ImageResultAsset,
+  ImageToolResultDetails,
+} from './types.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
 const IMAGE_TOOL_NAMES = new Set(['image_create', 'image_edit']);
@@ -18,6 +22,7 @@ function isToolResultMessage(message: AgentMessage): message is AgentMessage & {
   role: 'toolResult';
   toolName: string;
   toolCallId?: string;
+  details?: unknown;
   isError?: boolean;
   content: unknown;
 } {
@@ -44,17 +49,7 @@ function extractToolResultText(content: unknown): string {
   return text;
 }
 
-function parseImageGenerationResult(rawText: string): ImageGenerationResult | null {
-  const text = rawText.trim();
-  if (!text) return null;
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return null;
-  }
-
+function normalizeImageGenerationResult(parsed: unknown): ImageGenerationResult | null {
   if (!isRecord(parsed) || !Array.isArray(parsed.images)) {
     return null;
   }
@@ -87,6 +82,27 @@ function parseImageGenerationResult(rawText: string): ImageGenerationResult | nu
     requestId: typeof parsed.requestId === 'string' && parsed.requestId.trim() ? parsed.requestId.trim() : undefined,
     images,
   };
+}
+
+function parseImageGenerationResult(rawText: string): ImageGenerationResult | null {
+  const text = rawText.trim();
+  if (!text) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  return normalizeImageGenerationResult(parsed);
+}
+
+function resolveImageResultFromDetails(details: unknown): ImageGenerationResult | null {
+  if (!isRecord(details)) {
+    return null;
+  }
+  return normalizeImageGenerationResult((details as ImageToolResultDetails).imageResult);
 }
 
 function inferExtension(url: string, contentType: string | undefined): string {
@@ -182,12 +198,16 @@ export async function collectGeneratedImageAttachments(params: {
       role: 'toolResult';
       toolName: string;
       toolCallId?: string;
+      details?: unknown;
       isError?: boolean;
       content: unknown;
     } => isToolResultMessage(message))
     .filter((message) => IMAGE_TOOL_NAMES.has(message.toolName))
     .filter((message) => message.isError !== true)
-    .map((message) => parseImageGenerationResult(extractToolResultText(message.content)))
+    .map((message) => (
+      resolveImageResultFromDetails(message.details)
+      ?? parseImageGenerationResult(extractToolResultText(message.content))
+    ))
     .filter((result): result is ImageGenerationResult => result !== null);
 
   if (imageResults.length === 0) {

@@ -54,6 +54,11 @@ export interface ImageGenerationResult {
   images: ImageResultAsset[];
 }
 
+export interface ImageToolResultDetails {
+  isError?: boolean;
+  imageResult?: ImageGenerationResult;
+}
+
 export interface ImageCreateParams {
   prompt: string;
   provider?: ImageProviderPreference;

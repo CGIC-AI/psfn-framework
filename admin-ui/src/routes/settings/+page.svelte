@@ -97,6 +97,7 @@
     scheduler: '',
     'trust-policy': '',
     capabilities: '',
+    backup: '',
   });
 
   function computeSnapshot(): string {
@@ -238,6 +239,7 @@
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
   let capabilitiesJson = $state('');
+  let backupJson = $state('');
   let settingsJson = $state('');
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
   let validationErrorsByField = $state<Record<string, string[]>>({});
@@ -253,6 +255,7 @@
     'memory-profile',
     'tools-think',
     'advanced-trust',
+    'advanced-backup',
     'runtime-llm',
     'runtime-import',
     'runtime-fetch',
@@ -921,6 +924,7 @@
       case 'scheduler': return schedulerJson;
       case 'trust-policy': return trustPolicyJson;
       case 'capabilities': return capabilitiesJson;
+      case 'backup': return backupJson;
       default: return '';
     }
   }
@@ -932,6 +936,7 @@
       case 'scheduler': schedulerJson = val; break;
       case 'trust-policy': trustPolicyJson = val; break;
       case 'capabilities': capabilitiesJson = val; break;
+      case 'backup': backupJson = val; break;
     }
   }
 
@@ -943,6 +948,7 @@
       scheduler: schedulerJson,
       'trust-policy': trustPolicyJson,
       capabilities: capabilitiesJson,
+      backup: backupJson,
     };
   }
 
@@ -1099,16 +1105,18 @@
     populateSimpleFields(nextSettingsData);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
-    const [skConf, schConf, tpConf, capConf] = await Promise.all([
+    const [skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
       getSubConfig('skills').catch(() => '{}'),
       getSubConfig('scheduler').catch(() => '{}'),
       getSubConfig('trust-policy').catch(() => '{}'),
       getSubConfig('capabilities').catch(() => '{}'),
+      getSubConfig('backup').catch(() => '{}'),
     ]);
     skillsJson = tryPrettyPrint(skConf);
     schedulerJson = tryPrettyPrint(schConf);
     trustPolicyJson = tryPrettyPrint(tpConf);
     capabilitiesJson = tryPrettyPrint(capConf);
+    backupJson = tryPrettyPrint(bakConf);
     resetDirtyTracking();
   }
 
@@ -1278,16 +1286,18 @@
       populateSimpleFields(data);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
-      const [skConf, schConf, tpConf, capConf] = await Promise.all([
+      const [skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
         getSubConfig('skills').catch(() => '{}'),
         getSubConfig('scheduler').catch(() => '{}'),
         getSubConfig('trust-policy').catch(() => '{}'),
         getSubConfig('capabilities').catch(() => '{}'),
+        getSubConfig('backup').catch(() => '{}'),
       ]);
       skillsJson = tryPrettyPrint(skConf);
       schedulerJson = tryPrettyPrint(schConf);
       trustPolicyJson = tryPrettyPrint(tpConf);
       capabilitiesJson = tryPrettyPrint(capConf);
+      backupJson = tryPrettyPrint(bakConf);
       resetDirtyTracking();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load settings';
@@ -1921,6 +1931,57 @@
                 </p>
               </div>
             </div>
+          </div>
+        {/if}
+      </div>
+      </section>
+
+      <!-- Memory Backup -->
+      <section
+        id={settingsSimpleSectionAnchorId('advanced-backup')}
+        use:simpleSectionAnchor={'advanced-backup'}
+        data-settings-section="advanced-backup"
+      >
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('backup')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">B</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory Backup</h2>
+          </div>
+          <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('backup') ? 'rotate-180' : ''}">&#9660;</span>
+        </button>
+        {#if openSections.has('backup')}
+          <div class="border-t border-bark-300">
+            <div class="flex items-center justify-between px-5 py-3 border-b border-bark-200">
+              <p class="text-sm text-shadow-500">Edit <span class="font-mono">backup.json</span> — backup schedule, rotation counts, and mirror path.</p>
+              <div class="flex items-center gap-3">
+                {#if rawSaveStatus['backup']}
+                  <span class="text-sm font-medium {rawSaveStatus['backup'].ok ? 'text-moss-600' : 'text-wilt-600'}">
+                    {rawSaveStatus['backup'].msg}
+                  </span>
+                {/if}
+                <button
+                  onclick={() => saveRawConfig('backup', rawEditorLabel('backup'))}
+                  disabled={saving}
+                  class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium
+                         hover:bg-gold-700 disabled:opacity-50 transition-colors"
+                >
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+            <textarea
+              value={backupJson}
+              oninput={(e) => backupJson = (e.target as HTMLTextAreaElement).value}
+              rows="12"
+              class="w-full font-mono text-sm text-shadow-800 bg-white p-4
+                     focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
+                     resize-y border-0"
+              spellcheck="false"
+            ></textarea>
           </div>
         {/if}
       </div>

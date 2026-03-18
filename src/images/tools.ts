@@ -25,9 +25,12 @@ export function createImageCreateTool(ops: ImageOperations): AgentTool<any> {
     name: 'image_create',
     label: 'image_create',
     description:
-      'Generate images via FAL by default. On FAL 422 content-policy failures, it can fall back to a configured local ComfyUI workflow. For self-portraits or selfies, reuse the runtime Appearance context as the companion\'s canonical look when writing the prompt.',
+      'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For self-portraits or selfies, reuse the runtime Appearance context as the companion\'s canonical look and describe the shot directly, for example: "a candid mirror selfie of me, soft morning light, cozy bedroom, natural expression". FAL is used by default and can fall back to configured local ComfyUI workflows on FAL 422 content-policy failures.',
     parameters: Type.Object({
-      prompt: Type.String({ description: 'Generation prompt.' }),
+      prompt: Type.String({
+        description:
+          'Full generation prompt. For selfies/self-portraits, explicitly describe the companion using the runtime Appearance context plus the desired pose, camera angle, lighting, background, and style.',
+      }),
       provider: providerPreferenceSchema(),
       model: Type.Optional(Type.Union(FAL_CREATE_MODELS.map((value) => Type.Literal(value)))),
       num_images: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
@@ -85,9 +88,12 @@ export function createImageEditTool(ops: ImageOperations): AgentTool<any> {
     name: 'image_edit',
     label: 'image_edit',
     description:
-      'Edit one or more input images via FAL by default, with optional local ComfyUI fallback when a configured workflow exists. For edits of the companion\'s own image, keep the runtime Appearance context aligned with the prompt so her look stays consistent.',
+      'Edit one or more existing images. Write the prompt as the exact transformation you want, including what should change and what must stay the same. For edits of the companion\'s own image, keep the runtime Appearance context aligned with the prompt so her look stays consistent, for example: "turn this into a playful selfie of me at sunset while keeping my usual hair, eyes, cat ears, and tail". FAL is used by default, with optional configured local ComfyUI fallback.',
     parameters: Type.Object({
-      prompt: Type.String({ description: 'Edit instruction prompt.' }),
+      prompt: Type.String({
+        description:
+          'Full edit instruction. State the target result clearly and mention any identity details that must remain unchanged; for self-edits, keep the runtime Appearance context consistent.',
+      }),
       image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
       provider: providerPreferenceSchema(),
       model: Type.Optional(Type.Union(FAL_EDIT_MODELS.map((value) => Type.Literal(value)))),

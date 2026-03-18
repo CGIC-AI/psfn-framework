@@ -548,9 +548,22 @@ export function resolveAuthorContext(input: {
     const maybeChannelResolver = input.contactStore as ContactStore & {
       resolveChannelIdentity?: (channel: string, userId: string, displayName?: string) => Contact;
     };
-    const contact = typeof maybeChannelResolver.resolveChannelIdentity === 'function'
-      ? maybeChannelResolver.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName)
-      : input.contactStore.resolveUserId(input.message.authorId);
+    // If a trusted canonical contact ID hint is provided in the routing metadata (e.g. set
+    // by the Garden admin chat), resolve directly by ID so the correct contact (with nickname
+    // etc.) is used regardless of which API auth principal is making the request.
+    const canonicalHint = input.message.routing?.canonicalContactId?.trim();
+    const hintedContact = canonicalHint ? input.contactStore.getById(canonicalHint) : undefined;
+    const contact = hintedContact
+      ?? (typeof maybeChannelResolver.resolveChannelIdentity === 'function'
+        ? maybeChannelResolver.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName)
+        : input.contactStore.resolveUserId(input.message.authorId));
+    if (hintedContact) {
+      // Still update last seen so the contact record stays fresh.
+      const maybeLastSeenUpdater = input.contactStore as ContactStore & {
+        updateLastSeen?: (id: string) => void;
+      };
+      maybeLastSeenUpdater.updateLastSeen?.(hintedContact.id);
+    }
     const canonicalContactKey = contact.id;
     const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
     const maybeChannelPrivacyReader = input.contactStore as ContactStore & {

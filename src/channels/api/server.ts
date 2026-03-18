@@ -1040,6 +1040,10 @@ export class ApiServer implements ChannelAdapter {
     const visibilityScope = requestedScope === 'public_only' || requestedScope === 'approved_private_context'
       ? requestedScope
       : undefined;
+    const canonicalContactId = this.clampHeader(
+      this.singleHeader(req.headers['x-canonical-contact-id']),
+      256,
+    );
     const routing: MessageRoutingMetadata = {
       source: 'api',
       ...(approvalToken || visibilityScope
@@ -1054,12 +1058,14 @@ export class ApiServer implements ChannelAdapter {
       ...(overrides.modelOverride ? { modelOverride: overrides.modelOverride } : {}),
       ...(overrides.promptOverride ? { promptOverride: overrides.promptOverride } : {}),
       ...(overrides.responseStyle ? { responseStyle: overrides.responseStyle } : {}),
+      ...(canonicalContactId ? { canonicalContactId } : {}),
     };
     const hasRouting = routing.broadcast
       || routing.channelPrivacy
       || routing.modelOverride
       || routing.promptOverride
-      || routing.responseStyle;
+      || routing.responseStyle
+      || routing.canonicalContactId;
 
     return {
       id: `api-${randomUUID()}`,

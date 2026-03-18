@@ -101,7 +101,6 @@
 
   function computeSnapshot(): string {
     return JSON.stringify({
-      memoryRetrievalLimit, sessionMessageLimit,
       sessionRestartBehavior,
       compositionalPolicy: configValue('compositionalPolicy') ?? null,
       sessionHistoryBudgetPct, memoryRetrievalBudgetPct,
@@ -154,8 +153,6 @@
   }
 
   // ── Simple mode fields ──
-  let memoryRetrievalLimit = $state<number | null>(null);
-  let sessionMessageLimit = $state<number | null>(null);
   let sessionRestartBehavior = $state<'reuse_latest_session' | 'new_session'>('reuse_latest_session');
   let sessionHistoryBudgetPct = $state(6);
   let memoryRetrievalBudgetPct = $state(2);
@@ -687,42 +684,32 @@
     const memoryBudget = resolveMemoryRetrievalBudget(budgetConfig);
     const ctxWindow = sessionBudget.contextWindow;
     const sessTokenBudget = sessionBudget.tokenBudget;
-    const sessBudgetMsgs = sessionBudget.estimatedCount;
-    const sessEffective = sessionMessageLimit != null
-      ? Math.min(sessBudgetMsgs, sessionMessageLimit)
-      : sessBudgetMsgs;
-    const sessEffectiveTokens = sessEffective * SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE;
+    const sessEstimatedCount = sessionBudget.estimatedCount;
+    const sessEstimatedTokens = sessEstimatedCount * SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE;
 
     const memTokenBudget = memoryBudget.tokenBudget;
-    const memBudgetItems = memoryBudget.estimatedCount;
-    const memEffective = memoryRetrievalLimit != null
-      ? Math.min(memBudgetItems, memoryRetrievalLimit)
-      : memBudgetItems;
-    const memEffectiveTokens = memEffective * MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM;
+    const memEstimatedCount = memoryBudget.estimatedCount;
+    const memEstimatedTokens = memEstimatedCount * MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM;
 
     const systemPromptTokens = SYSTEM_PROMPT_ESTIMATE_TOKENS;
-    const allocated = systemPromptTokens + sessEffectiveTokens + memEffectiveTokens + maxResponseTokens;
+    const allocated = systemPromptTokens + sessEstimatedTokens + memEstimatedTokens + maxResponseTokens;
     const remaining = Math.max(0, ctxWindow - allocated);
 
     const sysPct = (systemPromptTokens / ctxWindow) * 100;
-    const sessPct = (sessEffectiveTokens / ctxWindow) * 100;
-    const memPct = (memEffectiveTokens / ctxWindow) * 100;
+    const sessPct = (sessEstimatedTokens / ctxWindow) * 100;
+    const memPct = (memEstimatedTokens / ctxWindow) * 100;
     const respPct = (maxResponseTokens / ctxWindow) * 100;
     const remainPct = (remaining / ctxWindow) * 100;
 
     return {
       contextWindow: ctxWindow,
       systemPromptTokens,
-      sessEffective,
-      sessBudgetMsgs,
-      sessEffectiveTokens,
+      sessEstimatedCount,
+      sessEstimatedTokens,
       sessTokenBudget,
-      sessMode: sessionMessageLimit != null ? 'hard_limit' as const : sessionBudget.mode,
-      memEffective,
-      memBudgetItems,
-      memEffectiveTokens,
+      memEstimatedCount,
+      memEstimatedTokens,
       memTokenBudget,
-      memMode: memoryRetrievalLimit != null ? 'hard_limit' as const : memoryBudget.mode,
       maxResponseTokens,
       allocated,
       remaining,
@@ -740,8 +727,6 @@
     const scheduler = settingsData.editors?.scheduler as SchedulerEditorConfig | undefined;
     const capabilities = settingsData.editors?.capabilities as CapabilitiesEditorConfig | undefined;
     const maxOutputTokensFromConfig = Number(config.primaryMaxTokens ?? config.extractionMaxTokens ?? 4096);
-    memoryRetrievalLimit = config.memoryRetrievalLimit != null ? Number(config.memoryRetrievalLimit) : null;
-    sessionMessageLimit = config.sessionMessageLimit != null ? Number(config.sessionMessageLimit) : null;
     sessionRestartBehavior = config.sessionRestartBehavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
     sessionHistoryBudgetPct = Number(config.sessionHistoryBudgetPct ?? 6);
     memoryRetrievalBudgetPct = Number(config.memoryRetrievalBudgetPct ?? 2);
@@ -1021,8 +1006,6 @@
     ) * 1000;
 
     return {
-      ...(memoryRetrievalLimit != null ? { memoryRetrievalLimit } : {}),
-      ...(sessionMessageLimit != null ? { sessionMessageLimit } : {}),
       sessionRestartBehavior,
       sessionHistoryBudgetPct,
       memoryRetrievalBudgetPct,
@@ -1501,14 +1484,14 @@
               {#if budgetPreview.sessPct > 0}
                 <div class="bg-moss-400 flex items-center justify-center text-white text-sm font-medium min-w-0 overflow-hidden"
                   style="width: {budgetPreview.sessPct}%"
-                  title="Session history: ~{fmtTokens(budgetPreview.sessEffectiveTokens)} tokens ({budgetPreview.sessEffective} messages)">
+                  title="Session history: ~{fmtTokens(budgetPreview.sessEstimatedTokens)} tokens (~{budgetPreview.sessEstimatedCount} whole messages)">
                   {#if budgetPreview.sessPct > 4}<span class="truncate px-1">Session</span>{/if}
                 </div>
               {/if}
               {#if budgetPreview.memPct > 0}
                 <div class="bg-gold-400 flex items-center justify-center text-white text-sm font-medium min-w-0 overflow-hidden"
                   style="width: {budgetPreview.memPct}%"
-                  title="Memory retrieval: ~{fmtTokens(budgetPreview.memEffectiveTokens)} tokens ({budgetPreview.memEffective} memories)">
+                  title="Memory retrieval: ~{fmtTokens(budgetPreview.memEstimatedTokens)} tokens (~{budgetPreview.memEstimatedCount} whole memories)">
                   {#if budgetPreview.memPct > 4}<span class="truncate px-1">Memory</span>{/if}
                 </div>
               {/if}
@@ -1535,11 +1518,11 @@
               </span>
               <span class="flex items-center gap-1.5">
                 <span class="w-3 h-3 rounded-sm bg-moss-400 inline-block"></span>
-                <span class="text-shadow-700">Session: {budgetPreview.sessEffective} msgs (~{fmtTokens(budgetPreview.sessEffectiveTokens)})</span>
+                <span class="text-shadow-700">Session: ~{budgetPreview.sessEstimatedCount} msgs (~{fmtTokens(budgetPreview.sessEstimatedTokens)})</span>
               </span>
               <span class="flex items-center gap-1.5">
                 <span class="w-3 h-3 rounded-sm bg-gold-400 inline-block"></span>
-                <span class="text-shadow-700">Memory: {budgetPreview.memEffective} items (~{fmtTokens(budgetPreview.memEffectiveTokens)})</span>
+                <span class="text-shadow-700">Memory: ~{budgetPreview.memEstimatedCount} items (~{fmtTokens(budgetPreview.memEstimatedTokens)})</span>
               </span>
               <span class="flex items-center gap-1.5">
                 <span class="w-3 h-3 rounded-sm bg-petal-400 inline-block"></span>
@@ -1561,21 +1544,13 @@
             </div>
             <div class="bg-moss-50 rounded-lg p-3 border border-moss-200">
               <span class="text-shadow-600 block mb-1">Session History</span>
-              <span class="text-shadow-900 font-semibold">{budgetPreview.sessEffective} messages</span>
-              {#if budgetPreview.sessMode === 'hard_limit'}
-                <span class="text-shadow-500 block text-sm">hard limit: {sessionMessageLimit}, budget: ~{budgetPreview.sessBudgetMsgs}</span>
-              {:else}
-                <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.sessTokenBudget)} token budget</span>
-              {/if}
+              <span class="text-shadow-900 font-semibold">~{budgetPreview.sessEstimatedCount} messages</span>
+              <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.sessTokenBudget)} token budget, trimmed on whole messages</span>
             </div>
             <div class="bg-gold-50 rounded-lg p-3 border border-gold-200">
               <span class="text-shadow-600 block mb-1">Memory Retrieval</span>
-              <span class="text-shadow-900 font-semibold">{budgetPreview.memEffective} memories</span>
-              {#if budgetPreview.memMode === 'hard_limit'}
-                <span class="text-shadow-500 block text-sm">hard limit: {memoryRetrievalLimit}, budget: ~{budgetPreview.memBudgetItems}</span>
-              {:else}
-                <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.memTokenBudget)} token budget</span>
-              {/if}
+              <span class="text-shadow-900 font-semibold">~{budgetPreview.memEstimatedCount} memories</span>
+              <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.memTokenBudget)} token budget, trimmed on whole memories</span>
             </div>
             <div class="rounded-lg p-3 border {budgetPreview.remaining < 0 ? 'bg-wilt-50 border-wilt-400' : 'bg-bark-100 border-bark-200'}">
               <span class="text-shadow-600 block mb-1">Remaining</span>
@@ -1603,16 +1578,7 @@
               <input type="range" min="1" max="80" step="1" bind:value={sessionHistoryBudgetPct} class={SLIDER_CLS} />
               <input type="number" min="1" max="80" bind:value={sessionHistoryBudgetPct} class={COMPACT_INPUT_CLS} />
             </div>
-            <p class="text-sm text-shadow-500 mt-1">% of context window for session history (default: 6%)</p>
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Session Message Limit (hard override)</label>
-            <input type="number" min="1" max="500"
-              value={sessionMessageLimit ?? ''}
-              onchange={(e) => { const v = Number((e.target as HTMLInputElement).value); sessionMessageLimit = v > 0 ? v : null; }}
-              placeholder="auto (budget-based)"
-              class={INPUT_CLS} />
-            <p class="text-sm text-shadow-500 mt-1">Caps messages regardless of budget. Leave blank for auto.</p>
+            <p class="text-sm text-shadow-500 mt-1">% of context window for session history (default: 6%). Runtime keeps whole messages within this token budget.</p>
           </div>
           <div>
             <label class={LABEL_CLS}>
@@ -1623,16 +1589,7 @@
               <input type="range" min="1" max="50" step="1" bind:value={memoryRetrievalBudgetPct} class={SLIDER_CLS} />
               <input type="number" min="1" max="50" bind:value={memoryRetrievalBudgetPct} class={COMPACT_INPUT_CLS} />
             </div>
-            <p class="text-sm text-shadow-500 mt-1">% of context window for memory retrieval (default: 2%)</p>
-          </div>
-          <div>
-            <label class={LABEL_CLS}>Memory Retrieval Limit (hard override)</label>
-            <input type="number" min="1" max="500"
-              value={memoryRetrievalLimit ?? ''}
-              onchange={(e) => { const v = Number((e.target as HTMLInputElement).value); memoryRetrievalLimit = v > 0 ? v : null; }}
-              placeholder="auto (budget-based)"
-              class={INPUT_CLS} />
-            <p class="text-sm text-shadow-500 mt-1">Caps memories regardless of budget. Leave blank for auto.</p>
+            <p class="text-sm text-shadow-500 mt-1">% of context window for memory retrieval (default: 2%). Runtime keeps whole memories within this token budget.</p>
           </div>
         </div>
       </div>

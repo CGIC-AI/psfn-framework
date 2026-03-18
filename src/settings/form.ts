@@ -38,8 +38,6 @@ export const SETTINGS_VALIDATION = {
     min: MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
     max: MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
   },
-  sessionMessageLimit: { min: 5, max: 200 },
-  memoryRetrievalLimit: { min: 1, max: 50 },
   extractionInterval: { min: 1, max: 50 },
   extractionThresholdPct: {
     min: EXTRACTION_THRESHOLD_PCT_RANGE.min,

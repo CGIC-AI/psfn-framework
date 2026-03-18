@@ -1723,7 +1723,7 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsRes.status).toBe(200);
     const settingsPayload = JSON.parse(settingsRes.body) as {
       config: {
-        sessionMessageLimit: number;
+        sessionHistoryBudgetPct: number;
         sessionRestartBehavior: string;
         primaryModel?: string;
         maintenanceIntervalMs?: number;
@@ -1741,7 +1741,7 @@ describe('AdminServer JSON API routes', () => {
         };
       };
     };
-    expect(settingsPayload.config.sessionMessageLimit).toBe(testConfig.sessionMessageLimit);
+    expect(settingsPayload.config.sessionHistoryBudgetPct).toBe(testConfig.sessionHistoryBudgetPct);
     expect(settingsPayload.config.sessionRestartBehavior).toBe('reuse_latest_session');
     expect(settingsPayload.config.primaryModel).toBeUndefined();
     expect(settingsPayload.config.maintenanceIntervalMs).toBeUndefined();
@@ -1761,7 +1761,7 @@ describe('AdminServer JSON API routes', () => {
       port,
       'PATCH',
       '/api/admin/settings',
-      JSON.stringify({ sessionMessageLimit: 55, sessionRestartBehavior: 'new_session' }),
+      JSON.stringify({ sessionHistoryBudgetPct: 9, sessionRestartBehavior: 'new_session' }),
       authHeaders,
     );
     expect(settingsPatchRes.status).toBe(200);
@@ -1771,12 +1771,12 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsAfterPatchRes.status).toBe(200);
     const settingsAfterPatch = JSON.parse(settingsAfterPatchRes.body) as {
       config: {
-        sessionMessageLimit: number;
+        sessionHistoryBudgetPct: number;
         sessionRestartBehavior: string;
         primaryModel?: string;
       };
     };
-    expect(settingsAfterPatch.config.sessionMessageLimit).toBe(55);
+    expect(settingsAfterPatch.config.sessionHistoryBudgetPct).toBe(9);
     expect(settingsAfterPatch.config.sessionRestartBehavior).toBe('new_session');
     expect(settingsAfterPatch.config.primaryModel).toBeUndefined();
 
@@ -1837,7 +1837,7 @@ describe('AdminServer JSON API routes', () => {
     ]));
     expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
-    expect(loadSettings(tempDir).sessionMessageLimit).toBe(55);
+    expect(loadSettings(tempDir).sessionHistoryBudgetPct).toBe(9);
 
     const identityRes = await request(port, 'GET', '/api/admin/identity', undefined, authHeaders);
     expect(identityRes.status).toBe(200);
@@ -2234,9 +2234,7 @@ describe('AdminServer JSON API routes', () => {
     const patch = {
       sessionHistoryBudgetPct: 9,
       memoryRetrievalBudgetPct: 4,
-      sessionMessageLimit: 44,
       sessionRestartBehavior: 'new_session',
-      memoryRetrievalLimit: 12,
       extractionInterval: 6,
       extractionThresholdPct: 34,
       compactionThresholdPct: 76,
@@ -2334,6 +2332,8 @@ describe('AdminServer JSON API routes', () => {
       JSON.stringify({
         memoryBudgetPct: 24,
         defaultContextWindow: 196000,
+        sessionMessageLimit: 44,
+        memoryRetrievalLimit: 12,
         discordEnabled: true,
         discordHeartbeatChannel: '1234567890',
       }),
@@ -2346,6 +2346,8 @@ describe('AdminServer JSON API routes', () => {
       validationErrors: expect.arrayContaining([
         expect.objectContaining({ field: 'memoryBudgetPct', code: 'removed_field' }),
         expect.objectContaining({ field: 'defaultContextWindow', code: 'removed_field' }),
+        expect.objectContaining({ field: 'sessionMessageLimit', code: 'removed_field' }),
+        expect.objectContaining({ field: 'memoryRetrievalLimit', code: 'removed_field' }),
         expect.objectContaining({ field: 'discordEnabled', code: 'removed_field' }),
         expect.objectContaining({ field: 'discordHeartbeatChannel', code: 'removed_field' }),
       ]),
@@ -2358,7 +2360,7 @@ describe('AdminServer JSON API routes', () => {
       'PATCH',
       '/api/admin/settings',
       JSON.stringify({
-        sessionMessageLimit: 0,
+        sessionHistoryBudgetPct: 0,
         importProcessingRouteMode: 'local_endpoint',
         importProcessingLocalEndpointUrl: '',
         importProcessingLocalModel: '',
@@ -2379,11 +2381,11 @@ describe('AdminServer JSON API routes', () => {
       validationErrors?: Array<{ field: string; message: string; code?: string }>;
     };
     expect(payload.ok).toBe(false);
-    expect(payload.message).toContain('sessionMessageLimit must be 5-200');
-      expect(payload.validationErrors).toEqual(expect.arrayContaining([
+    expect(payload.message).toContain('sessionHistoryBudgetPct must be 1-80');
+    expect(payload.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        field: 'sessionMessageLimit',
-        message: 'sessionMessageLimit must be 5-200',
+        field: 'sessionHistoryBudgetPct',
+        message: 'sessionHistoryBudgetPct must be 1-80',
       }),
       expect.objectContaining({
         field: 'importProcessingLocalEndpointUrl',
@@ -2488,7 +2490,7 @@ describe('AdminServer JSON API routes', () => {
       expect(isRawOnlySchemaSubsystem(skillsSubsystem)).toBe(true);
       expect(isRawOnlySchemaSubsystem(trustPolicySubsystem)).toBe(true);
 
-      const sessionMessageLimitField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sessionMessageLimit');
+      const sessionHistoryBudgetPctField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sessionHistoryBudgetPct');
       const primaryModelField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'primaryModel');
       const modelCatalogField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelCatalog');
       const modelRoleAssignmentsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoleAssignments');
@@ -2503,10 +2505,10 @@ describe('AdminServer JSON API routes', () => {
       const textEmotionDtypeField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'textEmotionDtype');
 
       expect(['number', 'integer']).toContain(
-        readStringMetadata(sessionMessageLimitField, ['type', 'kind', 'valueType', 'inputType']),
+        readStringMetadata(sessionHistoryBudgetPctField, ['type', 'kind', 'valueType', 'inputType']),
       );
-      expect(readNumberMetadata(sessionMessageLimitField, ['min', 'minimum'])).toBe(5);
-      expect(readNumberMetadata(sessionMessageLimitField, ['max', 'maximum'])).toBe(200);
+      expect(readNumberMetadata(sessionHistoryBudgetPctField, ['min', 'minimum'])).toBe(1);
+      expect(readNumberMetadata(sessionHistoryBudgetPctField, ['max', 'maximum'])).toBe(80);
 
       expect(readOwnerFiles(primaryModelField)).toContain('models.json');
       expect(readOwnerFiles(modelCatalogField)).toContain('models.json');
@@ -2550,7 +2552,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('round-trips runtime settings and subsystem owner files through the canonical admin settings payload', async () => {
     const runtimePatch = {
-      sessionMessageLimit: 44,
+      sessionHistoryBudgetPct: 9,
       sessionRestartBehavior: 'new_session',
       openRouterProviderOrder: ['parasail', 'openai'],
       compositionalPolicy: {

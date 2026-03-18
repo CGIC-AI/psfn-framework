@@ -62,9 +62,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     memoryRetrievalBudgetPct: retrievalBudgetPct,
     moodCongruenceWeight: config.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled: config.adaptiveContextBudgetsEnabled ?? false,
-    sessionMessageLimit: config.sessionMessageLimit ?? null,
     sessionRestartBehavior: config.sessionRestartBehavior ?? 'reuse_latest_session',
-    memoryRetrievalLimit: config.memoryRetrievalLimit ?? null,
     extractionInterval: config.extractionInterval,
     maintenanceIntervalMs: config.maintenanceIntervalMs,
     extractionThresholdPct: config.extractionThresholdPct,
@@ -174,12 +172,10 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if (settings.adaptiveContextBudgetsEnabled !== undefined) {
     config.adaptiveContextBudgetsEnabled = settings.adaptiveContextBudgetsEnabled;
   }
-  if (settings.sessionMessageLimit !== undefined) config.sessionMessageLimit = settings.sessionMessageLimit;
   if ('sessionRestartBehavior' in settings) {
     const behavior = settings.sessionRestartBehavior;
     config.sessionRestartBehavior = behavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
   }
-  if (settings.memoryRetrievalLimit !== undefined) config.memoryRetrievalLimit = settings.memoryRetrievalLimit;
   if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
   if (settings.extractionThresholdPct !== undefined) {
     config.extractionThresholdPct = settings.extractionThresholdPct;

@@ -319,7 +319,6 @@ export class RetrievalIntegrityError extends Error {
 }
 
 export interface MemoryRetrieverConfig {
-  retrievalLimit?: number;
   retrievalBudgetPct?: number;
   contextWindow?: number;
   retrievalThreshold?: number;
@@ -380,9 +379,6 @@ export class MemoryRetriever implements MemoryProvider {
       this.fallbackBudgetConfig = {
         defaultContextWindow: retrieverConfig?.contextWindow ?? 128_000,
         modelRoster: {},
-        ...(retrieverConfig?.retrievalLimit !== undefined
-          ? { memoryRetrievalLimit: retrieverConfig.retrievalLimit }
-          : {}),
         ...(retrieverConfig?.retrievalBudgetPct !== undefined
           ? { memoryRetrievalBudgetPct: retrieverConfig.retrievalBudgetPct }
           : {}),
@@ -453,7 +449,7 @@ export class MemoryRetriever implements MemoryProvider {
 
     if (contextText.trim().length > 0) {
       const embedding = await this.embeddingService.embed(contextText);
-      const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
+      const candidateLimit = Math.max(40, limit * 4);
       semanticCandidates = this.memoryStore.searchByEmbedding(
         embedding,
         this.retrievalThreshold,
@@ -619,7 +615,7 @@ export class MemoryRetriever implements MemoryProvider {
         .filter(memory => !isInternalMemoryArtifact(memory));
       if (semanticMemories.length === 0 && !turnSnapshot) {
         const embedding = await this.embeddingService.embed(contextText);
-        const candidateLimit = Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4));
+        const candidateLimit = Math.max(40, limit * 4);
         semanticMemories = this.memoryStore.searchByEmbedding(
           embedding,
           this.retrievalThreshold,
@@ -633,7 +629,7 @@ export class MemoryRetriever implements MemoryProvider {
         const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
           ?? this.memoryStore.searchByText(
             contextText,
-            Math.max(40, limit * (budget.mode === 'hard_limit' ? 3 : 4)),
+            Math.max(40, limit * 4),
           )).filter(memory => !isInternalMemoryArtifact(memory));
         telemetry.lexicalCandidateCount = lexicalMemories.length;
         if (lexicalMemories.length > 0) {
@@ -846,9 +842,7 @@ export class MemoryRetriever implements MemoryProvider {
 
       const scored = positiveScored;
 
-      const ranked = budget.mode === 'hard_limit'
-        ? scored.slice(0, limit)
-        : scored;
+      const ranked = scored;
       telemetry.rankedCount = ranked.length;
 
       if (ranked.length > 0) {
@@ -871,14 +865,10 @@ export class MemoryRetriever implements MemoryProvider {
         });
       }
 
-      const selected = budget.mode === 'hard_limit'
-        ? ranked.slice(0, limit)
-        : selectWithinTokenBudget(ranked, budget.tokenBudget);
+      const selected = selectWithinTokenBudget(ranked, budget.tokenBudget);
 
       telemetry.returnedCount = selected.length;
-      telemetry.budgetCappedCount = budget.mode === 'hard_limit'
-        ? Math.max(0, scored.length - selected.length)
-        : Math.max(0, ranked.length - selected.length);
+      telemetry.budgetCappedCount = Math.max(0, ranked.length - selected.length);
       telemetry.selectedTypes = countSelectedMemoryTypes(selected);
       diagnostics.selectedCount = selected.length;
       diagnostics.topSelected = selected.slice(0, 3).map((item) => ({

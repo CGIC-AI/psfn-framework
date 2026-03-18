@@ -48,8 +48,6 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   memoryRetrievalBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   moodCongruenceWeight: { sectionId: 'budget', surface: 'advanced' },
   adaptiveContextBudgetsEnabled: { sectionId: 'budget', surface: 'advanced' },
-  sessionMessageLimit: { sectionId: 'budget', surface: 'advanced' },
-  memoryRetrievalLimit: { sectionId: 'budget', surface: 'advanced' },
   extractionThresholdPct: { sectionId: 'memory', surface: 'advanced' },
   extractionInterval: { sectionId: 'memory', surface: 'advanced' },
   compactionEmotionalSalienceThresholdPct: { sectionId: 'memory', surface: 'advanced' },

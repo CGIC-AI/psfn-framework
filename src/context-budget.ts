@@ -9,8 +9,6 @@ export interface ContextBudgetConfigLike {
   modelRoster: Partial<Record<string, ContextBudgetModelSlotLike>>;
   modelCatalog?: Record<string, ContextBudgetModelCatalogEntryLike>;
   modelRoleAssignments?: Record<string, string>;
-  sessionMessageLimit?: number;
-  memoryRetrievalLimit?: number;
   sessionHistoryBudgetPct?: number;
   memoryRetrievalBudgetPct?: number;
   adaptiveContextBudgetsEnabled?: boolean;
@@ -66,9 +64,7 @@ export const SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE = 256;
 export const MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM = 170;
 
 export const SESSION_HISTORY_MIN_MESSAGES = 5;
-export const SESSION_HISTORY_MAX_MESSAGES = 400;
 export const MEMORY_RETRIEVAL_MIN_ITEMS = 1;
-export const MEMORY_RETRIEVAL_MAX_ITEMS = 200;
 
 export const DEFAULT_CONTEXT_WINDOW_FALLBACK = 128_000;
 const TASK_KIND_TASK_SET = new Set(['planning', 'maintenance', 'deferred_tool_handoff']);
@@ -167,10 +163,9 @@ function estimateCountFromBudget(
   tokenBudget: number,
   tokensPerItem: number,
   minCount: number,
-  maxCount: number,
 ): number {
   const rough = Math.floor(tokenBudget / Math.max(1, tokensPerItem));
-  return clamp(rough, minCount, maxCount);
+  return Math.max(minCount, rough);
 }
 
 function resolvePurposeChain(purpose: string | undefined): string[] {
@@ -433,7 +428,6 @@ export function resolveSessionHistoryBudget(
   config: ContextBudgetConfigLike,
   options: ContextBudgetResolutionOptions = {},
 ): ResolvedContextBudget {
-  const hardLimit = toPositiveInteger(config.sessionMessageLimit);
   const resolvedSlot = resolveContextBudgetModelSlot(config, options);
   const contextWindow = toPositiveInteger(resolvedSlot.contextWindow)
     ?? toPositiveInteger(config.defaultContextWindow)
@@ -446,11 +440,10 @@ export function resolveSessionHistoryBudget(
     contextWindow,
   );
   const tokenBudget = Math.max(minTokenFloor, Math.floor(contextWindow * (budgetPct / 100)));
-  const estimatedCount = hardLimit ?? estimateCountFromBudget(
+  const estimatedCount = estimateCountFromBudget(
     tokenBudget,
     SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE,
     SESSION_HISTORY_MIN_MESSAGES,
-    SESSION_HISTORY_MAX_MESSAGES,
   );
 
   return {
@@ -458,8 +451,7 @@ export function resolveSessionHistoryBudget(
     budgetPct,
     tokenBudget,
     estimatedCount,
-    ...(hardLimit !== undefined ? { hardLimit } : {}),
-    mode: hardLimit !== undefined ? 'hard_limit' : 'budget',
+    mode: 'budget',
   };
 }
 
@@ -467,7 +459,6 @@ export function resolveMemoryRetrievalBudget(
   config: ContextBudgetConfigLike,
   options: ContextBudgetResolutionOptions = {},
 ): ResolvedContextBudget {
-  const hardLimit = toPositiveInteger(config.memoryRetrievalLimit);
   const resolvedSlot = resolveContextBudgetModelSlot(config, options);
   const contextWindow = toPositiveInteger(resolvedSlot.contextWindow)
     ?? toPositiveInteger(config.defaultContextWindow)
@@ -480,11 +471,10 @@ export function resolveMemoryRetrievalBudget(
     contextWindow,
   );
   const tokenBudget = Math.max(minTokenFloor, Math.floor(contextWindow * (budgetPct / 100)));
-  const estimatedCount = hardLimit ?? estimateCountFromBudget(
+  const estimatedCount = estimateCountFromBudget(
     tokenBudget,
     MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM,
     MEMORY_RETRIEVAL_MIN_ITEMS,
-    MEMORY_RETRIEVAL_MAX_ITEMS,
   );
 
   return {
@@ -492,7 +482,6 @@ export function resolveMemoryRetrievalBudget(
     budgetPct,
     tokenBudget,
     estimatedCount,
-    ...(hardLimit !== undefined ? { hardLimit } : {}),
-    mode: hardLimit !== undefined ? 'hard_limit' : 'budget',
+    mode: 'budget',
   };
 }

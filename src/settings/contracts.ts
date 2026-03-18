@@ -39,6 +39,8 @@ export const REMOVED_RUNTIME_SETTINGS_KEYS = [
   'defaultContextWindow',
   'discordEnabled',
   'discordHeartbeatChannel',
+  'sessionMessageLimit',
+  'memoryRetrievalLimit',
 ] as const;
 
 export const MODEL_SLOT_KEY_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -194,9 +196,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryRetrievalBudgetPct',
   'moodCongruenceWeight',
   'adaptiveContextBudgetsEnabled',
-  'sessionMessageLimit',
   'sessionRestartBehavior',
-  'memoryRetrievalLimit',
   'extractionInterval',
   'maintenanceIntervalMs',
   'extractionThresholdPct',

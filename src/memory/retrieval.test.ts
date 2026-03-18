@@ -893,25 +893,35 @@ describe('MemoryRetriever basic behavior', () => {
     expect(telemetryPayloads[1].retrievalBudgetPct).toBe(2);
   });
 
-  it('uses hard retrieval limit override when provided', async () => {
+  it('ignores legacy retrieval count caps and fills by token budget', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
     const memories = Array.from({ length: 10 }, (_, idx) => makeMemory({
-      text: `Hard limit memory ${idx} ` + 'x'.repeat(240),
+      text: `Budget memory ${idx}`,
       sensitivity: 'public',
       similarity: 0.97 - idx * 0.01,
     }));
     const embedding = makeMockEmbedding();
     const config = makeRuntimeConfig({
       memoryRetrievalLimit: 2,
-      memoryRetrievalBudgetPct: 25,
+      memoryRetrievalBudgetPct: 10,
       modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 256_000 },
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 4_000,
+          contextBudget: { memoryRetrievalMinTokens: 1 },
+        },
       },
     });
     const retriever = new MemoryRetriever(makeMockStore(memories), embedding, config);
 
     const result = await retriever.retrieve('budget query', 'api:test', 'primary');
 
-    expect(countRenderedMemories(result)).toBe(2);
+    expect(countRenderedMemories(result)).toBeGreaterThan(2);
   });
 
   it('uses real token counts for budgeted memory selection', async () => {

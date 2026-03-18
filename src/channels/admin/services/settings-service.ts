@@ -73,6 +73,10 @@ const REMOVED_RUNTIME_SETTINGS_MESSAGES: Partial<Record<string, string>> = {
     'memoryBudgetPct has been removed; use sessionHistoryBudgetPct, memoryRetrievalBudgetPct, and extractionThresholdPct instead',
   defaultContextWindow:
     'defaultContextWindow has been removed from runtime settings; set per-model context windows in models.json instead',
+  sessionMessageLimit:
+    'sessionMessageLimit has been removed; session history now trims by token budget only',
+  memoryRetrievalLimit:
+    'memoryRetrievalLimit has been removed; memory retrieval now trims by token budget only',
   discordEnabled:
     'discordEnabled has been removed from runtime settings; Discord activation is controlled by DISCORD_TOKEN and DISCORD_BOT_ID',
   discordHeartbeatChannel:

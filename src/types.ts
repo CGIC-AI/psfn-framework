@@ -680,8 +680,6 @@ const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   vision: 'primary',
   import_processing: 'extraction',
 };
-const DEFAULT_SESSION_MESSAGE_LIMIT = 30;
-const DEFAULT_MEMORY_RETRIEVAL_LIMIT = 15;
 export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 const DEFAULT_EXTRACTION_INTERVAL = 5;
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 300_000;
@@ -852,10 +850,8 @@ export function loadConfig(): SubstrateConfig {
     companionDataDir,
     dataDir,
     databasePath,
-    sessionMessageLimit: DEFAULT_SESSION_MESSAGE_LIMIT,
     sessionRestartBehavior: 'reuse_latest_session',
     ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
-    memoryRetrievalLimit: DEFAULT_MEMORY_RETRIEVAL_LIMIT,
     sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_DEFAULT,
     memoryRetrievalBudgetPct: MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
     moodCongruenceWeight: DEFAULT_MOOD_CONGRUENCE_WEIGHT,

@@ -117,7 +117,7 @@
       capabilityCustomTokens,
       // Memory & Extraction
       extractionInterval, compactionEmotionalSalienceThresholdPct,
-      defaultContextWindow, maintenanceIntervalMs,
+      maintenanceIntervalMs,
       // Memory Extraction Tuning
       memoryExtractionMinImportance, memoryExtractionMinConfidence,
       memoryExtractionMinNovelty, memoryExtractionMaxWrites,
@@ -136,7 +136,6 @@
       // Obsidian Vault
       obsidianVaultName, obsidianCliPath, obsidianAutoPublish, obsidianTimeoutMs,
       // Channels
-      discordEnabled, discordHeartbeatChannel,
       discordTriggerWords, discordTriggerReactions,
       discordTriggerListenWindowSeconds,
       telegramEnabled, telegramAuthorizedUsers,
@@ -195,8 +194,6 @@
   let obsidianTimeoutMs = $state(10000);
 
   // ── Channels ──
-  let discordEnabled = $state(false);
-  let discordHeartbeatChannel = $state('');
   let discordTriggerWords = $state('');
   let discordTriggerReactions = $state('👆');
   let discordTriggerListenWindowSeconds = $state(120);
@@ -213,7 +210,6 @@
   // ── Memory & Extraction ──
   let extractionInterval = $state(5);
   let compactionEmotionalSalienceThresholdPct = $state(75);
-  let defaultContextWindow = $state(128000);
   let maintenanceIntervalMs = $state(300000);
 
   // ── Memory Extraction Tuning ──
@@ -390,7 +386,6 @@
         const reactionsCount = splitCsv(discordTriggerReactions).length;
         const windowSeconds = normalizeDiscordListenWindowSeconds(discordTriggerListenWindowSeconds);
         return [
-          discordEnabled ? 'Discord on' : 'Discord off',
           telegramEnabled ? 'Telegram on' : 'Telegram off',
           `${wordsCount} word trigger${wordsCount === 1 ? '' : 's'}`,
           `${reactionsCount} reaction trigger${reactionsCount === 1 ? '' : 's'}`,
@@ -414,6 +409,14 @@
     salienceDecayIntervalMs?: number;
   };
 
+  type ModelsEditorConfig = {
+    modelRoster?: {
+      chat?: {
+        contextWindow?: number;
+      };
+    };
+  };
+
   type CapabilitiesEditorConfig = {
     tier?: string;
     customTokens?: string[];
@@ -425,6 +428,13 @@
 
   function getCapabilitiesEditorConfig(): CapabilitiesEditorConfig {
     return (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
+  }
+
+  function getChatContextWindow(): number {
+    const chatContextWindow = Number(
+      (data?.editors?.models as ModelsEditorConfig | undefined)?.modelRoster?.chat?.contextWindow,
+    );
+    return Number.isFinite(chatContextWindow) && chatContextWindow > 0 ? chatContextWindow : 128000;
   }
 
   function fieldErrors(field: string): string[] {
@@ -664,7 +674,7 @@
 
   let budgetPreview = $derived.by(() => {
     if (!data) return null;
-    const ctxWindow = defaultContextWindow;
+    const ctxWindow = getChatContextWindow();
 
     const sessTokenBudget = Math.max(SESSION_HISTORY_MIN_TOKENS_FLOOR, Math.floor(ctxWindow * (sessionHistoryBudgetPct / 100)));
     const sessBudgetMsgs = clamp(
@@ -757,7 +767,6 @@
     // Memory & Extraction
     extractionInterval = Number(config.extractionInterval ?? 5);
     compactionEmotionalSalienceThresholdPct = Number(config.compactionEmotionalSalienceThresholdPct ?? 75);
-    defaultContextWindow = Number(config.defaultContextWindow ?? 128000);
     maintenanceIntervalMs = Number(scheduler?.salienceDecayIntervalMs ?? 300000);
 
     // Memory Extraction Tuning
@@ -801,8 +810,6 @@
     obsidianTimeoutMs = Number(config.obsidianTimeoutMs ?? 10000);
 
     // Channels
-    discordEnabled = Boolean(config.discordEnabled);
-    discordHeartbeatChannel = String(config.discordHeartbeatChannel ?? '');
     discordTriggerWords = String(config.discordTriggerWords ?? '');
     discordTriggerReactions = String(config.discordTriggerReactions ?? '👆');
     discordTriggerListenWindowSeconds = normalizeDiscordListenWindowSeconds(
@@ -1034,7 +1041,6 @@
       // Memory & Extraction
       extractionInterval,
       compactionEmotionalSalienceThresholdPct,
-      defaultContextWindow,
       // Memory Extraction Tuning
       memoryExtractionMinImportance,
       memoryExtractionMinConfidence,
@@ -1070,8 +1076,6 @@
       obsidianAutoPublish,
       obsidianTimeoutMs,
       // Channels
-      discordEnabled,
-      discordHeartbeatChannel,
       discordTriggerWords,
       discordTriggerReactions,
       discordTriggerListenWindowMs,
@@ -2260,31 +2264,18 @@
             <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">C</span>
             <h2 class="text-sm font-serif font-semibold text-shadow-800">Channels</h2>
           </div>
-          <div class="flex items-center gap-3">
-            {#if !openSections.has('channels')}
-              <span class="text-sm text-shadow-500">
-                {discordEnabled ? 'Discord on' : 'Discord off'}, {discordTriggerListenWindowSeconds}s listen window
-              </span>
-            {/if}
-            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('channels') ? 'rotate-180' : ''}">&#9660;</span>
+            <div class="flex items-center gap-3">
+              {#if !openSections.has('channels')}
+                <span class="text-sm text-shadow-500">
+                {discordTriggerListenWindowSeconds}s listen window, {telegramEnabled ? 'Telegram on' : 'Telegram off'}
+                </span>
+              {/if}
+              <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('channels') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
         </button>
         {#if openSections.has('channels')}
           <div class="px-5 pb-5 border-t border-bark-300 pt-4 space-y-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div>
-                <label class={LABEL_CLS}>Discord Enabled</label>
-                <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={discordEnabled} class={TOGGLE_CLS} />
-                  <span class="text-sm text-shadow-700">Enable Discord channel bridge</span>
-                </label>
-                <p class="text-sm text-shadow-500 mt-1">Requires a valid <span class="font-mono">DISCORD_TOKEN</span> at runtime.</p>
-              </div>
-              <div>
-                <label class={LABEL_CLS}>Discord Heartbeat Channel</label>
-                <input type="text" bind:value={discordHeartbeatChannel} class={INPUT_CLS} placeholder="channel-id" />
-                <p class="text-sm text-shadow-500 mt-1">Optional channel ID used for heartbeat/status pings.</p>
-              </div>
               <div class="md:col-span-2">
                 <label class={LABEL_CLS}>Discord Trigger Words</label>
                 <input type="text" bind:value={discordTriggerWords} class={INPUT_CLS} placeholder="pixie, hey companion" />
@@ -2339,7 +2330,7 @@
               <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div class="text-sm">
                   <span class="font-medium text-shadow-800">Discord:</span>
-                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_HEARTBEAT_CHANNEL, DISCORD_TRIGGER_* (optional)</span>
+                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_BOT_ID, DISCORD_HEARTBEAT_CHANNEL</span>
                 </div>
                 <div class="text-sm">
                   <span class="font-medium text-shadow-800">OpenAI API:</span>
@@ -2393,7 +2384,6 @@
                       ['OPENROUTER_API_KEY', env.openrouterApiKey],
                       ['LITELLM_BASE_URL', env.litellmBaseUrl],
                       ['LITELLM_API_KEY', env.litellmApiKey],
-                      ['OLLAMA_URL', env.ollamaUrl],
                     ] as pair}
                       <tr class="border-b border-bark-200">
                         <td class="py-2 font-mono text-shadow-700">{pair[0]}</td>

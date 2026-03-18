@@ -986,7 +986,7 @@
 
   <div class="card-garden p-4 text-sm text-shadow-700">
     Model config is JSON-owned in <span class="font-mono">models.json</span>. Secrets stay in environment variables and are not edited here
-    (for example <span class="font-mono">OPENROUTER_API_KEY</span>, <span class="font-mono">LITELLM_API_KEY</span>, <span class="font-mono">OLLAMA_URL</span>).
+    (for example <span class="font-mono">OPENROUTER_API_KEY</span> and <span class="font-mono">LITELLM_API_KEY</span>).
   </div>
 
   <div class="card-garden p-4 space-y-3">

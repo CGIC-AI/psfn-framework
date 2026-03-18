@@ -119,7 +119,6 @@ const TEST_CONFIG: SubstrateConfig = {
   extractionMaxTokens: 8192,
   maintenanceIntervalMs: 300_000,
   defaultContextWindow: 128_000,
-  memoryBudgetPct: 20,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
   modelRoster: {

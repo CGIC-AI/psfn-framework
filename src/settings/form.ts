@@ -438,21 +438,6 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     validateHttpUrl('elevenLabsEndpointBase', endpointUrl);
   }
 
-  const discordEnabledRaw = params.get('discordEnabled');
-  if (discordEnabledRaw !== null) {
-    const enabled = toBoolean(discordEnabledRaw);
-    if (enabled === undefined) {
-      errors.push('discordEnabled must be true or false');
-    } else {
-      settings.discordEnabled = enabled;
-    }
-  }
-
-  const discordHeartbeatChannelRaw = params.get('discordHeartbeatChannel');
-  if (discordHeartbeatChannelRaw !== null) {
-    settings.discordHeartbeatChannel = discordHeartbeatChannelRaw.trim();
-  }
-
   const discordTriggerWordsRaw = params.get('discordTriggerWords');
   if (discordTriggerWordsRaw !== null) {
     settings.discordTriggerWords = discordTriggerWordsRaw.trim();

@@ -11,6 +11,8 @@ import type { EventBus } from '../event-bus.js';
 import { SessionStore, type SessionIntegrityProvider } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
 import { UserContinuityStore } from '../session/continuity.js';
+import { InternalRoleEnvelopeLedgerStore } from '../internal-role-envelopes/store.js';
+import { wireInternalRoleEnvelopeRuntime } from '../internal-role-envelopes/runtime-wiring.js';
 import {
   createEmbeddingProviderFromConfig as createEmbeddingProviderFromMemoryConfig,
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
@@ -55,6 +57,7 @@ export interface SessionComposition {
   sessionStore: SessionStore;
   sessionManager: SessionManager;
   continuityStore: UserContinuityStore | null;
+  internalRoleEnvelopeLedger: InternalRoleEnvelopeLedgerStore;
 }
 
 export interface SessionCompositionOptions {
@@ -81,6 +84,7 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
     options.eventBus,
     options.promptRegistry ?? null,
   );
+  const internalRoleEnvelopeLedger = wireInternalRoleEnvelopeRuntime(sessionManager, options.config);
 
   let continuityStore: UserContinuityStore | null = null;
   if (options.enableContinuity) {
@@ -88,7 +92,7 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
     sessionManager.continuityStore = continuityStore;
   }
 
-  return { sessionStore, sessionManager, continuityStore };
+  return { sessionStore, sessionManager, continuityStore, internalRoleEnvelopeLedger };
 }
 
 export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {

@@ -4,6 +4,7 @@ import {
   classifyChannel,
   resolveChannelResponseStyle,
   channelsShareContinuity,
+  getVisibilityDisclosureCeiling,
   getAllowedSensitivities,
 } from './policy.js';
 import type { PolicyContext } from './policy.js';
@@ -495,16 +496,25 @@ describe('channelsShareContinuity', () => {
     expect(channelsShareContinuity('api:session1', 'sillytavern:chat')).toBe(true);
   });
 
-  it('private and semi_private do not share', () => {
+  it('lower-ceiling semi_private channels can flow into private channels', () => {
+    expect(channelsShareContinuity('1234567890', 'api:session1')).toBe(true);
+  });
+
+  it('higher-ceiling private channels do not flow into semi_private channels', () => {
     expect(channelsShareContinuity('api:session1', '1234567890')).toBe(false);
   });
 
-  it('two semi_private channels do not share', () => {
-    expect(channelsShareContinuity('1234567890', '9876543210')).toBe(false);
+  it('public-ceiling broadcast channels can flow into private channels', () => {
+    expect(channelsShareContinuity('twitter:timeline', 'api:session1')).toBe(true);
   });
+});
 
-  it('broadcast and private do not share', () => {
-    expect(channelsShareContinuity('twitter:timeline', 'api:session1')).toBe(false);
+describe('getVisibilityDisclosureCeiling', () => {
+  it('returns the highest sensitivity allowed for the visibility', () => {
+    expect(getVisibilityDisclosureCeiling('private')).toBe('confidential');
+    expect(getVisibilityDisclosureCeiling('semi_private')).toBe('personal');
+    expect(getVisibilityDisclosureCeiling('public')).toBe('public');
+    expect(getVisibilityDisclosureCeiling('broadcast')).toBe('public');
   });
 });
 

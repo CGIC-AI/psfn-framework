@@ -853,6 +853,40 @@ describe('SessionManager', () => {
     expect(mirrors).toHaveLength(0);
   });
 
+  it('mirrors lower-sensitivity semi_private activity into private sessions', () => {
+    const config = makeConfig({
+      sessionMirrorEnabled: true,
+      sessionMirrorActiveWindowMs: 60_000,
+    });
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = new UserContinuityStore(dir);
+
+    mgr.recordUserMessage(
+      'api:target',
+      'target bootstrap',
+      'discord-user-1',
+      'Alice',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+
+    mgr.recordAssistantMessage(
+      '1234567890',
+      'Semi-private mirror candidate',
+      'discord-user-1',
+      undefined,
+      'contact-1',
+      { trustLevel: 'primary' },
+    );
+
+    const targetEntries = store.getRecent('api:target', 10);
+    const mirrors = targetEntries.filter(entry => entry.role === 'system' && entry.metadata?.includes('"type":"mirror"'));
+    expect(mirrors).toHaveLength(1);
+    expect(mirrors[0].content).toContain('[from 1234567890]');
+    expect(mirrors[0].content).toContain('Semi-private mirror candidate');
+  });
+
   it('supports global and per-channel mirror toggles', () => {
     const disabledConfig = makeConfig({
       sessionMirrorEnabled: false,

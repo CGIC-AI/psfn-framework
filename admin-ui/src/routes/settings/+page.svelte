@@ -138,6 +138,9 @@
       discordTriggerWords, discordTriggerReactions,
       discordTriggerListenWindowSeconds,
       telegramEnabled, telegramAuthorizedUsers,
+      // Backup
+      backupIntervalHours, backupMaxRotating, backupMaxWeekly,
+      backupMaxMonthly, backupMirrorDir, backupVerifyRestore,
     });
   }
 
@@ -241,6 +244,14 @@
   let capabilitiesJson = $state('');
   let backupJson = $state('');
   let settingsJson = $state('');
+
+  // ── Backup form fields ──
+  let backupIntervalHours = $state(12);
+  let backupMaxRotating = $state(9);
+  let backupMaxWeekly = $state(2);
+  let backupMaxMonthly = $state(1);
+  let backupMirrorDir = $state('/mnt/ai/psfn-bak');
+  let backupVerifyRestore = $state(true);
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
   let validationErrorsByField = $state<Record<string, string[]>>({});
 
@@ -1082,6 +1093,31 @@
     };
   }
 
+  function populateBackupFields(json: string) {
+    try {
+      const parsed = JSON.parse(json) as Record<string, unknown>;
+      backupIntervalHours = Number(parsed.intervalHours ?? 12);
+      backupMaxRotating = Number(parsed.maxRotatingBackups ?? 9);
+      backupMaxWeekly = Number(parsed.maxWeeklyBackups ?? 2);
+      backupMaxMonthly = Number(parsed.maxMonthlyBackups ?? 1);
+      backupMirrorDir = String(parsed.mirrorDir ?? '/mnt/ai/psfn-bak');
+      backupVerifyRestore = parsed.verifyRestore !== false;
+    } catch {
+      // leave defaults
+    }
+  }
+
+  function buildBackupPayload(): Record<string, unknown> {
+    return {
+      intervalHours: backupIntervalHours,
+      maxRotatingBackups: backupMaxRotating,
+      maxWeeklyBackups: backupMaxWeekly,
+      maxMonthlyBackups: backupMaxMonthly,
+      mirrorDir: backupMirrorDir,
+      verifyRestore: backupVerifyRestore,
+    };
+  }
+
   function buildCapabilitiesPayload(): Record<string, unknown> {
     const current = getCapabilitiesEditorConfig();
     const customTokens = capabilityTier === 'custom'
@@ -1117,6 +1153,7 @@
     trustPolicyJson = tryPrettyPrint(tpConf);
     capabilitiesJson = tryPrettyPrint(capConf);
     backupJson = tryPrettyPrint(bakConf);
+    populateBackupFields(bakConf);
     resetDirtyTracking();
   }
 
@@ -1135,6 +1172,11 @@
         key: 'capabilities' as const,
         nextJson: JSON.stringify(buildCapabilitiesPayload(), null, 2),
         currentJson: tryPrettyPrint(capabilitiesJson),
+      },
+      {
+        key: 'backup' as const,
+        nextJson: JSON.stringify(buildBackupPayload(), null, 2),
+        currentJson: tryPrettyPrint(backupJson),
       },
     ].filter(entry => entry.nextJson !== entry.currentJson);
 
@@ -1954,34 +1996,38 @@
           <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('backup') ? 'rotate-180' : ''}">&#9660;</span>
         </button>
         {#if openSections.has('backup')}
-          <div class="border-t border-bark-300">
-            <div class="flex items-center justify-between px-5 py-3 border-b border-bark-200">
-              <p class="text-sm text-shadow-500">Edit <span class="font-mono">backup.json</span> — backup schedule, rotation counts, and mirror path.</p>
-              <div class="flex items-center gap-3">
-                {#if rawSaveStatus['backup']}
-                  <span class="text-sm font-medium {rawSaveStatus['backup'].ok ? 'text-moss-600' : 'text-wilt-600'}">
-                    {rawSaveStatus['backup'].msg}
-                  </span>
-                {/if}
-                <button
-                  onclick={() => saveRawConfig('backup', rawEditorLabel('backup'))}
-                  disabled={saving}
-                  class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium
-                         hover:bg-gold-700 disabled:opacity-50 transition-colors"
-                >
-                  {saving ? 'Saving...' : 'Save'}
-                </button>
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Interval (hours)</label>
+                <input type="number" min="1" max="168" bind:value={backupIntervalHours} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">How often to run a backup cycle</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Rotating backups</label>
+                <input type="number" min="1" max="99" bind:value={backupMaxRotating} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Most-recent backups to keep</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Weekly backups</label>
+                <input type="number" min="0" max="52" bind:value={backupMaxWeekly} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Weekly slots (derived from rotating cycle)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Monthly backups</label>
+                <input type="number" min="0" max="24" bind:value={backupMaxMonthly} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Monthly slots (derived from rotating cycle)</p>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Mirror directory</label>
+                <input type="text" bind:value={backupMirrorDir} class={INPUT_CLS} placeholder="/mnt/ai/psfn-bak" />
+                <p class="text-sm text-shadow-500 mt-1">Secondary backup mirror path (leave blank to disable)</p>
+              </div>
+              <div class="md:col-span-2 flex items-center gap-3">
+                <input type="checkbox" id="backup-verify-restore" bind:checked={backupVerifyRestore} class={TOGGLE_CLS} />
+                <label for="backup-verify-restore" class="text-sm text-shadow-700">Verify restore integrity after each backup</label>
               </div>
             </div>
-            <textarea
-              value={backupJson}
-              oninput={(e) => backupJson = (e.target as HTMLTextAreaElement).value}
-              rows="12"
-              class="w-full font-mono text-sm text-shadow-800 bg-white p-4
-                     focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
-                     resize-y border-0"
-              spellcheck="false"
-            ></textarea>
           </div>
         {/if}
       </div>

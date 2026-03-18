@@ -1159,4 +1159,101 @@ describe('GatewayServer', () => {
       expect(Buffer.from(encodedTitle!, 'latin1').toString('utf8')).toBe('😺 Alert');
     });
   });
+
+  describe('runtime.health', () => {
+    const fetchMock = vi.fn();
+
+    beforeEach(() => {
+      fetchMock.mockReset();
+      vi.stubGlobal('fetch', fetchMock);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('surfaces gateway, ntfy, and vault health through runtime.health', async () => {
+      const vaultOps = {
+        write: vi.fn().mockRejectedValue(new Error('vault write failed')),
+        read: vi.fn(),
+        search: vi.fn(),
+        daily: vi.fn(),
+      };
+      fetchMock.mockResolvedValue(
+        new Response('error', {
+          status: 500,
+          statusText: 'Internal Server Error',
+        }),
+      );
+
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        ntfy: {
+          baseUrl: 'https://ntfy.local',
+          defaultTopic: 'ops',
+          timeoutMs: 1_000,
+          debounceWindowMs: 60_000,
+        },
+        policyConfig: {
+          workspacePath: '/workspace',
+          vault: {
+            enabled: true,
+            allowActions: ['write', 'read'],
+            ops: vaultOps as any,
+          },
+        },
+      });
+
+      const initial = await invokeRpc(conn, 600, 'runtime.health', {});
+      expect(initial.result.services).toEqual(expect.arrayContaining([
+        expect.objectContaining({ serviceId: 'gateway', status: 'healthy' }),
+        expect.objectContaining({ serviceId: 'ntfy', status: 'healthy' }),
+        expect.objectContaining({
+          serviceId: 'vault',
+          status: 'healthy',
+          availableActions: ['write', 'read'],
+        }),
+      ]));
+
+      const notifyFailure = await invokeRpc(conn, 601, 'notify.ntfy', {
+        message: 'operator alert',
+      });
+      expect(notifyFailure.error).toBeDefined();
+      expect(notifyFailure.error.message).toContain('ntfy request failed: 500');
+
+      const vaultFailure = await invokeRpc(conn, 602, 'vault.write', {
+        name: 'Inbox',
+        content: 'entry',
+      });
+      expect(vaultFailure.error).toBeDefined();
+      expect(vaultFailure.error.message).toContain('vault write failed');
+
+      const degraded = await invokeRpc(conn, 603, 'runtime.health', {});
+      const servicesById = Object.fromEntries(
+        degraded.result.services.map((service: any) => [service.serviceId, service]),
+      ) as Record<string, any>;
+
+      expect(servicesById.gateway).toMatchObject({
+        serviceId: 'gateway',
+        status: 'healthy',
+      });
+      expect(servicesById.ntfy).toMatchObject({
+        serviceId: 'ntfy',
+        status: 'degraded',
+        lastFailure: expect.objectContaining({
+          scope: 'notify.ntfy',
+        }),
+      });
+      expect(servicesById.ntfy.lastFailure.message).toContain('ntfy request failed: 500');
+      expect(servicesById.vault).toMatchObject({
+        serviceId: 'vault',
+        status: 'degraded',
+        availableActions: ['write', 'read'],
+        lastFailure: expect.objectContaining({
+          scope: 'vault.write',
+        }),
+      });
+      expect(servicesById.vault.lastFailure.message).toContain('vault write failed');
+    });
+  });
 });

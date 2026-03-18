@@ -63,12 +63,18 @@ describe('registerVaultTools', () => {
     }
   });
 
-  it('does not attach wiring metadata without gatewayMode', () => {
+  it('attaches vault service wiring metadata without gatewayMode', () => {
     registerVaultTools(target, createMockOps());
 
     for (const call of target.registerTool.mock.calls) {
-      const tool = call[0] as { wiringMeta?: unknown };
-      expect(tool.wiringMeta).toBeUndefined();
+      const tool = call[0] as {
+        wiringMeta?: {
+          requiredServices?: string[];
+          requiredGatewayMethods?: string[];
+        };
+      };
+      expect(tool.wiringMeta?.requiredServices).toEqual(['vault']);
+      expect(tool.wiringMeta?.requiredGatewayMethods).toBeUndefined();
     }
   });
 });

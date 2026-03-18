@@ -54,10 +54,13 @@ import {
 import {
   extractGatewayMethods,
   validateAndLogToolWiring,
+  cloneToolWiringMeta,
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
   type ValidateToolsOptions,
+  type WirableTool,
 } from '../tool-wiring-validator.js';
+import type { RuntimeToolCatalogSnapshot } from '../tool-catalog.js';
 
 interface ToolRuntimeFacadeOptions {
   config: SubstrateConfig;
@@ -182,6 +185,26 @@ export class ToolRuntimeFacade {
     return {
       core: [...this.coreTools],
       extended: [...this.extendedTools],
+    };
+  }
+
+  getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
+    const toSnapshotEntry = (tool: AgentTool<any>, scope: 'core' | 'extended') => {
+      const wiringMeta = cloneToolWiringMeta((tool as WirableTool).wiringMeta);
+      return {
+        name: tool.name,
+        description: tool.description,
+        scope,
+        ...(wiringMeta ? { wiringMeta } : {}),
+      };
+    };
+
+    return {
+      generatedAt: Date.now(),
+      tools: [
+        ...this.coreTools.map(tool => toSnapshotEntry(tool, 'core')),
+        ...this.extendedTools.map(tool => toSnapshotEntry(tool, 'extended')),
+      ],
     };
   }
 

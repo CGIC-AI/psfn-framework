@@ -41,6 +41,11 @@ import type {
   AdaptiveToolRuntimeState,
   AdaptiveToolSnapshotTelemetry,
 } from '../../../agent/adaptive-tools-telemetry.js';
+import type { RuntimeToolCatalogSnapshot } from '../../../agent/tool-catalog.js';
+import type {
+  RuntimeServiceHealth,
+  RuntimeServiceHealthStatus,
+} from '../../../tool-health/types.js';
 import type {
   ObservedMemory,
   ObservedScoredMemory,
@@ -71,13 +76,45 @@ export type AdminAdaptiveToolTelemetryEvent =
     payload: AdaptiveToolSnapshotTelemetry;
   };
 
+export interface AdminToolFailureEvent {
+  toolName: string;
+  channelId: string;
+  message: string;
+  timestamp: number;
+}
+
+export interface AdminToolAvailabilityView {
+  status: 'active' | 'available' | 'unavailable' | 'not_applicable';
+  detail: string;
+  source?: string;
+}
+
+export interface AdminToolHealthView {
+  name: string;
+  description: string;
+  scope: 'core' | 'extended' | 'conditional';
+  health: {
+    status: RuntimeServiceHealthStatus;
+    detail: string;
+  };
+  contexts: {
+    chat: AdminToolAvailabilityView;
+    internalHeartbeat: AdminToolAvailabilityView;
+  };
+  lastFailure?: AdminToolFailureEvent;
+}
+
 export interface AdminAdaptiveToolsData {
   state: AdaptiveToolRuntimeState | null;
+  catalog: RuntimeToolCatalogSnapshot | null;
+  serviceHealth: RuntimeServiceHealth[];
+  toolHealth: AdminToolHealthView[];
+  recentFailures: AdminToolFailureEvent[];
   recentTelemetry: AdminAdaptiveToolTelemetryEvent[];
 }
 
 export interface AdminAdaptiveToolsService {
-  getAdaptiveToolsData(): AdminAdaptiveToolsData;
+  getAdaptiveToolsData(): Promise<AdminAdaptiveToolsData>;
 }
 
 export interface AdminMemoryContactSummary {

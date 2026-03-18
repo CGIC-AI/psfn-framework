@@ -21,6 +21,7 @@ import { createSocketServer } from './transport.js';
 import {
   GatewayErrors,
   type PolicyDecision,
+  type RuntimeHealthResult,
   type VoiceHandleMessageResult,
 } from './protocol.js';
 import type { GitOperations } from '../git/ops.js';
@@ -48,6 +49,7 @@ import {
   type GatewayNtfyConfig,
 } from './ntfy-notifier.js';
 import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
+import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS = 90_000;
@@ -117,6 +119,7 @@ export class GatewayServer {
   private readonly capabilityTierProvider: () => CapabilityTier;
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
+  private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -136,6 +139,12 @@ export class GatewayServer {
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting ?? parseWyomingShardRoutingConfigEnv(process.env);
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
+    this.runtimeHealthTracker = new GatewayRuntimeHealthTracker({
+      ntfyConfigured: Boolean(options.ntfy),
+      vaultEnabled: Boolean(options.policyConfig.vault?.enabled),
+      vaultAllowActions: options.policyConfig.vault?.allowActions ?? [],
+      vaultOpsConfigured: Boolean(options.policyConfig.vault?.ops),
+    });
     log.info('Session HMAC keyring configured', {
       activeVersion: this.sessionHmacKeyring.activeVersion,
       versionCount: Object.keys(this.sessionHmacKeyring.keys).length,
@@ -154,9 +163,11 @@ export class GatewayServer {
       const startTime = Date.now();
       try {
         const result = await handler(params);
+        this.runtimeHealthTracker.recordMethodSuccess(method);
         this.auditComplete(auditId, startTime);
         return result;
       } catch (err) {
+        this.runtimeHealthTracker.recordMethodFailure(method, err);
         const msg = toErrorMessage(err);
         this.auditComplete(auditId, startTime, msg);
         throw err;
@@ -223,9 +234,11 @@ export class GatewayServer {
           );
         }
         const result = await handler(params);
+        this.runtimeHealthTracker.recordMethodSuccess(method);
         this.auditComplete(auditId, startTime);
         return result;
       } catch (err) {
+        this.runtimeHealthTracker.recordMethodFailure(method, err);
         const msg = toErrorMessage(err);
         this.auditComplete(auditId, startTime, msg);
         throw err;
@@ -256,6 +269,7 @@ export class GatewayServer {
       listPendingConfirmations: () => this.confirmationQueue.listPending(),
       resolveConfirmation: (params) => this.confirmationQueue.resolve(params),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
+      getRuntimeHealth: () => this.getRuntimeHealth(),
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
       recordAuditEvent: (entry) => {
         if (this.options.auditStore) {
@@ -543,6 +557,36 @@ export class GatewayServer {
       health: status?.health,
       ...(failureReason ? { failureReason } : {}),
     });
+  }
+
+  private getConnectionSummary(): {
+    total: number;
+    registering: number;
+    ready: number;
+    degraded: number;
+    offline: number;
+  } {
+    const summary = {
+      total: 0,
+      registering: 0,
+      ready: 0,
+      degraded: 0,
+      offline: 0,
+    };
+
+    for (const status of this.connectionStatuses.values()) {
+      summary.total += 1;
+      if (status.state === 'registering') summary.registering += 1;
+      else if (status.state === 'ready') summary.ready += 1;
+      else if (status.state === 'degraded') summary.degraded += 1;
+      else if (status.state === 'offline') summary.offline += 1;
+    }
+
+    return summary;
+  }
+
+  private getRuntimeHealth(): RuntimeHealthResult {
+    return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary());
   }
 
   private normalizePositiveInt(value: number | undefined, fallback: number): number {

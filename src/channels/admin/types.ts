@@ -14,11 +14,13 @@ import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import type { SkillsRuntime } from '../../skills/runtime.js';
 import type { AdaptiveToolRuntimeState } from '../../agent/adaptive-tools-telemetry.js';
+import type { RuntimeToolCatalogSnapshot } from '../../agent/tool-catalog.js';
 import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
   ConfirmationResolveResult,
 } from '../../gateway/protocol.js';
+import type { AdminToolHealthProvider } from './tool-health-provider.js';
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;
@@ -27,6 +29,7 @@ export interface ConfirmationQueueAdminApi {
 
 export interface AdaptiveToolsStateProvider {
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState;
+  getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot;
 }
 
 export interface AdminModelDiscoveryBackend {
@@ -57,6 +60,7 @@ export interface AdminServerConfig {
   skillsRuntime?: SkillsRuntime | null;
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
   adaptiveToolsStateProvider?: AdaptiveToolsStateProvider | null;
+  toolHealthProvider?: AdminToolHealthProvider | null;
 }
 
 export type DashboardCostWindow = 'today' | 'week' | 'month';

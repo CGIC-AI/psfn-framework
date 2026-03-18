@@ -26,7 +26,10 @@ const VAULT_TOOL_GATEWAY_METHODS: Record<string, string[]> = {
 
 function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTool {
   const wirable = tool as WirableTool;
-  wirable.wiringMeta = meta;
+  wirable.wiringMeta = {
+    ...(wirable.wiringMeta ?? {}),
+    ...meta,
+  };
   return wirable;
 }
 
@@ -48,10 +51,11 @@ export function registerVaultTools(
   ];
 
   for (const tool of tools) {
-    if (options?.gatewayMode) {
-      const methods = VAULT_TOOL_GATEWAY_METHODS[tool.name];
-      attachWiringMeta(tool, { requiredGatewayMethods: methods });
-    }
+    const methods = options?.gatewayMode ? VAULT_TOOL_GATEWAY_METHODS[tool.name] : undefined;
+    attachWiringMeta(tool, {
+      ...(methods ? { requiredGatewayMethods: methods } : {}),
+      requiredServices: ['vault'],
+    });
     target.registerTool(tool, 'extended');
   }
 }

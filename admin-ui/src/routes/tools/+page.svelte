@@ -1,448 +1,417 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { apiGet } from '$lib/api/client';
+  import { getAdaptiveTools } from '$lib/api/endpoints/tools';
+  import type {
+    AdminAdaptiveToolsData,
+    AdminToolAvailabilityStatus,
+    AdminToolHealthView,
+    RuntimeServiceHealth,
+    RuntimeServiceHealthStatus,
+  } from '$lib/types/tools';
 
-  // ── Tool definitions ──
-  interface ToolInfo {
-    name: string;
-    description: string;
-    category: string;
-    availability?: string;
-  }
+  type ToolScope = AdminToolHealthView['scope'];
 
-  const CATEGORY_BADGE: Record<string, string> = {
-    core:       'bg-gold-100 text-gold-700',
-    memory:     'bg-moss-100 text-moss-700',
-    contact:    'bg-petal-100 text-petal-700',
-    lifecycle:  'bg-wilt-100 text-wilt-700',
-    git:        'bg-bark-200 text-shadow-800',
-    prompt:     'bg-gold-50 text-gold-600',
-    identity:   'bg-gold-50 text-gold-600',
-    settings:   'bg-bark-200 text-shadow-700',
-    heartbeat:  'bg-moss-100 text-moss-700',
-    trust:      'bg-gold-100 text-gold-700',
-    skills:     'bg-moss-50 text-moss-700',
-    gateway:    'bg-bark-200 text-shadow-800',
-    scratchpad: 'bg-gold-50 text-gold-600',
+  const SCOPE_ORDER: ToolScope[] = ['core', 'extended', 'conditional'];
+  const SCOPE_META: Record<ToolScope, { title: string; detail: string; accent: string }> = {
+    core: {
+      title: 'Core Tools',
+      detail: 'Always registered in the runtime catalog.',
+      accent: 'bg-moss-400',
+    },
+    extended: {
+      title: 'Extended Tools',
+      detail: 'Registered runtime tools that can be loaded or promoted as needed.',
+      accent: 'bg-gold-400',
+    },
+    conditional: {
+      title: 'Conditional Tools',
+      detail: 'Derived rows for runtime-backed tools that are unavailable in this mode.',
+      accent: 'bg-wilt-400',
+    },
   };
 
-  const CATEGORY_DOT: Record<string, string> = {
-    core:       'bg-gold-400',
-    memory:     'bg-moss-400',
-    contact:    'bg-petal-400',
-    lifecycle:  'bg-wilt-400',
-    git:        'bg-shadow-600',
-    prompt:     'bg-gold-400',
-    identity:   'bg-gold-400',
-    settings:   'bg-shadow-500',
-    heartbeat:  'bg-moss-400',
-    trust:      'bg-gold-500',
-    skills:     'bg-moss-500',
-    gateway:    'bg-shadow-600',
-    scratchpad: 'bg-gold-500',
+  const SERVICE_LABELS: Record<RuntimeServiceHealth['serviceId'], string> = {
+    gateway: 'Gateway RPC',
+    vault: 'Vault',
+    ntfy: 'ntfy',
   };
 
-  const CORE_TOOLS: ToolInfo[] = [
-    { name: 'think',               description: 'RLM+REPL sandbox for multi-step reasoning after direct tools are insufficient',  category: 'core' },
-    { name: 'fs_list',             description: 'List workspace files with a bounded glob for quick discovery',   category: 'gateway' },
-    { name: 'fs_read',             description: 'Read a workspace text file directly for bounded inspection',      category: 'gateway' },
-    { name: 'repo_status',         description: 'Show working tree status of the substrate repo',                  category: 'git' },
-    { name: 'repo_diff',           description: 'Show file diffs in the working tree',                             category: 'git' },
-    { name: 'prompt_layer_list',   description: 'List all prompt layers in the stack',                             category: 'prompt' },
-    { name: 'prompt_layer_get',    description: 'Get content of a specific prompt layer',                          category: 'prompt' },
-    { name: 'identity_diff',       description: 'Show identity changes between versions',                          category: 'identity' },
-    { name: 'settings_get',        description: 'Read current runtime settings',                                   category: 'settings' },
-    { name: 'session_list',        description: 'List recent sessions and active context',                         category: 'core' },
-    { name: 'heartbeat_get_policy', description: 'View heartbeat reflection templates and schedules',              category: 'heartbeat' },
-    { name: 'values_list',         description: 'List values journal entries',                                     category: 'core' },
-    { name: 'issue_ready',         description: 'List beads issues ready to work on',                              category: 'core' },
-    { name: 'issue_show',          description: 'Show a beads issue by id',                                        category: 'core' },
-    { name: 'memory_write',        description: 'Write a single memory directly to L2 store',                     category: 'memory', availability: 'Direct agent tool; also callable inside think' },
-    { name: 'scratchpad_read',     description: 'Read from the agent scratchpad (ephemeral key-value)',           category: 'scratchpad' },
-    { name: 'contact_lookup',      description: 'Look up a contact by name or Discord ID',                        category: 'contact' },
-    { name: 'contact_list',        description: 'List all known contacts with trust levels',                      category: 'contact' },
-    { name: 'load_tools',          description: 'Hot-swap active tool set to include extended tools',              category: 'core' },
-  ];
-
-  const EXTENDED_TOOLS: ToolInfo[] = [
-    // Shards & Lifecycle
-    { name: 'spawn_shard',            description: 'Launch ephemeral sub-agent for parallel work',           category: 'lifecycle' },
-    { name: 'self_restart',           description: 'Gracefully restart the agent process',                   category: 'lifecycle' },
-    { name: 'self_rebuild',           description: 'Trigger a rebuild and restart cycle',                    category: 'lifecycle' },
-    { name: 'notify_operator',        description: 'Send a notification to the operator via ntfy',           category: 'lifecycle' },
-    // Memory (extended)
-    { name: 'memory_import_batch',    description: 'Import multiple memories in a single batch',             category: 'memory', availability: 'Extended agent tool; also callable inside think' },
-    { name: 'memory_redact',          description: 'Redact sensitive content from a memory',                 category: 'memory', availability: 'Extended agent tool; also callable inside think' },
-    { name: 'memory_delete',          description: 'Soft-delete a memory',                                   category: 'memory' },
-    { name: 'undo_memory_delete',     description: 'Restore a previously deleted memory',                    category: 'memory' },
-    { name: 'scratchpad_write',       description: 'Write to the agent scratchpad (ephemeral key-value)',    category: 'scratchpad' },
-    // Git
-    { name: 'repo_apply_patch',       description: 'Apply a patch to files in allowed paths',               category: 'git' },
-    { name: 'repo_commit',            description: 'Stage and commit changes with audit metadata',          category: 'git' },
-    { name: 'repo_create_branch',     description: 'Create or switch branches',                             category: 'git' },
-    { name: 'repo_open_pr',           description: 'Create a pull request from current branch',             category: 'git' },
-    // Prompt
-    { name: 'prompt_layer_update',    description: 'Update a prompt layer (agent blocks base/operator)',    category: 'prompt' },
-    { name: 'prompt_layer_toggle',    description: 'Enable or disable a prompt layer',                      category: 'prompt' },
-    // Identity
-    { name: 'identity_changelog',     description: 'View the identity change history',                      category: 'identity' },
-    { name: 'character_card_update',  description: 'Update character card fields',                           category: 'identity' },
-    // Trust & Contacts
-    { name: 'contact_set_trust',      description: 'Change trust level for a contact',                      category: 'trust' },
-    { name: 'contact_set_channel_privacy', description: 'Set privacy level for a contact channel link',     category: 'trust' },
-    { name: 'contact_note',           description: 'Add or update notes on a contact',                      category: 'trust' },
-    { name: 'contact_link_identity',  description: 'Link two channel identities to the same contact',       category: 'trust' },
-    // Heartbeat & Scheduler
-    { name: 'heartbeat_run_template', description: 'Run a reflection template immediately on demand',        category: 'heartbeat' },
-    { name: 'heartbeat_update_policy', description: 'Modify reflection templates or intervals',             category: 'heartbeat' },
-    { name: 'schedule_task',          description: 'Create one-shot or recurring scheduled tasks',           category: 'heartbeat' },
-    // Skills
-    { name: 'skill_list',             description: 'List all loaded skill modules',                         category: 'skills' },
-    { name: 'skill_view',             description: 'View details of a specific skill',                      category: 'skills' },
-    { name: 'skill_create',           description: 'Create a new skill module',                             category: 'skills' },
-    { name: 'skill_update',           description: 'Update an existing skill module',                       category: 'skills' },
-    // Gateway
-    { name: 'shell.exec',             description: 'Execute a shell command via gateway (policy-gated)',    category: 'gateway' },
-  ];
-
-  // ── Grouped extended tools ──
-  const lifecycleTools = EXTENDED_TOOLS.filter(t => t.category === 'lifecycle');
-  const memoryTools = EXTENDED_TOOLS.filter(t => t.category === 'memory');
-  const gitTools = EXTENDED_TOOLS.filter(t => t.category === 'git');
-  const promptTools = EXTENDED_TOOLS.filter(t => t.category === 'prompt');
-  const identityTools = EXTENDED_TOOLS.filter(t => t.category === 'identity');
-  const settingsTools = EXTENDED_TOOLS.filter(t => t.category === 'settings');
-  const heartbeatTools = EXTENDED_TOOLS.filter(t => t.category === 'heartbeat');
-  const trustTools = EXTENDED_TOOLS.filter(t => t.category === 'trust');
-  const skillsTools = EXTENDED_TOOLS.filter(t => t.category === 'skills');
-  const gatewayTools = EXTENDED_TOOLS.filter(t => t.category === 'gateway');
-
-  const REPL_ONLY_TOOLS: ToolInfo[] = [
-    { name: 'read_file',           description: 'Read file content inside think through gateway fs policy checks', category: 'gateway' },
-    { name: 'write_file',          description: 'Write file content inside think through gateway fs policy checks', category: 'gateway' },
-    { name: 'list_files',          description: 'List workspace files inside think through gateway glob policy', category: 'gateway' },
-    { name: 'llm_query',           description: 'Ask a sub-LM question from inside think', category: 'core' },
-    { name: 'llm_query_strict',    description: 'Validated sub-LM query helper only inside think', category: 'core' },
-    { name: 'llm_query_json',      description: 'JSON sub-LM helper only inside think', category: 'core' },
-    { name: 'memory_search',       description: 'Semantic memory lookup inside think', category: 'memory' },
-    { name: 'memory_count',        description: 'Read total active memories inside think', category: 'memory' },
-    { name: 'memory_upsert',       description: 'Upsert or supersede memory inside think', category: 'memory' },
-    { name: 'memory_get_by_id',    description: 'Get a memory by id inside think', category: 'memory' },
-    { name: 'session_messages',    description: 'Read recent session messages inside think', category: 'core' },
-    { name: 'session_search',      description: 'Keyword-search transcript history inside think', category: 'core' },
-    { name: 'session_append_note', description: 'Inject a system note into a session inside think', category: 'core' },
-    { name: 'schedule_list',       description: 'Inspect scheduler state inside think', category: 'heartbeat' },
-    { name: 'schedule_add_every',  description: 'Create recurring tasks inside think', category: 'heartbeat' },
-    { name: 'schedule_add_once',   description: 'Create one-shot tasks inside think', category: 'heartbeat' },
-    { name: 'schedule_update',     description: 'Update scheduled tasks inside think', category: 'heartbeat' },
-    { name: 'event_emit',          description: 'Emit allowlisted events inside think', category: 'heartbeat' },
-    { name: 'module_list',         description: 'List modules inside think', category: 'lifecycle' },
-    { name: 'module_install',      description: 'Install or update modules inside think', category: 'lifecycle' },
-    { name: 'module_enable',       description: 'Enable a module inside think', category: 'lifecycle' },
-    { name: 'module_disable',      description: 'Disable a module inside think', category: 'lifecycle' },
-    { name: 'module_health',       description: 'Inspect module health inside think', category: 'lifecycle' },
-    { name: 'web_fetch',           description: 'Guarded web fetch helper inside think', category: 'gateway' },
-    { name: 'crawler_fetch',       description: 'Crawler fetch helper inside think', category: 'gateway' },
-    { name: 'web_research',        description: 'Research helper inside think', category: 'gateway' },
-    { name: 'shell_exec',          description: 'Capability-gated shell runner inside think', category: 'gateway' },
-    { name: 'sub_think',           description: 'Nested think helper when enabled', category: 'core' },
-  ];
-
-  interface ExtendedGroup {
-    id: string;
-    label: string;
-    dot: string;
-    tools: ToolInfo[];
-  }
-
-  const EXTENDED_GROUPS: ExtendedGroup[] = [
-    { id: 'lifecycle', label: 'Lifecycle & Shards', dot: CATEGORY_DOT.lifecycle, tools: lifecycleTools },
-    { id: 'memory', label: 'Memory (Extended)', dot: CATEGORY_DOT.memory, tools: memoryTools },
-    { id: 'git', label: 'Git Self-Modification', dot: CATEGORY_DOT.git, tools: gitTools },
-    { id: 'prompt', label: 'Prompt Stack', dot: CATEGORY_DOT.prompt, tools: promptTools },
-    { id: 'identity', label: 'Identity', dot: CATEGORY_DOT.identity, tools: identityTools },
-    { id: 'settings', label: 'Settings', dot: CATEGORY_DOT.settings, tools: settingsTools },
-    { id: 'heartbeat', label: 'Heartbeat & Scheduler', dot: CATEGORY_DOT.heartbeat, tools: heartbeatTools },
-    { id: 'trust', label: 'Trust & Contacts', dot: CATEGORY_DOT.trust, tools: trustTools },
-    { id: 'skills', label: 'Skills', dot: CATEGORY_DOT.skills, tools: skillsTools },
-    { id: 'gateway', label: 'Gateway', dot: CATEGORY_DOT.gateway, tools: gatewayTools },
-  ].filter(g => g.tools.length > 0);
-
-  // ── Service health state ──
-  interface ServiceStatus {
-    name: string;
-    description: string;
-    status: 'healthy' | 'degraded' | 'unavailable' | 'loading';
-    detail?: string;
-    expandable?: boolean;
-    expanded?: boolean;
-    models?: Array<{ id: string; description?: string }>;
-  }
-
-  let services = $state<ServiceStatus[]>([
-    { name: 'Admin API',  description: 'Garden admin server',                              status: 'loading' },
-    { name: 'LLM Proxy',  description: 'LiteLLM proxy for model routing',                  status: 'loading', expandable: true, expanded: false, models: [] },
-    { name: 'Embeddings',  description: 'Embedding model for semantic memory search',        status: 'loading' },
-  ]);
-
-  const STATUS_COLOR: Record<ServiceStatus['status'], string> = {
-    healthy:     'bg-moss-500',
-    degraded:    'bg-gold-500',
-    unavailable: 'bg-wilt-500',
-    loading:     'bg-bark-400 animate-pulse',
-  };
-
-  const STATUS_LABEL: Record<ServiceStatus['status'], string> = {
-    healthy:     'Healthy',
-    degraded:    'Degraded',
+  const HEALTH_LABELS: Record<RuntimeServiceHealthStatus, string> = {
+    healthy: 'Healthy',
+    degraded: 'Degraded',
     unavailable: 'Unavailable',
-    loading:     'Checking...',
+    not_applicable: 'N/A',
   };
 
-  const STATUS_TEXT: Record<ServiceStatus['status'], string> = {
-    healthy:     'text-moss-700',
-    degraded:    'text-gold-700',
-    unavailable: 'text-wilt-600',
-    loading:     'text-shadow-700',
+  const HEALTH_BADGE: Record<RuntimeServiceHealthStatus, string> = {
+    healthy: 'border-moss-300 bg-moss-100 text-moss-700',
+    degraded: 'border-gold-300 bg-gold-100 text-gold-700',
+    unavailable: 'border-wilt-300 bg-wilt-100 text-wilt-700',
+    not_applicable: 'border-bark-300 bg-bark-100 text-shadow-700',
   };
 
-  async function checkHealth() {
-    // Check admin API health
-    try {
-      const res = await fetch('/health');
-      if (res.ok) {
-        const data = await res.json() as { status?: string; uptime?: number };
-        const uptimeStr = data.uptime ? formatUptime(data.uptime) : undefined;
-        services[0] = {
-          ...services[0],
-          status: 'healthy',
-          detail: uptimeStr ? `Uptime: ${uptimeStr}` : 'Responding',
-        };
-      } else {
-        services[0] = { ...services[0], status: 'degraded', detail: `HTTP ${res.status}` };
-      }
-    } catch {
-      services[0] = { ...services[0], status: 'unavailable', detail: 'Connection failed' };
-    }
+  const AVAILABILITY_LABELS: Record<AdminToolAvailabilityStatus, string> = {
+    active: 'Active',
+    available: 'Available',
+    unavailable: 'Unavailable',
+    not_applicable: 'N/A',
+  };
 
-    // Check LLM proxy by attempting models list
-    try {
-      const res = await fetch('/api/admin/models');
-      if (res.ok) {
-        const data = await res.json() as Array<{ id: string; description?: string }>;
-        const modelList = Array.isArray(data) ? data : [];
-        services[1] = {
-          ...services[1],
-          status: 'healthy',
-          detail: `${modelList.length} models discovered`,
-          expandable: true,
-          models: modelList,
-        };
-      } else {
-        services[1] = { ...services[1], status: 'degraded', detail: `HTTP ${res.status}` };
-      }
-    } catch {
-      services[1] = { ...services[1], status: 'unavailable', detail: 'Not reachable' };
-    }
+  const AVAILABILITY_BADGE: Record<AdminToolAvailabilityStatus, string> = {
+    active: 'border-petal-300 bg-petal-100 text-petal-700',
+    available: 'border-moss-300 bg-moss-100 text-moss-700',
+    unavailable: 'border-wilt-300 bg-wilt-100 text-wilt-700',
+    not_applicable: 'border-bark-300 bg-bark-100 text-shadow-700',
+  };
 
-    // Embeddings: check via dashboard stats (indirect indicator)
-    try {
-      const dashRes = await apiGet<{ stats: { memoryTotal: number } }>('/api/admin/dashboard');
-      if (dashRes.stats.memoryTotal >= 0) {
-        services[2] = {
-          ...services[2],
-          status: 'healthy',
-          detail: `${dashRes.stats.memoryTotal} memories indexed`,
-        };
-      }
-    } catch {
-      services[2] = { ...services[2], status: 'unavailable', detail: 'Dashboard unreachable' };
-    }
-  }
-
-  function formatUptime(seconds: number): string {
-    if (seconds < 60) return `${Math.round(seconds)}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    return `${h}h ${m}m`;
-  }
-
-  function toggleModelList(idx: number) {
-    services[idx] = { ...services[idx], expanded: !services[idx].expanded };
-  }
-
+  let data = $state<AdminAdaptiveToolsData | null>(null);
+  let loading = $state(true);
   let refreshing = $state(false);
+  let errorMessage = $state('');
 
-  async function refreshHealth() {
+  let toolGroups = $derived.by(() => {
+    const tools = data?.toolHealth ?? [];
+    return SCOPE_ORDER
+      .map((scope) => ({
+        scope,
+        ...SCOPE_META[scope],
+        tools: tools.filter((tool) => tool.scope === scope),
+      }))
+      .filter((group) => group.tools.length > 0);
+  });
+
+  let summary = $derived.by(() => ({
+    registeredTools: data?.catalog?.tools.length ?? 0,
+    activeTools: data?.state?.activeTools.length ?? 0,
+    promotedActive: data?.state?.promotedToolsActive.length ?? 0,
+    recentFailures: data?.recentFailures.length ?? 0,
+  }));
+
+  async function loadData() {
+    errorMessage = '';
+    try {
+      data = await getAdaptiveTools();
+    } catch (error) {
+      errorMessage = error instanceof Error
+        ? error.message
+        : 'Failed to load adaptive tools data.';
+    } finally {
+      loading = false;
+      refreshing = false;
+    }
+  }
+
+  async function refreshData() {
     refreshing = true;
-    services = services.map(s => ({ ...s, status: 'loading' as const, detail: undefined }));
-    await checkHealth();
-    refreshing = false;
+    await loadData();
+  }
+
+  function formatTimestamp(timestamp: number | undefined): string {
+    if (!Number.isFinite(timestamp)) return 'Unknown';
+    return new Date(timestamp as number).toLocaleString('en-US', {
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  }
+
+  function availableActionSummary(service: RuntimeServiceHealth): string | null {
+    if (!service.availableActions?.length) return null;
+    return `Enabled actions: ${service.availableActions.join(', ')}`;
   }
 
   onMount(() => {
-    checkHealth();
+    void loadData();
   });
 </script>
 
-<div class="space-y-8">
-  <!-- Header -->
-  <div>
-    <h1 class="text-2xl font-serif font-bold text-shadow-900">The Shed</h1>
-    <p class="text-sm text-shadow-700 mt-1">Tools and services available to the substrate agent</p>
+<div class="space-y-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap">
+    <div>
+      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Shed</h1>
+      <p class="mt-1 text-sm text-shadow-600">
+        Direct runtime tool availability and health derived from the live agent catalog.
+      </p>
+    </div>
+    <button
+      onclick={refreshData}
+      disabled={refreshing}
+      class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {refreshing ? 'Refreshing...' : 'Refresh'}
+    </button>
   </div>
 
-  <!-- Tool loading info -->
-  <div class="card-garden p-4">
-    <div class="flex items-start gap-3">
-      <svg class="w-5 h-5 text-gold-500 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M9.663 17h4.674M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-      </svg>
-      <div class="text-sm text-shadow-800">
-        <p><strong class="text-shadow-900">Lazy loading:</strong> Only <strong>{CORE_TOOLS.length} core tools</strong> are active by default. The agent calls <code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">load_tools</code> to activate the <strong>{EXTENDED_TOOLS.length} extended tools</strong> when needed; loaded tools stay active for the current session.</p>
-        <p class="mt-2"><strong class="text-shadow-900">Surface split:</strong> This page distinguishes direct agent tools from helpers that only exist inside <code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">think</code>. REPL-only helpers are not normal agent tools, so direct tool calls, promotion, and <code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">load_tools</code> do not apply to them.</p>
+  {#if errorMessage}
+    <div class="card-garden border-l-4 border-l-wilt-400 p-4">
+      <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
+    </div>
+  {/if}
+
+  <div class="grid gap-4 md:grid-cols-4">
+    <div class="card-garden overflow-hidden p-5">
+      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Registered</p>
+      <p class="mt-3 text-4xl font-serif font-bold text-shadow-900">{summary.registeredTools}</p>
+      <p class="mt-2 text-sm text-shadow-600">Direct tools currently in the runtime catalog.</p>
+    </div>
+    <div class="card-garden overflow-hidden p-5">
+      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Active Now</p>
+      <p class="mt-3 text-4xl font-serif font-bold text-petal-500">{summary.activeTools}</p>
+      <p class="mt-2 text-sm text-shadow-600">Tools active in the current adaptive runtime snapshot.</p>
+    </div>
+    <div class="card-garden overflow-hidden p-5">
+      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Promoted Active</p>
+      <p class="mt-3 text-4xl font-serif font-bold text-gold-600">{summary.promotedActive}</p>
+      <p class="mt-2 text-sm text-shadow-600">Promoted extended tools currently in the active set.</p>
+    </div>
+    <div class="card-garden overflow-hidden p-5">
+      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent Failures</p>
+      <p class="mt-3 text-4xl font-serif font-bold text-wilt-500">{summary.recentFailures}</p>
+      <p class="mt-2 text-sm text-shadow-600">Latest soft and hard tool failures observed by admin telemetry.</p>
+    </div>
+  </div>
+
+  <div class="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
+    <div class="card-garden p-5">
+      <div class="flex items-baseline justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-serif font-semibold text-shadow-900">Runtime Snapshot</h2>
+          <p class="mt-1 text-sm text-shadow-600">
+            Catalog generated {formatTimestamp(data?.catalog?.generatedAt)}.
+          </p>
+        </div>
+        {#if loading}
+          <span class="text-sm text-shadow-500">Loading...</span>
+        {/if}
       </div>
-    </div>
-  </div>
 
-  <!-- Core Tools -->
-  <div>
-    <div class="flex items-baseline gap-3 mb-4">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Core Tools</h2>
-      <span class="text-sm font-sans text-shadow-600">{CORE_TOOLS.length} tools -- always available</span>
-    </div>
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-      {#each CORE_TOOLS as tool}
-        <div class="card-garden p-4">
-          <div class="flex items-center gap-2.5 mb-2">
-            <span class="inline-block w-2 h-2 rounded-full {CATEGORY_DOT[tool.category] || 'bg-bark-400'}"></span>
-            <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
-            <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
-          </div>
-          <p class="text-sm text-shadow-700 leading-relaxed pl-[18px]">{tool.description}</p>
-          {#if tool.availability}
-            <p class="text-sm text-shadow-500 leading-relaxed pl-[18px] mt-2">{tool.availability}</p>
+      {#if data?.state}
+        <div class="mt-4 flex flex-wrap gap-2">
+          {#each data.state.activeTools as tool}
+            <span class="rounded-full border border-petal-200 bg-petal-50 px-3 py-1 text-xs font-medium text-petal-700">
+              {tool.toolName} · {tool.source}
+            </span>
+          {/each}
+          {#if data.state.activeTools.length === 0}
+            <span class="text-sm text-shadow-500">No active tool snapshot available.</span>
           {/if}
         </div>
-      {/each}
-    </div>
-  </div>
-
-  <!-- Extended Tools -->
-  <div>
-    <div class="flex items-baseline gap-3 mb-4">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Extended Tools</h2>
-      <span class="text-sm font-sans text-shadow-600">{EXTENDED_TOOLS.length} tools -- loaded on demand via <code class="font-mono text-gold-600">load_tools</code></span>
+      {:else}
+        <p class="mt-4 text-sm text-shadow-500">Adaptive tool telemetry is not available in this runtime.</p>
+      {/if}
     </div>
 
-    {#each EXTENDED_GROUPS as group}
-      <div class="mb-5">
-        <h3 class="text-sm font-semibold text-shadow-800 mb-2 flex items-center gap-2">
-          <span class="inline-block w-2 h-2 rounded-full {group.dot}"></span>
-          {group.label}
-          <span class="text-sm font-normal text-shadow-600">({group.tools.length})</span>
-        </h3>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {#each group.tools as tool}
-            <div class="card-garden p-4">
-              <div class="flex items-center gap-2.5 mb-2">
-                <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
-                <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
+    <div class="card-garden p-5">
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Promotion Notes</h2>
+      {#if data?.state?.promotedToolsSkipped.length}
+        <div class="mt-4 space-y-3">
+          {#each data.state.promotedToolsSkipped as skip}
+            <div class="rounded-2xl border border-gold-200 bg-gold-50 px-4 py-3">
+              <div class="flex items-center justify-between gap-3">
+                <code class="text-sm font-medium text-shadow-900">{skip.toolName}</code>
+                <span class="rounded-full border border-gold-200 bg-white px-2 py-0.5 text-xs font-medium text-gold-700">
+                  {skip.reason}
+                </span>
               </div>
-              <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
-              {#if tool.availability}
-                <p class="text-sm text-shadow-500 leading-relaxed mt-2">{tool.availability}</p>
+              <p class="mt-2 text-sm text-shadow-600">Source: {skip.source}</p>
+              {#if skip.missingTokens?.length}
+                <p class="mt-2 text-sm text-shadow-600">
+                  Missing tokens: {skip.missingTokens.join(', ')}
+                </p>
               {/if}
             </div>
           {/each}
         </div>
-      </div>
-    {/each}
-  </div>
-
-  <div>
-    <div class="flex items-baseline gap-3 mb-4">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">REPL-Only Helpers</h2>
-      <span class="text-sm font-sans text-shadow-600">{REPL_ONLY_TOOLS.length} helpers -- only available inside <code class="font-mono text-gold-600">think</code></span>
-    </div>
-    <div class="card-garden p-4 mb-4">
-      <p class="text-sm text-shadow-800">These functions live only inside the RLM sandbox opened by <code class="font-mono text-sm bg-bark-100 px-1.5 py-0.5 rounded text-gold-700">think</code>. They are not part of the direct agent tool catalog.</p>
-    </div>
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-      {#each REPL_ONLY_TOOLS as tool}
-        <div class="card-garden p-4">
-          <div class="flex items-center gap-2.5 mb-2">
-            <code class="text-sm font-mono font-medium text-shadow-900">{tool.name}</code>
-            <span class="inline-block px-1.5 py-0.5 rounded text-sm font-medium {CATEGORY_BADGE[tool.category] || 'bg-bark-200 text-shadow-600'}">{tool.category}</span>
-          </div>
-          <p class="text-sm text-shadow-700 leading-relaxed">{tool.description}</p>
-        </div>
-      {/each}
+      {:else}
+        <p class="mt-4 text-sm text-shadow-500">No promoted tools are currently being skipped.</p>
+      {/if}
     </div>
   </div>
 
-  <!-- Service Health -->
   <div>
-    <div class="flex items-center justify-between mb-4">
-      <div class="flex items-baseline gap-3">
-        <h2 class="text-lg font-serif font-semibold text-shadow-900">Service Health</h2>
-        <span class="text-sm font-sans text-shadow-600">{services.length} services</span>
-      </div>
-      <button
-        onclick={refreshHealth}
-        disabled={refreshing}
-        class="text-sm px-3 py-1.5 rounded-lg border border-bark-300
-               text-shadow-600 hover:bg-bark-100
-               transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-      >
-        {refreshing ? 'Checking...' : 'Refresh'}
-      </button>
+    <div class="mb-4 flex items-baseline gap-3">
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Service Health</h2>
+      <span class="text-sm text-shadow-600">{data?.serviceHealth.length ?? 0} runtime dependencies</span>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {#each services as service, i}
-        <div class="card-garden p-5">
-          <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-semibold text-shadow-900">{service.name}</h3>
-            <span class="flex items-center gap-1.5">
-              <span class="inline-block w-2.5 h-2.5 rounded-full {STATUS_COLOR[service.status]}"></span>
-              <span class="text-sm font-medium {STATUS_TEXT[service.status]}">{STATUS_LABEL[service.status]}</span>
-            </span>
+    {#if loading}
+      <div class="grid gap-4 md:grid-cols-3">
+        {#each Array(3) as _}
+          <div class="card-garden animate-pulse p-5">
+            <div class="h-4 w-24 rounded bg-bark-200"></div>
+            <div class="mt-3 h-8 w-20 rounded bg-bark-100"></div>
+            <div class="mt-4 h-3 w-full rounded bg-bark-100"></div>
+            <div class="mt-2 h-3 w-3/4 rounded bg-bark-100"></div>
           </div>
-          <p class="text-sm text-shadow-700 mb-2">{service.description}</p>
-          {#if service.detail}
-            {#if service.expandable && service.models && service.models.length > 0}
-              <button
-                onclick={() => toggleModelList(i)}
-                class="text-sm font-mono text-shadow-800 bg-bark-100 rounded px-2 py-1 hover:bg-bark-200 transition-colors cursor-pointer w-full text-left"
-              >
-                {service.detail} {service.expanded ? '(click to collapse)' : '(click to expand)'}
-              </button>
-              {#if service.expanded}
-                <div class="mt-2 max-h-60 overflow-y-auto bg-bark-100 rounded border border-bark-300 p-2">
-                  <table class="w-full text-sm">
-                    <thead>
-                      <tr class="border-b border-bark-300">
-                        <th class="text-left py-1 text-shadow-700 font-medium">Model ID</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each service.models as model}
-                        <tr class="border-b border-bark-200">
-                          <td class="py-1 font-mono text-shadow-800 text-sm">{model.id}</td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-              {/if}
-            {:else}
-              <p class="text-sm font-mono text-shadow-800 bg-bark-100 rounded px-2 py-1">{service.detail}</p>
+        {/each}
+      </div>
+    {:else if data?.serviceHealth.length}
+      <div class="grid gap-4 md:grid-cols-3">
+        {#each data.serviceHealth as service}
+          <div class="card-garden p-5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <h3 class="text-sm font-semibold uppercase tracking-[0.16em] text-shadow-500">
+                  {SERVICE_LABELS[service.serviceId]}
+                </h3>
+                <p class="mt-1 text-xs text-shadow-500">Checked {formatTimestamp(service.checkedAt)}</p>
+              </div>
+              <span class="rounded-full border px-2.5 py-1 text-xs font-medium {HEALTH_BADGE[service.status]}">
+                {HEALTH_LABELS[service.status]}
+              </span>
+            </div>
+            <p class="mt-4 text-sm leading-relaxed text-shadow-700">{service.detail}</p>
+            {#if availableActionSummary(service)}
+              <p class="mt-3 rounded-xl border border-bark-200 bg-bark-50 px-3 py-2 text-xs text-shadow-700">
+                {availableActionSummary(service)}
+              </p>
             {/if}
-          {/if}
-        </div>
+            {#if service.lastFailure}
+              <div class="mt-4 rounded-2xl border border-wilt-200 bg-wilt-50 px-3 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-xs font-semibold uppercase tracking-[0.16em] text-wilt-700">Last failure</span>
+                  <span class="text-xs text-wilt-700">{formatTimestamp(service.lastFailure.at)}</span>
+                </div>
+                <p class="mt-2 text-sm text-wilt-700">{service.lastFailure.message}</p>
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <div class="card-garden p-5">
+        <p class="text-sm text-shadow-500">No runtime service health data is available.</p>
+      </div>
+    {/if}
+  </div>
+
+  <div class="space-y-5">
+    <div class="flex items-baseline gap-3">
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Tool Health</h2>
+      <span class="text-sm text-shadow-600">{data?.toolHealth.length ?? 0} runtime-derived rows</span>
+    </div>
+
+    {#if loading}
+      <div class="grid gap-4 lg:grid-cols-2">
+        {#each Array(4) as _}
+          <div class="card-garden animate-pulse p-5">
+            <div class="h-4 w-40 rounded bg-bark-200"></div>
+            <div class="mt-3 h-3 w-full rounded bg-bark-100"></div>
+            <div class="mt-2 h-3 w-5/6 rounded bg-bark-100"></div>
+            <div class="mt-5 grid gap-3 md:grid-cols-2">
+              <div class="h-20 rounded-2xl bg-bark-100"></div>
+              <div class="h-20 rounded-2xl bg-bark-100"></div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else if toolGroups.length}
+      {#each toolGroups as group}
+        <section class="space-y-3">
+          <div class="flex items-center gap-3">
+            <span class="inline-block h-2.5 w-2.5 rounded-full {group.accent}"></span>
+            <div>
+              <h3 class="text-base font-semibold text-shadow-900">{group.title}</h3>
+              <p class="text-sm text-shadow-600">{group.detail}</p>
+            </div>
+          </div>
+
+          <div class="grid gap-4 lg:grid-cols-2">
+            {#each group.tools as tool}
+              <div class="card-garden p-5">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <code class="text-sm font-medium text-shadow-900">{tool.name}</code>
+                      <span class="rounded-full border border-bark-200 bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-600">
+                        {tool.scope}
+                      </span>
+                    </div>
+                    <p class="mt-3 text-sm leading-relaxed text-shadow-700">{tool.description}</p>
+                  </div>
+                  <span class="rounded-full border px-2.5 py-1 text-xs font-medium {HEALTH_BADGE[tool.health.status]}">
+                    {HEALTH_LABELS[tool.health.status]}
+                  </span>
+                </div>
+
+                <div class="mt-4 rounded-2xl border border-bark-200 bg-bark-50 px-3 py-3 text-sm text-shadow-700">
+                  {tool.health.detail}
+                </div>
+
+                <div class="mt-4 grid gap-3 md:grid-cols-2">
+                  <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Chat</span>
+                      <span class="rounded-full border px-2 py-0.5 text-xs font-medium {AVAILABILITY_BADGE[tool.contexts.chat.status]}">
+                        {AVAILABILITY_LABELS[tool.contexts.chat.status]}
+                      </span>
+                    </div>
+                    <p class="mt-2 text-sm text-shadow-700">{tool.contexts.chat.detail}</p>
+                  </div>
+
+                  <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Internal Heartbeat</span>
+                      <span class="rounded-full border px-2 py-0.5 text-xs font-medium {AVAILABILITY_BADGE[tool.contexts.internalHeartbeat.status]}">
+                        {AVAILABILITY_LABELS[tool.contexts.internalHeartbeat.status]}
+                      </span>
+                    </div>
+                    <p class="mt-2 text-sm text-shadow-700">{tool.contexts.internalHeartbeat.detail}</p>
+                  </div>
+                </div>
+
+                {#if tool.lastFailure}
+                  <div class="mt-4 rounded-2xl border border-wilt-200 bg-wilt-50 px-4 py-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <span class="text-xs font-semibold uppercase tracking-[0.16em] text-wilt-700">Recent failure</span>
+                      <span class="text-xs text-wilt-700">{formatTimestamp(tool.lastFailure.timestamp)}</span>
+                    </div>
+                    <p class="mt-2 text-sm text-wilt-700">{tool.lastFailure.message}</p>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </section>
       {/each}
+    {:else}
+      <div class="card-garden p-5">
+        <p class="text-sm text-shadow-500">No tool health rows are available for this runtime.</p>
+      </div>
+    {/if}
+  </div>
+
+  <div class="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
+    <div class="card-garden p-5">
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Recent Failures</h2>
+      {#if data?.recentFailures.length}
+        <div class="mt-4 space-y-3">
+          {#each data.recentFailures as failure}
+            <div class="rounded-2xl border border-wilt-200 bg-wilt-50 px-4 py-3">
+              <div class="flex items-center justify-between gap-3">
+                <code class="text-sm font-medium text-wilt-700">{failure.toolName}</code>
+                <span class="text-xs text-wilt-700">{formatTimestamp(failure.timestamp)}</span>
+              </div>
+              <p class="mt-2 text-sm text-wilt-700">{failure.message}</p>
+              <p class="mt-2 text-xs uppercase tracking-[0.16em] text-wilt-600">{failure.channelId}</p>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="mt-4 text-sm text-shadow-500">No recent tool failures have been observed.</p>
+      {/if}
+    </div>
+
+    <div class="card-garden p-5">
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Scope Note</h2>
+      <p class="mt-4 text-sm leading-relaxed text-shadow-700">
+        This page is derived from the direct runtime tool catalog and admin telemetry. Helpers that only exist inside
+        <code class="rounded bg-bark-100 px-1.5 py-0.5 text-xs text-gold-700">think</code>
+        are intentionally excluded because they are not registered as direct agent tools.
+      </p>
     </div>
   </div>
 </div>

@@ -1,7 +1,7 @@
 import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../broadcast/safety.js';
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus, EventMap } from '../../event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
@@ -41,6 +41,16 @@ import { toErrorMessage } from '../../utils/errors.js';
 import type { ContextBudgetTurnCharacteristics } from '../../context-budget.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
 import { createTurnId } from '../../turns/id.js';
+import type {
+  TurnObservabilityRecord,
+  TurnRetrievalTelemetryRecord,
+  TurnStageTelemetryRecord,
+} from '../../turns/observability.js';
+import {
+  sanitizeTurnRetrievalTelemetry,
+  sanitizeTurnSnapshot,
+  sanitizeTurnStageTelemetry,
+} from '../../turns/observability.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../../turns/snapshot.js';
 import {
   parseDeferredToolHandoffActionId,
@@ -124,7 +134,7 @@ export interface TurnExecutionRuntime {
     stage: 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end',
     callType: ObservabilityCallType,
     payload: Record<string, unknown>,
-  ) => void;
+  ) => EventMap['agent.turn.stage'];
   recordUserMessage: (
     message: SubstrateMessage,
     turnId: TurnID,
@@ -261,6 +271,7 @@ export interface TurnExecutionRuntime {
     canonicalContactKey?: string;
     retrievalProvenanceRefs: string[];
     turnSnapshot?: TurnSnapshot;
+    turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
   }) => TurnRecord;
   queueBackgroundContinuationCompletion: (
@@ -306,9 +317,34 @@ export async function handleMessageForTurn(
   const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
   let retrievalProvenanceRefs: string[] = [];
   let memoryManifestSeed: ContextManifestMemorySeed | undefined;
+  const observedTurnStages: TurnStageTelemetryRecord[] = [];
+  const observedTurnRetrievals: TurnRetrievalTelemetryRecord[] = [];
+  let observedTurnSnapshot: TurnObservabilityRecord['snapshot'] | undefined;
+  const emitObservedTurnStage = (
+    stage: 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end',
+    payload: Record<string, unknown>,
+  ): void => {
+    const telemetry = runtime.emitTurnStage(
+      message,
+      startTime,
+      turnId,
+      requestId,
+      stage,
+      turnCallType,
+      payload,
+    );
+    observedTurnStages.push(sanitizeTurnStageTelemetry(telemetry));
+  };
   const unsubscribeRetrieval = runtime.eventBus.on('memory.retrieval', (telemetry) => {
     if (telemetry.channelId !== message.channelId) return;
     if (telemetry.requestId && telemetry.requestId !== requestId) return;
+    if (telemetry.turnId && telemetry.turnId !== turnId) return;
+
+    const observedRetrieval = sanitizeTurnRetrievalTelemetry(telemetry);
+    if (observedRetrieval) {
+      observedTurnRetrievals.push(observedRetrieval);
+    }
+
     memoryManifestSeed = {
       ...(telemetry.reason ? { reason: telemetry.reason } : {}),
       ...(telemetry.retrievalSource ? { retrievalSource: telemetry.retrievalSource } : {}),
@@ -371,7 +407,7 @@ export async function handleMessageForTurn(
     ?? authorContext.canonicalContactKey
     ?? message.authorId;
   const continuityUserId = authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey;
-  runtime.emitTurnStage(message, startTime, turnId, requestId, 'trust', turnCallType, {
+  emitObservedTurnStage('trust', {
     durationMs: Date.now() - trustStageStart,
     trustLevel: authorContext.trustLevel,
     canonicalContactKey: authorContext.canonicalContactKey ?? null,
@@ -434,6 +470,7 @@ export async function handleMessageForTurn(
       ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
       ...(memorySnapshot ? { memory: memorySnapshot } : {}),
     };
+    observedTurnSnapshot = sanitizeTurnSnapshot(turnSnapshot);
     await runtime.eventBus.emit('agent.turn.snapshot', {
       snapshot: turnSnapshot,
       ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
@@ -476,7 +513,7 @@ export async function handleMessageForTurn(
       .filter(section => section.length > 0)
       .join('\n\n');
     const scratchpadBlock = runtime.buildScratchpadContextBlock();
-    runtime.emitTurnStage(message, startTime, turnId, requestId, 'memory', turnCallType, {
+    emitObservedTurnStage('memory', {
       durationMs: Date.now() - memoryStageStart,
       hasMemoryProvider: memoryProvider != null,
       memoryChars: memoryContextBlock.length,
@@ -597,7 +634,7 @@ export async function handleMessageForTurn(
         turnBudgetCharacteristics,
       ),
     );
-    runtime.emitTurnStage(message, startTime, turnId, requestId, 'context', turnCallType, {
+    emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: context.messages.length,
       systemPromptChars: context.systemPrompt.length,
@@ -627,11 +664,11 @@ export async function handleMessageForTurn(
         emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
       });
       firstTokenAt = Date.now();
-      runtime.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
+      emitObservedTurnStage('first-token', {
         ttftMs: firstTokenAt - startTime,
         source: 'fallback',
       });
-      runtime.emitTurnStage(message, startTime, turnId, requestId, 'prompt', turnCallType, {
+      emitObservedTurnStage('prompt', {
         durationMs: Date.now() - promptStageStart,
         ttftMs: firstTokenAt - startTime,
         mode: 'moa',
@@ -665,7 +702,7 @@ export async function handleMessageForTurn(
       const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
         if (channelId !== message.channelId || streamFirstTokenAt != null) return;
         streamFirstTokenAt = Date.now();
-        runtime.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
+        emitObservedTurnStage('first-token', {
           ttftMs: streamFirstTokenAt - startTime,
           source: 'stream',
         });
@@ -703,12 +740,12 @@ export async function handleMessageForTurn(
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
       if (streamFirstTokenAt == null) {
         streamFirstTokenAt = Date.now();
-        runtime.emitTurnStage(message, startTime, turnId, requestId, 'first-token', turnCallType, {
+        emitObservedTurnStage('first-token', {
           ttftMs: streamFirstTokenAt - startTime,
           source: 'fallback',
         });
       }
-      runtime.emitTurnStage(message, startTime, turnId, requestId, 'prompt', turnCallType, {
+      emitObservedTurnStage('prompt', {
         durationMs: Date.now() - promptStageStart,
         ttftMs: streamFirstTokenAt - startTime,
       });
@@ -966,42 +1003,6 @@ export async function handleMessageForTurn(
       contextManifest: context.manifest,
       ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
     });
-    runtime.sessionManager.recordTurn(
-      runtime.buildTurnRecord({
-        message,
-        turnId,
-        requestId,
-        startedAt: startTime,
-        completedAt,
-        userSessionEntryId,
-        assistantSessionEntryId,
-        response: agentResponse,
-        turnMessages,
-        promptMode: promptOverride.mode,
-        promptText: fullPrompt,
-        contextMessageCount: context.messages.length,
-        memoryContextChars: memoryContextBlock.length,
-        trustLevel: authorContext.trustLevel,
-        canonicalContactKey: authorContext.canonicalContactKey,
-        retrievalProvenanceRefs,
-        turnSnapshot,
-        internalStateSnapshotRef,
-      }),
-    );
-
-    await runtime.eventBus.emit('agent.turn.end', {
-      message,
-      response: agentResponse,
-      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
-    });
-    if (inferredPostTurnActions.length > 0) {
-      await runtime.eventBus.emit('agent.post_turn.actions.inferred', {
-        message,
-        response: agentResponse,
-        actions: inferredPostTurnActions,
-        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.post_turn.actions.inferred'),
-      });
-    }
     if (deferredContinuationId && turnCallType === 'background') {
       const completionSignal = runtime.queueBackgroundContinuationCompletion(
         deferredContinuationId,
@@ -1054,12 +1055,53 @@ export async function handleMessageForTurn(
       usage: turnUsage,
       ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
     });
-    runtime.emitTurnStage(message, startTime, turnId, requestId, 'end', turnCallType, {
+    emitObservedTurnStage('end', {
       durationMs: completedAt - startTime,
       ttftMs: firstTokenAt - startTime,
       inputTokens: turnUsage.inputTokens,
       outputTokens: turnUsage.outputTokens,
     });
+    runtime.sessionManager.recordTurn(
+      runtime.buildTurnRecord({
+        message,
+        turnId,
+        requestId,
+        startedAt: startTime,
+        completedAt,
+        userSessionEntryId,
+        assistantSessionEntryId,
+        response: agentResponse,
+        turnMessages,
+        promptMode: promptOverride.mode,
+        promptText: fullPrompt,
+        contextMessageCount: context.messages.length,
+        memoryContextChars: memoryContextBlock.length,
+        trustLevel: authorContext.trustLevel,
+        canonicalContactKey: authorContext.canonicalContactKey,
+        retrievalProvenanceRefs,
+        turnSnapshot,
+        turnObservability: {
+          stages: observedTurnStages,
+          retrievals: observedTurnRetrievals,
+          ...(observedTurnSnapshot ? { snapshot: observedTurnSnapshot } : {}),
+        },
+        internalStateSnapshotRef,
+      }),
+    );
+
+    await runtime.eventBus.emit('agent.turn.end', {
+      message,
+      response: agentResponse,
+      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
+    });
+    if (inferredPostTurnActions.length > 0) {
+      await runtime.eventBus.emit('agent.post_turn.actions.inferred', {
+        message,
+        response: agentResponse,
+        actions: inferredPostTurnActions,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.post_turn.actions.inferred'),
+      });
+    }
 
     runtime.memoryExtractor?.maybeExtract(
       message.channelId,

@@ -13,6 +13,8 @@ import type {
 import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
 import type { ChannelMeta } from '../../trust/policy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
+import type { TurnObservabilityRecord } from '../../turns/observability.js';
+import { cloneTurnObservabilityRecord } from '../../turns/observability.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
@@ -173,6 +175,7 @@ export function buildTurnRecord(input: {
   canonicalContactKey?: string;
   retrievalProvenanceRefs: string[];
   turnSnapshot?: TurnSnapshot;
+  turnObservability?: TurnObservabilityRecord;
   internalStateSnapshotRef?: string;
   hashPromptText: (text: string) => string;
 }): TurnRecord {
@@ -220,6 +223,9 @@ export function buildTurnRecord(input: {
     extractedMemoryIds: [],
     concernDeltaRefs: [],
     contactDeltaRefs: [],
+    ...(input.turnObservability
+      ? { observability: cloneTurnObservabilityRecord(input.turnObservability) }
+      : {}),
     versionPointers: {
       model: input.response.metadata.model,
       promptMode: input.promptMode,

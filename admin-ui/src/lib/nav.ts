@@ -6,7 +6,7 @@ export interface NavItem {
 }
 
 export const navItems: NavItem[] = [
-  { id: 'dashboard', path: '', defaultLabel: 'Dashboard', icon: '\u{1F333}' },
+  { id: 'dashboard', path: '/', defaultLabel: 'Dashboard', icon: '\u{1F333}' },
   { id: 'memory', path: '/memory', defaultLabel: 'Memory', icon: '\u{1F33F}' },
   { id: 'sessions', path: '/sessions', defaultLabel: 'Sessions', icon: '\u{1F332}' },
   { id: 'chat', path: '/chat', defaultLabel: 'Chat', icon: '\u{1F4AC}' },

@@ -84,9 +84,8 @@
   }
 
   function isActive(navPath: string): boolean {
-    // navPath is base-relative (e.g., '' or '/memory'); $page.url.pathname is also base-stripped
     const currentPath = $page.url.pathname;
-    if (navPath === '') {
+    if (navPath === '/') {
       return currentPath === '/';
     }
     return currentPath.startsWith(navPath);
@@ -206,7 +205,7 @@
       <nav class="flex-1 overflow-y-auto py-2">
         {#each themedNavItems as item}
           <a
-            href="{base}{item.path}"
+            href={item.path}
             onclick={() => { if (!isDesktop) mobileNavOpen = false; }}
             class="flex items-start gap-3 px-4 py-2.5 mx-2 my-0.5 rounded-lg transition-colors group"
             class:bg-gold-50={isActive(item.path)}

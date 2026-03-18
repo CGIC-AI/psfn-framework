@@ -17,6 +17,7 @@ import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
 import type { SessionSearchHit } from './search-index.js';
 import type { EventBus } from '../event-bus.js';
+import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import { countTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../logger.js';
@@ -237,6 +238,7 @@ export class SessionManager {
   private compressionGuidelineRuntime: CompressionGuidelineRuntime;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
+  private internalRoleEnvelopeLedger: InternalRoleEnvelopeLedger | null;
   private activeContextSessionId: string | null = null;
   private activeFocusSessions: Map<string, ActiveFocusSession> = new Map();
   private pendingAutoCompactions = new Map<string, Promise<void>>();
@@ -263,6 +265,7 @@ export class SessionManager {
     );
     this.preCompactionExtractionHandler = null;
     this.coreMemoryProvider = null;
+    this.internalRoleEnvelopeLedger = null;
   }
 
   private resolveCompactionPromptText(basePrompt: string): string {
@@ -953,6 +956,14 @@ export class SessionManager {
 
   setCoreMemoryProvider(provider: SessionCoreMemoryProvider | null): void {
     this.coreMemoryProvider = provider;
+  }
+
+  setInternalRoleEnvelopeLedger(ledger: InternalRoleEnvelopeLedger | null): void {
+    this.internalRoleEnvelopeLedger = ledger;
+  }
+
+  getInternalRoleEnvelopeLedger(): InternalRoleEnvelopeLedger | null {
+    return this.internalRoleEnvelopeLedger;
   }
 
   recordCompressionFailureFromResponse(

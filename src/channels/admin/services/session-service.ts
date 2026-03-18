@@ -111,7 +111,7 @@ export class AdminSessionDataService implements AdminSessionService {
     const contacts = this.deps.contactStore?.listAll() ?? [];
     return {
       channels: channels.map(channel => {
-        const lastEntry = this.deps.sessionStore.getLastEntry(channel.channelId);
+        const lastEntry = this.deps.sessionStore.getLastEntry(channel.sessionId);
         const lastActivityAt = lastEntry
           ? (typeof lastEntry.timestamp === 'number'
             ? lastEntry.timestamp
@@ -139,21 +139,26 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  getSessionMessages(channelId: string): AdminSessionMessagesData {
-    const messages = this.deps.sessionManager.getRecentMessages(channelId, 100);
+  getSessionMessages(sessionId: string): AdminSessionMessagesData {
+    const messages = this.deps.sessionStore.getRecent(sessionId, 100);
+    const sessionActivity = this.deps.sessionStore.getSessionActivity(sessionId);
+    const channelId = messages[0]?.channelId
+      ?? sessionActivity?.channelId
+      ?? sessionId;
     const roleEnvelopePreviews = messages.flatMap((entry) => {
       const preview = resolveSessionEntryRoleEnvelopePreview(entry);
       return preview ? [{ sessionEntryId: entry.id, preview }] : [];
     });
     const turns = this.deps.sessionStore
-      .getRecentTurnRecords(channelId, DEFAULT_ADMIN_TURN_LIMIT)
+      .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
       .map(record => this.turnObservability.buildTurnData(record));
     const compactionAuditViews = this.deps.sessionStore
-      .getCompactionSummaries(channelId)
+      .getCompactionSummaries(sessionId)
       .slice()
       .sort((left, right) => right.id - left.id)
-      .map(summary => this.verifyCompactionSummary(channelId, summary));
+      .map(summary => this.verifyCompactionSummary(sessionId, summary));
     return {
+      sessionId,
       channelId,
       messages,
       roleEnvelopePreviews,

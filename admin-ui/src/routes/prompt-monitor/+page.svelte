@@ -24,7 +24,7 @@
   import type { ChannelInfo } from '$lib/types';
 
   let channels = $state<ChannelInfo[]>([]);
-  let selectedChannelId = $state<string | null>(null);
+  let selectedSessionId = $state<string | null>(null);
   let turns = $state<PromptMonitorTurn[]>([]);
   let selectedTurnId = $state<string | null>(null);
   let loadingChannels = $state(true);
@@ -35,6 +35,8 @@
 
   let unsubscribePromptEvents: (() => void) | null = null;
 
+  const selectedChannel = $derived(channels.find(channel => channel.sessionId === selectedSessionId) ?? null);
+  const selectedLogicalChannelId = $derived(selectedChannel?.channelId ?? null);
   const selectedTurn = $derived(turns.find(turn => turn.turnId === selectedTurnId) ?? turns[0] ?? null);
   const selectedTurnMetrics = $derived(selectedTurn ? resolvePromptMonitorMetrics(selectedTurn) : null);
   const summary = $derived(resolvePromptMonitorSummary(turns));
@@ -69,9 +71,9 @@
       const response = await listSessions();
       channels = sortChannels(response.channels);
 
-      if (!selectedChannelId && channels.length > 0) {
-        selectedChannelId = channels[0].channelId;
-        await loadTurnsForChannel(selectedChannelId, { preserveSelection: false });
+      if (!selectedSessionId && channels.length > 0) {
+        selectedSessionId = channels[0].sessionId;
+        await loadTurnsForChannel(selectedSessionId, { preserveSelection: false });
       }
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Failed to load sessions';
@@ -81,13 +83,13 @@
   }
 
   async function loadTurnsForChannel(
-    channelId: string,
+    sessionId: string,
     options: { preserveSelection: boolean } = { preserveSelection: true },
   ): Promise<void> {
     loadingTurns = true;
     error = '';
     try {
-      const response = await getSessionMessages(channelId);
+      const response = await getSessionMessages(sessionId);
       turns = buildPromptMonitorTurns(response.turns);
       liveEventCount = 0;
 
@@ -104,22 +106,22 @@
   }
 
   async function refreshSelectedChannel(): Promise<void> {
-    if (!selectedChannelId || refreshingSelected) return;
+    if (!selectedSessionId || refreshingSelected) return;
     refreshingSelected = true;
     try {
-      await loadTurnsForChannel(selectedChannelId);
+      await loadTurnsForChannel(selectedSessionId);
     } finally {
       refreshingSelected = false;
     }
   }
 
-  function selectChannel(channelId: string): void {
-    if (channelId === selectedChannelId) return;
-    selectedChannelId = channelId;
+  function selectChannel(sessionId: string): void {
+    if (sessionId === selectedSessionId) return;
+    selectedSessionId = sessionId;
     turns = [];
     selectedTurnId = null;
     liveEventCount = 0;
-    void loadTurnsForChannel(channelId, { preserveSelection: false });
+    void loadTurnsForChannel(sessionId, { preserveSelection: false });
   }
 
   function formatDuration(value: number | null): string {
@@ -176,7 +178,7 @@
   }
 
   function handlePromptEvent(event: Parameters<typeof mergePromptMonitorEvent>[1]): void {
-    if (!selectedChannelId || event.correlation.channelId !== selectedChannelId) {
+    if (!selectedLogicalChannelId || event.correlation.channelId !== selectedLogicalChannelId) {
       return;
     }
     turns = mergePromptMonitorEvent(turns, event);
@@ -226,7 +228,7 @@
         type="button"
         onclick={() => void refreshSelectedChannel()}
         class="rounded-lg border border-gold-300 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors disabled:opacity-60"
-        disabled={!selectedChannelId || refreshingSelected}
+        disabled={!selectedSessionId || refreshingSelected}
       >
         {refreshingSelected ? 'Refreshing…' : 'Refresh Turn History'}
       </button>
@@ -261,14 +263,14 @@
             No sessions with recorded turns yet.
           </div>
         {:else}
-          {#each channels as channel (channel.channelId)}
+          {#each channels as channel (channel.sessionId)}
             <button
               type="button"
-              onclick={() => selectChannel(channel.channelId)}
+              onclick={() => selectChannel(channel.sessionId)}
               class="w-full border-b border-bark-200 px-4 py-3 text-left transition-colors hover:bg-bark-100"
-              class:bg-gold-50={selectedChannelId === channel.channelId}
-              class:border-l-4={selectedChannelId === channel.channelId}
-              class:border-l-gold-400={selectedChannelId === channel.channelId}
+              class:bg-gold-50={selectedSessionId === channel.sessionId}
+              class:border-l-4={selectedSessionId === channel.sessionId}
+              class:border-l-gold-400={selectedSessionId === channel.sessionId}
             >
               <p class="truncate text-sm font-medium text-shadow-900" title={channel.channelId}>
                 {channelLabel(channel)}
@@ -276,6 +278,11 @@
               <p class="mt-1 text-sm text-shadow-600">
                 {channel.messageCount} messages . {formatRelativeActivity(channel)}
               </p>
+              {#if channel.sessionId !== channel.channelId}
+                <p class="mt-1 truncate font-mono text-sm text-shadow-600" title={channel.sessionId}>
+                  session: {channel.sessionId}
+                </p>
+              {/if}
               {#if channel.linkedContactName}
                 <p class="mt-1 truncate text-sm text-moss-700">
                   {channel.linkedContactName}
@@ -293,7 +300,7 @@
           <p class="text-sm font-medium uppercase tracking-wide text-shadow-600">Turns Loaded</p>
           <p class="mt-1 font-serif text-3xl text-shadow-900">{summary.turnCount}</p>
           <p class="mt-1 text-sm text-shadow-600">
-            {selectedChannelId ? truncateValue(selectedChannelId, 28) : 'No channel selected'}
+            {selectedLogicalChannelId ? truncateValue(selectedLogicalChannelId, 28) : 'No channel selected'}
           </p>
         </div>
         <div class="card-garden p-4">
@@ -319,7 +326,7 @@
         </div>
       </div>
 
-      {#if !selectedChannelId}
+      {#if !selectedSessionId}
         <div class="card-garden p-8 text-center text-shadow-600">
           Select a session to inspect prompt generation.
         </div>
@@ -342,7 +349,7 @@
             <div class="border-b border-bark-300 bg-bark-100 px-5 py-4">
               <h2 class="font-serif text-lg text-shadow-900">Turn Ledger</h2>
               <p class="mt-1 text-sm text-shadow-600">
-                Prompt snapshots and stage timings for {selectedChannelId}
+                Prompt snapshots and stage timings for {selectedLogicalChannelId ?? selectedSessionId}
               </p>
             </div>
 

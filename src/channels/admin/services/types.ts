@@ -182,6 +182,7 @@ export interface AdminSessionListData {
 }
 
 export interface AdminSessionMessagesData {
+  sessionId: string;
   channelId: string;
   messages: SessionEntry[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
@@ -191,7 +192,7 @@ export interface AdminSessionMessagesData {
 
 export interface AdminSessionService {
   listSessions(): AdminSessionListData;
-  getSessionMessages(channelId: string): AdminSessionMessagesData;
+  getSessionMessages(sessionId: string): AdminSessionMessagesData;
 }
 
 export type AdminObservedMemory = ObservedMemory;

@@ -42,7 +42,7 @@ import {
   migrateLegacyFilenames,
   primeChannelIndexFromDisk,
   rehydrateLastJournalEntry,
-  resolveExistingPath,
+  resolveExistingSession,
   snapshotIndexEntry,
   upsertChannelIndex,
   loadChannelIndex,
@@ -57,6 +57,7 @@ import { appendTurnRecord, readRecentTurnRecords } from './turn-records.js';
 import { SessionJournalRuntime } from './store/journal-runtime.js';
 import { resolveSessionEntryTurnContext } from './turn-provenance.js';
 import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
+import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
 const log = createComponentLogger('SessionStore');
 export {
   sanitizeChannelId,
@@ -81,6 +82,7 @@ export interface LatestSessionSummary {
 
 export interface SessionActivitySummary {
   sessionId: string;
+  channelId: string;
   channelType?: string;
   lastActivityAt: number;
   messageCount: number;
@@ -132,8 +134,9 @@ export class SessionStore {
     this.primeChannelIndexFromDisk();
     this.backfillSearchIndexFromDisk();
   }
-  private ensureChannelIndexEntry(channelId: string, filePath: string): ChannelIndexEntry {
+  private ensureChannelIndexEntry(sessionId: string, channelId: string, filePath: string): ChannelIndexEntry {
     return ensureChannelIndexEntry({
+      sessionId,
       channelId,
       filePath,
       channelIndexPath: this.channelIndexPath,
@@ -146,8 +149,15 @@ export class SessionStore {
   private upsertChannelIndex(channelId: string, entry: ChannelIndexEntry): void {
     upsertChannelIndex(channelId, entry, this.channelIndexPath, this.channelIndex);
   }
-  private resolveExistingPath(channelId: string): string | null {
-    return resolveExistingPath(this.sessionsDir, channelId, this.channelIndex);
+  private resolveSessionId(lookupKey: string): string | null {
+    return resolvePrimarySessionId(lookupKey, this.channelIndex);
+  }
+  private getLoadedCache(lookupKey: string): ChannelCache | undefined {
+    const sessionId = this.resolveSessionId(lookupKey) ?? lookupKey;
+    return this.channels.get(sessionId);
+  }
+  private resolveExistingSession(lookupKey: string) {
+    return resolveExistingSession(this.sessionsDir, lookupKey, this.channelIndex);
   }
   private rehydrateLastJournalEntry(channelId: string, indexEntry: ChannelIndexEntry): JournalEntry | null {
     return rehydrateLastJournalEntry(channelId, indexEntry);
@@ -183,40 +193,49 @@ export class SessionStore {
     });
   }
   private loadExistingChannelCache(channelId: string): ChannelCache | null {
-    const existing = this.channels.get(channelId);
+    const existing = this.getLoadedCache(channelId);
     if (existing) return existing;
-    const resolvedPath = this.resolveExistingPath(channelId);
-    if (!resolvedPath) return null;
-    const indexEntry = this.ensureChannelIndexEntry(channelId, resolvedPath);
-    const cache = createLightweightCache(channelId, resolvedPath, indexEntry);
-    this.channels.set(channelId, cache);
+    const resolved = this.resolveExistingSession(channelId);
+    if (!resolved) return null;
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
+    const cache = createLightweightCache(resolved.channelId, resolved.filePath, indexEntry);
+    this.channels.set(resolved.sessionId, cache);
     return cache;
   }
   private ensureChannelFullyLoaded(channelId: string): ChannelCache | null {
-    const existing = this.channels.get(channelId);
+    const resolvedSessionId = this.resolveSessionId(channelId) ?? channelId;
+    const existing = this.channels.get(resolvedSessionId);
     if (existing?.fullyLoaded) return existing;
-    const resolvedPath = existing?.resolvedPath ?? this.resolveExistingPath(channelId);
-    if (!resolvedPath) return null;
-    const loaded = this.journalRuntime.loadChannelFromPath(channelId, resolvedPath);
-    this.channels.set(channelId, loaded);
-    this.upsertChannelIndex(channelId, snapshotIndexEntry(loaded));
+    const resolved = existing
+      ? {
+        sessionId: resolvedSessionId,
+        channelId: existing.channelId,
+        filePath: existing.resolvedPath,
+      }
+      : this.resolveExistingSession(channelId);
+    if (!resolved) return null;
+    const loaded = this.journalRuntime.loadChannelFromPath(resolved.channelId, resolved.filePath);
+    this.channels.set(resolved.sessionId, loaded);
+    this.upsertChannelIndex(resolved.sessionId, snapshotIndexEntry(loaded));
     return loaded;
   }
   private indexSessionEntry(entry: SessionEntry): void {
     this.journalRuntime.indexSessionEntry(entry, this.searchIndex);
   }
   private ensureChannelForWrite(channelId: string, seed: SessionFileSeed): ChannelCache {
-    const existing = this.channels.get(channelId);
+    const resolvedSessionId = this.resolveSessionId(channelId) ?? channelId;
+    const existing = this.channels.get(resolvedSessionId);
     if (existing) return existing;
-    const resolvedPath = this.resolveExistingPath(channelId);
-    if (resolvedPath) {
-      const indexEntry = this.ensureChannelIndexEntry(channelId, resolvedPath);
-      const cache = createLightweightCache(channelId, resolvedPath, indexEntry);
-      this.channels.set(channelId, cache);
+    const resolved = this.resolveExistingSession(channelId);
+    if (resolved) {
+      const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
+      const cache = createLightweightCache(resolved.channelId, resolved.filePath, indexEntry);
+      this.channels.set(resolved.sessionId, cache);
       return cache;
     }
     const newPath = this.makeReadableFilePath(channelId, seed);
     const cache: ChannelCache = {
+      channelId,
       entries: [],
       compactions: [],
       turnTombstones: new Set(),
@@ -332,11 +351,12 @@ export class SessionStore {
     appendTurnRecord(this.sessionsDir, record);
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
-    const cached = this.channels.get(channelId) ?? this.loadExistingChannelCache(channelId);
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
     const hasTombstones = (cached?.activeTurnTombstoneCount ?? 0) > 0;
     const records = readRecentTurnRecords(
       this.sessionsDir,
-      channelId,
+      sessionId,
       hasTombstones ? Number.MAX_SAFE_INTEGER : limit,
     );
     if (!hasTombstones) {
@@ -362,7 +382,8 @@ export class SessionStore {
   }
   getRecent(channelId: string, limit: number): SessionEntry[] {
     if (limit <= 0) return [];
-    const cached = this.channels.get(channelId);
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
+    const cached = this.channels.get(sessionId);
     if (cached?.fullyLoaded) {
       if (cached.entries.length <= limit) return [...cached.entries];
       return cached.entries.slice(-limit);
@@ -373,9 +394,15 @@ export class SessionStore {
       if (full.entries.length <= limit) return [...full.entries];
       return full.entries.slice(-limit);
     }
-    const resolvedPath = cached?.resolvedPath ?? this.resolveExistingPath(channelId);
-    if (!resolvedPath) return [];
-    const indexEntry = this.ensureChannelIndexEntry(channelId, resolvedPath);
+    const resolved = cached
+      ? {
+        sessionId,
+        channelId: cached.channelId,
+        filePath: cached.resolvedPath,
+      }
+      : this.resolveExistingSession(channelId);
+    if (!resolved) return [];
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
     const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
     if (messageCount === 0) return [];
     if ((normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0) > 0) {
@@ -390,7 +417,7 @@ export class SessionStore {
       if (full.entries.length <= limit) return [...full.entries];
       return full.entries.slice(-limit);
     }
-    return this.readRecentEntriesFromTail(channelId, resolvedPath, limit);
+    return this.readRecentEntriesFromTail(resolved.channelId, resolved.filePath, limit);
   }
   getLastEntry(channelId: string): SessionEntry | undefined {
     const entries = this.getRecent(channelId, 1);
@@ -413,11 +440,11 @@ export class SessionStore {
     return new Set(ids);
   }
   count(channelId: string): number {
-    const cached = this.channels.get(channelId);
+    const cached = this.getLoadedCache(channelId);
     if (cached) return cached.messageCount;
-    const resolvedPath = this.resolveExistingPath(channelId);
-    if (!resolvedPath) return 0;
-    const indexEntry = this.ensureChannelIndexEntry(channelId, resolvedPath);
+    const resolved = this.resolveExistingSession(channelId);
+    if (!resolved) return 0;
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
     return normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
   }
   getCompactionSummaries(channelId: string): CompactionSummary[] {
@@ -425,13 +452,15 @@ export class SessionStore {
     return cache ? [...cache.compactions] : [];
   }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
+    const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const messageCount = this.count(channelId);
     if (messageCount <= 0) return null;
     const lastEntry = this.getLastEntry(channelId);
     if (!lastEntry || !Number.isFinite(lastEntry.timestamp) || lastEntry.timestamp <= 0) return null;
     return {
-      sessionId: channelId,
-      channelType: inferSessionChannelType(channelId),
+      sessionId,
+      channelId: lastEntry.channelId,
+      channelType: inferSessionChannelType(lastEntry.channelId),
       lastActivityAt: lastEntry.timestamp,
       messageCount,
       lastRole: lastEntry.role,
@@ -444,15 +473,16 @@ export class SessionStore {
     this.primeChannelIndexFromDisk();
     const sessions: SessionActivitySummary[] = [];
 
-    for (const [channelId, indexEntry] of this.channelIndex.entries()) {
+    for (const [sessionId, indexEntry] of this.channelIndex.entries()) {
+      const logicalChannelId = indexedChannelId(sessionId, indexEntry);
       const filePath = join(this.sessionsDir, indexEntry.filename);
       if (!existsSync(filePath)) continue;
 
-      const ensured = this.ensureChannelIndexEntry(channelId, filePath);
+      const ensured = this.ensureChannelIndexEntry(sessionId, logicalChannelId, filePath);
       const messageCount = normalizeOptionalNonNegativeNumber(ensured.messageCount) ?? 0;
       if (messageCount <= 0) continue;
 
-      const summary = this.getSessionActivity(channelId);
+      const summary = this.getSessionActivity(sessionId);
       if (!summary) continue;
       sessions.push(summary);
     }
@@ -476,15 +506,17 @@ export class SessionStore {
       channelType: latest.channelType,
     };
   }
-  listChannels(): Array<{ channelId: string; messageCount: number }> {
+  listChannels(): Array<{ sessionId: string; channelId: string; messageCount: number }> {
     this.primeChannelIndexFromDisk();
-    const channels: Array<{ channelId: string; messageCount: number }> = [];
-    for (const [channelId, indexEntry] of this.channelIndex.entries()) {
+    const channels: Array<{ sessionId: string; channelId: string; messageCount: number }> = [];
+    for (const [sessionId, indexEntry] of this.channelIndex.entries()) {
+      const logicalChannelId = indexedChannelId(sessionId, indexEntry);
       const filePath = join(this.sessionsDir, indexEntry.filename);
       if (!existsSync(filePath)) continue;
-      const ensured = this.ensureChannelIndexEntry(channelId, filePath);
+      const ensured = this.ensureChannelIndexEntry(sessionId, logicalChannelId, filePath);
       channels.push({
-        channelId,
+        sessionId,
+        channelId: logicalChannelId,
         messageCount: normalizeOptionalNonNegativeNumber(ensured.messageCount) ?? 0,
       });
     }
@@ -517,13 +549,13 @@ export class SessionStore {
   }
   insertExtractionMarker(channelId: string, coveredUpTo: number, timestamp = Date.now()): void {
     if (!Number.isFinite(coveredUpTo)) return;
-    const cache = this.channels.get(channelId) ?? this.loadExistingChannelCache(channelId);
+    const cache = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
     if (!cache) return;
     const markerCoveredUpTo = Math.max(0, Math.floor(coveredUpTo));
     const id = cache.nextId;
     const previousNextId = cache.nextId;
     cache.nextId = id + 1;
-    const journal = buildExtractionMarkerJournalEntry(id, channelId, markerCoveredUpTo, timestamp);
+    const journal = buildExtractionMarkerJournalEntry(id, cache.channelId, markerCoveredUpTo, timestamp);
     try {
       this.writeJournalEntry(cache, journal);
     } catch (error) {
@@ -627,8 +659,14 @@ export class SessionStore {
       sessionsDir: this.sessionsDir,
       channelIndex: this.channelIndex,
       primeChannelIndexFromDisk: () => this.primeChannelIndexFromDisk(),
-      ensureChannelIndexEntry: (channelId, filePath) => this.ensureChannelIndexEntry(channelId, filePath),
-      rehydrateLastJournalEntry: (channelId, indexEntry) => this.rehydrateLastJournalEntry(channelId, indexEntry),
+      ensureChannelIndexEntry: (channelId, filePath) => {
+        const indexEntry = this.channelIndex.get(channelId);
+        const logicalChannelId = indexEntry ? indexedChannelId(channelId, indexEntry) : channelId;
+        return this.ensureChannelIndexEntry(channelId, logicalChannelId, filePath);
+      },
+      rehydrateLastJournalEntry: (channelId, indexEntry) => (
+        this.rehydrateLastJournalEntry(indexedChannelId(channelId, indexEntry), indexEntry)
+      ),
     });
   }
   getCrashRecoveryExtractionCandidates(): CrashRecoveryExtractionCandidate[] {

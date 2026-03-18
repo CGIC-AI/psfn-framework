@@ -148,6 +148,7 @@ export interface AdminBulkMutationResult {
 
 // Sessions
 export interface ChannelInfo {
+  sessionId: string;
   channelId: string;
   messageCount: number;
   lastActivityAt?: number;
@@ -389,6 +390,7 @@ export interface AdminSessionRoleEnvelopePreview {
 }
 
 export interface AdminSessionMessagesData {
+  sessionId: string;
   channelId: string;
   messages: SessionEntry[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];

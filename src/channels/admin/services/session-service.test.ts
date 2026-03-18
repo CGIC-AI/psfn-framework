@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../../event-bus.js';
@@ -440,5 +440,56 @@ describe('AdminSessionDataService', () => {
     expect(result.turns[0]?.roleEnvelopeRefs).toEqual(['turn_record_summary:env_admin_preview_1']);
     expect(result.turns[0]?.record.roleEnvelopeRefs).toEqual(['turn_record_summary:env_admin_preview_1']);
     expect(JSON.stringify(result)).not.toContain(hiddenBody);
+  });
+
+  it('lists and reads distinct sessions for the same logical channel', () => {
+    const channelId = 'voxta:legacy:cf0a06ea';
+    writeFileSync(join(dir, '20241119_voxta-legacy-cf0a06ea_vega_111111.jsonl'), [
+      JSON.stringify({
+        type: 'message',
+        id: 1,
+        channelId,
+        role: 'user',
+        content: 'older session',
+        timestamp: 1_731_994_680_409,
+      }),
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, '20241225_voxta-legacy-cf0a06ea_vega_222222.jsonl'), [
+      JSON.stringify({
+        type: 'message',
+        id: 1,
+        channelId,
+        role: 'assistant',
+        content: 'newer session',
+        timestamp: 1_735_138_451_488,
+      }),
+      '',
+    ].join('\n'));
+
+    const importedStore = new SessionStore(dir);
+    const service = new AdminSessionDataService({
+      sessionStore: importedStore,
+      sessionManager: new SessionManager(importedStore, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const listed = service.listSessions().channels.filter(channel => channel.channelId === channelId);
+    expect(listed).toHaveLength(2);
+    expect(new Set(listed.map(channel => channel.sessionId)).size).toBe(2);
+
+    const contentBySessionId = new Map(
+      listed.map(channel => [
+        channel.sessionId,
+        service.getSessionMessages(channel.sessionId).messages[0]?.content ?? '',
+      ]),
+    );
+    expect(new Set(contentBySessionId.values())).toEqual(new Set(['older session', 'newer session']));
+
+    for (const channel of listed) {
+      const details = service.getSessionMessages(channel.sessionId);
+      expect(details.sessionId).toBe(channel.sessionId);
+      expect(details.channelId).toBe(channelId);
+    }
   });
 });

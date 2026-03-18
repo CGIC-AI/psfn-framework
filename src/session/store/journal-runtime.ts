@@ -114,6 +114,7 @@ export class SessionJournalRuntime {
 
   loadChannelFromPath(channelId: string, filePath: string): ChannelCache {
     const cache: ChannelCache = {
+      channelId,
       entries: [],
       compactions: [],
       turnTombstones: new Set(),

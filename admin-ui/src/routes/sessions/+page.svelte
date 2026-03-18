@@ -4,7 +4,7 @@
   import type { ChannelInfo, AdminSessionMessagesData, SessionEntry } from '$lib/types';
 
   let channels = $state<ChannelInfo[]>([]);
-  let selectedChannel = $state<string | null>(null);
+  let selectedSessionId = $state<string | null>(null);
   let messages = $state<SessionEntry[]>([]);
   let compactionAudits = $state<AdminSessionMessagesData['compactionAuditViews']>([]);
   let error = $state('');
@@ -16,6 +16,7 @@
   let channelSearch = $state('');
   let channelSort = $state<'recent' | 'messages_desc' | 'messages_asc' | 'name_asc' | 'name_desc'>('recent');
   let messageSearch = $state('');
+  const selectedChannel = $derived(channels.find(channel => channel.sessionId === selectedSessionId) ?? null);
 
   // Channel type labels matching the htmx admin
   const CHANNEL_TYPE_LABELS: Record<string, string> = {
@@ -68,7 +69,7 @@
       for (const channel of data.channels) {
         const ts = toTimestampMs(channel.lastActivityAt);
         if (ts !== null) {
-          seeded.set(channel.channelId, ts);
+          seeded.set(channel.sessionId, ts);
         }
       }
       channelLastActivity = seeded;
@@ -79,14 +80,14 @@
     }
   }
 
-  async function selectChannel(channelId: string) {
-    selectedChannel = channelId;
+  async function selectChannel(sessionId: string) {
+    selectedSessionId = sessionId;
     loadingMessages = true;
     messages = [];
     compactionAudits = [];
     expandedToolCall = null;
     try {
-      const data = await getSessionMessages(channelId);
+      const data = await getSessionMessages(sessionId);
       messages = data.messages;
       compactionAudits = data.compactionAuditViews ?? [];
 
@@ -99,7 +100,7 @@
             : Date.parse(lastMsg.timestamp);
           if (Number.isFinite(ts)) {
             const next = new Map(channelLastActivity);
-            next.set(channelId, ts);
+            next.set(data.sessionId, ts);
             channelLastActivity = next;
           }
         }
@@ -138,7 +139,7 @@
 
     // For user role, try to use the linked contact name from the selected channel
     if (msg.role === 'user') {
-      const channel = channels.find(c => c.channelId === selectedChannel);
+      const channel = channels.find(c => c.sessionId === selectedSessionId);
       if (channel?.linkedContactName) return channel.linkedContactName;
     }
 
@@ -187,6 +188,7 @@
       if (!needle) return true;
       return channelLabel(ch).toLowerCase().includes(needle)
         || ch.channelId.toLowerCase().includes(needle)
+        || ch.sessionId.toLowerCase().includes(needle)
         || (ch.linkedContactName ?? '').toLowerCase().includes(needle);
     });
 
@@ -204,8 +206,8 @@
         return channelLabel(b).localeCompare(channelLabel(a));
       }
 
-      const aTs = channelLastActivity.get(a.channelId) ?? 0;
-      const bTs = channelLastActivity.get(b.channelId) ?? 0;
+      const aTs = channelLastActivity.get(a.sessionId) ?? 0;
+      const bTs = channelLastActivity.get(b.sessionId) ?? 0;
       if (bTs !== aTs) return bTs - aTs;
       return b.messageCount - a.messageCount || channelLabel(a).localeCompare(channelLabel(b));
     });
@@ -268,15 +270,15 @@
             {/each}
           </div>
         {:else}
-          {#each filteredChannels as ch (ch.channelId)}
-            {@const lastActivityTs = channelLastActivity.get(ch.channelId)}
+          {#each filteredChannels as ch (ch.sessionId)}
+            {@const lastActivityTs = channelLastActivity.get(ch.sessionId)}
             <button
-              onclick={() => selectChannel(ch.channelId)}
+              onclick={() => selectChannel(ch.sessionId)}
               class="w-full text-left px-3 py-2.5 border-b border-bark-200 hover:bg-bark-100
                      transition-colors"
-              class:bg-gold-50={selectedChannel === ch.channelId}
-              class:border-l-3={selectedChannel === ch.channelId}
-              class:border-l-gold-400={selectedChannel === ch.channelId}
+              class:bg-gold-50={selectedSessionId === ch.sessionId}
+              class:border-l-3={selectedSessionId === ch.sessionId}
+              class:border-l-gold-400={selectedSessionId === ch.sessionId}
             >
               <span class="text-sm text-shadow-800 block truncate font-medium" title={ch.channelId}>
                 {channelLabel(ch)}
@@ -284,6 +286,11 @@
               {#if channelSubLabel(ch)}
                 <span class="text-sm text-shadow-600 block truncate font-mono">
                   {channelSubLabel(ch)}
+                </span>
+              {/if}
+              {#if ch.sessionId !== ch.channelId}
+                <span class="text-sm text-shadow-600 block truncate font-mono" title={ch.sessionId}>
+                  session: {ch.sessionId}
                 </span>
               {/if}
               <div class="flex items-center gap-1.5 mt-0.5">
@@ -311,18 +318,21 @@
 
     <!-- Messages panel -->
     <div class="flex-1 card-garden overflow-hidden flex flex-col">
-      {#if !selectedChannel}
+      {#if !selectedSessionId}
         <div class="flex-1 flex items-center justify-center">
           <p class="text-shadow-600 text-sm">Select a channel to view messages</p>
         </div>
       {:else}
         <div class="p-3 border-b border-bark-300 bg-bark-100 flex items-center justify-between">
           <div>
-            <h2 class="text-sm font-medium text-shadow-800 truncate" title={selectedChannel}>
-              {channelLabel(channels.find(c => c.channelId === selectedChannel) ?? { channelId: selectedChannel, messageCount: 0 })}
+            <h2 class="text-sm font-medium text-shadow-800 truncate" title={selectedChannel?.channelId ?? selectedSessionId}>
+              {channelLabel(selectedChannel ?? { sessionId: selectedSessionId, channelId: selectedSessionId, messageCount: 0 })}
             </h2>
-            {#if selectedChannel !== channelLabel(channels.find(c => c.channelId === selectedChannel) ?? { channelId: selectedChannel, messageCount: 0 })}
-              <p class="text-sm text-shadow-600 font-mono truncate">{selectedChannel}</p>
+            {#if selectedChannel?.channelId}
+              <p class="text-sm text-shadow-600 font-mono truncate">{selectedChannel.channelId}</p>
+            {/if}
+            {#if selectedChannel && selectedChannel.sessionId !== selectedChannel.channelId}
+              <p class="text-sm text-shadow-600 font-mono truncate">session: {selectedChannel.sessionId}</p>
             {/if}
           </div>
           <span class="text-sm text-shadow-600">{filteredMessages.length} of {messages.length} messages</span>

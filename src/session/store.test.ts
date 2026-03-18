@@ -905,6 +905,44 @@ describe('SessionStore', () => {
     expect(ids).toContain('discord/guild/ch');
   });
 
+  it('supports multiple L0 sessions for one logical channel', () => {
+    const channelId = 'voxta:legacy:cf0a06ea';
+    writeFileSync(join(dir, '20241119_voxta-legacy-cf0a06ea_vega_111111.jsonl'), [
+      JSON.stringify({
+        type: 'message',
+        id: 1,
+        channelId,
+        role: 'user',
+        content: 'older session',
+        timestamp: 1_731_994_680_409,
+      }),
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, '20241225_voxta-legacy-cf0a06ea_vega_222222.jsonl'), [
+      JSON.stringify({
+        type: 'message',
+        id: 1,
+        channelId,
+        role: 'assistant',
+        content: 'newer session',
+        timestamp: 1_735_138_451_488,
+      }),
+      '',
+    ].join('\n'));
+
+    const reloaded = new SessionStore(dir);
+    const sessions = reloaded.listChannels().filter(session => session.channelId === channelId);
+    expect(sessions).toHaveLength(2);
+    expect(new Set(sessions.map(session => session.sessionId)).size).toBe(2);
+
+    const contentBySessionId = new Map(
+      sessions.map(session => [session.sessionId, reloaded.getRecent(session.sessionId, 10)[0]?.content ?? '']),
+    );
+    expect(new Set(contentBySessionId.values())).toEqual(new Set(['older session', 'newer session']));
+
+    expect(reloaded.getRecent(channelId, 10).map(entry => entry.content)).toEqual(['newer session']);
+  });
+
   it('resolves latest session by last message timestamp across channels', () => {
     store.append({
       channelId: 'api:older',

@@ -8,6 +8,7 @@ import {
 } from './journal-utils.js';
 
 export interface ChannelCache {
+  channelId: string;
   entries: import('./types.js').SessionEntry[];
   compactions: import('./types.js').CompactionSummary[];
   turnTombstones: Set<string>;
@@ -23,6 +24,7 @@ export interface ChannelCache {
 }
 
 export interface ChannelIndexEntry {
+  channelId?: string;
   filename: string;
   messageCount?: number;
   activeTurnTombstoneCount?: number;
@@ -116,7 +118,7 @@ export interface LegacyChatImportManifestFilter {
 }
 
 export const CHANNEL_INDEX_FILENAME = '_channel_index.json';
-export const CHANNEL_INDEX_VERSION = 2;
+export const CHANNEL_INDEX_VERSION = 3;
 export const IMPORT_MANIFEST_FILENAME = '_import_manifest.jsonl';
 export const IMPORT_MANIFEST_SCHEMA_VERSION = 1;
 export const READABLE_SESSION_FILENAME = /^\d{8}_[a-z0-9-]+_[a-z0-9-]+_\d{6}\.jsonl$/;

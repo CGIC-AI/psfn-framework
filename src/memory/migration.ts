@@ -116,7 +116,7 @@ function loadRowsForMigration(
   return db.prepare(`
     SELECT m.id, m.text
     FROM l2_memories m
-    JOIN l2_memory_embeddings e ON e.memory_id = m.id
+    LEFT JOIN l2_memory_embeddings e ON e.memory_id = m.id
     ${whereClause}
     ORDER BY m.id ASC
   `).all() as MemoryTextRow[];

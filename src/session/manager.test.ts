@@ -129,7 +129,6 @@ describe('SessionManager', () => {
 
   it('records memory manifest details when retrieval seed metadata is provided', async () => {
     const config = makeConfig({
-      memoryRetrievalLimit: 2,
       memoryRetrievalBudgetPct: 15,
     });
     const mgr = new SessionManager(store, config);
@@ -155,7 +154,7 @@ describe('SessionManager', () => {
         retrievalLimit: 2,
         retrievalBudgetPct: 15,
         retrievalTokenBudget: 150,
-        retrievalLimitMode: 'hard_limit',
+        retrievalLimitMode: 'budget',
         contactScopeRejectedCount: 1,
         sensitivityRejectedCount: 1,
         policyRejectedCount: 1,
@@ -196,7 +195,7 @@ describe('SessionManager', () => {
         budgetCappedCount: 1,
       },
       retrieval: {
-        mode: 'hard_limit',
+        mode: 'budget',
         budgetPct: 15,
         tokenBudget: 150,
         limit: 2,
@@ -204,10 +203,9 @@ describe('SessionManager', () => {
       },
     });
     expect(ctx.manifest?.budgets.memoryRetrieval).toMatchObject({
-      mode: 'hard_limit',
+      mode: 'budget',
       budgetPct: 15,
       tokenBudget: 150,
-      hardLimit: 2,
       actualCount: 2,
       actualTokenCount: expect.any(Number),
     });
@@ -472,42 +470,44 @@ describe('SessionManager', () => {
     expect(ctx.messages[1].content).toContain('Public assistant reply');
   });
 
-  it('uses context-budgeted history when hard override is unset', async () => {
-    const budgetConfig = makeConfig({
-      sessionMessageLimit: undefined,
+  it('fills session history from the token budget instead of a derived message cap', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const config = makeConfig({
       sessionHistoryBudgetPct: 6,
       modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 4_000 },
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 4_000,
+          contextBudget: {
+            sessionHistoryMinTokens: 1,
+          },
+        },
       },
     });
-    const overrideConfig = makeConfig({
-      sessionMessageLimit: 40,
-      sessionHistoryBudgetPct: 6,
-      modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 4_000 },
-      },
-    });
+    const mgr = new SessionManager(store, config);
 
-    const budgetMgr = new SessionManager(store, budgetConfig);
-    const overrideStore = new SessionStore(join(dir, 'override-sessions'));
-    const overrideMgr = new SessionManager(overrideStore, overrideConfig);
-
-    for (let i = 0; i < 20; i++) {
-      const userText = `User ${i} ` + 'A'.repeat(220);
-      const assistantText = `Assistant ${i} ` + 'B'.repeat(220);
-      budgetMgr.recordUserMessage('ch-budget', userText, 'u1', 'User');
-      budgetMgr.recordAssistantMessage('ch-budget', assistantText);
-      overrideMgr.recordUserMessage('ch-override', userText, 'u1', 'User');
-      overrideMgr.recordAssistantMessage('ch-override', assistantText);
+    for (let i = 0; i < 12; i++) {
+      mgr.recordUserMessage('ch-budget', `U${i}`, 'u1', 'User');
+      mgr.recordAssistantMessage('ch-budget', `A${i}`);
     }
 
-    const budgetCtx = await budgetMgr.buildContext('ch-budget', 'Sys', '');
-    const overrideCtx = await overrideMgr.buildContext('ch-override', 'Sys', '');
+    const recent = mgr.getRecentMessages('ch-budget');
+    const ctx = await mgr.buildContext('ch-budget', 'Sys', '');
 
-    expect(budgetCtx.messages.length).toBeLessThan(overrideCtx.messages.length);
+    expect(recent.length).toBeGreaterThan(5);
+    expect(ctx.messages).toHaveLength(recent.length);
   });
 
   it('applies adaptive per-turn session and memory budgets when enabled', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
     const config = makeConfig({
       adaptiveContextBudgetsEnabled: true,
       sessionMessageLimit: undefined,
@@ -529,8 +529,8 @@ describe('SessionManager', () => {
     });
     const mgr = new SessionManager(store, config);
 
-    for (let i = 0; i < 40; i++) {
-      mgr.recordUserMessage('ch-adaptive', `Turn ${i} ` + 'x'.repeat(200), 'u1', 'User');
+    for (let i = 0; i < 120; i++) {
+      mgr.recordUserMessage('ch-adaptive', `Turn ${i} ` + 'x'.repeat(400), 'u1', 'User');
     }
 
     const recallTurn = { messageText: 'Can you remember what I told you last week?' };
@@ -754,22 +754,33 @@ describe('SessionManager', () => {
     expect(reflectionContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(8);
   });
 
-  it('prefers hard session limit over budget percentage', async () => {
+  it('ignores legacy hard session limits and keeps budget-based whole messages', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
     const config = makeConfig({
-      sessionMessageLimit: 8,
+      sessionMessageLimit: 2,
       sessionHistoryBudgetPct: 1,
       modelRoster: {
-        chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 2_000 },
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 500,
+          contextBudget: {
+            sessionHistoryMinTokens: 1,
+          },
+        },
       },
     });
     const mgr = new SessionManager(store, config);
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 4; i++) {
       mgr.recordUserMessage('ch1', `U${i}`, 'u1', 'User');
       mgr.recordAssistantMessage('ch1', `A${i}`);
     }
 
-    const ctx = await mgr.buildContext('ch1', 'Sys', '');
-    expect(ctx.messages.length).toBe(8);
+    expect(mgr.getRecentMessages('ch1')).toHaveLength(5);
   });
 
   it('indexes continuity by canonical contact key when provided', () => {

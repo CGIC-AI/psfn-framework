@@ -117,6 +117,15 @@ export interface MirrorEntryMetadata {
   truncated: boolean;
 }
 
+export interface RecentEntryStoreLike {
+  getRecent(channelId: string, limit: number): SessionEntry[];
+}
+
+export interface BudgetedRecentEntries {
+  entries: SessionEntry[];
+  sourceCount: number;
+}
+
 interface RetryConfig {
   maxRetries: number;
   baseDelayMs: number;
@@ -176,6 +185,30 @@ export function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBud
   }
 
   return selected.reverse();
+}
+
+export function collectRecentEntriesWithinTokenBudget(params: {
+  store: RecentEntryStoreLike;
+  channelId: string;
+  estimatedCount: number;
+  tokenBudget: number;
+}): BudgetedRecentEntries {
+  let limit = Math.max(SESSION_HISTORY_MIN_MESSAGES, Math.floor(params.estimatedCount));
+  let previousFetchedCount = -1;
+
+  for (;;) {
+    const recent = params.store.getRecent(params.channelId, limit);
+    const trimmed = trimRecentEntriesToTokenBudget(recent, params.tokenBudget);
+    if (recent.length < limit || trimmed.length < recent.length || recent.length === previousFetchedCount) {
+      return {
+        entries: trimmed,
+        sourceCount: recent.length,
+      };
+    }
+
+    previousFetchedCount = recent.length;
+    limit = Math.max(limit + 1, limit * 2);
+  }
 }
 
 export function normalizeImportBootstrapMaxTokens(value: number | undefined): number {

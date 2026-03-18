@@ -985,20 +985,6 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     delete (normalized as Record<string, unknown>)[key];
   }
 
-  const sessionLimit = toIntegerInRange(settings.sessionMessageLimit, 5, 200);
-  if (sessionLimit !== undefined) {
-    normalized.sessionMessageLimit = sessionLimit;
-  } else {
-    delete normalized.sessionMessageLimit;
-  }
-
-  const retrievalLimit = toIntegerInRange(settings.memoryRetrievalLimit, 1, 50);
-  if (retrievalLimit !== undefined) {
-    normalized.memoryRetrievalLimit = retrievalLimit;
-  } else {
-    delete normalized.memoryRetrievalLimit;
-  }
-
   const sessionBudgetPct = toIntegerInRange(
     settings.sessionHistoryBudgetPct,
     SESSION_HISTORY_BUDGET_PCT_RANGE.min,

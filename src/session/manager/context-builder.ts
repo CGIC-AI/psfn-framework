@@ -26,11 +26,11 @@ import type {
   ContextManifestMemorySeed,
 } from '../context-manifest.js';
 import {
+  collectRecentEntriesWithinTokenBudget,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   isUntrustedVisibility,
   parseChannelVisibility,
   resolveRoleName,
-  trimRecentEntriesToTokenBudget,
   wrapUntrustedContext,
 } from '../manager-primitives.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
@@ -86,13 +86,20 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
     adaptiveProfile: adaptiveBudgetProfile,
   });
+  const collectedRecent = params.turnSnapshot
+    ? null
+    : collectRecentEntriesWithinTokenBudget({
+      store: params.store,
+      channelId: params.channelId,
+      estimatedCount: historyBudget.estimatedCount,
+      tokenBudget: historyBudget.tokenBudget,
+    });
   let recent = params.turnSnapshot
     ? params.turnSnapshot.recentEntries.map(cloneSessionEntry)
-    : params.store.getRecent(params.channelId, historyBudget.estimatedCount);
-  const sourceEntryCount = recent.length;
-  if (!params.turnSnapshot && historyBudget.mode === 'budget') {
-    recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
-  }
+    : collectedRecent!.entries;
+  const sourceEntryCount = params.turnSnapshot
+    ? recent.length
+    : collectedRecent!.sourceCount;
   const focusCompaction = applyFocusCompactionRanges(
     recent,
     params.focusCompactionRanges,

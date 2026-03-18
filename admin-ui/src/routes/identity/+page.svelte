@@ -420,15 +420,12 @@
       ['dataDir', 'Data Dir'],
       ['characterCardPath', 'Character Card Path'],
       ['sessionHistoryBudgetPct', 'Session History Budget %'],
-      ['sessionMessageLimit', 'Session Message Hard Override'],
-      ['memoryRetrievalLimit', 'Memory Retrieval Hard Override'],
+      ['memoryRetrievalBudgetPct', 'Memory Retrieval Budget %'],
     ];
     for (const [key, label] of map) {
       const val = config?.[key];
       if (val !== undefined && val !== null) {
         fields.push({ label, value: String(val) });
-      } else if (key === 'sessionMessageLimit' || key === 'memoryRetrievalLimit') {
-        fields.push({ label, value: 'auto' });
       }
     }
     return fields;

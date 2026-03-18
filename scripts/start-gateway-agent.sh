@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+source "${ROOT_DIR}/scripts/system/runtime-env.sh"
+
 DEBUG_MODE=0
 YOLO_MODE=0
 for arg in "$@"; do
@@ -17,30 +19,22 @@ for arg in "$@"; do
   esac
 done
 
-if [ -f ".env" ]; then
+DOTENV_FILE="${PSFN_DOTENV_FILE:-.env}"
+if [ "${DOTENV_FILE}" != "${DOTENV_FILE#/}" ]; then
+  RESOLVED_DOTENV_FILE="${DOTENV_FILE}"
+else
+  RESOLVED_DOTENV_FILE="${ROOT_DIR}/${DOTENV_FILE#./}"
+fi
+
+if [ "${PSFN_SKIP_DOTENV:-false}" != "true" ] && [ -f "${RESOLVED_DOTENV_FILE}" ]; then
   set -a
-  # shellcheck disable=SC1091
-  source ".env"
+  # shellcheck disable=SC1090
+  source "${RESOLVED_DOTENV_FILE}"
   set +a
 fi
 
-if [ -z "${MODULE_REGISTRY_PATH:-}" ]; then
-  for candidate in \
-    "./companion/modules/repl-registry.json" \
-    "./workspace/purrsephone/modules/repl-registry.json" \
-    ./workspace/*/modules/repl-registry.json; do
-    if [ -f "${candidate}" ]; then
-      export MODULE_REGISTRY_PATH="${candidate}"
-      echo "[launcher] MODULE_REGISTRY_PATH not set; defaulting to ${MODULE_REGISTRY_PATH}"
-      break
-    fi
-  done
-fi
-
-if [ -z "${NRC_VAD_LEXICON_PATH:-}" ]; then
-  export NRC_VAD_LEXICON_PATH="./companion/emotion/nrc-vad-lexicon-v2.tsv"
-  echo "[launcher] NRC_VAD_LEXICON_PATH not set; defaulting to ${NRC_VAD_LEXICON_PATH}"
-fi
+psfn_export_default_module_registry_path
+psfn_export_default_vad_lexicon_path
 
 # Local-dev defaults so split/yolo mode is one-command.
 if [ -z "${ADMIN_PORT:-}" ]; then

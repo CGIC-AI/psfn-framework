@@ -1,0 +1,253 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { EventBus } from '../../../event-bus.js';
+import { SessionManager } from '../../../session/manager.js';
+import { SessionStore } from '../../../session/store.js';
+import { createTurnId } from '../../../turns/id.js';
+import type { SubstrateConfig } from '../../../types.js';
+import { AdminSessionDataService } from './session-service.js';
+
+function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
+  return {
+    primaryModel: 'test-model',
+    primaryProvider: 'test',
+    extractionModel: 'test-model',
+    extractionProvider: 'test',
+    discordToken: '',
+    discordBotId: '',
+    characterCardPath: '',
+    dataDir: './data',
+    databasePath: '',
+    sessionHistoryBudgetPct: 6,
+    memoryRetrievalBudgetPct: 2,
+    sessionMessageLimit: 50,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    primaryMaxTokens: 16_384,
+    extractionMaxTokens: 8_192,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    memoryBudgetPct: 20,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
+    modelRoster: {
+      chat: { model: 'test-model', provider: 'test', maxTokens: 16_384, contextWindow: 1_000 },
+    },
+    ...overrides,
+  };
+}
+
+describe('AdminSessionDataService', () => {
+  let dir: string;
+  let store: SessionStore;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'admin-session-service-'));
+    store = new SessionStore(dir);
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('returns persisted turn observability without requiring live event-bus state', () => {
+    const channelId = 'api:observability';
+    const requestId = 'persisted-turn-1';
+    const turnId = createTurnId();
+    const userSessionEntryId = store.append({
+      channelId,
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_700_000_000_000,
+    });
+    const assistantSessionEntryId = store.append({
+      channelId,
+      role: 'assistant',
+      content: 'world',
+      timestamp: 1_700_000_000_025,
+    });
+
+    store.appendTurnRecord({
+      schemaVersion: 1,
+      turnId,
+      requestId,
+      channelId,
+      channelType: 'api',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_050,
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: 'hello',
+        timestamp: 1_700_000_000_000,
+        sessionEntryId: userSessionEntryId ?? undefined,
+        sourceMessageId: 'msg-user-1',
+        authorId: 'user-1',
+        authorName: 'User',
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: 'world',
+        timestamp: 1_700_000_000_025,
+        sessionEntryId: assistantSessionEntryId ?? undefined,
+        sourceMessageId: 'msg-assistant-1',
+      },
+      toolCalls: [],
+      contextManifestRef: 'session:api:observability|messages:2|memory_chars:64',
+      internalStateSnapshotRef: 'trust:regular|contact:none|prompt:prompt-v1|memory:memory-v1|session:session-v1',
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      observability: {
+        stages: [
+          {
+            observedAt: 1_700_000_000_010,
+            turnId,
+            requestId,
+            channelId,
+            callType: 'chat',
+            purpose: 'agent.turn.stage.memory',
+            stage: 'memory',
+            elapsedMs: 10,
+            data: {
+              memoryChars: 64,
+              proactiveRecallIncluded: true,
+            },
+          },
+        ],
+        retrievals: [
+          {
+            observedAt: 1_700_000_000_015,
+            turnId,
+            requestId,
+            channelId,
+            callType: 'chat',
+            purpose: 'memory.retrieval',
+            count: 1,
+            retrievalSource: 'embedding',
+            data: {
+              candidateCount: 3,
+              withheldCount: 1,
+            },
+          },
+        ],
+        snapshot: {
+          turnId,
+          requestId,
+          channelId,
+          capturedAt: 1_700_000_000_020,
+          trustLevel: 'regular',
+          prompt: {
+            staticPrefixTemplate: 'Static prefix',
+            dynamicSuffixTemplate: 'Dynamic suffix',
+            staticHash: 'static-hash',
+            versionPointer: 'prompt-v1',
+          },
+          sessionContext: {
+            channelId,
+            recentEntries: [],
+            compactionSummaryTexts: ['summary-1'],
+            focusKnowledgeTexts: ['focus-1'],
+            continuityEntries: [],
+            compactionPromptText: 'Compaction prompt snapshot',
+            versionPointer: 'session-v1',
+          },
+          memory: {
+            channelId,
+            contactEmotionalMemories: [
+              {
+                id: 'mem-1',
+                text: 'Observed memory',
+                type: 'semantic',
+                importance: 0.7,
+                confidence: 0.8,
+                emotionalValence: 0.1,
+                salience: 0.9,
+                sourceRef: 'source:api:observability',
+                extractedAt: 1_700_000_000_001,
+                lastAccessed: 1_700_000_000_002,
+                accessCount: 1,
+                tags: ['api'],
+                sensitivity: 'personal',
+              },
+            ],
+            semanticCandidates: [
+              {
+                id: 'mem-2',
+                text: 'Allowed candidate',
+                type: 'semantic',
+                importance: 0.8,
+                confidence: 0.8,
+                emotionalValence: 0.05,
+                salience: 0.7,
+                sourceRef: 'source:api:observability',
+                extractedAt: 1_700_000_000_003,
+                lastAccessed: 1_700_000_000_004,
+                accessCount: 1,
+                tags: ['api'],
+                sensitivity: 'public',
+                similarity: 0.88,
+              },
+            ],
+            lexicalCandidates: [],
+            proactiveCandidates: [],
+            versionPointer: 'memory-v1',
+          },
+        },
+      },
+      versionPointers: {
+        model: 'test-model',
+        promptMode: 'default',
+        promptStack: 'prompt-v1',
+        memoryState: 'memory-v1',
+        sessionState: 'session-v1',
+      },
+      provenanceRefs: [`turn:${turnId}`],
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const result = service.getSessionMessages(channelId);
+    expect(result.turns).toHaveLength(1);
+    expect(result.turns[0]?.stages).toEqual([
+      expect.objectContaining({
+        stage: 'memory',
+        callType: 'chat',
+        data: expect.objectContaining({
+          memoryChars: 64,
+          proactiveRecallIncluded: true,
+        }),
+      }),
+    ]);
+    expect(result.turns[0]?.retrievals).toEqual([
+      expect.objectContaining({
+        retrievalSource: 'embedding',
+        data: expect.objectContaining({
+          candidateCount: 3,
+          withheldCount: 1,
+        }),
+      }),
+    ]);
+    expect(result.turns[0]?.snapshot).toMatchObject({
+      trustLevel: 'regular',
+      memory: {
+        versionPointer: 'memory-v1',
+        semanticCandidates: [
+          expect.objectContaining({
+            text: 'Allowed candidate',
+          }),
+        ],
+      },
+      sessionContext: {
+        compactionPromptText: 'Compaction prompt snapshot',
+      },
+    });
+  });
+});

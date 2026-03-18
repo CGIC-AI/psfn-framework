@@ -1,6 +1,6 @@
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import { createComponentLogger } from '../../logger.js';
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus, EventMap } from '../../event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
 import type {
@@ -14,6 +14,7 @@ import type {
   TurnRecord,
   TurnUsage,
 } from '../../types.js';
+import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type {
@@ -245,7 +246,7 @@ export class TurnSupportRuntime {
     stage: TurnStageName,
     callType: ObservabilityCallType,
     payload: Record<string, unknown>,
-  ): void {
+  ): EventMap['agent.turn.stage'] {
     const telemetry = buildTurnStageTelemetryForTurn({
       message,
       turnStartMs,
@@ -257,6 +258,7 @@ export class TurnSupportRuntime {
     });
     log.debug('Turn stage telemetry', telemetry);
     this.emitTelemetry('agent.turn.stage', telemetry);
+    return telemetry as EventMap['agent.turn.stage'];
   }
 
   resolveTurnCallType(
@@ -405,6 +407,7 @@ export class TurnSupportRuntime {
     canonicalContactKey?: string;
     retrievalProvenanceRefs: string[];
     turnSnapshot?: TurnSnapshot;
+    turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
   }): TurnRecord {
     return buildTurnRecordForTurn({

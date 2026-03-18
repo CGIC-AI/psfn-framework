@@ -9,14 +9,10 @@ import type {
 } from '../../../identity/prompt-registry.js';
 import type { PromptHistoryEntry, PromptLayer } from '../../../identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
-import type { EmotionalSnapshot } from '../../../contacts/store/emotional-baseline.js';
-import type { MemoryWithheldSummary } from '../../../memory/withheld-summary.js';
-import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
-import type { PurrMemory } from '../../../memory/types.js';
-import type { SessionEntry } from '../../../session/types.js';
 import type { EditableSettings } from '../../../settings.js';
-import type { TurnPromptSnapshot } from '../../../turns/snapshot.js';
-import type { ObservabilityCallType, SubstrateConfig, TurnRecord } from '../../../types.js';
+import type { MemoryLink } from '../../../memory/store.js';
+import type { PurrMemory } from '../../../memory/types.js';
+import type { SubstrateConfig, TurnRecord } from '../../../types.js';
 import type {
   Contact,
   ContactIdentityLinkVerification,
@@ -45,6 +41,15 @@ import type {
   AdaptiveToolRuntimeState,
   AdaptiveToolSnapshotTelemetry,
 } from '../../../agent/adaptive-tools-telemetry.js';
+import type {
+  ObservedMemory,
+  ObservedScoredMemory,
+  TurnMemorySnapshotRecord,
+  TurnRetrievalTelemetryRecord,
+  TurnSessionContextSnapshotRecord,
+  TurnSnapshotRecord,
+  TurnStageTelemetryRecord,
+} from '../../../turns/observability.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;
@@ -148,70 +153,19 @@ export interface AdminSessionService {
   getSessionMessages(channelId: string): AdminSessionMessagesData;
 }
 
-export type AdminObservedMemory = Omit<PurrMemory, 'embedding'>;
+export type AdminObservedMemory = ObservedMemory;
 
-export interface AdminObservedScoredMemory extends AdminObservedMemory {
-  similarity: number;
-}
+export type AdminObservedScoredMemory = ObservedScoredMemory;
 
-export interface AdminTurnStageTelemetry {
-  observedAt: number;
-  turnId: string;
-  requestId?: string;
-  channelId: string;
-  callType?: ObservabilityCallType;
-  purpose?: string;
-  stage: string;
-  elapsedMs: number;
-  data: Record<string, unknown>;
-}
+export type AdminTurnStageTelemetry = TurnStageTelemetryRecord;
 
-export interface AdminTurnRetrievalTelemetry {
-  observedAt: number;
-  turnId: string;
-  requestId?: string;
-  channelId: string;
-  callType?: ObservabilityCallType;
-  purpose?: string;
-  count: number;
-  reason?: string;
-  retrievalSource?: 'embedding' | 'lexical_fallback';
-  data: Record<string, unknown>;
-}
+export type AdminTurnRetrievalTelemetry = TurnRetrievalTelemetryRecord;
 
-export interface AdminTurnSessionContextSnapshotData {
-  channelId: string;
-  recentEntries: SessionEntry[];
-  compactionSummaryTexts: string[];
-  focusKnowledgeTexts: string[];
-  continuityEntries: SessionEntry[];
-  compactionPromptText?: string;
-  versionPointer: string;
-}
+export type AdminTurnSessionContextSnapshotData = TurnSessionContextSnapshotRecord;
 
-export interface AdminTurnMemorySnapshotData {
-  channelId: string;
-  profile?: ContactProfileArtifact;
-  emotionalSnapshot?: EmotionalSnapshot;
-  contactEmotionalMemories: AdminObservedMemory[];
-  semanticCandidates: AdminObservedScoredMemory[];
-  lexicalCandidates: AdminObservedScoredMemory[];
-  proactiveCandidates: AdminObservedMemory[];
-  withheldSummary?: MemoryWithheldSummary;
-  versionPointer: string;
-}
+export type AdminTurnMemorySnapshotData = TurnMemorySnapshotRecord;
 
-export interface AdminTurnSnapshotData {
-  turnId: string;
-  requestId: string;
-  channelId: string;
-  capturedAt: number;
-  trustLevel: string;
-  canonicalContactKey?: string;
-  prompt?: TurnPromptSnapshot;
-  sessionContext?: AdminTurnSessionContextSnapshotData;
-  memory?: AdminTurnMemorySnapshotData;
-}
+export type AdminTurnSnapshotData = TurnSnapshotRecord;
 
 export interface AdminSessionTurnData {
   record: TurnRecord;

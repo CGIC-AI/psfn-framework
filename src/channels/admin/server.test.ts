@@ -131,6 +131,27 @@ function openWebSocketExpectStatus(
   });
 }
 
+function readWebSocketMessage<T>(ws: WebSocket): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Timed out waiting for websocket message')), 2000);
+    ws.once('message', (raw: WebSocket.RawData) => {
+      clearTimeout(timeout);
+      try {
+        const text = typeof raw === 'string'
+          ? raw
+          : Array.isArray(raw)
+            ? Buffer.concat(raw).toString()
+            : raw instanceof ArrayBuffer
+              ? Buffer.from(raw).toString()
+              : raw.toString();
+        resolve(JSON.parse(text) as T);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
 function allocatePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -590,6 +611,186 @@ describe('AdminServer legacy UI removal', () => {
 
       const telemetry = await messagePromise;
       expect(telemetry.type).toBe('agent.turn.usage');
+      ws.close();
+    });
+
+    it('streams sanitized turn observability telemetry over /api/admin/events', async () => {
+      const ws = await openWebSocket(harness.port, '/api/admin/events', bearerHeaders);
+      const turnId = 'turn-live-1';
+      const requestId = 'turn-live-1';
+      const channelId = 'test-channel';
+
+      const snapshotMessagePromise = readWebSocketMessage<{
+        type: string;
+        data: {
+          snapshot: {
+            memory?: {
+              contactEmotionalMemories: Array<Record<string, unknown>>;
+              semanticCandidates: Array<Record<string, unknown>>;
+              proactiveCandidates: Array<Record<string, unknown>>;
+            };
+          };
+        };
+      }>(ws);
+      await harness.eventBus.emit('agent.turn.snapshot', {
+        turnId,
+        requestId,
+        channelId,
+        callType: 'chat',
+        purpose: 'agent.turn.snapshot',
+        snapshot: {
+          turnId,
+          requestId,
+          channelId,
+          capturedAt: Date.now(),
+          trustLevel: 'regular',
+          memory: {
+            channelId,
+            contactEmotionalMemories: [
+              {
+                id: 'mem-visible',
+                text: 'Visible memory',
+                type: 'semantic',
+                importance: 0.7,
+                confidence: 0.8,
+                emotionalValence: 0.1,
+                salience: 0.9,
+                embedding: new Float32Array([0.1, 0.2, 0.3]),
+                sourceRef: 'memory:test',
+                extractedAt: Date.now(),
+                lastAccessed: Date.now(),
+                accessCount: 1,
+                tags: ['test'],
+                sensitivity: 'personal',
+              },
+            ],
+            semanticCandidates: [
+              {
+                id: 'mem-allowed',
+                text: 'Allowed candidate',
+                type: 'semantic',
+                importance: 0.8,
+                confidence: 0.8,
+                emotionalValence: 0.05,
+                salience: 0.7,
+                embedding: new Float32Array([0.3, 0.4, 0.5]),
+                sourceRef: 'memory:test',
+                extractedAt: Date.now(),
+                lastAccessed: Date.now(),
+                accessCount: 1,
+                tags: ['api'],
+                sensitivity: 'public',
+                similarity: 0.88,
+              },
+              {
+                id: 'mem-withheld',
+                text: 'Withheld candidate should not leak',
+                type: 'semantic',
+                importance: 0.9,
+                confidence: 0.9,
+                emotionalValence: 0.2,
+                salience: 0.8,
+                embedding: new Float32Array([0.6, 0.7, 0.8]),
+                sourceRef: 'memory:test',
+                extractedAt: Date.now(),
+                lastAccessed: Date.now(),
+                accessCount: 1,
+                tags: ['private'],
+                sensitivity: 'personal',
+                similarity: 0.92,
+              },
+            ],
+            lexicalCandidates: [],
+            proactiveCandidates: [
+              {
+                id: 'mem-proactive-withheld',
+                text: 'Withheld proactive recall should not leak',
+                type: 'semantic',
+                importance: 0.6,
+                confidence: 0.7,
+                emotionalValence: 0,
+                salience: 0.6,
+                embedding: new Float32Array([0.9, 0.1, 0.2]),
+                sourceRef: 'memory:test',
+                extractedAt: Date.now(),
+                lastAccessed: Date.now(),
+                accessCount: 1,
+                tags: ['private'],
+                sensitivity: 'confidential',
+              },
+            ],
+            withheldCandidateIds: ['mem-withheld', 'mem-proactive-withheld'],
+            versionPointer: 'memory-v1',
+          },
+        },
+      });
+      const snapshotMessage = await snapshotMessagePromise;
+      expect(snapshotMessage.type).toBe('agent.turn.snapshot');
+      expect(snapshotMessage.data.snapshot.memory?.contactEmotionalMemories[0]).not.toHaveProperty('embedding');
+      expect(snapshotMessage.data.snapshot.memory?.semanticCandidates).toHaveLength(1);
+      expect(snapshotMessage.data.snapshot.memory?.semanticCandidates[0]?.text).toBe('Allowed candidate');
+      expect(snapshotMessage.data.snapshot.memory?.proactiveCandidates).toHaveLength(0);
+
+      const stageMessagePromise = readWebSocketMessage<{
+        type: string;
+        data: {
+          stage: string;
+          callType?: string;
+          data: { memoryChars?: number; proactiveRecallIncluded?: boolean };
+        };
+      }>(ws);
+      await harness.eventBus.emit('agent.turn.stage', {
+        turnId,
+        requestId,
+        channelId,
+        callType: 'chat',
+        purpose: 'agent.turn.stage.memory',
+        stage: 'memory',
+        elapsedMs: 25,
+        memoryChars: 128,
+        proactiveRecallIncluded: true,
+      });
+      const stageMessage = await stageMessagePromise;
+      expect(stageMessage.type).toBe('agent.turn.stage');
+      expect(stageMessage.data).toMatchObject({
+        stage: 'memory',
+        callType: 'chat',
+        data: {
+          memoryChars: 128,
+          proactiveRecallIncluded: true,
+        },
+      });
+
+      const retrievalMessagePromise = readWebSocketMessage<{
+        type: string;
+        data: {
+          retrievalSource?: string;
+          count: number;
+          data: { candidateCount?: number; withheldCount?: number };
+        };
+      }>(ws);
+      await harness.eventBus.emit('memory.retrieval', {
+        turnId,
+        requestId,
+        channelId,
+        callType: 'chat',
+        purpose: 'memory.retrieval',
+        count: 1,
+        retrievalSource: 'embedding',
+        candidateCount: 3,
+        withheldCount: 2,
+      });
+      const retrievalMessage = await retrievalMessagePromise;
+      expect(retrievalMessage.type).toBe('memory.retrieval');
+      expect(retrievalMessage.data).toMatchObject({
+        retrievalSource: 'embedding',
+        count: 1,
+        data: {
+          candidateCount: 3,
+          withheldCount: 2,
+        },
+      });
+
       ws.close();
     });
   });

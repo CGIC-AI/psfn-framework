@@ -11,11 +11,31 @@ import type {
 } from '../types.js';
 import { sanitizeChannelId } from './store-primitives.js';
 import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
+import type {
+  TurnObservabilityCallType,
+  TurnObservabilityRecord,
+  TurnRetrievalTelemetryRecord,
+  TurnSnapshotRecord,
+  TurnStageTelemetryRecord,
+} from '../turns/observability.js';
+import { cloneUnknownValue } from '../turns/observability.js';
 
 const TURN_RECORDS_DIR = '_turn_records';
 const TURN_RECORD_SCHEMA_VERSION = 1;
 const VALID_CHANNEL_TYPES = new Set<ChannelType>(['discord', 'terminal', 'api', 'telegram']);
 const VALID_TURN_STATUSES = new Set<TurnRecord['status']>(['completed', 'failed']);
+const VALID_OBSERVABILITY_CALL_TYPES = new Set<TurnObservabilityCallType>([
+  'chat',
+  'tool',
+  'memory',
+  'summary',
+  'background',
+  'scheduled',
+]);
+const VALID_RETRIEVAL_SOURCES = new Set<NonNullable<TurnRetrievalTelemetryRecord['retrievalSource']>>([
+  'embedding',
+  'lexical_fallback',
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -30,6 +50,15 @@ function parseRequiredString(value: unknown, fieldName: string): string {
     throw new Error(`TurnRecord field \"${fieldName}\" cannot be empty`);
   }
   return normalized;
+}
+
+function parseOptionalString(value: unknown, fieldName: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`TurnRecord field \"${fieldName}\" must be a string`);
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 function parseOptionalStringArray(value: unknown, fieldName: string): string[] {
@@ -48,11 +77,46 @@ function parseOptionalStringArray(value: unknown, fieldName: string): string[] {
   return [...deduped];
 }
 
+function parseRequiredNonNegativeNumber(value: unknown, fieldName: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`TurnRecord field \"${fieldName}\" must be a finite non-negative number`);
+  }
+  return value;
+}
+
 function parseRequiredTimestamp(value: unknown, fieldName: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     throw new Error(`TurnRecord field \"${fieldName}\" must be a finite non-negative number`);
   }
   return Math.floor(value);
+}
+
+function parseOptionalCallType(value: unknown, fieldName: string): TurnObservabilityCallType | undefined {
+  const normalized = parseOptionalString(value, fieldName);
+  if (!normalized) return undefined;
+  if (!VALID_OBSERVABILITY_CALL_TYPES.has(normalized as TurnObservabilityCallType)) {
+    throw new Error(`TurnRecord field \"${fieldName}\" is invalid: ${normalized}`);
+  }
+  return normalized as TurnObservabilityCallType;
+}
+
+function parseOptionalRetrievalSource(
+  value: unknown,
+  fieldName: string,
+): TurnRetrievalTelemetryRecord['retrievalSource'] | undefined {
+  const normalized = parseOptionalString(value, fieldName);
+  if (!normalized) return undefined;
+  if (!VALID_RETRIEVAL_SOURCES.has(normalized as NonNullable<TurnRetrievalTelemetryRecord['retrievalSource']>)) {
+    throw new Error(`TurnRecord field \"${fieldName}\" is invalid: ${normalized}`);
+  }
+  return normalized as TurnRetrievalTelemetryRecord['retrievalSource'];
+}
+
+function parseRequiredJsonRecord(value: unknown, fieldName: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`TurnRecord field \"${fieldName}\" must be an object`);
+  }
+  return cloneUnknownValue(value) as Record<string, unknown>;
 }
 
 function parseTurnRecordMessage(value: unknown, fieldName: string): TurnRecordMessage {
@@ -147,6 +211,149 @@ function parseVersionPointers(value: unknown): TurnRecordVersionPointers {
   };
 }
 
+function parseTurnStageTelemetryRecord(
+  value: unknown,
+  expected: { turnId: TurnID; requestId: string; channelId: string },
+  index: number,
+): TurnStageTelemetryRecord {
+  const fieldName = `observability.stages[${index}]`;
+  if (!isRecord(value)) {
+    throw new Error(`TurnRecord field \"${fieldName}\" must be an object`);
+  }
+
+  const turnId = parseRequiredString(value.turnId, `${fieldName}.turnId`);
+  if (turnId !== expected.turnId) {
+    throw new Error(`TurnRecord field \"${fieldName}.turnId\" must match turnId`);
+  }
+
+  const channelId = parseRequiredString(value.channelId, `${fieldName}.channelId`);
+  if (channelId !== expected.channelId) {
+    throw new Error(`TurnRecord field \"${fieldName}.channelId\" must match channelId`);
+  }
+
+  const requestId = parseOptionalString(value.requestId, `${fieldName}.requestId`);
+  if (requestId && requestId !== expected.requestId) {
+    throw new Error(`TurnRecord field \"${fieldName}.requestId\" must match requestId`);
+  }
+  const callType = parseOptionalCallType(value.callType, `${fieldName}.callType`);
+  const purpose = parseOptionalString(value.purpose, `${fieldName}.purpose`);
+
+  return {
+    observedAt: parseRequiredTimestamp(value.observedAt, `${fieldName}.observedAt`),
+    turnId,
+    ...(requestId ? { requestId } : {}),
+    channelId,
+    ...(callType ? { callType } : {}),
+    ...(purpose ? { purpose } : {}),
+    stage: parseRequiredString(value.stage, `${fieldName}.stage`),
+    elapsedMs: parseRequiredNonNegativeNumber(value.elapsedMs, `${fieldName}.elapsedMs`),
+    data: parseRequiredJsonRecord(value.data, `${fieldName}.data`),
+  };
+}
+
+function parseTurnRetrievalTelemetryRecord(
+  value: unknown,
+  expected: { turnId: TurnID; requestId: string; channelId: string },
+  index: number,
+): TurnRetrievalTelemetryRecord {
+  const fieldName = `observability.retrievals[${index}]`;
+  if (!isRecord(value)) {
+    throw new Error(`TurnRecord field \"${fieldName}\" must be an object`);
+  }
+
+  const turnId = parseRequiredString(value.turnId, `${fieldName}.turnId`);
+  if (turnId !== expected.turnId) {
+    throw new Error(`TurnRecord field \"${fieldName}.turnId\" must match turnId`);
+  }
+
+  const channelId = parseRequiredString(value.channelId, `${fieldName}.channelId`);
+  if (channelId !== expected.channelId) {
+    throw new Error(`TurnRecord field \"${fieldName}.channelId\" must match channelId`);
+  }
+
+  const requestId = parseOptionalString(value.requestId, `${fieldName}.requestId`);
+  if (requestId && requestId !== expected.requestId) {
+    throw new Error(`TurnRecord field \"${fieldName}.requestId\" must match requestId`);
+  }
+
+  const callType = parseOptionalCallType(value.callType, `${fieldName}.callType`);
+  const purpose = parseOptionalString(value.purpose, `${fieldName}.purpose`);
+  const reason = parseOptionalString(value.reason, `${fieldName}.reason`);
+  const retrievalSource = parseOptionalRetrievalSource(value.retrievalSource, `${fieldName}.retrievalSource`);
+
+  return {
+    observedAt: parseRequiredTimestamp(value.observedAt, `${fieldName}.observedAt`),
+    turnId,
+    ...(requestId ? { requestId } : {}),
+    channelId,
+    ...(callType ? { callType } : {}),
+    ...(purpose ? { purpose } : {}),
+    count: parseRequiredNonNegativeNumber(value.count, `${fieldName}.count`),
+    ...(reason ? { reason } : {}),
+    ...(retrievalSource ? { retrievalSource } : {}),
+    data: parseRequiredJsonRecord(value.data, `${fieldName}.data`),
+  };
+}
+
+function parseTurnSnapshotRecord(
+  value: unknown,
+  expected: { turnId: TurnID; requestId: string; channelId: string },
+): TurnSnapshotRecord {
+  const fieldName = 'observability.snapshot';
+  if (!isRecord(value)) {
+    throw new Error(`TurnRecord field \"${fieldName}\" must be an object`);
+  }
+
+  const turnId = parseRequiredString(value.turnId, `${fieldName}.turnId`);
+  if (turnId !== expected.turnId) {
+    throw new Error(`TurnRecord field \"${fieldName}.turnId\" must match turnId`);
+  }
+
+  const requestId = parseRequiredString(value.requestId, `${fieldName}.requestId`);
+  if (requestId !== expected.requestId) {
+    throw new Error(`TurnRecord field \"${fieldName}.requestId\" must match requestId`);
+  }
+
+  const channelId = parseRequiredString(value.channelId, `${fieldName}.channelId`);
+  if (channelId !== expected.channelId) {
+    throw new Error(`TurnRecord field \"${fieldName}.channelId\" must match channelId`);
+  }
+
+  parseRequiredTimestamp(value.capturedAt, `${fieldName}.capturedAt`);
+  parseRequiredString(value.trustLevel, `${fieldName}.trustLevel`);
+  return cloneUnknownValue(value) as TurnSnapshotRecord;
+}
+
+function parseTurnObservability(
+  value: unknown,
+  expected: { turnId: TurnID; requestId: string; channelId: string },
+): TurnObservabilityRecord | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error('TurnRecord field "observability" must be an object');
+  }
+
+  const stagesRaw = value.stages;
+  if (!Array.isArray(stagesRaw)) {
+    throw new Error('TurnRecord field "observability.stages" must be an array');
+  }
+
+  const retrievalsRaw = value.retrievals;
+  if (!Array.isArray(retrievalsRaw)) {
+    throw new Error('TurnRecord field "observability.retrievals" must be an array');
+  }
+
+  const snapshotRaw = value.snapshot;
+
+  return {
+    stages: stagesRaw.map((entry, index) => parseTurnStageTelemetryRecord(entry, expected, index)),
+    retrievals: retrievalsRaw.map((entry, index) => parseTurnRetrievalTelemetryRecord(entry, expected, index)),
+    ...(snapshotRaw !== undefined && snapshotRaw !== null
+      ? { snapshot: parseTurnSnapshotRecord(snapshotRaw, expected) }
+      : {}),
+  };
+}
+
 function parseTurnIdOrBackfill(raw: Record<string, unknown>, channelId: string): TurnID {
   const parsed = parseTurnId(raw.turnId, 'turnId');
   if (parsed) return parsed;
@@ -205,6 +412,11 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
 
   const contextManifestRef = raw.contextManifestRef;
   const internalStateSnapshotRef = raw.internalStateSnapshotRef;
+  const observability = parseTurnObservability(raw.observability, {
+    turnId,
+    requestId,
+    channelId,
+  });
 
   return {
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,
@@ -227,6 +439,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     extractedMemoryIds: parseOptionalStringArray(raw.extractedMemoryIds, 'extractedMemoryIds'),
     concernDeltaRefs: parseOptionalStringArray(raw.concernDeltaRefs, 'concernDeltaRefs'),
     contactDeltaRefs: parseOptionalStringArray(raw.contactDeltaRefs, 'contactDeltaRefs'),
+    ...(observability ? { observability } : {}),
     versionPointers,
     provenanceRefs: parseOptionalStringArray(raw.provenanceRefs, 'provenanceRefs'),
   };

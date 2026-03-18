@@ -659,7 +659,9 @@ export class MemoryStore {
 
     return rows
       .map(row => {
-        const similarity = 1 - row.distance;
+        // vec0 returns L2 distance; for L2-normalized unit vectors,
+        // cosine similarity = 1 - L2_dist² / 2
+        const similarity = 1 - (row.distance * row.distance) / 2;
         if (similarity < threshold) return null;
         return { ...mapMemoryRow(row), similarity };
       })

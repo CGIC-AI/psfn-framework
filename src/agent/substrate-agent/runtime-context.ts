@@ -210,6 +210,13 @@ export function buildRuntimeContext(input: {
     if (appearance.length > 0) lines.push(`Appearance context: ${appearance}`);
   }
 
+  if (hasActiveSelfImageTool()) {
+    lines.push('[Self-Image Tool Guidance]');
+    lines.push('Use image_create for a brand new selfie, portrait, or scene featuring you.');
+    lines.push('Use image_edit when modifying an existing image while keeping your identity consistent.');
+    lines.push('Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.');
+  }
+
   if (extendedCount > 0) {
     lines.push('');
     lines.push('Available extended tools:');

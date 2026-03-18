@@ -26,6 +26,8 @@ import {
   resolveContinuityDir,
   resolveHeartbeatPolicyPath,
   resolveIdentityAssetsDir,
+  resolveInternalRoleEnvelopeLedgerPath,
+  resolveInternalRoleEnvelopesDir,
   resolveLegacyValuesJournalPath,
   resolveLastActiveSessionPath,
   resolveNotesDir,
@@ -86,6 +88,10 @@ describe('persistence layout', () => {
     expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'journal.jsonl'));
     expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'notes', 'scratchpad.json'));
     expect(resolveCoreMemoryPath(dataDir)).toBe(join(dataDir, 'core_memory.json'));
+    expect(resolveInternalRoleEnvelopesDir(dataDir)).toBe(join(dataDir, 'internal-role-envelopes'));
+    expect(resolveInternalRoleEnvelopeLedgerPath(dataDir, 'discord:dm/primary')).toBe(
+      join(dataDir, 'internal-role-envelopes', 'discord%3Adm%2Fprimary.jsonl'),
+    );
     expect(resolveCharacterCardHistoryPath(dataDir)).toBe(join(dataDir, 'character-card-history.jsonl'));
     expect(resolvePromptLayersPath(dataDir)).toBe(join(dataDir, 'prompt-layers.json'));
     expect(resolvePromptHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-history.jsonl'));
@@ -244,6 +250,7 @@ describe('persistence layout', () => {
       resolveReflectionNotesDir(dataDir),
       resolveContactsDir(dataDir),
       resolveContinuityDir(dataDir),
+      resolveInternalRoleEnvelopesDir(dataDir),
     ];
     for (const dir of dirs) {
       expect(existsSync(dir)).toBe(true);

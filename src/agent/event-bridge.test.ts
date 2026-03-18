@@ -213,6 +213,34 @@ describe('createEventBridge', () => {
     });
   });
 
+  it('marks soft-error tool results as failures and forwards the error text', async () => {
+    const bridge = createEventBridge(agent, eventBus);
+    const events: any[] = [];
+    eventBus.on('agent.tool.end', (data) => { events.push(data); });
+
+    bridge.setChannel('test-channel');
+    emitAgentEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'call-soft-error',
+      toolName: 'notify_operator',
+      result: {
+        content: [{ type: 'text', text: 'notify_operator: failure (ntfy request failed: 503).' }],
+        details: { isError: true },
+      },
+      isError: false,
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      channelId: 'test-channel',
+      toolCallId: 'call-soft-error',
+      toolName: 'notify_operator',
+      isError: true,
+      errorMessage: 'notify_operator: failure (ntfy request failed: 503).',
+    });
+  });
+
   it('propagates turn/request correlation across stream and tool events', async () => {
     const bridge = createEventBridge(agent, eventBus);
     const streamEvents: any[] = [];

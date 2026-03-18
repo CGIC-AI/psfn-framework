@@ -123,6 +123,7 @@ export class AdminServer implements Lifecycle {
     this.adaptiveToolsService = new AdminAdaptiveToolsDataService({
       eventBus: config.eventBus,
       stateProvider: config.adaptiveToolsStateProvider ?? null,
+      toolHealthProvider: config.toolHealthProvider ?? null,
     });
     this.chatBootstrapService = new AdminChatBootstrapService(config.contactStore, {
       apiBaseUrl: config.apiBaseUrl,

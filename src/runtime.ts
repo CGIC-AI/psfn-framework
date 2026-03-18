@@ -31,6 +31,7 @@ import type {
 } from './channels/types.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import { AdminServer } from './channels/admin/server.js';
+import { createLocalAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
@@ -1190,6 +1191,7 @@ export class SubstrateRuntime implements Lifecycle {
           listConfirmationQueue: async () => ({ entries: cardProposalQueue.listPending() }),
           resolveConfirmationQueue: (params) => cardProposalQueue.resolve(params),
         },
+        toolHealthProvider: createLocalAdminToolHealthProvider(this.config),
       });
       await this.adminServer.init();
       log.info(`Admin GUI configured on port ${adminPort}`);

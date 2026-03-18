@@ -786,6 +786,52 @@ describe('GatewayClient vault RPC wrappers', () => {
   });
 });
 
+describe('GatewayClient runtime health RPC wrapper', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('requests runtime.health with the typed response shape', async () => {
+    const healthPromise = client.runtimeHealth();
+    const healthReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+
+    expect(healthReq.method).toBe('runtime.health');
+    expect(healthReq.params).toEqual({});
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: healthReq.id,
+      result: {
+        checkedAt: 1_701_234_567_890,
+        services: [
+          {
+            serviceId: 'gateway',
+            status: 'healthy',
+            detail: 'Gateway ready.',
+            checkedAt: 1_701_234_567_890,
+          },
+        ],
+      },
+    });
+
+    await expect(healthPromise).resolves.toEqual({
+      checkedAt: 1_701_234_567_890,
+      services: [
+        {
+          serviceId: 'gateway',
+          status: 'healthy',
+          detail: 'Gateway ready.',
+          checkedAt: 1_701_234_567_890,
+        },
+      ],
+    });
+  });
+});
+
 describe('GatewayClient beads RPC wrappers', () => {
   let conn: ReturnType<typeof createMockConnection>;
   let client: GatewayClient;

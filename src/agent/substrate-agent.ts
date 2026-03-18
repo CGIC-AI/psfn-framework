@@ -65,6 +65,7 @@ import {
 import type {
   AdaptiveToolRuntimeState,
 } from './adaptive-tools-telemetry.js';
+import type { RuntimeToolCatalogSnapshot } from './tool-catalog.js';
 import { createTurnId } from '../turns/id.js';
 import type { TurnPromptSnapshot } from '../turns/snapshot.js';
 import { EmotionState } from '../emotion/state.js';
@@ -518,6 +519,10 @@ export class SubstrateAgent {
 
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
     return this.toolRuntimeFacade.getAdaptiveToolRuntimeState();
+  }
+
+  getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
+    return this.toolRuntimeFacade.getToolCatalogSnapshot();
   }
 
   getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, renameSync, readFileSync, statSync 
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { readJournalFirstEntry } from '../session/journal-utils.js';
+import { sanitizeChannelId } from '../session/store-primitives.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 
 const log = createComponentLogger('PersistenceLayout');
@@ -499,6 +500,17 @@ export function resolveCoreMemoryPath(companionDataDir: string): string {
   return join(companionDataDir, 'core_memory.json');
 }
 
+export function resolveInternalRoleEnvelopesDir(companionDataDir: string): string {
+  return join(companionDataDir, 'internal-role-envelopes');
+}
+
+export function resolveInternalRoleEnvelopeLedgerPath(
+  companionDataDir: string,
+  channelId: string,
+): string {
+  return join(resolveInternalRoleEnvelopesDir(companionDataDir), `${sanitizeChannelId(channelId)}.jsonl`);
+}
+
 export function resolveCharacterCardHistoryPath(companionDataDir: string): string {
   return join(companionDataDir, 'character-card-history.jsonl');
 }
@@ -553,6 +565,7 @@ export function ensurePersistenceLayout(dataDir: string): void {
   mkdirSync(resolveReflectionNotesDir(dataDir), { recursive: true });
   mkdirSync(resolveContactsDir(dataDir), { recursive: true });
   mkdirSync(resolveContinuityDir(dataDir), { recursive: true });
+  mkdirSync(resolveInternalRoleEnvelopesDir(dataDir), { recursive: true });
 }
 
 export function migrateLegacyPersistenceLayout(dataDir: string): void {

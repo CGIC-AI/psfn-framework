@@ -1003,58 +1003,20 @@ export async function handleMessageForTurn(
       contextManifest: context.manifest,
       ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
     });
-    if (deferredContinuationId && turnCallType === 'background') {
-      const completionSignal = runtime.queueBackgroundContinuationCompletion(
+    const completionSignal = deferredContinuationId && turnCallType === 'background'
+      ? runtime.queueBackgroundContinuationCompletion(
         deferredContinuationId,
         message,
         agentResponse,
         taskKind ?? null,
         turnIntent,
-      );
-      await runtime.emitBackgroundContinuationEvent(
-        'agent.background.continuation.completed',
-        {
-          channelId: message.channelId,
-          continuationId: completionSignal.continuationId,
-          sourceMessageId: completionSignal.sourceMessageId,
-          deliverySessionId: completionSignal.deliverySessionId,
-          queuedForPostTurnDelivery: completionSignal.queuedForPostTurnDelivery,
-          hasDeliverableContent: completionSignal.hasDeliverableContent,
-          notifyUser: completionSignal.notifyUser,
-          notificationReason: completionSignal.notificationReason,
-          origin: completionSignal.origin,
-          urgency: completionSignal.urgency,
-          channelContext: completionSignal.channelContext,
-          completionAgeMs: completionSignal.completionAgeMs,
-          stale: completionSignal.stale,
-          taskKind: completionSignal.taskKind,
-          intent: completionSignal.intent,
-          completedAt: completionSignal.completedAt,
-          queueDepth: completionSignal.queueDepth,
-          ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.completed'),
-        },
-      );
-    } else if (turnCallType === 'chat') {
-      const postTurnDeliveries = runtime.dequeueBackgroundContinuationDeliveries(
+      )
+      : null;
+    const postTurnDeliveries = !completionSignal && turnCallType === 'chat'
+      ? runtime.dequeueBackgroundContinuationDeliveries(
         runtime.resolveSessionChannelId(message.channelId),
-      );
-      if (postTurnDeliveries.length > 0) {
-        await runtime.emitBackgroundContinuationEvent(
-          'agent.background.continuation.post_turn_delivery',
-          {
-            channelId: message.channelId,
-            deliverySessionId: runtime.resolveSessionChannelId(message.channelId),
-            deliveries: postTurnDeliveries,
-            ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.post_turn_delivery'),
-          },
-        );
-      }
-    }
-    await runtime.eventBus.emit('agent.turn.usage', {
-      message,
-      usage: turnUsage,
-      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
-    });
+      )
+      : [];
     emitObservedTurnStage('end', {
       durationMs: completedAt - startTime,
       ttftMs: firstTokenAt - startTime,
@@ -1094,6 +1056,41 @@ export async function handleMessageForTurn(
       response: agentResponse,
       ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
     });
+    if (completionSignal) {
+      await runtime.emitBackgroundContinuationEvent(
+        'agent.background.continuation.completed',
+        {
+          channelId: message.channelId,
+          continuationId: completionSignal.continuationId,
+          sourceMessageId: completionSignal.sourceMessageId,
+          deliverySessionId: completionSignal.deliverySessionId,
+          queuedForPostTurnDelivery: completionSignal.queuedForPostTurnDelivery,
+          hasDeliverableContent: completionSignal.hasDeliverableContent,
+          notifyUser: completionSignal.notifyUser,
+          notificationReason: completionSignal.notificationReason,
+          origin: completionSignal.origin,
+          urgency: completionSignal.urgency,
+          channelContext: completionSignal.channelContext,
+          completionAgeMs: completionSignal.completionAgeMs,
+          stale: completionSignal.stale,
+          taskKind: completionSignal.taskKind,
+          intent: completionSignal.intent,
+          completedAt: completionSignal.completedAt,
+          queueDepth: completionSignal.queueDepth,
+          ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.completed'),
+        },
+      );
+    } else if (postTurnDeliveries.length > 0) {
+      await runtime.emitBackgroundContinuationEvent(
+        'agent.background.continuation.post_turn_delivery',
+        {
+          channelId: message.channelId,
+          deliverySessionId: runtime.resolveSessionChannelId(message.channelId),
+          deliveries: postTurnDeliveries,
+          ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.post_turn_delivery'),
+        },
+      );
+    }
     if (inferredPostTurnActions.length > 0) {
       await runtime.eventBus.emit('agent.post_turn.actions.inferred', {
         message,
@@ -1102,6 +1099,11 @@ export async function handleMessageForTurn(
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.post_turn.actions.inferred'),
       });
     }
+    await runtime.eventBus.emit('agent.turn.usage', {
+      message,
+      usage: turnUsage,
+      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
+    });
 
     runtime.memoryExtractor?.maybeExtract(
       message.channelId,

@@ -17,6 +17,7 @@ import {
 } from '../../../config/models-config.js';
 import {
   loadSkillsConfig,
+  saveSkillsConfig,
 } from '../../../config/skills-config.js';
 import {
   loadSchedulerConfig,
@@ -24,11 +25,16 @@ import {
 } from '../../../config/scheduler-config.js';
 import {
   loadTrustPolicyConfig,
+  saveTrustPolicyConfig,
 } from '../../../config/trust-policy-config.js';
 import {
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
+import {
+  loadBackupConfig,
+  saveBackupConfig,
+} from '../../../config/backup-config.js';
 import {
   buildSettingsContractData,
   IMPORT_PROCESSING_ROUTE_MODE_VALUES,
@@ -306,6 +312,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       scheduler: loadSchedulerConfig(this.deps.config.dataDir),
       trustPolicy: loadTrustPolicyConfig(this.deps.config.dataDir),
       capabilities: loadCapabilityTierConfig(this.deps.config.dataDir),
+      backup: loadBackupConfig(this.deps.config.dataDir),
     };
   }
 
@@ -728,6 +735,91 @@ export class AdminSettingsDataService implements AdminSettingsService {
         return { ok: false, message: mutationResult.message };
       }
       return { ok: true, message: 'Settings updated' };
+    } catch (error) {
+      return { ok: false, message: toErrorMessage(error) };
+    }
+  }
+
+  private get companionDataDir(): string {
+    return this.deps.config.companionDataDir ?? this.deps.config.dataDir;
+  }
+
+  /**
+   * Returns the raw pretty-printed JSON for a named settings subsystem.
+   * Returns null when the key is unknown.
+   */
+  getSubConfigJson(key: string): string | null {
+    try {
+      switch (key) {
+        case 'settings':
+          return JSON.stringify(loadSettings(this.companionDataDir), null, 2);
+        case 'models':
+          return JSON.stringify(
+            loadModelsConfig(this.companionDataDir, { defaultContextWindow: this.deps.config.defaultContextWindow }),
+            null, 2,
+          );
+        case 'skills':
+          return JSON.stringify(loadSkillsConfig(this.companionDataDir), null, 2);
+        case 'scheduler':
+          return JSON.stringify(loadSchedulerConfig(this.companionDataDir), null, 2);
+        case 'trust-policy':
+          return JSON.stringify(loadTrustPolicyConfig(this.companionDataDir), null, 2);
+        case 'capabilities':
+          return JSON.stringify(loadCapabilityTierConfig(this.companionDataDir), null, 2);
+        case 'backup':
+          return JSON.stringify(loadBackupConfig(this.companionDataDir), null, 2);
+        default:
+          return null;
+      }
+    } catch (error) {
+      log.warn('Failed to load sub-config JSON', { key, error: toErrorMessage(error) });
+      return null;
+    }
+  }
+
+  /**
+   * Validates and saves a named settings subsystem from raw JSON.
+   * Returns a ConfigUpdateResult.
+   */
+  saveSubConfigJson(key: string, json: string): ConfigUpdateResult {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      return { ok: false, message: 'configJson must be valid JSON' };
+    }
+
+    try {
+      switch (key) {
+        case 'scheduler': {
+          const saved = saveSchedulerConfig(this.companionDataDir, parsed);
+          this.deps.config.maintenanceIntervalMs = saved.salienceDecayIntervalMs;
+          return { ok: true, message: 'scheduler.json saved' };
+        }
+        case 'capabilities': {
+          const result = applyAdminCapabilityTierMutation({
+            config: this.deps.config,
+            payload: parsed,
+          });
+          return result.ok
+            ? { ok: true, message: 'capability-tier.json saved' }
+            : { ok: false, message: result.message };
+        }
+        case 'backup': {
+          saveBackupConfig(this.companionDataDir, parsed);
+          return { ok: true, message: 'backup.json saved' };
+        }
+        case 'skills': {
+          saveSkillsConfig(this.companionDataDir, parsed);
+          return { ok: true, message: 'skills.json saved' };
+        }
+        case 'trust-policy': {
+          saveTrustPolicyConfig(this.companionDataDir, parsed);
+          return { ok: true, message: 'trust-policy.json saved' };
+        }
+        default:
+          return { ok: false, message: `Unknown settings subsystem: ${key}` };
+      }
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };
     }

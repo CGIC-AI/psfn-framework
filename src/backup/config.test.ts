@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_BACKUP_INTERVAL_MS,
-  DEFAULT_BACKUP_RETENTION_COUNT,
+  DEFAULT_BACKUP_INTERVAL_HOURS,
+  DEFAULT_BACKUP_MONTHLY_COUNT,
+  DEFAULT_BACKUP_ROTATING_COUNT,
   DEFAULT_BACKUP_VERIFY_RESTORE,
+  DEFAULT_BACKUP_WEEKLY_COUNT,
   MIN_BACKUP_INTERVAL_MS,
   MIN_BACKUP_RETENTION_COUNT,
   resolveBackupRuntimeConfig,
@@ -15,8 +17,10 @@ describe('resolveBackupRuntimeConfig', () => {
       env: {},
     });
 
-    expect(config.intervalMs).toBe(DEFAULT_BACKUP_INTERVAL_MS);
-    expect(config.retentionCount).toBe(DEFAULT_BACKUP_RETENTION_COUNT);
+    expect(config.intervalMs).toBe(DEFAULT_BACKUP_INTERVAL_HOURS * 60 * 60 * 1000);
+    expect(config.maxRotatingBackups).toBe(DEFAULT_BACKUP_ROTATING_COUNT);
+    expect(config.maxWeeklyBackups).toBe(DEFAULT_BACKUP_WEEKLY_COUNT);
+    expect(config.maxMonthlyBackups).toBe(DEFAULT_BACKUP_MONTHLY_COUNT);
     expect(config.rootDir).toBe('/tmp/psfn-backup-defaults/backups');
     expect(config.verifyRestore).toBe(DEFAULT_BACKUP_VERIFY_RESTORE);
   });
@@ -33,7 +37,7 @@ describe('resolveBackupRuntimeConfig', () => {
     });
 
     expect(config.intervalMs).toBe(MIN_BACKUP_INTERVAL_MS);
-    expect(config.retentionCount).toBe(MIN_BACKUP_RETENTION_COUNT);
+    expect(config.maxRotatingBackups).toBe(MIN_BACKUP_RETENTION_COUNT);
     expect(config.rootDir).toBe('/tmp/custom-backups');
     expect(config.verifyRestore).toBe(false);
   });

@@ -876,6 +876,41 @@ export function buildAdminApiRoutes(options: {
         });
       },
     },
+    // ── Settings subsystem raw-config editors ──
+    {
+      method: 'GET',
+      match: prefixedParamPath('/api/settings/', 'key'),
+      handle: (_req, res, params) => {
+        const raw = settingsService.getSubConfigJson(params.key);
+        if (raw === null) {
+          sendJson(res, 404, { error: `Unknown settings subsystem: ${params.key}` });
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(raw);
+      },
+    },
+    {
+      method: 'POST',
+      match: prefixedParamPath('/api/settings/', 'key'),
+      handle: (req, res, params) => {
+        withBody(req, res, (body) => {
+          const formParams = new URLSearchParams(body);
+          const configJson = formParams.get('configJson');
+          if (typeof configJson !== 'string' || configJson.trim().length === 0) {
+            sendJson(res, 400, { error: 'Missing configJson form field' });
+            return;
+          }
+          const result = settingsService.saveSubConfigJson(params.key, configJson);
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end(result.message);
+        });
+      },
+    },
     {
       method: 'GET',
       match: exactPath('/api/admin/identity'),

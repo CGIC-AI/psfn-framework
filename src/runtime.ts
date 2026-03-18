@@ -868,7 +868,7 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
-    const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
+    const heartbeatChannelId = channelsConfig.discord.heartbeatChannelId || undefined;
     this.lifecycleNotifier = new DiscordLifecycleNotifier({
       sender: this.discord,
       heartbeatChannelId,
@@ -881,6 +881,7 @@ export class SubstrateRuntime implements Lifecycle {
       const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
       writeLastActiveSession(companionDataDir, {
         sessionId,
+        channelId: message.channelId,
         channelType: inferSessionChannelType(sessionId) ?? message.channelType,
         timestamp: message.timestamp instanceof Date
           ? message.timestamp.getTime()

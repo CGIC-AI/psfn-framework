@@ -9,6 +9,7 @@ describe('loadRuntimeChannelsConfig', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       const config = loadRuntimeChannelsConfig(dataDir, {});
+      expect(config.discord.heartbeatChannelId).toBe('');
       expect(config.telegram.enabled).toBe(false);
       expect(config.telegram.token).toBe('');
       expect(config.telegram.allowedUsers).toEqual([]);
@@ -63,6 +64,23 @@ describe('loadRuntimeChannelsConfig', () => {
         port: 9091,
         path: '/hooks/telegram',
       });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads discord heartbeat channel config from file', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          heartbeatChannelId: '1312460007211536394',
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.discord.heartbeatChannelId).toBe('1312460007211536394');
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

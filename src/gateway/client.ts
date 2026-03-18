@@ -7,6 +7,7 @@ import { Worker } from 'node:worker_threads';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type {
   AgentResponse,
+  Attachment,
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
@@ -29,6 +30,7 @@ import type {
   LLMCompleteResult,
   LLMEmbedResult,
   DiscordSendResult,
+  DiscordSendMediaResult,
   WebFetchResult,
   WebFetchBinaryResult,
   WebFetchLane,
@@ -555,6 +557,13 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     }) as DiscordSendResult;
   }
 
+  async discordSendMedia(channelId: string, media: Attachment): Promise<void> {
+    await this.rpcInstance.request('discord.sendMedia', {
+      channelId,
+      media,
+    }) as DiscordSendMediaResult;
+  }
+
   async discordTyping(channelId: string): Promise<void> {
     await this.rpcInstance.request('discord.typing', { channelId });
   }
@@ -932,6 +941,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     return {
       content: response.content,
       channelId: response.channelId,
+      ...(response.attachments ? { attachments: response.attachments } : {}),
       model: response.metadata.model,
       durationMs: response.metadata.durationMs,
     } satisfies VoiceHandleMessageResult;

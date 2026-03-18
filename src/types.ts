@@ -171,6 +171,11 @@ export interface MessageRoutingMetadata {
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;
+  /** Trusted canonical contact ID hint. When set by an authenticated channel adapter,
+   *  the agent will attempt to resolve this contact directly before falling back to
+   *  channel identity resolution. Allows Garden admin chat to route to the correct
+   *  contact (with nickname etc.) regardless of API auth principal identity. */
+  canonicalContactId?: string;
 }
 
 export interface SubstrateMessage {
@@ -192,11 +197,13 @@ export interface Attachment {
   url: string;
   contentType: string;
   name: string;
+  localPath?: string;
 }
 
 export interface AgentResponse {
   content: string;
   channelId: string;
+  attachments?: Attachment[];
   metadata: ResponseMetadata;
 }
 

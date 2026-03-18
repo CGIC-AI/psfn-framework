@@ -5,9 +5,11 @@ import type { EventBus, EventMap } from '../../event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
 import { runWithRequestContext } from '../../llm/request-context.js';
 import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
 import { createComponentLogger } from '../../logger.js';
+import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';
 import {
@@ -994,6 +996,10 @@ export async function handleMessageForTurn(
       turnMessages,
       authorContext.trustLevel,
     );
+    const responseAttachments = await collectGeneratedImageAttachments({
+      turnMessages,
+      companionDataDir: resolveConfiguredCompanionDataDir(runtime.config),
+    });
 
     if (!broadcastSafetyMeta?.approvalRequired) {
       assistantSessionEntryId = runtime.recordAssistantMessage(
@@ -1019,6 +1025,7 @@ export async function handleMessageForTurn(
     const agentResponse: AgentResponse = {
       content: safeResponseText,
       channelId: message.channelId,
+      ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),
       metadata: {
         model: responseModel,
         inputTokens: turnUsage.inputTokens,

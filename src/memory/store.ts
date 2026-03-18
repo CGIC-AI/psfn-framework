@@ -8,6 +8,7 @@ import {
 } from '../persistence/sqlite-utils.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 import { createComponentLogger } from '../logger.js';
+import type { MemoryJournal } from './journal.js';
 import {
   normalizeConsentFlags,
   normalizeFormationVAD,
@@ -178,6 +179,7 @@ export interface ScratchpadAddResult {
 interface MemoryStoreOptions {
   notesDir?: string;
   scratchpadMirrorPath?: string;
+  journal?: MemoryJournal;
 }
 
 function mapMemoryDeleteVersionRow(row: MemoryDeleteVersionRow): MemoryDeleteVersion {
@@ -371,6 +373,7 @@ export class MemoryStore {
   private db: Database.Database;
   private embeddingDims: number;
   private scratchpadMirrorPath: string | null;
+  private journal: MemoryJournal | null;
 
   constructor(
     db: Database.Database,
@@ -380,6 +383,7 @@ export class MemoryStore {
     this.db = db;
     this.embeddingDims = embeddingDims;
     this.scratchpadMirrorPath = this.resolveScratchpadMirrorPath(options);
+    this.journal = options.journal ?? null;
     this.loadExtensions();
     this.createTables();
     this.migrateSchema();
@@ -624,6 +628,7 @@ export class MemoryStore {
     });
 
     transaction();
+    this.journal?.onInsert(memory);
   }
 
   runInTransaction<T>(handler: () => T): T {
@@ -892,7 +897,11 @@ export class MemoryStore {
       } satisfies MemoryDeleteVersion;
     });
 
-    return transaction();
+    const deleteVersion = transaction();
+    if (deleteVersion) {
+      this.journal?.onSoftDelete(deleteVersion);
+    }
+    return deleteVersion;
   }
 
   undoSoftDelete(
@@ -936,7 +945,11 @@ export class MemoryStore {
       } satisfies MemoryDeleteVersion;
     });
 
-    return transaction();
+    const restoreVersion = transaction();
+    if (restoreVersion) {
+      this.journal?.onRestore(restoreVersion);
+    }
+    return restoreVersion;
   }
 
   getDeleteVersion(deleteId: string): MemoryDeleteVersion | undefined {

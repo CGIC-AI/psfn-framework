@@ -496,6 +496,10 @@ export function resolveScratchpadMirrorPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'scratchpad.json');
 }
 
+export function resolveMemoryJournalPath(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'memories.jsonl');
+}
+
 export function resolveCoreMemoryPath(companionDataDir: string): string {
   return join(companionDataDir, 'core_memory.json');
 }

@@ -13,7 +13,7 @@ describe('settings contract guard', () => {
 
   it('fails closed when a schema field loses Garden exposure metadata', () => {
     const contractData = buildSettingsContractData();
-    const uiFieldExposureKeys = Object.keys(contractData.fields).filter((fieldKey) => fieldKey !== 'sessionMessageLimit');
+    const uiFieldExposureKeys = Object.keys(contractData.fields).filter((fieldKey) => fieldKey !== 'sessionHistoryBudgetPct');
 
     const result = verifySettingsContractGuard({
       contractData,
@@ -21,13 +21,13 @@ describe('settings contract guard', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.errors).toContain('Field "sessionMessageLimit" is missing Garden UI exposure metadata.');
+    expect(result.errors).toContain('Field "sessionHistoryBudgetPct" is missing Garden UI exposure metadata.');
   });
 
   it('fails closed when an advanced Garden field drifts to a non-runtime owner', () => {
     const contractData = buildSettingsContractData();
-    contractData.fields.sessionMessageLimit = {
-      ...contractData.fields.sessionMessageLimit,
+    contractData.fields.sessionHistoryBudgetPct = {
+      ...contractData.fields.sessionHistoryBudgetPct,
       ownerSubsystem: 'scheduler',
       ownerFile: contractData.subsystems.scheduler.ownerFile,
     };
@@ -36,7 +36,7 @@ describe('settings contract guard', () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors).toContain(
-      'Advanced field "sessionMessageLimit" must remain runtime-owned because Garden advanced editors read from runtime config.',
+      'Advanced field "sessionHistoryBudgetPct" must remain runtime-owned because Garden advanced editors read from runtime config.',
     );
   });
 });

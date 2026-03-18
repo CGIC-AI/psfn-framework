@@ -156,8 +156,6 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'extractionMaxTokens',
   'sessionHistoryBudgetPct',
   'memoryRetrievalBudgetPct',
-  'sessionMessageLimit',
-  'memoryRetrievalLimit',
   'extractionInterval',
   'maintenanceIntervalMs',
   'extractionThresholdPct',

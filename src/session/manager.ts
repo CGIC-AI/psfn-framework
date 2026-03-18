@@ -35,8 +35,8 @@ import {
   type ContextBudgetTurnCharacteristics,
 } from '../context-budget.js';
 import {
+  collectRecentEntriesWithinTokenBudget,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
-  trimRecentEntriesToTokenBudget,
   type SessionMessageRecordOptions,
 } from './manager-primitives.js';
 import {
@@ -692,13 +692,12 @@ export class SessionManager {
           ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
           adaptiveProfile,
         });
-        let recent = this.compactionBoundaryStore.getRecent(
-          resolvedChannelId,
-          historyBudget.estimatedCount,
-        );
-        if (historyBudget.mode === 'budget') {
-          recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
-        }
+        let recent = collectRecentEntriesWithinTokenBudget({
+          store: this.compactionBoundaryStore,
+          channelId: resolvedChannelId,
+          estimatedCount: historyBudget.estimatedCount,
+          tokenBudget: historyBudget.tokenBudget,
+        }).entries;
         recent = applyFocusCompactionRanges(
           recent,
           this.getFocusCompactionRanges(resolvedChannelId),
@@ -883,10 +882,12 @@ export class SessionManager {
       ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
       adaptiveProfile,
     });
-    let recent = this.compactionBoundaryStore.getRecent(resolvedChannelId, historyBudget.estimatedCount);
-    if (historyBudget.mode === 'budget') {
-      recent = trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
-    }
+    let recent = collectRecentEntriesWithinTokenBudget({
+      store: this.compactionBoundaryStore,
+      channelId: resolvedChannelId,
+      estimatedCount: historyBudget.estimatedCount,
+      tokenBudget: historyBudget.tokenBudget,
+    }).entries;
     const focusCompaction = applyFocusCompactionRanges(
       recent,
       this.getFocusCompactionRanges(resolvedChannelId),
@@ -1019,11 +1020,12 @@ export class SessionManager {
     }
 
     const historyBudget = resolveSessionHistoryBudget(this.config);
-    const recent = this.store.getRecent(resolvedChannelId, historyBudget.estimatedCount);
-    if (historyBudget.mode === 'hard_limit') {
-      return recent;
-    }
-    return trimRecentEntriesToTokenBudget(recent, historyBudget.tokenBudget);
+    return collectRecentEntriesWithinTokenBudget({
+      store: this.store,
+      channelId: resolvedChannelId,
+      estimatedCount: historyBudget.estimatedCount,
+      tokenBudget: historyBudget.tokenBudget,
+    }).entries;
   }
 
   getMessageCount(channelId: string): number {

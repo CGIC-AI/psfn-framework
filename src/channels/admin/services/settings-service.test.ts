@@ -197,6 +197,8 @@ describe('AdminSettingsDataService', () => {
     const result = service.updateSettings(JSON.stringify({
       memoryBudgetPct: 24,
       defaultContextWindow: 196_000,
+      sessionMessageLimit: 44,
+      memoryRetrievalLimit: 12,
       discordEnabled: true,
       discordHeartbeatChannel: '1234567890',
     }));
@@ -204,6 +206,8 @@ describe('AdminSettingsDataService', () => {
     expect(result.ok).toBe(false);
     expect(result.message).toContain('memoryBudgetPct has been removed');
     expect(result.message).toContain('defaultContextWindow has been removed');
+    expect(result.message).toContain('sessionMessageLimit has been removed');
+    expect(result.message).toContain('memoryRetrievalLimit has been removed');
     expect(result.message).toContain('discordEnabled has been removed');
     expect(result.message).toContain('discordHeartbeatChannel has been removed');
     expect(result.validationErrors).toEqual(expect.arrayContaining([
@@ -213,6 +217,14 @@ describe('AdminSettingsDataService', () => {
       }),
       expect.objectContaining({
         field: 'defaultContextWindow',
+        code: 'removed_field',
+      }),
+      expect.objectContaining({
+        field: 'sessionMessageLimit',
+        code: 'removed_field',
+      }),
+      expect.objectContaining({
+        field: 'memoryRetrievalLimit',
         code: 'removed_field',
       }),
       expect.objectContaining({

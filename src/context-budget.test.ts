@@ -34,24 +34,22 @@ describe('context-budget', () => {
     expect(budget.estimatedCount).toBe(Math.floor(20_000 / 256));
   });
 
-  it('uses hard overrides when session/message limits are provided', () => {
+  it('derives message and memory estimates directly from the token budget', () => {
     const sessionBudget = resolveSessionHistoryBudget({
-      defaultContextWindow: 128_000,
+      defaultContextWindow: 1_000_000,
       modelRoster: {},
-      sessionHistoryBudgetPct: 6,
-      sessionMessageLimit: 42,
+      sessionHistoryBudgetPct: 50,
     });
     const retrievalBudget = resolveMemoryRetrievalBudget({
-      defaultContextWindow: 128_000,
+      defaultContextWindow: 1_000_000,
       modelRoster: {},
-      memoryRetrievalBudgetPct: 2,
-      memoryRetrievalLimit: 11,
+      memoryRetrievalBudgetPct: 50,
     });
 
-    expect(sessionBudget.mode).toBe('hard_limit');
-    expect(sessionBudget.estimatedCount).toBe(42);
-    expect(retrievalBudget.mode).toBe('hard_limit');
-    expect(retrievalBudget.estimatedCount).toBe(11);
+    expect(sessionBudget.mode).toBe('budget');
+    expect(sessionBudget.estimatedCount).toBe(Math.floor(500_000 / 256));
+    expect(retrievalBudget.mode).toBe('budget');
+    expect(retrievalBudget.estimatedCount).toBe(Math.floor(500_000 / 170));
   });
 
   it('enforces minimum token floors for small context windows', () => {

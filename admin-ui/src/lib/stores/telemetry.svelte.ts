@@ -1,69 +1,45 @@
 import type { TelemetryEvent } from '$lib/types';
-import { ReconnectingWebSocket } from '$lib/api/websocket';
-
-const MAX_EVENTS = 500;
-
-let events = $state<TelemetryEvent[]>([]);
-let connected = $state(false);
-let paused = $state(false);
-let ws: ReconnectingWebSocket | null = null;
-let pollInterval: ReturnType<typeof setInterval> | null = null;
+import {
+  clearGardenEventBus,
+  connectGardenEventBus,
+  disconnectGardenEventBus,
+  getTelemetryEvents,
+  isGardenEventBusConnected,
+  isGardenEventBusPaused,
+  pauseGardenEventBus,
+  resumeGardenEventBus,
+} from '$lib/events/garden-event-bus.svelte';
 
 export function getEvents(): TelemetryEvent[] {
-  return events;
+  return getTelemetryEvents();
 }
 
 export function isConnected(): boolean {
-  return connected;
+  return isGardenEventBusConnected();
 }
 
 export function isPaused(): boolean {
-  return paused;
+  return isGardenEventBusPaused();
 }
 
 export function startTelemetry(): void {
-  if (ws) return;
-  ws = new ReconnectingWebSocket('/api/admin/events');
-
-  ws.onMessage((evt) => {
-    if (paused) return;
-    try {
-      const parsed = JSON.parse(evt.data) as TelemetryEvent;
-      events = [...events, parsed].slice(-MAX_EVENTS);
-    } catch {
-      // ignore non-JSON messages
-    }
-  });
-
-  // Poll connected state from the WebSocket wrapper
-  pollInterval = setInterval(() => {
-    connected = ws?.connected ?? false;
-  }, 1000);
-
-  ws.connect();
-  connected = ws.connected;
+  connectGardenEventBus();
 }
 
 export function stopTelemetry(): void {
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
-  }
-  ws?.close();
-  ws = null;
-  connected = false;
+  disconnectGardenEventBus();
 }
 
 export function clearEvents(): void {
-  events = [];
+  clearGardenEventBus();
 }
 
 export function pauseTelemetry(): void {
-  paused = true;
+  pauseGardenEventBus();
 }
 
 export function resumeTelemetry(): void {
-  paused = false;
+  resumeGardenEventBus();
 }
 
 /** Alias for startTelemetry */
@@ -77,5 +53,5 @@ export function disconnectTelemetry(): void {
 }
 
 export function filterEvents(prefix: string): TelemetryEvent[] {
-  return events.filter(e => e.type.startsWith(prefix));
+  return getEvents().filter(event => event.type.startsWith(prefix));
 }

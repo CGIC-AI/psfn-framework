@@ -1,3 +1,8 @@
+import {
+  deriveToolObservationContextShape,
+  type ToolObservationContextDisplayMode,
+} from './tool-observation-context.js';
+
 interface SessionMetadataEnvelope {
   toolObservation?: unknown;
   [key: string]: unknown;
@@ -17,6 +22,8 @@ export interface ToolObservationMetadata {
   isError?: boolean;
   truncated: boolean;
   originalCharLength: number;
+  contextSummary?: string;
+  contextDisplayMode?: ToolObservationContextDisplayMode;
 }
 
 export interface NormalizedToolObservation {
@@ -75,6 +82,17 @@ function parseOptionalBooleanField(value: unknown, fieldName: string): boolean |
   return value;
 }
 
+function parseOptionalContextDisplayModeField(
+  value: unknown,
+  fieldName: string,
+): ToolObservationContextDisplayMode | undefined {
+  if (value === undefined) return undefined;
+  if (value !== 'full' && value !== 'summary') {
+    throw new Error(`Tool observation field "${fieldName}" must be "full" or "summary"`);
+  }
+  return value;
+}
+
 function parseRequiredBooleanField(value: unknown, fieldName: string): boolean {
   if (typeof value !== 'boolean') {
     throw new Error(`Tool observation field "${fieldName}" must be a boolean`);
@@ -119,6 +137,7 @@ export function normalizeToolObservation(input: ToolObservationInput): Normalize
 
   const toolCallId = input.toolCallId?.trim();
   const normalizedContent = truncateToolObservationContent(input.content);
+  const contextShape = deriveToolObservationContextShape(input.content);
   return {
     content: normalizedContent.content,
     metadata: {
@@ -128,6 +147,8 @@ export function normalizeToolObservation(input: ToolObservationInput): Normalize
       ...(input.isError !== undefined ? { isError: input.isError } : {}),
       truncated: normalizedContent.truncated,
       originalCharLength: normalizedContent.originalCharLength,
+      contextSummary: contextShape.summary,
+      contextDisplayMode: contextShape.displayMode,
     },
   };
 }
@@ -170,6 +191,14 @@ export function parseToolObservationMetadata(metadata: string | undefined): Tool
     toolObservation.originalCharLength,
     'toolObservation.originalCharLength',
   );
+  const contextSummary = parseOptionalStringField(
+    toolObservation.contextSummary,
+    'toolObservation.contextSummary',
+  );
+  const contextDisplayMode = parseOptionalContextDisplayModeField(
+    toolObservation.contextDisplayMode,
+    'toolObservation.contextDisplayMode',
+  );
 
   return {
     schemaVersion: TOOL_OBSERVATION_SCHEMA_VERSION,
@@ -178,6 +207,8 @@ export function parseToolObservationMetadata(metadata: string | undefined): Tool
     ...(isError !== undefined ? { isError } : {}),
     truncated,
     originalCharLength,
+    ...(contextSummary ? { contextSummary } : {}),
+    ...(contextDisplayMode ? { contextDisplayMode } : {}),
   };
 }
 
@@ -186,8 +217,15 @@ export function formatToolObservationForContext(
   metadata: ToolObservationMetadata,
 ): string {
   const errorSuffix = metadata.isError ? ' (error)' : '';
+  const contextText = metadata.contextSummary?.trim();
   if (content === MASKED_TOOL_OBSERVATION_CONTENT) {
+    if (contextText) {
+      return `[Tool result: ${metadata.toolName}${errorSuffix}] ${contextText}`;
+    }
     return `[Tool result: ${metadata.toolName}${errorSuffix} — see earlier context]`;
+  }
+  if (metadata.contextDisplayMode === 'summary' && contextText) {
+    return `[Tool result: ${metadata.toolName}${errorSuffix}] ${contextText}`;
   }
   return `[Tool result: ${metadata.toolName}${errorSuffix}] ${content}`;
 }

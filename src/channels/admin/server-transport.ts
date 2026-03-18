@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { sendText } from '../http/primitives.js';
-import { GARDEN_PREFIX } from './server-request-routing.js';
+
 
 const STATIC_CACHE_CONTROL = 'public, max-age=86400';
 const MODULE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
@@ -105,11 +105,8 @@ export class AdminServerTransport {
       return;
     }
 
-    // Strip /garden prefix; bare /garden serves index.html
-    let filePath = path === GARDEN_PREFIX ? '/' : path.slice(GARDEN_PREFIX.length);
-    if (filePath === '' || filePath === '/') {
-      filePath = '/index.html';
-    }
+    // Use path directly; unknown paths fall back to index.html as SPA shell.
+    let filePath = path === '' || path === '/' ? '/index.html' : path;
 
     // Normalize and resolve within the build directory
     const normalizedPath = normalize(filePath);
@@ -191,12 +188,12 @@ export class AdminServerTransport {
     const projectRoot = resolve(import.meta.dirname, '..', '..', '..');
     const buildDir = join(projectRoot, 'admin-ui', 'build');
     if (!existsSync(buildDir)) {
-      this.log.warn('admin-ui/build not found; /garden/* route disabled. Run "cd admin-ui && npm run build" to enable.');
+      this.log.warn('admin-ui/build not found; Garden UI route disabled. Run "cd admin-ui && npm run build" to enable.');
       return;
     }
     const indexPath = join(buildDir, 'index.html');
     if (!existsSync(indexPath)) {
-      this.log.warn('admin-ui/build/index.html not found; /garden/* route disabled');
+      this.log.warn('admin-ui/build/index.html not found; Garden UI route disabled');
       return;
     }
     this.gardenBuildDir = buildDir;

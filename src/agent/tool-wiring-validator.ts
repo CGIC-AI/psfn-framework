@@ -169,6 +169,7 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
   issue_sync: Object.freeze(['beads.sync']),
   image_create: Object.freeze(['image.create']),
   image_edit: Object.freeze(['image.edit']),
+  image_analyze: Object.freeze(['web.fetch_binary']),
 });
 
 // ── Validation Types ──
@@ -238,6 +239,7 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'discord.send': 'discordSend',
   'discord.typing': 'discordTyping',
   'web.fetch': 'webFetch',
+  'web.fetch_binary': 'webFetchBinary',
   'shell.exec': 'shellExec',
   'fs.read': 'fsRead',
   'fs.write': 'fsWrite',

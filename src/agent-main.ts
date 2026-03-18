@@ -50,6 +50,7 @@ import { registerFilesystemTools } from './filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from './filesystem/gateway-ops.js';
 import { registerImageTools } from './images/runtime-wiring.js';
 import { GatewayImageOps } from './images/gateway-ops.js';
+import { DefaultImageVisionReviewer } from './images/vision-reviewer.js';
 import {
   DiscordLifecycleNotifier,
   writeLastActiveSession,
@@ -502,7 +503,12 @@ async function main(): Promise<void> {
     repoRoot: process.cwd(),
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
-  registerImageTools(agentLoop, new GatewayImageOps(gateway), { gatewayMode: true });
+  registerImageTools(agentLoop, new GatewayImageOps(gateway), {
+    gatewayMode: true,
+    reviewer: new DefaultImageVisionReviewer(config, {
+      binaryFetcher: gateway.webFetchBinary.bind(gateway),
+    }),
+  });
 
   // Prompt stack — layered, editable system prompt
   const promptStore = wirePromptRuntime(agentLoop, companionDataDir, composeSystemPromptTemplate(), {

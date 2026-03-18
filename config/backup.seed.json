@@ -1,0 +1,8 @@
+{
+  "intervalHours": 12,
+  "maxRotatingBackups": 9,
+  "maxWeeklyBackups": 2,
+  "maxMonthlyBackups": 1,
+  "mirrorDir": "/mnt/ai/psfn-bak",
+  "verifyRestore": true
+}

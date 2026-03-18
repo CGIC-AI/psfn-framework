@@ -720,12 +720,16 @@ export class SubstrateRuntime implements Lifecycle {
       db: this.db,
       databasePath: this.config.databasePath,
       sessionsDir,
+      memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
       config: backupConfig,
     });
     log.info('Scheduled backups enabled', {
       intervalMs: backupConfig.intervalMs,
-      retentionCount: backupConfig.retentionCount,
+      maxRotatingBackups: backupConfig.maxRotatingBackups,
+      maxWeeklyBackups: backupConfig.maxWeeklyBackups,
+      maxMonthlyBackups: backupConfig.maxMonthlyBackups,
       backupRootDir: backupConfig.rootDir,
+      mirrorDir: backupConfig.mirrorDir || '(none)',
       verifyRestore: backupConfig.verifyRestore,
     });
     this.scheduler.registerHeartbeat(async () => {

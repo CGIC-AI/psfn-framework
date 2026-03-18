@@ -97,6 +97,7 @@
     scheduler: '',
     'trust-policy': '',
     capabilities: '',
+    backup: '',
   });
 
   function computeSnapshot(): string {
@@ -238,6 +239,7 @@
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
   let capabilitiesJson = $state('');
+  let backupJson = $state('');
   let settingsJson = $state('');
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
   let validationErrorsByField = $state<Record<string, string[]>>({});
@@ -921,6 +923,7 @@
       case 'scheduler': return schedulerJson;
       case 'trust-policy': return trustPolicyJson;
       case 'capabilities': return capabilitiesJson;
+      case 'backup': return backupJson;
       default: return '';
     }
   }
@@ -932,6 +935,7 @@
       case 'scheduler': schedulerJson = val; break;
       case 'trust-policy': trustPolicyJson = val; break;
       case 'capabilities': capabilitiesJson = val; break;
+      case 'backup': backupJson = val; break;
     }
   }
 
@@ -943,6 +947,7 @@
       scheduler: schedulerJson,
       'trust-policy': trustPolicyJson,
       capabilities: capabilitiesJson,
+      backup: backupJson,
     };
   }
 
@@ -1099,16 +1104,18 @@
     populateSimpleFields(nextSettingsData);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
-    const [skConf, schConf, tpConf, capConf] = await Promise.all([
+    const [skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
       getSubConfig('skills').catch(() => '{}'),
       getSubConfig('scheduler').catch(() => '{}'),
       getSubConfig('trust-policy').catch(() => '{}'),
       getSubConfig('capabilities').catch(() => '{}'),
+      getSubConfig('backup').catch(() => '{}'),
     ]);
     skillsJson = tryPrettyPrint(skConf);
     schedulerJson = tryPrettyPrint(schConf);
     trustPolicyJson = tryPrettyPrint(tpConf);
     capabilitiesJson = tryPrettyPrint(capConf);
+    backupJson = tryPrettyPrint(bakConf);
     resetDirtyTracking();
   }
 
@@ -1278,16 +1285,18 @@
       populateSimpleFields(data);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
-      const [skConf, schConf, tpConf, capConf] = await Promise.all([
+      const [skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
         getSubConfig('skills').catch(() => '{}'),
         getSubConfig('scheduler').catch(() => '{}'),
         getSubConfig('trust-policy').catch(() => '{}'),
         getSubConfig('capabilities').catch(() => '{}'),
+        getSubConfig('backup').catch(() => '{}'),
       ]);
       skillsJson = tryPrettyPrint(skConf);
       schedulerJson = tryPrettyPrint(schConf);
       trustPolicyJson = tryPrettyPrint(tpConf);
       capabilitiesJson = tryPrettyPrint(capConf);
+      backupJson = tryPrettyPrint(bakConf);
       resetDirtyTracking();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load settings';

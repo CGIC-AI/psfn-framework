@@ -601,12 +601,17 @@ async function main(): Promise<void> {
     db,
     databasePath: config.databasePath,
     sessionsDir,
+    memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
     config: backupConfig,
   });
   log.info('Scheduled backups enabled', {
     intervalMs: backupConfig.intervalMs,
-    retentionCount: backupConfig.retentionCount,
+    maxRotatingBackups: backupConfig.maxRotatingBackups,
+    maxWeeklyBackups: backupConfig.maxWeeklyBackups,
+    maxMonthlyBackups: backupConfig.maxMonthlyBackups,
     backupRootDir: backupConfig.rootDir,
+    mirrorDir: backupConfig.mirrorDir || '(none)',
+    verifyRestore: backupConfig.verifyRestore,
   });
   scheduler.registerHeartbeat(async () => {
     const now = Date.now();

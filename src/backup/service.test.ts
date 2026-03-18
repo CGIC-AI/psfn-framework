@@ -96,7 +96,9 @@ describe('runBackupCycle', () => {
       databasePath,
       sessionsDir,
       backupRootDir,
-      retentionCount: 2,
+      maxRotatingBackups: 2,
+      maxWeeklyBackups: 0,
+      maxMonthlyBackups: 0,
       now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
     });
 
@@ -123,7 +125,9 @@ describe('runBackupCycle', () => {
         databasePath,
         sessionsDir,
         backupRootDir,
-        retentionCount: 7,
+        maxRotatingBackups: 7,
+        maxWeeklyBackups: 0,
+        maxMonthlyBackups: 0,
         verifyRestore: true,
         now: () => Date.UTC(2026, 1, 27, 10, 11, 12, 123),
       });
@@ -198,8 +202,11 @@ describe('registerScheduledBackupTask', () => {
       sessionsDir,
       config: {
         intervalMs: 60_000,
-        retentionCount: 7,
+        maxRotatingBackups: 7,
+        maxWeeklyBackups: 0,
+        maxMonthlyBackups: 0,
         rootDir: backupRootDir,
+        mirrorDir: '',
         verifyRestore: false,
       },
       skipFirstRun: false,

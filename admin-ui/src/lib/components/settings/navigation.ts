@@ -101,6 +101,12 @@ export const SETTINGS_SIMPLE_SECTIONS = [
     groupId: 'advanced',
   },
   {
+    id: 'advanced-backup',
+    title: 'Memory Backup',
+    description: 'Backup schedule, rotation, and mirror settings',
+    groupId: 'advanced',
+  },
+  {
     id: 'advanced-secrets',
     title: 'Secrets Snapshot',
     description: 'Read-only runtime environment values',

@@ -628,7 +628,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     );
   });
 
-  it('returns empty string when all memories are filtered out by trust', async () => {
+  it('returns an abstract withheld-memory note when all memories are filtered out by trust', async () => {
     const memories = [
       makeMemory({ text: 'Secret stuff', sensitivity: 'confidential', similarity: 0.95 }),
       makeMemory({ text: 'Private detail', sensitivity: 'intimate', similarity: 0.90 }),
@@ -640,7 +640,11 @@ describe('MemoryRetriever trust-gated filtering', () => {
     // public trust + broadcast = only public allowed, none present
     const result = await retriever.retrieve('test query', 'twitter:feed', 'public');
 
-    expect(result).toBe('');
+    expect(result).toContain('Memory access note:');
+    expect(result).toContain('2 candidate memories were withheld');
+    expect(result).toContain('trust ceiling');
+    expect(result).not.toContain('Secret stuff');
+    expect(result).not.toContain('Private detail');
   });
 
   it('does not update access stats for filtered-out memories', async () => {

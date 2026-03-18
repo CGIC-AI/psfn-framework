@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
+import type { AdaptiveToolSnapshotTelemetry } from '../agent/adaptive-tools-telemetry.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { MemoryWithheldSummary } from '../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../memory/store.js';
 import type { PurrMemory } from '../memory/types.js';
 import type { SessionEntry } from '../session/types.js';
-import type { ContextMessage, TurnID } from '../types.js';
+import type { ContextMessage, ToolSchema, TurnID } from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
 
 export interface TurnPromptSnapshot {
@@ -48,6 +49,11 @@ export interface TurnPromptContextSnapshot {
   messages: ContextMessage[];
 }
 
+export interface TurnToolContextSnapshot {
+  activeTools: ToolSchema[];
+  adaptiveSnapshot?: AdaptiveToolSnapshotTelemetry;
+}
+
 export interface TurnSnapshot {
   turnId: TurnID;
   requestId: string;
@@ -57,6 +63,7 @@ export interface TurnSnapshot {
   canonicalContactKey?: string;
   prompt?: TurnPromptSnapshot;
   promptContext?: TurnPromptContextSnapshot;
+  toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshot;
   memory?: TurnMemorySnapshot;
 }
@@ -88,6 +95,42 @@ export function cloneEmotionalSnapshot(snapshot: EmotionalSnapshot): EmotionalSn
 
 export function cloneContextMessage(message: ContextMessage): ContextMessage {
   return { ...message };
+}
+
+function cloneUnknownSchemaValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map(item => cloneUnknownSchemaValue(item)) as T;
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  const cloned: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    cloned[key] = cloneUnknownSchemaValue(item);
+  }
+  return cloned as T;
+}
+
+export function cloneToolSchema(tool: ToolSchema): ToolSchema {
+  return {
+    ...tool,
+    inputSchema: cloneUnknownSchemaValue(tool.inputSchema),
+  };
+}
+
+export function cloneAdaptiveToolSnapshotTelemetry(
+  snapshot: AdaptiveToolSnapshotTelemetry | null | undefined,
+): AdaptiveToolSnapshotTelemetry | null {
+  if (!snapshot) return null;
+  return {
+    ...snapshot,
+    tools: snapshot.tools.map(tool => ({ ...tool })),
+    skipped: snapshot.skipped.map(skip => ({
+      ...skip,
+      ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
+    })),
+    counts: { ...snapshot.counts },
+  };
 }
 
 export function cloneMemory<T extends PurrMemory>(memory: T): T {

@@ -5,6 +5,7 @@
   import PromptMonitorMessageList from '$lib/components/prompt-monitor/PromptMonitorMessageList.svelte';
   import PromptMonitorSessionEntryList from '$lib/components/prompt-monitor/PromptMonitorSessionEntryList.svelte';
   import PromptMonitorTextBlock from '$lib/components/prompt-monitor/PromptMonitorTextBlock.svelte';
+  import PromptMonitorToolList from '$lib/components/prompt-monitor/PromptMonitorToolList.svelte';
   import {
     connectGardenEventBus,
     disconnectGardenEventBus,
@@ -554,6 +555,49 @@
                     title="Model Context Messages"
                     messages={selectedTurn.snapshot?.promptContext?.messages ?? []}
                   />
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <PromptMonitorToolList
+                    title="Active Tool Schemas"
+                    tools={selectedTurn.snapshot?.toolContext?.activeTools ?? []}
+                  />
+
+                  <div class="rounded-xl border border-bark-200 bg-white p-4">
+                    <h3 class="font-medium text-shadow-900">Adaptive Tool State</h3>
+                    <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p class="text-shadow-600">Task Kind</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.taskKind ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Intent</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.intent ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Active Tools</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.counts?.total ?? selectedTurn.snapshot?.toolContext?.activeTools?.length ?? 0}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Skipped Tools</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.skipped?.length ?? 0}</p>
+                      </div>
+                    </div>
+                    <div class="mt-4 space-y-3">
+                      <PromptMonitorTextBlock
+                        title="Adaptive Active Tool Sources"
+                        value={formatJson(selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.tools)}
+                        emptyText="No adaptive tool activation snapshot recorded."
+                        maxHeightClass="max-h-56"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Adaptive Skips"
+                        value={formatJson(selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.skipped)}
+                        emptyText="No adaptive tool skips recorded."
+                        maxHeightClass="max-h-56"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">

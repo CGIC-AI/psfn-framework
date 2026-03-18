@@ -75,6 +75,7 @@ function createRuntime(params: {
 }) {
   const agentState = {
     messages: [] as any[],
+    tools: [] as any[],
     model: { id: 'test-model' },
   };
   const emotionSelfModelRuntime = {
@@ -112,6 +113,9 @@ function createRuntime(params: {
       setSystemPrompt: vi.fn(),
       replaceMessages: vi.fn((messages: any[]) => {
         agentState.messages = [...messages];
+      }),
+      setTools: vi.fn((tools: any[]) => {
+        agentState.tools = [...tools];
       }),
       prompt: vi.fn(async (message: { content: string }) => {
         agentState.messages.push({ role: 'user', content: message.content });
@@ -175,6 +179,17 @@ function createRuntime(params: {
     getPersonaAdaptation: vi.fn(() => null),
     resolveContextWindow: vi.fn(() => 4096),
     preloadExtendedToolsForTurn: vi.fn(() => ({ intent: null })),
+    getAdaptiveToolRuntimeState: vi.fn(() => ({
+      generatedAt: Date.now(),
+      coreTools: [],
+      extendedTools: [],
+      promotedToolsConfigured: [],
+      promotedToolsActive: [],
+      promotedToolsSkipped: [],
+      loadedExtendedTools: [],
+      activeTools: [],
+      lastSnapshot: null,
+    })),
     applyActiveToolsToAgentForTurn: vi.fn(),
     setActiveTurnContext: vi.fn(),
     clearActiveTurnContext: vi.fn(),
@@ -360,12 +375,58 @@ describe('handleMessageForTurn compaction scheduling', () => {
     runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
+    (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      runtime.agent.setTools?.([
+        {
+          name: 'contact_lookup',
+          description: 'Look up a contact.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+            },
+            required: ['query'],
+          },
+        },
+      ]);
+    });
+    (runtime.getAdaptiveToolRuntimeState as ReturnType<typeof vi.fn>).mockReturnValue({
+      generatedAt: 1_700_000_000_000,
+      coreTools: ['contact_lookup'],
+      extendedTools: ['notify_operator'],
+      promotedToolsConfigured: [],
+      promotedToolsActive: [],
+      promotedToolsSkipped: [],
+      loadedExtendedTools: [],
+      activeTools: [{ toolName: 'contact_lookup', source: 'core' }],
+      lastSnapshot: {
+        timestamp: 1_700_000_000_001,
+        turnId: 'turn-1',
+        requestId: 'msg-full-context',
+        channelId: 'ch1',
+        callType: 'chat',
+        purpose: 'agent.tools.adaptive.snapshot',
+        tools: [{ toolName: 'contact_lookup', source: 'core' }],
+        skipped: [{ toolName: 'notify_operator', source: 'autoload', reason: 'not_needed_for_turn' }],
+        counts: {
+          core: 1,
+          promoted: 0,
+          extendedLoaded: 0,
+          autoload: 0,
+          deferred: 0,
+          total: 1,
+        },
+        taskKind: null,
+        intent: 'chat',
+      },
+    });
 
     await handleMessageForTurn(runtime, createMessage('msg-full-context'));
 
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const toolContext = recordedInput.turnSnapshot?.toolContext as Record<string, unknown> | undefined;
     expect(promptContext).toMatchObject({
       renderedStaticPrefix: 'Rendered static prefix',
       renderedDynamicSuffix: 'Dynamic suffix template\n\nPersona hint',
@@ -380,11 +441,26 @@ describe('handleMessageForTurn compaction scheduling', () => {
       { role: 'user', content: 'Earlier user message' },
       { role: 'assistant', content: 'Earlier assistant reply' },
     ]);
+    expect(toolContext).toMatchObject({
+      activeTools: [
+        {
+          name: 'contact_lookup',
+          description: 'Look up a contact.',
+        },
+      ],
+      adaptiveSnapshot: {
+        tools: [{ toolName: 'contact_lookup', source: 'core' }],
+        skipped: [{ toolName: 'notify_operator', reason: 'not_needed_for_turn' }],
+      },
+    });
 
-    expect(emittedSnapshots).toHaveLength(2);
+    expect(emittedSnapshots).toHaveLength(3);
     expect(emittedSnapshots.at(-1)?.promptContext).toMatchObject({
       finalSystemPrompt: 'Final system prompt',
       runtimeContext: 'Runtime context block',
+    });
+    expect(emittedSnapshots.at(-1)?.toolContext).toMatchObject({
+      activeTools: [{ name: 'contact_lookup' }],
     });
   });
 });

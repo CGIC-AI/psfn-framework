@@ -114,6 +114,40 @@ function buildTurn(seed: {
           { role: 'assistant', content: 'world' },
         ],
       },
+      toolContext: {
+        activeTools: [
+          {
+            name: 'contact_lookup',
+            description: 'Look up a contact.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string' },
+              },
+            },
+          },
+        ],
+        adaptiveSnapshot: {
+          timestamp: seed.completedAt - 40,
+          turnId: seed.turnId,
+          requestId: seed.turnId,
+          channelId: seed.channelId,
+          callType: 'chat',
+          purpose: 'agent.tools.adaptive.snapshot',
+          tools: [{ toolName: 'contact_lookup', source: 'core' }],
+          skipped: [],
+          counts: {
+            core: 1,
+            promoted: 0,
+            extendedLoaded: 0,
+            autoload: 0,
+            deferred: 0,
+            total: 1,
+          },
+          taskKind: null,
+          intent: 'chat',
+        },
+      },
     },
   };
 }
@@ -203,6 +237,38 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
             { role: 'assistant', content: 'reply' },
           ],
         },
+        toolContext: {
+          activeTools: [
+            {
+              name: 'session_list',
+              description: 'List sessions.',
+              inputSchema: {
+                type: 'object',
+                properties: {},
+              },
+            },
+          ],
+          adaptiveSnapshot: {
+            timestamp: 3_060,
+            turnId: 'turn-live',
+            requestId: 'turn-live',
+            channelId: 'api:monitor',
+            callType: 'chat',
+            purpose: 'agent.tools.adaptive.snapshot',
+            tools: [{ toolName: 'session_list', source: 'core' }],
+            skipped: [{ toolName: 'notify_operator', source: 'autoload', reason: 'not_needed_for_turn' }],
+            counts: {
+              core: 1,
+              promoted: 0,
+              extendedLoaded: 0,
+              autoload: 0,
+              deferred: 0,
+              total: 1,
+            },
+            taskKind: null,
+            intent: 'chat',
+          },
+        },
       },
     },
   });
@@ -240,6 +306,16 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
   assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.messages, [
     { role: 'user', content: 'earlier' },
     { role: 'assistant', content: 'reply' },
+  ]);
+  assert.deepEqual(mergedStages[0]?.snapshot?.toolContext?.activeTools, [
+    {
+      name: 'session_list',
+      description: 'List sessions.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
   ]);
 });
 

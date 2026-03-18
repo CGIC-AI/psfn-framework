@@ -264,6 +264,52 @@ export interface AdminTurnPromptContextSnapshotData {
   messages: AdminTurnPromptContextMessage[];
 }
 
+export interface AdminTurnToolSchema {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface AdminAdaptiveToolSnapshotTool {
+  toolName: string;
+  source: string;
+}
+
+export interface AdminAdaptiveToolSnapshotSkip {
+  toolName: string;
+  source: string;
+  reason: string;
+  missingTokens?: string[];
+}
+
+export interface AdminAdaptiveToolSnapshotCounts {
+  core: number;
+  promoted: number;
+  extendedLoaded: number;
+  autoload: number;
+  deferred: number;
+  total: number;
+}
+
+export interface AdminAdaptiveToolSnapshotData {
+  timestamp: number;
+  tools: AdminAdaptiveToolSnapshotTool[];
+  skipped: AdminAdaptiveToolSnapshotSkip[];
+  counts: AdminAdaptiveToolSnapshotCounts;
+  taskKind?: string | null;
+  intent?: string | null;
+  turnId?: string;
+  requestId?: string;
+  channelId?: string;
+  callType?: string;
+  purpose?: string;
+}
+
+export interface AdminTurnToolContextSnapshotData {
+  activeTools: AdminTurnToolSchema[];
+  adaptiveSnapshot?: AdminAdaptiveToolSnapshotData;
+}
+
 export interface AdminTurnSessionContextSnapshotData {
   channelId: string;
   recentEntries: SessionEntry[];
@@ -295,6 +341,7 @@ export interface AdminTurnSnapshotData {
   canonicalContactKey?: string;
   prompt?: AdminTurnPromptSnapshotData;
   promptContext?: AdminTurnPromptContextSnapshotData;
+  toolContext?: AdminTurnToolContextSnapshotData;
   sessionContext?: AdminTurnSessionContextSnapshotData;
   memory?: AdminTurnMemorySnapshotData;
 }

@@ -1,15 +1,31 @@
 import { resolveBackupsDir } from '../persistence/layout.js';
+import { loadBackupConfig } from '../config/backup-config.js';
 
-export const DEFAULT_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
-export const DEFAULT_BACKUP_RETENTION_COUNT = 7;
+export const DEFAULT_BACKUP_INTERVAL_HOURS = 12;
+export const DEFAULT_BACKUP_ROTATING_COUNT = 9;
+export const DEFAULT_BACKUP_WEEKLY_COUNT = 2;
+export const DEFAULT_BACKUP_MONTHLY_COUNT = 1;
+export const DEFAULT_BACKUP_MIRROR_DIR = '/mnt/ai/psfn-bak';
 export const DEFAULT_BACKUP_VERIFY_RESTORE = true;
+
+/** @deprecated Use DEFAULT_BACKUP_INTERVAL_HOURS instead */
+export const DEFAULT_BACKUP_INTERVAL_MS = DEFAULT_BACKUP_INTERVAL_HOURS * 60 * 60 * 1000;
+/** @deprecated Use DEFAULT_BACKUP_ROTATING_COUNT instead */
+export const DEFAULT_BACKUP_RETENTION_COUNT = DEFAULT_BACKUP_ROTATING_COUNT;
 export const MIN_BACKUP_INTERVAL_MS = 60_000;
 export const MIN_BACKUP_RETENTION_COUNT = 1;
 
 export interface BackupRuntimeConfig {
   intervalMs: number;
-  retentionCount: number;
+  /** Number of rotating (most-recent) backup slots to keep. */
+  maxRotatingBackups: number;
+  /** Number of weekly backup slots to keep (derived from rotating cycle). */
+  maxWeeklyBackups: number;
+  /** Number of monthly backup slots to keep (derived from rotating cycle). */
+  maxMonthlyBackups: number;
   rootDir: string;
+  /** When non-empty, completed backups are mirrored here. */
+  mirrorDir: string;
   verifyRestore: boolean;
 }
 
@@ -45,18 +61,39 @@ export function resolveBackupRuntimeConfig(
   const defaultRootDir = options.defaultRootDir?.trim() || resolveBackupsDir(options.dataDir);
   const rootDir = env.BACKUP_ROOT_DIR?.trim() || defaultRootDir;
 
+  // Load JSON-owned config (may not exist yet — silently falls back to seed defaults)
+  let jsonConfig: ReturnType<typeof loadBackupConfig> | null = null;
+  try {
+    jsonConfig = loadBackupConfig(options.dataDir);
+  } catch {
+    // seed file may be absent in test environments; use hard-coded defaults
+  }
+
+  // Env vars override the JSON config for bootstrap/ops use
+  const intervalHoursFromJson = jsonConfig?.intervalHours ?? DEFAULT_BACKUP_INTERVAL_HOURS;
+  const intervalMsFromEnv = parseIntegerEnv(env.BACKUP_INTERVAL_MS, 0, MIN_BACKUP_INTERVAL_MS);
+  const intervalMs = intervalMsFromEnv > 0
+    ? intervalMsFromEnv
+    : Math.max(MIN_BACKUP_INTERVAL_MS, intervalHoursFromJson * 60 * 60 * 1000);
+
+  const retentionCountFromEnv = parseIntegerEnv(env.BACKUP_RETENTION_COUNT, 0, MIN_BACKUP_RETENTION_COUNT);
+  const maxRotatingBackups = retentionCountFromEnv > 0
+    ? retentionCountFromEnv
+    : (jsonConfig?.maxRotatingBackups ?? DEFAULT_BACKUP_ROTATING_COUNT);
+
+  const mirrorDir = env.BACKUP_MIRROR_DIR?.trim()
+    ?? (jsonConfig?.mirrorDir ?? DEFAULT_BACKUP_MIRROR_DIR);
+
   return {
-    intervalMs: parseIntegerEnv(
-      env.BACKUP_INTERVAL_MS,
-      DEFAULT_BACKUP_INTERVAL_MS,
-      MIN_BACKUP_INTERVAL_MS,
-    ),
-    retentionCount: parseIntegerEnv(
-      env.BACKUP_RETENTION_COUNT,
-      DEFAULT_BACKUP_RETENTION_COUNT,
-      MIN_BACKUP_RETENTION_COUNT,
-    ),
+    intervalMs,
+    maxRotatingBackups,
+    maxWeeklyBackups: jsonConfig?.maxWeeklyBackups ?? DEFAULT_BACKUP_WEEKLY_COUNT,
+    maxMonthlyBackups: jsonConfig?.maxMonthlyBackups ?? DEFAULT_BACKUP_MONTHLY_COUNT,
     rootDir,
-    verifyRestore: parseBooleanEnv(env.BACKUP_VERIFY_RESTORE, DEFAULT_BACKUP_VERIFY_RESTORE),
+    mirrorDir,
+    verifyRestore: parseBooleanEnv(
+      env.BACKUP_VERIFY_RESTORE,
+      jsonConfig?.verifyRestore ?? DEFAULT_BACKUP_VERIFY_RESTORE,
+    ),
   };
 }

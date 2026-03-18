@@ -61,6 +61,7 @@ export interface TurnRecord {
   extractedMemoryIds: string[];
   concernDeltaRefs: string[];
   contactDeltaRefs: string[];
+  roleEnvelopeRefs?: string[];
   observability?: import('./turns/observability.js').TurnObservabilityRecord;
   versionPointers: TurnRecordVersionPointers;
   provenanceRefs: string[];

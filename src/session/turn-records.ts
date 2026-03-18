@@ -417,6 +417,7 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     requestId,
     channelId,
   });
+  const roleEnvelopeRefs = parseOptionalStringArray(raw.roleEnvelopeRefs, 'roleEnvelopeRefs');
 
   return {
     schemaVersion: TURN_RECORD_SCHEMA_VERSION,
@@ -439,6 +440,9 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
     extractedMemoryIds: parseOptionalStringArray(raw.extractedMemoryIds, 'extractedMemoryIds'),
     concernDeltaRefs: parseOptionalStringArray(raw.concernDeltaRefs, 'concernDeltaRefs'),
     contactDeltaRefs: parseOptionalStringArray(raw.contactDeltaRefs, 'contactDeltaRefs'),
+    ...(roleEnvelopeRefs.length > 0
+      ? { roleEnvelopeRefs }
+      : {}),
     ...(observability ? { observability } : {}),
     versionPointers,
     provenanceRefs: parseOptionalStringArray(raw.provenanceRefs, 'provenanceRefs'),

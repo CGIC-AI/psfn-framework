@@ -268,4 +268,111 @@ describe('AdminSessionDataService', () => {
       },
     });
   });
+
+  it('surfaces role-envelope previews and promoted refs without exposing raw bodies', () => {
+    const channelId = 'api:role-envelope-session';
+    const requestId = 'role-envelope-turn-1';
+    const turnId = createTurnId();
+    const hiddenBody = 'raw internal envelope body should stay companion-private';
+    const sessionManager = new SessionManager(store, makeConfig({ dataDir: dir }));
+
+    const userSessionEntryId = sessionManager.recordUserMessage(
+      channelId,
+      'Please check in tomorrow if I go quiet.',
+      'user-1',
+      'User',
+      undefined,
+      undefined,
+      {
+        turnId,
+        requestId,
+      },
+    );
+    const assistantSessionEntryId = sessionManager.recordAssistantMessage(
+      channelId,
+      'Queued a gentle check-in reminder for tomorrow.',
+      undefined,
+      undefined,
+      undefined,
+      {
+        turnId,
+        requestId,
+        roleEnvelopePreview: {
+          schemaVersion: 1,
+          envelopeId: 'env_admin_preview_1',
+          internalRole: 'outreach_candidate',
+          summary: 'Queued a gentle check-in reminder for tomorrow.',
+          sourceStage: 'post_turn_appraisal',
+          promotionTarget: 'turn_record_summary',
+          promotedRef: 'turn_record_summary:env_admin_preview_1',
+        },
+      },
+    );
+    expect(userSessionEntryId).not.toBeNull();
+    expect(assistantSessionEntryId).not.toBeNull();
+
+    store.appendTurnRecord({
+      schemaVersion: 1,
+      turnId,
+      requestId,
+      channelId,
+      channelType: 'api',
+      startedAt: 1_700_000_100_000,
+      completedAt: 1_700_000_100_050,
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: 'Please check in tomorrow if I go quiet.',
+        timestamp: 1_700_000_100_000,
+        sessionEntryId: userSessionEntryId ?? undefined,
+        sourceMessageId: 'msg-user-envelope-1',
+        authorId: 'user-1',
+        authorName: 'User',
+      },
+      assistantMessage: {
+        role: 'assistant',
+        content: 'Queued a gentle check-in reminder for tomorrow.',
+        timestamp: 1_700_000_100_050,
+        sessionEntryId: assistantSessionEntryId ?? undefined,
+        sourceMessageId: 'msg-assistant-envelope-1',
+      },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      roleEnvelopeRefs: sessionManager.getRoleEnvelopeRefsForEntries(
+        channelId,
+        [userSessionEntryId ?? 0, assistantSessionEntryId ?? 0],
+      ),
+      versionPointers: {
+        model: 'test-model',
+      },
+      provenanceRefs: [`turn:${turnId}`],
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager,
+      eventBus: new EventBus(),
+    });
+
+    const result = service.getSessionMessages(channelId);
+    expect(result.roleEnvelopePreviews).toEqual([
+      {
+        sessionEntryId: assistantSessionEntryId,
+        preview: {
+          schemaVersion: 1,
+          envelopeId: 'env_admin_preview_1',
+          internalRole: 'outreach_candidate',
+          summary: 'Queued a gentle check-in reminder for tomorrow.',
+          sourceStage: 'post_turn_appraisal',
+          promotionTarget: 'turn_record_summary',
+          promotedRef: 'turn_record_summary:env_admin_preview_1',
+        },
+      },
+    ]);
+    expect(result.turns[0]?.roleEnvelopeRefs).toEqual(['turn_record_summary:env_admin_preview_1']);
+    expect(result.turns[0]?.record.roleEnvelopeRefs).toEqual(['turn_record_summary:env_admin_preview_1']);
+    expect(JSON.stringify(result)).not.toContain(hiddenBody);
+  });
 });

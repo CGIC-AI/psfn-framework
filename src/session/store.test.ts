@@ -95,6 +95,7 @@ describe('SessionStore', () => {
       extractedMemoryIds: [],
       concernDeltaRefs: [],
       contactDeltaRefs: [],
+      roleEnvelopeRefs: ['turn_record_summary:env_turn_record'],
       observability: {
         stages: [
           {
@@ -221,6 +222,7 @@ describe('SessionStore', () => {
           }),
         }),
       }),
+      roleEnvelopeRefs: ['turn_record_summary:env_turn_record'],
       versionPointers: expect.objectContaining({
         promptStack: 'prompt-snapshot-v1',
         memoryState: 'memory-snapshot-v1',

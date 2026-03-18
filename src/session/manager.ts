@@ -53,7 +53,11 @@ import {
   DEFAULT_OBSERVATION_MASKING_WINDOW,
   applyObservationMasking,
 } from './manager/context-builder.js';
-import { buildSessionMetadataWithTurn } from './turn-provenance.js';
+import {
+  buildSessionMetadataWithTurn,
+  buildSessionMetadataWithRoleEnvelopePreview,
+  resolveSessionEntryRoleEnvelopePreview,
+} from './turn-provenance.js';
 import type {
   PreCompactionExtractionContext,
   PreCompactionExtractionHandler,
@@ -90,6 +94,7 @@ import {
   CompressionGuidelineStore,
   type CompressionGuidelineUpdateResult,
 } from './compression-guideline.js';
+import { resolveRoleEnvelopeRef } from '../internal-role-envelopes/projections.js';
 
 export type {
   ImportedHistoryBootstrapChunk,
@@ -476,7 +481,7 @@ export class SessionManager {
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
-    const metadata = options.turnId
+    const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
@@ -484,6 +489,9 @@ export class SessionManager {
         role: 'user',
       })
       : options.metadata;
+    const metadata = options.roleEnvelopePreview
+      ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
+      : turnMetadata;
     const continuityKey = continuityUserId ?? authorId;
 
     if (!shouldPersistSessionChannel(resolvedChannelId)) {
@@ -558,7 +566,7 @@ export class SessionManager {
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
-    const metadata = options.turnId
+    const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
@@ -566,6 +574,9 @@ export class SessionManager {
         role: 'assistant',
       })
       : options.metadata;
+    const metadata = options.roleEnvelopePreview
+      ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
+      : turnMetadata;
     const continuityKey = continuityUserId ?? forUserId;
 
     if (!shouldPersistSessionChannel(resolvedChannelId)) {
@@ -635,7 +646,7 @@ export class SessionManager {
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannel(resolvedChannelId, meta);
     const timestamp = Date.now();
-    const metadata = options.turnId
+    const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
         turnId: options.turnId,
         requestId: options.requestId ?? options.sourceMessageId ?? options.turnId,
@@ -643,6 +654,9 @@ export class SessionManager {
         role: 'system',
       })
       : options.metadata;
+    const metadata = options.roleEnvelopePreview
+      ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
+      : turnMetadata;
     const entryId = this.store.append({
       channelId: resolvedChannelId,
       role: 'system',
@@ -768,9 +782,12 @@ export class SessionManager {
         role: 'tool',
       })
       : options.metadata;
+    const envelopeMetadata = options.roleEnvelopePreview
+      ? buildSessionMetadataWithRoleEnvelopePreview(turnMetadata, options.roleEnvelopePreview)
+      : turnMetadata;
     const normalizedObservation = normalizeToolObservation(observation);
     const metadata = buildToolObservationMetadata(
-      turnMetadata,
+      envelopeMetadata,
       normalizedObservation.metadata,
     );
 
@@ -788,6 +805,33 @@ export class SessionManager {
 
   recordTurn(record: TurnRecord): void {
     this.store.appendTurnRecord(record);
+  }
+
+  getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const refs: string[] = [];
+    const seenEntryIds = new Set<number>();
+    const seenRefs = new Set<string>();
+
+    for (const rawEntryId of sessionEntryIds) {
+      if (!Number.isFinite(rawEntryId)) continue;
+      const entryId = Math.floor(rawEntryId);
+      if (entryId <= 0 || seenEntryIds.has(entryId)) continue;
+      seenEntryIds.add(entryId);
+
+      const entry = this.store.getEntriesInRange(resolvedChannelId, entryId, entryId)[0];
+      if (!entry) continue;
+
+      const preview = resolveSessionEntryRoleEnvelopePreview(entry);
+      if (!preview) continue;
+
+      const ref = resolveRoleEnvelopeRef(preview);
+      if (seenRefs.has(ref)) continue;
+      seenRefs.add(ref);
+      refs.push(ref);
+    }
+
+    return refs;
   }
 
   private mirrorMessageToActiveSessions(params: {

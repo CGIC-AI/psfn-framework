@@ -40,6 +40,13 @@ function buildRecordedSnapshot(record: AdminSessionTurnData['record']): AdminTur
   return cloneTurnSnapshotRecord(snapshot);
 }
 
+function buildRecordedRoleEnvelopeRefs(record: AdminSessionTurnData['record']): string[] {
+  if (!Array.isArray(record.roleEnvelopeRefs)) return [];
+  return record.roleEnvelopeRefs
+    .filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0)
+    .map(ref => ref.trim());
+}
+
 export class AdminSessionTurnObservabilityStore {
   private readonly turnBufferLimit: number;
   private readonly stageBufferLimit: number;
@@ -89,6 +96,7 @@ export class AdminSessionTurnObservabilityStore {
     const recordedSnapshot = buildRecordedSnapshot(record);
     return {
       record,
+      roleEnvelopeRefs: buildRecordedRoleEnvelopeRefs(record),
       stages: observed?.stages.length
         ? observed.stages.map(cloneTurnStageTelemetryRecord)
         : recordedStages,

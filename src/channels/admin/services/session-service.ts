@@ -8,6 +8,7 @@ import {
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
 } from '../../../session/compaction-audit.js';
+import { resolveSessionEntryRoleEnvelopePreview } from '../../../session/turn-provenance.js';
 import type {
   AdminSessionListData,
   AdminSessionMessagesData,
@@ -140,6 +141,10 @@ export class AdminSessionDataService implements AdminSessionService {
 
   getSessionMessages(channelId: string): AdminSessionMessagesData {
     const messages = this.deps.sessionManager.getRecentMessages(channelId, 100);
+    const roleEnvelopePreviews = messages.flatMap((entry) => {
+      const preview = resolveSessionEntryRoleEnvelopePreview(entry);
+      return preview ? [{ sessionEntryId: entry.id, preview }] : [];
+    });
     const turns = this.deps.sessionStore
       .getRecentTurnRecords(channelId, DEFAULT_ADMIN_TURN_LIMIT)
       .map(record => this.turnObservability.buildTurnData(record));
@@ -151,6 +156,7 @@ export class AdminSessionDataService implements AdminSessionService {
     return {
       channelId,
       messages,
+      roleEnvelopePreviews,
       compactionAuditViews,
       turns,
     };

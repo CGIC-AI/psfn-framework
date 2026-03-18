@@ -727,8 +727,10 @@ export interface AdminChatBootstrapResponse {
     displayName: string;
     nickname?: string;
     linkedChannels: Array<{
+      targetKind: 'identity' | 'conversation';
       channel: string;
-      userId: string;
+      userId?: string;
+      channelId?: string;
       privacyLevel: string;
     }>;
   }>;
@@ -737,15 +739,20 @@ export interface AdminChatBootstrapResponse {
   displayName: string;
   nickname?: string;
   linkedChannels: Array<{
+    targetKind: 'identity' | 'conversation';
     channel: string;
-    userId: string;
+    userId?: string;
+    channelId?: string;
     privacyLevel: string;
   }>;
-  selectedIdentity: {
+  selectedTarget: {
     canonicalContactId: string;
+    targetKind: 'identity' | 'conversation';
     channel: string;
-    userId: string;
+    userId?: string;
+    channelId?: string;
     privacyLevel: string;
+    sessionId: string;
   };
   privacy: {
     availableLevels: string[];

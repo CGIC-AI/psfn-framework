@@ -55,6 +55,7 @@ interface SelectionState {
   canonicalContactId?: string;
   channel?: string;
   userId?: string;
+  channelId?: string;
   defaultAuthorName?: string;
   defaultAuthorId?: string;
 }
@@ -86,11 +87,14 @@ function normalizeChannel(channel: string): string {
   return trimmed.length > 0 ? trimmed : 'unknown';
 }
 
-function isSameIdentity(
-  left: Pick<AdminChatLinkedChannelOption, 'channel' | 'userId'>,
-  right: Pick<AdminChatLinkedChannelOption, 'channel' | 'userId'>,
+function isSameTarget(
+  left: Pick<AdminChatLinkedChannelOption, 'targetKind' | 'channel' | 'userId' | 'channelId'>,
+  right: Pick<AdminChatLinkedChannelOption, 'targetKind' | 'channel' | 'userId' | 'channelId'>,
 ): boolean {
-  return left.channel === right.channel && left.userId === right.userId;
+  if (left.targetKind !== right.targetKind || left.channel !== right.channel) return false;
+  return left.targetKind === 'conversation'
+    ? left.channelId === right.channelId
+    : left.userId === right.userId;
 }
 
 function sanitizePurposeSuffix(value: string): string {
@@ -148,6 +152,7 @@ export class AdminChatBootstrapService {
       input.canonicalContactId !== undefined
       || input.channel !== undefined
       || input.userId !== undefined
+      || input.channelId !== undefined
     ) {
       this.selectionPinnedByUser = true;
     }
@@ -190,6 +195,7 @@ export class AdminChatBootstrapService {
     const previousCanonicalContactId = this.selection.canonicalContactId;
     const previousChannel = this.selection.channel;
     const previousUserId = this.selection.userId;
+    const previousChannelId = this.selection.channelId;
     let selectedTargetChanged = false;
 
     if (input.canonicalContactId !== undefined) {
@@ -213,11 +219,16 @@ export class AdminChatBootstrapService {
 
     const hasChannelField = input.channel !== undefined;
     const hasUserIdField = input.userId !== undefined;
-    if (hasChannelField !== hasUserIdField) {
-      throw new Error('Both channel and userId are required to update selected identity');
+    const hasChannelIdField = input.channelId !== undefined;
+    const hasTargetIdentifier = hasUserIdField || hasChannelIdField;
+    if (hasChannelField !== hasTargetIdentifier) {
+      throw new Error('channel is required when updating a chat target');
+    }
+    if (hasUserIdField && hasChannelIdField) {
+      throw new Error('Provide either userId or channelId, not both');
     }
 
-    if (!hasChannelField || !hasUserIdField) {
+    if (!hasChannelField || !hasTargetIdentifier) {
       if (selectedTargetChanged) {
         if (input.defaultAuthorName === undefined) {
           this.selection.defaultAuthorName = undefined;
@@ -231,15 +242,18 @@ export class AdminChatBootstrapService {
 
     const normalizedChannel = normalizeTrimmed(input.channel);
     const normalizedUserId = normalizeTrimmed(input.userId);
-    if (!normalizedChannel || !normalizedUserId) {
-      throw new Error('Both channel and userId must be non-empty');
+    const normalizedChannelId = normalizeTrimmed(input.channelId);
+    if (!normalizedChannel || (!normalizedUserId && !normalizedChannelId)) {
+      throw new Error('channel and either userId or channelId must be non-empty');
     }
 
     this.selection.channel = normalizeChannel(normalizedChannel);
     this.selection.userId = normalizedUserId;
+    this.selection.channelId = normalizedChannelId;
     if (
       this.selection.channel !== previousChannel
       || this.selection.userId !== previousUserId
+      || this.selection.channelId !== previousChannelId
     ) {
       selectedTargetChanged = true;
     }
@@ -258,11 +272,28 @@ export class AdminChatBootstrapService {
     if (!this.contactStore) return;
     const selectedChannel = this.selection.channel;
     const selectedUserId = this.selection.userId;
-    if (!selectedChannel || !selectedUserId) return;
+    const selectedChannelId = this.selection.channelId;
+    if (!selectedChannel || (!selectedUserId && !selectedChannelId)) return;
 
     const contacts = this.loadContacts();
     const selectedContact = this.resolveSelectedContact(contacts, this.selection.canonicalContactId);
     if (selectedContact.synthetic) return;
+
+    if (selectedChannelId) {
+      if (!input.privacyLevel) return;
+      const updated = this.contactStore.setConversationChannelPrivacy(
+        selectedContact.canonicalContactId,
+        selectedChannel,
+        selectedChannelId,
+        input.privacyLevel,
+        'admin:chat:bootstrap',
+      );
+      if (!updated) {
+        throw new Error(`Unable to update privacy for ${selectedChannel}:${selectedChannelId}`);
+      }
+      return;
+    }
+    if (!selectedUserId) return;
 
     const existingIdentity = selectedContact.linkedChannels.find(identity => (
       identity.channel === selectedChannel && identity.userId === selectedUserId
@@ -274,6 +305,7 @@ export class AdminChatBootstrapService {
         selectedChannel,
         selectedUserId,
         { privacyLevel: input.privacyLevel },
+        'admin:chat:bootstrap',
       );
 
       if (linkResult === 'identity_conflict') {
@@ -290,6 +322,7 @@ export class AdminChatBootstrapService {
         selectedChannel,
         selectedUserId,
         input.privacyLevel,
+        'admin:chat:bootstrap',
       );
       if (!updated) {
         throw new Error(`Unable to update privacy for ${selectedChannel}:${selectedUserId}`);
@@ -300,10 +333,11 @@ export class AdminChatBootstrapService {
   private composeBootstrap(options: AdminChatBootstrapRuntimeOptions): AdminChatBootstrapResponse {
     const contacts = this.loadContacts();
     const selectedContact = this.resolveSelectedContact(contacts, this.selection.canonicalContactId);
-    const selectedIdentity = this.resolveSelectedIdentity(
+    const selectedTarget = this.resolveSelectedTarget(
       selectedContact,
       this.selection.channel,
       this.selection.userId,
+      this.selection.channelId,
     );
     const apiBaseUrl = resolveAdminChatApiBaseUrl({
       explicitApiBaseUrl: options.settingsApiBaseUrl ?? this.configuredApiBaseUrl,
@@ -311,29 +345,32 @@ export class AdminChatBootstrapService {
       apiPort: this.configuredApiPort,
       browserOrigin: options.requestOrigin,
     });
-    const selectedLinkedChannels = this.withSelectedIdentity(
+    const selectedLinkedChannels = this.withSelectedTarget(
       selectedContact.linkedChannels,
-      selectedIdentity,
+      selectedTarget,
     );
 
     this.selection.canonicalContactId = selectedContact.canonicalContactId;
-    this.selection.channel = selectedIdentity.channel;
-    this.selection.userId = selectedIdentity.userId;
+    this.selection.channel = selectedTarget.channel;
+    this.selection.userId = selectedTarget.userId;
+    this.selection.channelId = selectedTarget.channelId;
 
     const defaultAuthorName = this.selection.defaultAuthorName ?? selectedContact.displayName;
-    const defaultAuthorId = this.selection.defaultAuthorId ?? selectedIdentity.userId;
+    const defaultAuthorId = this.selection.defaultAuthorId ?? this.resolveDefaultAuthorId(selectedContact, selectedTarget);
     this.selection.defaultAuthorName = defaultAuthorName;
     this.selection.defaultAuthorId = defaultAuthorId;
-    const selectedIdentitySessionId = `${selectedIdentity.channel}:${selectedIdentity.userId}`;
+    const selectedSessionId = selectedTarget.targetKind === 'conversation'
+      ? selectedTarget.channelId ?? `${selectedTarget.channel}:unknown`
+      : `${selectedTarget.channel}:${selectedTarget.userId ?? 'unknown'}`;
     const globalDefaultSessionId = this.selectionPinnedByUser
       ? undefined
       : normalizeTrimmed(this.resolveGlobalDefaultSessionIdFn?.() ?? undefined);
-    const defaultSessionId = globalDefaultSessionId ?? selectedIdentitySessionId;
+    const defaultSessionId = globalDefaultSessionId ?? selectedSessionId;
     const transportHeaders = this.buildTransportHeaders(
       defaultSessionId,
       defaultAuthorId,
       defaultAuthorName,
-      selectedIdentity.privacyLevel,
+      selectedTarget.privacyLevel,
     );
     const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);
     const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, apiBaseUrl);
@@ -356,15 +393,18 @@ export class AdminChatBootstrapService {
       displayName: selectedContact.displayName,
       nickname: selectedContact.nickname,
       linkedChannels: selectedLinkedChannels,
-      selectedIdentity: {
+      selectedTarget: {
         canonicalContactId: selectedContact.canonicalContactId,
-        channel: selectedIdentity.channel,
-        userId: selectedIdentity.userId,
-        privacyLevel: selectedIdentity.privacyLevel,
+        targetKind: selectedTarget.targetKind,
+        channel: selectedTarget.channel,
+        userId: selectedTarget.userId,
+        channelId: selectedTarget.channelId,
+        privacyLevel: selectedTarget.privacyLevel,
+        sessionId: selectedSessionId,
       },
       privacy: {
         availableLevels: [...CHANNEL_PRIVACY_LEVELS],
-        selectedLevel: selectedIdentity.privacyLevel,
+        selectedLevel: selectedTarget.privacyLevel,
       },
       onboarding,
       api: {
@@ -469,11 +509,11 @@ export class AdminChatBootstrapService {
     };
   }
 
-  private withSelectedIdentity(
+  private withSelectedTarget(
     channels: AdminChatLinkedChannelOption[],
     selected: AdminChatLinkedChannelOption,
   ): AdminChatLinkedChannelOption[] {
-    if (channels.some(channel => isSameIdentity(channel, selected))) {
+    if (channels.some(channel => isSameTarget(channel, selected))) {
       return [...channels];
     }
     return [selected, ...channels];
@@ -497,18 +537,38 @@ export class AdminChatBootstrapService {
     return contacts[0];
   }
 
-  private resolveSelectedIdentity(
+  private resolveSelectedTarget(
     selectedContact: ContactCandidate,
     preferredChannel: string | undefined,
     preferredUserId: string | undefined,
+    preferredChannelId: string | undefined,
   ): AdminChatLinkedChannelOption {
+    if (preferredChannel && preferredChannelId) {
+      const conversation = selectedContact.linkedChannels.find(link => (
+        link.targetKind === 'conversation'
+        && link.channel === preferredChannel
+        && link.channelId === preferredChannelId
+      ));
+      if (conversation) return conversation;
+
+      return {
+        targetKind: 'conversation',
+        channel: preferredChannel,
+        channelId: preferredChannelId,
+        privacyLevel: this.defaultPrivacyForChannel(preferredChannel),
+      };
+    }
+
     if (preferredChannel && preferredUserId) {
       const linked = selectedContact.linkedChannels.find(link => (
-        link.channel === preferredChannel && link.userId === preferredUserId
+        link.targetKind === 'identity'
+        && link.channel === preferredChannel
+        && link.userId === preferredUserId
       ));
       if (linked) return linked;
 
       return {
+        targetKind: 'identity',
         channel: preferredChannel,
         userId: preferredUserId,
         privacyLevel: this.defaultPrivacyForChannel(preferredChannel),
@@ -516,6 +576,24 @@ export class AdminChatBootstrapService {
     }
 
     return selectedContact.linkedChannels[0];
+  }
+
+  private resolveDefaultAuthorId(
+    selectedContact: ContactCandidate,
+    selectedTarget: AdminChatLinkedChannelOption,
+  ): string {
+    if (selectedTarget.targetKind === 'identity' && selectedTarget.userId) {
+      return selectedTarget.userId;
+    }
+
+    const fallbackIdentity = selectedContact.linkedChannels.find(target => (
+      target.targetKind === 'identity' && typeof target.userId === 'string' && target.userId.trim().length > 0
+    ));
+    if (fallbackIdentity?.userId) {
+      return fallbackIdentity.userId;
+    }
+
+    return selectedTarget.channelId ?? selectedContact.canonicalContactId;
   }
 
   private loadContacts(): ContactCandidate[] {
@@ -528,7 +606,7 @@ export class AdminChatBootstrapService {
   }
 
   private contactToCandidate(contact: Contact): ContactCandidate {
-    const linkedChannels = this.getLinkedChannels(contact);
+    const linkedChannels = this.getChannelTargets(contact);
     return {
       canonicalContactId: contact.id,
       displayName: contact.displayName,
@@ -542,20 +620,38 @@ export class AdminChatBootstrapService {
     };
   }
 
-  private getLinkedChannels(contact: Contact): AdminChatLinkedChannelOption[] {
+  private getChannelTargets(contact: Contact): AdminChatLinkedChannelOption[] {
     const links: AdminChatLinkedChannelOption[] = [];
     const seen = new Set<string>();
-    const addChannel = (channel: string, userId: string, privacyLevel?: ChannelPrivacyLevel): void => {
+    const addIdentity = (channel: string, userId: string, privacyLevel?: ChannelPrivacyLevel): void => {
       const normalizedUserId = normalizeTrimmed(userId);
       if (!normalizedUserId) return;
       const normalizedChannel = normalizeChannel(channel);
-      const key = `${normalizedChannel}:${normalizedUserId}`;
+      const key = `identity:${normalizedChannel}:${normalizedUserId}`;
       if (seen.has(key)) return;
       seen.add(key);
 
       links.push({
+        targetKind: 'identity',
         channel: normalizedChannel,
         userId: normalizedUserId,
+        privacyLevel: privacyLevel && CHANNEL_PRIVACY_LEVELS.includes(privacyLevel)
+          ? privacyLevel
+          : this.defaultPrivacyForChannel(normalizedChannel),
+      });
+    };
+    const addConversation = (channel: string, channelId: string, privacyLevel?: ChannelPrivacyLevel): void => {
+      const normalizedChannelId = normalizeTrimmed(channelId);
+      if (!normalizedChannelId) return;
+      const normalizedChannel = normalizeChannel(channel);
+      const key = `conversation:${normalizedChannel}:${normalizedChannelId}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      links.push({
+        targetKind: 'conversation',
+        channel: normalizedChannel,
+        channelId: normalizedChannelId,
         privacyLevel: privacyLevel && CHANNEL_PRIVACY_LEVELS.includes(privacyLevel)
           ? privacyLevel
           : this.defaultPrivacyForChannel(normalizedChannel),
@@ -564,20 +660,24 @@ export class AdminChatBootstrapService {
 
     if (Array.isArray(contact.channels) && contact.channels.length > 0) {
       for (const channel of contact.channels) {
-        addChannel(channel.channel, channel.userId, channel.privacyLevel);
+        addIdentity(channel.channel, channel.userId, channel.privacyLevel);
       }
-      return links;
     }
 
     if (Array.isArray(contact.channelIdentities) && contact.channelIdentities.length > 0) {
       for (const identity of contact.channelIdentities) {
-        addChannel(identity.channel, identity.userId);
+        addIdentity(identity.channel, identity.userId);
       }
-      return links;
+    }
+
+    if (Array.isArray(contact.conversationChannels) && contact.conversationChannels.length > 0) {
+      for (const channel of contact.conversationChannels) {
+        addConversation(channel.channel, channel.channelId, channel.privacyLevel);
+      }
     }
 
     if (contact.discordUserId) {
-      addChannel('discord', contact.discordUserId, 'semi_private');
+      addIdentity('discord', contact.discordUserId, 'semi_private');
     }
 
     return links;
@@ -585,6 +685,7 @@ export class AdminChatBootstrapService {
 
   private fallbackContactChannel(contactId: string): AdminChatLinkedChannelOption {
     return {
+      targetKind: 'identity',
       channel: 'contact',
       userId: contactId,
       privacyLevel: 'private',
@@ -597,6 +698,7 @@ export class AdminChatBootstrapService {
       displayName: SYNTHETIC_DISPLAY_NAME,
       nickname: undefined,
       linkedChannels: [{
+        targetKind: 'identity',
         channel: SYNTHETIC_CHANNEL,
         userId: SYNTHETIC_USER_ID,
         privacyLevel: this.defaultPrivacyForChannel(SYNTHETIC_CHANNEL),

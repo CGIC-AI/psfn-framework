@@ -31,10 +31,10 @@
   let streamingThinking = $state('');
   let pendingToolCalls = $state<Array<{ name: string; id: string; args: string; result?: string; isError?: boolean }>>([]);
 
-  // Contact/privacy/identity selectors
+  // Contact/privacy/channel selectors
   let selectedContactId = $state('');
   let selectedPrivacyLevel = $state('');
-  let selectedChannelIdentity = $state(''); // "channel:userId" composite key
+  let selectedChannelIdentity = $state('');
   let showIdentityDetails = $state(false);
   let onboardingSaving = $state(false);
   let onboardingError = $state('');
@@ -47,14 +47,38 @@
   // Computed channel options for the identity selector
   const GARDEN_CHAT_CHANNEL = 'api';
   const GARDEN_CHAT_USER_ID = 'admin-user';
-  const GARDEN_CHAT_KEY = `${GARDEN_CHAT_CHANNEL}:${GARDEN_CHAT_USER_ID}`;
+  const GARDEN_CHAT_KEY = `identity:${GARDEN_CHAT_CHANNEL}:${GARDEN_CHAT_USER_ID}`;
 
   interface ChannelOption {
-    key: string;        // "channel:userId"
+    key: string;
+    targetKind: 'identity' | 'conversation';
     channel: string;
-    userId: string;
+    userId?: string;
+    channelId?: string;
     label: string;
     privacyLevel: string;
+  }
+
+  function targetKey(target: {
+    targetKind: 'identity' | 'conversation';
+    channel: string;
+    userId?: string;
+    channelId?: string;
+  }): string {
+    const identifier = target.targetKind === 'conversation' ? target.channelId : target.userId;
+    return `${target.targetKind}:${target.channel}:${identifier ?? 'unknown'}`;
+  }
+
+  function targetLabel(target: {
+    targetKind: 'identity' | 'conversation';
+    channel: string;
+    userId?: string;
+    channelId?: string;
+  }): string {
+    if (target.targetKind === 'conversation') {
+      return `${target.channel} (channel ${target.channelId ?? 'unknown'})`;
+    }
+    return `${target.channel} (${target.userId ?? 'unknown'})`;
   }
 
   function buildChannelOptions(bs: AdminChatBootstrapResponse): ChannelOption[] {
@@ -64,6 +88,7 @@
     // Always offer Garden Chat (admin-native api channel) first
     opts.push({
       key: GARDEN_CHAT_KEY,
+      targetKind: 'identity',
       channel: GARDEN_CHAT_CHANNEL,
       userId: GARDEN_CHAT_USER_ID,
       label: 'Garden Chat (admin)',
@@ -73,14 +98,16 @@
 
     // Add linked channels from the selected contact
     for (const lc of bs.linkedChannels) {
-      const key = `${lc.channel}:${lc.userId}`;
+      const key = targetKey(lc);
       if (seen.has(key)) continue;
       seen.add(key);
       opts.push({
         key,
+        targetKind: lc.targetKind,
         channel: lc.channel,
         userId: lc.userId,
-        label: `${lc.channel} (${lc.userId})`,
+        channelId: lc.channelId,
+        label: targetLabel(lc),
         privacyLevel: lc.privacyLevel,
       });
     }
@@ -111,7 +138,7 @@
     bootstrap = await getChatBootstrap();
     selectedContactId = bootstrap.canonicalContactId;
     selectedPrivacyLevel = bootstrap.privacy.selectedLevel;
-    selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+    selectedChannelIdentity = targetKey(bootstrap.selectedTarget);
     initializeOnboardingDraft(bootstrap);
     if (options.reloadSession || bootstrap.defaultSessionId !== previousSessionId) {
       messages = [];
@@ -231,7 +258,7 @@
       initializeOnboardingDraft(bootstrap);
 
       // Default to Garden Chat (api:admin-user) instead of whatever channel the contact has
-      const currentIdentityKey = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+      const currentIdentityKey = targetKey(bootstrap.selectedTarget);
       if (currentIdentityKey !== GARDEN_CHAT_KEY) {
         // Switch to admin-native channel
         await updateChatBootstrap({
@@ -243,7 +270,7 @@
         bootstrap = await getChatBootstrap();
         initializeOnboardingDraft(bootstrap);
       }
-      selectedChannelIdentity = `${bootstrap.selectedIdentity.channel}:${bootstrap.selectedIdentity.userId}`;
+      selectedChannelIdentity = targetKey(bootstrap.selectedTarget);
 
       await checkConnection();
       // Load existing session history
@@ -546,17 +573,25 @@
   async function onChannelIdentityChange() {
     if (!bootstrap || saving) return;
     const parts = selectedChannelIdentity.split(':');
-    if (parts.length < 2) return;
-    const channel = parts[0];
-    const userId = parts.slice(1).join(':'); // userId may contain colons
+    if (parts.length < 3) return;
+    const targetKind = parts[0];
+    const channel = parts[1];
+    const identifier = parts.slice(2).join(':');
     saving = true;
     try {
-      await updateChatBootstrap({
-        canonicalContactId: selectedContactId,
-        privacyLevel: selectedPrivacyLevel,
-        channel,
-        userId,
-      });
+      await updateChatBootstrap(targetKind === 'conversation'
+        ? {
+          canonicalContactId: selectedContactId,
+          privacyLevel: selectedPrivacyLevel,
+          channel,
+          channelId: identifier,
+        }
+        : {
+          canonicalContactId: selectedContactId,
+          privacyLevel: selectedPrivacyLevel,
+          channel,
+          userId: identifier,
+        });
       await refreshBootstrapFromServer({ reloadSession: true });
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to switch channel identity';
@@ -805,9 +840,14 @@
         <div class="mt-3 pt-3 border-t border-bark-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
           <div>
             <h3 class="text-sm text-shadow-800 font-semibold uppercase tracking-wide mb-1">Identity</h3>
-            <p class="text-shadow-800">Channel: <span class="font-mono">{bootstrap.selectedIdentity.channel}</span></p>
-            <p class="text-shadow-800">User ID: <span class="font-mono">{bootstrap.selectedIdentity.userId}</span></p>
-            <p class="text-shadow-800">Privacy: {bootstrap.selectedIdentity.privacyLevel}</p>
+            <p class="text-shadow-800">Channel: <span class="font-mono">{bootstrap.selectedTarget.channel}</span></p>
+            <p class="text-shadow-800">Target: <span class="font-mono">{bootstrap.selectedTarget.targetKind}</span></p>
+            {#if bootstrap.selectedTarget.targetKind === 'conversation'}
+              <p class="text-shadow-800">Channel ID: <span class="font-mono">{bootstrap.selectedTarget.channelId}</span></p>
+            {:else}
+              <p class="text-shadow-800">User ID: <span class="font-mono">{bootstrap.selectedTarget.userId}</span></p>
+            {/if}
+            <p class="text-shadow-800">Privacy: {bootstrap.selectedTarget.privacyLevel}</p>
           </div>
           <div>
             <h3 class="text-sm text-shadow-800 font-semibold uppercase tracking-wide mb-1">Session</h3>

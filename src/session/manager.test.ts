@@ -241,10 +241,34 @@ describe('SessionManager', () => {
     expect(ctx.messages).toHaveLength(3);
     expect(ctx.messages[0]).toEqual({ role: 'user', content: 'Search for the latest log' });
     expect(ctx.messages[1]).toEqual({
-      role: 'user',
+      role: 'system',
       content: '[Tool result: search_logs] Found 3 matching log entries.',
     });
     expect(ctx.messages[2]).toEqual({ role: 'assistant', content: 'I found the relevant logs.' });
+  });
+
+  it('renders structured tool payloads as summaries instead of raw machine output', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Inspect the latest result payload', 'u1', 'User');
+    mgr.recordToolObservation('ch1', {
+      toolName: 'search_logs',
+      toolCallId: 'tool-json-1',
+      content: JSON.stringify({
+        status: 'ok',
+        total: 2,
+        matches: [{ id: 'a' }, { id: 'b' }],
+      }),
+    });
+
+    const ctx = await mgr.buildContext('ch1', 'System prompt', '');
+    const toolMessage = ctx.messages.find(message => message.content.startsWith('[Tool result: search_logs]'));
+
+    expect(toolMessage).toEqual({
+      role: 'system',
+      content: '[Tool result: search_logs] Returned JSON object: status=ok; total=2; matches=2.',
+    });
+    expect(toolMessage?.content).not.toContain('"matches"');
   });
 
   it('masks tool observations outside the configured rolling turn window', async () => {
@@ -295,8 +319,7 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('ch1', 'System prompt', '');
     const allContent = ctx.messages.map(message => message.content).join('\n');
-    expect(allContent).toContain('[Tool result: search_logs — see earlier context]');
-    expect(allContent).not.toContain('Older tool output should be masked.');
+    expect(allContent).toContain('[Tool result: search_logs] Older tool output should be masked.');
     expect(allContent).toContain('[Tool result: search_logs] Newest tool output should remain visible.');
     expect(ctx.manifest?.session).toMatchObject({
       sourceEntryCount: 6,

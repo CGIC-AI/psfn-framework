@@ -9,6 +9,7 @@ import type {
   NotifyNtfyParams,
   NotifyNtfyResult,
   PolicyDecision,
+  RuntimeHealthResult,
 } from '../protocol.js';
 import type { SessionHmacKeyring } from '../../session/journal-utils.js';
 import type { PolicyConfig } from '../policy.js';
@@ -26,6 +27,7 @@ export interface GatewayMethodRuntime {
   listPendingConfirmations(): ConfirmationQueueEntry[];
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
   sendNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
+  getRuntimeHealth(): RuntimeHealthResult;
   nextStreamRequestId(): string;
   recordAuditEvent?(entry: {
     method: string;

@@ -130,4 +130,30 @@ describe('notify_operator tool', () => {
     expect((result.details as any).isError).toBe(true);
     expect(notifier.notify).not.toHaveBeenCalled();
   });
+
+  it('declares runtime wiring metadata for Garden health derivation', () => {
+    const notifier: NtfyNotifier = {
+      notify: vi.fn(),
+    };
+
+    const tool = createNotifyOperatorTool(notifier, { gatewayMode: true }) as {
+      wiringMeta?: {
+        requiredServices?: string[];
+        requiredGatewayMethods?: string[];
+        contextRestrictions?: {
+          disallowInternal?: boolean;
+          disallowScheduled?: boolean;
+        };
+      };
+    };
+
+    expect(tool.wiringMeta).toEqual({
+      requiredGatewayMethods: ['notify.ntfy'],
+      requiredServices: ['ntfy'],
+      contextRestrictions: {
+        disallowInternal: true,
+        disallowScheduled: true,
+      },
+    });
+  });
 });

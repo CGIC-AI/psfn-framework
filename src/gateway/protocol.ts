@@ -11,6 +11,7 @@ import type {
 } from '../types.js';
 import type { JournalEntry } from '../session/types.js';
 import type { JournalIntegrityVerificationResult } from '../session/journal-utils.js';
+import type { RuntimeServiceHealthSnapshot } from '../tool-health/types.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -239,10 +240,13 @@ export interface ConfirmationQueueEntry {
 }
 
 export type ConfirmationListParams = Record<string, never>;
+export type RuntimeHealthParams = Record<string, never>;
 
 export interface ConfirmationListResult {
   entries: ConfirmationQueueEntry[];
 }
+
+export type RuntimeHealthResult = RuntimeServiceHealthSnapshot;
 
 export interface ConfirmationResolveParams {
   id: string;
@@ -442,6 +446,7 @@ export interface GatewayMethods {
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
+  'runtime.health': [RuntimeHealthParams, RuntimeHealthResult];
   'session.hmac.sign': [SessionHmacSignParams, SessionHmacSignResult];
   'session.hmac.verify': [SessionHmacVerifyParams, SessionHmacVerifyResult];
 }

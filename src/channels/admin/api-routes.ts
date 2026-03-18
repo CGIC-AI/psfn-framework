@@ -354,11 +354,24 @@ export function buildAdminApiRoutes(options: {
         if (!adaptiveToolsService) {
           sendJson(res, 200, {
             state: null,
+            catalog: null,
+            serviceHealth: [],
+            toolHealth: [],
+            recentFailures: [],
             recentTelemetry: [],
           });
           return;
         }
-        sendJson(res, 200, adaptiveToolsService.getAdaptiveToolsData());
+        adaptiveToolsService.getAdaptiveToolsData().then(
+          (payload) => {
+            sendJson(res, 200, payload);
+          },
+          (error) => {
+            sendJson(res, 500, {
+              error: `Failed to load adaptive tools data: ${toSanitizedMessage(error, 'unknown error')}`,
+            });
+          },
+        );
       },
     },
     {

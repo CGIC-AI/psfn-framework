@@ -30,6 +30,12 @@ export interface ToolWiringMeta {
   requiredServices?: string[];
 
   /**
+   * Optional turn-context restrictions that make the tool not applicable in
+   * specific runtime contexts even when it is otherwise registered.
+   */
+  contextRestrictions?: ToolContextRestrictions;
+
+  /**
    * Required tool-concurrency metadata for bounded scheduler execution.
    * When concurrency metadata enforcement is enabled, tools missing this
    * metadata are disabled (fail-closed).
@@ -54,6 +60,11 @@ export type ToolInterruptibility =
 export interface ToolExecutionEligibility {
   foreground: boolean;
   background: boolean;
+}
+
+export interface ToolContextRestrictions {
+  disallowInternal?: boolean;
+  disallowScheduled?: boolean;
 }
 
 export interface ToolConcurrencyMeta {
@@ -97,6 +108,38 @@ export type WirableTool = AgentTool<any> & {
   wiringMeta?: ToolWiringMeta;
 };
 
+export function cloneToolWiringMeta(meta: ToolWiringMeta | undefined): ToolWiringMeta | undefined {
+  if (!meta) return undefined;
+
+  return {
+    ...(meta.requiredGatewayMethods ? { requiredGatewayMethods: [...meta.requiredGatewayMethods] } : {}),
+    ...(meta.requiredServices ? { requiredServices: [...meta.requiredServices] } : {}),
+    ...(meta.contextRestrictions
+      ? {
+        contextRestrictions: {
+          ...(meta.contextRestrictions.disallowInternal !== undefined
+            ? { disallowInternal: meta.contextRestrictions.disallowInternal }
+            : {}),
+          ...(meta.contextRestrictions.disallowScheduled !== undefined
+            ? { disallowScheduled: meta.contextRestrictions.disallowScheduled }
+            : {}),
+        },
+      }
+      : {}),
+    ...(meta.concurrency
+      ? {
+        concurrency: {
+          ...meta.concurrency,
+          eligibility: {
+            foreground: meta.concurrency.eligibility.foreground,
+            background: meta.concurrency.eligibility.background,
+          },
+        },
+      }
+      : {}),
+  };
+}
+
 /**
  * Expected requiredGatewayMethods coverage for known gateway-dependent tools.
  * If a tool appears in this map in gateway mode, it must declare matching
@@ -107,12 +150,17 @@ export type GatewayToolMetadataCoverage = Readonly<Record<string, readonly strin
 export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage = Object.freeze({
   fs_read: Object.freeze(['fs.read']),
   fs_list: Object.freeze(['fs.list']),
+  notify_operator: Object.freeze(['notify.ntfy']),
   repo_status: Object.freeze(['git.status']),
   repo_diff: Object.freeze(['git.diff']),
   repo_apply_patch: Object.freeze(['git.apply_patch']),
   repo_commit: Object.freeze(['git.commit']),
   repo_create_branch: Object.freeze(['git.create_branch']),
   repo_open_pr: Object.freeze(['git.open_pr']),
+  vault_write: Object.freeze(['vault.write']),
+  vault_read: Object.freeze(['vault.read']),
+  vault_search: Object.freeze(['vault.search']),
+  vault_daily: Object.freeze(['vault.daily']),
   issue_ready: Object.freeze(['beads.ready']),
   issue_show: Object.freeze(['beads.show']),
   issue_create: Object.freeze(['beads.create']),

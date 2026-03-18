@@ -150,7 +150,14 @@ export interface EventMap {
     shardId?: string;
   } & EventCorrelationFields;
   'agent.tool.start': { channelId: string; toolCallId: string; toolName: string; shardId?: string } & EventCorrelationFields;
-  'agent.tool.end': { channelId: string; toolCallId: string; toolName: string; isError: boolean; shardId?: string } & EventCorrelationFields;
+  'agent.tool.end': {
+    channelId: string;
+    toolCallId: string;
+    toolName: string;
+    isError: boolean;
+    errorMessage?: string;
+    shardId?: string;
+  } & EventCorrelationFields;
   'agent.compaction.start': {
     channelId: string;
     reason: 'threshold' | 'overflow';

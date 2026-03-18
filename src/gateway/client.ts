@@ -48,6 +48,7 @@ import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
   ConfirmationResolveResult,
+  RuntimeHealthResult,
   RpcSubstrateMessage,
   VoiceStreamStartParams,
   VoiceStreamChunkParams,
@@ -739,6 +740,10 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   async notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> {
     return await this.rpcInstance.request('notify.ntfy', params) as NotifyNtfyResult;
+  }
+
+  async runtimeHealth(): Promise<RuntimeHealthResult> {
+    return await this.rpcInstance.request('runtime.health', {}) as RuntimeHealthResult;
   }
 
   async listConfirmationQueue(): Promise<ConfirmationListResult> {

@@ -497,15 +497,14 @@ describe('AdminServer JSON API routes', () => {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1_701_234_567_890,
         coreTools: ['load_tools'],
-        extendedTools: ['repo_status', 'repo_diff', 'repo_apply_patch'],
-        promotedToolsConfigured: ['repo_status'],
+        extendedTools: ['repo_status', 'repo_diff', 'notify_operator'],
+        promotedToolsConfigured: ['repo_status', 'notify_operator'],
         promotedToolsActive: ['repo_status'],
         promotedToolsSkipped: [
           {
-            toolName: 'repo_apply_patch',
+            toolName: 'notify_operator',
             source: 'promoted',
-            reason: 'capability_denied',
-            missingTokens: ['git.write'],
+            reason: 'background_only',
           },
         ],
         loadedExtendedTools: [
@@ -522,6 +521,75 @@ describe('AdminServer JSON API routes', () => {
           { toolName: 'repo_diff', source: 'autoload' },
         ],
         lastSnapshot: null,
+      }),
+      getToolCatalogSnapshot: () => ({
+        generatedAt: 1_701_234_567_890,
+        tools: [
+          {
+            name: 'load_tools',
+            description: 'Load extended tools for the current session.',
+            scope: 'core',
+          },
+          {
+            name: 'repo_status',
+            description: 'Show working tree status of the substrate repo.',
+            scope: 'extended',
+            wiringMeta: {
+              requiredGatewayMethods: ['git.status'],
+            },
+          },
+          {
+            name: 'repo_diff',
+            description: 'Show file diffs in the working tree.',
+            scope: 'extended',
+            wiringMeta: {
+              requiredGatewayMethods: ['git.diff'],
+            },
+          },
+          {
+            name: 'notify_operator',
+            description: 'Send an out-of-band operator alert via ntfy.',
+            scope: 'extended',
+            wiringMeta: {
+              requiredServices: ['ntfy'],
+              requiredGatewayMethods: ['notify.ntfy'],
+              contextRestrictions: {
+                disallowInternal: true,
+                disallowScheduled: true,
+              },
+            },
+          },
+        ],
+      }),
+    };
+    const toolHealthProvider = {
+      getRuntimeServiceHealth: async () => ({
+        checkedAt: 1_701_234_567_999,
+        services: [
+          {
+            serviceId: 'gateway',
+            status: 'healthy',
+            detail: 'Gateway ready.',
+            checkedAt: 1_701_234_567_999,
+          },
+          {
+            serviceId: 'vault',
+            status: 'not_applicable',
+            detail: 'Vault is disabled in this runtime.',
+            checkedAt: 1_701_234_567_999,
+          },
+          {
+            serviceId: 'ntfy',
+            status: 'degraded',
+            detail: 'Gateway ntfy notifier is configured, but the last send failed: 503 Service Unavailable',
+            checkedAt: 1_701_234_567_999,
+            lastFailure: {
+              message: '503 Service Unavailable',
+              at: 1_701_234_567_995,
+              scope: 'notify.ntfy',
+            },
+          },
+        ],
       }),
     };
 
@@ -543,6 +611,7 @@ describe('AdminServer JSON API routes', () => {
       promptRegistry,
       cardVersionStore,
       adaptiveToolsStateProvider,
+      toolHealthProvider,
       skillsRuntime: {
         getSnapshot: () => null,
         invalidate: () => {},
@@ -1016,6 +1085,13 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('returns adaptive tool runtime state and recent adaptive telemetry', async () => {
+    await eventBus.emit('agent.tool.end', {
+      channelId: 'api-session',
+      toolCallId: 'notify-1',
+      toolName: 'notify_operator',
+      isError: true,
+      errorMessage: 'notify_operator: failure (503 Service Unavailable).',
+    });
     await eventBus.emit('agent.tools.adaptive.decision', {
       turnId: 'turn-adaptive-1',
       requestId: 'turn-adaptive-1',
@@ -1069,6 +1145,19 @@ describe('AdminServer JSON API routes', () => {
         coreTools: string[];
         activeTools: Array<{ toolName: string; source: string }>;
       } | null;
+      catalog: {
+        tools: Array<{ name: string; scope: string }>;
+      } | null;
+      serviceHealth: Array<{ serviceId: string; status: string; lastFailure?: { message: string } }>;
+      toolHealth: Array<{
+        name: string;
+        health: { status: string };
+        contexts: {
+          chat: { status: string };
+          internalHeartbeat: { status: string };
+        };
+      }>;
+      recentFailures: Array<{ toolName: string; message: string }>;
       recentTelemetry: Array<{
         type: 'decision' | 'snapshot';
         payload: Record<string, unknown>;
@@ -1080,6 +1169,38 @@ describe('AdminServer JSON API routes', () => {
     expect(adaptivePayload.state?.activeTools).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
       expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
+    ]));
+    expect(adaptivePayload.catalog?.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'load_tools', scope: 'core' }),
+      expect.objectContaining({ name: 'notify_operator', scope: 'extended' }),
+    ]));
+    expect(adaptivePayload.serviceHealth).toEqual(expect.arrayContaining([
+      expect.objectContaining({ serviceId: 'gateway', status: 'healthy' }),
+      expect.objectContaining({
+        serviceId: 'ntfy',
+        status: 'degraded',
+        lastFailure: expect.objectContaining({ message: '503 Service Unavailable' }),
+      }),
+    ]));
+    expect(adaptivePayload.toolHealth).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'notify_operator',
+        health: expect.objectContaining({ status: 'degraded' }),
+        contexts: expect.objectContaining({
+          chat: expect.objectContaining({ status: 'available' }),
+          internalHeartbeat: expect.objectContaining({ status: 'not_applicable' }),
+        }),
+      }),
+      expect.objectContaining({
+        name: 'repo_status',
+        health: expect.objectContaining({ status: 'healthy' }),
+      }),
+    ]));
+    expect(adaptivePayload.recentFailures).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolName: 'notify_operator',
+        message: 'notify_operator: failure (503 Service Unavailable).',
+      }),
     ]));
     expect(adaptivePayload.recentTelemetry).toEqual(expect.arrayContaining([
       expect.objectContaining({

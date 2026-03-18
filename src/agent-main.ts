@@ -26,6 +26,7 @@ import {
   toActiveProbeMeta,
 } from './channels/api/active-health-probe.js';
 import { AdminServer } from './channels/admin/server.js';
+import { createGatewayAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
@@ -959,6 +960,7 @@ async function main(): Promise<void> {
       confirmationQueueApi,
       cardVersionStore,
       adaptiveToolsStateProvider: agentLoop,
+      toolHealthProvider: createGatewayAdminToolHealthProvider(gateway),
     });
     await adminServer.init();
     await adminServer.start();
@@ -1047,6 +1049,7 @@ async function main(): Promise<void> {
     {
       rateLimiter: externalRateLimiter,
       defaultChannel: 'discord',
+      gatewayMode: true,
     },
   ));
 

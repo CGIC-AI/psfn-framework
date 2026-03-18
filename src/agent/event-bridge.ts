@@ -142,11 +142,14 @@ export function createEventBridge(agent: Agent, eventBus: EventBus): EventBridge
       }
       case 'tool_execution_end': {
         const toolName = event.toolName;
+        const reportedError = event.isError || hasToolResultError(event.result);
+        const errorMessage = extractToolErrorMessage(event.result);
         eventBus.emit('agent.tool.end', {
           channelId,
           toolCallId: event.toolCallId,
           toolName,
-          isError: event.isError,
+          isError: reportedError,
+          ...(reportedError && errorMessage ? { errorMessage } : {}),
           ...(shardId ? { shardId } : {}),
           ...withCorrelation('tool', 'tool_execution'),
         }).catch(err => log.warn('EventBus emit failed', { event: 'agent.tool.end', error: String(err) }));
@@ -208,4 +211,25 @@ function getToolCallFromPartial(partial: { content?: unknown[] }, contentIndex: 
   if (!block || typeof block !== 'object') return undefined;
   if ((block as { type?: string }).type !== 'toolCall') return undefined;
   return block as ToolCall;
+}
+
+function hasToolResultError(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const details = (result as { details?: unknown }).details;
+  if (!details || typeof details !== 'object') return false;
+  return (details as { isError?: unknown }).isError === true;
+}
+
+function extractToolErrorMessage(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const content = (result as { content?: unknown[] }).content;
+  if (!Array.isArray(content)) return undefined;
+  const textBlock = content.find((entry) => (
+    entry
+    && typeof entry === 'object'
+    && (entry as { type?: unknown }).type === 'text'
+    && typeof (entry as { text?: unknown }).text === 'string'
+  )) as { text?: string } | undefined;
+  const trimmed = textBlock?.text?.trim();
+  return trimmed ? trimmed : undefined;
 }

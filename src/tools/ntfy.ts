@@ -1,6 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { NotifyNtfyParams, NotifyNtfyResult } from '../gateway/protocol.js';
+import type { WirableTool } from '../agent/tool-wiring-validator.js';
 import type {
   ExternalCommunicationChannel,
   ExternalCommunicationRateLimiter,
@@ -151,6 +152,7 @@ export function createHttpNtfyNotifierFromEnv(env: NodeJS.ProcessEnv = process.e
 export interface NotifyOperatorToolOptions {
   rateLimiter?: ExternalCommunicationRateLimiter;
   defaultChannel?: ExternalCommunicationChannel;
+  gatewayMode?: boolean;
 }
 
 export function createNotifyOperatorTool(
@@ -158,8 +160,7 @@ export function createNotifyOperatorTool(
   options: NotifyOperatorToolOptions = {},
 ): AgentTool<any> {
   const defaultChannel = options.defaultChannel ?? 'discord';
-
-  return {
+  const tool: AgentTool<any> = {
     name: 'notify_operator',
     label: 'notify_operator',
     description:
@@ -266,4 +267,16 @@ export function createNotifyOperatorTool(
       }
     },
   };
+
+  const wirable = tool as WirableTool;
+  wirable.wiringMeta = {
+    ...(options.gatewayMode ? { requiredGatewayMethods: ['notify.ntfy'] } : {}),
+    requiredServices: ['ntfy'],
+    contextRestrictions: {
+      disallowInternal: true,
+      disallowScheduled: true,
+    },
+  };
+
+  return tool;
 }

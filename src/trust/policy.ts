@@ -21,6 +21,7 @@ import type {
 import {
   isHighTierTrustLevel,
   normalizeChannelVisibility,
+  sensitivityOrd,
 } from './types.js';
 import type { ResponseStyle, ResponseStyleOverrides } from '../types.js';
 import { getRuntimeTrustPolicy } from './runtime-policy.js';
@@ -424,15 +425,32 @@ export function getResponseStylePromptGuidance(style: ResponseStyle): string {
 
 // ── Continuity sharing ──
 
-export function channelsShareContinuity(a: string, b: string): boolean {
-  const visA = classifyChannel(a);
-  const visB = classifyChannel(b);
-  return visibilitiesShareContinuity(visA, visB);
+export function channelsShareContinuity(sourceChannelId: string, targetChannelId: string): boolean {
+  const sourceVisibility = classifyChannel(sourceChannelId);
+  const targetVisibility = classifyChannel(targetChannelId);
+  return visibilitiesShareContinuity(sourceVisibility, targetVisibility);
 }
 
-export function visibilitiesShareContinuity(a: ChannelVisibility, b: ChannelVisibility): boolean {
-  // Only private channels share cross-channel continuity
-  return a === 'private' && b === 'private';
+export function getVisibilityDisclosureCeiling(
+  channelVisibility: ChannelVisibility,
+): SensitivityLevel {
+  const allowed = getRuntimeTrustPolicy().visibilityAllowed[channelVisibility];
+  return allowed.reduce<SensitivityLevel>((ceiling, candidate) => (
+    sensitivityOrd(candidate) > sensitivityOrd(ceiling) ? candidate : ceiling
+  ), allowed[0] ?? 'public');
+}
+
+export function visibilitiesShareContinuity(
+  sourceVisibility: ChannelVisibility,
+  targetVisibility: ChannelVisibility,
+): boolean {
+  const trustPolicy = getRuntimeTrustPolicy();
+  const sourceAllowed = trustPolicy.visibilityAllowed[sourceVisibility];
+  const targetAllowed = trustPolicy.visibilityAllowed[targetVisibility];
+
+  // Directional: source continuity can flow into target only if the target
+  // allows every sensitivity the source channel may disclose.
+  return sourceAllowed.every(sensitivity => targetAllowed.includes(sensitivity));
 }
 
 // ── Allowed sensitivities for a context ──

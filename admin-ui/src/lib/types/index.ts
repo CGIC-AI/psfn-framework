@@ -904,9 +904,22 @@ export interface AdminValuesData {
 }
 
 // Telemetry
+export interface TelemetryCorrelation {
+  turnId?: string;
+  requestId?: string;
+  channelId?: string;
+  callType?: string;
+  originType?: string;
+  originStage?: string;
+  toolName?: string;
+  toolCallId?: string;
+  purpose?: string;
+}
+
 export interface TelemetryEvent {
   type: string;
   timestamp: number;
+  correlation?: TelemetryCorrelation;
   data: unknown;
 }
 

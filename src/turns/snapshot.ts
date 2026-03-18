@@ -4,7 +4,7 @@ import type { MemoryWithheldSummary } from '../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../memory/store.js';
 import type { PurrMemory } from '../memory/types.js';
 import type { SessionEntry } from '../session/types.js';
-import type { TurnID } from '../types.js';
+import type { ContextMessage, TurnID } from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
 
 export interface TurnPromptSnapshot {
@@ -37,6 +37,17 @@ export interface TurnMemorySnapshot {
   versionPointer: string;
 }
 
+export interface TurnPromptContextSnapshot {
+  renderedStaticPrefix: string;
+  renderedDynamicSuffix: string;
+  runtimeContext: string;
+  memoryContextBlock: string;
+  scratchpadContext: string;
+  assembledPrompt: string;
+  finalSystemPrompt: string;
+  messages: ContextMessage[];
+}
+
 export interface TurnSnapshot {
   turnId: TurnID;
   requestId: string;
@@ -45,6 +56,7 @@ export interface TurnSnapshot {
   trustLevel: TrustLevel;
   canonicalContactKey?: string;
   prompt?: TurnPromptSnapshot;
+  promptContext?: TurnPromptContextSnapshot;
   sessionContext?: TurnSessionContextSnapshot;
   memory?: TurnMemorySnapshot;
 }
@@ -72,6 +84,10 @@ export function cloneContactProfileArtifact(profile: ContactProfileArtifact): Co
 
 export function cloneEmotionalSnapshot(snapshot: EmotionalSnapshot): EmotionalSnapshot {
   return { ...snapshot };
+}
+
+export function cloneContextMessage(message: ContextMessage): ContextMessage {
+  return { ...message };
 }
 
 export function cloneMemory<T extends PurrMemory>(memory: T): T {

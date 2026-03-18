@@ -1588,6 +1588,19 @@ describe('AdminServer JSON API routes', () => {
           staticHash: 'static-hash',
           versionPointer: 'prompt-v1',
         },
+        promptContext: {
+          renderedStaticPrefix: 'Rendered static prefix',
+          renderedDynamicSuffix: 'Rendered dynamic suffix',
+          runtimeContext: 'Runtime context',
+          memoryContextBlock: 'Memory block',
+          scratchpadContext: 'Scratchpad block',
+          assembledPrompt: 'Rendered static prefix\n\nRendered dynamic suffix',
+          finalSystemPrompt: 'Final system prompt',
+          messages: [
+            { role: 'user', content: 'hello' },
+            { role: 'assistant', content: 'world' },
+          ],
+        },
         sessionContext: {
           channelId: 'api-session',
           recentEntries: [],
@@ -1772,6 +1785,11 @@ describe('AdminServer JSON API routes', () => {
       },
     });
     expect(messagesPayload.turns[0]?.snapshot?.memory?.versionPointer).toBe('memory-v1');
+    expect(messagesPayload.turns[0]?.snapshot?.promptContext?.finalSystemPrompt).toBe('Final system prompt');
+    expect(messagesPayload.turns[0]?.snapshot?.promptContext?.messages).toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'world' },
+    ]);
     expect(messagesPayload.turns[0]?.snapshot?.sessionContext?.compactionPromptText).toBe('Compaction prompt snapshot');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.contactEmotionalMemories[0]).not.toHaveProperty('embedding');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.semanticCandidates).toHaveLength(1);

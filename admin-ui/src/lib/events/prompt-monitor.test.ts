@@ -46,6 +46,7 @@ function buildTurn(seed: {
       },
       provenanceRefs: [],
     },
+    roleEnvelopeRefs: [],
     stages: [
       {
         observedAt: seed.completedAt - 40,
@@ -99,6 +100,19 @@ function buildTurn(seed: {
         dynamicSuffixTemplate: 'Dynamic suffix',
         staticHash: `${seed.promptVersionPointer}-hash`,
         versionPointer: seed.promptVersionPointer,
+      },
+      promptContext: {
+        renderedStaticPrefix: 'Rendered static prefix',
+        renderedDynamicSuffix: 'Rendered dynamic suffix',
+        runtimeContext: 'Runtime context',
+        memoryContextBlock: 'Memory block',
+        scratchpadContext: 'Scratchpad block',
+        assembledPrompt: 'Assembled prompt',
+        finalSystemPrompt: 'Final system prompt',
+        messages: [
+          { role: 'user', content: 'hello' },
+          { role: 'assistant', content: 'world' },
+        ],
       },
     },
   };
@@ -176,6 +190,19 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
           staticHash: 'live-hash',
           versionPointer: 'prompt-live',
         },
+        promptContext: {
+          renderedStaticPrefix: 'Rendered live static',
+          renderedDynamicSuffix: 'Rendered live dynamic',
+          runtimeContext: 'Live runtime context',
+          memoryContextBlock: 'Live memory block',
+          scratchpadContext: 'Live scratchpad block',
+          assembledPrompt: 'Live assembled prompt',
+          finalSystemPrompt: 'Live final system prompt',
+          messages: [
+            { role: 'user', content: 'earlier' },
+            { role: 'assistant', content: 'reply' },
+          ],
+        },
       },
     },
   });
@@ -209,6 +236,11 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
   assert.equal(metrics.ttftMs, 18);
   assert.equal(metrics.promptVersionPointer, 'prompt-live');
   assert.equal(metrics.isComplete, false);
+  assert.equal(mergedStages[0]?.snapshot?.promptContext?.finalSystemPrompt, 'Live final system prompt');
+  assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.messages, [
+    { role: 'user', content: 'earlier' },
+    { role: 'assistant', content: 'reply' },
+  ]);
 });
 
 test('mergePromptMonitorEvent ignores unrelated payloads and labels stages clearly', () => {

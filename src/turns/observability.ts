@@ -5,7 +5,12 @@ import type { MemoryWithheldSummary } from '../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../memory/store.js';
 import type { PurrMemory } from '../memory/types.js';
 import type { SessionEntry } from '../session/types.js';
-import type { TurnPromptSnapshot, TurnSnapshot } from './snapshot.js';
+import type {
+  TurnPromptContextSnapshot,
+  TurnPromptSnapshot,
+  TurnSnapshot,
+} from './snapshot.js';
+import { cloneContextMessage } from './snapshot.js';
 
 export type TurnObservabilityCallType =
   | 'chat'
@@ -51,6 +56,7 @@ export interface TurnSnapshotRecord {
   trustLevel: string;
   canonicalContactKey?: string;
   prompt?: TurnPromptSnapshot;
+  promptContext?: TurnPromptContextSnapshot;
   sessionContext?: TurnSessionContextSnapshotRecord;
   memory?: TurnMemorySnapshotRecord;
 }
@@ -182,6 +188,14 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         },
       }
       : {}),
+    ...(snapshot.promptContext
+      ? {
+        promptContext: {
+          ...snapshot.promptContext,
+          messages: snapshot.promptContext.messages.map(cloneContextMessage),
+        },
+      }
+      : {}),
     ...(snapshot.sessionContext
       ? {
         sessionContext: {
@@ -233,6 +247,14 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
   return {
     ...snapshot,
     ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
+    ...(snapshot.promptContext
+      ? {
+        promptContext: {
+          ...snapshot.promptContext,
+          messages: snapshot.promptContext.messages.map(cloneContextMessage),
+        },
+      }
+      : {}),
     ...(snapshot.sessionContext
       ? {
         sessionContext: {

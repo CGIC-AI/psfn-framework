@@ -322,6 +322,71 @@ describe('handleMessageForTurn compaction scheduling', () => {
       userId: DEFAULT_COMPANION_ID,
     }));
   });
+
+  it('captures the full model-facing prompt context in the turn snapshot', async () => {
+    const eventBus = new EventBus();
+    const emittedSnapshots: Array<Record<string, unknown>> = [];
+    eventBus.on('agent.turn.snapshot', (payload) => {
+      emittedSnapshots.push(payload.snapshot as Record<string, unknown>);
+    });
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [
+        { role: 'user', content: 'Earlier user message' },
+        { role: 'assistant', content: 'Earlier assistant reply' },
+      ],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        captureTurnMemorySnapshot: vi.fn(async () => undefined),
+        retrieve: vi.fn(async () => 'Retrieved memory block'),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+    runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+      staticPrefixTemplate: 'Static prefix template',
+      dynamicSuffixTemplate: 'Dynamic suffix template',
+      staticHash: 'static-hash',
+      versionPointer: 'prompt-v1',
+    }));
+    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
+    runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
+    runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
+
+    await handleMessageForTurn(runtime, createMessage('msg-full-context'));
+
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    expect(promptContext).toMatchObject({
+      renderedStaticPrefix: 'Rendered static prefix',
+      renderedDynamicSuffix: 'Dynamic suffix template\n\nPersona hint',
+      runtimeContext: 'Runtime context block',
+      memoryContextBlock: 'Retrieved memory block',
+      scratchpadContext: 'Scratchpad block',
+      finalSystemPrompt: 'Final system prompt',
+    });
+    expect(promptContext?.assembledPrompt).toContain('Rendered static prefix');
+    expect(promptContext?.assembledPrompt).toContain('Runtime context block');
+    expect(promptContext?.messages).toEqual([
+      { role: 'user', content: 'Earlier user message' },
+      { role: 'assistant', content: 'Earlier assistant reply' },
+    ]);
+
+    expect(emittedSnapshots).toHaveLength(2);
+    expect(emittedSnapshots.at(-1)?.promptContext).toMatchObject({
+      finalSystemPrompt: 'Final system prompt',
+      runtimeContext: 'Runtime context block',
+    });
+  });
 });
 
 describe('handleMessageForTurn pre-response concurrency', () => {

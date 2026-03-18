@@ -61,6 +61,14 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
   return {
     ...snapshot,
     ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
+    ...(snapshot.promptContext
+      ? {
+        promptContext: {
+          ...snapshot.promptContext,
+          messages: snapshot.promptContext.messages.map(message => ({ ...message })),
+        },
+      }
+      : {}),
     ...(snapshot.sessionContext
       ? {
         sessionContext: {

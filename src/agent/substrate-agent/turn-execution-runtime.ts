@@ -335,6 +335,13 @@ export async function handleMessageForTurn(
     );
     observedTurnStages.push(sanitizeTurnStageTelemetry(telemetry));
   };
+  const emitTurnSnapshot = async (snapshot: TurnSnapshot): Promise<void> => {
+    observedTurnSnapshot = sanitizeTurnSnapshot(snapshot);
+    await runtime.eventBus.emit('agent.turn.snapshot', {
+      snapshot,
+      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
+    });
+  };
   const unsubscribeRetrieval = runtime.eventBus.on('memory.retrieval', (telemetry) => {
     if (telemetry.channelId !== message.channelId) return;
     if (telemetry.requestId && telemetry.requestId !== requestId) return;
@@ -470,11 +477,7 @@ export async function handleMessageForTurn(
       ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
       ...(memorySnapshot ? { memory: memorySnapshot } : {}),
     };
-    observedTurnSnapshot = sanitizeTurnSnapshot(turnSnapshot);
-    await runtime.eventBus.emit('agent.turn.snapshot', {
-      snapshot: turnSnapshot,
-      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
-    });
+    await emitTurnSnapshot(turnSnapshot);
 
     const memoryStageStart = Date.now();
     const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
@@ -573,6 +576,8 @@ export async function handleMessageForTurn(
       emotionAppraisalChain,
     );
     let fullPrompt = '';
+    let renderedStaticPrefix = '';
+    let renderedDynamicSuffix = '';
 
     if (promptOverride.mode === 'default') {
       const staticCacheKey = runtime.buildPromptPrefixCacheKey(
@@ -582,7 +587,7 @@ export async function handleMessageForTurn(
         authorContext.subjectIdentityKey,
       );
       const staticSettingsHash = runtime.buildStaticPromptSettingsHash(templateVariables);
-      const staticPrefix = runtime.resolveStaticPromptPrefix({
+      renderedStaticPrefix = runtime.resolveStaticPromptPrefix({
         cacheKey: staticCacheKey,
         staticPrefixTemplate: turnSnapshot.prompt?.staticPrefixTemplate ?? runtime.systemPrompt,
         staticHash: turnSnapshot.prompt?.staticHash ?? runtime.hashPromptText(runtime.systemPrompt),
@@ -600,11 +605,11 @@ export async function handleMessageForTurn(
         .map(section => section?.trim() ?? '')
         .filter(section => section.length > 0)
         .join('\n\n');
-      const dynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
+      renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
         now: runtimeNow,
         variables: templateVariables,
       });
-      fullPrompt = [staticPrefix, dynamicSuffix, runtimeContext, scratchpadBlock]
+      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, runtimeContext, scratchpadBlock]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
@@ -634,6 +639,18 @@ export async function handleMessageForTurn(
         turnBudgetCharacteristics,
       ),
     );
+    turnSnapshot.capturedAt = Date.now();
+    turnSnapshot.promptContext = {
+      renderedStaticPrefix,
+      renderedDynamicSuffix,
+      runtimeContext,
+      memoryContextBlock,
+      scratchpadContext: scratchpadBlock,
+      assembledPrompt: fullPrompt,
+      finalSystemPrompt: context.systemPrompt,
+      messages: context.messages.map(contextMessage => ({ ...contextMessage })),
+    };
+    await emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: context.messages.length,

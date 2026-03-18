@@ -50,6 +50,8 @@ export interface VoxtaImportResult {
   dryRun: boolean;
   chats: VoxtaImportedChatSummary[];
   totalMessages: number;
+  writtenSessionCount: number;
+  writtenFilePaths: string[];
 }
 
 export interface ImportVoxtaCharacterChatsOptions {
@@ -62,6 +64,7 @@ export interface ImportVoxtaCharacterChatsOptions {
   profileDatabasePath?: string;
   profileAuthorId?: string;
   profileAuthorName?: string;
+  consolidateToSingleSession?: boolean;
   dryRun?: boolean;
 }
 
@@ -304,6 +307,7 @@ export function importVoxtaCharacterChats(
   const characterId = normalizeVoxtaId(options.characterId);
   const channelId = options.channelId?.trim() || 'voxta';
   const defaultChannelVisibility = options.defaultChannelVisibility?.trim() || 'private';
+  const consolidateToSingleSession = options.consolidateToSingleSession ?? false;
   const requestedChatIds = new Set((options.chatIds ?? []).map(normalizeVoxtaId));
   const db = new BetterSqlite3(dbPath, {
     readonly: true,
@@ -329,6 +333,8 @@ export function importVoxtaCharacterChats(
     }
 
     const summaries: VoxtaImportedChatSummary[] = [];
+    const writtenFilePaths: string[] = [];
+    const consolidatedMessages: Array<RawL0MessageInput & { sourceChatId: string }> = [];
 
     for (const chat of chats) {
       const rows = listChatMessages(db, chat.chatId);
@@ -343,26 +349,69 @@ export function importVoxtaCharacterChats(
 
       const firstTimestamp = messages[0]!.timestamp;
       const lastTimestamp = messages[messages.length - 1]!.timestamp;
-      const written = options.dryRun
-        ? null
-        : writeL0SessionFile({
-          sessionsDir,
-          channelId,
-          seedTimestamp: firstTimestamp,
-          seedAuthorId: profile.authorId,
-          seedAuthorName: profile.authorName,
-          messages,
-        });
+      let writtenFilePath: string | undefined;
+
+      if (consolidateToSingleSession) {
+        consolidatedMessages.push(
+          ...messages.map(message => ({
+            ...message,
+            sourceChatId: chat.chatId,
+          })),
+        );
+      } else {
+        const written = options.dryRun
+          ? null
+          : writeL0SessionFile({
+            sessionsDir,
+            channelId,
+            seedTimestamp: firstTimestamp,
+            seedAuthorId: profile.authorId,
+            seedAuthorName: profile.authorName,
+            messages,
+          });
+        writtenFilePath = written?.filePath;
+        if (written?.filePath) {
+          writtenFilePaths.push(written.filePath);
+        }
+      }
 
       summaries.push({
         chatId: chat.chatId,
         channelId,
-        filePath: written?.filePath,
+        filePath: writtenFilePath,
         title: chat.title?.trim() || undefined,
         messageCount: messages.length,
         firstTimestamp,
         lastTimestamp,
       });
+    }
+
+    if (consolidateToSingleSession && consolidatedMessages.length > 0) {
+      consolidatedMessages.sort((left, right) => {
+        if (left.timestamp !== right.timestamp) {
+          return left.timestamp - right.timestamp;
+        }
+        if (left.sourceChatId !== right.sourceChatId) {
+          return left.sourceChatId.localeCompare(right.sourceChatId);
+        }
+        const leftOrigin = left.originChannelId ?? '';
+        const rightOrigin = right.originChannelId ?? '';
+        return leftOrigin.localeCompare(rightOrigin);
+      });
+
+      const written = options.dryRun
+        ? null
+        : writeL0SessionFile({
+          sessionsDir,
+          channelId,
+          seedTimestamp: consolidatedMessages[0]!.timestamp,
+          seedAuthorId: profile.authorId,
+          seedAuthorName: profile.authorName,
+          messages: consolidatedMessages.map(({ sourceChatId: _sourceChatId, ...message }) => message),
+        });
+      if (written?.filePath) {
+        writtenFilePaths.push(written.filePath);
+      }
     }
 
     return {
@@ -373,6 +422,8 @@ export function importVoxtaCharacterChats(
       dryRun: options.dryRun ?? false,
       chats: summaries,
       totalMessages: summaries.reduce((sum, chat) => sum + chat.messageCount, 0),
+      writtenSessionCount: writtenFilePaths.length,
+      writtenFilePaths,
     };
   } finally {
     db.close();

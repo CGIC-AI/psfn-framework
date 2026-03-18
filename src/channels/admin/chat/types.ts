@@ -1,8 +1,10 @@
 import type { ChannelPrivacyLevel } from '../../../contacts/types.js';
 
 export interface AdminChatLinkedChannelOption {
+  targetKind: 'identity' | 'conversation';
   channel: string;
-  userId: string;
+  userId?: string;
+  channelId?: string;
   privacyLevel: ChannelPrivacyLevel;
 }
 
@@ -13,8 +15,9 @@ export interface AdminChatContactOption {
   linkedChannels: AdminChatLinkedChannelOption[];
 }
 
-export interface AdminChatSelectedIdentity extends AdminChatLinkedChannelOption {
+export interface AdminChatSelectedTarget extends AdminChatLinkedChannelOption {
   canonicalContactId: string;
+  sessionId: string;
 }
 
 export interface AdminChatBootstrapApiConfig {
@@ -61,7 +64,7 @@ export interface AdminChatBootstrapResponse {
   displayName: string;
   nickname?: string;
   linkedChannels: AdminChatLinkedChannelOption[];
-  selectedIdentity: AdminChatSelectedIdentity;
+  selectedTarget: AdminChatSelectedTarget;
   privacy: AdminChatPrivacyMetadata;
   onboarding: AdminChatOnboardingMetadata;
   api: AdminChatBootstrapApiConfig;
@@ -75,6 +78,7 @@ export interface AdminChatBootstrapUpdateInput {
   canonicalContactId?: string;
   channel?: string;
   userId?: string;
+  channelId?: string;
   privacyLevel?: ChannelPrivacyLevel;
   defaultAuthorName?: string;
   defaultAuthorId?: string;

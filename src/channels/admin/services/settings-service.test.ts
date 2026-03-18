@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { loadBackupConfig } from '../../../config/backup-config.js';
+import { loadCapabilityTierConfig } from '../../../config/capability-tier-config.js';
 import { loadModelsConfig } from '../../../config/models-config.js';
+import { loadSchedulerConfig } from '../../../config/scheduler-config.js';
 import { loadSettings } from '../../../settings.js';
 import type { SubstrateConfig } from '../../../types.js';
 import { AdminSettingsDataService } from './settings-service.js';
@@ -63,6 +66,113 @@ afterEach(() => {
 });
 
 describe('AdminSettingsDataService', () => {
+  it('round-trips the visible runtime-owned Garden controls through the canonical settings payload', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = new AdminSettingsDataService({ config });
+    const payload = {
+      sessionRestartBehavior: 'new_session',
+      sessionHistoryBudgetPct: 11,
+      memoryRetrievalBudgetPct: 7,
+      moodCongruenceWeight: 0.55,
+      adaptiveContextBudgetsEnabled: true,
+      extractionThresholdPct: 34,
+      extractionInterval: 7,
+      compactionEmotionalSalienceThresholdPct: 82,
+      compactionThresholdPct: 76,
+      memoryExtractionMinImportance: 0.45,
+      memoryExtractionMinConfidence: 0.5,
+      memoryExtractionMinNovelty: 0.2,
+      memoryExtractionEmotionalIntensityWeight: 0.65,
+      memoryExtractionMaxWrites: 14,
+      memoryExtractionTelemetryEnabled: false,
+      memoryRetrievalTelemetryEnabled: false,
+      embeddingProvider: 'api',
+      embeddingModel: 'nomic-embed-text',
+      embeddingDims: 768,
+      embeddingOllamaUrl: 'http://127.0.0.1:11434',
+      transformersModel: 'sentence-transformers/all-MiniLM-L6-v2',
+      transformersCacheDir: '/tmp/psfn-transformers',
+      textEmotionModel: 'j-hartmann/emotion-english-distilroberta-base',
+      textEmotionCacheDir: '/tmp/psfn-emotions',
+      textEmotionDtype: 'fp16',
+      embeddingApiUrl: 'https://example.test/v1/embeddings',
+      embeddingApiModel: 'text-embedding-3-small',
+      embeddingApiDims: 1536,
+      profileSynthesisEnabled: false,
+      profileSynthesisRefreshIntervalMs: 7_200_000,
+      profileSynthesisCooldownMs: 600_000,
+      profileSynthesisMinWrites: 3,
+      profileSynthesisMinImportance: 0.7,
+      profileSynthesisMinConfidence: 0.75,
+      profileSynthesisMinNovelty: 0.22,
+      profileSynthesisSourceMemoryLimit: 20,
+      profileSynthesisMinSourceMemories: 3,
+      uiThemeId: 'generic-dark',
+      thinkMaxTokens: 76_000,
+      thinkMaxWallTimeMs: 180_000,
+      thinkMaxSubQueries: 12,
+      retryMaxAttempts: 4,
+      retryBaseDelayMs: 2_500,
+      importProcessingRouteMode: 'local_endpoint',
+      importProcessingStrictPolicy: true,
+      importProcessingLocalEndpointUrl: 'http://127.0.0.1:8088',
+      importProcessingLocalModel: 'llama3.3:70b',
+      openRouterProviderOrder: ['openai', 'anthropic'],
+      webFetchAllowHttp: true,
+      webFetchDomainAllowlist: ['example.test', 'internal.example'],
+      webFetchAllowInternalNetwork: true,
+      webFetchTlsCaCertPaths: ['/tmp/ca-one.pem', '/tmp/ca-two.pem'],
+      ttsProvider: 'disabled',
+      voiceId: 'voice-123',
+      echoTtsUrl: 'http://127.0.0.1:8001/v1/audio/speech',
+      echoTtsVoice: 'Allison',
+      echoTtsPreset: 'High',
+      sttProvider: 'disabled',
+      deepgramModel: 'nova-2',
+      deepgramSttEndpoint: 'https://stt.example.test/v1/listen',
+      deepgramListenEndpoint: 'wss://listen.example.test/v1/listen',
+      elevenLabsModelId: 'eleven_multilingual_v2',
+      elevenLabsEndpointBase: 'https://api.elevenlabs.test',
+      obsidianVaultName: 'companion',
+      obsidianCliPath: '/usr/bin/obsidian',
+      obsidianAutoPublish: true,
+      obsidianTimeoutMs: 15_000,
+      discordTriggerWords: 'pixie, hey companion',
+      discordTriggerReactions: '👆,🔥',
+      discordTriggerListenWindowMs: 180_000,
+      telegramEnabled: true,
+      telegramAuthorizedUsers: '123456,654321',
+      promotedExtendedTools: ['obsidian_append_note', 'think'],
+      chatApiBaseUrl: 'http://127.0.0.1:3000/api',
+      moaEnabled: true,
+      moaReferenceModels: ['openai/gpt-4.1-mini', 'anthropic/claude-3.7-sonnet'],
+      moaAggregatorModel: 'openai/gpt-4.1',
+      moaMaxRounds: 3,
+      moaMaxTokensPerRound: 4096,
+      moaTimeoutMs: 90_000,
+      compositionalPolicy: {
+        enabled: true,
+        allowedTiers: ['apprentice'],
+        allowedChannelTypes: ['discord'],
+        allowedPurposes: ['think'],
+      },
+    } satisfies Record<string, unknown>;
+
+    const result = service.updateSettings(JSON.stringify(payload));
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'Settings updated',
+    });
+
+    const settingsData = await service.getSettingsData();
+    expect(settingsData.config).toEqual(expect.objectContaining(payload));
+
+    const persistedSettings = loadSettings(root);
+    expect(persistedSettings).toEqual(expect.objectContaining(payload));
+  });
+
   it('round-trips model-control runtime settings with persistence and reload guarantees', async () => {
     const root = makeTempDir();
     const refreshModelsSpy = vi.fn();
@@ -243,5 +353,79 @@ describe('AdminSettingsDataService', () => {
     expect((settingsAfter as Record<string, unknown>).discordEnabled).toBeUndefined();
     expect((settingsAfter as Record<string, unknown>).discordHeartbeatChannel).toBeUndefined();
     expect(settingsAfter).toEqual(settingsBefore);
+  });
+
+  it('routes scheduler-backed and capability-tier-backed controls through their owner files', async () => {
+    const root = makeTempDir();
+    const refreshCapabilitiesSpy = vi.fn();
+    const config = buildConfig(root, {
+      refreshCapabilities: refreshCapabilitiesSpy,
+    });
+    const service = new AdminSettingsDataService({ config });
+    const schedulerPayload = {
+      ...JSON.parse(service.getSubConfigJson('scheduler') ?? '{}'),
+      salienceDecayIntervalMs: 180_000,
+    };
+    const capabilitiesPayload = {
+      capabilityTier: 'custom',
+      customTokens: ['identity.read', 'memory.write', 'git.read'],
+    };
+
+    const schedulerResult = service.saveSubConfigJson('scheduler', JSON.stringify(schedulerPayload));
+    const capabilitiesResult = service.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: capabilitiesPayload.capabilityTier,
+      customTokens: capabilitiesPayload.customTokens,
+    }));
+
+    expect(schedulerResult).toEqual({
+      ok: true,
+      message: 'scheduler.json saved',
+    });
+    expect(capabilitiesResult).toEqual({
+      ok: true,
+      message: 'capability-tier.json saved',
+    });
+    expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
+
+    const schedulerConfig = loadSchedulerConfig(root);
+    expect(schedulerConfig.salienceDecayIntervalMs).toBe(180_000);
+    expect(config.maintenanceIntervalMs).toBe(180_000);
+
+    const capabilityConfig = loadCapabilityTierConfig(root);
+    expect(capabilityConfig.tier).toBe('custom');
+    expect(capabilityConfig.customTokens).toEqual(capabilitiesPayload.customTokens);
+
+    const settingsData = await service.getSettingsData();
+    expect(settingsData.editors.scheduler.salienceDecayIntervalMs).toBe(180_000);
+    expect(settingsData.editors.capabilities).toEqual(expect.objectContaining({
+      tier: 'custom',
+      customTokens: capabilitiesPayload.customTokens,
+    }));
+  });
+
+  it('round-trips backup controls through backup.json owner-file saves', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = new AdminSettingsDataService({ config });
+    const payload = {
+      intervalHours: 24,
+      maxRotatingBackups: 12,
+      maxWeeklyBackups: 4,
+      maxMonthlyBackups: 3,
+      mirrorDir: '/mnt/ai/psfn-bak',
+      verifyRestore: false,
+    };
+
+    const result = service.saveSubConfigJson('backup', JSON.stringify(payload));
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'backup.json saved',
+    });
+    expect(loadBackupConfig(root)).toEqual(payload);
+    expect(JSON.parse(service.getSubConfigJson('backup') ?? '{}')).toEqual(payload);
+
+    const settingsData = await service.getSettingsData();
+    expect(settingsData.editors.backup).toEqual(payload);
   });
 });

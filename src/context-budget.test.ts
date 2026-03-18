@@ -122,6 +122,144 @@ describe('context-budget', () => {
     expect(retrievalBudget.tokenBudget).toBe(750);
   });
 
+  it('prefers canonical model catalog metadata over stale chat roster metadata', () => {
+    const sessionBudget = resolveSessionHistoryBudget({
+      defaultContextWindow: 128_000,
+      modelRoster: {
+        chat: {
+          model: 'stale/chat',
+          provider: 'openrouter',
+          maxTokens: 4096,
+          contextWindow: 32_000,
+        },
+      },
+      modelCatalog: {
+        primary: {
+          model: 'catalog/chat',
+          provider: 'openrouter',
+          defaults: {
+            maxTokens: 4096,
+            contextWindow: 200_000,
+            contextBudget: {
+              sessionHistoryMinTokens: 9_000,
+            },
+          },
+        },
+      },
+      modelRoleAssignments: {
+        chat: 'primary',
+      },
+      sessionHistoryBudgetPct: 4,
+    });
+
+    expect(sessionBudget.contextWindow).toBe(200_000);
+    expect(sessionBudget.tokenBudget).toBe(9_000);
+  });
+
+  it('recomputes budgets from the canonical per-turn purpose slot', () => {
+    const sessionBudget = resolveSessionHistoryBudget({
+      defaultContextWindow: 128_000,
+      modelRoster: {
+        chat: {
+          model: 'chat-model',
+          provider: 'openrouter',
+          maxTokens: 4096,
+          contextWindow: 128_000,
+          contextBudget: {
+            sessionHistoryMinTokens: 4_000,
+          },
+        },
+      },
+      modelCatalog: {
+        primary: {
+          model: 'chat-model',
+          provider: 'openrouter',
+          defaults: {
+            maxTokens: 4096,
+            contextWindow: 128_000,
+            contextBudget: {
+              sessionHistoryMinTokens: 4_000,
+            },
+          },
+        },
+        vision: {
+          model: 'vision-model',
+          provider: 'openrouter',
+          defaults: {
+            maxTokens: 4096,
+            contextWindow: 16_000,
+            contextBudget: {
+              sessionHistoryMinTokens: 2_000,
+            },
+          },
+        },
+      },
+      modelRoleAssignments: {
+        chat: 'primary',
+        vision: 'vision',
+      },
+      sessionHistoryBudgetPct: 6,
+    }, {
+      turn: {
+        modelSelection: {
+          purpose: 'vision',
+        },
+      },
+    });
+
+    expect(sessionBudget.contextWindow).toBe(16_000);
+    expect(sessionBudget.tokenBudget).toBe(2_000);
+  });
+
+  it('matches explicit per-turn provider/model overrides against canonical metadata', () => {
+    const retrievalBudget = resolveMemoryRetrievalBudget({
+      defaultContextWindow: 128_000,
+      modelRoster: {
+        chat: {
+          model: 'chat-model',
+          provider: 'openrouter',
+          maxTokens: 4096,
+          contextWindow: 128_000,
+        },
+      },
+      modelCatalog: {
+        primary: {
+          model: 'chat-model',
+          provider: 'openrouter',
+          defaults: {
+            maxTokens: 4096,
+            contextWindow: 128_000,
+          },
+        },
+        compact: {
+          model: 'compact-model',
+          provider: 'openrouter',
+          defaults: {
+            maxTokens: 4096,
+            contextWindow: 24_000,
+            contextBudget: {
+              memoryRetrievalMinTokens: 600,
+            },
+          },
+        },
+      },
+      modelRoleAssignments: {
+        chat: 'primary',
+      },
+      memoryRetrievalBudgetPct: 2,
+    }, {
+      turn: {
+        modelSelection: {
+          provider: 'openrouter',
+          model: 'compact-model',
+        },
+      },
+    });
+
+    expect(retrievalBudget.contextWindow).toBe(24_000);
+    expect(retrievalBudget.tokenBudget).toBe(600);
+  });
+
   it('clamps or defaults budget percentages into supported ranges', () => {
     const sessionPct = resolveSessionHistoryBudgetPct({
       sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_RANGE.max + 50,

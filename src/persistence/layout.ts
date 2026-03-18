@@ -555,6 +555,10 @@ export function resolveIdentityAssetsDir(companionDataDir: string): string {
   return join(companionDataDir, 'identity-assets');
 }
 
+export function resolveGeneratedImagesDir(companionDataDir: string): string {
+  return join(resolveIdentityAssetsDir(companionDataDir), 'generated-images');
+}
+
 export function resolveBackupsDir(companionDataDir: string): string {
   return join(companionDataDir, 'backups');
 }

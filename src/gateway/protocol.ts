@@ -2,6 +2,7 @@
 // The contract between gateway (host) and agent (container).
 
 import type {
+  Attachment,
   CompletionPurpose,
   ContextMessage,
   ModelThinkingEffort,
@@ -75,6 +76,11 @@ export interface LLMEmbedParams {
 export interface DiscordSendParams {
   channelId: string;
   content: string;
+}
+
+export interface DiscordSendMediaParams {
+  channelId: string;
+  media: Attachment;
 }
 
 export interface DiscordTypingParams {
@@ -328,6 +334,10 @@ export interface DiscordSendResult {
   success: boolean;
 }
 
+export interface DiscordSendMediaResult {
+  success: boolean;
+}
+
 export interface DiscordTypingResult {
   success: boolean;
 }
@@ -460,6 +470,7 @@ export interface GatewayMethods {
   'llm.complete': [LLMCompleteParams, LLMCompleteResult];
   'llm.embed': [LLMEmbedParams, LLMEmbedResult];
   'discord.send': [DiscordSendParams, DiscordSendResult];
+  'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
@@ -523,6 +534,7 @@ export interface VoiceHandleMessageParams {
 export interface VoiceHandleMessageResult {
   content: string;
   channelId: string;
+  attachments?: Attachment[];
   model: string;
   durationMs: number;
 }

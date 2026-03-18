@@ -760,12 +760,26 @@ export class TelegramAdapter implements ChannelAdapter {
       }
 
       const hasText = response.content.trim().length > 0;
-      if (!hasText) return;
+      const responseAttachments = response.attachments ?? [];
+      if (!hasText && responseAttachments.length === 0) return;
 
       try {
-        const streamed = await this.finalizeStreamResponse(channelId, response.content);
-        if (!streamed) {
+        const streamed = hasText
+          ? await this.finalizeStreamResponse(channelId, response.content)
+          : false;
+        if (hasText && !streamed) {
           await this.outbound.sendText(replyContext, response.content);
+        }
+        if (responseAttachments.length > 0) {
+          const mediaContext: OutboundContext = hasText
+            ? {
+              channelId,
+              ...(threadId ? { threadId } : {}),
+            }
+            : replyContext;
+          for (const attachment of responseAttachments) {
+            await this.outbound.sendMedia?.(mediaContext, attachment);
+          }
         }
         await this.eventBus.emit('message.sent', { response });
       } catch (error) {

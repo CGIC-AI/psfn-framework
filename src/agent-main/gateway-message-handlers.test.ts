@@ -76,6 +76,7 @@ function createHarness(overrides?: {
       onDiscordMessage = handler;
     }),
     discordSend: vi.fn(async () => {}),
+    discordSendMedia: vi.fn(async () => {}),
   };
   const agentLoop = {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
@@ -254,6 +255,35 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'discord response');
   });
 
+  it('sends generated media attachments back through the gateway discord egress', async () => {
+    const harness = createHarness({
+      handleMessage: async () => ({
+        ...makeResponse(''),
+        attachments: [{
+          url: 'https://images.example.test/purr.png',
+          contentType: 'image/png',
+          name: 'purr.png',
+          localPath: '/tmp/purr.png',
+        }],
+      }),
+    });
+    const message = makeMessage({
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+    expect(harness.gateway.discordSendMedia).toHaveBeenCalledWith('discord:general', {
+      url: 'https://images.example.test/purr.png',
+      contentType: 'image/png',
+      name: 'purr.png',
+      localPath: '/tmp/purr.png',
+    });
+  });
+
   it('records diagnostics when discord agent handling fails', async () => {
     const harness = createHarness({
       handleMessage: async () => {
@@ -279,6 +309,7 @@ describe('registerGatewayMessageHandlers', () => {
       error: 'agent handling failure',
     });
     expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+    expect(harness.gateway.discordSendMedia).not.toHaveBeenCalled();
   });
 
   it('drops duplicate discord notifications by message id within dedupe window', async () => {

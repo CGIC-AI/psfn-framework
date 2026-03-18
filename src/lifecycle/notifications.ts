@@ -10,6 +10,7 @@ import { resolveLastActiveSessionPath } from '../persistence/layout.js';
 import { inferSessionChannelType, isInternalSessionId } from '../session/session-id.js';
 
 const log = createComponentLogger('Lifecycle');
+const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 
 // ── Interfaces ──
 
@@ -42,6 +43,7 @@ export interface LastActiveSessionData {
 
 export interface LastActiveSessionWriteInput {
   sessionId: string;
+  channelId?: string;
   channelType?: string;
   timestamp?: number;
 }
@@ -111,6 +113,7 @@ function normalizeLastActiveData(data: LastActiveData | LastActiveSessionData): 
 function toLastActiveSessionData(input: LastActiveSessionWriteInput): LastActiveSessionData | null {
   const sessionId = input.sessionId.trim();
   if (!sessionId || isInternalSessionId(sessionId)) return null;
+  const rawChannelId = typeof input.channelId === 'string' ? input.channelId.trim() : '';
 
   const timestamp = Number.isFinite(input.timestamp) && (input.timestamp ?? 0) > 0
     ? (input.timestamp as number)
@@ -121,7 +124,7 @@ function toLastActiveSessionData(input: LastActiveSessionWriteInput): LastActive
 
   return {
     sessionId,
-    channelId: sessionId,
+    channelId: rawChannelId || sessionId,
     channelType: normalizedType,
     timestamp,
   };
@@ -227,26 +230,44 @@ export function writeLastActiveChannel(dataDir: string, channelId: string): void
 }
 
 function resolveDiscordNotificationChannel(session: LastActiveSessionData | null): string | null {
-  if (!session?.sessionId) return null;
+  if (!session) return null;
 
-  const normalizedSessionId = session.sessionId.trim();
-  if (!normalizedSessionId) return null;
+  const normalizeDiscordChannelCandidate = (rawValue: string): string | null => {
+    const normalized = rawValue.trim();
+    if (!normalized) return null;
+    if (DISCORD_CHANNEL_ID_PATTERN.test(normalized)) return normalized;
+    if (normalized.startsWith('discord:')) {
+      const rawChannelId = normalized.slice('discord:'.length).trim();
+      return DISCORD_CHANNEL_ID_PATTERN.test(rawChannelId) ? rawChannelId : null;
+    }
+    const compoundSeparator = normalized.indexOf('#');
+    if (compoundSeparator > 0) {
+      const rawChannelId = normalized.slice(0, compoundSeparator).trim();
+      return DISCORD_CHANNEL_ID_PATTERN.test(rawChannelId) ? rawChannelId : null;
+    }
+    return null;
+  };
+
+  const channelCandidates = [
+    session.channelId,
+    session.sessionId,
+  ];
 
   if (session.channelType === 'discord') {
-    if (normalizedSessionId.startsWith('discord:')) {
-      const rawChannelId = normalizedSessionId.slice('discord:'.length).trim();
-      return rawChannelId.length > 0 ? rawChannelId : null;
+    for (const candidate of channelCandidates) {
+      const resolved = normalizeDiscordChannelCandidate(candidate);
+      if (resolved) return resolved;
     }
-    return normalizedSessionId;
+    return null;
   }
 
   if (session.channelType && session.channelType !== 'discord') {
     return null;
   }
 
-  if (normalizedSessionId.startsWith('discord:')) {
-    const rawChannelId = normalizedSessionId.slice('discord:'.length).trim();
-    return rawChannelId.length > 0 ? rawChannelId : null;
+  for (const candidate of channelCandidates) {
+    const resolved = normalizeDiscordChannelCandidate(candidate);
+    if (resolved) return resolved;
   }
 
   return null;
@@ -269,10 +290,14 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
 
   /** Resolve which channel to send lifecycle messages to */
   private getNotificationChannel(): string | null {
-    // Prefer the latest known Discord session, fall back to heartbeat channel.
+    // Prefer the configured Discord broadcast/heartbeat channel.
+    // Fall back to the latest active Discord session when no broadcast channel is configured.
+    if (this.heartbeatChannelId?.trim()) {
+      return this.heartbeatChannelId.trim();
+    }
     const lastActive = readLastActiveSession(this.dataDir);
     const sessionChannel = resolveDiscordNotificationChannel(lastActive);
-    return sessionChannel ?? this.heartbeatChannelId ?? null;
+    return sessionChannel ?? null;
   }
 
   async notifyPreRestart(reason?: string): Promise<void> {

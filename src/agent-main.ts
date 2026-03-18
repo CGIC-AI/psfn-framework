@@ -112,6 +112,7 @@ import {
   resolveModuleRegistryPathFromWorkspace,
 } from './modules/registry.js';
 import type { ChannelAdapter } from './channels/types.js';
+import { loadRuntimeChannelsConfig } from './channels/config.js';
 import {
   createApiServerChannelAdapterFactoryEntry,
   requireChannelAdapter,
@@ -134,6 +135,7 @@ import {
   resolveSessionsDir,
 } from './persistence/layout.js';
 import {
+  buildRuntimeChannelsConfigOverrides,
   hydrateCanonicalStartupConfig,
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
@@ -294,6 +296,11 @@ async function main(): Promise<void> {
       trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
   });
+  const channelsConfig = loadRuntimeChannelsConfig(
+    systemDataDir,
+    process.env,
+    buildRuntimeChannelsConfigOverrides(config, startupHydration.settingsDomains.runtime),
+  );
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: companionDataDir,
     defaultRootDir: runtimePathLayout.backupsDir,
@@ -981,7 +988,7 @@ async function main(): Promise<void> {
   // ── Lifecycle notifier + tools ──
 
   const startTime = Date.now();
-  const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
+  const heartbeatChannelId = channelsConfig.discord.heartbeatChannelId || undefined;
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
   };
@@ -1110,6 +1117,7 @@ async function main(): Promise<void> {
     const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
     writeLastActiveSession(companionDataDir, {
       sessionId,
+      channelId: message.channelId,
       channelType: inferSessionChannelType(sessionId) ?? message.channelType,
       timestamp: message.timestamp instanceof Date
         ? message.timestamp.getTime()

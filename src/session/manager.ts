@@ -689,6 +689,7 @@ export class SessionManager {
           params.turnBudgetCharacteristics,
         );
         const historyBudget = resolveSessionHistoryBudget(this.config, {
+          ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
           adaptiveProfile,
         });
         let recent = this.compactionBoundaryStore.getRecent(
@@ -879,6 +880,7 @@ export class SessionManager {
       turnBudgetCharacteristics,
     );
     const historyBudget = resolveSessionHistoryBudget(this.config, {
+      ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
       adaptiveProfile,
     });
     let recent = this.compactionBoundaryStore.getRecent(resolvedChannelId, historyBudget.estimatedCount);

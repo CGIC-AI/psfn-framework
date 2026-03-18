@@ -2,6 +2,10 @@ import type { ChannelPromptDock } from '../../channels/types.js';
 import type { SubstrateMessage } from '../../types.js';
 import type { ContextBudgetTurnCharacteristics } from '../../context-budget.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
+import {
+  normalizeTurnModelOverride,
+  resolveTurnModelPurpose,
+} from './model-runtime.js';
 
 export function resolveChannelPromptDock(
   message: SubstrateMessage,
@@ -68,11 +72,21 @@ export function buildTurnBudgetCharacteristics(
   message: SubstrateMessage,
   taskKind?: string,
 ): ContextBudgetTurnCharacteristics {
+  const modelOverride = normalizeTurnModelOverride(message);
+  const modelPurpose = modelOverride?.purpose ?? resolveTurnModelPurpose(message);
+
   return {
     channelId: message.channelId,
     channelType: message.channelType,
     isDirectMessage: message.isDirectMessage,
     messageText: message.content,
     ...(taskKind ? { taskKind } : {}),
+    modelSelection: {
+      purpose: modelPurpose,
+      ...(modelOverride?.slotKey ? { slotKey: modelOverride.slotKey } : {}),
+      ...(modelOverride?.provider ? { provider: modelOverride.provider } : {}),
+      ...(modelOverride?.model ? { model: modelOverride.model } : {}),
+      ...(modelOverride?.contextWindow !== undefined ? { contextWindow: modelOverride.contextWindow } : {}),
+    },
   };
 }

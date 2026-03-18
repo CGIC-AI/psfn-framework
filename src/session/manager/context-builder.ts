@@ -79,9 +79,11 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     params.turnBudgetCharacteristics,
   );
   const historyBudget = resolveSessionHistoryBudget(params.config, {
+    ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
     adaptiveProfile: adaptiveBudgetProfile,
   });
   const memoryBudget = resolveMemoryRetrievalBudget(params.config, {
+    ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
     adaptiveProfile: adaptiveBudgetProfile,
   });
   let recent = params.turnSnapshot

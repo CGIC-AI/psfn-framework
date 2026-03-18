@@ -1,0 +1,37 @@
+[Unit]
+Description=PSFN Substrate Runtime (dedicated system account)
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=__APP_ROOT__ __RUNTIME_ROOT__
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_GROUP__
+WorkingDirectory=__APP_ROOT__
+UMask=0007
+Environment=PATH=__NODE_PATH__:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=HOME=__SERVICE_HOME__
+Environment=PSFN_SKIP_DOTENV=true
+Environment=PSFN_RUNTIME_MODE=__SERVICE_MODE__
+Environment=PSFN_RUNTIME_LAYOUT_MODE=production
+Environment=PSFN_RUNTIME_ROOT=__RUNTIME_ROOT__
+Environment=GATEWAY_SOCKET=/run/psfn/gateway.sock
+EnvironmentFile=-__ENV_FILE__
+ExecStartPre=/usr/bin/test -x __NODE_BIN__
+ExecStartPre=/usr/bin/test -x __APP_ROOT__/node_modules/.bin/tsx
+ExecStart=/bin/bash __APP_ROOT__/scripts/start-gateway-agent.sh
+Restart=on-failure
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=30
+RuntimeDirectory=psfn
+RuntimeDirectoryMode=0770
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=psfn
+
+[Install]
+WantedBy=multi-user.target

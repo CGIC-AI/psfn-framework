@@ -792,5 +792,47 @@ describe('AdminServer legacy UI removal', () => {
 
       ws.close();
     });
+
+    it('streams thinking deltas with correlation metadata for Garden event bus consumers', async () => {
+      const ws = await openWebSocket(harness.port, '/api/admin/events', bearerHeaders);
+      const thinkingMessagePromise = readWebSocketMessage<{
+        type: string;
+        correlation?: {
+          turnId?: string;
+          requestId?: string;
+          channelId?: string;
+          purpose?: string;
+        };
+        data: {
+          channelId: string;
+          text: string;
+        };
+      }>(ws);
+
+      await harness.eventBus.emit('agent.stream.thinking', {
+        channelId: 'test-channel',
+        text: 'pondering',
+        turnId: 'turn-thinking-1',
+        requestId: 'turn-thinking-1',
+        purpose: 'agent.turn.prompt',
+      });
+
+      const thinkingMessage = await thinkingMessagePromise;
+      expect(thinkingMessage).toMatchObject({
+        type: 'agent.stream.thinking',
+        correlation: {
+          turnId: 'turn-thinking-1',
+          requestId: 'turn-thinking-1',
+          channelId: 'test-channel',
+          purpose: 'agent.turn.prompt',
+        },
+        data: {
+          channelId: 'test-channel',
+          text: 'pondering',
+        },
+      });
+
+      ws.close();
+    });
   });
 });

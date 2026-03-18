@@ -8,10 +8,12 @@ interface CliArgs {
   dbPath?: string;
   sessionsDir?: string;
   characterId?: string;
-  channelPrefix?: string;
+  channelId?: string;
   defaultChannelVisibility?: string;
+  profileDatabasePath?: string;
+  profileAuthorId?: string;
+  profileAuthorName?: string;
   chatIds: string[];
-  allowExistingChannels: boolean;
   dryRun: boolean;
 }
 
@@ -27,9 +29,11 @@ function printUsage(): void {
       '',
       'Options:',
       '  --chat-id <uuid>              Limit export to a specific Voxta chat (repeatable)',
-      '  --channel-prefix <prefix>     Channel prefix for generated PSFN channels (default: voxta)',
+      '  --channel-id <id>             L0 channelId for imported sessions (default: voxta)',
       '  --visibility <level>          channelVisibility for imported entries (default: private)',
-      '  --allow-existing              Append into existing generated channels instead of refusing',
+      '  --profile-db <path>           Profile attribution DB (default: ./data/psfn.db)',
+      '  --profile-id <id>             Override imported user authorId',
+      '  --profile-name <name>         Override imported user authorName',
       '  --dry-run                     Inspect what would be written without writing any files',
       '  --help                        Show this help text',
       '',
@@ -45,7 +49,6 @@ function printUsage(): void {
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     chatIds: [],
-    allowExistingChannels: false,
     dryRun: false,
   };
 
@@ -54,10 +57,6 @@ function parseArgs(argv: string[]): CliArgs {
     if (arg === '--help') {
       printUsage();
       process.exit(0);
-    }
-    if (arg === '--allow-existing') {
-      args.allowExistingChannels = true;
-      continue;
     }
     if (arg === '--dry-run') {
       args.dryRun = true;
@@ -91,10 +90,10 @@ function parseArgs(argv: string[]): CliArgs {
       index += 1;
       continue;
     }
-    if (arg === '--channel-prefix') {
+    if (arg === '--channel-id') {
       const value = argv[index + 1];
-      if (!value) throw new Error('--channel-prefix requires a value');
-      args.channelPrefix = value;
+      if (!value) throw new Error('--channel-id requires a value');
+      args.channelId = value;
       index += 1;
       continue;
     }
@@ -102,6 +101,27 @@ function parseArgs(argv: string[]): CliArgs {
       const value = argv[index + 1];
       if (!value) throw new Error('--visibility requires a value');
       args.defaultChannelVisibility = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--profile-db') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--profile-db requires a value');
+      args.profileDatabasePath = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--profile-id') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--profile-id requires a value');
+      args.profileAuthorId = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--profile-name') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--profile-name requires a value');
+      args.profileAuthorName = value;
       index += 1;
       continue;
     }
@@ -121,10 +141,12 @@ function main(): void {
     dbPath: args.dbPath,
     sessionsDir: args.sessionsDir,
     characterId: args.characterId,
-    channelPrefix: args.channelPrefix,
+    channelId: args.channelId,
     defaultChannelVisibility: args.defaultChannelVisibility,
     chatIds: args.chatIds,
-    allowExistingChannels: args.allowExistingChannels,
+    profileDatabasePath: args.profileDatabasePath,
+    profileAuthorId: args.profileAuthorId,
+    profileAuthorName: args.profileAuthorName,
     dryRun: args.dryRun,
   });
 

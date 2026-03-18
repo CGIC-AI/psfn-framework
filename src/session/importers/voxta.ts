@@ -1,9 +1,12 @@
 import BetterSqlite3 from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
-import { SessionStore } from '../store.js';
-import { toSlug } from '../store-primitives.js';
 import type { SessionEntryRole } from '../types.js';
+import { writeL0SessionFile, type RawL0MessageInput } from './l0-file-writer.js';
+import {
+  resolvePrimaryPartnerDiscordProfile,
+  type ImportedProfileAttribution,
+} from './profile-attribution.js';
 
 const SYSTEM_SENDER_ID = '00000000-0000-0000-0000-000000000000';
 
@@ -32,6 +35,7 @@ interface VoxtaMessageRow {
 export interface VoxtaImportedChatSummary {
   chatId: string;
   channelId: string;
+  filePath?: string;
   title?: string;
   messageCount: number;
   firstTimestamp: number;
@@ -52,10 +56,12 @@ export interface ImportVoxtaCharacterChatsOptions {
   dbPath: string;
   sessionsDir: string;
   characterId: string;
-  channelPrefix?: string;
+  channelId?: string;
   defaultChannelVisibility?: string;
   chatIds?: string[];
-  allowExistingChannels?: boolean;
+  profileDatabasePath?: string;
+  profileAuthorId?: string;
+  profileAuthorName?: string;
   dryRun?: boolean;
 }
 
@@ -120,7 +126,13 @@ function buildMessageContent(row: VoxtaMessageRow): string {
   return '[Voxta empty message; see metadata]';
 }
 
-function buildMetadata(row: VoxtaMessageRow, role: SessionEntryRole): string {
+function buildMetadata(
+  row: VoxtaMessageRow,
+  role: SessionEntryRole,
+  originalAuthorId: string,
+  originalAuthorName: string,
+  profileMapped: boolean,
+): string {
   return JSON.stringify({
     source: 'voxta',
     voxtaRole: row.role,
@@ -132,11 +144,10 @@ function buildMetadata(row: VoxtaMessageRow, role: SessionEntryRole): string {
     voxtaChatTime: row.chatTime,
     voxtaSpecial: row.special ?? undefined,
     voxtaAttachments: row.attachments ?? undefined,
+    originalAuthorId,
+    originalAuthorName,
+    importedProfileMapped: profileMapped,
   });
-}
-
-function buildChannelId(prefix: string, characterName: string, chatId: string): string {
-  return `${prefix}:${toSlug(characterName, 24)}:${chatId}`;
 }
 
 function loadSenderNames(db: BetterSqlite3.Database): Map<string, string> {
@@ -166,6 +177,20 @@ function loadSenderNames(db: BetterSqlite3.Database): Map<string, string> {
 
   names.set(SYSTEM_SENDER_ID, 'system');
   return names;
+}
+
+function loadVoxtaUserIds(db: BetterSqlite3.Database): Set<string> {
+  const ids = new Set<string>();
+  const rows = db.prepare(`
+    SELECT Id AS id
+    FROM Users
+  `).all() as Array<{ id: string }>;
+
+  for (const row of rows) {
+    if (!row.id) continue;
+    ids.add(normalizeVoxtaId(row.id));
+  }
+  return ids;
 }
 
 function resolveCharacterName(
@@ -239,6 +264,34 @@ function listChatMessages(
   `).all(chatId) as VoxtaMessageRow[];
 }
 
+function mapVoxtaMessageToL0(
+  row: VoxtaMessageRow,
+  profile: ImportedProfileAttribution,
+  senderNames: ReadonlyMap<string, string>,
+  voxtaUserIds: ReadonlySet<string>,
+  visibility: string,
+): RawL0MessageInput {
+  const role = mapVoxtaRole(row.role);
+  const sourceSenderId = normalizeVoxtaId(row.senderId);
+  const sourceAuthorName = row.userName?.trim()
+    || senderNames.get(sourceSenderId)
+    || (sourceSenderId === SYSTEM_SENDER_ID ? 'system' : sourceSenderId);
+  const profileMapped = voxtaUserIds.has(sourceSenderId);
+  const authorId = profileMapped ? profile.authorId : sourceSenderId;
+  const authorName = profileMapped ? profile.authorName : sourceAuthorName;
+
+  return {
+    role,
+    content: buildMessageContent(row),
+    authorId,
+    authorName,
+    timestamp: parseVoxtaTimestamp(row.timestamp),
+    metadata: buildMetadata(row, role, sourceSenderId, sourceAuthorName, profileMapped),
+    originChannelId: `voxta:${row.chatId}`,
+    channelVisibility: visibility,
+  };
+}
+
 export function importVoxtaCharacterChats(
   options: ImportVoxtaCharacterChatsOptions,
 ): VoxtaImportResult {
@@ -249,7 +302,7 @@ export function importVoxtaCharacterChats(
 
   const sessionsDir = resolve(options.sessionsDir);
   const characterId = normalizeVoxtaId(options.characterId);
-  const channelPrefix = options.channelPrefix?.trim() || 'voxta';
+  const channelId = options.channelId?.trim() || 'voxta';
   const defaultChannelVisibility = options.defaultChannelVisibility?.trim() || 'private';
   const requestedChatIds = new Set((options.chatIds ?? []).map(normalizeVoxtaId));
   const db = new BetterSqlite3(dbPath, {
@@ -260,6 +313,12 @@ export function importVoxtaCharacterChats(
   try {
     const characterName = resolveCharacterName(db, characterId);
     const senderNames = loadSenderNames(db);
+    const voxtaUserIds = loadVoxtaUserIds(db);
+    const profile = resolvePrimaryPartnerDiscordProfile({
+      databasePath: options.profileDatabasePath,
+      authorId: options.profileAuthorId,
+      authorName: options.profileAuthorName,
+    });
     const chats = listTargetChats(db, characterId, requestedChatIds);
     if (requestedChatIds.size > 0 && chats.length !== requestedChatIds.size) {
       const locatedIds = new Set(chats.map(chat => normalizeVoxtaId(chat.chatId)));
@@ -269,55 +328,38 @@ export function importVoxtaCharacterChats(
       }
     }
 
-    const store = options.dryRun ? null : new SessionStore(sessionsDir, { disableSearchIndex: true });
     const summaries: VoxtaImportedChatSummary[] = [];
 
     for (const chat of chats) {
-      const channelId = buildChannelId(channelPrefix, characterName, chat.chatId);
-      if (store && !options.allowExistingChannels && store.count(channelId) > 0) {
-        throw new Error(`Refusing to write into existing channel ${channelId}; rerun with --allow-existing if you intend to append`);
-      }
-
       const rows = listChatMessages(db, chat.chatId);
-      let messageCount = 0;
-      let firstTimestamp = 0;
-      let lastTimestamp = 0;
+      const messages = rows.map(row => mapVoxtaMessageToL0(
+        row,
+        profile,
+        senderNames,
+        voxtaUserIds,
+        defaultChannelVisibility,
+      ));
+      if (messages.length === 0) continue;
 
-      for (const row of rows) {
-        const timestamp = parseVoxtaTimestamp(row.timestamp);
-        const role = mapVoxtaRole(row.role);
-        const senderId = normalizeVoxtaId(row.senderId);
-        const authorName = row.userName?.trim()
-          || senderNames.get(senderId)
-          || (senderId === SYSTEM_SENDER_ID ? 'system' : senderId);
-        const content = buildMessageContent(row);
-        if (store) {
-          store.append({
-            channelId,
-            role,
-            content,
-            timestamp,
-            authorId: senderId,
-            authorName,
-            channelVisibility: defaultChannelVisibility,
-            metadata: buildMetadata(row, role),
-            originChannelId: `voxta:${chat.chatId}`,
-          });
-        }
-        messageCount += 1;
-        if (firstTimestamp === 0 || timestamp < firstTimestamp) {
-          firstTimestamp = timestamp;
-        }
-        if (timestamp > lastTimestamp) {
-          lastTimestamp = timestamp;
-        }
-      }
+      const firstTimestamp = messages[0]!.timestamp;
+      const lastTimestamp = messages[messages.length - 1]!.timestamp;
+      const written = options.dryRun
+        ? null
+        : writeL0SessionFile({
+          sessionsDir,
+          channelId,
+          seedTimestamp: firstTimestamp,
+          seedAuthorId: profile.authorId,
+          seedAuthorName: profile.authorName,
+          messages,
+        });
 
       summaries.push({
         chatId: chat.chatId,
         channelId,
+        filePath: written?.filePath,
         title: chat.title?.trim() || undefined,
-        messageCount,
+        messageCount: messages.length,
         firstTimestamp,
         lastTimestamp,
       });

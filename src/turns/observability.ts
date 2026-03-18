@@ -6,11 +6,16 @@ import type { ContactProfileArtifact } from '../memory/store.js';
 import type { PurrMemory } from '../memory/types.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
+  TurnToolContextSnapshot,
   TurnPromptContextSnapshot,
   TurnPromptSnapshot,
   TurnSnapshot,
 } from './snapshot.js';
-import { cloneContextMessage } from './snapshot.js';
+import {
+  cloneAdaptiveToolSnapshotTelemetry,
+  cloneContextMessage,
+  cloneToolSchema,
+} from './snapshot.js';
 
 export type TurnObservabilityCallType =
   | 'chat'
@@ -57,6 +62,7 @@ export interface TurnSnapshotRecord {
   canonicalContactKey?: string;
   prompt?: TurnPromptSnapshot;
   promptContext?: TurnPromptContextSnapshot;
+  toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshotRecord;
   memory?: TurnMemorySnapshotRecord;
 }
@@ -196,6 +202,16 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         },
       }
       : {}),
+    ...(snapshot.toolContext
+      ? {
+        toolContext: {
+          activeTools: snapshot.toolContext.activeTools.map(cloneToolSchema),
+          ...(snapshot.toolContext.adaptiveSnapshot
+            ? { adaptiveSnapshot: cloneAdaptiveToolSnapshotTelemetry(snapshot.toolContext.adaptiveSnapshot)! }
+            : {}),
+        },
+      }
+      : {}),
     ...(snapshot.sessionContext
       ? {
         sessionContext: {
@@ -252,6 +268,16 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+        },
+      }
+      : {}),
+    ...(snapshot.toolContext
+      ? {
+        toolContext: {
+          activeTools: snapshot.toolContext.activeTools.map(cloneToolSchema),
+          ...(snapshot.toolContext.adaptiveSnapshot
+            ? { adaptiveSnapshot: cloneAdaptiveToolSnapshotTelemetry(snapshot.toolContext.adaptiveSnapshot)! }
+            : {}),
         },
       }
       : {}),

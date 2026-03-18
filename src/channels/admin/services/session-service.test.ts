@@ -162,6 +162,41 @@ describe('AdminSessionDataService', () => {
               { role: 'assistant', content: 'world' },
             ],
           },
+          toolContext: {
+            activeTools: [
+              {
+                name: 'contact_lookup',
+                description: 'Look up a contact.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    query: { type: 'string' },
+                  },
+                  required: ['query'],
+                },
+              },
+            ],
+            adaptiveSnapshot: {
+              timestamp: 1_700_000_000_021,
+              turnId,
+              requestId,
+              channelId,
+              callType: 'chat',
+              purpose: 'agent.tools.adaptive.snapshot',
+              tools: [{ toolName: 'contact_lookup', source: 'core' }],
+              skipped: [{ toolName: 'notify_operator', source: 'autoload', reason: 'not_needed_for_turn' }],
+              counts: {
+                core: 1,
+                promoted: 0,
+                extendedLoaded: 0,
+                autoload: 0,
+                deferred: 0,
+                total: 1,
+              },
+              taskKind: null,
+              intent: 'chat',
+            },
+          },
           sessionContext: {
             channelId,
             recentEntries: [],
@@ -282,6 +317,17 @@ describe('AdminSessionDataService', () => {
           { role: 'user', content: 'hello' },
           { role: 'assistant', content: 'world' },
         ],
+      },
+      toolContext: {
+        activeTools: [
+          {
+            name: 'contact_lookup',
+          },
+        ],
+        adaptiveSnapshot: {
+          tools: [{ toolName: 'contact_lookup', source: 'core' }],
+          skipped: [{ toolName: 'notify_operator', reason: 'not_needed_for_turn' }],
+        },
       },
       sessionContext: {
         compactionPromptText: 'Compaction prompt snapshot',

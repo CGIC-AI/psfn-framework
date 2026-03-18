@@ -69,6 +69,29 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
         },
       }
       : {}),
+    ...(snapshot.toolContext
+      ? {
+        toolContext: {
+          activeTools: snapshot.toolContext.activeTools.map(tool => ({
+            ...tool,
+            inputSchema: structuredClone(tool.inputSchema),
+          })),
+          ...(snapshot.toolContext.adaptiveSnapshot
+            ? {
+              adaptiveSnapshot: {
+                ...snapshot.toolContext.adaptiveSnapshot,
+                tools: snapshot.toolContext.adaptiveSnapshot.tools.map(tool => ({ ...tool })),
+                skipped: snapshot.toolContext.adaptiveSnapshot.skipped.map(skip => ({
+                  ...skip,
+                  ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
+                })),
+                counts: { ...snapshot.toolContext.adaptiveSnapshot.counts },
+              },
+            }
+            : {}),
+        },
+      }
+      : {}),
     ...(snapshot.sessionContext
       ? {
         sessionContext: {

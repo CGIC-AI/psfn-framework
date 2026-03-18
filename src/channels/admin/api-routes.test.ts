@@ -1601,6 +1601,41 @@ describe('AdminServer JSON API routes', () => {
             { role: 'assistant', content: 'world' },
           ],
         },
+        toolContext: {
+          activeTools: [
+            {
+              name: 'contact_lookup',
+              description: 'Look up a contact.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  query: { type: 'string' },
+                },
+                required: ['query'],
+              },
+            },
+          ],
+          adaptiveSnapshot: {
+            timestamp: Date.now() + 3,
+            turnId,
+            requestId: 'api-session-turn-1',
+            channelId: 'api-session',
+            callType: 'chat',
+            purpose: 'agent.tools.adaptive.snapshot',
+            tools: [{ toolName: 'contact_lookup', source: 'core' }],
+            skipped: [{ toolName: 'notify_operator', source: 'autoload', reason: 'not_needed_for_turn' }],
+            counts: {
+              core: 1,
+              promoted: 0,
+              extendedLoaded: 0,
+              autoload: 0,
+              deferred: 0,
+              total: 1,
+            },
+            taskKind: null,
+            intent: 'chat',
+          },
+        },
         sessionContext: {
           channelId: 'api-session',
           recentEntries: [],
@@ -1750,6 +1785,16 @@ describe('AdminServer JSON API routes', () => {
           data: { candidateCount?: number; withheldCount?: number; withheldReasonCounts?: Record<string, number> };
         }>;
         snapshot: {
+          promptContext?: {
+            finalSystemPrompt?: string;
+            messages?: Array<{ role: string; content: string }>;
+          };
+          toolContext?: {
+            activeTools?: Array<{ name: string }>;
+            adaptiveSnapshot?: {
+              skipped?: Array<{ toolName?: string; reason?: string }>;
+            };
+          };
           memory?: {
             versionPointer: string;
             contactEmotionalMemories: Array<Record<string, unknown>>;
@@ -1789,6 +1834,17 @@ describe('AdminServer JSON API routes', () => {
     expect(messagesPayload.turns[0]?.snapshot?.promptContext?.messages).toEqual([
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'world' },
+    ]);
+    expect(messagesPayload.turns[0]?.snapshot?.toolContext?.activeTools).toEqual([
+      expect.objectContaining({
+        name: 'contact_lookup',
+      }),
+    ]);
+    expect(messagesPayload.turns[0]?.snapshot?.toolContext?.adaptiveSnapshot?.skipped).toEqual([
+      expect.objectContaining({
+        toolName: 'notify_operator',
+        reason: 'not_needed_for_turn',
+      }),
     ]);
     expect(messagesPayload.turns[0]?.snapshot?.sessionContext?.compactionPromptText).toBe('Compaction prompt snapshot');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.contactEmotionalMemories[0]).not.toHaveProperty('embedding');

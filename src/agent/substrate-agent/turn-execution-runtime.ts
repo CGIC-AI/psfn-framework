@@ -59,6 +59,7 @@ import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import { resolveModel } from '../stream-adapter.js';
 import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
+import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import {
   hasVisionAttachments,
   buildTurnUserContent,
@@ -74,6 +75,10 @@ import type {
   BackgroundContinuationCompletionSignal,
   PendingBackgroundContinuationDelivery,
 } from './background-continuation-runtime.js';
+import {
+  cloneObservedAdaptiveToolSnapshot,
+  readActiveTurnToolSchemas,
+} from './turn-tool-context.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -210,6 +215,7 @@ export interface TurnExecutionRuntime {
     taskKind: string | undefined,
     correlation: CorrelationMetadata,
   ) => AutoloadTurnOutcome;
+  getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
   applyActiveToolsToAgentForTurn: (
     message: SubstrateMessage,
     taskKind: string | undefined,
@@ -706,6 +712,20 @@ export async function handleMessageForTurn(
         turnCorrelationBase,
         autoloadOutcome,
       );
+      const adaptiveToolSnapshot = cloneObservedAdaptiveToolSnapshot(
+        runtime.getAdaptiveToolRuntimeState().lastSnapshot,
+      );
+      const activeTools = readActiveTurnToolSchemas(runtime.agent);
+      if (activeTools.length > 0 || adaptiveToolSnapshot) {
+        turnSnapshot.toolContext = {
+          activeTools,
+          ...(adaptiveToolSnapshot
+            ? { adaptiveSnapshot: adaptiveToolSnapshot }
+            : {}),
+        };
+        turnSnapshot.capturedAt = Date.now();
+        await emitTurnSnapshot(turnSnapshot);
+      }
 
       const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
       const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];

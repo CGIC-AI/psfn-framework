@@ -276,6 +276,10 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       return 'ALLOW';
     }
 
+    case 'image.create':
+    case 'image.edit':
+      return 'ALLOW';
+
     case 'vault.write':
     case 'vault.read':
     case 'vault.search':

@@ -11,6 +11,7 @@ import { registerVaultMethods } from './vault.js';
 import { registerFilesystemMethods } from './fs.js';
 import { registerGitMethods } from './git.js';
 import { registerBeadsMethods } from './beads.js';
+import { registerImageMethods } from './image.js';
 
 export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerLLMMethods(runtime);
@@ -25,4 +26,5 @@ export function registerGatewayMethods(runtime: GatewayMethodRuntime): void {
   registerFilesystemMethods(runtime);
   registerGitMethods(runtime);
   registerBeadsMethods(runtime);
+  registerImageMethods(runtime);
 }

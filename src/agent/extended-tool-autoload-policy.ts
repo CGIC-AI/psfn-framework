@@ -83,6 +83,8 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'issue_sync',
   ],
   social: [
+    'image_create',
+    'image_edit',
     'vault_write',
     'vault_daily',
   ],

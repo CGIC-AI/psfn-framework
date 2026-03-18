@@ -64,6 +64,8 @@ describe('resolveClientMethod', () => {
     expect(resolveClientMethod('git.open_pr')).toBe('gitOpenPR');
     expect(resolveClientMethod('beads.ready')).toBe('beadsReady');
     expect(resolveClientMethod('beads.create')).toBe('beadsCreate');
+    expect(resolveClientMethod('image.create')).toBe('imageCreate');
+    expect(resolveClientMethod('image.edit')).toBe('imageEdit');
     expect(resolveClientMethod('llm.chat')).toBe('stream');
     expect(resolveClientMethod('llm.complete')).toBe('complete');
     expect(resolveClientMethod('discord.send')).toBe('discordSend');
@@ -500,6 +502,8 @@ describe('extractGatewayMethods with GatewayClient shape', () => {
       beadsUpdate(): void { /* noop */ }
       beadsClose(): void { /* noop */ }
       beadsSync(): void { /* noop */ }
+      imageCreate(): void { /* noop */ }
+      imageEdit(): void { /* noop */ }
     }
 
     const methods = extractGatewayMethods(new FakeGatewayClient());
@@ -513,6 +517,8 @@ describe('extractGatewayMethods with GatewayClient shape', () => {
     expect(methods.has('gitOpenPR')).toBe(true);
     expect(methods.has('beadsReady')).toBe(true);
     expect(methods.has('beadsCreate')).toBe(true);
+    expect(methods.has('imageCreate')).toBe(true);
+    expect(methods.has('imageEdit')).toBe(true);
 
     // Verify LLM methods
     expect(methods.has('stream')).toBe(true);

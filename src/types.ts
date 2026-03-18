@@ -9,6 +9,7 @@ import type { TurnID } from './turns/types.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import type { ChannelVisibility } from './trust/types.js';
+import type { ImageWorkflowSettings } from './images/types.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
 import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './config/seed-defaults.js';
 import { parseOptionalStringEnv } from './utils/env.js';
@@ -603,6 +604,9 @@ export interface SubstrateConfig {
   elevenLabsVoiceId?: string;
   elevenLabsModelId?: string;
   elevenLabsEndpointBase?: string;
+  falApiKey?: string;
+  comfyUiBaseUrl?: string;
+  imageWorkflows?: ImageWorkflowSettings;
   echoTtsUrl?: string;
   echoTtsVoice?: string;
   echoTtsPreset?: string;
@@ -912,6 +916,8 @@ export function loadConfig(): SubstrateConfig {
     elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
     elevenLabsModelId: runtimeSeedDefaults.elevenLabsModelId,
     elevenLabsEndpointBase: runtimeSeedDefaults.elevenLabsEndpointBase,
+    falApiKey: process.env.FAL_API_KEY,
+    imageWorkflows: {},
     ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,
     retryBaseDelayMs: DEFAULT_RETRY_BASE_DELAY_MS,

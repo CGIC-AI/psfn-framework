@@ -46,6 +46,7 @@ import {
 import {
   validateCompositionalPolicyConfig,
 } from '../../../compositional/policy.js';
+import { normalizeImageWorkflowSettings } from '../../../images/types.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
@@ -301,6 +302,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       litellmBaseUrl: process.env.LITELLM_BASE_URL ? '[set]' : '[not set]',
       litellmApiKey: process.env.LITELLM_API_KEY ? '[set]' : '[not set]',
       importProcessingLocalApiKey: process.env.IMPORT_PROCESSING_LOCAL_API_KEY ? '[set]' : '[not set]',
+      falApiKey: process.env.FAL_API_KEY ? '[set]' : '[not set]',
       telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ? '[set]' : '[not set]',
     };
   }
@@ -533,6 +535,23 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
+  private validateImageWorkflowsField(
+    payload: Record<string, unknown>,
+    errors: SettingsValidationError[],
+  ): void {
+    if (!('imageWorkflows' in payload)) return;
+    try {
+      normalizeImageWorkflowSettings(payload.imageWorkflows);
+    } catch (error) {
+      this.pushFieldError(
+        errors,
+        'imageWorkflows',
+        error instanceof Error ? error.message : 'imageWorkflows is invalid',
+        'invalid_object',
+      );
+    }
+  }
+
   private validateModelCatalogRouting(
     payload: Record<string, unknown>,
     errors: SettingsValidationError[],
@@ -637,7 +656,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     this.validateHttpUrlField(payload, 'importProcessingLocalEndpointUrl', errors);
     this.validateHttpUrlField(payload, 'chatApiBaseUrl', errors);
+    this.validateHttpUrlField(payload, 'comfyUiBaseUrl', errors);
     this.validateCompositionalPolicyField(payload, errors);
+    this.validateImageWorkflowsField(payload, errors);
     this.validateModelCatalogRouting(payload, errors);
     this.validateNumberRangeField(payload, 'moodCongruenceWeight', MOOD_CONGRUENCE_WEIGHT_RANGE, errors);
 

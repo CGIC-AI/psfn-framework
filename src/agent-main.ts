@@ -48,6 +48,8 @@ import { registerBeadsTools } from './beads/runtime-wiring.js';
 import { GatewayBeadsOps } from './beads/gateway-ops.js';
 import { registerFilesystemTools } from './filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from './filesystem/gateway-ops.js';
+import { registerImageTools } from './images/runtime-wiring.js';
+import { GatewayImageOps } from './images/gateway-ops.js';
 import {
   DiscordLifecycleNotifier,
   writeLastActiveSession,
@@ -493,6 +495,7 @@ async function main(): Promise<void> {
     repoRoot: process.cwd(),
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
+  registerImageTools(agentLoop, new GatewayImageOps(gateway), { gatewayMode: true });
 
   // Prompt stack — layered, editable system prompt
   const promptStore = wirePromptRuntime(agentLoop, companionDataDir, composeSystemPromptTemplate(), {

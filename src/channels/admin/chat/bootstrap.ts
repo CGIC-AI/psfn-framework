@@ -355,7 +355,7 @@ export class AdminChatBootstrapService {
     this.selection.userId = selectedTarget.userId;
     this.selection.channelId = selectedTarget.channelId;
 
-    const defaultAuthorName = this.selection.defaultAuthorName ?? selectedContact.displayName;
+    const defaultAuthorName = this.selection.defaultAuthorName ?? (selectedContact.nickname ?? selectedContact.displayName);
     const defaultAuthorId = this.selection.defaultAuthorId ?? this.resolveDefaultAuthorId(selectedContact, selectedTarget);
     this.selection.defaultAuthorName = defaultAuthorName;
     this.selection.defaultAuthorId = defaultAuthorId;
@@ -371,6 +371,7 @@ export class AdminChatBootstrapService {
       defaultAuthorId,
       defaultAuthorName,
       selectedTarget.privacyLevel,
+      selectedContact.canonicalContactId,
     );
     const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);
     const voiceWebSocketUrl = buildAbsoluteAdminChatApiUrl(VOICE_WEBSOCKET_PATH, apiBaseUrl);
@@ -500,12 +501,14 @@ export class AdminChatBootstrapService {
     defaultAuthorId: string,
     defaultAuthorName: string,
     privacyLevel: ChannelPrivacyLevel,
+    canonicalContactId: string,
   ): Record<string, string> {
     return {
       'X-Session-ID': defaultSessionId,
       'X-User-ID': defaultAuthorId,
       'X-User-Name': defaultAuthorName,
       'X-Channel-Privacy': privacyLevel,
+      'X-Canonical-Contact-ID': canonicalContactId,
     };
   }
 

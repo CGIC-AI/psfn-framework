@@ -24,6 +24,7 @@ import type {
   CapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
 import type { SettingsContractData } from '../../../config/settings-contract.js';
+import type { BackupJsonConfig } from '../../../config/backup-config.js';
 import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
@@ -288,6 +289,7 @@ export interface SettingsConfigEditors {
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;
   capabilities: CapabilityTierConfig;
+  backup: BackupJsonConfig;
 }
 
 export interface AdminVoiceProviderOption {
@@ -324,6 +326,8 @@ export interface AdminSettingsService {
   getSettingsData(): Promise<AdminSettingsData>;
   getSettingsContractData(): SettingsContractData;
   updateSettings(body: string): ConfigUpdateResult;
+  getSubConfigJson(key: string): string | null;
+  saveSubConfigJson(key: string, json: string): ConfigUpdateResult;
 }
 
 export interface AdminContactListData {

@@ -148,6 +148,26 @@
     return rt.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
 
+  function formatAuditField(field: string): string {
+    switch (field) {
+      case 'trust_level':
+        return 'Trust';
+      case 'display_name':
+        return 'Display Name';
+      case 'relationship_type':
+        return 'Relationship';
+      case 'channel_privacy':
+        return 'Channel Privacy';
+      case 'channel_link':
+        return 'Channel Link';
+      case 'notes':
+      case 'nickname':
+        return field.charAt(0).toUpperCase() + field.slice(1);
+      default:
+        return formatRelType(field);
+    }
+  }
+
   function contactChannelKey(ch: { channel: string; userId: string }): string {
     return `identity:${ch.channel}:${ch.userId}`;
   }
@@ -545,7 +565,7 @@
           onclick={() => showAuditTrail = !showAuditTrail}
         >
           <div>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Trust & Note Mutation Audit</h2>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Contact Mutation Audit</h2>
             <p class="text-sm text-shadow-600 mt-0.5">
               {data.mutationAudits.length} mutation{data.mutationAudits.length !== 1 ? 's' : ''} recorded
             </p>
@@ -571,9 +591,7 @@
                 {#each data.mutationAudits as audit (audit.id)}
                   <tr class="hover:bg-bark-50">
                     <td class="px-4 py-2.5 text-sm text-shadow-800">{contactNameForId(audit.contactId)}</td>
-                    <td class="px-4 py-2.5 text-sm text-shadow-700 capitalize">
-                      {audit.field === 'trust_level' ? 'trust' : audit.field}
-                    </td>
+                    <td class="px-4 py-2.5 text-sm text-shadow-700">{formatAuditField(audit.field)}</td>
                     <td class="px-4 py-2.5 font-mono text-sm text-shadow-700">{audit.actor}</td>
                     <td class="px-4 py-2.5">
                       {#if audit.oldValue}

@@ -42,6 +42,9 @@ import {
   LEGACY_DISCORD_CHANNEL,
   isPrimaryIdentity,
   isValidChannelPrivacyLevel,
+  normalizeIdentity,
+  normalizeNicknameValue,
+  normalizePrivacyLevel,
 } from './store/identity-utils.js';
 import { mergeContacts as mergeContactsOperation } from './store/merge-operations.js';
 import {
@@ -110,6 +113,23 @@ export interface ContactTrustDriftApplyResult {
 
 function sanitizeContactFileComponent(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+function serializeChannelPrivacyAuditValue(params: {
+  channel: string;
+  privacyLevel: ChannelPrivacyLevel;
+  userId?: string;
+  channelId?: string;
+}): string {
+  return JSON.stringify(params);
+}
+
+function serializeChannelLinkAuditValue(params: {
+  channel: string;
+  userId: string;
+  privacyLevel: ChannelPrivacyLevel;
+}): string {
+  return JSON.stringify(params);
 }
 
 export class ContactStore {
@@ -473,19 +493,35 @@ export class ContactStore {
     updateContactLastSeen(this.db, id);
   }
 
-  updateIdentityProfile(contactId: string, displayName: string, nickname?: string): boolean {
+  updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): boolean {
     const contact = this.getById(contactId);
     if (!contact) return false;
+
+    const nextDisplayName = displayName.trim() || contact.displayName;
+    const requestedNickname = normalizeNicknameValue(nickname);
+    const nextNickname = requestedNickname === undefined
+      ? (contact.nickname ?? null)
+      : requestedNickname;
+
+    if (contact.displayName === nextDisplayName && (contact.nickname ?? null) === nextNickname) {
+      return true;
+    }
 
     const updated = updateContactIdentityProfile(
       this.db,
       contactId,
       contact.displayName,
       contact.nickname,
-      displayName,
+      nextDisplayName,
       nickname,
     );
     if (updated) {
+      if (contact.displayName !== nextDisplayName) {
+        appendMutationAuditEntry(this.db, contactId, 'display_name', contact.displayName, nextDisplayName, actor);
+      }
+      if ((contact.nickname ?? null) !== nextNickname) {
+        appendMutationAuditEntry(this.db, contactId, 'nickname', contact.nickname ?? null, nextNickname, actor);
+      }
       this.syncContactExports();
     }
     return updated;
@@ -559,9 +595,10 @@ export class ContactStore {
     return hasLearnedMoodSnapshot(snapshot) ? snapshot : undefined;
   }
 
-  updateRelationshipType(id: string, relationshipType: RelationshipType): boolean {
+  updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): boolean {
     const contact = this.getById(id);
     if (!contact) return false;
+    if (contact.relationshipType === relationshipType) return true;
 
     if (contact.trustLevel === 'primary' && relationshipType !== 'partner') {
       log.warn('Attempted to change primary user relationship type', { id, relationshipType });
@@ -569,6 +606,7 @@ export class ContactStore {
     }
 
     updateContactRelationshipType(this.db, id, relationshipType);
+    appendMutationAuditEntry(this.db, id, 'relationship_type', contact.relationshipType, relationshipType, actor);
     this.syncContactExports();
     return true;
   }
@@ -578,10 +616,36 @@ export class ContactStore {
     channel: ContactChannel,
     channelUserId: string,
     privacyLevel: ChannelPrivacyLevel,
+    actor?: string,
   ): boolean {
     if (!isValidChannelPrivacyLevel(privacyLevel)) return false;
+    const contact = this.getById(contactId);
+    if (!contact) return false;
+    const normalizedIdentity = normalizeIdentity(channel, channelUserId);
+    const existingLink = contact.channels?.find(link => (
+      link.channel === normalizedIdentity.channel && link.userId === normalizedIdentity.userId
+    ));
+    if (!existingLink) return false;
+    if (existingLink.privacyLevel === privacyLevel) return true;
+
     const updated = updateContactChannelPrivacy(this.db, contactId, channel, channelUserId, privacyLevel);
     if (updated) {
+      appendMutationAuditEntry(
+        this.db,
+        contactId,
+        'channel_privacy',
+        serializeChannelPrivacyAuditValue({
+          channel: normalizedIdentity.channel,
+          userId: normalizedIdentity.userId,
+          privacyLevel: existingLink.privacyLevel,
+        }),
+        serializeChannelPrivacyAuditValue({
+          channel: normalizedIdentity.channel,
+          userId: normalizedIdentity.userId,
+          privacyLevel,
+        }),
+        actor,
+      );
       this.syncContactExports();
     }
     return updated;
@@ -592,10 +656,41 @@ export class ContactStore {
     channel: ContactChannel,
     channelId: string,
     privacyLevel: ChannelPrivacyLevel,
+    actor?: string,
   ): boolean {
     if (!isValidChannelPrivacyLevel(privacyLevel)) return false;
+    const contact = this.getById(contactId);
+    if (!contact) return false;
+    const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
+    const trimmedChannelId = channelId.trim();
+    if (!trimmedChannelId) return false;
+    const existingChannel = contact.conversationChannels?.find(entry => (
+      entry.channel === normalizedChannel && entry.channelId === trimmedChannelId
+    ));
+    const previousPrivacyLevel = existingChannel?.privacyLevel;
+    const normalizedPrivacyLevel = normalizePrivacyLevel(privacyLevel, normalizedChannel);
+    if (previousPrivacyLevel === normalizedPrivacyLevel) return true;
+
     const updated = updateConversationChannelPrivacy(this.db, contactId, channel, channelId, privacyLevel);
     if (updated) {
+      appendMutationAuditEntry(
+        this.db,
+        contactId,
+        'channel_privacy',
+        previousPrivacyLevel
+          ? serializeChannelPrivacyAuditValue({
+            channel: normalizedChannel,
+            channelId: trimmedChannelId,
+            privacyLevel: previousPrivacyLevel,
+          })
+          : null,
+        serializeChannelPrivacyAuditValue({
+          channel: normalizedChannel,
+          channelId: trimmedChannelId,
+          privacyLevel: normalizedPrivacyLevel,
+        }),
+        actor,
+      );
       this.syncContactExports();
     }
     return updated;
@@ -646,6 +741,7 @@ export class ContactStore {
     channel: ContactChannel,
     channelUserId: string,
     options?: ContactIdentityLinkOptions,
+    actor?: string,
   ): ContactIdentityLinkResult {
     const result = linkChannelIdentity(
       this.buildUpsertResolveContext(),
@@ -654,6 +750,25 @@ export class ContactStore {
       channelUserId,
       options,
     );
+    if (result === 'linked') {
+      const normalizedIdentity = normalizeIdentity(channel, channelUserId);
+      const updatedContact = this.getById(contactId);
+      const linkedChannel = updatedContact?.channels?.find(link => (
+        link.channel === normalizedIdentity.channel && link.userId === normalizedIdentity.userId
+      ));
+      appendMutationAuditEntry(
+        this.db,
+        contactId,
+        'channel_link',
+        null,
+        serializeChannelLinkAuditValue({
+          channel: normalizedIdentity.channel,
+          userId: normalizedIdentity.userId,
+          privacyLevel: linkedChannel?.privacyLevel ?? normalizePrivacyLevel(options?.privacyLevel, normalizedIdentity.channel),
+        }),
+        actor,
+      );
+    }
     this.syncContactExports();
     return result;
   }
@@ -704,11 +819,28 @@ export class ContactStore {
     return deleted;
   }
 
-  unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string): boolean {
+  unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): boolean {
     const contact = this.getById(contactId);
     if (!contact) return false;
+    const normalizedIdentity = normalizeIdentity(channel, channelUserId);
+    const existingLink = contact.channels?.find(link => (
+      link.channel === normalizedIdentity.channel && link.userId === normalizedIdentity.userId
+    ));
+    if (!existingLink) return false;
     const unlinked = unlinkChannelIdentityOperation(this.db, contactId, channel, channelUserId);
     if (unlinked) {
+      appendMutationAuditEntry(
+        this.db,
+        contactId,
+        'channel_link',
+        serializeChannelLinkAuditValue({
+          channel: normalizedIdentity.channel,
+          userId: normalizedIdentity.userId,
+          privacyLevel: existingLink.privacyLevel,
+        }),
+        null,
+        actor,
+      );
       this.syncContactExports();
     }
     return unlinked;

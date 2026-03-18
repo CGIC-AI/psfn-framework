@@ -1933,6 +1933,23 @@ describe('AdminServer JSON API routes', () => {
     expect(patchRes.status).toBe(200);
     expect(contactStore.getById(contact.id)?.notes).toBe('after patch');
 
+    const auditRes = await request(
+      port,
+      'GET',
+      `/api/admin/contacts?contactId=${encodeURIComponent(contact.id)}&field=channel_privacy&limit=10`,
+      undefined,
+      authHeaders,
+    );
+    expect(auditRes.status).toBe(200);
+    const auditPayload = JSON.parse(auditRes.body) as {
+      mutationAudits: Array<{ field: string; actor: string; newValue?: string }>;
+    };
+    expect(auditPayload.mutationAudits.some(entry => (
+      entry.field === 'channel_privacy'
+      && entry.actor === 'admin:api'
+      && entry.newValue?.includes('"privacyLevel":"broadcast"')
+    ))).toBe(true);
+
     const badPatch = await request(
       port,
       'PATCH',

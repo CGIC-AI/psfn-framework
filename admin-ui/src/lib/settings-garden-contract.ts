@@ -35,15 +35,7 @@ export interface GardenSettingsFieldExposure {
 }
 
 export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
-  primaryModel: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  primaryProvider: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  primaryMaxTokens: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  extractionModel: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  extractionProvider: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  extractionMaxTokens: { sectionId: 'models', surface: 'custom', editorId: 'models' },
   modelCatalog: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  modelRoleAssignments: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  modelRoster: { sectionId: 'models', surface: 'custom', editorId: 'models' },
   sessionHistoryBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   memoryRetrievalBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   moodCongruenceWeight: { sectionId: 'budget', surface: 'advanced' },
@@ -101,10 +93,6 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   webFetchAllowHttp: { sectionId: 'fetch', surface: 'advanced' },
   webFetchDomainAllowlist: { sectionId: 'fetch', surface: 'advanced' },
   webFetchAllowInternalNetwork: { sectionId: 'fetch', surface: 'advanced' },
-  webFetchLocalCrawlerEnabled: { sectionId: 'fetch', surface: 'advanced' },
-  webFetchLocalCrawlerAllowHttp: { sectionId: 'fetch', surface: 'advanced' },
-  webFetchLocalCrawlerHostAllowlist: { sectionId: 'fetch', surface: 'advanced' },
-  webFetchLocalCrawlerDomainAllowlist: { sectionId: 'fetch', surface: 'advanced' },
   webFetchTlsCaCertPaths: { sectionId: 'fetch', surface: 'advanced' },
   ttsProvider: { sectionId: 'voice', surface: 'advanced' },
   voiceId: { sectionId: 'voice', surface: 'advanced' },

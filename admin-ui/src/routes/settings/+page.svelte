@@ -521,6 +521,10 @@
     return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
   }
 
+  function isDeprecatedField(key: string): boolean {
+    return fieldContract(key)?.deprecated === true;
+  }
+
   function humanizeSettingValue(value: string): string {
     return value
       .replaceAll(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -2485,8 +2489,16 @@
   <!-- ADVANCED MODE -->
   {:else if mode === 'advanced'}
     <div class="space-y-3">
+      <div class="rounded-2xl border border-bark-300 bg-bark-100/70 px-4 py-3 text-sm text-shadow-700">
+        Legacy and removed runtime keys are hidden here. Garden only shows canonical settings; if an old key is submitted through a raw editor or API call, save validation will return migration guidance instead of silently accepting it.
+      </div>
       {#each SECTIONS as section}
-        {@const sectionKeys = section.keys.filter((k) => data && k in (data.config as Record<string, unknown>) && !MODEL_OWNED_FIELDS.has(k))}
+        {@const sectionKeys = section.keys.filter((k) => (
+          data
+          && k in (data.config as Record<string, unknown>)
+          && !MODEL_OWNED_FIELDS.has(k)
+          && !isDeprecatedField(k)
+        ))}
         {#if sectionKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button
@@ -2669,7 +2681,11 @@
       <!-- Other (uncategorized) keys -->
       {#if data}
         {@const allCategorized = new Set(SECTIONS.flatMap(s => s.keys))}
-        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter(k => !allCategorized.has(k) && !MODEL_OWNED_FIELDS.has(k))}
+        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter((k) => (
+          !allCategorized.has(k)
+          && !MODEL_OWNED_FIELDS.has(k)
+          && !isDeprecatedField(k)
+        ))}
         {#if otherKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button

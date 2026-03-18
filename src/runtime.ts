@@ -17,6 +17,7 @@ import { EmotionState } from './emotion/state.js';
 import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
 import type { DiscordAdapter } from './channels/discord/adapter.js';
 import { MemoryStore } from './memory/store.js';
+import { MemoryJournal } from './memory/journal.js';
 import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
@@ -117,6 +118,7 @@ import {
   resolveCharacterCardHistoryPath,
   resolveConfiguredCompanionDataDir,
   resolveContactsDir,
+  resolveMemoryJournalPath,
   resolveNotesDir,
   resolvePostTurnActionQueuePath,
   resolveScratchpadMirrorPath,
@@ -536,6 +538,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims, {
       notesDir,
       scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
+      journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
     });
     const embeddingDimensionCheck = validateEmbeddingDimensions(
       this.db,

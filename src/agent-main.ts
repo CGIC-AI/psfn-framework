@@ -11,6 +11,7 @@ import type {
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
 import { MemoryStore } from './memory/store.js';
+import { MemoryJournal } from './memory/journal.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
 import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
@@ -124,6 +125,7 @@ import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
   resolveCharacterCardHistoryPath,
   resolveContactsDir,
+  resolveMemoryJournalPath,
   resolveNotesDir,
   resolvePostTurnActionQueuePath,
   resolveScratchpadMirrorPath,
@@ -425,6 +427,7 @@ async function main(): Promise<void> {
   const memoryStore = new MemoryStore(db, gateway.dims, {
     notesDir: resolveNotesDir(companionDataDir),
     scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
+    journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
   });
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
   const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(

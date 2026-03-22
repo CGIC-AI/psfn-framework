@@ -39,6 +39,7 @@ import type { ComposeContext } from '../identity/prompt-types.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import {
   createSubstrateStreamFn,
+  type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm } from './messages.js';
@@ -171,6 +172,7 @@ export interface SelfModelRuntimeWiring {
 
 export interface SubstrateAgentOptions {
   streamFn?: StreamFn;
+  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'onBudgetBlocked'>;
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
@@ -292,6 +294,7 @@ export class SubstrateAgent {
     this.agent = new Agent({
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
         onBudgetBlocked: emitBudgetBlocked,
+        ...(options?.streamRuntimeOptions ?? {}),
       }),
       convertToLlm,
     });

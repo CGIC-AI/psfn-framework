@@ -145,6 +145,7 @@ import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,
 } from './runtime/ml-warmup.js';
+import { createPromptGenerationFailureAlertHandler } from './runtime/operator-alerts.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
 import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
@@ -469,6 +470,7 @@ async function main(): Promise<void> {
     audioClassifier: getSharedAudioEmotionClassifier(),
   });
   const emotionState = new EmotionState();
+  const operatorNotifier = createGatewayNtfyNotifier(gateway);
   const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: gateway,
@@ -478,6 +480,9 @@ async function main(): Promise<void> {
     characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
     runtimeMode: 'gateway',
+    streamRuntimeOptions: {
+      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
+    },
     emotionRuntime: {
       observer: emotionObserver,
       state: emotionState,
@@ -1069,7 +1074,7 @@ async function main(): Promise<void> {
     },
   ));
   agentLoop.registerTool(createNotifyOperatorTool(
-    createGatewayNtfyNotifier(gateway),
+    operatorNotifier,
     {
       rateLimiter: externalRateLimiter,
       defaultChannel: 'discord',

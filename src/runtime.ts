@@ -144,6 +144,7 @@ import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,
 } from './runtime/ml-warmup.js';
+import { createPromptGenerationFailureAlertHandler } from './runtime/operator-alerts.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import {
   buildChannelAdapterFactoryManifest,
@@ -575,6 +576,7 @@ export class SubstrateRuntime implements Lifecycle {
       audioClassifier: getSharedAudioEmotionClassifier(),
     });
     const emotionState = new EmotionState();
+    const operatorNotifier = createHttpNtfyNotifierFromEnv();
     this.agentLoop = composeSubstrateAgent({
       eventBus: this.eventBus,
       llmProvider: this.llmClient,
@@ -584,6 +586,9 @@ export class SubstrateRuntime implements Lifecycle {
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       config: this.config,
       runtimeMode: 'single',
+      streamRuntimeOptions: {
+        onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
+      },
       emotionRuntime: {
         observer: emotionObserver,
         state: emotionState,
@@ -917,7 +922,7 @@ export class SubstrateRuntime implements Lifecycle {
       },
     ));
     this.agentLoop.registerTool(createNotifyOperatorTool(
-      createHttpNtfyNotifierFromEnv(),
+      operatorNotifier,
       {
         rateLimiter: externalRateLimiter,
         defaultChannel: 'discord',

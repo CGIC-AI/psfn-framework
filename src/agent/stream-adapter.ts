@@ -144,7 +144,13 @@ export function createSubstrateStreamFn(
             });
           }
         }
-        throw err;
+        yield buildTerminalFailureEvent({
+          candidate: lastAttemptCandidate,
+          fallbackModel: model,
+          litellmBaseUrl,
+          correlation: requestContext,
+          error: err,
+        });
       }
     })() as any;
   };
@@ -556,6 +562,66 @@ function toUsageCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : 0;
+}
+
+function buildTerminalFailureEvent(input: {
+  candidate?: RoutingCandidate;
+  fallbackModel: Model<any>;
+  litellmBaseUrl: string | null;
+  correlation?: Partial<CorrelationMetadata>;
+  error: Error;
+}): AssistantMessageEvent {
+  const candidateProvider = input.candidate?.provider
+    ?? resolveModelProvider(input.fallbackModel)
+    ?? 'openrouter';
+  const provider = input.litellmBaseUrl ? 'litellm' : candidateProvider;
+  const model = input.candidate
+    ? (input.litellmBaseUrl
+      ? normalizeLiteLLMModelId(input.candidate.provider, input.candidate.model)
+      : input.candidate.model)
+    : String(input.fallbackModel.id);
+
+  return {
+    type: 'error',
+    reason: 'error',
+    error: {
+      role: 'assistant',
+      content: [{
+        type: 'text',
+        text: buildTerminalFailureText(input.correlation),
+      }],
+      api: input.fallbackModel.api,
+      provider,
+      model,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: 'error',
+      errorMessage: input.error.message,
+      timestamp: Date.now(),
+    },
+  };
+}
+
+function buildTerminalFailureText(correlation: Partial<CorrelationMetadata> | undefined): string {
+  const channelId = typeof correlation?.channelId === 'string'
+    ? correlation.channelId.trim().toLowerCase()
+    : '';
+  if (correlation?.callType === 'scheduled' || channelId.startsWith('internal:')) {
+    return 'Scheduled generation failed because all configured model candidates were unavailable.';
+  }
+  return 'I hit an upstream model failure and could not finish that reply. Please try again in a moment.';
 }
 
 function sleep(delayMs: number): Promise<void> {

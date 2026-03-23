@@ -232,7 +232,7 @@ describe('createSubstrateStreamFn', () => {
       };
     })() as any);
 
-    await expect(runWithRequestContext(
+    const events = await runWithRequestContext(
       {
         turnId: 'turn-stream-budget-1',
         requestId: 'req-stream-budget-1',
@@ -259,12 +259,13 @@ describe('createSubstrateStreamFn', () => {
           } as any,
           {},
         );
-        for await (const _event of stream as AsyncIterable<unknown>) {
-          // consume until budget gate fires
-        }
+        return await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
-    )).rejects.toThrow(/Model budget blocked/);
+    );
 
+    expect(events).toHaveLength(1);
+    expect((events[0] as { type: string }).type).toBe('error');
+    expect((events[0] as { error: { errorMessage: string } }).error.errorMessage).toContain('Model budget blocked');
     expect(blockedEvents).toHaveLength(1);
     expect(blockedEvents[0]).toMatchObject({
       reason: 'daily_budget_exceeded',
@@ -491,7 +492,13 @@ describe('createSubstrateStreamFn', () => {
       messages: [{ role: 'user', content: 'hello' }],
     } as any, {});
 
-    await expect(collectStreamEvents(stream as AsyncIterable<unknown>)).rejects.toThrow(/fatal failure/);
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(events).toHaveLength(1);
+    expect((events[0] as { type: string }).type).toBe('error');
+    expect((events[0] as { error: { content: Array<{ text: string }>; errorMessage: string } }).error.content[0]?.text)
+      .toContain('could not finish that reply');
+    expect((events[0] as { error: { errorMessage: string } }).error.errorMessage).toContain('fatal failure');
     expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(2);
     expect(onTerminalFailure).toHaveBeenCalledTimes(1);
     expect(onTerminalFailure.mock.calls[0]?.[0]).toMatchObject({
@@ -605,7 +612,13 @@ describe('createSubstrateStreamFn', () => {
       messages: [{ role: 'user', content: 'hello' }],
     } as any, {});
 
-    await expect(collectStreamEvents(stream as AsyncIterable<unknown>)).rejects.toThrow(/stream broke after partial output/);
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(events).toHaveLength(4);
+    expect((events[0] as { type: string }).type).toBe('start');
+    expect((events[2] as { type: string }).type).toBe('text_delta');
+    expect((events[3] as { type: string }).type).toBe('error');
+    expect((events[3] as { error: { errorMessage: string } }).error.errorMessage).toContain('stream broke after partial output');
     expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(1);
   });
 });

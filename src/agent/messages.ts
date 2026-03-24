@@ -31,6 +31,14 @@ export interface SystemNoteMessage {
   timestamp: number;
 }
 
+export interface WhisperMessage {
+  role: 'custom';
+  type: 'whisper';
+  content: string;
+  speakerName?: string;
+  timestamp: number;
+}
+
 export interface ContinuityMessage {
   role: 'custom';
   type: 'continuity';
@@ -64,6 +72,7 @@ declare module '@mariozechner/pi-agent-core' {
   interface CustomAgentMessages {
     compaction: CompactionMessage;
     systemNote: SystemNoteMessage;
+    whisper: WhisperMessage;
     continuity: ContinuityMessage;
     mirror: MirrorMessage;
   }
@@ -83,6 +92,10 @@ export function isCompactionMessage(m: AgentMessage): m is CompactionMessage {
 
 export function isSystemNoteMessage(m: AgentMessage): m is SystemNoteMessage {
   return hasCustomRole(m) && m.type === 'systemNote';
+}
+
+export function isWhisperMessage(m: AgentMessage): m is WhisperMessage {
+  return hasCustomRole(m) && m.type === 'whisper';
 }
 
 export function isContinuityMessage(m: AgentMessage): m is ContinuityMessage {
@@ -106,6 +119,7 @@ export function isCustomMessage(m: AgentMessage): boolean {
  * Custom messages are converted:
  * - compaction → user message with summary prefix
  * - systemNote → user message with [System note] prefix
+ * - whisper → user message with a note-to-self prefix
  * - mirror → compact user-side mirror note
  * - continuity → filtered out (injected into system prompt instead)
  */
@@ -123,6 +137,13 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       result.push({
         role: 'user',
         content: `[System note] ${msg.content}`,
+        timestamp: msg.timestamp,
+      } satisfies UserMessage);
+    } else if (isWhisperMessage(msg)) {
+      const label = msg.speakerName?.trim() || 'Whisper';
+      result.push({
+        role: 'user',
+        content: `[${label} note to self] ${msg.content}`,
         timestamp: msg.timestamp,
       } satisfies UserMessage);
     } else if (isContinuityMessage(msg)) {

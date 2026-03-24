@@ -533,7 +533,7 @@ export class DiscordVoiceRuntime {
 
     if (this.receiveEnabled) {
       this.speakingListener = (userId: string) => {
-        if (userId !== this.targetUserId || this.capturing || this.activeTurn) return;
+        if (userId !== this.targetUserId || this.capturing || this.activeTurn || this.isPlaybackActive()) return;
         this.handleUtterance().catch((error) => {
           try {
             this.emitVoiceError(error);
@@ -635,6 +635,10 @@ export class DiscordVoiceRuntime {
 
   private isCurrentConnection(connection: VoiceConnection, generation: number): boolean {
     return this.connection === connection && this.connectionGeneration === generation;
+  }
+
+  private isPlaybackActive(): boolean {
+    return this.player?.state?.status === AudioPlayerStatus.Playing;
   }
 
   private async handleConnectionStateChange(params: VoiceConnectionStateChange): Promise<void> {

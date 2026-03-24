@@ -626,6 +626,39 @@ describe('DiscordVoiceRuntime', () => {
     }));
   });
 
+  it('ignores receive-start events while bot playback is already active', async () => {
+    const connection = createMockVoiceConnection();
+    voiceSdkMocks.joinVoiceChannel.mockReturnValue(connection as any);
+    voiceSdkMocks.createAudioPlayer.mockReturnValueOnce({
+      play: vi.fn(),
+      stop: vi.fn(),
+      state: { status: 'playing' },
+    } as any);
+
+    const runtime = new DiscordVoiceRuntime({
+      client: {
+        on: vi.fn(),
+        off: vi.fn(),
+      } as any,
+      config: makeConfig(),
+      eventBus: new EventBus(),
+      getHandler: () => null,
+    });
+
+    const handleUtteranceSpy = vi.spyOn(runtime as any, 'handleUtterance').mockResolvedValue(undefined);
+
+    await (runtime as any).joinChannel(makeVoiceChannel('channel-1'));
+
+    const speakingListener = connection.receiver.speaking.on.mock.calls[0]?.[1] as
+      | ((userId: string) => void)
+      | undefined;
+    expect(typeof speakingListener).toBe('function');
+
+    speakingListener?.('user-1');
+
+    expect(handleUtteranceSpy).not.toHaveBeenCalled();
+  });
+
   it('builds only the explicitly selected echo TTS connector when echo is configured', () => {
     const echoConnector = createMockTtsConnector('echo');
     const elevenLabsConnector = createMockTtsConnector('elevenlabs');

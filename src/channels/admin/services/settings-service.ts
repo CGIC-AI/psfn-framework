@@ -87,7 +87,7 @@ const REMOVED_RUNTIME_SETTINGS_MESSAGES: Partial<Record<string, string>> = {
   discordEnabled:
     'discordEnabled has been removed from runtime settings; Discord activation is controlled by DISCORD_TOKEN and DISCORD_BOT_ID',
   discordHeartbeatChannel:
-    'discordHeartbeatChannel has been removed from runtime settings; use DISCORD_HEARTBEAT_CHANNEL at startup instead',
+    'discordHeartbeatChannel has been removed from runtime settings; use channels.json -> discord.heartbeatChannelId instead',
 };
 const log = createComponentLogger('AdminSettingsService');
 

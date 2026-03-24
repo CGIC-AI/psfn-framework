@@ -2410,7 +2410,7 @@
               <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div class="text-sm">
                   <span class="font-medium text-shadow-800">Discord:</span>
-                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_BOT_ID, DISCORD_HEARTBEAT_CHANNEL</span>
+                  <span class="text-shadow-600 ml-1 font-mono">DISCORD_TOKEN, DISCORD_BOT_ID, channels.json:discord.heartbeatChannelId</span>
                 </div>
                 <div class="text-sm">
                   <span class="font-medium text-shadow-800">OpenAI API:</span>

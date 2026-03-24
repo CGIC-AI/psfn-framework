@@ -197,7 +197,7 @@ export class AdminServerTransport {
       return;
     }
     this.gardenBuildDir = buildDir;
-    this.log.info('Garden SvelteKit UI enabled at /garden/*');
+    this.log.info('Garden SvelteKit UI enabled at /*');
   }
 
   private registerModuleAssetRoute(routePath: string, filePath: string, contentType?: string): string {

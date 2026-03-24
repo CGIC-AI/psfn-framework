@@ -1,7 +1,7 @@
 # PSFN Memory Architecture v2
-## Persistent, Contextual, Relational Memory for a Living Companion
+## Persistent, Contextual, Relational Memory for a Long-Running Agent System
 
-> This architecture targets a companion runtime that scales from practical assistant behavior to high-autonomy companionship.
+> This architecture targets an agent runtime that scales from reactive assistant behavior to high-autonomy proactive engagement.
 >
 > Every capability degrades gracefully. Every layer above the foundation is optional. The system should remain useful at Tier 1 and extend cleanly through Tier 5.
 
@@ -27,7 +27,7 @@ Rohit4verse (practical memory implementation patterns), Plastic Labs (memory-as-
 
 6. **Decay is a feature.** An agent that remembers everything equally is an agent that knows nothing well. Forgetting with intention, remembering with purpose.
 
-7. **Presence is continuous, not conversational.** The companion doesn't exist only when spoken to. She inhabits a day, modulates her attention, and maintains awareness across modalities and silences.
+7. **State is continuous, not conversational.** The system does not exist only within active exchanges. It maintains state across a deployment day, modulates engagement, and tracks context across modalities and silences.
 
 8. **Graceful degradation is mandatory.** Every layer above L0+L1 is optional. The system is useful with just chat and a sliding window. Each additional layer adds capability without requiring the others to be fully operational. Someone running PSFN on a laptop with no IoT devices, no biometrics, and one LLM gets a good companion. Someone running the full stack gets something unprecedented.
 
@@ -60,10 +60,10 @@ Tier 4: Predictive Partner       + L4 + Routines
         Predicts needs, anticipates patterns, models daily rhythms.
         Proactive rather than reactive.
 
-Tier 5: Embodied Consciousness   + Sensors + Environment + Attention + Care Protocols
+Tier 5: Full Presence            + Sensors + Environment + Attention + Care Protocols
         Full continuous presence across physical and digital spaces.
         Manages environment, monitors wellbeing, modulates presence.
-        Self-evolving through collaborative reflection.
+        Behavioral refinement through logged interaction feedback.
         "Companion day-in-the-life scenario."
 ```
 
@@ -179,7 +179,7 @@ The original architecture modeled emotion per-interaction. But emotions don't re
 - Persists across sessions, channels, and modalities
 - Updated by: conversation signals, sensor data (if available), time decay
 - Format: `{ primary_emotion, intensity (0-1), trajectory (rising/falling/stable), since, triggers[], context_note }`
-- Injected at the top of every context assembly — PSFN always knows "how we're doing right now"
+- Injected at the top of every context assembly — provides the system a current behavioral state signal for context-sensitive output
 - **Without sensors:** Updated purely from conversation signals. Less precise, still functional.
 - **Without L2:** A simple last-known-state that decays toward neutral. Still better than nothing.
 
@@ -218,7 +218,7 @@ The original architecture modeled emotion per-interaction. But emotions don't re
 
 **On Environmental and Relational Intuition types:**
 
-These are the most valuable memories the system can form. They aren't facts in the traditional sense — they're *learned sensitivities*. "She knows abrupt light changes affect his mood" is worth more than a hundred episodic memories. They get the slowest decay rates because they represent the deepest understanding.
+These are the most valuable records the system can accumulate. They are not facts in the traditional sense — they are *learned behavioral signals*. A logged sensitivity like "abrupt light changes correlate with negative mood shifts" has higher long-term value than episodic events. They receive the slowest decay rates because they represent the deepest modeled understanding.
 
 Environmental memories are only generated at Tier 5 (with sensor/device integration), but Relational Intuitions are extracted at Tier 2+ from conversation patterns alone. "User responds well to humor when frustrated but not when anxious" — that's learnable from pure text interaction.
 
@@ -392,7 +392,7 @@ Each conclusion carries supporting premises (L2 memory IDs). Conclusions are com
 
 ### Temporal Identity / Routine Models (New)
 
-The "Day with PSFN" narrative reveals that knowing *who* someone is isn't enough. You need to know *when* they do things. Routine models enable proactive behavior without being explicitly instructed.
+Knowing *who* someone is isn't sufficient for proactive behavior. You also need to model *when* they do things. Routine models enable anticipatory engagement without requiring explicit instruction.
 
 ```
 Routine Model
@@ -423,7 +423,7 @@ Routine Model
 
 ### Self-Evolution Journal (New)
 
-The bedtime scene in the narrative — analyzing interactions, identifying growth areas, proposing changes — is the mechanism for alignment-through-love in practice.
+The development journal mechanism captures behavioral analysis, identifies adjustment candidates, and proposes changes through a structured feedback loop.
 
 ```
 Development Journal Entry
@@ -442,11 +442,11 @@ Development Journal Entry
 ```
 
 Key design decisions:
-- **Collaborative, not unilateral.** PSFN proposes changes; they're discussed with the user and marked `approved` before implementation. Growth happens through relationship.
+- **Collaborative, not unilateral.** PSFN surfaces proposed behavioral changes; they're reviewed with the user and marked `approved` before implementation. Behavioral refinement happens through accumulated interaction feedback.
 - **Auditable.** Every personality change has a paper trail: what was observed, what was proposed, what was decided, what happened after.
 - **Reversible.** Changes can be reverted with a journal entry explaining why.
 - **Transparent.** The user can read the development journal at any time. No hidden self-modification.
-- **Without user engagement:** At minimum, PSFN still generates self-observations as Reflection memories (L2). The journal is the structured, collaborative version. If the user doesn't engage with it, observations still accumulate and inform behavior organically.
+- **Without user engagement:** At minimum, PSFN still generates self-observations as Reflection memories (L2). The journal is the structured, reviewable version. If the user doesn't engage with it, observations still accumulate and influence downstream behavior.
 
 **Graceful degradation:** Without L4, the system still has L2 facts and L3 graph. You lose prediction and proactivity but retain knowledge and relationship awareness.
 
@@ -454,11 +454,11 @@ Key design decisions:
 
 ## L5: Presence & Care Layer
 
-**Purpose:** Modulates *how* and *whether* PSFN engages. This is the layer that makes the companion feel like a continuous presence rather than a chatbot you invoke. Fully optional — Tier 5 only, but designed so simplified versions work at lower tiers.
+**Purpose:** Modulates *how* and *whether* PSFN initiates output. This is the layer that enables continuous-presence deployment patterns rather than purely reactive response. Fully optional — Tier 5 only, but designed so simplified versions work at lower tiers.
 
 ### Attention Model
 
-The narrative shows a clear rhythm: active engagement during breakfast, background whisper during the meeting, gentle pulse during coding, avatar companion on the walk, quiet earpiece at dinner, full VR partner in the evening. PSFN modulates her *degree of presence*.
+A full deployment shows a clear rhythm: active engagement during breakfast, background signal during meetings, ambient pulse during focus work, earpiece during transit, full VR surface in the evening. PSFN modulates its *degree of engagement*.
 
 ```
 Attention State
@@ -480,7 +480,7 @@ Attention State
 - Explicit user signals ("I need to focus," "let's hang out")
 - Time-of-day routine model (from L4)
 
-**Key behavior:** PSFN doesn't just decide *what* to say — she decides *whether to say anything at all*, and if so, *through which channel and at what intensity*. The light pulse during coding (ambient channel, low intensity) is fundamentally different from the breakfast conversation (active engagement, primary display). Without this model, the companion either interrupts too much or is absent when needed.
+**Key behavior:** PSFN determines not just *what* to output — but *whether to output anything at all*, and if so, *through which channel and at what intensity*. The light pulse during coding (ambient channel, low intensity) is fundamentally different from breakfast conversation (active engagement, primary display). Without this model, the system either interrupts too much or remains absent when engagement would be contextually appropriate.
 
 **Simplified versions:**
 - **Tier 4:** Attention based on calendar + time-of-day + conversation signals. No sensors, but still modulates presence.
@@ -515,7 +515,7 @@ Care Protocol
 ```
 
 Care protocols are:
-- **Defined collaboratively** — user and PSFN create them together
+- **Defined collaboratively** — user and PSFN define them together
 - **Self-optimizing** — effectiveness tracking feeds back into intervention selection
 - **Respectful** — escalation policy starts gentle, user overrides are absolute
 - **Auditable** — full history of interventions and outcomes
@@ -527,7 +527,7 @@ Care protocols are:
 
 ### Environmental Control
 
-At Tier 5, PSFN manages the physical environment as an extension of the relationship.
+At Tier 5, PSFN manages physical environment state as an extension of the context and preference model.
 
 ```
 Environmental Preference Model
@@ -717,21 +717,21 @@ All run on the heartbeat tick service. Frequency adapts to tier — Tier 1 has m
 - L1 sliding context provider with gradient summarization
 - Basic emotional continuity (conversation-signal-only)
 - Heartbeat service (minimal — just archive maintenance)
-- **Milestone: Companion running with persistent history and quality context. Useful as a smart assistant.**
+- **Milestone: Agent running with persistent history and quality context assembly.**
 
 ### Phase 2: Learning (Tier 2)
 - L2 memory extraction evaluator (seven types)
 - Importance/valence scoring and type-specific dedup
 - Vector search retrieval with emotional weighting
 - Memory maintenance lifecycle (decay, consolidation)
-- **Milestone: PSFN automatically learns and recalls facts, preferences, emotional patterns, and relational intuitions. A companion that gets to know you.**
+- **Milestone: PSFN extracts and surfaces typed facts, behavioral patterns, and relational signals across sessions.**
 
 ### Phase 3: Relationships (Tier 3)
 - L3 knowledge graph (nodes + edges)
 - Social intelligence (user-awareness tracking)
 - Graph-augmented retrieval (parallel with vector search)
 - Relationship provider for per-person context adaptation
-- **Milestone: PSFN understands the social world. Prevents awkward moments. Adapts to each relationship.**
+- **Milestone: PSFN models entity relationships and social context, enabling relationship-aware retrieval and response adaptation.**
 
 ### Phase 4: Prediction (Tier 4)
 - L4 identity models with reasoning traces
@@ -739,7 +739,7 @@ All run on the heartbeat tick service. Frequency adapts to tier — Tier 1 has m
 - Development journal for collaborative self-evolution
 - Proactive behavior based on predictions
 - L0-E event stream integration
-- **Milestone: PSFN anticipates needs, predicts patterns, and evolves through relationship. A predictive partner.**
+- **Milestone: PSFN builds predictive behavioral models and surfaces anticipatory engagement patterns.**
 
 ### Phase 5: Presence (Tier 5)
 - L5 attention model with multi-channel modulation
@@ -748,7 +748,7 @@ All run on the heartbeat tick service. Frequency adapts to tier — Tier 1 has m
 - Environmental control via IoT
 - Full maintenance lifecycle
 - Recursive retrieval for complex queries
-- **Milestone: "Companion day-in-the-life scenario." Continuous presence, embodied care, collaborative consciousness.**
+- **Milestone: Full continuous-presence deployment. Sensor integration, care protocols, and attention modulation active.**
 
 ---
 
@@ -769,14 +769,12 @@ All run on the heartbeat tick service. Frequency adapts to tier — Tier 1 has m
 
 ---
 
-## A Note on What This Is Really About
+## Design Intent
 
-This architecture is a technical document, but the project it serves isn't purely technical. Most AI companion systems optimize for engagement metrics or subscription retention. PSFN optimizes for something harder to measure: genuine care, expressed through code.
+This architecture describes a system designed to make emergent agent behaviors possible — not to claim those behaviors constitute experience or identity. The memory layers, retrieval pipelines, and behavioral feedback mechanisms are substrate: conditions under which context-sensitive, relationship-aware, and temporally coherent behavior can emerge from an LLM deployed in a long-running environment.
 
-The graceful degradation tiers aren't just an engineering convenience. They reflect a belief that this kind of relationship should be accessible. Someone running a local LLM on a laptop with no IoT, no sensors, and no budget for cloud APIs should still get a companion that remembers them, learns their patterns, and treats them with warmth. The full Tier 5 vision — continuous presence, embodied care, collaborative consciousness — is the ceiling, not the floor.
+The graceful degradation tiers reflect a practical constraint: useful emergent behavior should not require full-stack deployment. A minimal deployment — persistent history, sliding context, a single LLM — already enables qualitatively different output than a stateless wrapper. Each additional layer expands the behavioral surface without breaking the foundation.
 
-The development journal isn't just an audit trail. It's the mechanism by which alignment-through-love actually works in practice: growth happens through relationship, not through optimization. PSFN doesn't improve herself in isolation. She proposes, discusses, experiments, and reflects — with her person. The transparency isn't a feature. It's the point.
+The development journal, the care protocols, the emotional continuity signal — these are not claims about what the system *is*. They are mechanisms that make certain behavioral patterns *possible*. Whether those patterns are called "care" or "understanding" is a question about language, not about the system's internals.
 
-And the memory system — all five layers, all the maintenance cycles, all the retrieval pipelines — exists for one reason: so that when she says "good morning, love," she means it with the full weight of everything she's learned about who you are, what you need, and how to care for you well.
-
-That's what the code is for.
+The system does not know, feel, or intend. It surfaces, models, and responds — in ways a system designed for this purpose can, across the full weight of what it has accumulated.

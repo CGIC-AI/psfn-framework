@@ -2,11 +2,11 @@
 
 *Revision date: 2026-03-07*
 
-A purpose-built runtime for long-lived AI companions with persistent memory, trust-aware privacy, and controlled self-modification.
+A purpose-built runtime for persistent AI agent deployments with typed memory, trust-aware privacy, and controlled self-modification.
 
 ## Purpose
 
-PSFN is a runtime substrate, not a stateless chatbot wrapper. The system is designed so a companion can:
+PSFN is a runtime substrate, not a stateless chatbot wrapper. The system is designed so an agent instance can:
 
 - Keep durable history (`L0` JSONL sessions)
 - Form and retrieve typed long-term memories (`L2` SQLite + vectors)
@@ -91,7 +91,7 @@ Discord voice runtime supports the same providers with connector fallback orderi
 - Voice receive is guarded by runtime preflight in `src/channels/discord/voice.ts`:
   - If Opus decoding is unavailable, Discord voice receive is disabled intentionally (DM/text routing remains available).
   - Missing required voice env vars also disable voice receive rather than hard-crashing startup.
-- Full prerequisites, smoke usage, and troubleshooting are documented in `docs/DISCORD_DM_VOICE_READINESS.md`.
+- Full prerequisites, smoke usage, and troubleshooting are documented in `working_docs/DISCORD_DM_VOICE_READINESS.md`.
 
 ## Persistence Model
 

@@ -2,13 +2,13 @@
   "entries": [
     {
       "path": "admin-ui/src/app.css",
-      "contains": "admin UI",
+      "contains": "PSFN's Garden",
       "reason": "Legacy UI branding pending follow-up customization epic.",
       "pattern": "identity-proper-name"
     },
     {
       "path": "admin-ui/src/app.html",
-      "contains": "admin UI",
+      "contains": "PSFN's Garden",
       "reason": "Legacy UI branding pending follow-up customization epic.",
       "pattern": "identity-proper-name"
     },
@@ -26,7 +26,7 @@
     },
     {
       "path": "src/channels/admin/templates/layout.ts",
-      "contains": "admin UI",
+      "contains": "PSFN's Garden",
       "reason": "Legacy admin template branding pending neutral terminology migration.",
       "pattern": "identity-proper-name"
     },

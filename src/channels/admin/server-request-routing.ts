@@ -15,8 +15,26 @@ interface AdminRequestRoutingDependencies {
     path: string,
     req: IncomingMessage,
     res: ServerResponse,
-  ) => void;
+  ) => boolean;
+  sendNotFound: (path: string, res: ServerResponse) => void;
   onRequestError: (path: string, err: unknown) => void;
+}
+
+function isGardenClientRoute(method: string | undefined, requestPath: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  if (
+    requestPath === '/api'
+    || requestPath.startsWith('/api/')
+    || requestPath === '/health'
+    || requestPath.startsWith('/health/')
+    || requestPath === '/login'
+    || requestPath.startsWith('/login/')
+    || requestPath === '/static'
+    || requestPath.startsWith('/static/')
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function handleAdminRequest(
@@ -39,21 +57,23 @@ export function handleAdminRequest(
     return;
   }
 
-  // API and login routes go to the route dispatcher.
-  if (requestPath === '/login' || requestPath.startsWith('/api/')) {
-    try {
-      deps.route(req.method ?? 'GET', requestPath, req, res);
-    } catch (err) {
-      deps.onRequestError(requestPath, err);
-      sendText(res, 500, 'Internal Server Error');
+  try {
+    const handled = deps.route(req.method ?? 'GET', requestPath, req, res);
+    if (handled) return;
+  } catch (err) {
+    deps.onRequestError(requestPath, err);
+    sendText(res, 500, 'Internal Server Error');
+    return;
+  }
+
+  if (isGardenClientRoute(req.method, requestPath)) {
+    if (deps.isGardenUiEnabled()) {
+      deps.serveGardenAsset(requestPath, res);
+    } else {
+      deps.sendNotFound(requestPath, res);
     }
     return;
   }
 
-  // All other paths: serve Garden SPA (UI routes, /_app/*, root).
-  if (deps.isGardenUiEnabled()) {
-    deps.serveGardenAsset(requestPath, res);
-  } else {
-    sendText(res, 404, `Not found: ${requestPath}`);
-  }
+  deps.sendNotFound(requestPath, res);
 }

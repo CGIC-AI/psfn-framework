@@ -351,11 +351,11 @@ describe('AdminServer legacy UI removal', () => {
       expect(patchRes.status).toBe(200);
       const patchPayload = JSON.parse(patchRes.body) as {
         ok: boolean;
-        bootstrap?: { selectedIdentity?: { channel: string; userId: string } };
+        bootstrap?: { selectedTarget?: { channel: string; userId: string } };
       };
       expect(patchPayload.ok).toBe(true);
-      expect(patchPayload.bootstrap?.selectedIdentity?.channel).toBe('api');
-      expect(patchPayload.bootstrap?.selectedIdentity?.userId).toBe('admin-user');
+      expect(patchPayload.bootstrap?.selectedTarget?.channel).toBe('api');
+      expect(patchPayload.bootstrap?.selectedTarget?.userId).toBe('admin-user');
 
       const modelRoomRes = await request(harness.port, 'GET', '/api/admin/chat/model-room/bootstrap');
       expect(modelRoomRes.status).toBe(200);

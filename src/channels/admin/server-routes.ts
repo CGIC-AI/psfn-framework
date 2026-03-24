@@ -118,16 +118,15 @@ export function dispatchAdminRoute(
   path: string,
   req: IncomingMessage,
   res: ServerResponse,
-  send404: (res: ServerResponse, path: string) => void,
-): void {
+): boolean {
   for (const route of routes) {
     if (route.method !== method) continue;
     const params = route.match(path);
     if (!params) continue;
     route.handle(req, res, params);
-    return;
+    return true;
   }
-  send404(res, path);
+  return false;
 }
 
 export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {

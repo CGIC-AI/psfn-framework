@@ -227,6 +227,7 @@ export class AdminServer implements Lifecycle {
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenAsset: (path, response) => this.transport.serveGardenAsset(path, response),
       route: (method, path, request, response) => this.route(method, path, request, response),
+      sendNotFound: (path, response) => this.send404(response, path),
       onRequestError: (path, err) => log.error('Request error', { path, error: String(err) }),
     });
   }
@@ -235,8 +236,8 @@ export class AdminServer implements Lifecycle {
     this.telemetryTransport.handleUpgrade(req, socket, head);
   }
 
-  private route(method: string, path: string, req: IncomingMessage, res: ServerResponse): void {
-    dispatchAdminRoute(this.routes, method, path, req, res, (response, unknownPath) => this.send404(response, unknownPath));
+  private route(method: string, path: string, req: IncomingMessage, res: ServerResponse): boolean {
+    return dispatchAdminRoute(this.routes, method, path, req, res);
   }
 
   private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {

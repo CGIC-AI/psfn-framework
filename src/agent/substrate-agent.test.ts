@@ -253,6 +253,7 @@ function makeMockSessionManager(): SessionManager {
       ],
     } satisfies LLMContext),
     getRecentMessages: vi.fn().mockReturnValue([]),
+    getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
     resolveSessionChannelId,
     setActiveContextSession,
     getActiveContextSession,
@@ -2108,15 +2109,18 @@ describe('SubstrateAgent.handleMessage', () => {
       TEST_USER_GREETING,
       'test-channel',
       'regular',
-      { isDirectMessage: undefined },
+      {},
       undefined,
       undefined,
-      {
+      expect.objectContaining({
         channelId: 'test-channel',
         channelType: 'terminal',
         isDirectMessage: undefined,
         messageText: TEST_USER_GREETING,
-      },
+        modelSelection: {
+          purpose: 'chat',
+        },
+      }),
     );
   });
 
@@ -2140,15 +2144,18 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(mockMemory.retrieveProactiveRecall).toHaveBeenCalledWith(
       'test-channel',
       'regular',
-      { isDirectMessage: undefined },
+      {},
       undefined,
       undefined,
-      {
+      expect.objectContaining({
         channelId: 'test-channel',
         channelType: 'terminal',
         isDirectMessage: undefined,
         messageText: TEST_USER_GREETING,
-      },
+        modelSelection: {
+          purpose: 'chat',
+        },
+      }),
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[2]).toContain('Relevant memories here');
@@ -2178,16 +2185,19 @@ describe('SubstrateAgent.handleMessage', () => {
       'heartbeat check',
       'internal:heartbeat',
       'primary',
-      { isDirectMessage: undefined },
+      {},
       undefined,
       undefined,
-      {
+      expect.objectContaining({
         channelId: 'internal:heartbeat',
         channelType: 'terminal',
         isDirectMessage: undefined,
         messageText: 'heartbeat check',
+        modelSelection: {
+          purpose: 'chat',
+        },
         taskKind: 'heartbeat',
-      },
+      }),
     );
   });
 

@@ -149,6 +149,13 @@ Expanded meaning in this repo:
 - Gateway policy and path checks must deny by default.
 - If a capability or confirmation requirement is missing, stop the action.
 
+## Supply Chain Pinning
+
+- Do not use floating dependency or image references such as `latest`, `main-latest`, branch names, or unpinned aliases.
+- When adding or updating external packages, container images, or fetched artifacts, pin them to an exact version. Prefer immutable digests for container images when operationally practical.
+- Do not widen version ranges as part of routine maintenance. If you touch a dependency for security or upgrade work, land it as an exact pin in the repo.
+- Treat floating upstream refs as a supply-chain risk. Replace them instead of preserving them.
+
 ## Structure Requirements
 
 - Do not create or expand god files.

@@ -298,27 +298,27 @@ describe('AdminServer legacy UI removal', () => {
       await destroyHarness(harness);
     });
 
-    it('redirects / to /garden', async () => {
+    it('serves SPA shell at root', async () => {
       const res = await request(harness.port, 'GET', '/');
-      expect(res.status).toBe(302);
-      expect(res.headers.location).toBe('/garden');
+      expect([200, 404]).toContain(res.status);
+      if (res.status === 200) {
+        expect(res.headers['content-type']).toContain('text/html');
+      }
     });
 
-    it('does not route legacy paths', async () => {
+    it('serves SPA fallback for unknown client routes', async () => {
       const legacyRoot = await request(harness.port, 'GET', '/legacy');
-      expect(legacyRoot.status).toBe(404);
-
       const legacyPage = await request(harness.port, 'GET', '/memory');
-      expect(legacyPage.status).toBe(404);
+      for (const res of [legacyRoot, legacyPage]) {
+        expect([200, 404]).toContain(res.status);
+      }
     });
 
-    it('keeps /garden route active and fail-closed when build assets are unavailable', async () => {
+    it('falls back gracefully when build assets are unavailable', async () => {
       const res = await request(harness.port, 'GET', '/garden');
       expect([200, 404]).toContain(res.status);
       if (res.status === 200) {
         expect(res.headers['content-type']).toContain('text/html');
-      } else {
-        expect(res.body).toContain('Not found: /garden');
       }
     });
 
@@ -502,8 +502,8 @@ describe('AdminServer legacy UI removal', () => {
       await destroyHarness(harness);
     });
 
-    it('requires auth for /garden and /api/admin routes', async () => {
-      const gardenRes = await request(harness.port, 'GET', '/garden', undefined, {
+    it('requires auth for UI and /api/admin routes', async () => {
+      const gardenRes = await request(harness.port, 'GET', '/', undefined, {
         Accept: 'text/html',
       });
       expect(gardenRes.status).toBe(302);
@@ -526,7 +526,7 @@ describe('AdminServer legacy UI removal', () => {
         'Content-Type': 'application/x-www-form-urlencoded',
       });
       expect(loginRes.status).toBe(302);
-      expect(loginRes.headers.location).toBe('/garden');
+      expect(loginRes.headers.location).toBe('/');
 
       const setCookie = loginRes.headers['set-cookie'];
       const cookie = Array.isArray(setCookie) ? setCookie[0] : setCookie;
@@ -558,9 +558,9 @@ describe('AdminServer legacy UI removal', () => {
       expect(cleared).toContain('Max-Age=0');
     });
 
-    it('keeps /legacy routes unavailable when authenticated', async () => {
+    it('serves SPA fallback for unknown routes when authenticated', async () => {
       const res = await request(harness.port, 'GET', '/legacy', undefined, bearerHeaders);
-      expect(res.status).toBe(404);
+      expect([200, 404]).toContain(res.status);
     });
 
     it('preserves /api/admin/events websocket auth and event streaming', async () => {

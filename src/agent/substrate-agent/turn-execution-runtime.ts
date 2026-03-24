@@ -5,9 +5,11 @@ import type { EventBus, EventMap } from '../../event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
 import { runWithRequestContext } from '../../llm/request-context.js';
 import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
 import { createComponentLogger } from '../../logger.js';
+import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';
 import {
@@ -59,6 +61,7 @@ import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import { resolveModel } from '../stream-adapter.js';
 import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
+import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import {
   hasVisionAttachments,
   buildTurnUserContent,
@@ -74,6 +77,10 @@ import type {
   BackgroundContinuationCompletionSignal,
   PendingBackgroundContinuationDelivery,
 } from './background-continuation-runtime.js';
+import {
+  cloneObservedAdaptiveToolSnapshot,
+  readActiveTurnToolSchemas,
+} from './turn-tool-context.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -210,6 +217,7 @@ export interface TurnExecutionRuntime {
     taskKind: string | undefined,
     correlation: CorrelationMetadata,
   ) => AutoloadTurnOutcome;
+  getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
   applyActiveToolsToAgentForTurn: (
     message: SubstrateMessage,
     taskKind: string | undefined,
@@ -334,6 +342,13 @@ export async function handleMessageForTurn(
       payload,
     );
     observedTurnStages.push(sanitizeTurnStageTelemetry(telemetry));
+  };
+  const emitTurnSnapshot = async (snapshot: TurnSnapshot): Promise<void> => {
+    observedTurnSnapshot = sanitizeTurnSnapshot(snapshot);
+    await runtime.eventBus.emit('agent.turn.snapshot', {
+      snapshot,
+      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
+    });
   };
   const unsubscribeRetrieval = runtime.eventBus.on('memory.retrieval', (telemetry) => {
     if (telemetry.channelId !== message.channelId) return;
@@ -470,11 +485,7 @@ export async function handleMessageForTurn(
       ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
       ...(memorySnapshot ? { memory: memorySnapshot } : {}),
     };
-    observedTurnSnapshot = sanitizeTurnSnapshot(turnSnapshot);
-    await runtime.eventBus.emit('agent.turn.snapshot', {
-      snapshot: turnSnapshot,
-      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
-    });
+    await emitTurnSnapshot(turnSnapshot);
 
     const memoryStageStart = Date.now();
     const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
@@ -573,6 +584,8 @@ export async function handleMessageForTurn(
       emotionAppraisalChain,
     );
     let fullPrompt = '';
+    let renderedStaticPrefix = '';
+    let renderedDynamicSuffix = '';
 
     if (promptOverride.mode === 'default') {
       const staticCacheKey = runtime.buildPromptPrefixCacheKey(
@@ -582,7 +595,7 @@ export async function handleMessageForTurn(
         authorContext.subjectIdentityKey,
       );
       const staticSettingsHash = runtime.buildStaticPromptSettingsHash(templateVariables);
-      const staticPrefix = runtime.resolveStaticPromptPrefix({
+      renderedStaticPrefix = runtime.resolveStaticPromptPrefix({
         cacheKey: staticCacheKey,
         staticPrefixTemplate: turnSnapshot.prompt?.staticPrefixTemplate ?? runtime.systemPrompt,
         staticHash: turnSnapshot.prompt?.staticHash ?? runtime.hashPromptText(runtime.systemPrompt),
@@ -600,11 +613,11 @@ export async function handleMessageForTurn(
         .map(section => section?.trim() ?? '')
         .filter(section => section.length > 0)
         .join('\n\n');
-      const dynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
+      renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
         now: runtimeNow,
         variables: templateVariables,
       });
-      fullPrompt = [staticPrefix, dynamicSuffix, runtimeContext, scratchpadBlock]
+      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, runtimeContext, scratchpadBlock]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
@@ -634,6 +647,18 @@ export async function handleMessageForTurn(
         turnBudgetCharacteristics,
       ),
     );
+    turnSnapshot.capturedAt = Date.now();
+    turnSnapshot.promptContext = {
+      renderedStaticPrefix,
+      renderedDynamicSuffix,
+      runtimeContext,
+      memoryContextBlock,
+      scratchpadContext: scratchpadBlock,
+      assembledPrompt: fullPrompt,
+      finalSystemPrompt: context.systemPrompt,
+      messages: context.messages.map(contextMessage => ({ ...contextMessage })),
+    };
+    await emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: context.messages.length,
@@ -689,6 +714,20 @@ export async function handleMessageForTurn(
         turnCorrelationBase,
         autoloadOutcome,
       );
+      const adaptiveToolSnapshot = cloneObservedAdaptiveToolSnapshot(
+        runtime.getAdaptiveToolRuntimeState().lastSnapshot,
+      );
+      const activeTools = readActiveTurnToolSchemas(runtime.agent);
+      if (activeTools.length > 0 || adaptiveToolSnapshot) {
+        turnSnapshot.toolContext = {
+          activeTools,
+          ...(adaptiveToolSnapshot
+            ? { adaptiveSnapshot: adaptiveToolSnapshot }
+            : {}),
+        };
+        turnSnapshot.capturedAt = Date.now();
+        await emitTurnSnapshot(turnSnapshot);
+      }
 
       const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
       const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
@@ -957,6 +996,10 @@ export async function handleMessageForTurn(
       turnMessages,
       authorContext.trustLevel,
     );
+    const responseAttachments = await collectGeneratedImageAttachments({
+      turnMessages,
+      companionDataDir: resolveConfiguredCompanionDataDir(runtime.config),
+    });
 
     if (!broadcastSafetyMeta?.approvalRequired) {
       assistantSessionEntryId = runtime.recordAssistantMessage(
@@ -982,6 +1025,7 @@ export async function handleMessageForTurn(
     const agentResponse: AgentResponse = {
       content: safeResponseText,
       channelId: message.channelId,
+      ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),
       metadata: {
         model: responseModel,
         inputTokens: turnUsage.inputTokens,

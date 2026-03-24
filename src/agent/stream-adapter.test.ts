@@ -15,6 +15,20 @@ import * as models from '../llm/models.js';
 import { ModelBudgetController } from '../llm/model-budget.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 
+const streamAdapterMocks = vi.hoisted(() => ({
+  streamSimple: vi.fn(),
+  getEnvApiKey: vi.fn(),
+}));
+
+vi.mock('@mariozechner/pi-ai', async () => {
+  const actual = await vi.importActual<typeof import('@mariozechner/pi-ai')>('@mariozechner/pi-ai');
+  return {
+    ...actual,
+    streamSimple: streamAdapterMocks.streamSimple,
+    getEnvApiKey: streamAdapterMocks.getEnvApiKey,
+  };
+});
+
 // Minimal config fixture
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   const dataDir = mkdtempSync(join(tmpdir(), 'psfn-stream-adapter-test-'));
@@ -60,6 +74,8 @@ afterEach(() => {
     if (!dir) continue;
     rmSync(dir, { recursive: true, force: true });
   }
+  streamAdapterMocks.streamSimple.mockReset();
+  streamAdapterMocks.getEnvApiKey.mockReset();
 });
 
 function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistry {
@@ -137,6 +153,14 @@ function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistr
   };
 }
 
+async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unknown[]> {
+  const events: unknown[] = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
+
 describe('createSubstrateStreamFn', () => {
   it('returns a function with StreamFn signature', () => {
     const config = makeConfig();
@@ -191,7 +215,24 @@ describe('createSubstrateStreamFn', () => {
       onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
     });
 
-    await expect(runWithRequestContext(
+    streamAdapterMocks.streamSimple.mockImplementation(() => (async function* emptyStream() {
+      yield {
+        type: 'done',
+        reason: 'stop',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'ok' }],
+          api: 'openai-completions',
+          provider: 'litellm',
+          model: 'openrouter/deepseek/deepseek-v3.2',
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+          stopReason: 'stop',
+          timestamp: Date.now(),
+        },
+      };
+    })() as any);
+
+    const events = await runWithRequestContext(
       {
         turnId: 'turn-stream-budget-1',
         requestId: 'req-stream-budget-1',
@@ -201,7 +242,7 @@ describe('createSubstrateStreamFn', () => {
         originStage: 'agent.stream.prompt',
       },
       async () => {
-        streamFn(
+        const stream = await streamFn(
           {
             id: 'deepseek/deepseek-v3.2',
             provider: 'openrouter',
@@ -218,9 +259,13 @@ describe('createSubstrateStreamFn', () => {
           } as any,
           {},
         );
+        return await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
-    )).rejects.toThrow(/Model budget blocked/);
+    );
 
+    expect(events).toHaveLength(1);
+    expect((events[0] as { type: string }).type).toBe('error');
+    expect((events[0] as { error: { errorMessage: string } }).error.errorMessage).toContain('Model budget blocked');
     expect(blockedEvents).toHaveLength(1);
     expect(blockedEvents[0]).toMatchObject({
       reason: 'daily_budget_exceeded',
@@ -246,6 +291,335 @@ describe('createSubstrateStreamFn', () => {
       estimatedRequestCostUsd: expect.any(Number),
     });
     expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
+  });
+
+  it('falls back to the next configured chat candidate when the primary stream errors before output commits', async () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const baseConfig = makeConfig();
+    const baseRegistry = baseConfig.modelRegistry!;
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseRegistry,
+        models: [
+          ...baseRegistry.models,
+          {
+            id: 'chat-fallback',
+            rank: 500,
+            identity: {
+              provider: 'openrouter',
+              model: 'moonshotai/kimi-k2.5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 8192,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 8192,
+              contextWindow: 128_000,
+            },
+          },
+        ],
+      },
+    });
+    streamAdapterMocks.streamSimple.mockImplementation((resolvedModel: { id: string }) => {
+      if (resolvedModel.id === 'openrouter/deepseek/deepseek-v3.2') {
+        return (async function* primaryFailure() {
+          yield {
+            type: 'start',
+            partial: {
+              role: 'assistant',
+              content: [],
+              api: 'openai-completions',
+              provider: 'litellm',
+              model: resolvedModel.id,
+              usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+              stopReason: 'error',
+              timestamp: Date.now(),
+            },
+          };
+          yield {
+            type: 'error',
+            reason: 'error',
+            error: {
+              role: 'assistant',
+              content: [],
+              api: 'openai-completions',
+              provider: 'litellm',
+              model: resolvedModel.id,
+              usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+              stopReason: 'error',
+              errorMessage: '403 Key limit exceeded (total limit)',
+              timestamp: Date.now(),
+            },
+          };
+        })() as any;
+      }
+
+      return (async function* fallbackSuccess() {
+        yield {
+          type: 'start',
+          partial: {
+            role: 'assistant',
+            content: [],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        };
+        yield {
+          type: 'text_start',
+          contentIndex: 0,
+          partial: {
+            role: 'assistant',
+            content: [{ type: 'text', text: '' }],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        };
+        yield {
+          type: 'text_delta',
+          contentIndex: 0,
+          delta: 'Recovered on fallback.',
+          partial: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Recovered on fallback.' }],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        };
+        yield {
+          type: 'done',
+          reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Recovered on fallback.' }],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 7, output: 4, cacheRead: 0, cacheWrite: 0, totalTokens: 11, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        };
+      })() as any;
+    });
+
+    const streamFn = createSubstrateStreamFn(config);
+    const model = resolveModel(config, 'chat');
+    const stream = await streamFn(model, {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'hello' }],
+    } as any, {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(events).toHaveLength(4);
+    expect((events[0] as { type: string }).type).toBe('start');
+    expect((events.at(-1) as { type: string; message: { model: string } }).type).toBe('done');
+    expect((events.at(-1) as { message: { model: string } }).message.model).toBe('openrouter/moonshotai/kimi-k2.5');
+    expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect((streamAdapterMocks.streamSimple.mock.calls[0]?.[0] as { id: string }).id).toBe('openrouter/deepseek/deepseek-v3.2');
+    expect((streamAdapterMocks.streamSimple.mock.calls[1]?.[0] as { id: string }).id).toBe('openrouter/moonshotai/kimi-k2.5');
+  });
+
+  it('emits a terminal failure hook when all configured candidates fail', async () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const baseConfig = makeConfig();
+    const baseRegistry = baseConfig.modelRegistry!;
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseRegistry,
+        models: [
+          ...baseRegistry.models,
+          {
+            id: 'chat-fallback',
+            rank: 500,
+            identity: {
+              provider: 'openrouter',
+              model: 'moonshotai/kimi-k2.5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 8192,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 8192,
+              contextWindow: 128_000,
+            },
+          },
+        ],
+      },
+    });
+    streamAdapterMocks.streamSimple.mockImplementation((resolvedModel: { id: string }) => (
+      (async function* streamFailure() {
+        yield {
+          type: 'error',
+          reason: 'error',
+          error: {
+            role: 'assistant',
+            content: [],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'error',
+            errorMessage: `fatal failure for ${resolvedModel.id}`,
+            timestamp: Date.now(),
+          },
+        };
+      })()
+    ) as any);
+    const onTerminalFailure = vi.fn();
+
+    const streamFn = createSubstrateStreamFn(config, { onTerminalFailure });
+    const model = resolveModel(config, 'chat');
+    const stream = await streamFn(model, {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'hello' }],
+    } as any, {});
+
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(events).toHaveLength(1);
+    expect((events[0] as { type: string }).type).toBe('error');
+    expect((events[0] as { error: { content: Array<{ text: string }>; errorMessage: string } }).error.content[0]?.text)
+      .toContain('could not finish that reply');
+    expect((events[0] as { error: { errorMessage: string } }).error.errorMessage).toContain('fatal failure');
+    expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(onTerminalFailure).toHaveBeenCalledTimes(1);
+    expect(onTerminalFailure.mock.calls[0]?.[0]).toMatchObject({
+      purpose: 'chat',
+      attempts: 2,
+      service: 'chat',
+      process: 'agent.stream.prompt',
+      candidate: {
+        provider: 'openrouter',
+        model: 'moonshotai/kimi-k2.5',
+      },
+    });
+  });
+
+  it('does not switch candidates after output has already started streaming', async () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const baseConfig = makeConfig();
+    const baseRegistry = baseConfig.modelRegistry!;
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseRegistry,
+        models: [
+          ...baseRegistry.models,
+          {
+            id: 'chat-fallback',
+            rank: 500,
+            identity: {
+              provider: 'openrouter',
+              model: 'moonshotai/kimi-k2.5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 8192,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 8192,
+              contextWindow: 128_000,
+            },
+          },
+        ],
+      },
+    });
+    streamAdapterMocks.streamSimple.mockImplementation((resolvedModel: { id: string }) => (
+      (async function* partialFailure() {
+        yield {
+          type: 'start',
+          partial: {
+            role: 'assistant',
+            content: [],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        };
+        yield {
+          type: 'text_start',
+          contentIndex: 0,
+          partial: {
+            role: 'assistant',
+            content: [{ type: 'text', text: '' }],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        };
+        yield {
+          type: 'text_delta',
+          contentIndex: 0,
+          delta: 'partial',
+          partial: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'partial' }],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        };
+        yield {
+          type: 'error',
+          reason: 'error',
+          error: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'partial' }],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'error',
+            errorMessage: 'stream broke after partial output',
+            timestamp: Date.now(),
+          },
+        };
+      })()
+    ) as any);
+
+    const streamFn = createSubstrateStreamFn(config);
+    const model = resolveModel(config, 'chat');
+    const stream = await streamFn(model, {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'hello' }],
+    } as any, {});
+
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect(events).toHaveLength(4);
+    expect((events[0] as { type: string }).type).toBe('start');
+    expect((events[2] as { type: string }).type).toBe('text_delta');
+    expect((events[3] as { type: string }).type).toBe('error');
+    expect((events[3] as { error: { errorMessage: string } }).error.errorMessage).toContain('stream broke after partial output');
+    expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(1);
   });
 });
 

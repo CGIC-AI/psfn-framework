@@ -15,6 +15,7 @@ import {
   DEFAULT_UI_THEME_ID,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
 } from '../types.js';
+import { normalizeImageWorkflowSettings } from '../images/types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
@@ -1244,6 +1245,16 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     normalized.chatApiBaseUrl = typeof settings.chatApiBaseUrl === 'string'
       ? settings.chatApiBaseUrl.trim()
       : '';
+  }
+
+  if ('comfyUiBaseUrl' in settings) {
+    normalized.comfyUiBaseUrl = typeof settings.comfyUiBaseUrl === 'string'
+      ? settings.comfyUiBaseUrl.trim()
+      : '';
+  }
+
+  if ('imageWorkflows' in settings) {
+    normalized.imageWorkflows = normalizeImageWorkflowSettings(settings.imageWorkflows);
   }
 
   if ('uiThemeId' in settings) {

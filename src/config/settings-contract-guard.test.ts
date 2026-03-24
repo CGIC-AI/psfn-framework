@@ -39,4 +39,22 @@ describe('settings contract guard', () => {
       'Advanced field "sessionHistoryBudgetPct" must remain runtime-owned because Garden advanced editors read from runtime config.',
     );
   });
+
+  it('allows deprecated schema fields to stay out of Garden exposure metadata', () => {
+    const contractData = buildSettingsContractData();
+    const uiFieldExposureKeys = Object.keys(contractData.fields).filter((fieldKey) => (
+      fieldKey !== 'primaryModel'
+      && fieldKey !== 'webFetchLocalCrawlerEnabled'
+    ));
+
+    const result = verifySettingsContractGuard({
+      contractData,
+      uiFieldExposureKeys,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      errors: [],
+    });
+  });
 });

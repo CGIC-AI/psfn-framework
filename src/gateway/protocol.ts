@@ -2,6 +2,7 @@
 // The contract between gateway (host) and agent (container).
 
 import type {
+  Attachment,
   CompletionPurpose,
   ContextMessage,
   ModelThinkingEffort,
@@ -9,6 +10,13 @@ import type {
   SubstrateMessage,
   ToolSchema,
 } from '../types.js';
+import type {
+  FalCreateModel,
+  FalEditModel,
+  ImageAspectRatio,
+  ImageGenerationResult,
+  ImageProviderPreference,
+} from '../images/types.js';
 import type { JournalEntry } from '../session/types.js';
 import type { JournalIntegrityVerificationResult } from '../session/journal-utils.js';
 import type { RuntimeServiceHealthSnapshot } from '../tool-health/types.js';
@@ -69,6 +77,11 @@ export interface LLMEmbedParams {
 export interface DiscordSendParams {
   channelId: string;
   content: string;
+}
+
+export interface DiscordSendMediaParams {
+  channelId: string;
+  media: Attachment;
 }
 
 export interface DiscordTypingParams {
@@ -166,6 +179,39 @@ export interface BeadsCloseParams extends BeadsBaseParams {
 }
 
 export interface BeadsSyncParams extends BeadsBaseParams {}
+
+export interface ImageCreateParams extends GatewayCorrelationParams {
+  prompt: string;
+  provider?: ImageProviderPreference;
+  model?: FalCreateModel;
+  numImages?: number;
+  width?: number;
+  height?: number;
+  aspectRatio?: ImageAspectRatio;
+  resolution?: string;
+  imageSize?: string;
+  background?: string;
+  outputFormat?: string;
+  seed?: number;
+}
+
+export interface ImageEditParams extends GatewayCorrelationParams {
+  prompt: string;
+  imageUrls: string[];
+  provider?: ImageProviderPreference;
+  model?: FalEditModel;
+  numImages?: number;
+  width?: number;
+  height?: number;
+  aspectRatio?: ImageAspectRatio;
+  resolution?: string;
+  imageSize?: string;
+  background?: string;
+  outputFormat?: string;
+  maskImageUrl?: string;
+  inputFidelity?: string;
+  seed?: number;
+}
 
 export interface ShellExecParams {
   command: string;
@@ -289,6 +335,10 @@ export interface DiscordSendResult {
   success: boolean;
 }
 
+export interface DiscordSendMediaResult {
+  success: boolean;
+}
+
 export interface DiscordTypingResult {
   success: boolean;
 }
@@ -356,6 +406,8 @@ export interface BeadsActionResult {
   payload: unknown;
 }
 
+export type ImageGenerationRpcResult = ImageGenerationResult;
+
 export interface ShellExecResult {
   command: string;
   args: string[];
@@ -419,6 +471,7 @@ export interface GatewayMethods {
   'llm.complete': [LLMCompleteParams, LLMCompleteResult];
   'llm.embed': [LLMEmbedParams, LLMEmbedResult];
   'discord.send': [DiscordSendParams, DiscordSendResult];
+  'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
@@ -442,6 +495,8 @@ export interface GatewayMethods {
   'beads.update': [BeadsUpdateParams, BeadsActionResult];
   'beads.close': [BeadsCloseParams, BeadsActionResult];
   'beads.sync': [BeadsSyncParams, BeadsActionResult];
+  'image.create': [ImageCreateParams, ImageGenerationRpcResult];
+  'image.edit': [ImageEditParams, ImageGenerationRpcResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
@@ -480,6 +535,7 @@ export interface VoiceHandleMessageParams {
 export interface VoiceHandleMessageResult {
   content: string;
   channelId: string;
+  attachments?: Attachment[];
   model: string;
   durationMs: number;
 }

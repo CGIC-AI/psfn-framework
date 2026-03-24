@@ -31,9 +31,25 @@ export function buildExtractionEntryChunks(
   return chunks;
 }
 
-export function formatExtractionTranscript(entries: readonly SessionEntry[]): string {
+export interface ExtractionTranscriptRoleNames {
+  charName?: string;
+  userName?: string;
+}
+
+export function formatExtractionTranscript(
+  entries: readonly SessionEntry[],
+  roleNames: ExtractionTranscriptRoleNames = {},
+): string {
   return entries
-    .map((entry) => `${entry.authorName ?? entry.role}: ${entry.content}`)
+    .map((entry) => {
+      let speaker: string;
+      if (entry.role === 'assistant') {
+        speaker = roleNames.charName?.trim() || entry.authorName || 'Assistant';
+      } else {
+        speaker = entry.authorName || roleNames.userName?.trim() || 'User';
+      }
+      return `${speaker}: ${entry.content}`;
+    })
     .join('\n');
 }
 

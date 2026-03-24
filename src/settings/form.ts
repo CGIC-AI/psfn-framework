@@ -333,6 +333,13 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     }
   }
 
+  const comfyUiBaseUrlRaw = params.get('comfyUiBaseUrl');
+  if (comfyUiBaseUrlRaw !== null) {
+    const endpointUrl = comfyUiBaseUrlRaw.trim();
+    settings.comfyUiBaseUrl = endpointUrl;
+    validateHttpUrl('comfyUiBaseUrl', endpointUrl);
+  }
+
   const uiThemeIdRaw = params.get('uiThemeId');
   if (uiThemeIdRaw !== null) {
     settings.uiThemeId = uiThemeIdRaw.trim() || DEFAULT_UI_THEME_ID;

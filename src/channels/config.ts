@@ -34,7 +34,12 @@ export interface TelegramChannelConfig {
   webhook: TelegramWebhookConfig;
 }
 
+export interface DiscordChannelConfig {
+  heartbeatChannelId: string;
+}
+
 export interface RuntimeChannelsConfig {
+  discord: DiscordChannelConfig;
   telegram: TelegramChannelConfig;
 }
 
@@ -58,6 +63,10 @@ const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
     port: DEFAULT_TELEGRAM_WEBHOOK_PORT,
     path: DEFAULT_TELEGRAM_WEBHOOK_PATH,
   },
+};
+
+const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
+  heartbeatChannelId: '',
 };
 
 function interpolateEnvTokens(value: unknown, env: NodeJS.ProcessEnv): unknown {
@@ -165,6 +174,9 @@ export function loadRuntimeChannelsConfig(
   const interpolated = interpolateEnvTokens(rawConfig, env);
   const root = isRecord(interpolated) ? interpolated : {};
   const scopedRoot = isRecord(root.channels) ? root.channels : root;
+  const discordConfig = isRecord(scopedRoot.discord)
+    ? scopedRoot.discord
+    : {};
   const telegramConfig = isRecord(scopedRoot.telegram)
     ? scopedRoot.telegram
     : {};
@@ -217,6 +229,10 @@ export function loadRuntimeChannelsConfig(
   );
 
   return {
+    discord: {
+      heartbeatChannelId: parseString(discordConfig.heartbeatChannelId)
+        ?? DEFAULT_DISCORD_CHANNEL_CONFIG.heartbeatChannelId,
+    },
     telegram: {
       enabled,
       token,

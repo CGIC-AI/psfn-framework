@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import {
   Client,
   Events,
@@ -17,6 +18,7 @@ import type {
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
   ChannelOutboundAdapter,
+  MediaAttachment,
   ChannelPromptAdapter,
   ChannelSecurityAdapter,
   ChannelStreamingAdapter,
@@ -151,6 +153,9 @@ export class DiscordAdapter implements ChannelAdapter {
       sendText: async (ctx: OutboundContext, text: string): Promise<void> => {
         await this.send(ctx.channelId, text);
       },
+      sendMedia: async (ctx: OutboundContext, media: MediaAttachment): Promise<void> => {
+        await this.sendMediaInternal(ctx, media);
+      },
     };
     this.gateway = this;
     this.security = {
@@ -272,6 +277,41 @@ export class DiscordAdapter implements ChannelAdapter {
     for (const chunk of chunks) {
       await (channel as TextChannel).send(chunk);
     }
+  }
+
+  private async sendMediaInternal(ctx: OutboundContext, media: MediaAttachment): Promise<void> {
+    const channel = await this.client.channels.fetch(ctx.channelId);
+    if (!channel?.isTextBased()) return;
+
+    const fileName = media.name?.trim() || 'attachment';
+    const localPath = media.localPath?.trim();
+    const file = localPath && existsSync(localPath)
+      ? localPath
+      : await this.fetchRemoteMediaAttachment(media.url, fileName);
+
+    await (channel as TextChannel).send({
+      files: [file],
+      ...(ctx.replyToMessageId ? { reply: { messageReference: ctx.replyToMessageId } } : {}),
+    });
+  }
+
+  private async fetchRemoteMediaAttachment(
+    mediaUrl: string,
+    fileName: string,
+  ): Promise<{ attachment: Buffer; name: string }> {
+    if (!mediaUrl.trim()) {
+      throw new Error('Discord media attachment URL is required');
+    }
+
+    const response = await fetch(mediaUrl);
+    if (!response.ok) {
+      throw new Error(`Discord media fetch failed (${response.status})`);
+    }
+
+    return {
+      attachment: Buffer.from(await response.arrayBuffer()),
+      name: fileName,
+    };
   }
 
   private async onDiscordMessage(msg: Message): Promise<void> {
@@ -440,12 +480,23 @@ export class DiscordAdapter implements ChannelAdapter {
       const response = await this.handler(substrateMsg);
       const trimmedResponse = response.content.trim();
       const hasText = trimmedResponse.length > 0;
+      const responseAttachments = response.attachments ?? [];
       if (hasText) {
         if (replyToOriginal) {
           await this.sendReply(msg, trimmedResponse);
         } else {
           await this.outbound.sendText({ channelId }, response.content);
         }
+      }
+      if (responseAttachments.length > 0) {
+        const mediaContext = replyToOriginal && !hasText
+          ? { channelId, replyToMessageId: msg.id }
+          : { channelId };
+        for (const attachment of responseAttachments) {
+          await this.outbound.sendMedia?.(mediaContext, attachment);
+        }
+      }
+      if (hasText || responseAttachments.length > 0) {
         await this.eventBus.emit('message.sent', { response });
       } else {
         log.debug('Suppressing empty handler response for Discord channel', { channelId });

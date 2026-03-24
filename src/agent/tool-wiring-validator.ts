@@ -167,6 +167,9 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
   issue_update: Object.freeze(['beads.update']),
   issue_close: Object.freeze(['beads.close']),
   issue_sync: Object.freeze(['beads.sync']),
+  image_create: Object.freeze(['image.create']),
+  image_edit: Object.freeze(['image.edit']),
+  image_analyze: Object.freeze(['web.fetch_binary']),
 });
 
 // ── Validation Types ──
@@ -228,12 +231,15 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'beads.update': 'beadsUpdate',
   'beads.close': 'beadsClose',
   'beads.sync': 'beadsSync',
+  'image.create': 'imageCreate',
+  'image.edit': 'imageEdit',
   'llm.chat': 'stream',
   'llm.complete': 'complete',
   'llm.embed': 'embed',
   'discord.send': 'discordSend',
   'discord.typing': 'discordTyping',
   'web.fetch': 'webFetch',
+  'web.fetch_binary': 'webFetchBinary',
   'shell.exec': 'shellExec',
   'fs.read': 'fsRead',
   'fs.write': 'fsWrite',

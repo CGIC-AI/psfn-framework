@@ -9,8 +9,10 @@ import {
 } from '../time/active-timezone.js';
 import {
   formatAttributedSystemContent,
+  isIntentionAppraisalArtifact,
   normalizeSessionEntryAttribution,
 } from '../session/entry-attribution.js';
+import { renderPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import type {
   ChannelType,
   CompletionPurpose,
@@ -34,15 +36,17 @@ const DEFAULT_SYSTEM_PROMPT = [
   'Most turns should return noop unless concrete action is warranted.',
   'Return JSON only, no markdown, with shape:',
   '{"decisions":[{"type":"followUp|concern|schedule|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?}}]}',
-  'For followUp decisions, include followUp.content.',
-  'Never set authorId or authorName for followUp decisions. They are always system-originated internal messages.',
+  'For followUp decisions, include followUp.content as a brief internal Whisper note to self, not a user-facing message.',
+  'Write Whisper notes in first person, in the companion\'s own private voice, grounded in the supplied persona context.',
+  'Whisper notes should capture what she is noticing or intends to do next, not simulate a sent message to the user.',
+  'Never set authorId or authorName for followUp decisions. Runtime labels them as internal Whisper notes to self.',
   'For schedule decisions, include schedule.templateId.',
   'For concern decisions, include concern.title and/or concern.summary.',
 ].join('\n');
 
 export const INTENTION_FOLLOW_UP_ACTION_KIND = 'intention.follow_up';
 export const INTENTION_FOLLOW_UP_AUTHOR_ID = 'system:intention';
-export const INTENTION_FOLLOW_UP_AUTHOR_NAME = 'Intention Appraisal';
+export const INTENTION_FOLLOW_UP_AUTHOR_NAME = 'Whisper';
 
 export type IntentionDecisionType = 'followUp' | 'concern' | 'schedule' | 'noop';
 export type IntentionDecisionPriority = 'low' | 'medium' | 'high';
@@ -124,6 +128,8 @@ export interface IntentionAppraisalConfig {
   maxConcernCount?: number;
   maxDecisions?: number;
   systemPrompt?: string;
+  characterName?: string;
+  characterPromptVariablesProvider?: () => Record<string, string>;
   onEvaluationError?: (error: unknown, context: { sessionId: string; trigger: AppraisalTrigger }) => void;
 }
 
@@ -157,6 +163,16 @@ interface NormalizedIntentionAppraisalInput {
   triggerOverride: 'motivation' | null;
   motivationSignals: string[];
   now: number;
+}
+
+interface AppraisalPersonaContext {
+  name?: string;
+  description?: string;
+  personality?: string;
+  scenario?: string;
+  messageExample?: string;
+  postHistoryInstructions?: string;
+  visualDescription?: string;
 }
 
 type AppraisalTrigger = 'frequency' | 'emotional_shift' | 'concern_due' | 'motivation';
@@ -796,6 +812,179 @@ function normalizeCandidatePayload(payload: PostTurnActionCandidate['payload']):
   return Object.fromEntries(normalizedEntries);
 }
 
+function pickFirstTrimmedString(...values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+function renderPersonaField(
+  value: string | undefined,
+  variables: Record<string, string>,
+): string | undefined {
+  if (!value) return undefined;
+  const rendered = renderPromptRuntimeTokens(value, { variables }).text.trim();
+  return rendered.length > 0 ? rendered : undefined;
+}
+
+function buildAppraisalPersonaContext(
+  characterPromptVariables: Record<string, string>,
+  fallbackCharacterName?: string,
+): AppraisalPersonaContext | null {
+  const name = pickFirstTrimmedString(
+    characterPromptVariables['character.name'],
+    characterPromptVariables.char_name,
+    characterPromptVariables.character_name,
+    characterPromptVariables.name,
+    fallbackCharacterName,
+  );
+  const renderVariables: Record<string, string> = {
+    ...characterPromptVariables,
+    ...(name ? {
+      char: name,
+      char_name: name,
+      character: name,
+      character_name: name,
+      name,
+      'character.name': name,
+    } : {}),
+    user: 'the user',
+    user_name: 'the user',
+  };
+
+  const persona: AppraisalPersonaContext = {
+    ...(name ? { name } : {}),
+    ...(renderPersonaField(
+      pickFirstTrimmedString(
+        characterPromptVariables['character.description'],
+        characterPromptVariables.description,
+      ),
+      renderVariables,
+    ) ? {
+      description: renderPersonaField(
+        pickFirstTrimmedString(
+          characterPromptVariables['character.description'],
+          characterPromptVariables.description,
+        ),
+        renderVariables,
+      ),
+    } : {}),
+    ...(renderPersonaField(
+      pickFirstTrimmedString(
+        characterPromptVariables['character.personality'],
+        characterPromptVariables.personality,
+      ),
+      renderVariables,
+    ) ? {
+      personality: renderPersonaField(
+        pickFirstTrimmedString(
+          characterPromptVariables['character.personality'],
+          characterPromptVariables.personality,
+        ),
+        renderVariables,
+      ),
+    } : {}),
+    ...(renderPersonaField(
+      pickFirstTrimmedString(
+        characterPromptVariables['character.scenario'],
+        characterPromptVariables.scenario,
+      ),
+      renderVariables,
+    ) ? {
+      scenario: renderPersonaField(
+        pickFirstTrimmedString(
+          characterPromptVariables['character.scenario'],
+          characterPromptVariables.scenario,
+        ),
+        renderVariables,
+      ),
+    } : {}),
+    ...(renderPersonaField(
+      pickFirstTrimmedString(
+        characterPromptVariables['character.mes_example'],
+        characterPromptVariables.mes_example,
+      ),
+      renderVariables,
+    ) ? {
+      messageExample: renderPersonaField(
+        pickFirstTrimmedString(
+          characterPromptVariables['character.mes_example'],
+          characterPromptVariables.mes_example,
+        ),
+        renderVariables,
+      ),
+    } : {}),
+    ...(renderPersonaField(
+      pickFirstTrimmedString(
+        characterPromptVariables['character.post_history_instructions'],
+        characterPromptVariables.post_history_instructions,
+      ),
+      renderVariables,
+    ) ? {
+      postHistoryInstructions: renderPersonaField(
+        pickFirstTrimmedString(
+          characterPromptVariables['character.post_history_instructions'],
+          characterPromptVariables.post_history_instructions,
+        ),
+        renderVariables,
+      ),
+    } : {}),
+    ...(renderPersonaField(
+      pickFirstTrimmedString(
+        characterPromptVariables['character.visual_description'],
+        characterPromptVariables.visual_description,
+        characterPromptVariables.extensions_visual_description,
+      ),
+      renderVariables,
+    ) ? {
+      visualDescription: renderPersonaField(
+        pickFirstTrimmedString(
+          characterPromptVariables['character.visual_description'],
+          characterPromptVariables.visual_description,
+          characterPromptVariables.extensions_visual_description,
+        ),
+        renderVariables,
+      ),
+    } : {}),
+  };
+
+  return Object.keys(persona).length > 0 ? persona : null;
+}
+
+function buildRuntimeAppraisalSystemPrompt(
+  basePrompt: string,
+  persona: AppraisalPersonaContext | null,
+): string {
+  if (!persona) {
+    return basePrompt;
+  }
+
+  const personaLines = [
+    persona.name ? `Name: ${persona.name}` : null,
+    persona.description ? `Description: ${persona.description}` : null,
+    persona.personality ? `Personality: ${persona.personality}` : null,
+    persona.scenario ? `Scenario: ${persona.scenario}` : null,
+    persona.visualDescription ? `Appearance: ${persona.visualDescription}` : null,
+    persona.messageExample ? `Example dialogue style:\n${persona.messageExample}` : null,
+    persona.postHistoryInstructions ? `Post-history instructions: ${persona.postHistoryInstructions}` : null,
+  ].filter((line): line is string => Boolean(line));
+
+  if (personaLines.length === 0) {
+    return basePrompt;
+  }
+
+  return [
+    basePrompt,
+    'Current companion persona context for Whisper notes to self:',
+    ...personaLines,
+  ].join('\n\n');
+}
+
 export function decisionsToPostTurnActionCandidates(
   decisions: readonly IntentionActionDecision[],
   context: IntentionDecisionActionContext,
@@ -936,6 +1125,9 @@ export function sessionEntriesToIntentionMessages(
     if (typeof entry.role !== 'string' || typeof entry.content !== 'string') {
       continue;
     }
+    if (isIntentionAppraisalArtifact(entry)) {
+      continue;
+    }
     const normalized = normalizeSessionEntryAttribution({
       role: (
         entry.role === 'assistant'
@@ -982,6 +1174,8 @@ export class IntentionAppraisal {
   private readonly maxConcernCount: number;
   private readonly maxDecisions: number;
   private readonly systemPrompt: string;
+  private readonly fallbackCharacterName?: string;
+  private readonly resolveCharacterPromptVariables: () => Record<string, string>;
   private readonly onEvaluationError?: IntentionAppraisalConfig['onEvaluationError'];
   private readonly sessionState = new Map<string, SessionAppraisalState>();
 
@@ -1023,6 +1217,9 @@ export class IntentionAppraisal {
       'Intention appraisal maxDecisions',
     );
     this.systemPrompt = config.systemPrompt?.trim() || DEFAULT_SYSTEM_PROMPT;
+    this.fallbackCharacterName = config.characterName?.trim() || undefined;
+    this.resolveCharacterPromptVariables = config.characterPromptVariablesProvider
+      ?? (() => ({}));
     this.onEvaluationError = config.onEvaluationError;
   }
 
@@ -1083,6 +1280,16 @@ export class IntentionAppraisal {
         ...(dueAtLabel ? { dueAt: dueAtLabel } : {}),
       };
     });
+    let persona: AppraisalPersonaContext | null;
+    try {
+      persona = buildAppraisalPersonaContext(
+        this.resolveCharacterPromptVariables(),
+        this.fallbackCharacterName,
+      );
+    } catch (error) {
+      this.onEvaluationError?.(error, { sessionId: normalized.sessionId, trigger });
+      return [buildNoopDecision('appraisal failed closed')];
+    }
 
     const promptPayload = {
       trigger,
@@ -1119,6 +1326,7 @@ export class IntentionAppraisal {
       conversationTrajectory: normalized.conversationTrajectory,
       ...(normalized.motivationSignals.length > 0 ? { motivationSignals: normalized.motivationSignals } : {}),
       recentMessages: promptRecentMessages,
+      ...(persona ? { persona } : {}),
       now: formatPromptTimestamp(normalized.now) ?? null,
       timezone: resolveActiveTimezone(),
     };
@@ -1131,7 +1339,7 @@ export class IntentionAppraisal {
 
     try {
       const completion = await this.llmProvider.complete({
-        systemPrompt: this.systemPrompt,
+        systemPrompt: buildRuntimeAppraisalSystemPrompt(this.systemPrompt, persona),
         messages: [promptMessage],
       }, completionPurpose);
       const parsed = parseDecisionResponse(completion.content, this.maxDecisions);

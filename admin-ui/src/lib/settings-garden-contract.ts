@@ -35,15 +35,7 @@ export interface GardenSettingsFieldExposure {
 }
 
 export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
-  primaryModel: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  primaryProvider: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  primaryMaxTokens: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  extractionModel: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  extractionProvider: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  extractionMaxTokens: { sectionId: 'models', surface: 'custom', editorId: 'models' },
   modelCatalog: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  modelRoleAssignments: { sectionId: 'models', surface: 'custom', editorId: 'models' },
-  modelRoster: { sectionId: 'models', surface: 'custom', editorId: 'models' },
   sessionHistoryBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   memoryRetrievalBudgetPct: { sectionId: 'budget', surface: 'advanced' },
   moodCongruenceWeight: { sectionId: 'budget', surface: 'advanced' },
@@ -101,10 +93,6 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   webFetchAllowHttp: { sectionId: 'fetch', surface: 'advanced' },
   webFetchDomainAllowlist: { sectionId: 'fetch', surface: 'advanced' },
   webFetchAllowInternalNetwork: { sectionId: 'fetch', surface: 'advanced' },
-  webFetchLocalCrawlerEnabled: { sectionId: 'fetch', surface: 'advanced' },
-  webFetchLocalCrawlerAllowHttp: { sectionId: 'fetch', surface: 'advanced' },
-  webFetchLocalCrawlerHostAllowlist: { sectionId: 'fetch', surface: 'advanced' },
-  webFetchLocalCrawlerDomainAllowlist: { sectionId: 'fetch', surface: 'advanced' },
   webFetchTlsCaCertPaths: { sectionId: 'fetch', surface: 'advanced' },
   ttsProvider: { sectionId: 'voice', surface: 'advanced' },
   voiceId: { sectionId: 'voice', surface: 'advanced' },
@@ -128,6 +116,8 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   telegramAuthorizedUsers: { sectionId: 'channels', surface: 'advanced' },
   promotedExtendedTools: { sectionId: 'channels', surface: 'advanced' },
   chatApiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
+  comfyUiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
+  imageWorkflows: { sectionId: 'channels', surface: 'advanced' },
   moaEnabled: { sectionId: 'channels', surface: 'advanced' },
   moaReferenceModels: { sectionId: 'channels', surface: 'advanced' },
   moaAggregatorModel: { sectionId: 'channels', surface: 'advanced' },
@@ -183,6 +173,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY = {
   scheduler: 'scheduler',
   'trust-policy': 'trustPolicy',
   capabilities: 'capabilities',
+  backup: 'backup',
 } as const;
 
 export type GardenSettingsRawEditorKey = keyof typeof SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY;
@@ -198,6 +189,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSetti
   scheduler: 'scheduler.json',
   'trust-policy': 'trust-policy.json',
   capabilities: 'capability-tier.json',
+  backup: 'backup.json',
 };
 
 export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
@@ -207,4 +199,5 @@ export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
   'capabilities',
   'skills',
   'trustPolicy',
+  'backup',
 ] as const;

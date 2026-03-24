@@ -2,6 +2,7 @@ import BetterSqlite3 from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -14,6 +15,7 @@ import { createComponentLogger } from '../logger.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { runDatabaseIntegrityCheck } from './startup-checks.js';
+import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
 
 const log = createComponentLogger('BackupService');
 
@@ -25,7 +27,15 @@ export interface BackupRunOptions {
   databasePath: string;
   sessionsDir: string;
   backupRootDir: string;
-  retentionCount: number;
+  /** @deprecated Use maxRotatingBackups */
+  retentionCount?: number;
+  maxRotatingBackups?: number;
+  maxWeeklyBackups?: number;
+  maxMonthlyBackups?: number;
+  /** Path to memories.jsonl (L0 memory journal); if set, included in backup. */
+  memoriesJournalPath?: string;
+  /** When non-empty, mirror the completed backup to this directory. */
+  mirrorDir?: string;
   verifyRestore?: boolean;
   now?: () => number;
 }
@@ -54,6 +64,8 @@ export interface BackupRunResult {
   copiedSessionFiles: string[];
   prunedBackupDirs: string[];
   restoreVerification?: BackupRestoreVerificationResult;
+  tieredRetention?: TieredRetentionResult;
+  mirrorDir?: string;
 }
 
 export interface RegisterScheduledBackupTaskOptions {
@@ -61,6 +73,7 @@ export interface RegisterScheduledBackupTaskOptions {
   db: Database.Database;
   databasePath: string;
   sessionsDir: string;
+  memoriesJournalPath?: string;
   config: BackupRuntimeConfig;
   skipFirstRun?: boolean;
 }
@@ -91,25 +104,16 @@ function listSessionSnapshotFiles(directory: string): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function pruneBackups(
-  backupRootDir: string,
-  retentionCount: number,
-): string[] {
-  const directories = readdirSync(backupRootDir, { withFileTypes: true })
-    .filter(entry => entry.isDirectory())
-    .map(entry => entry.name)
-    .sort((a, b) => a.localeCompare(b));
-
-  if (directories.length <= retentionCount) return [];
-
-  const remove = directories.slice(0, directories.length - retentionCount);
-  const removedPaths: string[] = [];
-  for (const directory of remove) {
-    const path = join(backupRootDir, directory);
-    rmSync(path, { recursive: true, force: true });
-    removedPaths.push(path);
-  }
-  return removedPaths;
+/**
+ * Mirrors a completed backup directory to a secondary location.
+ * The destination is `<mirrorRoot>/<backupDirName>`.
+ * Uses recursive cpSync with overwrite so incremental mirrors are safe.
+ */
+function mirrorBackupToDir(backupDir: string, mirrorRootDir: string): void {
+  const dirName = basename(backupDir);
+  const mirrorTarget = join(mirrorRootDir, dirName);
+  mkdirSync(mirrorTarget, { recursive: true });
+  cpSync(backupDir, mirrorTarget, { recursive: true, force: true });
 }
 
 export function verifyBackupRestore(
@@ -193,10 +197,50 @@ export async function runBackupCycle(
     sessionSnapshotDir,
   );
 
-  const prunedBackupDirs = pruneBackups(
-    options.backupRootDir,
-    options.retentionCount,
-  );
+  // Back up the L0 memories journal (notes/memories.jsonl) if available.
+  const { memoriesJournalPath } = options;
+  if (memoriesJournalPath && existsSync(memoriesJournalPath)) {
+    const notesDir = join(backupDir, 'notes');
+    mkdirSync(notesDir, { recursive: true });
+    copyFileSync(memoriesJournalPath, join(notesDir, basename(memoriesJournalPath)));
+  }
+
+  // Apply tiered GFS retention (or fall back to flat count if tiering not configured).
+  const maxRotating = options.maxRotatingBackups
+    ?? options.retentionCount
+    ?? 9;
+  const maxWeekly = options.maxWeeklyBackups ?? 2;
+  const maxMonthly = options.maxMonthlyBackups ?? 1;
+
+  const tieredRetention = applyTieredRetention(options.backupRootDir, {
+    maxRotatingBackups: maxRotating,
+    maxWeeklyBackups: maxWeekly,
+    maxMonthlyBackups: maxMonthly,
+  });
+
+  // Mirror to secondary location if configured.
+  const effectiveMirrorDir = options.mirrorDir?.trim();
+  let mirrorDir: string | undefined;
+  if (effectiveMirrorDir && existsSync(backupDir)) {
+    try {
+      mkdirSync(effectiveMirrorDir, { recursive: true });
+      mirrorBackupToDir(backupDir, effectiveMirrorDir);
+      // Also sync pruned dirs: remove from mirror if they no longer exist locally.
+      for (const pruned of tieredRetention.prunedBackupDirs) {
+        const mirrorPruned = join(effectiveMirrorDir, basename(pruned));
+        if (existsSync(mirrorPruned)) {
+          rmSync(mirrorPruned, { recursive: true, force: true });
+        }
+      }
+      mirrorDir = effectiveMirrorDir;
+    } catch (mirrorErr) {
+      log.warn('Backup mirror failed — local backup is intact', {
+        mirrorDir: effectiveMirrorDir,
+        error: String(mirrorErr),
+      });
+    }
+  }
+
   const restoreVerification = options.verifyRestore
     ? verifyBackupRestore({
       databaseBackupPath,
@@ -211,8 +255,10 @@ export async function runBackupCycle(
     databaseBackupPath,
     sessionSnapshotDir,
     copiedSessionFiles,
-    prunedBackupDirs,
+    prunedBackupDirs: tieredRetention.prunedBackupDirs,
     restoreVerification,
+    tieredRetention,
+    mirrorDir,
   };
 }
 
@@ -230,8 +276,12 @@ export function registerScheduledBackupTask(
           db: options.db,
           databasePath: options.databasePath,
           sessionsDir: options.sessionsDir,
+          memoriesJournalPath: options.memoriesJournalPath,
           backupRootDir: options.config.rootDir,
-          retentionCount: options.config.retentionCount,
+          maxRotatingBackups: options.config.maxRotatingBackups,
+          maxWeeklyBackups: options.config.maxWeeklyBackups,
+          maxMonthlyBackups: options.config.maxMonthlyBackups,
+          mirrorDir: options.config.mirrorDir,
           verifyRestore: options.config.verifyRestore,
         });
 
@@ -239,6 +289,9 @@ export function registerScheduledBackupTask(
           backupDir: result.backupDir,
           copiedSessionFiles: result.copiedSessionFiles.length,
           prunedBackupDirs: result.prunedBackupDirs.length,
+          weeklySlots: result.tieredRetention?.weeklyCount,
+          monthlySlots: result.tieredRetention?.monthlyCount,
+          mirrored: Boolean(result.mirrorDir),
           restoreVerified: Boolean(result.restoreVerification),
           restoreIntegrity: result.restoreVerification?.integrityDetails.join('; '),
         });

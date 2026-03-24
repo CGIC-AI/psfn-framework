@@ -1588,6 +1588,54 @@ describe('AdminServer JSON API routes', () => {
           staticHash: 'static-hash',
           versionPointer: 'prompt-v1',
         },
+        promptContext: {
+          renderedStaticPrefix: 'Rendered static prefix',
+          renderedDynamicSuffix: 'Rendered dynamic suffix',
+          runtimeContext: 'Runtime context',
+          memoryContextBlock: 'Memory block',
+          scratchpadContext: 'Scratchpad block',
+          assembledPrompt: 'Rendered static prefix\n\nRendered dynamic suffix',
+          finalSystemPrompt: 'Final system prompt',
+          messages: [
+            { role: 'user', content: 'hello' },
+            { role: 'assistant', content: 'world' },
+          ],
+        },
+        toolContext: {
+          activeTools: [
+            {
+              name: 'contact_lookup',
+              description: 'Look up a contact.',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  query: { type: 'string' },
+                },
+                required: ['query'],
+              },
+            },
+          ],
+          adaptiveSnapshot: {
+            timestamp: Date.now() + 3,
+            turnId,
+            requestId: 'api-session-turn-1',
+            channelId: 'api-session',
+            callType: 'chat',
+            purpose: 'agent.tools.adaptive.snapshot',
+            tools: [{ toolName: 'contact_lookup', source: 'core' }],
+            skipped: [{ toolName: 'notify_operator', source: 'autoload', reason: 'not_needed_for_turn' }],
+            counts: {
+              core: 1,
+              promoted: 0,
+              extendedLoaded: 0,
+              autoload: 0,
+              deferred: 0,
+              total: 1,
+            },
+            taskKind: null,
+            intent: 'chat',
+          },
+        },
         sessionContext: {
           channelId: 'api-session',
           recentEntries: [],
@@ -1737,6 +1785,16 @@ describe('AdminServer JSON API routes', () => {
           data: { candidateCount?: number; withheldCount?: number; withheldReasonCounts?: Record<string, number> };
         }>;
         snapshot: {
+          promptContext?: {
+            finalSystemPrompt?: string;
+            messages?: Array<{ role: string; content: string }>;
+          };
+          toolContext?: {
+            activeTools?: Array<{ name: string }>;
+            adaptiveSnapshot?: {
+              skipped?: Array<{ toolName?: string; reason?: string }>;
+            };
+          };
           memory?: {
             versionPointer: string;
             contactEmotionalMemories: Array<Record<string, unknown>>;
@@ -1772,6 +1830,22 @@ describe('AdminServer JSON API routes', () => {
       },
     });
     expect(messagesPayload.turns[0]?.snapshot?.memory?.versionPointer).toBe('memory-v1');
+    expect(messagesPayload.turns[0]?.snapshot?.promptContext?.finalSystemPrompt).toBe('Final system prompt');
+    expect(messagesPayload.turns[0]?.snapshot?.promptContext?.messages).toEqual([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'world' },
+    ]);
+    expect(messagesPayload.turns[0]?.snapshot?.toolContext?.activeTools).toEqual([
+      expect.objectContaining({
+        name: 'contact_lookup',
+      }),
+    ]);
+    expect(messagesPayload.turns[0]?.snapshot?.toolContext?.adaptiveSnapshot?.skipped).toEqual([
+      expect.objectContaining({
+        toolName: 'notify_operator',
+        reason: 'not_needed_for_turn',
+      }),
+    ]);
     expect(messagesPayload.turns[0]?.snapshot?.sessionContext?.compactionPromptText).toBe('Compaction prompt snapshot');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.contactEmotionalMemories[0]).not.toHaveProperty('embedding');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.semanticCandidates).toHaveLength(1);
@@ -1794,6 +1868,10 @@ describe('AdminServer JSON API routes', () => {
       relationshipType: 'friend',
       notes: 'before',
     });
+    contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
+      privacyLevel: 'semi_private',
+    });
+    contactStore.recordChannelActivity(contact.id, 'discord', '1313001762793197678');
 
     const listRes = await request(port, 'GET', '/api/admin/contacts', undefined, authHeaders);
     expect(listRes.status).toBe(200);
@@ -1809,12 +1887,41 @@ describe('AdminServer JSON API routes', () => {
       port,
       'PUT',
       `/api/admin/contacts/${contact.id}`,
-      JSON.stringify({ trustLevel: 'trusted', notes: 'after put' }),
+      JSON.stringify({
+        nickname: 'Api Nick',
+        trustLevel: 'trusted',
+        notes: 'after put',
+        channelPrivacy: [{
+          channel: 'discord',
+          userId: 'api-contact-user',
+          privacyLevel: 'private',
+        }],
+      }),
       authHeaders,
     );
     expect(putRes.status).toBe(200);
     expect(contactStore.getById(contact.id)?.trustLevel).toBe('trusted');
+    expect(contactStore.getById(contact.id)?.nickname).toBe('Api Nick');
     expect(contactStore.getById(contact.id)?.notes).toBe('after put');
+    expect(contactStore.getById(contact.id)?.channels?.find(channel => channel.channel === 'discord')?.privacyLevel).toBe('private');
+    expect(contactStore.getById(contact.id)?.conversationChannels?.find(channel => channel.channelId === '1313001762793197678')?.privacyLevel)
+      .toBeUndefined();
+
+    const directChannelRes = await request(
+      port,
+      'PUT',
+      `/api/admin/contacts/${contact.id}`,
+      JSON.stringify({
+        channelPrivacy: [{
+          channel: 'discord',
+          channelId: '1313001762793197678',
+          privacyLevel: 'broadcast',
+        }],
+      }),
+      authHeaders,
+    );
+    expect(directChannelRes.status).toBe(200);
+    expect(contactStore.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('broadcast');
 
     const patchRes = await request(
       port,
@@ -1825,6 +1932,23 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(patchRes.status).toBe(200);
     expect(contactStore.getById(contact.id)?.notes).toBe('after patch');
+
+    const auditRes = await request(
+      port,
+      'GET',
+      `/api/admin/contacts?contactId=${encodeURIComponent(contact.id)}&field=channel_privacy&limit=10`,
+      undefined,
+      authHeaders,
+    );
+    expect(auditRes.status).toBe(200);
+    const auditPayload = JSON.parse(auditRes.body) as {
+      mutationAudits: Array<{ field: string; actor: string; newValue?: string }>;
+    };
+    expect(auditPayload.mutationAudits.some(entry => (
+      entry.field === 'channel_privacy'
+      && entry.actor === 'admin:api'
+      && entry.newValue?.includes('"privacyLevel":"broadcast"')
+    ))).toBe(true);
 
     const badPatch = await request(
       port,

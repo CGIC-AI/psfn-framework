@@ -6,9 +6,9 @@ export function listSessions(): Promise<AdminSessionListData> {
 }
 
 export function getSessionMessages(
-  channelId: string
+  sessionId: string
 ): Promise<AdminSessionMessagesData> {
   return apiGet<AdminSessionMessagesData>(
-    `/api/admin/sessions/${encodeURIComponent(channelId)}`
+    `/api/admin/sessions/${encodeURIComponent(sessionId)}`
   );
 }

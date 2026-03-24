@@ -37,7 +37,7 @@
   let editRelationshipType = $state<RelationshipType>('acquaintance');
   let editNotes = $state('');
 
-  // Channel privacy edits (tracked per channel:userId key)
+  // Channel privacy edits (tracked per identity or conversation-channel key)
   let channelPrivacyEdits = $state<Record<string, ChannelPrivacyLevel>>({});
 
   // Add channel form
@@ -148,14 +148,80 @@
     return rt.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   }
 
-  function channelKey(ch: ContactConversationChannelView): string {
-    return `${ch.channel}:${ch.userId}`;
+  function formatAuditField(field: string): string {
+    switch (field) {
+      case 'trust_level':
+        return 'Trust';
+      case 'display_name':
+        return 'Display Name';
+      case 'relationship_type':
+        return 'Relationship';
+      case 'channel_privacy':
+        return 'Channel Privacy';
+      case 'channel_link':
+        return 'Channel Link';
+      case 'notes':
+      case 'nickname':
+        return field.charAt(0).toUpperCase() + field.slice(1);
+      default:
+        return formatRelType(field);
+    }
   }
 
-  // Edit panel
-
   function contactChannelKey(ch: { channel: string; userId: string }): string {
-    return `${ch.channel}:${ch.userId}`;
+    return `identity:${ch.channel}:${ch.userId}`;
+  }
+
+  function conversationChannelKey(ch: { channel: string; channelId: string }): string {
+    return `conversation:${ch.channel}:${ch.channelId}`;
+  }
+
+  type ChannelPrivacyChangeCandidate =
+    | {
+      key: string;
+      target: 'identity';
+      channel: string;
+      userId: string;
+      privacyLevel: ChannelPrivacyLevel;
+    }
+    | {
+      key: string;
+      target: 'conversation';
+      channel: string;
+      channelId: string;
+      privacyLevel: ChannelPrivacyLevel;
+    };
+
+  function buildPrivacyChangeCandidates(
+    contact: Contact,
+    relatedChannels: ContactConversationChannelView[],
+  ): ChannelPrivacyChangeCandidate[] {
+    const candidates = new Map<string, ChannelPrivacyChangeCandidate>();
+
+    for (const ch of contact.channels ?? []) {
+      const key = contactChannelKey(ch);
+      candidates.set(key, {
+        key,
+        target: 'identity',
+        channel: ch.channel,
+        userId: ch.userId,
+        privacyLevel: ch.privacyLevel as ChannelPrivacyLevel,
+      });
+    }
+
+    for (const ch of relatedChannels) {
+      if (!ch.privacyLevel) continue;
+      const key = conversationChannelKey(ch);
+      candidates.set(key, {
+        key,
+        target: 'conversation',
+        channel: ch.channel,
+        channelId: ch.channelId,
+        privacyLevel: ch.privacyLevel,
+      });
+    }
+
+    return [...candidates.values()];
   }
 
   function startEdit(contact: Contact) {
@@ -171,16 +237,13 @@
     newChannelPrivacy = 'private';
     // Initialize channel privacy edits from contact.channels
     channelPrivacyEdits = {};
-    if (contact.channels) {
-      for (const ch of contact.channels) {
-        channelPrivacyEdits[contactChannelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
-      }
-    } else {
-      // Fallback to relatedChannelMap
-      const channels = getChannels(contact.id);
-      for (const ch of channels) {
-        channelPrivacyEdits[channelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
-      }
+    for (const ch of contact.channels ?? []) {
+      channelPrivacyEdits[contactChannelKey(ch)] = ch.privacyLevel as ChannelPrivacyLevel;
+    }
+    for (const ch of getChannels(contact.id)) {
+      const key = conversationChannelKey(ch);
+      if (!ch.privacyLevel) continue;
+      channelPrivacyEdits[key] = ch.privacyLevel;
     }
   }
 
@@ -212,23 +275,20 @@
         patch.notes = editNotes;
       }
 
-      // Collect channel privacy changes from contact.channels or relatedChannelMap
-      const privacyChanges: Array<{ channel: string; userId: string; privacyLevel: ChannelPrivacyLevel }> = [];
-      if (contact.channels && contact.channels.length > 0) {
-        for (const ch of contact.channels) {
-          const key = contactChannelKey(ch);
-          const newPrivacy = channelPrivacyEdits[key];
-          if (newPrivacy && newPrivacy !== ch.privacyLevel) {
+      // Collect channel privacy changes from both linked identities and observed channels.
+      const privacyChanges: Array<{
+        channel: string;
+        userId?: string;
+        channelId?: string;
+        privacyLevel: ChannelPrivacyLevel;
+      }> = [];
+      for (const ch of buildPrivacyChangeCandidates(contact, getChannels(contactId))) {
+        const newPrivacy = channelPrivacyEdits[ch.key];
+        if (newPrivacy && newPrivacy !== ch.privacyLevel) {
+          if (ch.target === 'identity') {
             privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
-          }
-        }
-      } else {
-        const channels = getChannels(contactId);
-        for (const ch of channels) {
-          const key = channelKey(ch);
-          const newPrivacy = channelPrivacyEdits[key];
-          if (newPrivacy && newPrivacy !== ch.privacyLevel) {
-            privacyChanges.push({ channel: ch.channel, userId: ch.userId, privacyLevel: newPrivacy });
+          } else {
+            privacyChanges.push({ channel: ch.channel, channelId: ch.channelId, privacyLevel: newPrivacy });
           }
         }
       }
@@ -505,7 +565,7 @@
           onclick={() => showAuditTrail = !showAuditTrail}
         >
           <div>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Trust & Note Mutation Audit</h2>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Contact Mutation Audit</h2>
             <p class="text-sm text-shadow-600 mt-0.5">
               {data.mutationAudits.length} mutation{data.mutationAudits.length !== 1 ? 's' : ''} recorded
             </p>
@@ -531,9 +591,7 @@
                 {#each data.mutationAudits as audit (audit.id)}
                   <tr class="hover:bg-bark-50">
                     <td class="px-4 py-2.5 text-sm text-shadow-800">{contactNameForId(audit.contactId)}</td>
-                    <td class="px-4 py-2.5 text-sm text-shadow-700 capitalize">
-                      {audit.field === 'trust_level' ? 'trust' : audit.field}
-                    </td>
+                    <td class="px-4 py-2.5 text-sm text-shadow-700">{formatAuditField(audit.field)}</td>
                     <td class="px-4 py-2.5 font-mono text-sm text-shadow-700">{audit.actor}</td>
                     <td class="px-4 py-2.5">
                       {#if audit.oldValue}
@@ -758,7 +816,7 @@
                 {#each channels as ch}
                   <div class="flex items-center gap-2">
                     <span class="text-sm text-shadow-800 font-medium">{ch.channel}</span>
-                    <span class="font-mono text-sm text-shadow-700 break-all">{ch.userId}</span>
+                    <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
                     {#if ch.privacyLevel}
                       {@const pb = privacyBadge(ch.privacyLevel)}
                       <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
@@ -771,6 +829,33 @@
               </div>
             {:else}
               <p class="text-sm text-shadow-500 italic">No channel identities linked</p>
+            {/if}
+          </div>
+
+          <!-- Observed Conversation Channels -->
+          <div class="border-t border-bark-200 pt-2">
+            <p class="text-sm font-medium text-shadow-700 mb-1.5 uppercase tracking-wider">Conversation Channels</p>
+            {#if channels.length > 0}
+              <div class="space-y-1.5">
+                {#each channels as ch}
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="text-sm text-shadow-800 font-medium">{ch.channel}</span>
+                    <span class="font-mono text-sm text-shadow-700 break-all">{ch.channelId}</span>
+                    {#if ch.privacyLevel}
+                      {@const pb = privacyBadge(ch.privacyLevel)}
+                      <span class="inline-flex items-center px-2 py-0.5 rounded-full text-sm font-medium"
+                        style="{pb.bg}; {pb.text}">
+                        {pb.label}
+                      </span>
+                    {/if}
+                    {#if ch.lastSeen}
+                      <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="text-sm text-shadow-500 italic">No observed conversation channels yet</p>
             {/if}
           </div>
 
@@ -923,27 +1008,65 @@
                   <p class="text-sm font-medium text-shadow-800 mb-2">Channel Privacy Levels</p>
                   <div class="space-y-2">
                     {#each channels as ch}
-                      {@const key = channelKey(ch)}
+                      {@const key = conversationChannelKey(ch)}
                       <div class="flex items-center gap-2 flex-wrap">
-                        <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.userId}</span>
-                        <select
-                          value={channelPrivacyEdits[key] ?? ch.privacyLevel}
-                          onchange={(e) => {
-                            channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
-                          }}
-                          class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-white text-shadow-800
-                                 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
-                          {#each CHANNEL_PRIVACY_LEVELS as pl}
-                            <option value={pl}>{pl.replace('_', ' ')}</option>
-                          {/each}
-                        </select>
-                        <button onclick={() => handleUnlink(contact.id, ch.channel, ch.userId)}
-                          disabled={saving}
-                          class="text-xs px-2 py-0.5 rounded border border-wilt-300 text-wilt-600
-                                 hover:bg-wilt-50 disabled:opacity-50 transition-colors"
-                          title="Unlink this channel identity">
-                          Unlink
-                        </button>
+                        <div class="min-w-0">
+                          <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.channelId}</span>
+                          {#if ch.userId}
+                            <p class="text-xs text-shadow-600">Linked identity {ch.userId}</p>
+                          {/if}
+                        </div>
+                        {#if ch.privacyLevel}
+                          <select
+                            value={channelPrivacyEdits[key] ?? ch.privacyLevel}
+                            onchange={(e) => {
+                              channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
+                            }}
+                            class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-white text-shadow-800
+                                   focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
+                            {#each CHANNEL_PRIVACY_LEVELS as pl}
+                              <option value={pl}>{pl.replace('_', ' ')}</option>
+                            {/each}
+                          </select>
+                        {/if}
+                        {#if ch.lastSeen}
+                          <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              {#if channels.length > 0 && contact.channels && contact.channels.length > 0}
+                <div>
+                  <p class="text-sm font-medium text-shadow-800 mb-2">Observed Conversation Channels</p>
+                  <div class="space-y-2">
+                    {#each channels as ch}
+                      {@const key = conversationChannelKey(ch)}
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <div class="min-w-0">
+                          <span class="font-mono text-sm text-shadow-800 min-w-0 truncate">{ch.channel}:{ch.channelId}</span>
+                          {#if ch.userId}
+                            <p class="text-xs text-shadow-600">Linked identity {ch.userId}</p>
+                          {/if}
+                        </div>
+                        {#if ch.privacyLevel}
+                          <select
+                            value={channelPrivacyEdits[key] ?? ch.privacyLevel}
+                            onchange={(e) => {
+                              channelPrivacyEdits[key] = (e.target as HTMLSelectElement).value as ChannelPrivacyLevel;
+                            }}
+                            class="text-sm px-2 py-1 rounded-lg border border-bark-300 bg-white text-shadow-800
+                                   focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400">
+                            {#each CHANNEL_PRIVACY_LEVELS as pl}
+                              <option value={pl}>{pl.replace('_', ' ')}</option>
+                            {/each}
+                          </select>
+                        {/if}
+                        {#if ch.lastSeen}
+                          <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>
+                        {/if}
                       </div>
                     {/each}
                   </div>

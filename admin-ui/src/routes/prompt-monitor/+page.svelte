@@ -1,6 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { getSessionMessages, listSessions } from '$lib/api/endpoints/sessions';
+  import PromptMonitorMemoryList from '$lib/components/prompt-monitor/PromptMonitorMemoryList.svelte';
+  import PromptMonitorMessageList from '$lib/components/prompt-monitor/PromptMonitorMessageList.svelte';
+  import PromptMonitorSessionEntryList from '$lib/components/prompt-monitor/PromptMonitorSessionEntryList.svelte';
+  import PromptMonitorTextBlock from '$lib/components/prompt-monitor/PromptMonitorTextBlock.svelte';
+  import PromptMonitorToolList from '$lib/components/prompt-monitor/PromptMonitorToolList.svelte';
   import {
     connectGardenEventBus,
     disconnectGardenEventBus,
@@ -19,7 +24,7 @@
   import type { ChannelInfo } from '$lib/types';
 
   let channels = $state<ChannelInfo[]>([]);
-  let selectedChannelId = $state<string | null>(null);
+  let selectedSessionId = $state<string | null>(null);
   let turns = $state<PromptMonitorTurn[]>([]);
   let selectedTurnId = $state<string | null>(null);
   let loadingChannels = $state(true);
@@ -30,6 +35,8 @@
 
   let unsubscribePromptEvents: (() => void) | null = null;
 
+  const selectedChannel = $derived(channels.find(channel => channel.sessionId === selectedSessionId) ?? null);
+  const selectedLogicalChannelId = $derived(selectedChannel?.channelId ?? null);
   const selectedTurn = $derived(turns.find(turn => turn.turnId === selectedTurnId) ?? turns[0] ?? null);
   const selectedTurnMetrics = $derived(selectedTurn ? resolvePromptMonitorMetrics(selectedTurn) : null);
   const summary = $derived(resolvePromptMonitorSummary(turns));
@@ -64,9 +71,9 @@
       const response = await listSessions();
       channels = sortChannels(response.channels);
 
-      if (!selectedChannelId && channels.length > 0) {
-        selectedChannelId = channels[0].channelId;
-        await loadTurnsForChannel(selectedChannelId, { preserveSelection: false });
+      if (!selectedSessionId && channels.length > 0) {
+        selectedSessionId = channels[0].sessionId;
+        await loadTurnsForChannel(selectedSessionId, { preserveSelection: false });
       }
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Failed to load sessions';
@@ -76,13 +83,13 @@
   }
 
   async function loadTurnsForChannel(
-    channelId: string,
+    sessionId: string,
     options: { preserveSelection: boolean } = { preserveSelection: true },
   ): Promise<void> {
     loadingTurns = true;
     error = '';
     try {
-      const response = await getSessionMessages(channelId);
+      const response = await getSessionMessages(sessionId);
       turns = buildPromptMonitorTurns(response.turns);
       liveEventCount = 0;
 
@@ -99,22 +106,22 @@
   }
 
   async function refreshSelectedChannel(): Promise<void> {
-    if (!selectedChannelId || refreshingSelected) return;
+    if (!selectedSessionId || refreshingSelected) return;
     refreshingSelected = true;
     try {
-      await loadTurnsForChannel(selectedChannelId);
+      await loadTurnsForChannel(selectedSessionId);
     } finally {
       refreshingSelected = false;
     }
   }
 
-  function selectChannel(channelId: string): void {
-    if (channelId === selectedChannelId) return;
-    selectedChannelId = channelId;
+  function selectChannel(sessionId: string): void {
+    if (sessionId === selectedSessionId) return;
+    selectedSessionId = sessionId;
     turns = [];
     selectedTurnId = null;
     liveEventCount = 0;
-    void loadTurnsForChannel(channelId, { preserveSelection: false });
+    void loadTurnsForChannel(sessionId, { preserveSelection: false });
   }
 
   function formatDuration(value: number | null): string {
@@ -160,8 +167,18 @@
     return value >= warningThreshold ? 'text-wilt-600' : 'text-moss-700';
   }
 
+  function joinLines(values: readonly string[] | null | undefined): string | null {
+    if (!values || values.length === 0) return null;
+    return values.join('\n\n');
+  }
+
+  function formatJson(value: unknown): string | null {
+    if (value == null) return null;
+    return JSON.stringify(value, null, 2);
+  }
+
   function handlePromptEvent(event: Parameters<typeof mergePromptMonitorEvent>[1]): void {
-    if (!selectedChannelId || event.correlation.channelId !== selectedChannelId) {
+    if (!selectedLogicalChannelId || event.correlation.channelId !== selectedLogicalChannelId) {
       return;
     }
     turns = mergePromptMonitorEvent(turns, event);
@@ -211,7 +228,7 @@
         type="button"
         onclick={() => void refreshSelectedChannel()}
         class="rounded-lg border border-gold-300 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors disabled:opacity-60"
-        disabled={!selectedChannelId || refreshingSelected}
+        disabled={!selectedSessionId || refreshingSelected}
       >
         {refreshingSelected ? 'Refreshing…' : 'Refresh Turn History'}
       </button>
@@ -246,14 +263,14 @@
             No sessions with recorded turns yet.
           </div>
         {:else}
-          {#each channels as channel (channel.channelId)}
+          {#each channels as channel (channel.sessionId)}
             <button
               type="button"
-              onclick={() => selectChannel(channel.channelId)}
+              onclick={() => selectChannel(channel.sessionId)}
               class="w-full border-b border-bark-200 px-4 py-3 text-left transition-colors hover:bg-bark-100"
-              class:bg-gold-50={selectedChannelId === channel.channelId}
-              class:border-l-4={selectedChannelId === channel.channelId}
-              class:border-l-gold-400={selectedChannelId === channel.channelId}
+              class:bg-gold-50={selectedSessionId === channel.sessionId}
+              class:border-l-4={selectedSessionId === channel.sessionId}
+              class:border-l-gold-400={selectedSessionId === channel.sessionId}
             >
               <p class="truncate text-sm font-medium text-shadow-900" title={channel.channelId}>
                 {channelLabel(channel)}
@@ -261,6 +278,11 @@
               <p class="mt-1 text-sm text-shadow-600">
                 {channel.messageCount} messages . {formatRelativeActivity(channel)}
               </p>
+              {#if channel.sessionId !== channel.channelId}
+                <p class="mt-1 truncate font-mono text-sm text-shadow-600" title={channel.sessionId}>
+                  session: {channel.sessionId}
+                </p>
+              {/if}
               {#if channel.linkedContactName}
                 <p class="mt-1 truncate text-sm text-moss-700">
                   {channel.linkedContactName}
@@ -278,7 +300,7 @@
           <p class="text-sm font-medium uppercase tracking-wide text-shadow-600">Turns Loaded</p>
           <p class="mt-1 font-serif text-3xl text-shadow-900">{summary.turnCount}</p>
           <p class="mt-1 text-sm text-shadow-600">
-            {selectedChannelId ? truncateValue(selectedChannelId, 28) : 'No channel selected'}
+            {selectedLogicalChannelId ? truncateValue(selectedLogicalChannelId, 28) : 'No channel selected'}
           </p>
         </div>
         <div class="card-garden p-4">
@@ -304,7 +326,7 @@
         </div>
       </div>
 
-      {#if !selectedChannelId}
+      {#if !selectedSessionId}
         <div class="card-garden p-8 text-center text-shadow-600">
           Select a session to inspect prompt generation.
         </div>
@@ -327,7 +349,7 @@
             <div class="border-b border-bark-300 bg-bark-100 px-5 py-4">
               <h2 class="font-serif text-lg text-shadow-900">Turn Ledger</h2>
               <p class="mt-1 text-sm text-shadow-600">
-                Prompt snapshots and stage timings for {selectedChannelId}
+                Prompt snapshots and stage timings for {selectedLogicalChannelId ?? selectedSessionId}
               </p>
             </div>
 
@@ -428,66 +450,233 @@
                   </div>
                 </div>
 
+                <div class="rounded-xl border border-bark-200 bg-white p-4">
+                  <h3 class="font-medium text-shadow-900">Context Inputs</h3>
+                  <div class="mt-3 grid grid-cols-2 gap-3 text-sm xl:grid-cols-4">
+                    <div>
+                      <p class="text-shadow-600">Trust</p>
+                      <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.trustLevel ?? '—'}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">Prompt Mode</p>
+                      <p class="mt-1 text-shadow-900">{metrics?.promptMode ?? 'default'}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">Memory Chars</p>
+                      <p class="mt-1 text-shadow-900">{metrics?.memoryChars ?? '—'}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">System Prompt Chars</p>
+                      <p class="mt-1 text-shadow-900">{metrics?.systemPromptChars ?? '—'}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">Context Messages</p>
+                      <p class="mt-1 text-shadow-900">{metrics?.contextMessages ?? '—'}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">First Token Source</p>
+                      <p class="mt-1 text-shadow-900">{metrics?.firstTokenSource ?? '—'}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">Compaction Summaries</p>
+                      <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.sessionContext?.compactionSummaryTexts?.length ?? 0}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">Focus Knowledge Blocks</p>
+                      <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.sessionContext?.focusKnowledgeTexts?.length ?? 0}</p>
+                    </div>
+                  </div>
+                </div>
+
                 <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
                   <div class="rounded-xl border border-bark-200 bg-white p-4">
                     <h3 class="font-medium text-shadow-900">Template Snapshot</h3>
                     <div class="mt-3 space-y-3 text-sm">
-                      <div>
-                        <p class="text-shadow-600">Static Prefix</p>
-                        <pre class="mt-1 max-h-44 overflow-auto rounded-lg bg-bark-100 p-3 font-mono text-sm text-shadow-800 whitespace-pre-wrap">
-{selectedTurn.snapshot?.prompt?.staticPrefixTemplate ?? 'No static prompt snapshot recorded.'}</pre>
-                      </div>
-                      <div>
-                        <p class="text-shadow-600">Dynamic Suffix</p>
-                        <pre class="mt-1 max-h-44 overflow-auto rounded-lg bg-bark-100 p-3 font-mono text-sm text-shadow-800 whitespace-pre-wrap">
-{selectedTurn.snapshot?.prompt?.dynamicSuffixTemplate ?? 'No dynamic prompt snapshot recorded.'}</pre>
-                      </div>
+                      <PromptMonitorTextBlock
+                        title="Static Prefix Template"
+                        value={selectedTurn.snapshot?.prompt?.staticPrefixTemplate}
+                        emptyText="No static prompt snapshot recorded."
+                      />
+                      <PromptMonitorTextBlock
+                        title="Dynamic Suffix Template"
+                        value={selectedTurn.snapshot?.prompt?.dynamicSuffixTemplate}
+                        emptyText="No dynamic prompt snapshot recorded."
+                      />
                     </div>
                   </div>
 
                   <div class="rounded-xl border border-bark-200 bg-white p-4">
-                    <h3 class="font-medium text-shadow-900">Context Inputs</h3>
-                    <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
-                      <div>
-                        <p class="text-shadow-600">Trust</p>
-                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.trustLevel ?? '—'}</p>
-                      </div>
-                      <div>
-                        <p class="text-shadow-600">Prompt Mode</p>
-                        <p class="mt-1 text-shadow-900">{metrics?.promptMode ?? 'default'}</p>
-                      </div>
-                      <div>
-                        <p class="text-shadow-600">Memory Chars</p>
-                        <p class="mt-1 text-shadow-900">{metrics?.memoryChars ?? '—'}</p>
-                      </div>
-                      <div>
-                        <p class="text-shadow-600">System Prompt Chars</p>
-                        <p class="mt-1 text-shadow-900">{metrics?.systemPromptChars ?? '—'}</p>
-                      </div>
-                      <div>
-                        <p class="text-shadow-600">Context Messages</p>
-                        <p class="mt-1 text-shadow-900">{metrics?.contextMessages ?? '—'}</p>
-                      </div>
-                      <div>
-                        <p class="text-shadow-600">First Token Source</p>
-                        <p class="mt-1 text-shadow-900">{metrics?.firstTokenSource ?? '—'}</p>
-                      </div>
-                      <div>
-                        <p class="text-shadow-600">Compaction Summaries</p>
-                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.sessionContext?.compactionSummaryTexts?.length ?? 0}</p>
-                      </div>
-                      <div>
-                        <p class="text-shadow-600">Focus Knowledge Blocks</p>
-                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.sessionContext?.focusKnowledgeTexts?.length ?? 0}</p>
-                      </div>
-                    </div>
-
-                    <div class="mt-4">
-                      <p class="text-sm text-shadow-600">Compaction Prompt Snapshot</p>
-                      <pre class="mt-1 max-h-36 overflow-auto rounded-lg bg-bark-100 p-3 font-mono text-sm text-shadow-800 whitespace-pre-wrap">
-{selectedTurn.snapshot?.sessionContext?.compactionPromptText ?? 'No compaction prompt snapshot recorded.'}</pre>
+                    <h3 class="font-medium text-shadow-900">Resolved Prompt Context</h3>
+                    <div class="mt-3 space-y-3 text-sm">
+                      <PromptMonitorTextBlock
+                        title="Rendered Static Prefix"
+                        value={selectedTurn.snapshot?.promptContext?.renderedStaticPrefix}
+                        emptyText="No rendered static prefix recorded."
+                      />
+                      <PromptMonitorTextBlock
+                        title="Rendered Dynamic Suffix"
+                        value={selectedTurn.snapshot?.promptContext?.renderedDynamicSuffix}
+                        emptyText="No rendered dynamic suffix recorded."
+                      />
+                      <PromptMonitorTextBlock
+                        title="Runtime Context Block"
+                        value={selectedTurn.snapshot?.promptContext?.runtimeContext}
+                        emptyText="No runtime context block recorded."
+                        maxHeightClass="max-h-64"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Memory Context Block"
+                        value={selectedTurn.snapshot?.promptContext?.memoryContextBlock}
+                        emptyText="No memory context block recorded."
+                        maxHeightClass="max-h-64"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Scratchpad Context"
+                        value={selectedTurn.snapshot?.promptContext?.scratchpadContext}
+                        emptyText="No scratchpad context recorded."
+                      />
                     </div>
                   </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <div class="rounded-xl border border-bark-200 bg-white p-4">
+                    <h3 class="font-medium text-shadow-900">Assembled Prompt</h3>
+                    <div class="mt-3 space-y-3">
+                      <PromptMonitorTextBlock
+                        title="Pre-Session Prompt"
+                        value={selectedTurn.snapshot?.promptContext?.assembledPrompt}
+                        emptyText="No assembled prompt recorded."
+                        maxHeightClass="max-h-[28rem]"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Final System Prompt"
+                        value={selectedTurn.snapshot?.promptContext?.finalSystemPrompt}
+                        emptyText="No final system prompt recorded."
+                        maxHeightClass="max-h-[28rem]"
+                      />
+                    </div>
+                  </div>
+
+                  <PromptMonitorMessageList
+                    title="Model Context Messages"
+                    messages={selectedTurn.snapshot?.promptContext?.messages ?? []}
+                  />
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <PromptMonitorToolList
+                    title="Active Tool Schemas"
+                    tools={selectedTurn.snapshot?.toolContext?.activeTools ?? []}
+                  />
+
+                  <div class="rounded-xl border border-bark-200 bg-white p-4">
+                    <h3 class="font-medium text-shadow-900">Adaptive Tool State</h3>
+                    <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p class="text-shadow-600">Task Kind</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.taskKind ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Intent</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.intent ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Active Tools</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.counts?.total ?? selectedTurn.snapshot?.toolContext?.activeTools?.length ?? 0}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Skipped Tools</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.skipped?.length ?? 0}</p>
+                      </div>
+                    </div>
+                    <div class="mt-4 space-y-3">
+                      <PromptMonitorTextBlock
+                        title="Adaptive Active Tool Sources"
+                        value={formatJson(selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.tools)}
+                        emptyText="No adaptive tool activation snapshot recorded."
+                        maxHeightClass="max-h-56"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Adaptive Skips"
+                        value={formatJson(selectedTurn.snapshot?.toolContext?.adaptiveSnapshot?.skipped)}
+                        emptyText="No adaptive tool skips recorded."
+                        maxHeightClass="max-h-56"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <PromptMonitorSessionEntryList
+                    title="Recent Session Entries"
+                    entries={selectedTurn.snapshot?.sessionContext?.recentEntries ?? []}
+                    emptyText="No recent session entries recorded."
+                  />
+                  <PromptMonitorSessionEntryList
+                    title="Continuity Entries"
+                    entries={selectedTurn.snapshot?.sessionContext?.continuityEntries ?? []}
+                    emptyText="No continuity entries recorded."
+                  />
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <div class="rounded-xl border border-bark-200 bg-white p-4">
+                    <h3 class="font-medium text-shadow-900">Session Prompt Inputs</h3>
+                    <div class="mt-3 space-y-3">
+                      <PromptMonitorTextBlock
+                        title="Compaction Summaries"
+                        value={joinLines(selectedTurn.snapshot?.sessionContext?.compactionSummaryTexts)}
+                        emptyText="No compaction summaries recorded."
+                        maxHeightClass="max-h-64"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Focus Knowledge"
+                        value={joinLines(selectedTurn.snapshot?.sessionContext?.focusKnowledgeTexts)}
+                        emptyText="No focus knowledge recorded."
+                        maxHeightClass="max-h-64"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Compaction Prompt Snapshot"
+                        value={selectedTurn.snapshot?.sessionContext?.compactionPromptText}
+                        emptyText="No compaction prompt snapshot recorded."
+                      />
+                    </div>
+                  </div>
+
+                  <div class="rounded-xl border border-bark-200 bg-white p-4">
+                    <h3 class="font-medium text-shadow-900">Memory Withholds</h3>
+                    <div class="mt-3 space-y-3">
+                      <PromptMonitorTextBlock
+                        title="Withheld Summary"
+                        value={formatJson(selectedTurn.snapshot?.memory?.withheldSummary)}
+                        emptyText="No withheld memories recorded."
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <PromptMonitorMemoryList
+                    title="Contact Emotional Memories"
+                    memories={selectedTurn.snapshot?.memory?.contactEmotionalMemories ?? []}
+                    emptyText="No contact emotional memories recorded."
+                  />
+                  <PromptMonitorMemoryList
+                    title="Semantic Candidates"
+                    memories={selectedTurn.snapshot?.memory?.semanticCandidates ?? []}
+                    emptyText="No semantic candidates recorded."
+                  />
+                  <PromptMonitorMemoryList
+                    title="Lexical Candidates"
+                    memories={selectedTurn.snapshot?.memory?.lexicalCandidates ?? []}
+                    emptyText="No lexical candidates recorded."
+                  />
+                  <PromptMonitorMemoryList
+                    title="Proactive Candidates"
+                    memories={selectedTurn.snapshot?.memory?.proactiveCandidates ?? []}
+                    emptyText="No proactive candidates recorded."
+                  />
                 </div>
 
                 <div class="rounded-xl border border-bark-200 bg-white p-4">

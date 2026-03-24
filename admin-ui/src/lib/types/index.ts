@@ -148,6 +148,7 @@ export interface AdminBulkMutationResult {
 
 // Sessions
 export interface ChannelInfo {
+  sessionId: string;
   channelId: string;
   messageCount: number;
   lastActivityAt?: number;
@@ -248,6 +249,68 @@ export interface AdminTurnPromptSnapshotData {
   versionPointer: string;
 }
 
+export interface AdminTurnPromptContextMessage {
+  role: string;
+  content: string;
+}
+
+export interface AdminTurnPromptContextSnapshotData {
+  renderedStaticPrefix: string;
+  renderedDynamicSuffix: string;
+  runtimeContext: string;
+  memoryContextBlock: string;
+  scratchpadContext: string;
+  assembledPrompt: string;
+  finalSystemPrompt: string;
+  messages: AdminTurnPromptContextMessage[];
+}
+
+export interface AdminTurnToolSchema {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface AdminAdaptiveToolSnapshotTool {
+  toolName: string;
+  source: string;
+}
+
+export interface AdminAdaptiveToolSnapshotSkip {
+  toolName: string;
+  source: string;
+  reason: string;
+  missingTokens?: string[];
+}
+
+export interface AdminAdaptiveToolSnapshotCounts {
+  core: number;
+  promoted: number;
+  extendedLoaded: number;
+  autoload: number;
+  deferred: number;
+  total: number;
+}
+
+export interface AdminAdaptiveToolSnapshotData {
+  timestamp: number;
+  tools: AdminAdaptiveToolSnapshotTool[];
+  skipped: AdminAdaptiveToolSnapshotSkip[];
+  counts: AdminAdaptiveToolSnapshotCounts;
+  taskKind?: string | null;
+  intent?: string | null;
+  turnId?: string;
+  requestId?: string;
+  channelId?: string;
+  callType?: string;
+  purpose?: string;
+}
+
+export interface AdminTurnToolContextSnapshotData {
+  activeTools: AdminTurnToolSchema[];
+  adaptiveSnapshot?: AdminAdaptiveToolSnapshotData;
+}
+
 export interface AdminTurnSessionContextSnapshotData {
   channelId: string;
   recentEntries: SessionEntry[];
@@ -278,6 +341,8 @@ export interface AdminTurnSnapshotData {
   trustLevel: string;
   canonicalContactKey?: string;
   prompt?: AdminTurnPromptSnapshotData;
+  promptContext?: AdminTurnPromptContextSnapshotData;
+  toolContext?: AdminTurnToolContextSnapshotData;
   sessionContext?: AdminTurnSessionContextSnapshotData;
   memory?: AdminTurnMemorySnapshotData;
 }
@@ -325,6 +390,7 @@ export interface AdminSessionRoleEnvelopePreview {
 }
 
 export interface AdminSessionMessagesData {
+  sessionId: string;
   channelId: string;
   messages: SessionEntry[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
@@ -355,6 +421,13 @@ export interface Contact {
   relationshipType: string;
   channelIdentities?: ContactChannelIdentity[];
   channels?: ContactChannelLink[];
+  conversationChannels?: Array<{
+    channel: string;
+    channelId: string;
+    privacyLevel?: ChannelPrivacyLevel;
+    firstSeen: string;
+    lastSeen: string;
+  }>;
   emotionalBaseline?: Record<string, number>;
   firstSeen: string;
   lastSeen: string;
@@ -371,8 +444,10 @@ export interface ContactProfileArtifact {
 
 export interface ContactConversationChannelView {
   channel: string;
-  userId: string;
-  privacyLevel: string;
+  channelId: string;
+  userId?: string;
+  privacyLevel?: ChannelPrivacyLevel;
+  lastSeen?: string;
 }
 
 export interface AdminContactListData {
@@ -654,8 +729,10 @@ export interface AdminChatBootstrapResponse {
     displayName: string;
     nickname?: string;
     linkedChannels: Array<{
+      targetKind: 'identity' | 'conversation';
       channel: string;
-      userId: string;
+      userId?: string;
+      channelId?: string;
       privacyLevel: string;
     }>;
   }>;
@@ -664,15 +741,20 @@ export interface AdminChatBootstrapResponse {
   displayName: string;
   nickname?: string;
   linkedChannels: Array<{
+    targetKind: 'identity' | 'conversation';
     channel: string;
-    userId: string;
+    userId?: string;
+    channelId?: string;
     privacyLevel: string;
   }>;
-  selectedIdentity: {
+  selectedTarget: {
     canonicalContactId: string;
+    targetKind: 'identity' | 'conversation';
     channel: string;
-    userId: string;
+    userId?: string;
+    channelId?: string;
     privacyLevel: string;
+    sessionId: string;
   };
   privacy: {
     availableLevels: string[];

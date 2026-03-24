@@ -47,6 +47,15 @@ export interface AdaptiveContextBudgetProfile {
   memoryRetrievalBudgetPct: number;
 }
 
+export interface AdaptiveContextBudgetPreviewProfile {
+  key: 'default' | 'heartbeat_reflection' | 'recall' | 'task' | 'emotional' | 'creative' | 'factual';
+  label: string;
+  source: 'disabled' | 'default' | 'adaptive';
+  category: ContextBudgetTurnCategory;
+  sessionHistoryBudgetPct: number;
+  memoryRetrievalBudgetPct: number;
+}
+
 export interface ContextBudgetResolutionOptions {
   turn?: ContextBudgetTurnCharacteristics;
   adaptiveProfile?: AdaptiveContextBudgetProfile;
@@ -422,6 +431,70 @@ export function resolveAdaptiveContextBudgetProfile(
       MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
     ),
   };
+}
+
+export function resolveAdaptiveContextBudgetPreviewProfiles(
+  config: Pick<
+    ContextBudgetConfigLike,
+    'sessionHistoryBudgetPct' | 'memoryRetrievalBudgetPct' | 'adaptiveContextBudgetsEnabled'
+  >,
+): AdaptiveContextBudgetPreviewProfile[] {
+  const baseProfile = resolveAdaptiveContextBudgetProfile(config);
+  const buildProfile = (
+    key: AdaptiveContextBudgetPreviewProfile['key'],
+    label: string,
+    category: ContextBudgetTurnCategory,
+  ): AdaptiveContextBudgetPreviewProfile => {
+    if (category === 'default') {
+      return {
+        key,
+        label,
+        source: baseProfile.source,
+        category,
+        sessionHistoryBudgetPct: baseProfile.sessionHistoryBudgetPct,
+        memoryRetrievalBudgetPct: baseProfile.memoryRetrievalBudgetPct,
+      };
+    }
+
+    if (config.adaptiveContextBudgetsEnabled !== true) {
+      return {
+        key,
+        label,
+        source: 'disabled',
+        category,
+        sessionHistoryBudgetPct: baseProfile.sessionHistoryBudgetPct,
+        memoryRetrievalBudgetPct: baseProfile.memoryRetrievalBudgetPct,
+      };
+    }
+
+    const adaptiveProfile = ADAPTIVE_BUDGET_PROFILE_BY_CATEGORY[category];
+    return {
+      key,
+      label,
+      source: 'adaptive',
+      category,
+      sessionHistoryBudgetPct: clamp(
+        adaptiveProfile.sessionHistoryBudgetPct,
+        SESSION_HISTORY_BUDGET_PCT_RANGE.min,
+        SESSION_HISTORY_BUDGET_PCT_RANGE.max,
+      ),
+      memoryRetrievalBudgetPct: clamp(
+        adaptiveProfile.memoryRetrievalBudgetPct,
+        MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
+        MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
+      ),
+    };
+  };
+
+  return [
+    buildProfile('default', 'Default chat', 'default'),
+    buildProfile('heartbeat_reflection', 'Heartbeat / reflection', 'default'),
+    buildProfile('recall', 'Memory recall', 'recall'),
+    buildProfile('task', 'Task / terminal', 'task'),
+    buildProfile('emotional', 'Emotional support', 'emotional'),
+    buildProfile('creative', 'Creative work', 'creative'),
+    buildProfile('factual', 'Factual Q&A', 'factual'),
+  ];
 }
 
 export function resolveSessionHistoryBudget(

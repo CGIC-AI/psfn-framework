@@ -5,6 +5,8 @@ interface ParsedTurnMetadata {
   sourceMessageId?: string;
 }
 
+const LEGACY_INTENTION_AUTHOR_NAME = 'Intention Appraisal';
+
 export interface NormalizedSessionEntryAttribution {
   role: SessionEntryRole;
   authorName?: string;
@@ -47,6 +49,11 @@ function startsWithReflectionRequest(value: string | undefined): boolean {
   return typeof value === 'string' && value.startsWith('reflection-');
 }
 
+function hasIntentionPrefix(content: string): boolean {
+  return content.startsWith('[Intention Appraisal]')
+    || content.startsWith('[SYSTEM: Intention Appraisal]');
+}
+
 function stripBracketedPrefix(content: string, label: string): string {
   const trimmed = content.trimStart();
   const prefix = `[${label}]`;
@@ -56,6 +63,33 @@ function stripBracketedPrefix(content: string, label: string): string {
 
   const remainder = trimmed.slice(prefix.length).trimStart();
   return remainder || content;
+}
+
+export function isIntentionAppraisalArtifact(
+  entry: Pick<SessionEntry, 'content' | 'authorId' | 'authorName' | 'metadata'>
+    & Partial<ParsedTurnMetadata>,
+): boolean {
+  const parsedTurn = parseTurnMetadata(entry.metadata);
+  const turn: ParsedTurnMetadata = {
+    ...parsedTurn,
+    ...(typeof entry.requestId === 'string' && entry.requestId.trim().length > 0
+      ? { requestId: entry.requestId.trim() }
+      : {}),
+    ...(typeof entry.sourceMessageId === 'string' && entry.sourceMessageId.trim().length > 0
+      ? { sourceMessageId: entry.sourceMessageId.trim() }
+      : {}),
+  };
+  const authorId = entry.authorId?.trim() ?? '';
+  const authorName = entry.authorName?.trim() ?? '';
+  const content = entry.content.trimStart();
+
+  return (
+    authorId.startsWith('system:')
+    || authorName === LEGACY_INTENTION_AUTHOR_NAME
+    || startsWithIntentionFollowUp(turn.requestId)
+    || startsWithIntentionFollowUp(turn.sourceMessageId)
+    || hasIntentionPrefix(content)
+  );
 }
 
 export function normalizeSessionEntryAttribution(
@@ -78,19 +112,11 @@ export function normalizeSessionEntryAttribution(
   };
   const authorId = entry.authorId?.trim() ?? '';
   const authorName = entry.authorName?.trim() ?? '';
-  const content = entry.content.trimStart();
-  const isIntentionFollowUp = (
-    authorId.startsWith('system:')
-    || authorName === 'Intention Appraisal'
-    || startsWithIntentionFollowUp(turn.requestId)
-    || startsWithIntentionFollowUp(turn.sourceMessageId)
-    || content.startsWith('[Intention Appraisal]')
-  );
 
-  if (isIntentionFollowUp) {
+  if (isIntentionAppraisalArtifact(entry)) {
     return {
       role: 'system',
-      authorName: 'Intention Appraisal',
+      authorName: LEGACY_INTENTION_AUTHOR_NAME,
     };
   }
 

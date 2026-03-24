@@ -121,6 +121,9 @@ export function verifySettingsContractGuard(
         + `"${field.ownerSubsystem}" owner file "${subsystem.ownerFile}".`,
       );
     }
+    if (field.deprecated) {
+      continue;
+    }
     if (!uiFieldExposureKeys.has(fieldKey)) {
       errors.push(`Field "${fieldKey}" is missing Garden UI exposure metadata.`);
     }

@@ -326,6 +326,56 @@ describe('IntentionAppraisal', () => {
     expect(promptPayload.internalState).toBeDefined();
     expect(promptPayload.currentEmotion).toBeDefined();
   });
+
+  it('loads persona context for Whisper notes and renders character macros before appraisal', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'followUp',
+          priority: 'medium',
+          reason: 'Needs an internal nudge.',
+          timing: 'soon',
+          followUp: {
+            content: 'Note to self: keep the tone gentle and direct.',
+          },
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+      characterPromptVariablesProvider: () => ({
+        char_name: 'RuntimeCompanion',
+        description: '{{char}} helps {{user}} untangle confusing bugs.',
+        personality: 'Warm, analytical, and quietly steady.',
+        'character.visual_description': 'Silver eyes and a weathered jacket.',
+      }),
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:persona',
+      currentEmotion: makeEmotionSnapshot(),
+      recentMessages: [{ role: 'user', content: 'I am frustrated with this bug.' }],
+    });
+
+    const promptBody = String(complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '');
+    const promptPayload = JSON.parse(promptBody) as {
+      persona?: {
+        name?: string;
+        description?: string;
+        personality?: string;
+        visualDescription?: string;
+      };
+    };
+    expect(promptPayload.persona).toMatchObject({
+      name: 'RuntimeCompanion',
+      description: 'RuntimeCompanion helps the user untangle confusing bugs.',
+      personality: 'Warm, analytical, and quietly steady.',
+      visualDescription: 'Silver eyes and a weathered jacket.',
+    });
+    expect(String(complete.mock.calls[0]?.[0]?.systemPrompt ?? '')).toContain('Whisper notes to self');
+  });
 });
 
 describe('intention appraisal action mapping', () => {
@@ -423,7 +473,7 @@ describe('intention appraisal action mapping', () => {
 });
 
 describe('sessionEntriesToIntentionMessages', () => {
-  it('reclassifies intention artifacts as system messages', () => {
+  it('drops leaked intention artifacts from appraisal history', () => {
     const messages = sessionEntriesToIntentionMessages([{
       role: 'user',
       content: '[Intention Appraisal] I am investigating the logs.',
@@ -440,12 +490,19 @@ describe('sessionEntriesToIntentionMessages', () => {
           role: 'user',
         },
       }),
+    }, {
+      role: 'user',
+      content: 'This is the real partner message.',
+      timestamp: 1_700_000_000_100,
+      authorId: 'user-1',
+      authorName: 'PrimaryUser',
+      channelId: 'discord:test',
     }]);
 
     expect(messages).toEqual([{
-      role: 'system',
-      content: '[SYSTEM: Intention Appraisal] I am investigating the logs.',
-      timestamp: 1_700_000_000_000,
+      role: 'user',
+      content: 'This is the real partner message.',
+      timestamp: 1_700_000_000_100,
     }]);
   });
 });

@@ -61,6 +61,7 @@ import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
+import { wireImageRuntime } from './images/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
   createIntentionAppraisalHooks,
@@ -143,6 +144,7 @@ import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,
 } from './runtime/ml-warmup.js';
+import { createPromptGenerationFailureAlertHandler } from './runtime/operator-alerts.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import {
   buildChannelAdapterFactoryManifest,
@@ -574,6 +576,7 @@ export class SubstrateRuntime implements Lifecycle {
       audioClassifier: getSharedAudioEmotionClassifier(),
     });
     const emotionState = new EmotionState();
+    const operatorNotifier = createHttpNtfyNotifierFromEnv();
     this.agentLoop = composeSubstrateAgent({
       eventBus: this.eventBus,
       llmProvider: this.llmClient,
@@ -583,6 +586,9 @@ export class SubstrateRuntime implements Lifecycle {
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       config: this.config,
       runtimeMode: 'single',
+      streamRuntimeOptions: {
+        onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
+      },
       emotionRuntime: {
         observer: emotionObserver,
         state: emotionState,
@@ -608,6 +614,7 @@ export class SubstrateRuntime implements Lifecycle {
       repoRoot: process.cwd(),
     });
     wireFilesystemToolsRuntime(this.agentLoop, process.cwd());
+    wireImageRuntime(this.agentLoop, this.config);
 
     // Prompt stack — layered, editable system prompt
     const promptStore = wirePromptRuntime(
@@ -720,12 +727,16 @@ export class SubstrateRuntime implements Lifecycle {
       db: this.db,
       databasePath: this.config.databasePath,
       sessionsDir,
+      memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
       config: backupConfig,
     });
     log.info('Scheduled backups enabled', {
       intervalMs: backupConfig.intervalMs,
-      retentionCount: backupConfig.retentionCount,
+      maxRotatingBackups: backupConfig.maxRotatingBackups,
+      maxWeeklyBackups: backupConfig.maxWeeklyBackups,
+      maxMonthlyBackups: backupConfig.maxMonthlyBackups,
       backupRootDir: backupConfig.rootDir,
+      mirrorDir: backupConfig.mirrorDir || '(none)',
       verifyRestore: backupConfig.verifyRestore,
     });
     this.scheduler.registerHeartbeat(async () => {
@@ -862,7 +873,7 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Lifecycle notifier — pre-restart, ready, shutdown messages
-    const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
+    const heartbeatChannelId = channelsConfig.discord.heartbeatChannelId || undefined;
     this.lifecycleNotifier = new DiscordLifecycleNotifier({
       sender: this.discord,
       heartbeatChannelId,
@@ -875,6 +886,7 @@ export class SubstrateRuntime implements Lifecycle {
       const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
       writeLastActiveSession(companionDataDir, {
         sessionId,
+        channelId: message.channelId,
         channelType: inferSessionChannelType(sessionId) ?? message.channelType,
         timestamp: message.timestamp instanceof Date
           ? message.timestamp.getTime()
@@ -910,7 +922,7 @@ export class SubstrateRuntime implements Lifecycle {
       },
     ));
     this.agentLoop.registerTool(createNotifyOperatorTool(
-      createHttpNtfyNotifierFromEnv(),
+      operatorNotifier,
       {
         rateLimiter: externalRateLimiter,
         defaultChannel: 'discord',

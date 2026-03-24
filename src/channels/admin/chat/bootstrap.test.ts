@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Contact } from '../../../contacts/types.js';
 import type { ContactStore } from '../../../contacts/store.js';
 import type { SubstrateConfig } from '../../../types.js';
@@ -73,8 +73,8 @@ describe('AdminChatBootstrapService', () => {
     expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('123456789012345678');
     expect(payload.runtime.transportHeaders['X-Channel-Privacy']).toBe('private');
     // Global default should not force a Garden contact remap by itself.
-    expect(payload.selectedIdentity.channel).toBe('api');
-    expect(payload.selectedIdentity.userId).toBe('admin-user');
+    expect(payload.selectedTarget.channel).toBe('api');
+    expect(payload.selectedTarget.userId).toBe('admin-user');
     expect(payload.assistantName).toBe('Assistant');
     expect(payload.onboarding.required).toBe(false);
   });
@@ -104,6 +104,64 @@ describe('AdminChatBootstrapService', () => {
     expect(payload.defaultSessionId).toBe('api:operator-7');
     expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('api:operator-7');
     expect(payload.runtime.transportHeaders['X-Channel-Privacy']).toBe('private');
+  });
+
+  it('switches to conversation-channel targets without forcing identity links', () => {
+    const contact = makeContact('contact-dm', 'DM Contact');
+    contact.conversationChannels = [{
+      channel: 'discord',
+      channelId: '1313001762793197678',
+      firstSeen: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      privacyLevel: 'semi_private',
+    }];
+
+    const setConversationChannelPrivacy = vi.fn((
+      _contactId: string,
+      _channel: string,
+      _channelId: string,
+      privacyLevel: 'private' | 'semi_private' | 'public' | 'broadcast',
+    ) => {
+      if (contact.conversationChannels) {
+        contact.conversationChannels[0].privacyLevel = privacyLevel;
+      }
+      return true;
+    });
+    const linkChannelIdentity = vi.fn(() => 'linked');
+    const contactStore = {
+      listAll: () => [contact],
+      setConversationChannelPrivacy,
+      linkChannelIdentity,
+      setChannelPrivacy: vi.fn(() => true),
+    } as unknown as ContactStore;
+
+    const service = new AdminChatBootstrapService(contactStore, {
+      resolveGlobalDefaultSessionId: () => null,
+    });
+
+    const payload = service.updateSelection({
+      canonicalContactId: contact.id,
+      channel: 'discord',
+      channelId: '1313001762793197678',
+      privacyLevel: 'private',
+    });
+
+    expect(payload.defaultSessionId).toBe('1313001762793197678');
+    expect(payload.selectedTarget).toMatchObject({
+      targetKind: 'conversation',
+      channel: 'discord',
+      channelId: '1313001762793197678',
+      privacyLevel: 'private',
+    });
+    expect(payload.defaultAuthorId).toBe('admin-user');
+    expect(setConversationChannelPrivacy).toHaveBeenCalledWith(
+      contact.id,
+      'discord',
+      '1313001762793197678',
+      'private',
+      'admin:chat:bootstrap',
+    );
+    expect(linkChannelIdentity).not.toHaveBeenCalled();
   });
 
   it('does not expose raw api keys in bootstrap payloads', () => {

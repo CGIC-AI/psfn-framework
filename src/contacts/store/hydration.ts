@@ -88,7 +88,7 @@ export function getConversationChannels(
   contactId: string,
 ): ContactConversationChannel[] {
   const rows = db.prepare(`
-    SELECT contact_id, channel, channel_id, first_seen, last_seen
+    SELECT contact_id, channel, channel_id, privacy_level, first_seen, last_seen
     FROM contact_channel_activity
     WHERE contact_id = ?
     ORDER BY last_seen DESC, channel ASC, channel_id ASC
@@ -97,6 +97,14 @@ export function getConversationChannels(
   return rows.map((row): ContactConversationChannel => ({
     channel: row.channel,
     channelId: row.channel_id,
+    ...(row.privacy_level
+      ? {
+        privacyLevel: normalizePrivacyLevel(
+          row.privacy_level as ChannelPrivacyLevel,
+          row.channel,
+        ),
+      }
+      : {}),
     firstSeen: row.first_seen,
     lastSeen: row.last_seen,
   }));

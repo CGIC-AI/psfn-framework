@@ -7,6 +7,7 @@ import type {
 import type { TrustLevel } from '../../trust/types.js';
 import {
   normalizeIdentity,
+  normalizePrivacyLevel,
   normalizeNicknameValue,
 } from './identity-utils.js';
 import { maybeHasContactLinkedTable } from './schema.js';
@@ -53,21 +54,43 @@ export function recordContactChannelActivity(
   contactId: string,
   channel: ContactChannel,
   channelId: string,
+  privacyLevel?: ChannelPrivacyLevel,
 ): void {
   const trimmedChannelId = channelId.trim();
   if (!trimmedChannelId) return;
 
   const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
   const now = new Date().toISOString();
+  if (privacyLevel !== undefined) {
+    const normalizedPrivacy = normalizePrivacyLevel(privacyLevel, normalizedChannel);
+    db.prepare(`
+      INSERT INTO contact_channel_activity (
+        contact_id,
+        channel,
+        channel_id,
+        privacy_level,
+        first_seen,
+        last_seen
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(contact_id, channel, channel_id)
+      DO UPDATE SET
+        privacy_level = excluded.privacy_level,
+        last_seen = excluded.last_seen
+    `).run(contactId, normalizedChannel, trimmedChannelId, normalizedPrivacy, now, now);
+    return;
+  }
+
   db.prepare(`
     INSERT INTO contact_channel_activity (
       contact_id,
       channel,
       channel_id,
+      privacy_level,
       first_seen,
       last_seen
     )
-    VALUES (?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, NULL, ?, ?)
     ON CONFLICT(contact_id, channel, channel_id)
     DO UPDATE SET last_seen = excluded.last_seen
   `).run(contactId, normalizedChannel, trimmedChannelId, now, now);
@@ -119,6 +142,44 @@ export function updateContactChannelPrivacy(
     contactId,
     identity.channel,
     identity.userId,
+  );
+  return result.changes > 0;
+}
+
+export function updateConversationChannelPrivacy(
+  db: Database.Database,
+  contactId: string,
+  channel: ContactChannel,
+  channelId: string,
+  privacyLevel: ChannelPrivacyLevel,
+): boolean {
+  const trimmedChannelId = channelId.trim();
+  if (!trimmedChannelId) return false;
+
+  const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
+  const normalizedPrivacy = normalizePrivacyLevel(privacyLevel, normalizedChannel);
+  const now = new Date().toISOString();
+  const result = db.prepare(`
+    INSERT INTO contact_channel_activity (
+      contact_id,
+      channel,
+      channel_id,
+      privacy_level,
+      first_seen,
+      last_seen
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(contact_id, channel, channel_id)
+    DO UPDATE SET
+      privacy_level = excluded.privacy_level,
+      last_seen = excluded.last_seen
+  `).run(
+    contactId,
+    normalizedChannel,
+    trimmedChannelId,
+    normalizedPrivacy,
+    now,
+    now,
   );
   return result.changes > 0;
 }

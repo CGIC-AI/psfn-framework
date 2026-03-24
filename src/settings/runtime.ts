@@ -4,6 +4,10 @@ import {
   type SubstrateConfig,
 } from '../types.js';
 import {
+  cloneImageWorkflowSettings,
+  normalizeImageWorkflowSettings,
+} from '../images/types.js';
+import {
   resolveMemoryRetrievalBudgetPct,
   resolveSessionHistoryBudgetPct,
 } from '../context-budget.js';
@@ -124,6 +128,8 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     capabilityTier: config.capabilityTier ?? 'nursery',
     promotedExtendedTools: config.promotedExtendedTools ?? [],
     chatApiBaseUrl: (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl ?? null,
+    comfyUiBaseUrl: config.comfyUiBaseUrl ?? null,
+    imageWorkflows: cloneImageWorkflowSettings(config.imageWorkflows),
     uiThemeId: toNonEmptyString(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
     // Voice / TTS
     ttsProvider: resolveRuntimeTtsProvider(config),
@@ -356,6 +362,13 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if ('chatApiBaseUrl' in settings) {
     const trimmed = settings.chatApiBaseUrl?.trim() ?? '';
     (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl = trimmed || undefined;
+  }
+  if ('comfyUiBaseUrl' in settings) {
+    const trimmed = settings.comfyUiBaseUrl?.trim() ?? '';
+    config.comfyUiBaseUrl = trimmed || undefined;
+  }
+  if ('imageWorkflows' in settings) {
+    config.imageWorkflows = normalizeImageWorkflowSettings(settings.imageWorkflows);
   }
   if ('uiThemeId' in settings) {
     const trimmedThemeId = settings.uiThemeId?.trim() ?? '';

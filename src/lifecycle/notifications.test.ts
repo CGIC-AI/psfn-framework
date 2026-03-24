@@ -72,7 +72,7 @@ describe('DiscordLifecycleNotifier', () => {
       expect(sentMessages[0].content).toContain('updating config');
     });
 
-    it('prefers last-active channel over heartbeat channel', async () => {
+    it('prefers configured heartbeat channel over last-active channel', async () => {
       writeLastActiveChannel(tempDir, '1234567890123456');
 
       const notifier = new DiscordLifecycleNotifier({
@@ -84,7 +84,26 @@ describe('DiscordLifecycleNotifier', () => {
 
       await notifier.notifyPreRestart();
 
-      expect(sentMessages[0].channelId).toBe('1234567890123456');
+      expect(sentMessages[0].channelId).toBe('hb-channel');
+    });
+
+    it('recovers a raw discord channel id from older compound session ids', async () => {
+      writeLastActiveSession(tempDir, {
+        sessionId: '1313001762793197678#20260318_1313001762793197678_388908766306893854_277462',
+        channelType: 'discord',
+        timestamp: Date.now(),
+      });
+
+      const notifier = new DiscordLifecycleNotifier({
+        sender: mockSender,
+        dataDir: tempDir,
+        startTime: Date.now(),
+      });
+
+      await notifier.notifyReady();
+
+      expect(sentMessages[0].channelId).toBe('1313001762793197678');
+      expect(sentMessages[0].content).toContain("I'm back");
     });
 
     it('falls back to heartbeat when latest active session is non-discord', async () => {
@@ -104,6 +123,24 @@ describe('DiscordLifecycleNotifier', () => {
       await notifier.notifyPreRestart();
 
       expect(sentMessages[0].channelId).toBe('hb-channel');
+    });
+
+    it('falls back to the latest active discord session when no heartbeat channel is configured', async () => {
+      writeLastActiveSession(tempDir, {
+        sessionId: '1313001762793197678#20260318_1313001762793197678_388908766306893854_277462',
+        channelType: 'discord',
+        timestamp: Date.now(),
+      });
+
+      const notifier = new DiscordLifecycleNotifier({
+        sender: mockSender,
+        dataDir: tempDir,
+        startTime: Date.now(),
+      });
+
+      await notifier.notifyReady();
+
+      expect(sentMessages[0].channelId).toBe('1313001762793197678');
     });
 
     it('does not throw when sender fails', async () => {
@@ -244,6 +281,7 @@ describe('Last-active channel tracking', () => {
   it('reads and writes last-active session metadata', () => {
     writeLastActiveSession(tempDir, {
       sessionId: '123456789012345678',
+      channelId: '123456789012345678',
       channelType: 'discord',
       timestamp: 1234,
     });
@@ -251,6 +289,23 @@ describe('Last-active channel tracking', () => {
     expect(session).toEqual({
       sessionId: '123456789012345678',
       channelId: '123456789012345678',
+      channelType: 'discord',
+      timestamp: 1234,
+    });
+  });
+
+  it('preserves transport channel id separately from session id when provided', () => {
+    writeLastActiveSession(tempDir, {
+      sessionId: '1313001762793197678#20260318_1313001762793197678_388908766306893854_277462',
+      channelId: '1313001762793197678',
+      channelType: 'discord',
+      timestamp: 1234,
+    });
+
+    const session = readLastActiveSession(tempDir);
+    expect(session).toEqual({
+      sessionId: '1313001762793197678#20260318_1313001762793197678_388908766306893854_277462',
+      channelId: '1313001762793197678',
       channelType: 'discord',
       timestamp: 1234,
     });

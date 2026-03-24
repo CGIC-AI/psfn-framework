@@ -4,7 +4,7 @@
 // Gateway mode: would use GatewayClient (future, PSFN-d5n).
 
 import { streamSimple, getEnvApiKey } from '@mariozechner/pi-ai';
-import type { Model } from '@mariozechner/pi-ai';
+import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type {
   ModelBudgetBlockedEvent,
@@ -15,11 +15,19 @@ import type {
 } from '../types.js';
 import { createModel, resolveRegisteredModel } from '../llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../llm/routing.js';
-import { markErrorAsNonRetryable, withRetry } from '../llm/retry.js';
+import {
+  DEFAULT_BASE_DELAY_MS,
+  DEFAULT_MAX_RETRIES,
+  isRetryableError,
+} from '../llm/retry.js';
 import { llmRetryConfig } from '../llm/retry-config.js';
 import { createComponentLogger } from '../logger.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { toCorrelationLogFields } from '../llm/correlation.js';
+import {
+  FallbackRunner,
+  NonRecoverableFallbackError,
+} from '../llm/fallback.js';
 import {
   findRegistryEntryByModelId,
   findRegistryEntryByProviderModel,
@@ -29,9 +37,22 @@ import {
 } from '../llm/model-budget.js';
 
 const log = createComponentLogger('StreamAdapter');
+const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
+
+export interface StreamTerminalFailureEvent {
+  purpose: RoutingPurpose;
+  attempts: number;
+  candidate?: RoutingCandidate;
+  candidates: RoutingCandidate[];
+  error: Error;
+  correlation?: Partial<CorrelationMetadata>;
+  service: string;
+  process: string;
+}
 
 export interface SubstrateStreamRuntimeOptions {
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  onTerminalFailure?: (event: StreamTerminalFailureEvent) => void | Promise<void>;
 }
 
 /**
@@ -49,89 +70,244 @@ export function createSubstrateStreamFn(
 ): StreamFn {
   const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
   const budgetController = new ModelBudgetController(config);
+  const fallbackRunner = new FallbackRunner();
 
-  const wrappedStreamFn: StreamFn = (model, context, options) => {
+  const wrappedStreamFn: StreamFn = async (model, context, options) => {
     const requestContext = getRequestContext();
     const correlationFields = toCorrelationLogFields(requestContext);
-    const modelProvider = resolveModelProvider(model);
-    const effectiveProvider = (modelProvider ?? config.primaryProvider).trim().toLowerCase();
-    const rawModelId = String(model.id);
-    const normalizedModelId = normalizeModelIdForProvider(effectiveProvider, rawModelId);
-    const resolvedMaxTokens = resolveStreamMaxTokens(model, options?.maxTokens, config.primaryMaxTokens);
-    const registryEntry = findRegistryEntryByProviderModel(config, effectiveProvider, normalizedModelId)
-      ?? (effectiveProvider === 'litellm'
-        ? findRegistryEntryByModelId(config, normalizedModelId)
-        : undefined);
-    const candidate: RoutingCandidate = {
-      provider: registryEntry?.identity.provider ?? effectiveProvider,
-      model: registryEntry?.identity.model ?? normalizedModelId,
-      maxTokens: resolvedMaxTokens,
-      ...(registryEntry ? { slotKey: registryEntry.id } : {}),
-    };
     const purpose = resolveStreamBudgetPurpose(requestContext);
     const processName = requestContext?.originStage ?? requestContext?.purpose ?? 'agent.stream.prompt';
     const service = requestContext?.callType ?? 'chat';
     const estimatedInputTokens = estimateContextInputTokens(context);
-    const preflight = budgetController.evaluatePreflight({
-      candidate,
+    const callerMaxTokens = resolveCallerMaxTokens(options?.maxTokens);
+    const candidates = resolveStreamCandidates(
+      config,
       purpose,
-      service,
-      process: processName,
-      estimatedInputTokens,
-      correlation: requestContext,
-    });
-    if (!preflight.allowed && preflight.blockedEvent) {
-      runtimeOptions.onBudgetBlocked?.(preflight.blockedEvent);
-      throw markErrorAsNonRetryable(new ModelBudgetExceededError(preflight.blockedEvent));
-    }
+      model,
+      callerMaxTokens,
+      litellmBaseUrl,
+    );
 
-    // Resolve API key: prefer caller's, then LiteLLM key, then provider env key
-    const apiKey = options?.apiKey
-      ?? (litellmBaseUrl ? process.env.LITELLM_API_KEY : undefined)
-      ?? (modelProvider ? getEnvApiKey(modelProvider as any) : undefined)
-      ?? getEnvApiKey(config.primaryProvider)
-      ?? undefined;
+    let lastAttemptCandidate: RoutingCandidate | undefined;
+    let lastAttempt = 0;
 
-    return withRetry(
-      async () => {
-        const stream = streamSimple(model, context, {
-          ...options,
-          apiKey,
-        });
-
-        return wrapStreamWithUsageRecording(stream, (inputTokens, outputTokens) => {
-          budgetController.recordUsage({
-            candidate,
-            purpose,
-            service,
-            process: processName,
-            inputTokens,
-            outputTokens,
-            correlation: requestContext,
-          });
+    const fallbackStream = fallbackRunner.runStream(
+      purpose,
+      candidates,
+      (candidateTarget, attempt) => {
+        lastAttemptCandidate = candidateTarget;
+        lastAttempt = attempt;
+        return executeStreamCandidate({
+          candidate: candidateTarget,
+          attempt,
+          config,
+          litellmBaseUrl,
+          model,
+          context,
+          options,
+          purpose,
+          service,
+          processName,
+          estimatedInputTokens,
+          requestContext,
+          budgetController,
+          onBudgetBlocked: runtimeOptions.onBudgetBlocked,
+          correlationFields,
         });
       },
-      llmRetryConfig(config),
-      {
-        onRetry: ({ attempt, maxRetries, delayMs, error }) => {
-          log.warn('LLM stream failed, retrying', {
-            model: String(model.id),
-            attempt,
-            maxRetries,
-            delayMs,
-            error: error.message,
-            ...correlationFields,
-          });
-        },
-      },
-    ) as any;
+      requestContext,
+    );
+
+    return (async function* streamWithTerminalFailureHook() {
+      try {
+        yield* fallbackStream;
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        if (runtimeOptions.onTerminalFailure) {
+          try {
+            await runtimeOptions.onTerminalFailure({
+              purpose,
+              attempts: Math.max(1, lastAttempt),
+              candidate: lastAttemptCandidate,
+              candidates,
+              error: err,
+              correlation: requestContext,
+              service,
+              process: processName,
+            });
+          } catch (hookError) {
+            log.warn('Failed to emit prompt-generation failure hook', {
+              error: hookError instanceof Error ? hookError.message : String(hookError),
+              purpose,
+              attempts: Math.max(1, lastAttempt),
+              ...correlationFields,
+            });
+          }
+        }
+        yield buildTerminalFailureEvent({
+          candidate: lastAttemptCandidate,
+          fallbackModel: model,
+          litellmBaseUrl,
+          correlation: requestContext,
+          error: err,
+        });
+      }
+    })() as any;
   };
   return wrappedStreamFn;
 }
 
+interface ExecuteStreamCandidateParams {
+  candidate: RoutingCandidate;
+  attempt: number;
+  config: SubstrateConfig;
+  litellmBaseUrl: string | null;
+  model: Model<any>;
+  context: unknown;
+  options: Record<string, unknown> | undefined;
+  purpose: RoutingPurpose;
+  service: string;
+  processName: string;
+  estimatedInputTokens: number;
+  requestContext: Partial<CorrelationMetadata> | undefined;
+  budgetController: ModelBudgetController;
+  onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  correlationFields: ReturnType<typeof toCorrelationLogFields>;
+}
+
+function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGenerator<AssistantMessageEvent, void, unknown> {
+  const { candidate } = params;
+  const preflight = params.budgetController.evaluatePreflight({
+    candidate,
+    purpose: params.purpose,
+    service: params.service,
+    process: params.processName,
+    estimatedInputTokens: params.estimatedInputTokens,
+    correlation: params.requestContext,
+  });
+  if (!preflight.allowed && preflight.blockedEvent) {
+    params.onBudgetBlocked?.(preflight.blockedEvent);
+    throw new ModelBudgetExceededError(preflight.blockedEvent);
+  }
+
+  const { model: candidateModel, apiKey } = getModelAndKey(
+    params.config,
+    params.litellmBaseUrl,
+    candidate,
+  );
+  const requestOptions = buildStreamRequestOptions(candidate, params.options, apiKey);
+  const retryConfig = llmRetryConfig(params.config);
+  const maxRetries = Number.isFinite(retryConfig.maxRetries)
+    ? Math.max(0, Math.floor(retryConfig.maxRetries!))
+    : DEFAULT_MAX_RETRIES;
+  const baseDelayMs = Number.isFinite(retryConfig.baseDelayMs)
+    ? Math.max(0, Math.floor(retryConfig.baseDelayMs!))
+    : DEFAULT_BASE_DELAY_MS;
+
+  return (async function* executeWithRetry() {
+    for (let retryAttempt = 0; ; retryAttempt += 1) {
+      let committed = false;
+      const bufferedEvents: AssistantMessageEvent[] = [];
+
+      try {
+        const stream = streamSimple(candidateModel, params.context as any, requestOptions as any);
+
+        for await (const rawEvent of stream) {
+          const event = rawEvent as AssistantMessageEvent;
+
+          if (event.type === 'error') {
+            const error = new Error(event.error.errorMessage ?? 'LLM stream error');
+            if (committed) {
+              throw new NonRecoverableFallbackError(error);
+            }
+            throw error;
+          }
+
+          if (event.type === 'done') {
+            assertValidTerminalAssistantMessage(event.message, event.reason, candidate);
+            if (!committed) {
+              committed = true;
+              for (const bufferedEvent of bufferedEvents) {
+                yield bufferedEvent;
+              }
+            }
+
+            params.budgetController.recordUsage({
+              candidate,
+              purpose: params.purpose,
+              service: params.service,
+              process: params.processName,
+              inputTokens: toUsageCount(event.message.usage?.input),
+              outputTokens: toUsageCount(event.message.usage?.output),
+              correlation: params.requestContext,
+            });
+
+            yield event;
+            return;
+          }
+
+          if (!committed) {
+            bufferedEvents.push(event);
+            if (shouldCommitBufferedEvent(event)) {
+              committed = true;
+              for (const bufferedEvent of bufferedEvents) {
+                yield bufferedEvent;
+              }
+            }
+            continue;
+          }
+
+          yield event;
+        }
+
+        const streamError = new Error('LLM stream completed without terminal event');
+        if (committed) {
+          throw new NonRecoverableFallbackError(streamError);
+        }
+        throw streamError;
+      } catch (error) {
+        const explicitNonRecoverable = error instanceof NonRecoverableFallbackError;
+        const err = explicitNonRecoverable
+          ? error.causeError
+          : (error instanceof Error ? error : new Error(String(error)));
+
+        if (committed) {
+          throw explicitNonRecoverable ? error : new NonRecoverableFallbackError(err);
+        }
+
+        const canRetry = retryAttempt < maxRetries && isRetryableError(err, retryConfig.retryableErrors);
+        if (!canRetry) {
+          throw err;
+        }
+
+        const delayMs = baseDelayMs * (2 ** retryAttempt);
+        log.warn('LLM stream failed, retrying', {
+          model: String(candidateModel.id),
+          provider: candidate.provider,
+          attempt: retryAttempt + 1,
+          maxRetries,
+          delayMs,
+          error: err.message,
+          purpose: params.purpose,
+          ...params.correlationFields,
+        });
+        await sleep(delayMs);
+      }
+    }
+  })();
+}
+
+function resolveCallerMaxTokens(optionsMaxTokens: unknown): number | undefined {
+  if (typeof optionsMaxTokens !== 'number' || !Number.isFinite(optionsMaxTokens) || optionsMaxTokens <= 0) {
+    return undefined;
+  }
+  return Math.floor(optionsMaxTokens);
+}
+
 function resolveStreamMaxTokens(model: Model<any>, optionsMaxTokens: unknown, fallback: number): number {
-  if (typeof optionsMaxTokens === 'number' && Number.isFinite(optionsMaxTokens) && optionsMaxTokens > 0) {
-    return Math.floor(optionsMaxTokens);
+  const callerMaxTokens = resolveCallerMaxTokens(optionsMaxTokens);
+  if (callerMaxTokens !== undefined) {
+    return callerMaxTokens;
   }
   if (typeof model.maxTokens === 'number' && Number.isFinite(model.maxTokens) && model.maxTokens > 0) {
     return Math.floor(model.maxTokens);
@@ -168,20 +344,288 @@ function estimateContextInputTokens(context: unknown): number {
   return Math.max(1, Math.ceil(charCount / 4));
 }
 
-function wrapStreamWithUsageRecording(
-  stream: AsyncIterable<any>,
-  onDone: (inputTokens: number, outputTokens: number) => void,
-): AsyncIterable<any> {
-  return (async function* streamWithUsage() {
-    for await (const event of stream) {
-      if (event?.type === 'done') {
-        const inputTokens = Number.isFinite(event?.message?.usage?.input) ? Math.floor(event.message.usage.input) : 0;
-        const outputTokens = Number.isFinite(event?.message?.usage?.output) ? Math.floor(event.message.usage.output) : 0;
-        onDone(inputTokens, outputTokens);
-      }
-      yield event;
+function resolveStreamReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {
+  if (candidate.thinkingEnabled === false) return undefined;
+  if (candidate.thinkingEffort) return candidate.thinkingEffort;
+  if (candidate.thinkingEnabled === true) return 'medium';
+  return undefined;
+}
+
+function supportsFullKnobPassthrough(candidate: RoutingCandidate, litellmBaseUrl: string | null): boolean {
+  return FULL_KNOB_PASSTHROUGH_PROVIDERS.has(candidate.provider)
+    || !!candidate.requestBaseUrl
+    || litellmBaseUrl !== null;
+}
+
+function buildStreamRequestOptions(
+  candidate: RoutingCandidate,
+  options: Record<string, unknown> | undefined,
+  apiKey: string | undefined,
+): Record<string, unknown> {
+  const requestOptions: Record<string, unknown> = {
+    ...(options ?? {}),
+    apiKey,
+    maxTokens: candidate.maxTokens,
+  };
+
+  if (candidate.contextWindow !== undefined && requestOptions.contextWindow === undefined) {
+    requestOptions.contextWindow = candidate.contextWindow;
+  }
+
+  if (candidate.temperature !== undefined && requestOptions.temperature === undefined) {
+    requestOptions.temperature = candidate.temperature;
+  }
+
+  const reasoning = resolveStreamReasoningLevel(candidate);
+  if (reasoning && requestOptions.reasoning === undefined) {
+    requestOptions.reasoning = reasoning;
+  }
+
+  if (supportsFullKnobPassthrough(candidate, process.env.LITELLM_BASE_URL ?? null)) {
+    if (candidate.topP !== undefined && requestOptions.topP === undefined) {
+      requestOptions.topP = candidate.topP;
     }
-  })();
+    if (candidate.topK !== undefined && requestOptions.topK === undefined) {
+      requestOptions.topK = candidate.topK;
+    }
+    if (candidate.frequencyPenalty !== undefined && requestOptions.frequencyPenalty === undefined) {
+      requestOptions.frequencyPenalty = candidate.frequencyPenalty;
+    }
+    if (candidate.repetitionPenalty !== undefined && requestOptions.repetitionPenalty === undefined) {
+      requestOptions.repetitionPenalty = candidate.repetitionPenalty;
+    }
+  }
+
+  if (candidate.provider === 'openrouter') {
+    if (candidate.openRouterZdrOnly && requestOptions.zdr === undefined) {
+      requestOptions.zdr = true;
+    }
+    if (candidate.openRouterProviderOrder && candidate.openRouterProviderOrder.length > 0 && requestOptions.provider === undefined) {
+      requestOptions.provider = { order: [...candidate.openRouterProviderOrder] };
+    }
+  }
+
+  return requestOptions;
+}
+
+function getModelAndKey(
+  config: SubstrateConfig,
+  litellmBaseUrl: string | null,
+  candidate: RoutingCandidate,
+): { model: Model<any>; apiKey: string | undefined } {
+  if (candidate.requestBaseUrl) {
+    const apiKey = candidate.requestApiKeyEnv
+      ? process.env[candidate.requestApiKeyEnv] ?? undefined
+      : undefined;
+    return {
+      model: createModel(candidate.requestBaseUrl, candidate.model, candidate.maxTokens, candidate.contextWindow),
+      apiKey,
+    };
+  }
+
+  if (litellmBaseUrl) {
+    return {
+      model: createModel(
+        litellmBaseUrl,
+        normalizeLiteLLMModelId(candidate.provider, candidate.model),
+        candidate.maxTokens,
+        candidate.contextWindow,
+      ),
+      apiKey: process.env.LITELLM_API_KEY ?? undefined,
+    };
+  }
+
+  const model = resolveRegisteredModel(candidate.provider, candidate.model);
+  if (!model) {
+    throw new Error(
+      `Unknown model "${candidate.model}" for provider "${candidate.provider}". ` +
+      'Set LITELLM_BASE_URL or update the canonical model config in models.json.',
+    );
+  }
+  return {
+    model: {
+      ...model,
+      ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
+      maxTokens: candidate.maxTokens,
+    },
+    apiKey: getEnvApiKey(candidate.provider as any) ?? undefined,
+  };
+}
+
+function resolveStreamCandidates(
+  config: SubstrateConfig,
+  purpose: RoutingPurpose,
+  model: Model<any>,
+  callerMaxTokens: number | undefined,
+  litellmBaseUrl: string | null,
+): RoutingCandidate[] {
+  const currentCandidate = buildCurrentCandidate(
+    config,
+    model,
+    callerMaxTokens,
+    litellmBaseUrl,
+  );
+  const routingCandidates = resolveRoutingCandidates(config, purpose);
+  if (routingCandidates.length === 0) {
+    return [currentCandidate];
+  }
+
+  const adjustedRoutingCandidates = routingCandidates.map(candidate => (
+    callerMaxTokens === undefined
+      ? candidate
+      : {
+        ...candidate,
+        maxTokens: callerMaxTokens,
+      }
+  ));
+  const matchedIndex = adjustedRoutingCandidates.findIndex(candidate => candidatesEquivalent(candidate, currentCandidate));
+  if (matchedIndex < 0) {
+    return [currentCandidate];
+  }
+
+  const matched = adjustedRoutingCandidates[matchedIndex]!;
+  return [
+    matched,
+    ...adjustedRoutingCandidates.filter((_, index) => index !== matchedIndex),
+  ];
+}
+
+function buildCurrentCandidate(
+  config: SubstrateConfig,
+  model: Model<any>,
+  callerMaxTokens: number | undefined,
+  litellmBaseUrl: string | null,
+): RoutingCandidate {
+  const modelProvider = resolveModelProvider(model);
+  const effectiveProvider = litellmBaseUrl
+    ? config.primaryProvider.trim().toLowerCase()
+    : (modelProvider ?? config.primaryProvider).trim().toLowerCase();
+  const rawModelId = String(model.id);
+  const normalizedModelId = litellmBaseUrl
+    ? normalizeModelIdForProvider(effectiveProvider, rawModelId)
+    : normalizeModelIdForProvider(effectiveProvider, rawModelId);
+  const resolvedMaxTokens = callerMaxTokens ?? resolveStreamMaxTokens(model, undefined, config.primaryMaxTokens);
+  const registryEntry = findRegistryEntryByProviderModel(config, effectiveProvider, normalizedModelId)
+    ?? findRegistryEntryByModelId(config, normalizedModelId);
+
+  return {
+    provider: registryEntry?.identity.provider ?? effectiveProvider,
+    model: registryEntry?.identity.model ?? normalizedModelId,
+    maxTokens: resolvedMaxTokens,
+    ...(registryEntry?.capabilities?.contextWindow
+      ? { contextWindow: registryEntry.capabilities.contextWindow }
+      : (typeof model.contextWindow === 'number' && Number.isFinite(model.contextWindow) && model.contextWindow > 0
+        ? { contextWindow: Math.floor(model.contextWindow) }
+        : {})),
+    ...(registryEntry ? { slotKey: registryEntry.id } : {}),
+  };
+}
+
+function candidatesEquivalent(left: RoutingCandidate, right: RoutingCandidate): boolean {
+  return left.provider === right.provider
+    && left.model === right.model
+    && (left.slotKey ?? '') === (right.slotKey ?? '');
+}
+
+function shouldCommitBufferedEvent(event: AssistantMessageEvent): boolean {
+  return event.type !== 'start'
+    && event.type !== 'text_start'
+    && event.type !== 'thinking_start';
+}
+
+function assertValidTerminalAssistantMessage(
+  message: AssistantMessage,
+  reason: string,
+  candidate: RoutingCandidate,
+): void {
+  const stopReason = message.stopReason ?? reason;
+  if (stopReason === 'error' || stopReason === 'aborted') {
+    throw new Error(message.errorMessage ?? `LLM request failed for ${candidate.provider}/${candidate.model}`);
+  }
+
+  const hasText = message.content.some((entry) => (
+    entry.type === 'text' && entry.text.trim().length > 0
+  ));
+  const hasToolCalls = message.content.some((entry) => (
+    entry.type === 'toolCall' && entry.name.trim().length > 0
+  ));
+
+  if (!hasText && !hasToolCalls) {
+    throw new Error(
+      message.errorMessage
+      ?? `LLM response from ${candidate.provider}/${candidate.model} contained no text or tool calls`,
+    );
+  }
+}
+
+function toUsageCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : 0;
+}
+
+function buildTerminalFailureEvent(input: {
+  candidate?: RoutingCandidate;
+  fallbackModel: Model<any>;
+  litellmBaseUrl: string | null;
+  correlation?: Partial<CorrelationMetadata>;
+  error: Error;
+}): AssistantMessageEvent {
+  const candidateProvider = input.candidate?.provider
+    ?? resolveModelProvider(input.fallbackModel)
+    ?? 'openrouter';
+  const provider = input.litellmBaseUrl ? 'litellm' : candidateProvider;
+  const model = input.candidate
+    ? (input.litellmBaseUrl
+      ? normalizeLiteLLMModelId(input.candidate.provider, input.candidate.model)
+      : input.candidate.model)
+    : String(input.fallbackModel.id);
+
+  return {
+    type: 'error',
+    reason: 'error',
+    error: {
+      role: 'assistant',
+      content: [{
+        type: 'text',
+        text: buildTerminalFailureText(input.correlation),
+      }],
+      api: input.fallbackModel.api,
+      provider,
+      model,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: 'error',
+      errorMessage: input.error.message,
+      timestamp: Date.now(),
+    },
+  };
+}
+
+function buildTerminalFailureText(correlation: Partial<CorrelationMetadata> | undefined): string {
+  const channelId = typeof correlation?.channelId === 'string'
+    ? correlation.channelId.trim().toLowerCase()
+    : '';
+  if (correlation?.callType === 'scheduled' || channelId.startsWith('internal:')) {
+    return 'Scheduled generation failed because all configured model candidates were unavailable.';
+  }
+  return 'I hit an upstream model failure and could not finish that reply. Please try again in a moment.';
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function resolveModelProvider(model: Model<any>): string | undefined {

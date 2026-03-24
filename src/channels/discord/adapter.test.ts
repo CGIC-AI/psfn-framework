@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../event-bus.js';
@@ -364,6 +364,7 @@ interface MockSentMessage {
 
 function makeInteractiveTextChannel() {
   const sent: string[] = [];
+  const sentPayloads: unknown[] = [];
   const edits: string[] = [];
   const deleted: string[] = [];
   let typingCalls = 0;
@@ -374,9 +375,9 @@ function makeInteractiveTextChannel() {
       fetch: vi.fn(async () => new Map()),
     },
     sendTyping: vi.fn(async () => { typingCalls++; }),
-    send: vi.fn(async (content: string) => {
+    send: vi.fn(async (content: any) => {
       const message: MockSentMessage = {
-        content,
+        content: typeof content === 'string' ? content : JSON.stringify(content),
         edit: async (next: string) => {
           message.content = next;
           edits.push(next);
@@ -386,12 +387,15 @@ function makeInteractiveTextChannel() {
           deleted.push(message.content);
         },
       };
-      sent.push(content);
+      if (typeof content === 'string') {
+        sent.push(content);
+      }
+      sentPayloads.push(content);
       return message;
     }),
   };
 
-  return { channel, sent, edits, deleted, get typingCalls() { return typingCalls; } };
+  return { channel, sent, sentPayloads, edits, deleted, get typingCalls() { return typingCalls; } };
 }
 
 function makeDiscordIncomingMessage(
@@ -1260,6 +1264,77 @@ describe('DiscordAdapter status visibility', () => {
 
     expect(interactive.sent).toContain('facet reply');
     expect(interactive.typingCalls).toBeGreaterThan(0);
+  });
+
+  it('sends media attachments through the outbound facet', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'facet-media-channel';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const mediaPath = join(tmpdir(), `psfn-discord-media-${Date.now()}.png`);
+    writeFileSync(mediaPath, Buffer.from('png-bytes'));
+
+    try {
+      await adapter.outbound.sendMedia?.(
+        { channelId },
+        {
+          url: 'https://images.example.test/purr.png',
+          contentType: 'image/png',
+          name: 'purr.png',
+          localPath: mediaPath,
+        },
+      );
+    } finally {
+      rmSync(mediaPath, { force: true });
+    }
+
+    expect(interactive.sentPayloads).toHaveLength(1);
+    expect(interactive.sentPayloads[0]).toEqual(expect.objectContaining({
+      files: [mediaPath],
+    }));
+  });
+
+  it('sends response attachments after text replies', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'discord-attachment-reply';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const mediaPath = join(tmpdir(), `psfn-discord-reply-${Date.now()}.png`);
+    writeFileSync(mediaPath, Buffer.from('png-bytes'));
+
+    adapter.onMessage(async () => ({
+      content: 'here you go',
+      channelId,
+      attachments: [{
+        url: 'https://images.example.test/purr.png',
+        contentType: 'image/png',
+        name: 'purr.png',
+        localPath: mediaPath,
+      }],
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+
+    try {
+      await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+    } finally {
+      rmSync(mediaPath, { force: true });
+    }
+
+    expect(interactive.sent).toContain('here you go');
+    expect(interactive.sentPayloads).toEqual(expect.arrayContaining([
+      'here you go',
+      expect.objectContaining({
+        files: [mediaPath],
+      }),
+    ]));
   });
 
   it('shows and clears compaction status messages', async () => {

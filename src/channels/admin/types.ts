@@ -177,6 +177,7 @@ export interface AdminChatDebugStreamOptions {
 }
 
 export interface ChannelInfo {
+  sessionId: string;
   channelId: string;
   messageCount: number;
   lastActivityAt?: number;

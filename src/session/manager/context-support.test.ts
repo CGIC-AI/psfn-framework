@@ -14,7 +14,7 @@ function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
 }
 
 describe('entriesToMessages', () => {
-  it('reclassifies legacy intention follow-ups as system context', () => {
+  it('drops leaked legacy intention follow-ups from runtime context', () => {
     const messages = entriesToMessages([
       makeEntry({
         role: 'user',
@@ -36,16 +36,12 @@ describe('entriesToMessages', () => {
         role: 'user',
         content: 'This is the actual partner message.',
         authorId: 'user-1',
-        authorName: 'Operator',
+        authorName: 'PrimaryUser',
         timestamp: 1_700_000_000_100,
       }),
     ], 'private');
 
     expect(messages).toEqual([
-      {
-        role: 'system',
-        content: '[SYSTEM: Intention Appraisal] I am still investigating the message flow.',
-      },
       {
         role: 'user',
         content: 'This is the actual partner message.',

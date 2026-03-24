@@ -5,6 +5,7 @@ import type { UserContinuityStore } from '../continuity.js';
 import type { SessionEntry } from '../types.js';
 import {
   formatAttributedSystemContent,
+  isIntentionAppraisalArtifact,
   normalizeSessionEntryAttribution,
 } from '../entry-attribution.js';
 import {
@@ -82,6 +83,9 @@ export function entriesToMessages(
   const messages: Array<ContextMessage & { sourceRole: SessionEntry['role'] }> = [];
 
   for (const entry of entries) {
+    if (isIntentionAppraisalArtifact(entry)) {
+      continue;
+    }
     const attribution = normalizeSessionEntryAttribution(entry);
     const role = attribution.role === 'tool'
       ? 'system'

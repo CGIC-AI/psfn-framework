@@ -2,6 +2,7 @@ import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../../agent/contracts.js';
 import type { ChannelOutboundDock } from '../../channels/types.js';
 import type { GitOperations } from '../../git/ops.js';
+import type { ImageRuntimeConfig } from '../../images/types.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationResolveParams,
@@ -20,6 +21,7 @@ export interface GatewayMethodRuntime {
   embeddingService: EmbeddingService;
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
+  imageConfig?: ImageRuntimeConfig;
   policyConfig: PolicyConfig;
   workspacePath: string;
   sessionHmacKeyring: SessionHmacKeyring;

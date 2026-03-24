@@ -7,11 +7,13 @@ import {
   compactionToMessage,
   isCompactionMessage,
   isSystemNoteMessage,
+  isWhisperMessage,
   isContinuityMessage,
   isMirrorMessage,
   isCustomMessage,
   type CompactionMessage,
   type SystemNoteMessage,
+  type WhisperMessage,
   type ContinuityMessage,
   type MirrorMessage,
 } from './messages.js';
@@ -43,6 +45,10 @@ function makeSystemNote(content: string): SystemNoteMessage {
   return { role: 'custom', type: 'systemNote', content, timestamp: NOW };
 }
 
+function makeWhisper(content: string, speakerName = 'Whisper'): WhisperMessage {
+  return { role: 'custom', type: 'whisper', content, speakerName, timestamp: NOW };
+}
+
 function makeContinuity(content: string): ContinuityMessage {
   return { role: 'custom', type: 'continuity', content, originChannelId: 'ch1', timestamp: NOW };
 }
@@ -70,6 +76,11 @@ describe('type guards', () => {
     expect(isSystemNoteMessage(makeUser('test'))).toBe(false);
   });
 
+  it('isWhisperMessage', () => {
+    expect(isWhisperMessage(makeWhisper('test'))).toBe(true);
+    expect(isWhisperMessage(makeUser('test'))).toBe(false);
+  });
+
   it('isContinuityMessage', () => {
     expect(isContinuityMessage(makeContinuity('test'))).toBe(true);
     expect(isContinuityMessage(makeUser('test'))).toBe(false);
@@ -83,6 +94,7 @@ describe('type guards', () => {
   it('isCustomMessage', () => {
     expect(isCustomMessage(makeCompaction('test'))).toBe(true);
     expect(isCustomMessage(makeSystemNote('test'))).toBe(true);
+    expect(isCustomMessage(makeWhisper('test'))).toBe(true);
     expect(isCustomMessage(makeContinuity('test'))).toBe(true);
     expect(isCustomMessage(makeMirror('test'))).toBe(true);
     expect(isCustomMessage(makeUser('test'))).toBe(false);
@@ -115,6 +127,13 @@ describe('convertToLlm', () => {
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe('user');
     expect((result[0] as UserMessage).content).toBe('[System note] Agent restarted');
+  });
+
+  it('converts whisper to a note-to-self message with Whisper label', () => {
+    const result = convertToLlm([makeWhisper('Stay gentle and concrete.')]);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('user');
+    expect((result[0] as UserMessage).content).toBe('[Whisper note to self] Stay gentle and concrete.');
   });
 
   it('filters out continuity messages', () => {

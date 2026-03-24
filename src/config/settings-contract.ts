@@ -4,6 +4,7 @@ import {
   SETTINGS_FILE_NAME,
   SETTINGS_VALIDATION,
 } from '../settings.js';
+import { BACKUP_FILE_NAME } from './backup-config.js';
 import { CAPABILITY_TIER_FILE_NAME } from './capability-tier-config.js';
 import { MODELS_FILE_NAME } from './models-config.js';
 import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
@@ -27,7 +28,8 @@ export type SettingsSubsystemId =
   | 'scheduler'
   | 'capabilities'
   | 'skills'
-  | 'trustPolicy';
+  | 'trustPolicy'
+  | 'backup';
 
 export type SettingsFieldType =
   | 'string'
@@ -90,6 +92,11 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
   trustPolicy: {
     id: 'trustPolicy',
     ownerFile: TRUST_POLICY_FILE_NAME,
+    mode: 'raw_only',
+  },
+  backup: {
+    id: 'backup',
+    ownerFile: BACKUP_FILE_NAME,
     mode: 'raw_only',
   },
 };
@@ -195,6 +202,7 @@ const SETTINGS_NUMBER_FIELDS = new Set<string>([
 
 const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'compositionalPolicy',
+  'imageWorkflows',
   'modelCatalog',
   'modelRoleAssignments',
   'modelRoster',

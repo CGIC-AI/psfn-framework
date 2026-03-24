@@ -1,5 +1,6 @@
 import type {
   DiscordSendParams,
+  DiscordSendMediaParams,
   DiscordTypingParams,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
@@ -16,6 +17,20 @@ const discordDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       return { success: true };
     },
     summary: (p: DiscordSendParams) => ({ channelId: p.channelId }),
+  },
+  {
+    name: 'discord.sendMedia',
+    handler: async (params: DiscordSendMediaParams, runtime) => {
+      await runtime.discordAdapter.outbound.sendMedia?.(
+        { channelId: params.channelId },
+        params.media,
+      );
+      return { success: true };
+    },
+    summary: (p: DiscordSendMediaParams) => ({
+      channelId: p.channelId,
+      mediaName: p.media.name,
+    }),
   },
   {
     name: 'discord.typing',

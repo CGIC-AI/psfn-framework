@@ -21,6 +21,11 @@
     SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
     type GardenSettingsRawEditorKey,
   } from '$lib/settings-garden-contract';
+  import {
+    resolveBudgetContextWindowAuthority,
+    resolveSettingAuthority,
+  } from '$lib/settings/authority';
+  import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingsSidebarNav from '$lib/components/settings/SettingsSidebarNav.svelte';
   import {
     buildSettingsSimpleSectionGroups,
@@ -31,14 +36,8 @@
     type SettingsSimpleSectionId,
   } from '$lib/components/settings/navigation';
   import { resolveVoiceProviderSelection } from './voice-provider-selection';
-  import {
-    DEFAULT_CONTEXT_WINDOW_FALLBACK,
-    MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM,
-    resolveMemoryRetrievalBudget,
-    resolveSessionHistoryBudget,
-    SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE,
-  } from '../../../../src/context-budget.js';
   import type { ContextBudgetConfigLike } from '../../../../src/context-budget.js';
+  import { buildContextBudgetPreview } from '$lib/settings/context-budget-preview';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
 
@@ -97,6 +96,7 @@
     scheduler: '',
     'trust-policy': '',
     capabilities: '',
+    backup: '',
   });
 
   function computeSnapshot(): string {
@@ -137,6 +137,9 @@
       discordTriggerWords, discordTriggerReactions,
       discordTriggerListenWindowSeconds,
       telegramEnabled, telegramAuthorizedUsers,
+      // Backup
+      backupIntervalHours, backupMaxRotating, backupMaxWeekly,
+      backupMaxMonthly, backupMirrorDir, backupVerifyRestore,
     });
   }
 
@@ -238,7 +241,16 @@
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
   let capabilitiesJson = $state('');
+  let backupJson = $state('');
   let settingsJson = $state('');
+
+  // ── Backup form fields ──
+  let backupIntervalHours = $state(12);
+  let backupMaxRotating = $state(9);
+  let backupMaxWeekly = $state(2);
+  let backupMaxMonthly = $state(1);
+  let backupMirrorDir = $state('/mnt/ai/psfn-bak');
+  let backupVerifyRestore = $state(true);
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
   let validationErrorsByField = $state<Record<string, string[]>>({});
 
@@ -253,6 +265,7 @@
     'memory-profile',
     'tools-think',
     'advanced-trust',
+    'advanced-backup',
     'runtime-llm',
     'runtime-import',
     'runtime-fetch',
@@ -483,8 +496,6 @@
   }
 
   // ── Source attribution ──
-  type SettingSource = 'default' | string;
-
   function fieldContract(key: string): SettingsContractField | undefined {
     return settingsSchema?.fields?.[key];
   }
@@ -513,6 +524,10 @@
     return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))];
   }
 
+  function isDeprecatedField(key: string): boolean {
+    return fieldContract(key)?.deprecated === true;
+  }
+
   function humanizeSettingValue(value: string): string {
     return value
       .replaceAll(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -529,12 +544,16 @@
     return subsystemOwnerFile(subsystemId) ?? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY[key];
   }
 
-  function getSource(key: string): SettingSource {
-    if (!data) return 'default';
-    const ownerFile = fieldOwnerFile(key);
-    if (ownerFile) return ownerFile;
-    const config = data.config as Record<string, unknown>;
-    return config[key] !== undefined ? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY.settings : 'default';
+  function getSettingAuthority(key: string) {
+    return resolveSettingAuthority(data, settingsSchema, key);
+  }
+
+  function getSource(key: string): string {
+    return getSettingAuthority(key).sourceLabel;
+  }
+
+  function getBudgetContextWindowAuthority() {
+    return resolveBudgetContextWindowAuthority(data, budgetPreview);
   }
 
   function fieldEditorType(
@@ -667,58 +686,25 @@
     if (!data) return null;
     const models = getModelsEditorConfig();
     return {
-      defaultContextWindow: DEFAULT_CONTEXT_WINDOW_FALLBACK,
+      defaultContextWindow: 128_000,
       modelRoster: models.modelRoster ?? {},
       ...(models.modelCatalog ? { modelCatalog: models.modelCatalog } : {}),
       ...(models.modelRoleAssignments ? { modelRoleAssignments: models.modelRoleAssignments } : {}),
       sessionHistoryBudgetPct,
       memoryRetrievalBudgetPct,
+      ...(data.config.adaptiveContextBudgetsEnabled !== undefined
+        ? { adaptiveContextBudgetsEnabled: data.config.adaptiveContextBudgetsEnabled === true }
+        : {}),
     };
   }
 
   let budgetPreview = $derived.by(() => {
     const budgetConfig = buildBudgetPreviewConfig();
     if (!budgetConfig) return null;
-
-    const sessionBudget = resolveSessionHistoryBudget(budgetConfig);
-    const memoryBudget = resolveMemoryRetrievalBudget(budgetConfig);
-    const ctxWindow = sessionBudget.contextWindow;
-    const sessTokenBudget = sessionBudget.tokenBudget;
-    const sessEstimatedCount = sessionBudget.estimatedCount;
-    const sessEstimatedTokens = sessEstimatedCount * SESSION_HISTORY_ESTIMATED_TOKENS_PER_MESSAGE;
-
-    const memTokenBudget = memoryBudget.tokenBudget;
-    const memEstimatedCount = memoryBudget.estimatedCount;
-    const memEstimatedTokens = memEstimatedCount * MEMORY_RETRIEVAL_ESTIMATED_TOKENS_PER_ITEM;
-
-    const systemPromptTokens = SYSTEM_PROMPT_ESTIMATE_TOKENS;
-    const allocated = systemPromptTokens + sessEstimatedTokens + memEstimatedTokens + maxResponseTokens;
-    const remaining = Math.max(0, ctxWindow - allocated);
-
-    const sysPct = (systemPromptTokens / ctxWindow) * 100;
-    const sessPct = (sessEstimatedTokens / ctxWindow) * 100;
-    const memPct = (memEstimatedTokens / ctxWindow) * 100;
-    const respPct = (maxResponseTokens / ctxWindow) * 100;
-    const remainPct = (remaining / ctxWindow) * 100;
-
-    return {
-      contextWindow: ctxWindow,
-      systemPromptTokens,
-      sessEstimatedCount,
-      sessEstimatedTokens,
-      sessTokenBudget,
-      memEstimatedCount,
-      memEstimatedTokens,
-      memTokenBudget,
+    return buildContextBudgetPreview(budgetConfig, {
+      systemPromptTokens: SYSTEM_PROMPT_ESTIMATE_TOKENS,
       maxResponseTokens,
-      allocated,
-      remaining,
-      sysPct,
-      sessPct,
-      memPct,
-      respPct,
-      remainPct,
-    };
+    });
   });
 
   // ── Helpers ──
@@ -921,6 +907,7 @@
       case 'scheduler': return schedulerJson;
       case 'trust-policy': return trustPolicyJson;
       case 'capabilities': return capabilitiesJson;
+      case 'backup': return backupJson;
       default: return '';
     }
   }
@@ -932,6 +919,7 @@
       case 'scheduler': schedulerJson = val; break;
       case 'trust-policy': trustPolicyJson = val; break;
       case 'capabilities': capabilitiesJson = val; break;
+      case 'backup': backupJson = val; break;
     }
   }
 
@@ -943,6 +931,7 @@
       scheduler: schedulerJson,
       'trust-policy': trustPolicyJson,
       capabilities: capabilitiesJson,
+      backup: backupJson,
     };
   }
 
@@ -1076,6 +1065,31 @@
     };
   }
 
+  function populateBackupFields(json: string) {
+    try {
+      const parsed = JSON.parse(json) as Record<string, unknown>;
+      backupIntervalHours = Number(parsed.intervalHours ?? 12);
+      backupMaxRotating = Number(parsed.maxRotatingBackups ?? 9);
+      backupMaxWeekly = Number(parsed.maxWeeklyBackups ?? 2);
+      backupMaxMonthly = Number(parsed.maxMonthlyBackups ?? 1);
+      backupMirrorDir = String(parsed.mirrorDir ?? '/mnt/ai/psfn-bak');
+      backupVerifyRestore = parsed.verifyRestore !== false;
+    } catch {
+      // leave defaults
+    }
+  }
+
+  function buildBackupPayload(): Record<string, unknown> {
+    return {
+      intervalHours: backupIntervalHours,
+      maxRotatingBackups: backupMaxRotating,
+      maxWeeklyBackups: backupMaxWeekly,
+      maxMonthlyBackups: backupMaxMonthly,
+      mirrorDir: backupMirrorDir,
+      verifyRestore: backupVerifyRestore,
+    };
+  }
+
   function buildCapabilitiesPayload(): Record<string, unknown> {
     const current = getCapabilitiesEditorConfig();
     const customTokens = capabilityTier === 'custom'
@@ -1099,16 +1113,19 @@
     populateSimpleFields(nextSettingsData);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
-    const [skConf, schConf, tpConf, capConf] = await Promise.all([
+    const [skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
       getSubConfig('skills').catch(() => '{}'),
       getSubConfig('scheduler').catch(() => '{}'),
       getSubConfig('trust-policy').catch(() => '{}'),
       getSubConfig('capabilities').catch(() => '{}'),
+      getSubConfig('backup').catch(() => '{}'),
     ]);
     skillsJson = tryPrettyPrint(skConf);
     schedulerJson = tryPrettyPrint(schConf);
     trustPolicyJson = tryPrettyPrint(tpConf);
     capabilitiesJson = tryPrettyPrint(capConf);
+    backupJson = tryPrettyPrint(bakConf);
+    populateBackupFields(bakConf);
     resetDirtyTracking();
   }
 
@@ -1127,6 +1144,11 @@
         key: 'capabilities' as const,
         nextJson: JSON.stringify(buildCapabilitiesPayload(), null, 2),
         currentJson: tryPrettyPrint(capabilitiesJson),
+      },
+      {
+        key: 'backup' as const,
+        nextJson: JSON.stringify(buildBackupPayload(), null, 2),
+        currentJson: tryPrettyPrint(backupJson),
       },
     ].filter(entry => entry.nextJson !== entry.currentJson);
 
@@ -1278,16 +1300,18 @@
       populateSimpleFields(data);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
-      const [skConf, schConf, tpConf, capConf] = await Promise.all([
+      const [skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
         getSubConfig('skills').catch(() => '{}'),
         getSubConfig('scheduler').catch(() => '{}'),
         getSubConfig('trust-policy').catch(() => '{}'),
         getSubConfig('capabilities').catch(() => '{}'),
+        getSubConfig('backup').catch(() => '{}'),
       ]);
       skillsJson = tryPrettyPrint(skConf);
       schedulerJson = tryPrettyPrint(schConf);
       trustPolicyJson = tryPrettyPrint(tpConf);
       capabilitiesJson = tryPrettyPrint(capConf);
+      backupJson = tryPrettyPrint(bakConf);
       resetDirtyTracking();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load settings';
@@ -1470,6 +1494,7 @@
         <div class="card-garden p-6 space-y-4">
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Context Window Allocation</h2>
           <hr class="divider-filigree" />
+          <SettingAuthorityHint info={getBudgetContextWindowAuthority()} />
 
           <!-- Visual bar chart -->
           <div class="space-y-2">
@@ -1541,16 +1566,31 @@
               <span class="text-shadow-600 block mb-1">Context Window</span>
               <span class="text-shadow-900 font-mono font-semibold">{budgetPreview.contextWindow.toLocaleString()}</span>
               <span class="text-shadow-600"> tokens</span>
+              {#if budgetPreview.resolvedChatProvider || budgetPreview.resolvedChatModel}
+                <span class="text-shadow-500 block text-sm mt-1">
+                  {budgetPreview.resolvedChatProvider ?? 'unknown'} / {budgetPreview.resolvedChatModel ?? 'unknown'}
+                </span>
+              {/if}
             </div>
             <div class="bg-moss-50 rounded-lg p-3 border border-moss-200">
               <span class="text-shadow-600 block mb-1">Session History</span>
               <span class="text-shadow-900 font-semibold">~{budgetPreview.sessEstimatedCount} messages</span>
-              <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.sessTokenBudget)} token budget, trimmed on whole messages</span>
+              <span class="text-shadow-500 block text-sm">
+                ~{fmtTokens(budgetPreview.sessTokenBudget)} token budget, trimmed on whole messages
+                {#if budgetPreview.sessionHistoryMinTokens}
+                  · floor {fmtTokens(budgetPreview.sessionHistoryMinTokens)}
+                {/if}
+              </span>
             </div>
             <div class="bg-gold-50 rounded-lg p-3 border border-gold-200">
               <span class="text-shadow-600 block mb-1">Memory Retrieval</span>
               <span class="text-shadow-900 font-semibold">~{budgetPreview.memEstimatedCount} memories</span>
-              <span class="text-shadow-500 block text-sm">~{fmtTokens(budgetPreview.memTokenBudget)} token budget, trimmed on whole memories</span>
+              <span class="text-shadow-500 block text-sm">
+                ~{fmtTokens(budgetPreview.memTokenBudget)} token budget, trimmed on whole memories
+                {#if budgetPreview.memoryRetrievalMinTokens}
+                  · floor {fmtTokens(budgetPreview.memoryRetrievalMinTokens)}
+                {/if}
+              </span>
             </div>
             <div class="rounded-lg p-3 border {budgetPreview.remaining < 0 ? 'bg-wilt-50 border-wilt-400' : 'bg-bark-100 border-bark-200'}">
               <span class="text-shadow-600 block mb-1">Remaining</span>
@@ -1559,6 +1599,29 @@
               {#if budgetPreview.remaining < 0}
                 <span class="text-wilt-600 block text-sm font-medium">Over budget!</span>
               {/if}
+            </div>
+          </div>
+
+          <div class="rounded-lg border border-bark-200 bg-bark-50 p-4 space-y-3">
+            <div>
+              <h3 class="text-sm font-medium text-shadow-800">Adaptive Turn Profiles</h3>
+              <p class="text-sm text-shadow-600">
+                Garden now previews the effective chat slot context window and the same adaptive budget table the runtime uses. Heartbeat and reflection stay on the default companion budget unless their content classifies differently.
+              </p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 text-sm">
+              {#each budgetPreview.variants as variant}
+                <div class="rounded-lg border border-bark-200 bg-white p-3">
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="font-medium text-shadow-800">{variant.label}</span>
+                    <span class="text-xs uppercase tracking-[0.12em] text-shadow-500">{variant.source}</span>
+                  </div>
+                  <div class="mt-2 space-y-1 text-shadow-600">
+                    <div>Session {variant.sessionBudget.budgetPct}% · ~{variant.sessionBudget.estimatedCount} msgs</div>
+                    <div>Memory {variant.memoryBudget.budgetPct}% · ~{variant.memoryBudget.estimatedCount} items</div>
+                  </div>
+                </div>
+              {/each}
             </div>
           </div>
         </div>
@@ -1661,6 +1724,7 @@
             </label>
             <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
+            <SettingAuthorityHint info={getSettingAuthority('maintenanceIntervalMs')} />
           </div>
           <div>
             <label class={LABEL_CLS}>
@@ -1903,6 +1967,7 @@
                   {/each}
                 </select>
                 <p class="text-sm text-shadow-500 mt-1">Controls agent autonomy level</p>
+                <SettingAuthorityHint info={getSettingAuthority('capabilityTier')} />
               </div>
               <div class="md:col-span-2">
                 <label class={LABEL_CLS}>
@@ -1919,6 +1984,62 @@
                 <p class="text-sm text-shadow-500 mt-1">
                   Comma-separated capability tokens for the <span class="font-mono">custom</span> tier. Saved to {rawEditorLabel('capabilities')}.
                 </p>
+                <SettingAuthorityHint info={getSettingAuthority('customTokens')} />
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+      </section>
+
+      <!-- Memory Backup -->
+      <section
+        id={settingsSimpleSectionAnchorId('advanced-backup')}
+        use:simpleSectionAnchor={'advanced-backup'}
+        data-settings-section="advanced-backup"
+      >
+      <div class="card-garden overflow-hidden">
+        <button
+          onclick={() => toggleSection('backup')}
+          class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
+        >
+          <div class="flex items-center gap-3">
+            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">B</span>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory Backup</h2>
+          </div>
+          <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('backup') ? 'rotate-180' : ''}">&#9660;</span>
+        </button>
+        {#if openSections.has('backup')}
+          <div class="px-5 pb-5 border-t border-bark-300 pt-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label class={LABEL_CLS}>Interval (hours)</label>
+                <input type="number" min="1" max="168" bind:value={backupIntervalHours} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">How often to run a backup cycle</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Rotating backups</label>
+                <input type="number" min="1" max="99" bind:value={backupMaxRotating} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Most-recent backups to keep</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Weekly backups</label>
+                <input type="number" min="0" max="52" bind:value={backupMaxWeekly} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Weekly slots (derived from rotating cycle)</p>
+              </div>
+              <div>
+                <label class={LABEL_CLS}>Monthly backups</label>
+                <input type="number" min="0" max="24" bind:value={backupMaxMonthly} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Monthly slots (derived from rotating cycle)</p>
+              </div>
+              <div class="md:col-span-2">
+                <label class={LABEL_CLS}>Mirror directory</label>
+                <input type="text" bind:value={backupMirrorDir} class={INPUT_CLS} placeholder="/mnt/ai/psfn-bak" />
+                <p class="text-sm text-shadow-500 mt-1">Secondary backup mirror path (leave blank to disable)</p>
+              </div>
+              <div class="md:col-span-2 flex items-center gap-3">
+                <input type="checkbox" id="backup-verify-restore" bind:checked={backupVerifyRestore} class={TOGGLE_CLS} />
+                <label for="backup-verify-restore" class="text-sm text-shadow-700">Verify restore integrity after each backup</label>
               </div>
             </div>
           </div>
@@ -2379,8 +2500,16 @@
   <!-- ADVANCED MODE -->
   {:else if mode === 'advanced'}
     <div class="space-y-3">
+      <div class="rounded-2xl border border-bark-300 bg-bark-100/70 px-4 py-3 text-sm text-shadow-700">
+        Legacy and removed runtime keys are hidden here. Garden only shows canonical settings; if an old key is submitted through a raw editor or API call, save validation will return migration guidance instead of silently accepting it.
+      </div>
       {#each SECTIONS as section}
-        {@const sectionKeys = section.keys.filter((k) => data && k in (data.config as Record<string, unknown>) && !MODEL_OWNED_FIELDS.has(k))}
+        {@const sectionKeys = section.keys.filter((k) => (
+          data
+          && k in (data.config as Record<string, unknown>)
+          && !MODEL_OWNED_FIELDS.has(k)
+          && !isDeprecatedField(k)
+        ))}
         {#if sectionKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button
@@ -2563,7 +2692,11 @@
       <!-- Other (uncategorized) keys -->
       {#if data}
         {@const allCategorized = new Set(SECTIONS.flatMap(s => s.keys))}
-        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter(k => !allCategorized.has(k) && !MODEL_OWNED_FIELDS.has(k))}
+        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter((k) => (
+          !allCategorized.has(k)
+          && !MODEL_OWNED_FIELDS.has(k)
+          && !isDeprecatedField(k)
+        ))}
         {#if otherKeys.length > 0}
           <div class="card-garden overflow-hidden">
             <button

@@ -10,6 +10,7 @@ import type {
   SessionRestartBehavior,
   SubstrateConfig,
 } from '../types.js';
+import type { ImageWorkflowSettings } from '../images/types.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';
 export const PRIMARY_MODEL_SLOT_KEY = 'primary';
@@ -148,6 +149,8 @@ export interface EditableSettings {
    *  auto-resolved URL derived from `API_HOST`/`API_PORT`. Useful when the
    *  API server is behind a reverse proxy or on a non-standard URL. */
   chatApiBaseUrl?: string;
+  comfyUiBaseUrl?: string;
+  imageWorkflows?: ImageWorkflowSettings;
   uiThemeId?: string;
 
   // Voice / TTS (non-secret config only — API keys stay in .env)
@@ -254,6 +257,8 @@ export const RUNTIME_SETTINGS_KEYS = [
   'capabilityTier',
   'promotedExtendedTools',
   'chatApiBaseUrl',
+  'comfyUiBaseUrl',
+  'imageWorkflows',
   'uiThemeId',
   // Voice / TTS
   'ttsProvider',
@@ -294,5 +299,6 @@ export type RuntimeSettingValue =
   | boolean
   | null
   | string[]
-  | CompositionalPolicyConfig;
+  | CompositionalPolicyConfig
+  | ImageWorkflowSettings;
 export type RuntimeSettingsSnapshot = Record<RuntimeSettingKey, RuntimeSettingValue>;

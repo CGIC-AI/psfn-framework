@@ -20,6 +20,7 @@ export interface ContactConversationChannel {
   channelId: string;
   firstSeen: string;
   lastSeen: string;
+  privacyLevel?: ChannelPrivacyLevel;
 }
 
 export interface ContactIdentityLinkOptions {
@@ -97,7 +98,17 @@ export type ContactIdentityLinkVerificationResult =
   | { status: 'identity_conflict'; verification: ContactIdentityLinkVerification }
   | { status: 'contact_not_found' };
 
-export type ContactMutationAuditField = 'trust_level' | 'notes';
+export const CONTACT_MUTATION_AUDIT_FIELDS = [
+  'trust_level',
+  'notes',
+  'display_name',
+  'nickname',
+  'relationship_type',
+  'channel_privacy',
+  'channel_link',
+] as const;
+
+export type ContactMutationAuditField = typeof CONTACT_MUTATION_AUDIT_FIELDS[number];
 
 export interface ContactMutationAuditEntry {
   id: number;

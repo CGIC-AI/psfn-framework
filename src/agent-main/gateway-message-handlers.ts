@@ -1,5 +1,6 @@
 import type {
   AgentResponse,
+  Attachment,
   SubstrateConfig,
   SubstrateMessage,
   WyomingRoutingMetadata,
@@ -24,6 +25,7 @@ export interface GatewayMessageGateway {
   onHandleMessage(handler: (message: SubstrateMessage) => Promise<AgentResponse>): void;
   onDiscordMessage(handler: (message: SubstrateMessage) => void | Promise<void>): void;
   discordSend(channelId: string, content: string): Promise<void>;
+  discordSendMedia(channelId: string, media: Attachment): Promise<void>;
 }
 
 export interface GatewayMessageAgentLoop {
@@ -283,7 +285,12 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
       });
 
       const response = await agentLoop.handleMessage(message);
-      await gateway.discordSend(message.channelId, response.content);
+      if (response.content.trim()) {
+        await gateway.discordSend(message.channelId, response.content);
+      }
+      for (const attachment of response.attachments ?? []) {
+        await gateway.discordSendMedia(message.channelId, attachment);
+      }
     } catch (err) {
       const errorText = toErrorMessage(err);
       log.error('Error handling message', {

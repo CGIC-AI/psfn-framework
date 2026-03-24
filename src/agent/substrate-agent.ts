@@ -14,6 +14,10 @@ import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
+import {
+  INTENTION_FOLLOW_UP_AUTHOR_ID,
+  INTENTION_FOLLOW_UP_AUTHOR_NAME,
+} from '../intention/appraisal.js';
 import type {
   AgentResponse,
   CapabilityTier,
@@ -39,9 +43,10 @@ import type { ComposeContext } from '../identity/prompt-types.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import {
   createSubstrateStreamFn,
+  type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
-import { convertToLlm } from './messages.js';
+import { convertToLlm, type WhisperMessage } from './messages.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
@@ -171,6 +176,7 @@ export interface SelfModelRuntimeWiring {
 
 export interface SubstrateAgentOptions {
   streamFn?: StreamFn;
+  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'onBudgetBlocked'>;
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
@@ -292,6 +298,7 @@ export class SubstrateAgent {
     this.agent = new Agent({
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
         onBudgetBlocked: emitBudgetBlocked,
+        ...(options?.streamRuntimeOptions ?? {}),
       }),
       convertToLlm,
     });
@@ -593,11 +600,25 @@ export class SubstrateAgent {
    * Queue a follow-up message processed after the agent finishes current work.
    * Non-interrupting — waits for idle before delivery.
    *
-   * System-originated follow-ups (authorId starting with "system:") are
-   * recorded as system messages and queued back into the model with an explicit
-   * system wrapper so they are never mistaken for partner-authored chat.
+   * Intention appraisal follow-ups are injected as internal Whisper notes to self
+   * and are never persisted into the external session journal.
    */
   followUp(message: SubstrateMessage): void {
+    if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
+      this.agent.followUp({
+        role: 'custom',
+        type: 'whisper',
+        content: message.content,
+        speakerName: message.authorName?.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
+        timestamp: Date.now(),
+      } satisfies WhisperMessage);
+      log.debug('Queued follow-up', {
+        channelId: message.channelId,
+        internalKind: 'whisper',
+      });
+      return;
+    }
+
     const isSystemOriginated = message.authorId.startsWith('system:');
     const turnId = createTurnId();
     const systemContent = isSystemOriginated

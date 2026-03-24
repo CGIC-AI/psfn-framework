@@ -452,6 +452,29 @@ describe('ContactStore', () => {
       expect(hydrated?.conversationChannels?.[0].firstSeen).toBeDefined();
       expect(hydrated?.conversationChannels?.[0].lastSeen).toBeDefined();
     });
+
+    it('records explicit conversation-channel privacy and persists direct channel edits', () => {
+      const contact = store.upsert({ displayName: 'DM User', discordUserId: 'dm-user-1' });
+      store.recordChannelActivity(contact.id, 'Discord', '1313001762793197678', 'private');
+
+      expect(store.getById(contact.id)?.conversationChannels).toEqual([
+        expect.objectContaining({
+          channel: 'discord',
+          channelId: '1313001762793197678',
+          privacyLevel: 'private',
+        }),
+      ]);
+
+      expect(store.setConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678', 'public')).toBe(true);
+      expect(store.getConversationChannelPrivacy(contact.id, 'discord', '1313001762793197678')).toBe('public');
+      expect(store.getById(contact.id)?.conversationChannels).toEqual([
+        expect.objectContaining({
+          channel: 'discord',
+          channelId: '1313001762793197678',
+          privacyLevel: 'public',
+        }),
+      ]);
+    });
   });
 
   describe('mergeContacts', () => {
@@ -591,6 +614,114 @@ describe('ContactStore', () => {
 
       const byActor = store.listMutationAuditEntries({ actor: 'agent:tool:contact_note', limit: 10 });
       expect(byActor.some(entry => entry.contactId === contact.id && entry.field === 'notes')).toBe(true);
+    });
+  });
+
+  describe('profile and privacy audit trail', () => {
+    it('records display name and nickname mutations with actor metadata', () => {
+      const contact = store.upsert({ displayName: 'Profile Audit Target' });
+
+      expect(store.updateIdentityProfile(contact.id, 'Updated Profile Name', 'Poppy', 'admin:api')).toBe(true);
+
+      const entries = store.listMutationAuditEntries({ contactId: contact.id, limit: 10 });
+      expect(entries).toEqual([
+        expect.objectContaining({
+          contactId: contact.id,
+          actor: 'admin:api',
+          field: 'nickname',
+          oldValue: null,
+          newValue: 'Poppy',
+        }),
+        expect.objectContaining({
+          contactId: contact.id,
+          actor: 'admin:api',
+          field: 'display_name',
+          oldValue: 'Profile Audit Target',
+          newValue: 'Updated Profile Name',
+        }),
+      ]);
+    });
+
+    it('records relationship mutations', () => {
+      const contact = store.upsert({ displayName: 'Relationship Audit Target', relationshipType: 'friend' });
+
+      expect(store.updateRelationshipType(contact.id, 'partner', 'admin:api')).toBe(true);
+
+      const entries = store.listMutationAuditEntries({ contactId: contact.id, field: 'relationship_type' });
+      expect(entries).toEqual([
+        expect.objectContaining({
+          contactId: contact.id,
+          actor: 'admin:api',
+          field: 'relationship_type',
+          oldValue: 'friend',
+          newValue: 'partner',
+        }),
+      ]);
+    });
+
+    it('records linked identity and conversation channel privacy mutations', () => {
+      const contact = store.upsert({ displayName: 'Privacy Audit Target' });
+      expect(store.linkChannelIdentity(contact.id, 'discord', 'privacy-user', { privacyLevel: 'semi_private' })).toBe('linked');
+      store.recordChannelActivity(contact.id, 'discord', '1313001762793197678', 'private');
+
+      expect(store.setChannelPrivacy(contact.id, 'discord', 'privacy-user', 'private', 'admin:api')).toBe(true);
+      expect(store.setConversationChannelPrivacy(
+        contact.id,
+        'discord',
+        '1313001762793197678',
+        'broadcast',
+        'admin:api',
+      )).toBe(true);
+
+      const entries = store.listMutationAuditEntries({ contactId: contact.id, field: 'channel_privacy', limit: 10 });
+      expect(entries).toHaveLength(2);
+      expect(entries[0]).toMatchObject({
+        contactId: contact.id,
+        actor: 'admin:api',
+        field: 'channel_privacy',
+      });
+      expect(entries[0].oldValue).toContain('"privacyLevel":"private"');
+      expect(entries[0].newValue).toContain('"privacyLevel":"broadcast"');
+      expect(entries[0].newValue).toContain('"channelId":"1313001762793197678"');
+      expect(entries[1]).toMatchObject({
+        contactId: contact.id,
+        actor: 'admin:api',
+        field: 'channel_privacy',
+      });
+      expect(entries[1].oldValue).toContain('"privacyLevel":"semi_private"');
+      expect(entries[1].newValue).toContain('"privacyLevel":"private"');
+      expect(entries[1].newValue).toContain('"userId":"privacy-user"');
+    });
+
+    it('records channel link and unlink mutations', () => {
+      const contact = store.upsert({ displayName: 'Link Audit Target' });
+
+      expect(store.linkChannelIdentity(
+        contact.id,
+        'telegram',
+        'link-user',
+        { privacyLevel: 'private' },
+        'admin:api',
+      )).toBe('linked');
+      expect(store.unlinkChannelIdentity(contact.id, 'telegram', 'link-user', 'admin:api')).toBe(true);
+
+      const entries = store.listMutationAuditEntries({ contactId: contact.id, field: 'channel_link', limit: 10 });
+      expect(entries).toHaveLength(2);
+      expect(entries[0]).toMatchObject({
+        contactId: contact.id,
+        actor: 'admin:api',
+        field: 'channel_link',
+        newValue: null,
+      });
+      expect(entries[0].oldValue).toContain('"channel":"telegram"');
+      expect(entries[0].oldValue).toContain('"userId":"link-user"');
+      expect(entries[1]).toMatchObject({
+        contactId: contact.id,
+        actor: 'admin:api',
+        field: 'channel_link',
+        oldValue: null,
+      });
+      expect(entries[1].newValue).toContain('"privacyLevel":"private"');
     });
   });
 

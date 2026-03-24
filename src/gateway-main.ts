@@ -667,6 +667,7 @@ async function main(): Promise<void> {
     embeddingService: embeddingProvider,
     discordAdapter: discord,
     gitOps,
+    imageConfig: config,
     policyConfig: {
       workspacePath: workspaceRoot,
       allowedReadPaths: resolveAllowedReadPathsFromEnv(process.env, workspaceRoot),

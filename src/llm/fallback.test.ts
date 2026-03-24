@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { FallbackRunner } from './fallback.js';
+import { FallbackRunner, NonRecoverableFallbackError } from './fallback.js';
 import type { RoutingCandidate } from './routing.js';
 
 const chatPrimary: RoutingCandidate = {
@@ -90,5 +90,48 @@ describe('FallbackRunner', () => {
     ).rejects.toThrow(/context length|maximum context length/);
 
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('streams through the next candidate after a pre-output failure', async () => {
+    const runner = new FallbackRunner({ rateLimitCooldownMs: 1000, now: () => 0 });
+    const seen: string[] = [];
+    const events: string[] = [];
+
+    for await (const event of runner.runStream(
+      'chat',
+      [chatPrimary, chatFallback],
+      (candidate) => (async function* execute() {
+        seen.push(candidate.model);
+        if (candidate.model === chatPrimary.model) {
+          throw new Error('503 upstream unavailable');
+        }
+        yield `ok:${candidate.model}`;
+      })(),
+    )) {
+      events.push(event);
+    }
+
+    expect(seen).toEqual([chatPrimary.model, chatFallback.model]);
+    expect(events).toEqual([`ok:${chatFallback.model}`]);
+  });
+
+  it('stops stream fallback when a candidate failure is explicitly non-recoverable', async () => {
+    const runner = new FallbackRunner({ rateLimitCooldownMs: 1000, now: () => 0 });
+    const seen: string[] = [];
+
+    await expect((async () => {
+      for await (const _event of runner.runStream(
+        'chat',
+        [chatPrimary, chatFallback],
+        (candidate) => (async function* execute() {
+          seen.push(candidate.model);
+          throw new NonRecoverableFallbackError(new Error('stream already committed'));
+        })(),
+      )) {
+        // no-op
+      }
+    })()).rejects.toThrow(/stream already committed/);
+
+    expect(seen).toEqual([chatPrimary.model]);
   });
 });

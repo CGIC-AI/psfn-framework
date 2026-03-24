@@ -423,6 +423,9 @@ export function wireHeartbeatRuntime(
   )
     ? new IntentionAppraisal({
       llmProvider: runtimeOptions.llmProvider,
+      ...(runtimeOptions.characterPromptVariablesProvider
+        ? { characterPromptVariablesProvider: runtimeOptions.characterPromptVariablesProvider }
+        : {}),
       onEvaluationError: (error, context) => {
         log.warn('Intention appraisal failed closed', {
           sessionId: context.sessionId,

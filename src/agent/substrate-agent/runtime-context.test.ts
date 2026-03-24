@@ -159,4 +159,119 @@ describe('runtime subject identity', () => {
 
     expect(runtimeContext).toContain('Channel: api:admin-broadcast (type: api, visibility: broadcast)');
   });
+
+  it('exposes appearance context on ordinary turns when image tools are active', () => {
+    const message = makeMessage({
+      channelId: 'discord:dm:operator',
+      channelType: 'discord',
+      authorId: 'user-operator',
+      authorName: 'Operator',
+      content: 'send me a selfie',
+    });
+
+    const { templateVariables } = buildPromptTemplateVariables({
+      message,
+      resolvedUserName: 'Operator',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-operator',
+      subjectIdentityKey: undefined,
+      now: new Date('2026-03-17T12:00:00Z'),
+      characterPromptVariables: {
+        char_name: 'Companion',
+        'character.visual_description': 'Silver eyes and a weathered jacket.',
+      },
+      modelId: 'test-model',
+      fallbackCharacterName: 'Companion',
+    });
+
+    const runtimeContext = buildRuntimeContext({
+      message,
+      resolvedUserName: 'Operator',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-operator',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables,
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 2,
+        autoload: 2,
+        deferred: 0,
+        total: 2,
+      },
+      extendedTools: [],
+      loadedExtended: new Map([
+        ['image_create', {
+          toolName: 'image_create',
+          source: 'autoload',
+          activatedAt: 1,
+          lastActivatedAt: 1,
+        }],
+      ]),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
+    expect(runtimeContext).toContain('[Self-Image Tool Guidance]');
+    expect(runtimeContext).toContain('Use image_create for a brand new selfie, portrait, or scene featuring you.');
+  });
+
+  it('uses persisted conversation-channel privacy and records it on activity', () => {
+    const recordedCalls: Array<{
+      contactId: string;
+      channel: string;
+      channelId: string;
+      privacyLevel?: string;
+    }> = [];
+    const authorContext = resolveAuthorContext({
+      message: makeMessage({
+        channelId: '1313001762793197678',
+        channelType: 'discord',
+        authorId: '388908766306893854',
+        authorName: 'Operator',
+        content: 'hi',
+      }),
+      contactStore: {
+        resolveChannelIdentity: () => ({
+          id: 'contact-operator',
+          displayName: 'Operator',
+          trustLevel: 'trusted',
+          relationshipType: 'partner',
+          firstSeen: '2026-03-18T00:00:00.000Z',
+          lastSeen: '2026-03-18T00:00:00.000Z',
+        }),
+        getConversationChannelPrivacy: () => 'private',
+        recordChannelActivity: (
+          contactId: string,
+          channel: string,
+          channelId: string,
+          privacyLevel?: string,
+        ) => {
+          recordedCalls.push({ contactId, channel, channelId, privacyLevel });
+        },
+      } as any,
+      logger: {
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext.channelPrivacyLevel).toBe('private');
+    expect(recordedCalls).toEqual([{
+      contactId: 'contact-operator',
+      channel: 'discord',
+      channelId: '1313001762793197678',
+      privacyLevel: 'private',
+    }]);
+  });
 });

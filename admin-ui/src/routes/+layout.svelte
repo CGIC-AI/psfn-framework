@@ -84,14 +84,11 @@
   }
 
   function isActive(navPath: string): boolean {
-    // navPath includes base (e.g., '/garden/memory'), but $page.url.pathname does not
-    // Strip the base prefix to compare
-    const stripped = navPath.startsWith(base) ? navPath.slice(base.length) || '/' : navPath;
     const currentPath = $page.url.pathname;
-    if (stripped === '/') {
+    if (navPath === '/') {
       return currentPath === '/';
     }
-    return currentPath.startsWith(stripped);
+    return currentPath.startsWith(navPath);
   }
 
   function isEditableTarget(target: EventTarget | null): boolean {

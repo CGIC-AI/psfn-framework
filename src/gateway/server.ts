@@ -25,6 +25,7 @@ import {
   type VoiceHandleMessageResult,
 } from './protocol.js';
 import type { GitOperations } from '../git/ops.js';
+import type { ImageRuntimeConfig } from '../images/types.js';
 import type { AuditStore } from './audit.js';
 import type { SessionHmacKeyring } from '../session/journal-utils.js';
 import { createComponentLogger } from '../logger.js';
@@ -97,6 +98,7 @@ export interface GatewayServerOptions {
   embeddingService: EmbeddingService;
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
+  imageConfig?: ImageRuntimeConfig;
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: AuditStore;
@@ -262,6 +264,7 @@ export class GatewayServer {
       embeddingService: this.options.embeddingService,
       discordAdapter: this.options.discordAdapter,
       gitOps: this.options.gitOps,
+      imageConfig: this.options.imageConfig,
       policyConfig: this.options.policyConfig,
       workspacePath: this.options.policyConfig.workspacePath,
       sessionHmacKeyring: this.sessionHmacKeyring,

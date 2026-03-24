@@ -7,6 +7,7 @@ import type { ContactStore } from '../../contacts/store.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { Contact } from '../../contacts/types.js';
 import type { SessionManager } from '../../session/manager.js';
+import { isIntentionAppraisalArtifact } from '../../session/entry-attribution.js';
 import { MetacognitiveMonitor, type MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
   INTERNAL_STATE_NEUTRAL_EMOTION,
@@ -233,11 +234,13 @@ export class EmotionSelfModelRuntime {
       return;
     }
 
-    const recentMessages = manager.getRecentMessages(params.sessionChannelId, 10).map((entry) => ({
-      role: entry.role,
-      content: entry.content,
-      timestamp: entry.timestamp,
-    }));
+    const recentMessages = manager.getRecentMessages(params.sessionChannelId, 10)
+      .filter(entry => !isIntentionAppraisalArtifact(entry))
+      .map((entry) => ({
+        role: entry.role,
+        content: entry.content,
+        timestamp: entry.timestamp,
+      }));
 
     const result = await this.emotionAppraisal.maybeAppraise({
       sessionId: params.sessionChannelId,
@@ -275,7 +278,8 @@ export class EmotionSelfModelRuntime {
       return;
     }
 
-    const recentEntries = manager.getRecentMessages(sessionChannelId, 64);
+    const recentEntries = manager.getRecentMessages(sessionChannelId, 64)
+      .filter(entry => !isIntentionAppraisalArtifact(entry));
     for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
       const entry = recentEntries[index];
       if (!entry.metadata || !entry.metadata.includes('"emotionState"')) {
@@ -353,7 +357,8 @@ export class EmotionSelfModelRuntime {
     if (typeof manager.getRecentMessages !== 'function') {
       return 0;
     }
-    const recentMessages = manager.getRecentMessages(sessionChannelId, 12);
+    const recentMessages = manager.getRecentMessages(sessionChannelId, 12)
+      .filter(entry => !isIntentionAppraisalArtifact(entry));
     if (!Array.isArray(recentMessages)) {
       throw new Error('SessionManager.getRecentMessages returned an invalid payload for InternalState computation');
     }
@@ -371,7 +376,8 @@ export class EmotionSelfModelRuntime {
     if (typeof manager.getRecentMessages !== 'function') {
       return [];
     }
-    const recentMessages = manager.getRecentMessages(sessionChannelId, 6);
+    const recentMessages = manager.getRecentMessages(sessionChannelId, 6)
+      .filter(entry => !isIntentionAppraisalArtifact(entry));
     if (!Array.isArray(recentMessages)) {
       throw new Error('SessionManager.getRecentMessages returned an invalid payload for metacognitive monitoring');
     }

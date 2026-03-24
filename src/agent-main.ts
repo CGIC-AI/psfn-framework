@@ -48,6 +48,9 @@ import { registerBeadsTools } from './beads/runtime-wiring.js';
 import { GatewayBeadsOps } from './beads/gateway-ops.js';
 import { registerFilesystemTools } from './filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from './filesystem/gateway-ops.js';
+import { registerImageTools } from './images/runtime-wiring.js';
+import { GatewayImageOps } from './images/gateway-ops.js';
+import { DefaultImageVisionReviewer } from './images/vision-reviewer.js';
 import {
   DiscordLifecycleNotifier,
   writeLastActiveSession,
@@ -110,6 +113,7 @@ import {
   resolveModuleRegistryPathFromWorkspace,
 } from './modules/registry.js';
 import type { ChannelAdapter } from './channels/types.js';
+import { loadRuntimeChannelsConfig } from './channels/config.js';
 import {
   createApiServerChannelAdapterFactoryEntry,
   requireChannelAdapter,
@@ -132,6 +136,7 @@ import {
   resolveSessionsDir,
 } from './persistence/layout.js';
 import {
+  buildRuntimeChannelsConfigOverrides,
   hydrateCanonicalStartupConfig,
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
@@ -140,6 +145,7 @@ import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,
 } from './runtime/ml-warmup.js';
+import { createPromptGenerationFailureAlertHandler } from './runtime/operator-alerts.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
 import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
@@ -292,6 +298,11 @@ async function main(): Promise<void> {
       trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
   });
+  const channelsConfig = loadRuntimeChannelsConfig(
+    systemDataDir,
+    process.env,
+    buildRuntimeChannelsConfigOverrides(config, startupHydration.settingsDomains.runtime),
+  );
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: companionDataDir,
     defaultRootDir: runtimePathLayout.backupsDir,
@@ -459,6 +470,7 @@ async function main(): Promise<void> {
     audioClassifier: getSharedAudioEmotionClassifier(),
   });
   const emotionState = new EmotionState();
+  const operatorNotifier = createGatewayNtfyNotifier(gateway);
   const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: gateway,
@@ -468,6 +480,9 @@ async function main(): Promise<void> {
     characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
     runtimeMode: 'gateway',
+    streamRuntimeOptions: {
+      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
+    },
     emotionRuntime: {
       observer: emotionObserver,
       state: emotionState,
@@ -493,6 +508,12 @@ async function main(): Promise<void> {
     repoRoot: process.cwd(),
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
+  registerImageTools(agentLoop, new GatewayImageOps(gateway), {
+    gatewayMode: true,
+    reviewer: new DefaultImageVisionReviewer(config, {
+      binaryFetcher: gateway.webFetchBinary.bind(gateway),
+    }),
+  });
 
   // Prompt stack — layered, editable system prompt
   const promptStore = wirePromptRuntime(agentLoop, companionDataDir, composeSystemPromptTemplate(), {
@@ -601,12 +622,17 @@ async function main(): Promise<void> {
     db,
     databasePath: config.databasePath,
     sessionsDir,
+    memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
     config: backupConfig,
   });
   log.info('Scheduled backups enabled', {
     intervalMs: backupConfig.intervalMs,
-    retentionCount: backupConfig.retentionCount,
+    maxRotatingBackups: backupConfig.maxRotatingBackups,
+    maxWeeklyBackups: backupConfig.maxWeeklyBackups,
+    maxMonthlyBackups: backupConfig.maxMonthlyBackups,
     backupRootDir: backupConfig.rootDir,
+    mirrorDir: backupConfig.mirrorDir || '(none)',
+    verifyRestore: backupConfig.verifyRestore,
   });
   scheduler.registerHeartbeat(async () => {
     const now = Date.now();
@@ -973,7 +999,7 @@ async function main(): Promise<void> {
   // ── Lifecycle notifier + tools ──
 
   const startTime = Date.now();
-  const heartbeatChannelId = process.env.DISCORD_HEARTBEAT_CHANNEL;
+  const heartbeatChannelId = channelsConfig.discord.heartbeatChannelId || undefined;
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
   };
@@ -1048,7 +1074,7 @@ async function main(): Promise<void> {
     },
   ));
   agentLoop.registerTool(createNotifyOperatorTool(
-    createGatewayNtfyNotifier(gateway),
+    operatorNotifier,
     {
       rateLimiter: externalRateLimiter,
       defaultChannel: 'discord',
@@ -1102,6 +1128,7 @@ async function main(): Promise<void> {
     const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
     writeLastActiveSession(companionDataDir, {
       sessionId,
+      channelId: message.channelId,
       channelType: inferSessionChannelType(sessionId) ?? message.channelType,
       timestamp: message.timestamp instanceof Date
         ? message.timestamp.getTime()

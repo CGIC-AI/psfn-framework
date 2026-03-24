@@ -24,6 +24,7 @@ import {
   resolveConfiguredSystemDataDir,
   resolveContactsDir,
   resolveContinuityDir,
+  resolveGeneratedImagesDir,
   resolveHeartbeatPolicyPath,
   resolveIdentityAssetsDir,
   resolveInternalRoleEnvelopeLedgerPath,
@@ -104,6 +105,7 @@ describe('persistence layout', () => {
       join(dataDir, 'shard-session-memory-sync-audit.jsonl'),
     );
     expect(resolveIdentityAssetsDir(dataDir)).toBe(join(dataDir, 'identity-assets'));
+    expect(resolveGeneratedImagesDir(dataDir)).toBe(join(dataDir, 'images'));
     expect(resolveBackupsDir(dataDir)).toBe(join(dataDir, 'backups'));
     expect(resolveLastActiveSessionPath(dataDir)).toBe(join(dataDir, 'last_active_channel.json'));
   });

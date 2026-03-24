@@ -5,6 +5,7 @@ import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   resolveAdaptiveContextBudgetProfile,
+  resolveAdaptiveContextBudgetPreviewProfiles,
   resolveMemoryRetrievalBudget,
   resolveMemoryRetrievalBudgetPct,
   resolveSessionHistoryBudget,
@@ -350,6 +351,59 @@ describe('context-budget', () => {
     expect(profile.category).toBe('recall');
     expect(profile.sessionHistoryBudgetPct).toBe(4);
     expect(profile.memoryRetrievalBudgetPct).toBe(8);
+  });
+
+  it('builds preview profiles from the same adaptive budget table used by runtime', () => {
+    const profiles = resolveAdaptiveContextBudgetPreviewProfiles({
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+      adaptiveContextBudgetsEnabled: true,
+    });
+
+    expect(profiles).toEqual([
+      expect.objectContaining({
+        key: 'default',
+        source: 'default',
+        sessionHistoryBudgetPct: 6,
+        memoryRetrievalBudgetPct: 2,
+      }),
+      expect.objectContaining({
+        key: 'heartbeat_reflection',
+        source: 'default',
+        sessionHistoryBudgetPct: 6,
+        memoryRetrievalBudgetPct: 2,
+      }),
+      expect.objectContaining({
+        key: 'recall',
+        source: 'adaptive',
+        sessionHistoryBudgetPct: 4,
+        memoryRetrievalBudgetPct: 8,
+      }),
+      expect.objectContaining({
+        key: 'task',
+        source: 'adaptive',
+        sessionHistoryBudgetPct: 12,
+        memoryRetrievalBudgetPct: 2,
+      }),
+      expect.objectContaining({
+        key: 'emotional',
+        source: 'adaptive',
+        sessionHistoryBudgetPct: 7,
+        memoryRetrievalBudgetPct: 4,
+      }),
+      expect.objectContaining({
+        key: 'creative',
+        source: 'adaptive',
+        sessionHistoryBudgetPct: 9,
+        memoryRetrievalBudgetPct: 3,
+      }),
+      expect.objectContaining({
+        key: 'factual',
+        source: 'adaptive',
+        sessionHistoryBudgetPct: 6,
+        memoryRetrievalBudgetPct: 3,
+      }),
+    ]);
   });
 
   it('uses adaptive percentages during budget resolution', () => {

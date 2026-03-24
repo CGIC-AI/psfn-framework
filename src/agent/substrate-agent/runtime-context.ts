@@ -57,6 +57,8 @@ export interface ResolvedAuthorContext {
   continuityFallbackKeys: string[];
 }
 
+const SELF_IMAGE_TOOL_NAMES = ['image_create', 'image_edit', 'image_analyze'] as const;
+
 function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {
   const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
@@ -137,6 +139,28 @@ export function buildRuntimeContext(input: {
   behavioralNotesBlock?: string;
   formatTopEmotions: (discrete: Record<string, number>) => string;
 }): string {
+  const resolveAppearanceContext = (): string => {
+    const promptVariables = input.templateVariables ?? {};
+    return (
+      promptVariables['character.visual_description']
+      || promptVariables.extensions_visual_description
+      || promptVariables.visual_description
+      || ''
+    ).trim();
+  };
+
+  const hasActiveSelfImageTool = (): boolean => {
+    for (const toolName of SELF_IMAGE_TOOL_NAMES) {
+      if (input.promotedExtendedToolNames.has(toolName)) {
+        return true;
+      }
+      if (input.loadedExtended.has(toolName)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const responseStyle = input.responseStyle ?? 'concise';
   const now = input.now ?? new Date();
   const metacognitiveFlags = input.metacognitiveFlags ?? [];
@@ -180,17 +204,19 @@ export function buildRuntimeContext(input: {
   const isScheduledTask = input.taskKind === 'heartbeat'
     || input.taskKind === 'reflection'
     || input.message.channelId.startsWith('internal:');
-  if (isScheduledTask) {
-    const promptVariables = input.templateVariables ?? {};
-    const appearance = (
-      promptVariables['character.visual_description']
-      || promptVariables.extensions_visual_description
-      || promptVariables.visual_description
-      || ''
-    ).trim();
-    if (appearance.length > 0) {
-      lines.push(`Appearance context: ${appearance}`);
-    }
+  const shouldIncludeAppearanceContext = isScheduledTask || hasActiveSelfImageTool();
+  if (shouldIncludeAppearanceContext) {
+    const appearance = resolveAppearanceContext();
+    if (appearance.length > 0) lines.push(`Appearance context: ${appearance}`);
+  }
+
+  if (hasActiveSelfImageTool()) {
+    lines.push('[Self-Image Tool Guidance]');
+    lines.push('Use image_create for a brand new selfie, portrait, or scene featuring you.');
+    lines.push('Use image_edit when modifying an existing image while keeping your identity consistent.');
+    lines.push('Use image_analyze to inspect generated or incoming images so you can see what is actually there.');
+    lines.push('Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.');
+    lines.push('Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.');
   }
 
   if (extendedCount > 0) {
@@ -524,24 +550,56 @@ export function resolveAuthorContext(input: {
     const maybeChannelResolver = input.contactStore as ContactStore & {
       resolveChannelIdentity?: (channel: string, userId: string, displayName?: string) => Contact;
     };
-    const contact = typeof maybeChannelResolver.resolveChannelIdentity === 'function'
-      ? maybeChannelResolver.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName)
-      : input.contactStore.resolveUserId(input.message.authorId);
+    // If a trusted canonical contact ID hint is provided in the routing metadata (e.g. set
+    // by the Garden admin chat), resolve directly by ID so the correct contact (with nickname
+    // etc.) is used regardless of which API auth principal is making the request.
+    const canonicalHint = input.message.routing?.canonicalContactId?.trim();
+    const hintedContact = canonicalHint ? input.contactStore.getById(canonicalHint) : undefined;
+    const contact = hintedContact
+      ?? (typeof maybeChannelResolver.resolveChannelIdentity === 'function'
+        ? maybeChannelResolver.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName)
+        : input.contactStore.resolveUserId(input.message.authorId));
+    if (hintedContact) {
+      // Still update last seen so the contact record stays fresh.
+      const maybeLastSeenUpdater = input.contactStore as ContactStore & {
+        updateLastSeen?: (id: string) => void;
+      };
+      maybeLastSeenUpdater.updateLastSeen?.(hintedContact.id);
+    }
     const canonicalContactKey = contact.id;
-    const channelPrivacyLevel = normalizeChannelVisibility(
-      contact.channels?.find(link => (
-        link.channel === channel && link.userId === input.message.authorId
-      ))?.privacyLevel,
-    );
+    const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
+    const maybeChannelPrivacyReader = input.contactStore as ContactStore & {
+      getConversationChannelPrivacy?: (contactId: string, channel: string, channelId: string) => ChannelVisibility | undefined;
+    };
+    const channelPrivacyLevel = explicitChannelPrivacy
+      ?? (typeof maybeChannelPrivacyReader.getConversationChannelPrivacy === 'function'
+        ? normalizeChannelVisibility(
+          maybeChannelPrivacyReader.getConversationChannelPrivacy(
+            canonicalContactKey,
+            channel,
+            input.message.channelId,
+          ),
+        )
+        : undefined);
 
     const maybeActivityRecorder = input.contactStore as ContactStore & {
-      recordChannelActivity?: (contactId: string, channel: string, channelId: string) => void;
+      recordChannelActivity?: (
+        contactId: string,
+        channel: string,
+        channelId: string,
+        privacyLevel?: ChannelVisibility,
+      ) => void;
     };
     if (
       canonicalContactKey
       && typeof maybeActivityRecorder.recordChannelActivity === 'function'
     ) {
-      maybeActivityRecorder.recordChannelActivity(canonicalContactKey, channel, input.message.channelId);
+      maybeActivityRecorder.recordChannelActivity(
+        canonicalContactKey,
+        channel,
+        input.message.channelId,
+        channelPrivacyLevel,
+      );
     }
 
     return {

@@ -4951,7 +4951,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
-  it('followUp records system-originated messages as system instead of user or assistant', () => {
+  it('routes intention appraisal follow-ups as internal whispers instead of persisted chat messages', () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -4961,27 +4961,18 @@ describe('SubstrateAgent steering + follow-up', () => {
 
     agent.followUp(makeMessage({
       authorId: 'system:intention',
-      authorName: 'Intention Appraisal',
-      content: 'internal follow-up',
+      authorName: 'Whisper',
+      content: 'Keep the answer concrete and grounded.',
     }));
 
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
     expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
-    expect(sessionManager.recordSystemMessage).toHaveBeenCalledWith(
-      'test-channel',
-      '[SYSTEM: Intention Appraisal] internal follow-up',
-      'system:intention',
-      'Intention Appraisal',
-      undefined,
-      undefined,
-      expect.objectContaining({
-        requestId: 'msg-1',
-        sourceMessageId: 'msg-1',
-      }),
-    );
+    expect(sessionManager.recordSystemMessage).not.toHaveBeenCalled();
     expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
-      role: 'user',
-      content: '[SYSTEM: Intention Appraisal] internal follow-up',
+      role: 'custom',
+      type: 'whisper',
+      speakerName: 'Whisper',
+      content: 'Keep the answer concrete and grounded.',
     }));
 
     followUpSpy.mockRestore();

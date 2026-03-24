@@ -1,5 +1,5 @@
 // ── Admin GUI Server ──
-// Serves the /garden UI shell and canonical /api/admin endpoints on ADMIN_PORT.
+// Serves the Garden UI shell and canonical /api/admin endpoints on ADMIN_PORT.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';

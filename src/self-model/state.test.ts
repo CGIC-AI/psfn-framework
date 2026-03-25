@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActiveConcern } from '../intention/concerns.js';
+import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import {
   buildInternalStateSnapshotRef,
   InternalStateComputer,
@@ -14,6 +15,22 @@ function makeConcern(overrides?: Partial<ActiveConcern>): ActiveConcern {
     source: 'agent',
     createdAt: '2026-03-01T10:00:00.000Z',
     expiresAt: '2026-03-03T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function makePendingFollowUp(overrides?: Partial<PendingFollowUp>): PendingFollowUp {
+  return {
+    id: 'follow-up-1',
+    content: 'Check in tomorrow afternoon if they are still overwhelmed.',
+    priority: 'medium',
+    timing: 'scheduled',
+    createdAt: '2026-03-01T10:00:00.000Z',
+    dueAt: '2026-03-02T10:00:00.000Z',
+    channelId: 'api:test',
+    channelType: 'api',
+    authorId: 'system:intention',
+    authorName: 'Whisper',
     ...overrides,
   };
 }
@@ -37,6 +54,9 @@ describe('InternalStateComputer', () => {
           expiresAt: '2026-03-02T09:00:00.000Z',
         }),
       ],
+      pendingFollowUps: [
+        makePendingFollowUp(),
+      ],
       trustLevel: 'trusted',
       contactId: 'contact-123',
       contactEmotionalSnapshot: {
@@ -59,6 +79,7 @@ describe('InternalStateComputer', () => {
       'concern-high',
       'concern-medium',
     ]);
+    expect(state.attention.pendingFollowUps?.map(followUp => followUp.id)).toEqual(['follow-up-1']);
     expect(state.attention.conversationTrajectory).toBe('deepening');
     expect(state.cognitive.processingQuality).toBe('deliberate');
     expect(state.relational).toMatchObject({
@@ -84,6 +105,10 @@ describe('InternalStateComputer', () => {
         makeConcern({ id: 'b', priority: 'low' }),
         makeConcern({ id: 'a', priority: 'high' }),
       ],
+      pendingFollowUps: [
+        makePendingFollowUp({ id: 'follow-up-b' }),
+        makePendingFollowUp({ id: 'follow-up-a', dueAt: '2026-03-01T09:30:00.000Z' }),
+      ],
       trustLevel: 'regular',
       sessionMetrics: {
         userMessageText: 'Switching gears, what about backups?',
@@ -102,6 +127,10 @@ describe('InternalStateComputer', () => {
       activeConcerns: [
         makeConcern({ id: 'a', priority: 'high' }),
         makeConcern({ id: 'b', priority: 'low' }),
+      ],
+      pendingFollowUps: [
+        makePendingFollowUp({ id: 'follow-up-a', dueAt: '2026-03-01T09:30:00.000Z' }),
+        makePendingFollowUp({ id: 'follow-up-b' }),
       ],
       trustLevel: 'regular',
       sessionMetrics: {
@@ -126,6 +155,7 @@ describe('InternalStateComputer', () => {
         confidence: 1.5,
       },
       activeConcerns: [],
+      pendingFollowUps: [],
       trustLevel: 'public',
       sessionMetrics: {
         userMessageText: 'hello',
@@ -148,6 +178,7 @@ describe('InternalStateComputer', () => {
       activeConcerns: [
         makeConcern({ createdAt: 'not-a-date' }),
       ],
+      pendingFollowUps: [],
       trustLevel: 'public',
       sessionMetrics: {
         userMessageText: 'hello',

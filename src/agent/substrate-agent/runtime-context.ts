@@ -248,6 +248,7 @@ export function buildRuntimeContext(input: {
   lines.push(responseStyleGuidance);
 
   if (input.internalState) {
+    const pendingFollowUps = input.internalState.attention.pendingFollowUps ?? [];
     lines.push('');
     lines.push('[Internal State]');
     lines.push(
@@ -270,12 +271,17 @@ export function buildRuntimeContext(input: {
     lines.push(
       `Attention: trajectory=${input.internalState.attention.conversationTrajectory},`
       + ` salient_entities=${input.internalState.attention.salientEntities.length},`
-      + ` active_concerns=${input.internalState.attention.activeConcerns.length}`,
+      + ` active_concerns=${input.internalState.attention.activeConcerns.length},`
+      + ` pending_follow_ups=${pendingFollowUps.length}`,
     );
     const concernRefs = input.internalState.attention.activeConcerns
       .slice(0, 3)
       .map((concern) => `${concern.id}:${concern.priority}`);
     lines.push(`Active concern refs: ${concernRefs.length > 0 ? concernRefs.join(', ') : 'none'}`);
+    const pendingRefs = pendingFollowUps
+      .slice(0, 3)
+      .map((followUp) => `${followUp.id}:${followUp.timing}`);
+    lines.push(`Pending follow-up refs: ${pendingRefs.length > 0 ? pendingRefs.join(', ') : 'none'}`);
     const metacognitiveSummary = cloneMetacognitiveFlags(metacognitiveFlags)
       .slice(0, 3)
       .map((flag) => `${flag.flag}(${flag.confidence.toFixed(3)})`);

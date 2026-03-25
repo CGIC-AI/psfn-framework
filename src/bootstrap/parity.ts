@@ -194,6 +194,17 @@ interface HeartbeatRuntimeOptions {
     canonicalContactKey?: string;
     sourceMessageId: string;
   }) => Promise<void> | void;
+  onIntentionFollowUpDecision?: (input: {
+    decision: IntentionActionDecision;
+    channelId: string;
+    channelType: SubstrateMessage['channelType'];
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+  }) => Promise<string | undefined> | string | undefined;
+  onIntentionFollowUpActivated?: (input: {
+    pendingFollowUpId: string;
+    activationReason?: string;
+  }) => Promise<void> | void;
   onBehavioralPatternOutcome?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -1262,6 +1273,24 @@ export function wireHeartbeatRuntime(
             });
           }
         }
+        if (runtimeOptions.onIntentionFollowUpDecision) {
+          for (const decision of decisions) {
+            if (decision.type !== 'followUp') continue;
+            const pendingFollowUpId = await runtimeOptions.onIntentionFollowUpDecision({
+              decision,
+              channelId: resolvedSessionId,
+              channelType: context.message.channelType,
+              canonicalContactKey: context.canonicalContactKey,
+              sourceMessageId: context.message.id,
+            });
+            if (pendingFollowUpId) {
+              decision.followUp = {
+                ...decision.followUp,
+                pendingFollowUpId,
+              };
+            }
+          }
+        }
 
         const candidates = decisionsToPostTurnActionCandidates(decisions, {
           message: context.message,
@@ -1450,6 +1479,12 @@ export function wireHeartbeatRuntime(
             const payload = normalizeIntentionFollowUpActionPayload(action.payload);
             if (!payload) {
               throw new Error(`Intention follow-up action "${action.id}" payload is missing required fields`);
+            }
+            if (payload.pendingFollowUpId && runtimeOptions.onIntentionFollowUpActivated) {
+              await runtimeOptions.onIntentionFollowUpActivated({
+                pendingFollowUpId: payload.pendingFollowUpId,
+                activationReason: 'post_turn_action',
+              });
             }
             agentLoop.followUp?.({
               id: `intention-follow-up:${action.id}`,

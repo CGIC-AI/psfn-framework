@@ -14,6 +14,7 @@ function authHeaders(): Record<string, string> {
 
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(API_BASE + path, {
+    cache: 'no-store',
     headers: { ...authHeaders(), Accept: 'application/json' },
     credentials: 'include',
   });

@@ -1875,11 +1875,13 @@ describe('AdminServer JSON API routes', () => {
 
     const listRes = await request(port, 'GET', '/api/admin/contacts', undefined, authHeaders);
     expect(listRes.status).toBe(200);
+    expect(listRes.headers['cache-control']).toBe('no-store');
     const listPayload = JSON.parse(listRes.body) as { contacts: Array<{ id: string }> };
     expect(listPayload.contacts.some(entry => entry.id === contact.id)).toBe(true);
 
     const detailRes = await request(port, 'GET', `/api/admin/contacts/${contact.id}`, undefined, authHeaders);
     expect(detailRes.status).toBe(200);
+    expect(detailRes.headers['cache-control']).toBe('no-store');
     const detailPayload = JSON.parse(detailRes.body) as { contact: { id: string } };
     expect(detailPayload.contact.id).toBe(contact.id);
 

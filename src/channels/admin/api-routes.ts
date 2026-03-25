@@ -207,6 +207,7 @@ const ADMIN_MODELS_REFRESH_API_PATH = '/api/admin/models/refresh';
 const ADMIN_CHAT_BOOTSTRAP_API_PATH = '/api/admin/chat/bootstrap';
 const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/bootstrap';
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
+const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
@@ -668,11 +669,16 @@ export function buildAdminApiRoutes(options: {
       handle: (req, res) => {
         const url = parseRequestUrl(req, '/api/admin/contacts');
         const data = contactsService.listContacts(url.searchParams);
-        sendJson(res, 200, {
-          ...data,
-          profileMap: Object.fromEntries(data.profileMap.entries()),
-          relatedChannelMap: Object.fromEntries(data.relatedChannelMap.entries()),
-        });
+        sendJson(
+          res,
+          200,
+          {
+            ...data,
+            profileMap: Object.fromEntries(data.profileMap.entries()),
+            relatedChannelMap: Object.fromEntries(data.relatedChannelMap.entries()),
+          },
+          ADMIN_DYNAMIC_JSON_HEADERS,
+        );
       },
     },
     {
@@ -742,7 +748,7 @@ export function buildAdminApiRoutes(options: {
           sendJson(res, 404, { error: 'Contact not found' });
           return;
         }
-        sendJson(res, 200, detail);
+        sendJson(res, 200, detail, ADMIN_DYNAMIC_JSON_HEADERS);
       },
     },
     {

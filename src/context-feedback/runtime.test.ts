@@ -216,7 +216,20 @@ describe('wireContextFeedbackRuntime', () => {
     await scheduler.tick();
 
     expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
-    expect(llmProvider.complete).toHaveBeenCalledWith(expect.anything(), 'context');
+    expect(llmProvider.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          callType: 'memory',
+          originType: 'memory',
+          originStage: 'context.feedback',
+          purpose: 'context.feedback',
+          channelId: 'terminal:test',
+          turnId: 'turn-ctx-1',
+          requestId: 'turn-ctx-1',
+        }),
+      }),
+      'memory',
+    );
     expect(telemetryPhases).toEqual(expect.arrayContaining(['started', 'scored', 'persisted']));
   });
 

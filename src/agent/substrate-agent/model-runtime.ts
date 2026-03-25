@@ -41,6 +41,14 @@ export function getModelSignatureForPurpose(
 export function resolveTurnModelPurpose(
   message?: SubstrateMessage,
 ): ModelPurpose {
+  const channelId = message?.channelId ?? '';
+  if (
+    channelId === 'internal:heartbeat'
+    || channelId.startsWith('internal:heartbeat:')
+    || channelId.startsWith('internal:reflection:')
+  ) {
+    return 'memory';
+  }
   return hasVisionAttachments(message) ? 'vision' : 'chat';
 }
 

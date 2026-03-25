@@ -465,6 +465,7 @@ export class LLMClient {
   }
 
   private resolveBudgetService(purpose: RoutingPurpose, correlation: ResolvedCorrelationMetadata | undefined): string {
+    if (purpose === 'memory') return 'memory';
     if (correlation?.callType) return correlation.callType;
     if (purpose === 'chat') return 'chat';
     return 'background';

@@ -888,6 +888,9 @@ describe('LLMClient correlation metadata', () => {
       {
         systemPrompt: 'System',
         messages: [{ role: 'user', content: 'Refresh context' }],
+        correlation: {
+          channelId: 'internal:heartbeat',
+        },
       },
       'memory',
       { disableRetry: true },
@@ -898,6 +901,18 @@ describe('LLMClient correlation metadata', () => {
     expect(model.id).toBe('memory/model');
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(1536);
+
+    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
+    const parsed = JSON.parse(raw) as { schemaVersion: number; records: Array<Record<string, unknown>> };
+    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.records[0]).toMatchObject({
+      purpose: 'memory',
+      service: 'memory',
+      process: 'memory',
+      inputTokens: 8,
+      outputTokens: 5,
+    });
   });
 });
 

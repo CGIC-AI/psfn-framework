@@ -183,7 +183,16 @@ export class ContextEvaluator {
         role: 'user',
         content: buildEvaluationPrompt(input),
       }],
-    }, 'context');
+      correlation: {
+        requestId: input.turnId,
+        turnId: input.turnId,
+        channelId: input.channelId,
+        callType: 'memory',
+        originType: 'memory',
+        originStage: 'context.feedback',
+        purpose: 'context.feedback',
+      },
+    }, 'memory');
 
     const parsed = parseContextEvaluationResponse(completion.content);
     return {

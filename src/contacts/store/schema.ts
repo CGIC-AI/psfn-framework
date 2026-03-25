@@ -107,6 +107,37 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS social_graph_entities (
+      id TEXT PRIMARY KEY,
+      entity_kind TEXT NOT NULL DEFAULT 'person',
+      display_name TEXT NOT NULL,
+      contact_id TEXT UNIQUE,
+      sensitivity TEXT NOT NULL DEFAULT 'personal',
+      provenance_refs TEXT NOT NULL DEFAULT '[]',
+      confidence REAL NOT NULL DEFAULT 1,
+      source TEXT NOT NULL DEFAULT 'contact',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS social_relationship_edges (
+      id TEXT PRIMARY KEY,
+      source_entity_id TEXT NOT NULL,
+      target_entity_id TEXT NOT NULL,
+      relationship_type TEXT NOT NULL,
+      directional INTEGER NOT NULL DEFAULT 1,
+      sensitivity TEXT NOT NULL DEFAULT 'personal',
+      provenance_refs TEXT NOT NULL DEFAULT '[]',
+      evidence_memory_ids TEXT NOT NULL DEFAULT '[]',
+      confidence REAL NOT NULL DEFAULT 0.7,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (source_entity_id, target_entity_id, relationship_type, directional),
+      FOREIGN KEY (source_entity_id) REFERENCES social_graph_entities(id) ON DELETE CASCADE,
+      FOREIGN KEY (target_entity_id) REFERENCES social_graph_entities(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);
     CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);
     CREATE INDEX IF NOT EXISTS idx_contact_channel_ids_contact ON contact_channel_ids(contact_id);
@@ -132,12 +163,53 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       ON contact_mutation_audit(field, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_contact_mutation_audit_actor
       ON contact_mutation_audit(actor, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_social_graph_entities_contact
+      ON social_graph_entities(contact_id);
+    CREATE INDEX IF NOT EXISTS idx_social_graph_entities_updated_at
+      ON social_graph_entities(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_source
+      ON social_relationship_edges(source_entity_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_target
+      ON social_relationship_edges(target_entity_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_type
+      ON social_relationship_edges(relationship_type, updated_at DESC);
   `);
 
   ensureNicknameColumn(db);
   ensureChannelPrivacyColumn(db);
   ensureConversationChannelPrivacyColumn(db);
   migrateLegacyDiscordIdentities(db);
+  db.exec(`
+    INSERT INTO social_graph_entities (
+      id,
+      entity_kind,
+      display_name,
+      contact_id,
+      sensitivity,
+      provenance_refs,
+      confidence,
+      source,
+      created_at,
+      updated_at
+    )
+    SELECT
+      'contact:' || c.id,
+      'person',
+      c.display_name,
+      c.id,
+      'personal',
+      '[]',
+      1,
+      'contact',
+      c.first_seen,
+      c.last_seen
+    FROM contacts c
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM social_graph_entities e
+      WHERE e.contact_id = c.id
+    )
+  `);
 }
 
 export function maybeHasContactLinkedTable(db: Database.Database, tableName: string, columnName: string): boolean {

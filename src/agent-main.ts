@@ -113,7 +113,7 @@ import {
   resolveModuleRegistryPathFromWorkspace,
 } from './modules/registry.js';
 import type { ChannelAdapter } from './channels/types.js';
-import { loadRuntimeChannelsConfig } from './channels/config.js';
+import { buildExternalChannelProfiles, loadRuntimeChannelsConfig } from './channels/config.js';
 import {
   createApiServerChannelAdapterFactoryEntry,
   createOpenHomeChannelAdapterFactoryEntry,
@@ -780,6 +780,7 @@ async function main(): Promise<void> {
         allowInsecureWithoutAuth,
         corsAllowedOrigins,
         modelName: process.env.API_MODEL_NAME,
+        externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
         requestTimeoutMs: parsePositiveIntEnv(
           process.env.API_REQUEST_TIMEOUT_MS,
           DEFAULT_API_REQUEST_TIMEOUT_MS,

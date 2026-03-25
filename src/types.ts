@@ -16,7 +16,7 @@ import { parseOptionalStringEnv } from './utils/env.js';
 
 // ── Channel-agnostic message types ──
 
-export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'openhome'] as const;
+export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'psfn-amica'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];
 export type { TurnID } from './turns/types.js';
 
@@ -164,7 +164,7 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
 }
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'api' | 'openhome' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'unknown';
   wyoming?: WyomingRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelVisibility;

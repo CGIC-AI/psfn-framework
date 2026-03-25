@@ -51,19 +51,19 @@ describe('internal role envelope ids', () => {
     });
   });
 
-  it('accepts openhome as a first-class external channel type', () => {
+  it('accepts psfn-amica as a first-class external channel type', () => {
     const envelope = createInternalRoleEnvelope({
-      turnId: 'turn-openhome',
-      channelId: 'openhome:test:pi5',
-      channelType: 'openhome',
+      turnId: 'turn-psfn-amica',
+      channelId: 'psfn-amica:test:pi5',
+      channelType: 'psfn-amica',
       transportRole: 'assistant',
       internalRole: 'outreach_result',
       sourceStage: 'turn_execution',
       visibility: 'user_visible',
       summary: 'Reply delivered through the satellite UX.',
-      body: 'The assistant answered through the OpenHome-backed Pi channel.',
+      body: 'The assistant answered through the PSFN Amica-backed Pi channel.',
     });
 
-    expect(envelope.channelType).toBe('openhome');
+    expect(envelope.channelType).toBe('psfn-amica');
   });
 });

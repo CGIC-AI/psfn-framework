@@ -1723,6 +1723,12 @@ describe('ApiServer with auth', () => {
       eventBus,
       sessionManager: createMockSessionManager(),
       apiKey: 'test-secret-key',
+      externalChannelProfiles: {
+        'psfn-amica': {
+          canonicalContactId: 'contact-operator',
+          channelPrivacy: 'semi_private',
+        },
+      },
     });
     await server.init();
     await server.start();
@@ -1745,12 +1751,93 @@ describe('ApiServer with auth', () => {
     expect(call.channelId).toBe(`api:${principalId}:identity-session`);
   });
 
-  it('routes authenticated OpenHome claims into openhome channel sessions', async () => {
+  it('routes authenticated PSFN Amica claims into psfn-amica channel sessions', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);
     server = new ApiServer({
       port,
       agentLoop: mockAgent,
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      externalChannelProfiles: {
+        'psfn-amica': {
+          canonicalContactId: 'contact-operator',
+          channelPrivacy: 'semi_private',
+        },
+      },
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'satellite hello' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Channel-Type': 'psfn-amica',
+      'X-PSFN-Channel-ID': 'psfn-amica:lab:pi5-display',
+      'X-PSFN-Author-ID': 'admin-user',
+      'X-PSFN-Author-Name': 'Operator',
+    });
+    expect(res.status).toBe(200);
+
+    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    expect(call.channelId).toBe('psfn-amica:lab:pi5-display');
+    expect(call.channelType).toBe('psfn-amica');
+    expect(call.authorId).toBe('admin-user');
+    expect(call.authorName).toBe('Operator');
+    expect(call.routing?.source).toBe('psfn-amica');
+    expect(call.routing?.canonicalContactId).toBe('contact-operator');
+    expect(call.routing?.channelPrivacy).toBe('semi_private');
+  });
+
+  it('applies configured psfn-amica defaults when the caller only claims channel type and id', async () => {
+    await server.stop();
+    const mockAgent = createMockAgentLoop(eventBus);
+    server = new ApiServer({
+      port,
+      agentLoop: mockAgent,
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      externalChannelProfiles: {
+        'psfn-amica': {
+          authorId: 'admin-user',
+          authorName: 'Operator',
+          canonicalContactId: 'contact-operator',
+          channelPrivacy: 'semi_private',
+        },
+      },
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'satellite hello' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Channel-Type': 'psfn-amica',
+      'X-PSFN-Channel-ID': 'psfn-amica:lab:pi5-display',
+    });
+    expect(res.status).toBe(200);
+
+    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    expect(call.channelId).toBe('psfn-amica:lab:pi5-display');
+    expect(call.channelType).toBe('psfn-amica');
+    expect(call.authorId).toBe('admin-user');
+    expect(call.authorName).toBe('Operator');
+    expect(call.routing?.source).toBe('psfn-amica');
+    expect(call.routing?.canonicalContactId).toBe('contact-operator');
+    expect(call.routing?.channelPrivacy).toBe('semi_private');
+  });
+
+  it('fails closed for psfn-amica claims when the PSFN-side profile is missing', async () => {
+    await server.stop();
+    server = new ApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
       eventBus,
       sessionManager: createMockSessionManager(),
       apiKey: 'test-secret-key',
@@ -1763,19 +1850,12 @@ describe('ApiServer with auth', () => {
       messages: [{ role: 'user', content: 'satellite hello' }],
     }, {
       Authorization: 'Bearer test-secret-key',
-      'X-PSFN-Channel-Type': 'openhome',
-      'X-PSFN-Channel-ID': 'openhome:lab:pi5-display',
-      'X-PSFN-Author-ID': 'openhome-user:owner',
-      'X-PSFN-Author-Name': 'Lab Satellite',
+      'X-PSFN-Channel-Type': 'psfn-amica',
+      'X-PSFN-Channel-ID': 'psfn-amica:lab:pi5-display',
     });
-    expect(res.status).toBe(200);
 
-    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
-    expect(call.channelId).toBe('openhome:lab:pi5-display');
-    expect(call.channelType).toBe('openhome');
-    expect(call.authorId).toBe('openhome-user:owner');
-    expect(call.authorName).toBe('Lab Satellite');
-    expect(call.routing?.source).toBe('openhome');
+    expect(res.status).toBe(503);
+    expect(JSON.parse(res.body).error.type).toBe('external_channel_not_configured');
   });
 
   it('binds identity claims to the authenticated principal and prevents X-User-ID spoofing', async () => {

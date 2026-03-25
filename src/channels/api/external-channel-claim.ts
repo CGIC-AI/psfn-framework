@@ -4,13 +4,15 @@ import {
   type ChannelType,
   type MessageRoutingMetadata,
 } from '../../types.js';
+import type { ChannelVisibility } from '../../trust/types.js';
+import type { ExternalChannelProfileConfig } from '../config.js';
 import type { ApiAuthPrincipal } from '../http/auth.js';
 import {
   clampHttpHeader as clampHeaderValue,
   singleHeader as firstHeaderValue,
 } from './http-policy.js';
 
-const EXTERNAL_API_CHANNEL_TYPE_ALLOWLIST = new Set<ChannelType>(['openhome']);
+const EXTERNAL_API_CHANNEL_TYPE_ALLOWLIST = new Set<ChannelType>(['psfn-amica']);
 
 type MessageRoutingSource = NonNullable<MessageRoutingMetadata['source']>;
 
@@ -20,6 +22,8 @@ export interface ApiTurnIdentity {
   authorId: string;
   authorName: string;
   source: MessageRoutingSource;
+  channelPrivacy?: ChannelVisibility;
+  canonicalContactId?: string;
 }
 
 export type ApiTurnIdentityResolution = { ok: true; value: ApiTurnIdentity } | {
@@ -45,17 +49,8 @@ function readHeader(headers: IncomingHttpHeaders, name: string, maxLength: numbe
 }
 
 function resolveExternalChannelSource(channelType: ChannelType): MessageRoutingSource {
-  if (channelType === 'openhome') return 'openhome';
+  if (channelType === 'psfn-amica') return 'psfn-amica';
   return 'api';
-}
-
-function defaultExternalAuthorId(channelType: ChannelType): string {
-  return `${channelType}-user:owner`;
-}
-
-function defaultExternalAuthorName(channelType: ChannelType): string {
-  if (channelType === 'openhome') return 'OpenHome User';
-  return 'External Channel User';
 }
 
 export function resolveApiTurnIdentity(options: {
@@ -64,6 +59,7 @@ export function resolveApiTurnIdentity(options: {
   defaultChannelId: string;
   defaultAuthorId: string;
   defaultAuthorName: string;
+  externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
 }): ApiTurnIdentityResolution {
   const {
     headers,
@@ -71,6 +67,7 @@ export function resolveApiTurnIdentity(options: {
     defaultChannelId,
     defaultAuthorId,
     defaultAuthorName,
+    externalChannelProfiles,
   } = options;
 
   const claimedChannelId = readHeader(headers, EXTERNAL_CHANNEL_HEADERS.channelId, 256);
@@ -143,14 +140,28 @@ export function resolveApiTurnIdentity(options: {
     };
   }
 
+  const defaultProfile = externalChannelProfiles?.[claimedChannelType];
+  const resolvedAuthorId = claimedAuthorId ?? defaultProfile?.authorId;
+  const resolvedAuthorName = claimedAuthorName ?? defaultProfile?.authorName;
+  if (claimedChannelType === 'psfn-amica' && (!resolvedAuthorId || !resolvedAuthorName)) {
+    return {
+      ok: false,
+      status: 503,
+      type: 'external_channel_not_configured',
+      message: 'PSFN Amica claims require configured identity metadata or explicit author headers',
+    };
+  }
+
   return {
     ok: true,
     value: {
       channelId: claimedChannelId,
       channelType: claimedChannelType,
-      authorId: claimedAuthorId ?? defaultExternalAuthorId(claimedChannelType),
-      authorName: claimedAuthorName ?? defaultExternalAuthorName(claimedChannelType),
+      authorId: resolvedAuthorId!,
+      authorName: resolvedAuthorName!,
       source: resolveExternalChannelSource(claimedChannelType),
+      ...(defaultProfile?.channelPrivacy ? { channelPrivacy: defaultProfile.channelPrivacy } : {}),
+      ...(defaultProfile?.canonicalContactId ? { canonicalContactId: defaultProfile.canonicalContactId } : {}),
     },
   };
 }

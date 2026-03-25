@@ -297,7 +297,7 @@ export interface EventMap {
   };
   'channel.message.error': {
     channelId: string;
-    channelType: 'discord' | 'telegram' | 'api' | 'terminal' | 'openhome' | 'unknown';
+    channelType: 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'unknown';
     messageId?: string;
     phase: 'ingress' | 'handler' | 'egress' | 'unknown';
     error: string;

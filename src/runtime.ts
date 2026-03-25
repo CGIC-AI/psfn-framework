@@ -93,7 +93,7 @@ import {
 } from './bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { attachVoiceObservers } from './voice/observers/index.js';
-import { loadRuntimeChannelsConfig } from './channels/config.js';
+import { buildExternalChannelProfiles, loadRuntimeChannelsConfig } from './channels/config.js';
 import { WyomingTcpServer } from './channels/wyoming/server.js';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
 import { createWyomingServiceRegistry } from './channels/wyoming/services/index.js';
@@ -1008,6 +1008,7 @@ export class SubstrateRuntime implements Lifecycle {
           allowInsecureWithoutAuth,
           corsAllowedOrigins,
           modelName: process.env.API_MODEL_NAME,
+          externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
           healthChecks: {
           memory: () => {
             const stats = this.memoryStore.getStats();

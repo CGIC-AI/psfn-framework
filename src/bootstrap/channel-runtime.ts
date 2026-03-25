@@ -104,8 +104,8 @@ export function createApiServerChannelAdapterFactoryEntry(
 export function createOpenHomeChannelAdapterFactoryEntry(): ChannelAdapterFactoryEntry {
   return {
     manifest: {
-      id: 'openhome',
-      label: 'OpenHome',
+      id: 'psfn-amica',
+      label: 'PSFN Amica',
       enabled: true,
       required: false,
       eligibility: {},

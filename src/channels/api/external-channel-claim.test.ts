@@ -27,13 +27,13 @@ describe('resolveApiTurnIdentity', () => {
     });
   });
 
-  it('accepts authenticated openhome claims', () => {
+  it('accepts authenticated psfn-amica claims', () => {
     const result = resolveApiTurnIdentity({
       headers: {
-        'x-psfn-channel-type': 'openhome',
-        'x-psfn-channel-id': 'openhome:lab:pi5-display',
-        'x-psfn-author-id': 'openhome-user:owner',
-        'x-psfn-author-name': 'Lab Satellite',
+        'x-psfn-channel-type': 'psfn-amica',
+        'x-psfn-channel-id': 'psfn-amica:lab:pi5-display',
+        'x-psfn-author-id': 'admin-user',
+        'x-psfn-author-name': 'Operator',
       },
       principal: principalFromApiKeyToken('test-secret-key'),
       defaultChannelId: 'api:principal:session-1',
@@ -44,11 +44,45 @@ describe('resolveApiTurnIdentity', () => {
     expect(result).toEqual({
       ok: true,
       value: {
-        channelId: 'openhome:lab:pi5-display',
-        channelType: 'openhome',
-        authorId: 'openhome-user:owner',
-        authorName: 'Lab Satellite',
-        source: 'openhome',
+        channelId: 'psfn-amica:lab:pi5-display',
+        channelType: 'psfn-amica',
+        authorId: 'admin-user',
+        authorName: 'Operator',
+        source: 'psfn-amica',
+      },
+    });
+  });
+
+  it('applies psfn-amica default identity metadata when the claim omits user headers', () => {
+    const result = resolveApiTurnIdentity({
+      headers: {
+        'x-psfn-channel-type': 'psfn-amica',
+        'x-psfn-channel-id': 'psfn-amica:lab:pi5-display',
+      },
+      principal: principalFromApiKeyToken('test-secret-key'),
+      defaultChannelId: 'api:principal:session-1',
+      defaultAuthorId: 'principal',
+      defaultAuthorName: 'API Principal',
+      externalChannelProfiles: {
+        'psfn-amica': {
+          authorId: 'admin-user',
+          authorName: 'Operator',
+          canonicalContactId: 'contact-operator',
+          channelPrivacy: 'semi_private',
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        channelId: 'psfn-amica:lab:pi5-display',
+        channelType: 'psfn-amica',
+        authorId: 'admin-user',
+        authorName: 'Operator',
+        source: 'psfn-amica',
+        canonicalContactId: 'contact-operator',
+        channelPrivacy: 'semi_private',
       },
     });
   });
@@ -56,7 +90,7 @@ describe('resolveApiTurnIdentity', () => {
   it('rejects incomplete claims', () => {
     const result = resolveApiTurnIdentity({
       headers: {
-        'x-psfn-channel-type': 'openhome',
+        'x-psfn-channel-type': 'psfn-amica',
       },
       principal: principalFromApiKeyToken('test-secret-key'),
       defaultChannelId: 'api:principal:session-1',
@@ -72,11 +106,31 @@ describe('resolveApiTurnIdentity', () => {
     });
   });
 
+  it('rejects psfn-amica claims without configured identity metadata or explicit author headers', () => {
+    const result = resolveApiTurnIdentity({
+      headers: {
+        'x-psfn-channel-type': 'psfn-amica',
+        'x-psfn-channel-id': 'psfn-amica:lab:pi5-display',
+      },
+      principal: principalFromApiKeyToken('test-secret-key'),
+      defaultChannelId: 'api:principal:session-1',
+      defaultAuthorId: 'principal',
+      defaultAuthorName: 'API Principal',
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 503,
+      type: 'external_channel_not_configured',
+      message: 'PSFN Amica claims require configured identity metadata or explicit author headers',
+    });
+  });
+
   it('rejects external claims for insecure local principals', () => {
     const result = resolveApiTurnIdentity({
       headers: {
-        'x-psfn-channel-type': 'openhome',
-        'x-psfn-channel-id': 'openhome:lab:pi5-display',
+        'x-psfn-channel-type': 'psfn-amica',
+        'x-psfn-channel-id': 'psfn-amica:lab:pi5-display',
       },
       principal: INSECURE_LOCAL_API_PRINCIPAL,
       defaultChannelId: 'api:local-insecure:session-1',

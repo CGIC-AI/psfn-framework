@@ -14,7 +14,7 @@ const OPENHOME_CAPABILITIES: ChannelCapabilities = {
   reactions: false,
   threads: false,
   streaming: true,
-  promptChannelType: 'openhome',
+  promptChannelType: 'psfn-amica',
 };
 
 const OPENHOME_GATEWAY: ChannelGatewayAdapter = {
@@ -24,26 +24,26 @@ const OPENHOME_GATEWAY: ChannelGatewayAdapter = {
 };
 
 const OPENHOME_PROMPT: ChannelPromptAdapter = {
-  resolveChannelType: () => 'openhome',
+  resolveChannelType: () => 'psfn-amica',
 };
 
 export class OpenHomeAdapter implements ChannelAdapter {
-  readonly id = 'openhome';
+  readonly id = 'psfn-amica';
   readonly name = this.id;
   readonly meta = {
-    label: 'OpenHome',
+    label: 'PSFN Amica',
     emoji: ':satellite:',
   };
   readonly capabilities = OPENHOME_CAPABILITIES;
   readonly config: ChannelConfigAdapter = {
     enabled: true,
-    connectionLabel: 'psfn-external-api-claim',
+    connectionLabel: 'psfn-amica-external-api-claim',
   };
   readonly outbound: ChannelOutboundAdapter = {
     textChunkLimit: Number.MAX_SAFE_INTEGER,
     sendText: async (ctx: OutboundContext, _text: string): Promise<void> => {
       throw new Error(
-        `OpenHome outbound delivery is not wired for "${ctx.channelId}"; replies must flow through the initiating transport`,
+        `PSFN Amica outbound delivery is not wired for "${ctx.channelId}"; replies must flow through the initiating transport`,
       );
     },
   };

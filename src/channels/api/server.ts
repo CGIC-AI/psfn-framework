@@ -83,6 +83,7 @@ import {
   formatSseDoneEvent,
 } from './response-format.js';
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
+import type { ExternalChannelProfileConfig } from '../config.js';
 
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
@@ -185,6 +186,7 @@ export interface ApiServerConfig {
   corsAllowedOrigins?: string[];
   healthChecks?: ApiServerHealthChecks;
   schedulerHeartbeatStaleAfterMs?: number;
+  externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
 }
 
 export class ApiServer implements ChannelAdapter {
@@ -226,6 +228,7 @@ export class ApiServer implements ChannelAdapter {
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHeartbeatStaleAfterMs: number;
+  private externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private lastSchedulerHeartbeatAtMs: number | null = null;
   private unregisterSchedulerHeartbeat: (() => void) | null = null;
 
@@ -246,6 +249,7 @@ export class ApiServer implements ChannelAdapter {
     this.schedulerHeartbeatStaleAfterMs = this.parseSchedulerHeartbeatStaleAfterMs(
       config.schedulerHeartbeatStaleAfterMs,
     );
+    this.externalChannelProfiles = config.externalChannelProfiles ?? {};
     this.unregisterSchedulerHeartbeat = this.eventBus.on('schedule.heartbeat', ({ timestamp }) => {
       if (Number.isFinite(timestamp) && timestamp > 0) {
         this.lastSchedulerHeartbeatAtMs = Math.floor(timestamp);
@@ -1032,6 +1036,7 @@ export class ApiServer implements ChannelAdapter {
     req: IncomingMessage;
     overrides: TurnRoutingOverrides;
     channelPrivacy?: ChannelVisibility;
+    canonicalContactId?: string;
   }): SubstrateMessage {
     const {
       channelId,
@@ -1043,6 +1048,7 @@ export class ApiServer implements ChannelAdapter {
       req,
       overrides,
       channelPrivacy,
+      canonicalContactId,
     } = params;
     const approvalToken = this.clampHeader(
       this.singleHeader(req.headers['x-broadcast-approval-token']),
@@ -1055,10 +1061,6 @@ export class ApiServer implements ChannelAdapter {
     const visibilityScope = requestedScope === 'public_only' || requestedScope === 'approved_private_context'
       ? requestedScope
       : undefined;
-    const canonicalContactId = this.clampHeader(
-      this.singleHeader(req.headers['x-canonical-contact-id']),
-      256,
-    );
     const routing: MessageRoutingMetadata = {
       source,
       ...(approvalToken || visibilityScope
@@ -1546,6 +1548,7 @@ export class ApiServer implements ChannelAdapter {
       defaultChannelId,
       defaultAuthorId: defaultAuthor.authorId,
       defaultAuthorName: defaultAuthor.authorName,
+      externalChannelProfiles: this.externalChannelProfiles,
     });
     if (!turnIdentity.ok) {
       this.sendError(res, turnIdentity.status, turnIdentity.type, turnIdentity.message);
@@ -1557,11 +1560,38 @@ export class ApiServer implements ChannelAdapter {
       authorId,
       authorName,
       source,
+      channelPrivacy: claimedChannelPrivacy,
+      canonicalContactId: claimedCanonicalContactId,
     } = turnIdentity.value;
     if (!this.enforceIdentityClaim(req, res, authorId)) {
       return null;
     }
 
+    const canonicalContactId = this.clampHeader(
+      this.singleHeader(req.headers['x-canonical-contact-id']),
+      256,
+    ) ?? claimedCanonicalContactId;
+    const resolvedChannelPrivacy = channelPrivacy.value ?? claimedChannelPrivacy;
+    if (channelType === 'psfn-amica') {
+      if (!canonicalContactId) {
+        this.sendError(
+          res,
+          503,
+          'external_channel_not_configured',
+          'PSFN Amica claims require a canonical contact mapping',
+        );
+        return null;
+      }
+      if (!resolvedChannelPrivacy) {
+        this.sendError(
+          res,
+          503,
+          'external_channel_not_configured',
+          'PSFN Amica claims require a configured channel privacy level',
+        );
+        return null;
+      }
+    }
     const lastUserMsg = this.getLastUserMessage(request.messages);
     const substrateMsg = this.buildSubstrateMessage({
       channelId,
@@ -1572,9 +1602,10 @@ export class ApiServer implements ChannelAdapter {
       authorName,
       req,
       overrides: routingOverrides.value,
-      channelPrivacy: channelPrivacy.value,
+      channelPrivacy: resolvedChannelPrivacy,
+      canonicalContactId,
     });
-    this.seedSession(channelId, request.messages, authorId, authorName, channelPrivacy.value);
+    this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 
     const releaseChannel = await this.acquireChannel(channelId, req, res);
     if (!releaseChannel) return null;

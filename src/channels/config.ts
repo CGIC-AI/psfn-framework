@@ -5,6 +5,11 @@ import { getIgnoredTelegramChannelEnvKeys } from '../config/legacy-env.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { parseBooleanEnv } from '../utils/env.js';
 import { isRecord } from '../utils/types.js';
+import {
+  normalizeChannelVisibility,
+  type ChannelVisibility,
+} from '../trust/types.js';
+import type { ChannelType } from '../types.js';
 
 const log = createComponentLogger('ChannelConfig');
 
@@ -38,9 +43,22 @@ export interface DiscordChannelConfig {
   heartbeatChannelId: string;
 }
 
+export interface ExternalChannelProfileConfig {
+  authorId?: string;
+  authorName?: string;
+  canonicalContactId?: string;
+  channelPrivacy?: ChannelVisibility;
+}
+
+export interface PsfnAmicaChannelConfig {
+  enabled: boolean;
+  defaultIdentity?: ExternalChannelProfileConfig;
+}
+
 export interface RuntimeChannelsConfig {
   discord: DiscordChannelConfig;
   telegram: TelegramChannelConfig;
+  psfnAmica: PsfnAmicaChannelConfig;
 }
 
 export interface RuntimeChannelsConfigOverrides {
@@ -67,6 +85,10 @@ const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
 
 const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
   heartbeatChannelId: '',
+};
+
+const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
+  enabled: true,
 };
 
 function interpolateEnvTokens(value: unknown, env: NodeJS.ProcessEnv): unknown {
@@ -138,6 +160,24 @@ function deriveWebhookPathFromUrl(webhookUrl: string): string | undefined {
   }
 }
 
+function parseExternalChannelProfile(value: unknown): ExternalChannelProfileConfig | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const authorId = parseString(value.authorId);
+  const authorName = parseString(value.authorName);
+  const canonicalContactId = parseString(value.canonicalContactId);
+  const channelPrivacy = normalizeChannelVisibility(parseString(value.channelPrivacy));
+  const hasValues = authorId || authorName || canonicalContactId || channelPrivacy;
+  if (!hasValues) return undefined;
+
+  return {
+    ...(authorId ? { authorId } : {}),
+    ...(authorName ? { authorName } : {}),
+    ...(canonicalContactId ? { canonicalContactId } : {}),
+    ...(channelPrivacy ? { channelPrivacy } : {}),
+  };
+}
+
 function loadRawChannelsConfig(dataDir: string): Record<string, unknown> {
   const filePath = join(dataDir, CHANNELS_CONFIG_FILE);
   if (!existsSync(filePath)) {
@@ -177,6 +217,10 @@ export function loadRuntimeChannelsConfig(
   const discordConfig = isRecord(scopedRoot.discord)
     ? scopedRoot.discord
     : {};
+  const psfnAmicaConfig = isRecord(scopedRoot.psfnAmica)
+    ? scopedRoot.psfnAmica
+    : {};
+  const psfnAmicaDefaultIdentity = parseExternalChannelProfile(psfnAmicaConfig.defaultIdentity);
   const telegramConfig = isRecord(scopedRoot.telegram)
     ? scopedRoot.telegram
     : {};
@@ -233,6 +277,11 @@ export function loadRuntimeChannelsConfig(
       heartbeatChannelId: parseString(discordConfig.heartbeatChannelId)
         ?? DEFAULT_DISCORD_CHANNEL_CONFIG.heartbeatChannelId,
     },
+    psfnAmica: {
+      enabled: parseBoolean(psfnAmicaConfig.enabled)
+        ?? DEFAULT_PSFN_AMICA_CHANNEL_CONFIG.enabled,
+      ...(psfnAmicaDefaultIdentity ? { defaultIdentity: psfnAmicaDefaultIdentity } : {}),
+    },
     telegram: {
       enabled,
       token,
@@ -248,4 +297,12 @@ export function loadRuntimeChannelsConfig(
       },
     },
   };
+}
+
+export function buildExternalChannelProfiles(
+  config: RuntimeChannelsConfig,
+): Partial<Record<ChannelType, ExternalChannelProfileConfig>> {
+  return config.psfnAmica.defaultIdentity
+    ? { 'psfn-amica': config.psfnAmica.defaultIdentity }
+    : {};
 }

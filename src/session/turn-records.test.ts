@@ -9,9 +9,9 @@ function createTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
     schemaVersion: 1,
     turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
-    requestId: 'req-openhome',
-    channelId: 'openhome:test:pi5',
-    channelType: 'openhome',
+    requestId: 'req-psfn-amica',
+    channelId: 'psfn-amica:test:pi5',
+    channelType: 'psfn-amica',
     startedAt: 1_742_000_000_000,
     completedAt: 1_742_000_000_500,
     status: 'completed',
@@ -42,8 +42,8 @@ function createTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
 }
 
 describe('turn-records', () => {
-  it('persists and reads openhome turn records', () => {
-    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-openhome-turn-records-'));
+  it('persists and reads psfn-amica turn records', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-psfn-amica-turn-records-'));
     const record = createTurnRecord();
 
     appendTurnRecord(sessionsDir, record);

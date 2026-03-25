@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadRuntimeChannelsConfig } from './config.js';
+import { buildExternalChannelProfiles, loadRuntimeChannelsConfig } from './config.js';
 
 describe('loadRuntimeChannelsConfig', () => {
   it('returns defaults when data/channels.json is missing', () => {
@@ -22,6 +22,7 @@ describe('loadRuntimeChannelsConfig', () => {
         port: 8080,
         path: '/telegram/webhook',
       });
+      expect(config.psfnAmica).toEqual({ enabled: true });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -81,6 +82,45 @@ describe('loadRuntimeChannelsConfig', () => {
       const config = loadRuntimeChannelsConfig(dataDir, {});
 
       expect(config.discord.heartbeatChannelId).toBe('1312460007211536394');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads psfn-amica defaults from channels.json and exposes them as external channel profiles', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        psfnAmica: {
+          enabled: true,
+          defaultIdentity: {
+            authorId: 'admin-user',
+            authorName: 'Operator',
+            canonicalContactId: 'contact-operator',
+            channelPrivacy: 'semi_private',
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.psfnAmica).toEqual({
+        enabled: true,
+        defaultIdentity: {
+          authorId: 'admin-user',
+          authorName: 'Operator',
+          canonicalContactId: 'contact-operator',
+          channelPrivacy: 'semi_private',
+        },
+      });
+      expect(buildExternalChannelProfiles(config)).toEqual({
+        'psfn-amica': {
+          authorId: 'admin-user',
+          authorName: 'Operator',
+          canonicalContactId: 'contact-operator',
+          channelPrivacy: 'semi_private',
+        },
+      });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

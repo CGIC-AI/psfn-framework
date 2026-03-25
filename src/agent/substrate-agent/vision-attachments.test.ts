@@ -39,21 +39,19 @@ describe('buildTurnUserContent', () => {
     });
 
     expect(Array.isArray(result)).toBe(true);
-    expect(result).toEqual([
-      {
-        type: 'text',
-        text: expect.stringContaining('Do not call image_analyze for the current attachment'),
-      },
-      {
-        type: 'image',
-        data: 'YWJjZA==',
-        mimeType: 'image/jpeg',
-      },
-    ]);
-    expect((result as Array<{ type: string; text?: string }>)[0].text).toContain('My little satellite');
+    const blocks = result as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+    expect(blocks[0]?.type).toBe('text');
+    expect(blocks[0]?.text).toContain('Runtime note');
+    expect(blocks[0]?.text).toContain('ground your reply in what is actually visible');
+    expect(blocks[0]?.text).toContain('User text: My little satellite');
+    expect(blocks[1]).toEqual({
+      type: 'image',
+      data: 'YWJjZA==',
+      mimeType: 'image/jpeg',
+    });
   });
 
-  it('falls back to plain text when the current attachment cannot be resolved', async () => {
+  it('surfaces attachment resolution failures as a runtime note when the current attachment cannot be resolved', async () => {
     const result = await buildTurnUserContent({
       message: makeMessage(),
       llmClient: {
@@ -68,6 +66,59 @@ describe('buildTurnUserContent', () => {
       },
     });
 
-    expect(result).toBe('My little satellite');
+    expect(result).toContain('Runtime note');
+    expect(result).toContain('could not load their image bytes');
+    expect(result).toContain('Do not pretend you saw them');
+    expect(result).toContain('404 Not Found');
+    expect(result).toContain('User text: My little satellite');
+  });
+
+  it('treats transport placeholder text as metadata and grounds image-only turns on the current attachment', async () => {
+    const result = await buildTurnUserContent({
+      message: makeMessage({
+        content: '(image attachment)',
+      }),
+      llmClient: {
+        webFetchBinary: vi.fn(async () => ({
+          dataBase64: 'YWJjZA==',
+          mimeType: 'image/jpeg',
+          sizeBytes: 4,
+        })),
+      } as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    const blocks = result as Array<{ type: string; text?: string }>;
+    expect(blocks[0]?.text).toContain('transport metadata');
+    expect(blocks[0]?.text).not.toContain('User text:');
+  });
+
+  it('treats pasted current-turn CDN URLs as transport metadata instead of semantic text', async () => {
+    const attachmentUrl = 'https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768';
+    const result = await buildTurnUserContent({
+      message: makeMessage({
+        content: attachmentUrl,
+      }),
+      llmClient: {
+        webFetchBinary: vi.fn(async () => ({
+          dataBase64: 'YWJjZA==',
+          mimeType: 'image/jpeg',
+          sizeBytes: 4,
+        })),
+      } as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    const blocks = result as Array<{ type: string; text?: string }>;
+    expect(blocks[0]?.text).toContain('transport metadata');
+    expect(blocks[0]?.text).not.toContain(`User text: ${attachmentUrl}`);
   });
 });

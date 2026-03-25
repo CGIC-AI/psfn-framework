@@ -90,6 +90,40 @@ function mockAssistantErrorResponse(errorMessage: string): void {
   });
 }
 
+function expectResolvedVisionPrompt(
+  content: unknown,
+  expected: { userText?: string; data: string; mimeType: string },
+): void {
+  expect(Array.isArray(content)).toBe(true);
+  const blocks = content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+  expect(blocks[0]?.type).toBe('text');
+  expect(blocks[0]?.text).toContain('Runtime note');
+  expect(blocks[0]?.text).toContain('ground your reply in what is actually visible');
+  if (expected.userText) {
+    expect(blocks[0]?.text).toContain(`User text: ${expected.userText}`);
+  }
+  expect(blocks[1]).toEqual({
+    type: 'image',
+    data: expected.data,
+    mimeType: expected.mimeType,
+  });
+}
+
+function expectUnresolvedVisionPrompt(
+  content: unknown,
+  expected: { userText?: string; detailSubstring: string },
+): void {
+  expect(typeof content).toBe('string');
+  const text = content as string;
+  expect(text).toContain('Runtime note');
+  expect(text).toContain('could not load their image bytes');
+  expect(text).toContain('Do not pretend you saw them');
+  expect(text).toContain(expected.detailSubstring);
+  if (expected.userText) {
+    expect(text).toContain(`User text: ${expected.userText}`);
+  }
+}
+
 // ── Fixtures ──
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -2301,7 +2335,10 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toBe(TEST_USER_GREETING);
+      expectUnresolvedVisionPrompt(promptInput.content, {
+        userText: TEST_USER_GREETING,
+        detailSubstring: 'Gateway binary fetch capability is unavailable',
+      });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       (globalThis as any).fetch = originalFetch;
@@ -2345,10 +2382,11 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toEqual([
-        { type: 'text', text: TEST_USER_GREETING },
-        { type: 'image', data: 'AQID', mimeType: 'image/png' },
-      ]);
+      expectResolvedVisionPrompt(promptInput.content, {
+        userText: TEST_USER_GREETING,
+        data: 'AQID',
+        mimeType: 'image/png',
+      });
       expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
         'https://cdn.discordapp.com/attachments/1/2/image.png',
         { lane: 'default', maxBytes: 8 * 1024 * 1024 },
@@ -2446,10 +2484,11 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toEqual([
-        { type: 'text', text: TEST_USER_GREETING },
-        { type: 'image', data: 'AQID', mimeType: 'image/webp' },
-      ]);
+      expectResolvedVisionPrompt(promptInput.content, {
+        userText: TEST_USER_GREETING,
+        data: 'AQID',
+        mimeType: 'image/webp',
+      });
       expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
         'https://images-ext-1.discordapp.net/external/foo/bar/cat.webp',
         { lane: 'default', maxBytes: 8 * 1024 * 1024 },
@@ -2497,10 +2536,11 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toEqual([
-        { type: 'text', text: TEST_USER_GREETING },
-        { type: 'image', data: 'AQID', mimeType: 'image/webp' },
-      ]);
+      expectResolvedVisionPrompt(promptInput.content, {
+        userText: TEST_USER_GREETING,
+        data: 'AQID',
+        mimeType: 'image/webp',
+      });
       expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
         'https://media.discordapp.net/attachments/1/2/image?format=webp&quality=lossless&width=1159&height=1640',
         { lane: 'default', maxBytes: 8 * 1024 * 1024 },
@@ -2546,7 +2586,10 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toBe(TEST_USER_GREETING);
+      expectUnresolvedVisionPrompt(promptInput.content, {
+        userText: TEST_USER_GREETING,
+        detailSubstring: 'gateway fetch denied',
+      });
       expect(llmProvider.webFetchBinary).toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
@@ -2587,7 +2630,10 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toBe(TEST_USER_GREETING);
+      expectUnresolvedVisionPrompt(promptInput.content, {
+        userText: TEST_USER_GREETING,
+        detailSubstring: 'Gateway binary fetch capability is unavailable',
+      });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       (globalThis as any).fetch = originalFetch;
@@ -2623,7 +2669,10 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(response.metadata.model).toBe('vision-model');
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
-      expect(promptInput.content).toBe(TEST_USER_GREETING);
+      expectUnresolvedVisionPrompt(promptInput.content, {
+        userText: TEST_USER_GREETING,
+        detailSubstring: 'Channel type "telegram" does not support live attachment byte fetches.',
+      });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       (globalThis as any).fetch = originalFetch;

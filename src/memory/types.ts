@@ -28,11 +28,40 @@ export type MemoryType =
   | 'reflection'
   | 'relational';
 export type MemoryRetentionClass = 'standard' | 'durable';
+export type MemoryScopeKind =
+  | 'conversation'
+  | 'contact'
+  | 'project'
+  | 'north_star'
+  | 'task_worker'
+  | 'shard'
+  | 'system';
+export type MemoryScopeQueryMode = 'prefer' | 'only';
 export interface MemoryFormationVAD {
   valence: number;
   arousal: number;
   dominance: number;
 }
+export interface MemoryScopeRef {
+  kind: MemoryScopeKind;
+  id: string;
+  label?: string;
+}
+export interface MemoryScopeQuery {
+  refs?: MemoryScopeRef[];
+  tags?: string[];
+  mode?: MemoryScopeQueryMode;
+}
+
+export const VALID_MEMORY_SCOPE_KINDS: MemoryScopeKind[] = [
+  'conversation',
+  'contact',
+  'project',
+  'north_star',
+  'task_worker',
+  'shard',
+  'system',
+];
 
 export const DURABLE_RETENTION_TAG = 'durable';
 export const CORE_DURABLE_MEMORY_TAGS = [
@@ -102,6 +131,8 @@ export interface PurrMemory {
   accessCount: number;
   supersededBy?: string;
   tags: string[];
+  scopeRef?: MemoryScopeRef;
+  scopeTags?: string[];
   provenanceRefs?: string[];
   retentionClass?: MemoryRetentionClass;
   sensitivity: SensitivityLevel;    // default 'personal'
@@ -220,6 +251,91 @@ export function normalizeMemoryTags(tags: readonly string[]): string[] {
     if (tag.length > 0) out.add(tag);
   }
   return Array.from(out);
+}
+
+export function normalizeMemoryScopeTags(tags: readonly string[] | undefined): string[] {
+  return normalizeMemoryTags(tags ?? []);
+}
+
+export function normalizeMemoryScopeRef(
+  value: Partial<MemoryScopeRef> | { kind?: string; id?: string; label?: string } | undefined,
+): MemoryScopeRef | undefined {
+  if (!value) return undefined;
+  const kind = typeof value.kind === 'string'
+    ? value.kind.trim().toLowerCase() as MemoryScopeKind
+    : undefined;
+  const id = typeof value.id === 'string' ? value.id.trim() : '';
+  const label = typeof value.label === 'string' ? value.label.trim() : '';
+  if (!kind || !VALID_MEMORY_SCOPE_KINDS.includes(kind) || id.length === 0) {
+    return undefined;
+  }
+  return {
+    kind,
+    id,
+    ...(label.length > 0 ? { label } : {}),
+  };
+}
+
+export function normalizeMemoryScopeRefs(
+  refs: readonly MemoryScopeRef[] | undefined,
+): MemoryScopeRef[] {
+  const deduped = new Map<string, MemoryScopeRef>();
+  for (const candidate of refs ?? []) {
+    const normalized = normalizeMemoryScopeRef(candidate);
+    if (!normalized) continue;
+    deduped.set(`${normalized.kind}:${normalized.id}`, normalized);
+  }
+  return [...deduped.values()];
+}
+
+export function normalizeMemoryScopeQuery(
+  query: MemoryScopeQuery | undefined,
+): MemoryScopeQuery | undefined {
+  if (!query) return undefined;
+  const refs = normalizeMemoryScopeRefs(query.refs);
+  const tags = normalizeMemoryScopeTags(query.tags);
+  const mode: MemoryScopeQueryMode = query.mode === 'only' ? 'only' : 'prefer';
+  if (refs.length === 0 && tags.length === 0) return undefined;
+  return {
+    ...(refs.length > 0 ? { refs } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
+    mode,
+  };
+}
+
+export function memoryMatchesScopeQuery(
+  memory: Pick<PurrMemory, 'scopeRef' | 'scopeTags'>,
+  query: MemoryScopeQuery | undefined,
+): boolean {
+  const normalized = normalizeMemoryScopeQuery(query);
+  if (!normalized) return true;
+  const refMatch = normalized.refs?.some((ref) => (
+    memory.scopeRef?.kind === ref.kind
+    && memory.scopeRef?.id === ref.id
+  )) ?? false;
+  const memoryScopeTags = new Set(normalizeMemoryScopeTags(memory.scopeTags));
+  const tagMatch = normalized.tags?.some(tag => memoryScopeTags.has(tag)) ?? false;
+  return refMatch || tagMatch;
+}
+
+export function computeMemoryScopeMatchStrength(
+  memory: Pick<PurrMemory, 'scopeRef' | 'scopeTags'>,
+  query: MemoryScopeQuery | undefined,
+): number {
+  const normalized = normalizeMemoryScopeQuery(query);
+  if (!normalized) return 0;
+  let strength = 0;
+  if (normalized.refs?.some((ref) => (
+    memory.scopeRef?.kind === ref.kind
+    && memory.scopeRef?.id === ref.id
+  ))) {
+    strength = Math.max(strength, 1);
+  }
+  const scopeTags = new Set(normalizeMemoryScopeTags(memory.scopeTags));
+  if (normalized.tags?.some(tag => scopeTags.has(tag))) {
+    strength = Math.max(strength, 0.6);
+  }
+  return strength;
 }
 
 function clampUnit(value: number, fallback = 0.5): number {

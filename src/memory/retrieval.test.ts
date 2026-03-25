@@ -256,6 +256,75 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(approvedScope).toContain('Confidential secret');
   });
 
+  it('biases retrieval toward matching scope selectors when scope query is preferred', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Alpha scoped memory',
+        similarity: 0.85,
+        scopeRef: { kind: 'project', id: 'alpha' },
+        scopeTags: ['project:alpha'],
+      }),
+      makeMemory({
+        text: 'Beta scoped memory',
+        similarity: 0.9,
+        scopeRef: { kind: 'project', id: 'beta' },
+        scopeTags: ['project:beta'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'memory check',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { tags: ['project:alpha'] },
+    );
+
+    expect(result).toContain('Alpha scoped memory');
+    expect(result).toContain('Beta scoped memory');
+    expect(result.indexOf('Alpha scoped memory')).toBeLessThan(result.indexOf('Beta scoped memory'));
+  });
+
+  it('filters retrieval to matching scope selectors when scope query mode is only', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Alpha only memory',
+        scopeRef: { kind: 'project', id: 'alpha' },
+        scopeTags: ['project:alpha'],
+      }),
+      makeMemory({
+        text: 'Beta only memory',
+        scopeRef: { kind: 'project', id: 'beta' },
+        scopeTags: ['project:beta'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'memory check',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { refs: [{ kind: 'project', id: 'beta' }], mode: 'only' },
+    );
+
+    expect(result).toContain('Beta only memory');
+    expect(result).not.toContain('Alpha only memory');
+  });
+
   it('primary trust + semi_private channel returns public + personal only', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);

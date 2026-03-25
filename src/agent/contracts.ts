@@ -14,6 +14,7 @@ import type { TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
 import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
+import type { MemoryScopeQuery } from '../memory/types.js';
 
 export interface LLMProvider {
   stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
@@ -42,6 +43,7 @@ export interface MemoryProvider {
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    scopeQuery?: MemoryScopeQuery,
   ): Promise<TurnMemorySnapshot>;
   retrieve(
     contextText: string,
@@ -52,6 +54,7 @@ export interface MemoryProvider {
     turnSnapshot?: TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     currentVAD?: RetrievalVADInput,
+    scopeQuery?: MemoryScopeQuery,
   ): Promise<string>;
   retrieveProactiveRecall?(
     channelId: string,
@@ -60,6 +63,7 @@ export interface MemoryProvider {
     canonicalContactId?: string,
     turnSnapshot?: TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    scopeQuery?: MemoryScopeQuery,
   ): Promise<string>;
 }
 

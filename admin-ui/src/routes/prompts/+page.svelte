@@ -236,13 +236,50 @@
   });
 
   // Build interleaved list of layers + markers
+  interface FixedStackEntry {
+    id: 'constitution' | 'north-star';
+    label: string;
+    description: string;
+    sectionId: string;
+    tokenCount: number;
+    preview: string;
+    status: string;
+  }
+
   type StackEntry =
+    | { kind: 'fixed'; fixed: FixedStackEntry }
     | { kind: 'layer'; layer: PromptLayer; idx: number }
     | { kind: 'marker'; marker: RuntimeMarker };
 
   let stackEntries = $derived.by((): StackEntry[] => {
     const entries: StackEntry[] = [];
     const usedMarkers = new Set<string>();
+
+    entries.push({
+      kind: 'fixed',
+      fixed: {
+        id: 'constitution',
+        label: 'CONSTITUTION',
+        description: 'Immutable human-care constitution and companion-derived values. Fixed at the top of the stack.',
+        sectionId: 'constitution-builder',
+        tokenCount: estimateTokens(constitutionPreviewText),
+        preview: constitutionPreviewText,
+        status: `${constitutionImmutableBlocks.length} immutable, ${constitutionMutableLayers.length} mutable`,
+      },
+    });
+
+    entries.push({
+      kind: 'fixed',
+      fixed: {
+        id: 'north-star',
+        label: 'NORTH STAR',
+        description: 'Long-term goals layer. Fixed immediately after Constitution.',
+        sectionId: 'north-star-editor',
+        tokenCount: estimateTokens(northStarPreviewText),
+        preview: northStarPreviewText || 'No enabled North Star goals.',
+        status: `${northStarItems.filter(item => item.enabled).length}/${northStarLimit} active`,
+      },
+    });
 
     for (let i = 0; i < sortedLayers.length; i++) {
       const layer = sortedLayers[i];
@@ -289,6 +326,10 @@
     toastMessage = msg;
     if (toastTimeout) clearTimeout(toastTimeout);
     toastTimeout = setTimeout(() => { toastMessage = ''; }, 3000);
+  }
+
+  function scrollToSection(sectionId: string) {
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function copyToClipboard(text: string) {
@@ -623,6 +664,10 @@
     await Promise.all([refreshConstitution(), refreshNorthStar()]);
   }
 
+  function isPromptLayerNotFoundError(errorValue: unknown): boolean {
+    return errorValue instanceof Error && errorValue.message.includes('Prompt layer not found');
+  }
+
   // ── Layer actions ──
   async function toggleExpand(layerId: string) {
     if (expandedLayerId === layerId) {
@@ -642,7 +687,12 @@
     try {
       detailData = await getPromptDetail(layerId);
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load layer detail';
+      if (isPromptLayerNotFoundError(e)) {
+        await refreshList();
+        error = 'That prompt layer no longer exists. The stack was refreshed.';
+      } else {
+        error = e instanceof Error ? e.message : 'Failed to load layer detail';
+      }
       expandedLayerId = null;
     } finally {
       detailLoading = false;
@@ -914,7 +964,7 @@
     </div>
   {:else}
     <!-- ─── Constitution Builder ─── -->
-    <div class="card-garden overflow-hidden">
+    <div id="constitution-builder" class="card-garden overflow-hidden">
       <button
         onclick={() => showConstitutionSection = !showConstitutionSection}
         class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-bark-100 transition-colors"
@@ -1047,7 +1097,7 @@
     </div>
 
     <!-- ─── North Star ─── -->
-    <div class="card-garden overflow-hidden">
+    <div id="north-star-editor" class="card-garden overflow-hidden">
       <button
         onclick={() => showNorthStarSection = !showNorthStarSection}
         class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-bark-100 transition-colors"
@@ -1204,7 +1254,7 @@
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-3">
           <h2 class="text-base font-serif font-semibold text-shadow-800">Composition Stack</h2>
-          <span class="text-sm text-shadow-600">Drag to reorder. Click to expand.</span>
+          <span class="text-sm text-shadow-600">Drag prompt layers to reorder. Constitution and North Star stay fixed.</span>
         </div>
         <button
           onclick={() => { showNewLayerForm = !showNewLayerForm; if (!showNewLayerForm) resetNewLayerForm(); }}
@@ -1290,7 +1340,40 @@
 
       <div class="space-y-1">
         {#each stackEntries as entry}
-          {#if entry.kind === 'marker'}
+          {#if entry.kind === 'fixed'}
+            {@const fixed = entry.fixed}
+            <div class="card-garden overflow-hidden border-bark-300 bg-bark-50">
+              <div class="px-3 py-3 flex items-start gap-3">
+                <div class="flex items-center justify-center w-8 h-8 shrink-0 rounded-lg bg-bark-200 text-shadow-700">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                </div>
+                <div class="min-w-0 flex-1 space-y-1">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-bark-400 text-white">
+                      {fixed.label}
+                    </span>
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-200 text-shadow-700">
+                      Fixed Position
+                    </span>
+                    <span class="text-sm text-shadow-600">{fixed.status}</span>
+                    <span class="ml-auto text-sm font-mono text-shadow-600 shrink-0">
+                      {formatTokenCount(fixed.tokenCount)}t
+                    </span>
+                  </div>
+                  <p class="text-sm text-shadow-700">{fixed.description}</p>
+                  <pre class="text-xs font-mono text-shadow-700 whitespace-pre-wrap bg-white/70 p-2 rounded border border-bark-200 max-h-28 overflow-y-auto leading-relaxed">{fixed.preview}</pre>
+                </div>
+                <button
+                  onclick={() => scrollToSection(fixed.sectionId)}
+                  class="shrink-0 px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 text-sm hover:bg-bark-100 transition-colors"
+                >
+                  Open Editor
+                </button>
+              </div>
+            </div>
+          {:else if entry.kind === 'marker'}
             <!-- Runtime Marker -->
             <div class="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-dashed border-bark-400 bg-bark-100">
               <svg class="w-4 h-4 text-shadow-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

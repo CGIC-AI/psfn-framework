@@ -32,7 +32,8 @@ interface AdminRequestRoutingDependencies {
   checkAuth: (req: IncomingMessage, res: ServerResponse) => boolean;
   tryServeStaticAsset: (path: string, res: ServerResponse) => boolean;
   isGardenUiEnabled: () => boolean;
-  serveGardenAsset: (path: string, res: ServerResponse) => void;
+  serveGardenBuildAsset: (path: string, res: ServerResponse) => void;
+  serveGardenPage: (path: string, res: ServerResponse) => void;
   route: (
     method: string,
     path: string,
@@ -66,6 +67,11 @@ function isGardenClientRoute(method: string | undefined, requestPath: string): b
   return GARDEN_CLIENT_ROUTES.has(normalizedPath);
 }
 
+function isGardenBuildAssetPath(method: string | undefined, requestPath: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  return requestPath === '/_app' || requestPath.startsWith('/_app/');
+}
+
 export function handleAdminRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -95,9 +101,18 @@ export function handleAdminRequest(
     return;
   }
 
+  if (isGardenBuildAssetPath(req.method, requestPath)) {
+    if (deps.isGardenUiEnabled()) {
+      deps.serveGardenBuildAsset(requestPath, res);
+    } else {
+      deps.sendNotFound(requestPath, res);
+    }
+    return;
+  }
+
   if (isGardenClientRoute(req.method, requestPath)) {
     if (deps.isGardenUiEnabled()) {
-      deps.serveGardenAsset(requestPath, res);
+      deps.serveGardenPage(requestPath, res);
     } else {
       deps.sendNotFound(requestPath, res);
     }

@@ -20,7 +20,8 @@ describe('handleAdminRequest', () => {
   it('serves the Garden SPA for canonical root-served client routes', () => {
     const req = makeRequest('GET', '/memory');
     const res = makeResponse();
-    const serveGardenAsset = vi.fn();
+    const serveGardenPage = vi.fn();
+    const serveGardenBuildAsset = vi.fn();
     const route = vi.fn(() => false);
     const sendNotFound = vi.fn();
 
@@ -28,53 +29,84 @@ describe('handleAdminRequest', () => {
       checkAuth: vi.fn(() => true),
       tryServeStaticAsset: vi.fn(() => false),
       isGardenUiEnabled: vi.fn(() => true),
-      serveGardenAsset,
+      serveGardenBuildAsset,
+      serveGardenPage,
       route,
       sendNotFound,
       onRequestError: vi.fn(),
     });
 
     expect(route).toHaveBeenCalledWith('GET', '/memory', req, res);
-    expect(serveGardenAsset).toHaveBeenCalledWith('/memory', res);
+    expect(serveGardenPage).toHaveBeenCalledWith('/memory', res);
+    expect(serveGardenBuildAsset).not.toHaveBeenCalled();
     expect(sendNotFound).not.toHaveBeenCalled();
   });
 
   it('serves the Garden SPA shell at root instead of redirecting', () => {
     const req = makeRequest('GET', '/');
     const res = makeResponse();
-    const serveGardenAsset = vi.fn();
+    const serveGardenPage = vi.fn();
+    const serveGardenBuildAsset = vi.fn();
 
     handleAdminRequest(req, res, {
       checkAuth: vi.fn(() => true),
       tryServeStaticAsset: vi.fn(() => false),
       isGardenUiEnabled: vi.fn(() => true),
-      serveGardenAsset,
+      serveGardenBuildAsset,
+      serveGardenPage,
       route: vi.fn(() => false),
       sendNotFound: vi.fn(),
       onRequestError: vi.fn(),
     });
 
-    expect(serveGardenAsset).toHaveBeenCalledWith('/', res);
+    expect(serveGardenPage).toHaveBeenCalledWith('/', res);
+    expect(serveGardenBuildAsset).not.toHaveBeenCalled();
+  });
+
+  it('serves built Garden asset files outside the SPA fallback allowlist', () => {
+    const req = makeRequest('GET', '/_app/immutable/entry/start.hash.js');
+    const res = makeResponse();
+    const serveGardenPage = vi.fn();
+    const serveGardenBuildAsset = vi.fn();
+    const sendNotFound = vi.fn();
+
+    handleAdminRequest(req, res, {
+      checkAuth: vi.fn(() => true),
+      tryServeStaticAsset: vi.fn(() => false),
+      isGardenUiEnabled: vi.fn(() => true),
+      serveGardenBuildAsset,
+      serveGardenPage,
+      route: vi.fn(() => false),
+      sendNotFound,
+      onRequestError: vi.fn(),
+    });
+
+    expect(serveGardenBuildAsset).toHaveBeenCalledWith('/_app/immutable/entry/start.hash.js', res);
+    expect(serveGardenPage).not.toHaveBeenCalled();
+    expect(sendNotFound).not.toHaveBeenCalled();
   });
 
   it('keeps non-canonical paths out of the Garden SPA fallback', () => {
     for (const path of ['/api/admin/missing', '/health', '/missing', '/missing/memory']) {
       const req = makeRequest('GET', path);
       const res = makeResponse();
-      const serveGardenAsset = vi.fn();
+      const serveGardenPage = vi.fn();
+      const serveGardenBuildAsset = vi.fn();
       const sendNotFound = vi.fn();
 
       handleAdminRequest(req, res, {
         checkAuth: vi.fn(() => true),
         tryServeStaticAsset: vi.fn(() => false),
         isGardenUiEnabled: vi.fn(() => true),
-        serveGardenAsset,
+        serveGardenBuildAsset,
+        serveGardenPage,
         route: vi.fn(() => false),
         sendNotFound,
         onRequestError: vi.fn(),
       });
 
-      expect(serveGardenAsset).not.toHaveBeenCalled();
+      expect(serveGardenPage).not.toHaveBeenCalled();
+      expect(serveGardenBuildAsset).not.toHaveBeenCalled();
       expect(sendNotFound).toHaveBeenCalledWith(path, res);
     }
   });

@@ -99,7 +99,19 @@ export class AdminServerTransport {
     return true;
   }
 
-  serveGardenAsset(path: string, res: ServerResponse): void {
+  serveGardenPage(path: string, res: ServerResponse): void {
+    this.serveGardenPath(path, res, { spaFallback: true });
+  }
+
+  serveGardenBuildAsset(path: string, res: ServerResponse): void {
+    this.serveGardenPath(path, res, { spaFallback: false });
+  }
+
+  private serveGardenPath(
+    path: string,
+    res: ServerResponse,
+    options: { spaFallback: boolean },
+  ): void {
     if (!this.gardenBuildDir) {
       sendText(res, 404, `Not found: ${path}`);
       return;
@@ -132,6 +144,11 @@ export class AdminServerTransport {
         res.end(content);
       })
       .catch((fileErr) => {
+        if (!options.spaFallback) {
+          sendText(res, 404, `Not found: ${path}`);
+          return;
+        }
+
         // File not found — serve index.html as SPA fallback
         if ((fileErr as NodeJS.ErrnoException).code !== 'ENOENT') {
           this.log.debug('Garden asset read error', { path, error: String(fileErr) });

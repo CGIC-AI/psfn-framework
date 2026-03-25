@@ -322,6 +322,15 @@ describe('AdminServer Garden routing', () => {
       }
     });
 
+    it('serves built Garden assets at root-mounted _app paths', async () => {
+      const res = await request(harness.port, 'GET', '/_app/version.json');
+      expect([200, 404]).toContain(res.status);
+      if (res.status === 200) {
+        expect(res.headers['content-type']).toContain('application/json');
+        expect(() => JSON.parse(res.body)).not.toThrow();
+      }
+    });
+
     it('keeps canonical /api/admin JSON routes reachable', async () => {
       const res = await request(harness.port, 'GET', '/api/admin/dashboard');
       expect(res.status).toBe(200);

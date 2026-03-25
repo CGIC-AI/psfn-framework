@@ -136,6 +136,103 @@ describe('wireIntentionRuntime', () => {
     });
   });
 
+  it('includes recently resolved concerns in appraisal snapshots and suppresses near-duplicate recreation', () => {
+    const db = new Database(':memory:');
+    const target = new FakeTarget();
+    const runtime = wireIntentionRuntime(target, db);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+
+    const resolved = runtime.concernStore.create({
+      text: 'Clean up the profile synthesis reminder',
+      contactId: 'contact-a',
+      source: 'heartbeat',
+    });
+    runtime.concernStore.resolveConcern(resolved.id, {
+      outcome: 'Fixed during this session',
+      resolvedAt: new Date(Date.now() - (10 * 60 * 1000)).toISOString(),
+    });
+
+    const snapshots = hooks.getActiveConcerns({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+    });
+    expect(snapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: resolved.id,
+        title: 'Clean up the profile synthesis reminder',
+        status: 'resolved',
+        summary: 'Resolved recently: Fixed during this session',
+      }),
+    ]));
+
+    hooks.onIntentionConcernDecision({
+      decision: {
+        type: 'concern',
+        priority: 'medium',
+        reason: 'same issue recurred',
+        timing: 'soon',
+        concern: {
+          title: 'Clean up the profile synthesis reminder',
+          summary: 'same issue recurred',
+        },
+      },
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-suppress-1',
+    });
+
+    const concerns = runtime.concernStore.list({
+      contactId: 'contact-a',
+      includeResolved: true,
+      includeExpired: true,
+      limit: 10,
+    });
+    expect(concerns).toHaveLength(1);
+    expect(concerns[0]?.resolvedAt).toBeDefined();
+  });
+
+  it('allows concern recreation when the prior resolution is outside the suppression window', () => {
+    const db = new Database(':memory:');
+    const target = new FakeTarget();
+    const runtime = wireIntentionRuntime(target, db);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+
+    const resolved = runtime.concernStore.create({
+      text: 'Check back on the deployment cleanup',
+      contactId: 'contact-a',
+      source: 'heartbeat',
+    });
+    runtime.concernStore.resolveConcern(resolved.id, {
+      outcome: 'Handled long ago',
+      resolvedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    hooks.onIntentionConcernDecision({
+      decision: {
+        type: 'concern',
+        priority: 'medium',
+        reason: 'issue came back',
+        timing: 'soon',
+        concern: {
+          title: 'Check back on the deployment cleanup',
+          summary: 'issue came back',
+        },
+      },
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-allow-1',
+    });
+
+    const concerns = runtime.concernStore.list({
+      contactId: 'contact-a',
+      includeResolved: true,
+      includeExpired: true,
+      limit: 10,
+    });
+    expect(concerns).toHaveLength(2);
+    expect(concerns.some(concern => concern.source === 'appraisal' && !concern.resolvedAt)).toBe(true);
+  });
+
   it('fails closed when concern decision payload omits title and summary', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();

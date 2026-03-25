@@ -21,6 +21,8 @@ import {
   createResolveConcernTool,
 } from './tools.js';
 
+const RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT = 3;
+
 export interface IntentionRuntimeTarget {
   activeConcernProvider: ActiveConcernContextProvider | null;
   behavioralPatternProvider?: BehavioralPatternContextProvider | null;
@@ -111,6 +113,20 @@ function toActiveConcernSnapshot(concern: ReturnType<ActiveConcernStore['getActi
   };
 }
 
+function toRecentlyResolvedConcernSnapshot(
+  concern: ReturnType<ActiveConcernStore['listRecentlyResolvedConcerns']>[number],
+): ActiveConcernSnapshot {
+  return {
+    id: concern.id,
+    title: concern.text,
+    status: 'resolved',
+    priority: concern.priority,
+    ...(concern.resolutionOutcome
+      ? { summary: `Resolved recently: ${concern.resolutionOutcome}` }
+      : { summary: 'Resolved recently.' }),
+  };
+}
+
 function normalizeObservedAtIso(value: number | undefined): string | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -122,11 +138,17 @@ export function createIntentionAppraisalHooks(
   concernStore: ActiveConcernStore,
 ): IntentionAppraisalHooks {
   return {
-    getActiveConcerns: ({ canonicalContactKey }) => (
-      concernStore
+    getActiveConcerns: ({ canonicalContactKey }) => {
+      const activeConcerns = concernStore
         .getActiveConcerns(canonicalContactKey)
-        .map(concern => toActiveConcernSnapshot(concern))
-    ),
+        .map(concern => toActiveConcernSnapshot(concern));
+      const recentlyResolved = concernStore
+        .listRecentlyResolvedConcerns(canonicalContactKey, {
+          limit: RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT,
+        })
+        .map(concern => toRecentlyResolvedConcernSnapshot(concern));
+      return [...activeConcerns, ...recentlyResolved];
+    },
     onIntentionConcernDecision: ({
       decision,
       canonicalContactKey,
@@ -138,6 +160,13 @@ export function createIntentionAppraisalHooks(
       const expiresAt = normalizeFutureIsoTimestamp(
         decision.concern?.dueAt ?? decision.dueAt,
       );
+      const recentMatch = concernStore.findRecentlyResolvedSimilarConcern({
+        text,
+        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+      });
+      if (recentMatch) {
+        return;
+      }
       concernStore.create({
         text,
         priority: decision.concern?.priority ?? decision.priority,

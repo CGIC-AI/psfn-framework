@@ -61,6 +61,7 @@ import {
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
+import { resolveConfiguredLiteLLMBaseUrl } from './config/providers-config.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import type { SubstrateConfig } from './types.js';
 import type { EditableSettings } from './settings.js';
@@ -118,6 +119,11 @@ function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagn
     log.warn('Migrated legacy model settings from settings.json to models.json');
   } else if (diagnostics.modelsLegacyDriftDetected) {
     log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+  }
+  if (diagnostics.providersMigratedFromLegacyConfig) {
+    log.warn('Migrated legacy provider endpoints into providers.json');
+  } else if (diagnostics.providersLegacyDriftDetected) {
+    log.warn('Detected provider endpoint drift between legacy config and providers.json; providers.json is authoritative');
   }
 
   if (diagnostics.maintenanceIntervalMigration.state === 'migrated') {
@@ -580,7 +586,7 @@ async function main(): Promise<void> {
     : undefined;
   const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(process.env, codebaseRoot);
   const discoveryLaneConfig = resolveDiscoveryLaneConfig({
-    litellmBaseUrl: process.env.LITELLM_BASE_URL,
+    litellmBaseUrl: resolveConfiguredLiteLLMBaseUrl(config) ?? undefined,
     openRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
   if (fullCodebaseReadRoot) {

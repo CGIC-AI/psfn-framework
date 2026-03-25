@@ -13,6 +13,11 @@ import {
   saveModelsConfig,
 } from './models-config.js';
 import {
+  PROVIDERS_FILE_NAME,
+  loadProvidersConfig,
+  saveProvidersConfig,
+} from './providers-config.js';
+import {
   SCHEDULER_FILE_NAME,
   loadSchedulerConfig,
   saveSchedulerConfig,
@@ -287,5 +292,38 @@ describe('subsystem config round-trip', () => {
     expect(saveCapabilityTierConfig(dataDir, expected)).toEqual(expected);
     expect(readJsonFile(join(dataDir, CAPABILITY_TIER_FILE_NAME))).toEqual(expected);
     expect(loadCapabilityTierConfig(dataDir)).toEqual(expected);
+  });
+
+  it('round-trips providers.json without drift', () => {
+    const dataDir = makeDataDir('psfn-providers-config-');
+    const expected = {
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'litellm',
+          type: 'litellm_proxy',
+          enabled: true,
+          label: 'LiteLLM Proxy',
+          apiBaseUrl: 'http://127.0.0.1:4000/v1',
+          apiKeyEnv: 'LITELLM_API_KEY',
+        },
+        {
+          id: 'openrouter',
+          type: 'openrouter',
+          enabled: true,
+          label: 'OpenRouter',
+          apiBaseUrl: 'https://openrouter.ai/api/v1',
+          modelsApiUrl: 'https://openrouter.ai/api/v1/models',
+          apiKeyEnv: 'OPENROUTER_API_KEY',
+        },
+      ],
+    };
+
+    const saved = saveProvidersConfig(dataDir, expected);
+    expect(saved.registry).toEqual(expected);
+    expect(saved.litellmBaseUrl).toBe('http://127.0.0.1:4000/v1');
+    expect(saved.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
+    expect(readJsonFile(join(dataDir, PROVIDERS_FILE_NAME))).toEqual(expected);
+    expect(loadProvidersConfig(dataDir).registry).toEqual(expected);
   });
 });

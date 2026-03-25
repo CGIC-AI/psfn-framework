@@ -419,6 +419,34 @@ export interface ModelRegistryBudgetPolicy {
   currency?: 'USD';
 }
 
+export const CANONICAL_PROVIDER_TYPES = [
+  'litellm_proxy',
+  'openrouter',
+  'openai',
+  'anthropic',
+  'google',
+  'mistral',
+  'generic_openai',
+] as const;
+
+export type CanonicalProviderType = typeof CANONICAL_PROVIDER_TYPES[number];
+
+export interface ProviderRegistryEntry {
+  id: string;
+  type: CanonicalProviderType;
+  enabled: boolean;
+  label?: string;
+  apiBaseUrl?: string;
+  modelsApiUrl?: string;
+  apiKeyEnv?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CanonicalProviderRegistry {
+  schemaVersion: 1;
+  providers: ProviderRegistryEntry[];
+}
+
 export interface ModelRegistryEntry {
   id: string;
   rank: number;
@@ -587,6 +615,10 @@ export interface SubstrateConfig {
   modelCatalog?: Record<string, ModelCatalogEntry>;
   modelRoleAssignments?: ModelRoleAssignments;
   modelRegistry?: CanonicalModelRegistry;
+  providerRegistry?: CanonicalProviderRegistry;
+  litellmBaseUrl?: string;
+  litellmApiKeyEnv?: string;
+  openRouterApiBaseUrl?: string;
   responseStyleOverrides?: ResponseStyleOverrides;
   runtimeHooks?: RuntimeConfigHooks;
   promotedExtendedTools?: string[];

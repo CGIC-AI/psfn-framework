@@ -361,6 +361,36 @@ describe('LLMClient completion model hints', () => {
 
     expect(mocks.completeSimple).not.toHaveBeenCalled();
   });
+
+  it('uses provider-configured LiteLLM routing when runtime options do not override it', async () => {
+    process.env.CUSTOM_LITELLM_KEY = 'provider-key';
+    const client = new LLMClient(makeConfig({
+      litellmBaseUrl: 'http://provider-config.test/v1',
+      litellmApiKeyEnv: 'CUSTOM_LITELLM_KEY',
+    }));
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'provider-config response' }],
+      model: 'z-ai/glm-5',
+      usage: { input: 12, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'chat',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { baseUrl: string };
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
+    expect(model.baseUrl).toBe('http://provider-config.test/v1');
+    expect(requestOptions.apiKey).toBe('provider-key');
+    delete process.env.CUSTOM_LITELLM_KEY;
+  });
 });
 
 describe('LLMClient model knob plumbing', () => {

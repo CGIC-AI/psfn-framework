@@ -35,6 +35,10 @@ import {
   ModelBudgetExceededError,
   normalizeModelIdForProvider,
 } from '../llm/model-budget.js';
+import {
+  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMBaseUrl,
+} from '../config/providers-config.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -68,7 +72,7 @@ export function createSubstrateStreamFn(
   config: SubstrateConfig,
   runtimeOptions: SubstrateStreamRuntimeOptions = {},
 ): StreamFn {
-  const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
+  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   const budgetController = new ModelBudgetController(config);
   const fallbackRunner = new FallbackRunner();
 
@@ -195,7 +199,12 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     params.litellmBaseUrl,
     candidate,
   );
-  const requestOptions = buildStreamRequestOptions(candidate, params.options, apiKey);
+  const requestOptions = buildStreamRequestOptions(
+    candidate,
+    params.options,
+    apiKey,
+    params.litellmBaseUrl,
+  );
   const retryConfig = llmRetryConfig(params.config);
   const maxRetries = Number.isFinite(retryConfig.maxRetries)
     ? Math.max(0, Math.floor(retryConfig.maxRetries!))
@@ -361,6 +370,7 @@ function buildStreamRequestOptions(
   candidate: RoutingCandidate,
   options: Record<string, unknown> | undefined,
   apiKey: string | undefined,
+  litellmBaseUrl: string | null,
 ): Record<string, unknown> {
   const requestOptions: Record<string, unknown> = {
     ...(options ?? {}),
@@ -381,7 +391,7 @@ function buildStreamRequestOptions(
     requestOptions.reasoning = reasoning;
   }
 
-  if (supportsFullKnobPassthrough(candidate, process.env.LITELLM_BASE_URL ?? null)) {
+  if (supportsFullKnobPassthrough(candidate, litellmBaseUrl)) {
     if (candidate.topP !== undefined && requestOptions.topP === undefined) {
       requestOptions.topP = candidate.topP;
     }
@@ -431,7 +441,7 @@ function getModelAndKey(
         candidate.maxTokens,
         candidate.contextWindow,
       ),
-      apiKey: process.env.LITELLM_API_KEY ?? undefined,
+      apiKey: process.env[resolveConfiguredLiteLLMApiKeyEnv(config)] ?? undefined,
     };
   }
 
@@ -439,7 +449,7 @@ function getModelAndKey(
   if (!model) {
     throw new Error(
       `Unknown model "${candidate.model}" for provider "${candidate.provider}". ` +
-      'Set LITELLM_BASE_URL or update the canonical model config in models.json.',
+      'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
     );
   }
   return {
@@ -638,14 +648,14 @@ function resolveModelProvider(model: Model<any>): string | undefined {
 /**
  * Resolve a pi-ai Model object from SubstrateConfig for a given purpose.
  *
- * Uses LiteLLM proxy if LITELLM_BASE_URL is set, otherwise falls back
+ * Uses LiteLLM proxy if providers.json or env config resolves one, otherwise falls back
  * to pi-ai's built-in model registry via resolveRegisteredModel().
  */
 export function resolveModel(
   config: SubstrateConfig,
   purpose: ModelPurpose = 'chat',
 ): Model<any> {
-  const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
+  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   const selection = resolveModelSelection(config, purpose);
 
   if (litellmBaseUrl) {
@@ -660,7 +670,7 @@ export function resolveModel(
   if (!model) {
     throw new Error(
       `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
-      'Set LITELLM_BASE_URL or update the canonical model config in models.json.',
+      'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
     );
   }
   return ensurePurposeInputCapabilities(model, purpose);

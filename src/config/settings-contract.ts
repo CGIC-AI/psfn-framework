@@ -7,6 +7,7 @@ import {
 import { BACKUP_FILE_NAME } from './backup-config.js';
 import { CAPABILITY_TIER_FILE_NAME } from './capability-tier-config.js';
 import { MODELS_FILE_NAME } from './models-config.js';
+import { PROVIDERS_FILE_NAME } from './providers-config.js';
 import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
 import { SKILLS_FILE_NAME } from './skills-config.js';
 import { TRUST_POLICY_FILE_NAME } from './trust-policy-config.js';
@@ -25,6 +26,7 @@ export const SESSION_RESTART_BEHAVIOR_VALUES = [
 export type SettingsSubsystemId =
   | 'runtime'
   | 'models'
+  | 'providers'
   | 'scheduler'
   | 'capabilities'
   | 'skills'
@@ -73,6 +75,11 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
     id: 'models',
     ownerFile: MODELS_FILE_NAME,
     mode: 'structured',
+  },
+  providers: {
+    id: 'providers',
+    ownerFile: PROVIDERS_FILE_NAME,
+    mode: 'raw_only',
   },
   scheduler: {
     id: 'scheduler',

@@ -35,6 +35,10 @@ import { AdminServer } from './channels/admin/server.js';
 import { createLocalAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
+import {
+  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMBaseUrl,
+} from './config/providers-config.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
 import { registerScheduledBackupTask } from './backup/service.js';
 import {
@@ -181,6 +185,11 @@ function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagn
     log.warn('Migrated legacy model settings from settings.json to models.json');
   } else if (diagnostics.modelsLegacyDriftDetected) {
     log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
+  }
+  if (diagnostics.providersMigratedFromLegacyConfig) {
+    log.warn('Migrated legacy provider endpoints into providers.json');
+  } else if (diagnostics.providersLegacyDriftDetected) {
+    log.warn('Detected provider endpoint drift between legacy config and providers.json; providers.json is authoritative');
   }
 
   if (diagnostics.maintenanceIntervalMigration.state === 'migrated') {
@@ -1181,9 +1190,9 @@ export class SubstrateRuntime implements Lifecycle {
     }
 
     // Model discovery (if LiteLLM is configured)
-    const litellmBaseUrl = process.env.LITELLM_BASE_URL;
+    const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(this.config);
     const modelDiscovery = litellmBaseUrl
-      ? new ModelDiscovery(litellmBaseUrl, process.env.LITELLM_API_KEY, {
+      ? new ModelDiscovery(litellmBaseUrl, process.env[resolveConfiguredLiteLLMApiKeyEnv(this.config)] ?? undefined, {
         openRouterModelsApiUrl: this.config.openRouterModelsApiUrl ?? '',
       })
       : null;

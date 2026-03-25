@@ -11,6 +11,7 @@ import {
 import { loadSettings, saveSettings } from '../settings.js';
 import { saveModelsConfig } from '../config/models-config.js';
 import { loadCapabilityTierConfig } from '../config/capability-tier-config.js';
+import { loadProvidersConfig } from '../config/providers-config.js';
 import { loadSchedulerConfig, saveSchedulerConfig } from '../config/scheduler-config.js';
 import {
   createRuntimeVoiceSttConnector,
@@ -963,16 +964,21 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(result.systemDataDir).toBe(systemDataDir);
     expect(result.companionDataDir).toBe(companionDataDir);
     expect(result.runtimePathLayout.systemDataDir).toBe(systemDataDir);
-    expect(config.sessionMessageLimit).toBe(44);
-    expect(config.memoryRetrievalLimit).toBe(11);
+    expect(config.sessionMessageLimit).toBe(30);
+    expect(config.memoryRetrievalLimit).toBe(15);
     expect(config.extractionThresholdPct).toBe(34);
     expect(config.compactionThresholdPct).toBe(76);
     expect(config.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(config.modelRoster.chat?.contextWindow).toBe(65_536);
     expect(result.schedulerConfig.salienceDecayIntervalMs).toBe(123_000);
     expect(config.maintenanceIntervalMs).toBe(123_000);
+    expect(config.providerRegistry?.providers.length).toBeGreaterThan(0);
+    expect(config.litellmBaseUrl).toBeUndefined();
+    expect(config.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
     expect(result.trustPolicyConfig.channelClassification.defaultVisibility).toBeTruthy();
     expect(result.diagnostics.modelsMigratedFromLegacySettings).toBe(false);
+    expect(result.diagnostics.providersMigratedFromLegacyConfig).toBe(false);
+    expect(result.diagnostics.providersLegacyDriftDetected).toBe(false);
     expect(result.diagnostics.modelsLegacyDriftDetected).toBe(false);
     expect(result.diagnostics.removedLegacyKeys).toEqual([]);
   });
@@ -1030,10 +1036,10 @@ describe('hydrateCanonicalStartupConfig', () => {
       expect(snapshot.schedulerConfig).toEqual(runtimeSnapshot.schedulerConfig);
     }
 
-    expect(runtimeConfig.sessionMessageLimit).toBe(41);
-    expect(agentConfig.sessionMessageLimit).toBe(41);
-    expect(gatewayConfig.sessionMessageLimit).toBe(41);
-    expect(chatCliConfig.sessionMessageLimit).toBe(41);
+    expect(runtimeConfig.sessionMessageLimit).toBe(30);
+    expect(agentConfig.sessionMessageLimit).toBe(30);
+    expect(gatewayConfig.sessionMessageLimit).toBe(30);
+    expect(chatCliConfig.sessionMessageLimit).toBe(30);
     expect(runtimeConfig.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(agentConfig.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(gatewayConfig.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
@@ -1081,5 +1087,41 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(rewrittenSettings.maintenanceIntervalMs).toBeUndefined();
     expect(rewrittenSettings.capabilityTier).toBeUndefined();
     expect(config.maintenanceIntervalMs).toBe(222_000);
+  });
+
+  it('migrates legacy provider endpoints into providers.json on first canonical hydration', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-providers-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    writeFileSync(
+      join(systemDataDir, 'settings.json'),
+      `${JSON.stringify({
+        openRouterModelsApiUrl: 'https://legacy.example.test/openrouter-models',
+      }, null, 2)}\n`,
+      'utf-8',
+    );
+
+    const result = hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+        LITELLM_BASE_URL: 'http://127.0.0.1:4999/v1',
+      },
+    });
+
+    expect(result.diagnostics.providersMigratedFromLegacyConfig).toBe(true);
+    expect(config.litellmBaseUrl).toBe('http://127.0.0.1:4999/v1');
+    expect(config.openRouterModelsApiUrl).toBe('https://legacy.example.test/openrouter-models');
+    expect(loadProvidersConfig(systemDataDir).litellmBaseUrl).toBe('http://127.0.0.1:4999/v1');
+    expect(loadProvidersConfig(systemDataDir).openRouterModelsApiUrl).toBe('https://legacy.example.test/openrouter-models');
   });
 });

@@ -7,6 +7,10 @@ import {
   type SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
 import { resolveModel } from '../agent/stream-adapter.js';
+import {
+  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMBaseUrl,
+} from '../config/providers-config.js';
 import { createComponentLogger } from '../logger.js';
 import type { SubstrateConfig } from '../types.js';
 import { extractTextContent } from '../llm/conversion.js';
@@ -63,9 +67,9 @@ function normalizeQuestion(input: ImageVisionReviewRequest): string {
 }
 
 function resolveApiKey(model: Model<any>, config: SubstrateConfig): string | undefined {
-  const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
+  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   if (litellmBaseUrl) {
-    return process.env.LITELLM_API_KEY ?? undefined;
+    return process.env[resolveConfiguredLiteLLMApiKeyEnv(config)] ?? undefined;
   }
 
   const modelProvider = (model as { provider?: unknown }).provider;

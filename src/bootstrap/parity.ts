@@ -1263,9 +1263,15 @@ export function wireHeartbeatRuntime(
           }
         }
 
-        const candidates = decisionsToPostTurnActionCandidates(decisions, {
-          message: context.message,
-        });
+        const candidates = decisionsToPostTurnActionCandidates(
+          decisions,
+          {
+            message: context.message,
+          },
+          motivationAssessment?.shouldTriggerAppraisal
+            ? { surfacePendingFollowUpsImmediately: true }
+            : {},
+        );
         if (candidates.length === 0) {
           return;
         }

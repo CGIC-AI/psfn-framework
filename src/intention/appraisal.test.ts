@@ -443,6 +443,66 @@ describe('intention appraisal action mapping', () => {
     }
   });
 
+  it('delays soon follow-ups without explicit dueAt before surfacing them', () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_500_000);
+
+      const candidates = decisionsToPostTurnActionCandidates([{
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Needs a check-in but not right this second.',
+        timing: 'soon',
+        followUp: {
+          content: 'Checking in a little later.',
+        },
+      }], {
+        message: {
+          id: 'msg-intention-3',
+          channelId: 'api:test',
+          channelType: 'api',
+        },
+      });
+
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]?.kind).toBe(INTENTION_FOLLOW_UP_ACTION_KIND);
+      expect(candidates[0]?.runAt).toBe(1_700_000_800_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('surfaces pending follow-ups immediately during explicit proactive rechecks', () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_500_000);
+
+      const candidates = decisionsToPostTurnActionCandidates([{
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Needs an explicit recheck.',
+        timing: 'soon',
+        followUp: {
+          content: 'Checking in now because I rechecked the situation.',
+        },
+      }], {
+        message: {
+          id: 'msg-intention-4',
+          channelId: 'api:test',
+          channelType: 'api',
+        },
+      }, {
+        surfacePendingFollowUpsImmediately: true,
+      });
+
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]?.kind).toBe(INTENTION_FOLLOW_UP_ACTION_KIND);
+      expect(candidates[0]?.runAt).toBe(1_700_000_500_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('forces intention follow-ups to system attribution even if the model supplies user authors', () => {
     const candidates = decisionsToPostTurnActionCandidates([{
       type: 'followUp',

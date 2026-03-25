@@ -71,7 +71,9 @@ function makeResponse(internalState = makeInternalState()): AgentResponse {
 describe('intention appraisal runtime integration', () => {
   it('dispatches follow-up actions asynchronously through post-turn runtime', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-'));
+    const nowSpy = vi.spyOn(Date, 'now');
     try {
+      nowSpy.mockReturnValue(1_700_000_400_000);
       const eventBus = new EventBus();
       const scheduler = new Scheduler(eventBus, {
         tickIntervalMs: 50,
@@ -174,6 +176,12 @@ describe('intention appraisal runtime integration', () => {
       ) as { internalState?: unknown };
       expect(promptPayload.internalState).toBeDefined();
       expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
+
+      await scheduler.tick();
+      expect(agentLoop.followUp).not.toHaveBeenCalled();
+
+      nowSpy.mockReturnValue(1_700_000_700_001);
+      await scheduler.tick();
       expect(agentLoop.followUp).toHaveBeenCalledTimes(1);
       expect(agentLoop.followUp).toHaveBeenCalledWith(expect.objectContaining({
         channelId: 'api:test',
@@ -181,6 +189,7 @@ describe('intention appraisal runtime integration', () => {
         content: 'Quick follow-up: how are you doing today?',
       }));
     } finally {
+      nowSpy.mockRestore();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

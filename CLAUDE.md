@@ -10,15 +10,13 @@ PSFN is a TypeScript runtime for long-lived AI companions.
 
 The codebase currently supports:
 
-- single-process development runtime
+- direct single-process runtime entrypoints
 - split gateway/agent runtime with policy enforcement
 - persistent session and memory systems
 - trust-aware privacy and contact modeling
 - self-modification surfaces for prompts, code, modules, skills, values, and vault notes
 - voice, chat, admin, and protocol adapters across multiple channels
-- Phase V foundation work for plugin seams, schema-driven config ownership, compositional cognition, and deeper internal-state modeling
-
-Do not describe this branch as "pre-Phase-V" or "planning only". The branch already contains substantial landed Phase V implementation.
+- registry-driven adapters, schema-owned config, compositional cognition, and internal-state modeling
 
 ## Source Of Truth
 
@@ -37,8 +35,9 @@ When checking behavior, prefer this order:
    - `src/config/settings-contract.ts`
    - `src/config/runtime-config.ts`
    - `src/persistence/layout.ts`
-3. Branch execution ledger
-   - `PHASE_V.md`
+3. Product/runtime overview and deeper design docs
+   - `README.md`
+   - `docs/PSFN_SUBSTRATE_SPEC.md`
 4. Bootstrap template only
    - `.env.example`
 
@@ -47,25 +46,25 @@ When checking behavior, prefer this order:
 ## Runtime Entry Points
 
 ```bash
-npm run dev
-npm run gateway
-npm run agent
-npm run split
-npm run yolo
+npm run dev                 # split launcher (gateway + agent)
+npm run split               # same launcher, explicit name
+npm run gateway             # gateway only
+npm run agent               # agent only
+npm run yolo                # split launcher with broader fs.read policy
 npm run agent:docker
 npm run agent:docker:continuous
 ```
 
 Entry point roles:
 
-- `src/index.ts`: single-process runtime with dotenv
+- `src/index.ts`: direct single-process runtime entrypoint with dotenv
 - `src/gateway-main.ts`: host-side gateway holding secrets and external egress
 - `src/agent-main.ts`: isolated agent process, no dotenv import, gateway-backed providers
 - `src/runtime.ts`: single-process `SubstrateRuntime`
 
 ## Configuration And Persistence Model
 
-Phase V changed the configuration contract in important ways.
+Configuration uses strict owner-file contracts.
 
 ### Env scope
 
@@ -95,7 +94,7 @@ See `src/config/settings-contract.ts` for the owner map and schema metadata.
 
 ### Two-root persistence
 
-Phase V landed split persistence topology.
+PSFN uses split persistence topology.
 
 - `system-data`: system-owned config and operator/runtime state
 - `companion-data`: character, prompts, sessions, notes, memories, and related companion artifacts
@@ -136,126 +135,32 @@ src/
   voice/              connectors, transports, runtime, policies
 ```
 
-## Implemented Phase V Work
+## Architecture Highlights
 
-This section is about landed code, not future intent.
+### Registries and adapters
 
-### Plugin seams and fail-closed registries
+- channels, STT, and TTS resolve through registries/manifests with fail-closed activation and parity across runtime modes
+- key files: `src/runtime/channel-lifecycle.ts`, `src/runtime/bootstrap-helpers.ts`, `src/channels/config.ts`, `src/voice/connectors/stt/`, `src/voice/connectors/tts/`
 
-Implemented:
+### Config ownership and Garden exposure
 
-- channel adapter manifest loading
-- STT provider registry
-- TTS provider registry
-- eligibility-gated plugin activation
-- bootstrap parity across single-process and split runtime
+- mutable runtime settings are owned by canonical JSON files, guarded by owner-file validation, and exposed through Garden/admin APIs
+- key files: `src/config/settings-contract.ts`, `src/config/settings-contract-guard.ts`, `src/channels/admin/api-routes.ts`, `admin-ui/`
 
-Relevant files:
+### Persistence and layout
 
-- `src/runtime/channel-lifecycle.ts`
-- `src/runtime/bootstrap-helpers.ts`
-- `src/channels/config.ts`
-- `src/voice/connectors/stt/`
-- `src/voice/connectors/tts/`
+- system-owned state lives under `system-data`; companion artifacts live under `companion-data`; cutover helpers and path guards enforce the topology
+- key files: `src/persistence/layout.ts`, `src/migrate-persistence-layout.ts`, `src/config/runtime-config.ts`, `src/runtime/bootstrap-helpers.ts`
 
-### Settings governance
+### Cognition and context
 
-Implemented:
+- retrieval, extraction, appraisal, nested `sub_think`, context manifests, observation masking, and context feedback all feed runtime decision-making
+- key files: `src/compositional/policy.ts`, `src/memory/extraction/`, `src/memory/retrieval.ts`, `src/intention/`, `src/repl/`, `src/session/`, `src/context-feedback/`
 
-- backend settings schema metadata
-- owner-file contract enforcement
-- Garden settings schema exposure
-- contract tests and settings guard
+### Affect, self-model, and background work
 
-Relevant files:
-
-- `src/config/settings-contract.ts`
-- `src/config/settings-contract-guard.ts`
-- `src/channels/admin/api-routes.ts`
-- `admin-ui/` settings surfaces
-
-### Persistence/config topology
-
-Implemented:
-
-- split `system-data` and `companion-data`
-- env scope reduction for JSON-owned settings
-- persistence cutover tooling
-- seed-default hydration and migration warnings
-
-Relevant files:
-
-- `src/persistence/layout.ts`
-- `src/migrate-persistence-layout.ts`
-- `src/config/runtime-config.ts`
-- `src/runtime/bootstrap-helpers.ts`
-
-### Compositional cognition
-
-Implemented:
-
-- policy-gated compositional extraction
-- retrieval rerank and compose path
-- post-turn intention appraisal composition
-- nested `sub_think` with budget/depth controls
-- shard focused context packs
-- compositional telemetry and diagnostics
-
-Relevant files:
-
-- `src/compositional/policy.ts`
-- `src/memory/extraction/`
-- `src/memory/retrieval.ts`
-- `src/intention/`
-- `src/repl/`
-- `src/shards/`
-
-### Context composition improvements
-
-Implemented:
-
-- tool observation persistence
-- observation masking window
-- context manifests
-- stable-prefix optimization
-- context feedback scoring
-
-Relevant files:
-
-- `src/session/tool-observation.ts`
-- `src/session/context-manifest.ts`
-- `src/session/manager/context-builder.ts`
-- `src/context-feedback/`
-
-### Affect, intention, and self-model
-
-Implemented:
-
-- continuous emotion state and classifiers
-- persona adaptation
-- active concerns and motivation bridge
-- internal-state snapshots
-- metacognitive flags in runtime metadata
-
-Relevant files:
-
-- `src/emotion/`
-- `src/intention/`
-- `src/self-model/`
-
-### Early distributed-autonomy slices
-
-Implemented:
-
-- deferred background continuation handling
-- background completion delivery queue
-- shard lifecycle and readiness hardening
-
-Relevant files:
-
-- `src/agent/background-completion-delivery-queue.ts`
-- `src/agent/background-completion-policy.ts`
-- `src/shards/manager.ts`
+- emotion state, active concerns, self-model snapshots, metacognitive flags, background continuation, and shard lifecycle management are first-class runtime surfaces
+- key files: `src/emotion/`, `src/intention/`, `src/self-model/`, `src/agent/background-completion-delivery-queue.ts`, `src/agent/background-completion-policy.ts`, `src/shards/manager.ts`
 
 ## Channels And Interfaces
 
@@ -328,11 +233,9 @@ npm run e2e:voice
 
 For runtime parity and plugin wiring, targeted tests are often better than full-suite runs.
 
-## Current Branch Status
+## Current Development Posture
 
-The major Phase V foundation epics for plugin seams, settings governance, config/persistence topology, and compositional kernel are already landed on `phase-v`.
-
-What remains is not "build Phase V from scratch" but continued Stage 4 and later feature work on top of those foundations. Read `PHASE_V.md` before claiming anything about what is still open.
+Treat the repo as active implementation, not as a planning branch. Determine current work from `bd`, the entrypoints above, and the live code paths rather than roadmap language.
 
 ## Working Rules
 

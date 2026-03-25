@@ -75,33 +75,38 @@ cp .env.example .env
 
 The root `npm install` also provisions the Garden admin UI dependencies automatically.
 
-Edit `.env` with your credentials:
+Edit `.env` for secrets and bootstrap/process wiring:
 
 ```bash
-# Required
+# Required secrets
 OPENROUTER_API_KEY=sk-or-...
 DISCORD_TOKEN=...
 DISCORD_BOT_ID=...
+
+# Bootstrap paths
 CHARACTER_CARD_PATH=./data/character.json
 
-# Models (change to your preference)
-PRIMARY_MODEL=z-ai/glm-5
-PRIMARY_PROVIDER=openrouter
-EXTRACTION_MODEL=deepseek/deepseek-v3.2
-EXTRACTION_PROVIDER=openrouter
-
-# Embeddings (default: Ollama)
-# EMBEDDING_PROVIDER=ollama  # ollama|transformers|api
-EMBEDDING_MODEL=snowflake-arctic-embed2
-EMBEDDING_DIMS=1024
-OLLAMA_URL=http://localhost:11434
-
-# Data storage
+# Continuous/dev shared-root defaults
 DATA_DIR=./data
 DATABASE_PATH=./data/companion.db
+
+# Production split-root layout (set both or neither)
+# PSFN_RUNTIME_LAYOUT_MODE=production
+# SYSTEM_DATA_DIR=./runtime/production/system-data
+# COMPANION_DATA_DIR=./runtime/production/companion-data
 ```
 
-Runtime config (models, settings, scheduler, capabilities, channels) lives in canonical JSON files that seed on first run — not `.env`. See `.env.example` for full bootstrap options.
+Mutable runtime config is owned by canonical JSON files under the system-data config domain, not by `.env`:
+
+- `settings.json`
+- `models.json`
+- `scheduler.json`
+- `capability-tier.json`
+- `channels.json`
+- `skills.json`
+- `trust-policy.json`
+
+Most of those files seed from `config/*.seed.json` on first boot and can be edited through Garden or the admin API. In production, set both `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR`; startup rejects overlap or only-one-set configurations. See `.env.example` for the full bootstrap surface.
 
 ### Running
 
@@ -172,18 +177,12 @@ DISCORD_VOICE_ENABLED=true
 DISCORD_VOICE_GUILD_ID=...
 DISCORD_VOICE_USER_ID=...
 DEEPGRAM_API_KEY=...
-TTS_PROVIDER=elevenlabs                 # or: echo
 
-# ElevenLabs
+# Optional provider secrets
 ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=your-voice-id-here
-ELEVENLABS_MODEL_ID=eleven_turbo_v2_5
-
-# Echo (provider-pluggable streaming TTS)
-ECHO_TTS_URL=http://your-echo-host:8001
-ECHO_TTS_VOICE=11labs-Allison
-ECHO_TTS_PRESET=Independent-High-Speaker-CFG
 ```
+
+STT/TTS provider selection, voices, and runtime tuning live in `settings.json`. Keep `.env` for secrets and bootstrap wiring; use `.env.example` for the current voice-related env surface.
 
 **Wyoming (Home Assistant):**
 ```bash

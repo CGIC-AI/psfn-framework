@@ -40,23 +40,6 @@ Rules:
 - Link discovered follow-up work with `discovered-from:<parent-id>`.
 - Keep issue descriptions self-contained: summary, files, concrete steps, and an example when useful.
 
-## Current Phase V Reality
-
-This `phase-v` branch already contains major implemented Phase V work. Do not treat it like a pure planning branch.
-
-Implemented foundations on this branch include:
-
-- registry-driven plugin seams for channels, STT, and TTS
-- schema-owned settings and owner-file enforcement
-- two-root persistence topology (`system-data` and `companion-data`)
-- compositional extraction, retrieval, appraisal, nested think, shard context packs, and diagnostics
-- observation masking, context manifests, stable-prefix context optimization, and context feedback scoring
-- emotion state, active concerns, self-model snapshots, and metacognitive flags
-- background continuation slices and shard lifecycle hardening
-- Telegram, Wyoming, Garden, backup/restore verification, and beads gateway tools
-
-Use [PHASE_V.md](./PHASE_V.md) as the branch status ledger.
-
 ## Source Of Truth
 
 Prefer these files when checking behavior:
@@ -71,8 +54,9 @@ Prefer these files when checking behavior:
    - `src/settings.ts`
    - `src/config/settings-contract.ts`
    - `src/persistence/layout.ts`
-3. Phase-V status and sequencing
-   - `PHASE_V.md`
+3. Product/runtime overview and deeper design docs
+   - `README.md`
+   - `docs/PSFN_SUBSTRATE_SPEC.md`
 4. Bootstrap examples only
    - `.env.example`
 
@@ -80,7 +64,7 @@ Do not assume `.env.example` is the current authority for mutable settings.
 
 ## Configuration Rules
 
-Phase V enforces strict ownership.
+Configuration uses strict ownership.
 
 Use `.env` only for:
 
@@ -113,10 +97,10 @@ Guardrails:
 Use the right entrypoint for the task:
 
 ```bash
-npm run dev                 # single-process runtime
+npm run dev                 # split gateway + agent launcher
 npm run gateway             # host-side gateway
 npm run agent               # isolated agent entrypoint
-npm run split               # gateway + agent launcher
+npm run split               # same launcher as npm run dev
 npm run yolo                # split runtime with broader fs.read policy
 npm run agent:docker        # production containerized agent
 npm run agent:docker:continuous

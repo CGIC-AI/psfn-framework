@@ -626,6 +626,55 @@ describe('DiscordAdapter DM routing', () => {
     }));
   });
 
+  it('prefers canonical Discord attachment URLs over proxy URLs for image attachments', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-channel-attachments-prefer-cdn';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'image received',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-image-cdn-1',
+        content: '',
+        attachments: [
+          {
+            id: 'att-image-cdn-1',
+            name: 'photo.jpg',
+            url: 'https://cdn.discordapp.com/attachments/a/b/photo.jpg',
+            proxyURL: 'https://media.discordapp.net/attachments/a/b/photo.jpg?width=1410&height=1880',
+            contentType: 'image/jpeg',
+            size: 190_580,
+          },
+        ],
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      channelId,
+      content: '(image attachment)',
+      attachments: [
+        {
+          url: 'https://cdn.discordapp.com/attachments/a/b/photo.jpg',
+          contentType: 'image/jpeg',
+          name: 'photo.jpg',
+        },
+      ],
+    }));
+  });
+
   it('infers image attachment type from extension when contentType is missing', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

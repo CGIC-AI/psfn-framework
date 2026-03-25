@@ -596,8 +596,10 @@ export class DiscordAdapter implements ChannelAdapter {
         continue;
       }
 
+      // Prefer the canonical CDN URL over Discord's transient proxy URL.
+      // The proxy can 404 immediately after upload, which breaks vision fetches.
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- discord.js types claim non-null but mocks/edge cases disagree
-      const url = (raw.proxyURL ?? raw.url ?? '').trim();
+      const url = (raw.url ?? raw.proxyURL ?? '').trim();
       if (!url) continue;
 
       attachments.push({
@@ -650,7 +652,7 @@ export class DiscordAdapter implements ChannelAdapter {
       return normalizedContentType;
     }
 
-    const candidates = [raw.name, raw.proxyURL, raw.url];
+    const candidates = [raw.name, raw.url, raw.proxyURL];
     for (const candidate of candidates) {
       const inferred = inferImageMimeTypeFromCandidate(candidate);
       if (inferred) return inferred;

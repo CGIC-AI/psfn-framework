@@ -34,7 +34,11 @@ import {
   wrapUntrustedContext,
 } from '../manager-primitives.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
-import { entriesToMessages, getMergedContinuity } from './context-support.js';
+import {
+  countIntentionAppraisalArtifacts,
+  entriesToMessages,
+  getMergedContinuity,
+} from './context-support.js';
 import { runAutoCompaction } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
@@ -106,6 +110,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   );
   recent = focusCompaction.entries;
   const trimmedEntryCount = Math.max(0, sourceEntryCount - recent.length);
+  const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
   const masking = applyObservationMasking(
     recent,
     params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
@@ -254,6 +259,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       trimmedEntryCount,
       maskedEntryCount: masking.maskedCount,
       compactedEntryCount: compactionManifest.compactedEntryCount,
+      intentionAppraisalArtifactCount,
       finalEntryCount: recent.length,
       finalMessageCount: messages.length,
       compactionSummaryCount: compactionSummaryTexts.length,

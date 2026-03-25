@@ -55,6 +55,12 @@ describe('context leak audit (assembled context)', () => {
     const channelId = 'dm:leak-audit';
 
     manager.recordUserMessage(channelId, 'Run diagnostics for the account.', 'u1', 'PrimaryUser');
+    manager.recordSystemMessage(
+      channelId,
+      '[Intention Appraisal] Re-evaluate whether we still need to check this.',
+      'system:intention',
+      'Intention Appraisal',
+    );
     manager.recordToolObservation(channelId, {
       toolName: 'diagnostic_dump',
       toolCallId: 'diag-1',
@@ -77,6 +83,7 @@ describe('context leak audit (assembled context)', () => {
         '[Tool result: diagnostic_dump] Captured 1 line of text output with credential-like values omitted.',
       );
       expect(context.manifest?.session.maskedEntryCount).toBeGreaterThan(0);
+      expect(context.manifest?.session.intentionAppraisalArtifactCount).toBe(1);
 
       manager.recordAssistantMessage(channelId, `audit pass ${pass} complete`);
     }

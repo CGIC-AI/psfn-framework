@@ -96,6 +96,7 @@ export interface ContextManifestSessionSummary {
   trimmedEntryCount: number;
   maskedEntryCount: number;
   compactedEntryCount: number;
+  intentionAppraisalArtifactCount?: number;
   finalEntryCount: number;
   finalMessageCount: number;
   compactionSummaryCount: number;

@@ -68,7 +68,10 @@ import {
   buildSnapshotVersionPointer,
   cloneSessionEntry,
 } from '../turns/snapshot.js';
-import { getMergedContinuity } from './manager/context-support.js';
+import {
+  countIntentionAppraisalArtifacts,
+  getMergedContinuity,
+} from './manager/context-support.js';
 import {
   buildToolObservationMetadata,
   normalizeToolObservation,
@@ -966,6 +969,7 @@ export class SessionManager {
       this.getFocusCompactionRanges(resolvedChannelId),
     );
     recent = focusCompaction.entries;
+    const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
     const focusKnowledgeTexts = this.getFocusKnowledgeTexts(resolvedChannelId);
 
     const continuityEntries = userId && this.continuityStore
@@ -991,6 +995,7 @@ export class SessionManager {
       compactionSummaryTexts: [...compactionSummaryTexts],
       focusKnowledgeTexts: [...focusKnowledgeTexts],
       continuityEntries: continuityEntries.map(cloneSessionEntry),
+      intentionAppraisalArtifactCount,
       compactionPromptText,
       versionPointer: buildSnapshotVersionPointer([
         resolvedChannelId,

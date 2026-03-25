@@ -131,3 +131,13 @@ export function entriesToMessages(
 
   return messages.map(({ role, content }) => ({ role, content }));
 }
+
+export function countIntentionAppraisalArtifacts(entries: readonly SessionEntry[]): number {
+  let count = 0;
+  for (const entry of entries) {
+    if (isIntentionAppraisalArtifact(entry)) {
+      count += 1;
+    }
+  }
+  return count;
+}

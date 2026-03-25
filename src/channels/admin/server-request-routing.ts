@@ -31,6 +31,8 @@ function isGardenClientRoute(method: string | undefined, requestPath: string): b
     || requestPath.startsWith('/login/')
     || requestPath === '/static'
     || requestPath.startsWith('/static/')
+    || requestPath === '/legacy'
+    || requestPath.startsWith('/legacy/')
   ) {
     return false;
   }

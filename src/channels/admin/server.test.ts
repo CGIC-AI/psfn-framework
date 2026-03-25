@@ -306,12 +306,12 @@ describe('AdminServer legacy UI removal', () => {
       }
     });
 
-    it('serves SPA fallback for unknown client routes', async () => {
-      const legacyRoot = await request(harness.port, 'GET', '/legacy');
-      const legacyPage = await request(harness.port, 'GET', '/memory');
-      for (const res of [legacyRoot, legacyPage]) {
-        expect([200, 404]).toContain(res.status);
-      }
+    it('serves SPA fallback only for live client routes', async () => {
+      const removedLegacyRoot = await request(harness.port, 'GET', '/legacy');
+      const liveClientPage = await request(harness.port, 'GET', '/memory');
+
+      expect(removedLegacyRoot.status).toBe(404);
+      expect([200, 404]).toContain(liveClientPage.status);
     });
 
     it('falls back gracefully when build assets are unavailable', async () => {
@@ -558,9 +558,9 @@ describe('AdminServer legacy UI removal', () => {
       expect(cleared).toContain('Max-Age=0');
     });
 
-    it('serves SPA fallback for unknown routes when authenticated', async () => {
+    it('fails closed for removed legacy routes when authenticated', async () => {
       const res = await request(harness.port, 'GET', '/legacy', undefined, bearerHeaders);
-      expect([200, 404]).toContain(res.status);
+      expect(res.status).toBe(404);
     });
 
     it('preserves /api/admin/events websocket auth and event streaming', async () => {

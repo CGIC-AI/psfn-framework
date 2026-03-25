@@ -58,7 +58,7 @@ describe('handleAdminRequest', () => {
   });
 
   it('keeps canonical non-UI routes out of the Garden SPA fallback', () => {
-    for (const path of ['/api/admin/missing', '/health']) {
+    for (const path of ['/api/admin/missing', '/health', '/legacy', '/legacy/memory']) {
       const req = makeRequest('GET', path);
       const res = makeResponse();
       const serveGardenAsset = vi.fn();

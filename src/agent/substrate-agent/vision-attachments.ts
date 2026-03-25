@@ -26,9 +26,8 @@ interface VisionLogger {
 
 interface VisionAttachmentResolutionFailure {
   code:
-    | 'unsupported_channel'
+    | 'unsupported_protocol'
     | 'invalid_url'
-    | 'unsupported_host'
     | 'fetch_unavailable'
     | 'fetch_failed'
     | 'unsupported_mime'
@@ -48,14 +47,6 @@ interface ResolvedVisionAttachmentSet {
 
 const VISION_ATTACHMENT_MAX_COUNT = 4;
 const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
-const DISCORD_VISION_ATTACHMENT_HOSTS = new Set([
-  'cdn.discordapp.com',
-  'media.discordapp.net',
-]);
-const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
-  '.discordapp.com',
-  '.discordapp.net',
-];
 const LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION = [
   '[Runtime note]',
   'The current user turn includes live image attachment bytes below.',
@@ -227,16 +218,6 @@ async function resolveVisionAttachmentContent(input: {
   runtimeMode: RuntimeMode;
   logger: VisionLogger;
 }): Promise<VisionAttachmentResolutionResult> {
-  if (input.message.channelType !== 'discord') {
-    return {
-      failure: {
-        code: 'unsupported_channel',
-        url: input.attachment.url,
-        detail: `Channel type "${input.message.channelType}" does not support live attachment byte fetches.`,
-      },
-    };
-  }
-
   let attachmentUrl: URL;
   try {
     attachmentUrl = new URL(input.attachment.url);
@@ -249,15 +230,12 @@ async function resolveVisionAttachmentContent(input: {
       },
     };
   }
-  if (
-    attachmentUrl.protocol !== 'https:'
-    || !isAllowedDiscordVisionAttachmentHost(attachmentUrl.hostname)
-  ) {
+  if (attachmentUrl.protocol !== 'https:') {
     return {
       failure: {
-        code: 'unsupported_host',
+        code: 'unsupported_protocol',
         url: attachmentUrl.toString(),
-        detail: `Attachment host "${attachmentUrl.hostname}" is not allowed for live image fetches.`,
+        detail: `Attachment URL protocol "${attachmentUrl.protocol}" is not supported for live image fetches.`,
       },
     };
   }
@@ -300,8 +278,9 @@ async function resolveVisionAttachmentContent(input: {
       };
     } catch (error) {
       const errorMessage = toErrorMessage(error);
-      input.logger.warn('Gateway binary fetch for Discord image attachment failed', {
+      input.logger.warn('Gateway binary fetch for live image attachment failed', {
         channelId: input.message.channelId,
+        channelType: input.message.channelType,
         url: attachmentUrl.toString(),
         error: errorMessage,
       });
@@ -316,8 +295,9 @@ async function resolveVisionAttachmentContent(input: {
   }
 
   const capabilityUnavailableMessage = `Gateway binary fetch capability is unavailable in runtime mode "${input.runtimeMode}".`;
-  input.logger.warn('Skipping Discord image attachment because gateway binary fetch capability is unavailable', {
+  input.logger.warn('Skipping live image attachment because gateway binary fetch capability is unavailable', {
     channelId: input.message.channelId,
+    channelType: input.message.channelType,
     url: attachmentUrl.toString(),
     runtimeMode: input.runtimeMode,
   });
@@ -328,13 +308,6 @@ async function resolveVisionAttachmentContent(input: {
       detail: capabilityUnavailableMessage,
     },
   };
-}
-
-function isAllowedDiscordVisionAttachmentHost(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase();
-  if (!normalized) return false;
-  if (DISCORD_VISION_ATTACHMENT_HOSTS.has(normalized)) return true;
-  return DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
 }
 
 function extractSemanticVisionTurnText(

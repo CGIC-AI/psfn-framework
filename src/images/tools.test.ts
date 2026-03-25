@@ -107,7 +107,7 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('appearance is consistent');
   });
 
-  it('blocks stale Discord CDN urls when the current turn already has a live image attachment', async () => {
+  it('blocks mismatched image urls when the current turn already has a live image attachment', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Does this still look like me?',
@@ -122,12 +122,12 @@ describe('image tools', () => {
       {
         userMessageText: 'did you not see the image?',
         imageAttachmentUrls: [
-          'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+          'https://files.example.test/uploads/current-image.png?token=fresh',
         ],
       },
       async () => tool.execute('tool-call-3', {
         image_urls: [
-          'https://cdn.discordapp.com/attachments/9/8/expired-image.png?ex=stale',
+          'https://files.example.test/uploads/other-image.png?token=stale',
         ],
         question: 'Does this still look like me?',
       }) as Promise<AgentToolResult<ImageToolResultDetails>>,
@@ -136,10 +136,10 @@ describe('image tools', () => {
     expect(reviewer.analyze).not.toHaveBeenCalled();
     expect(result.details.visionReview).toBeUndefined();
     expect(result.details.visionReviewError).toContain('live image attachment bytes');
-    expect(resultText(result)).toContain('may be stale or expired');
+    expect(resultText(result)).toContain('may be stale or refer to a different image');
   });
 
-  it('allows a Discord CDN url that is explicitly present in the current user message', async () => {
+  it('allows an explicit current-message url even when the turn also has a live attachment', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'What is in this image?',
@@ -148,14 +148,14 @@ describe('image tools', () => {
         imageCount: 1,
       })),
     };
-    const explicitUrl = 'https://cdn.discordapp.com/attachments/4/5/explicit-image.png?ex=current';
+    const explicitUrl = 'https://images.example.test/review/explicit-image.png?token=current';
 
     const tool = createImageAnalyzeTool(reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: explicitUrl,
         imageAttachmentUrls: [
-          'https://cdn.discordapp.com/attachments/1/2/current-attachment.png?ex=fresh',
+          'https://files.example.test/uploads/current-attachment.png?token=fresh',
         ],
       },
       async () => tool.execute('tool-call-4', {

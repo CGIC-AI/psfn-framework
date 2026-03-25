@@ -22,14 +22,6 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Common values: 1:1 square, 3:4 portrait, 9:16 story, 4:3 landscape, 16:9 wide.',
   'Use only one of the supported presets.',
 ].join(' ');
-const DISCORD_VISION_ATTACHMENT_HOSTS = new Set([
-  'cdn.discordapp.com',
-  'media.discordapp.net',
-]);
-const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
-  '.discordapp.com',
-  '.discordapp.net',
-];
 
 function formatResult(result: ImageGenerationResult): string {
   return JSON.stringify(result, null, 2);
@@ -76,17 +68,6 @@ function aspectRatioSchema() {
   ));
 }
 
-function isDiscordAttachmentUrl(url: string): boolean {
-  try {
-    const hostname = new URL(url).hostname.trim().toLowerCase();
-    if (!hostname) return false;
-    if (DISCORD_VISION_ATTACHMENT_HOSTS.has(hostname)) return true;
-    return DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
-  } catch {
-    return false;
-  }
-}
-
 function normalizeUrlForTurnComparison(url: string): string | null {
   try {
     const parsed = new URL(url);
@@ -96,12 +77,17 @@ function normalizeUrlForTurnComparison(url: string): string | null {
   }
 }
 
-function resolveStaleDiscordTurnUrlNotice(imageUrls: readonly string[]): string | null {
+function resolveMismatchedCurrentTurnUrlNotice(imageUrls: readonly string[]): string | null {
   const requestContext = getVisionToolRequestContext();
   if (!requestContext || requestContext.imageAttachmentUrls.length === 0) {
     return null;
   }
 
+  const currentTurnRawAttachmentUrls = new Set(
+    requestContext.imageAttachmentUrls
+      .map((url) => url.trim())
+      .filter((url) => url.length > 0),
+  );
   const currentTurnAttachmentUrls = new Set(
     requestContext.imageAttachmentUrls
       .map(normalizeUrlForTurnComparison)
@@ -110,17 +96,18 @@ function resolveStaleDiscordTurnUrlNotice(imageUrls: readonly string[]): string 
 
   for (const rawUrl of imageUrls) {
     const trimmedUrl = rawUrl.trim();
-    if (!trimmedUrl || !isDiscordAttachmentUrl(trimmedUrl)) continue;
+    if (!trimmedUrl) continue;
     if (requestContext.userMessageText.includes(trimmedUrl)) continue;
+    if (currentTurnRawAttachmentUrls.has(trimmedUrl)) continue;
 
     const normalizedUrl = normalizeUrlForTurnComparison(trimmedUrl);
     if (normalizedUrl && currentTurnAttachmentUrls.has(normalizedUrl)) continue;
 
     return [
       'Current turn already includes live image attachment bytes.',
-      'The Discord CDN URL passed to image_analyze does not match a current-turn attachment and may be stale or expired.',
-      'Do not use an old Discord attachment URL for this turn.',
-      'Inspect the current attached image already in context, or ask the user to resend the specific URL if they want a different image checked.',
+      'The URL passed to image_analyze does not match a current-turn attachment and may be stale or refer to a different image.',
+      'Do not use a mismatched prior-turn URL for this turn.',
+      'Inspect the current attached image already in context, or ask the user to resend or paste the specific URL if they want a different image checked.',
     ].join(' ');
   }
 
@@ -327,7 +314,7 @@ export function createImageAnalyzeTool(reviewer: ImageVisionReviewer): AgentTool
     name: 'image_analyze',
     label: 'image_analyze',
     description:
-      'Inspect one or more images with the vision pipeline. Use this to see what was actually generated or sent, including checking whether a selfie/edit still matches your appearance, instead of asking the user to go inspect it for you. Discord attachment URLs expire, so do not pass an old CDN link for the current turn when the live attachment is already in context.',
+      'Inspect one or more images with the vision pipeline. Use this to see what was actually generated or sent, including checking whether a selfie/edit still matches your appearance, instead of asking the user to go inspect it for you. When the current turn already includes live attachment bytes, do not pass a mismatched prior-turn URL unless the user explicitly pasted that URL in the current message.',
     parameters: Type.Object({
       image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
       question: Type.Optional(Type.String({
@@ -343,11 +330,11 @@ export function createImageAnalyzeTool(reviewer: ImageVisionReviewer): AgentTool
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
-        const staleDiscordTurnUrlNotice = resolveStaleDiscordTurnUrlNotice(params.image_urls);
-        if (staleDiscordTurnUrlNotice) {
+        const mismatchedCurrentTurnUrlNotice = resolveMismatchedCurrentTurnUrlNotice(params.image_urls);
+        if (mismatchedCurrentTurnUrlNotice) {
           return {
-            content: [{ type: 'text', text: staleDiscordTurnUrlNotice }] satisfies TextContent[],
-            details: { visionReviewError: staleDiscordTurnUrlNotice },
+            content: [{ type: 'text', text: mismatchedCurrentTurnUrlNotice }] satisfies TextContent[],
+            details: { visionReviewError: mismatchedCurrentTurnUrlNotice },
           };
         }
 

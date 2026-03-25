@@ -2671,8 +2671,61 @@ describe('SubstrateAgent.handleMessage', () => {
       const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
       expectUnresolvedVisionPrompt(promptInput.content, {
         userText: TEST_USER_GREETING,
-        detailSubstring: 'Channel type "telegram" does not support live attachment byte fetches.',
+        detailSubstring: 'Attachment URL protocol "telegram:" is not supported for live image fetches.',
       });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('uses gateway binary fetch for non-Discord HTTPS image turns when available', async () => {
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 8192, contextWindow: 128_000 },
+        background: { model: 'background-model', provider: 'openrouter', maxTokens: 4096 },
+        vision: { model: 'vision-model', provider: 'openrouter', maxTokens: 2048, contextWindow: 128_000 },
+      },
+    });
+    const originalFetch = (globalThis as any).fetch;
+    const fetchMock = vi.fn();
+    (globalThis as any).fetch = fetchMock;
+
+    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+      webFetchBinary: ReturnType<typeof vi.fn>;
+    };
+    llmProvider.webFetchBinary = vi.fn(async () => ({
+      dataBase64: 'AQID',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+    }));
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), llmProvider, makeMockSessionManager(), 'test', config,
+      );
+
+      const response = await agent.handleMessage(makeMessage({
+        channelType: 'api',
+        channelId: 'api:test',
+        attachments: [{
+          url: 'https://files.example.test/uploads/image.png?token=fresh',
+          contentType: 'image/png',
+          name: 'image.png',
+        }],
+      }));
+
+      expect(response.metadata.model).toBe('vision-model');
+      const promptInput = promptSpy.mock.calls.at(-1)?.[0] as { content: unknown };
+      expectResolvedVisionPrompt(promptInput.content, {
+        userText: TEST_USER_GREETING,
+        data: 'AQID',
+        mimeType: 'image/png',
+      });
+      expect(llmProvider.webFetchBinary).toHaveBeenCalledWith(
+        'https://files.example.test/uploads/image.png?token=fresh',
+        { lane: 'default', maxBytes: 8 * 1024 * 1024 },
+      );
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       (globalThis as any).fetch = originalFetch;

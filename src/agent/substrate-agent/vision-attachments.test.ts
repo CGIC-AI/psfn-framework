@@ -51,6 +51,40 @@ describe('buildTurnUserContent', () => {
     });
   });
 
+  it('fetches current-turn HTTPS image attachments even when they are not from Discord', async () => {
+    const result = await buildTurnUserContent({
+      message: makeMessage({
+        channelType: 'api',
+        channelId: 'api-channel',
+        attachments: [{
+          url: 'https://files.example.test/uploads/current-photo.png?token=fresh',
+          contentType: 'image/png',
+          name: 'current-photo.png',
+        }],
+      }),
+      llmClient: {
+        webFetchBinary: vi.fn(async () => ({
+          dataBase64: 'AQID',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+      } as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    const blocks = result as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+    expect(blocks[0]?.text).toContain('Runtime note');
+    expect(blocks[1]).toEqual({
+      type: 'image',
+      data: 'AQID',
+      mimeType: 'image/png',
+    });
+  });
+
   it('surfaces attachment resolution failures as a runtime note when the current attachment cannot be resolved', async () => {
     const result = await buildTurnUserContent({
       message: makeMessage(),
@@ -120,5 +154,29 @@ describe('buildTurnUserContent', () => {
     const blocks = result as Array<{ type: string; text?: string }>;
     expect(blocks[0]?.text).toContain('transport metadata');
     expect(blocks[0]?.text).not.toContain(`User text: ${attachmentUrl}`);
+  });
+
+  it('surfaces unsupported attachment protocols as an unresolved runtime note', async () => {
+    const result = await buildTurnUserContent({
+      message: makeMessage({
+        channelType: 'telegram',
+        channelId: 'telegram:5635268079',
+        attachments: [{
+          url: 'telegram://file/abc123',
+          contentType: 'image/jpeg',
+          name: 'photo.jpg',
+        }],
+      }),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
+    expect(result).toContain('Runtime note');
+    expect(result).toContain('protocol "telegram:" is not supported');
+    expect(result).toContain('Do not pretend you saw them');
   });
 });

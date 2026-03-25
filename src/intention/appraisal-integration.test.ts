@@ -194,6 +194,121 @@ describe('intention appraisal runtime integration', () => {
     }
   });
 
+  it('reopens pending follow-ups immediately on internal background turns', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-internal-'));
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_400_000);
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 50,
+        heartbeatIntervalMs: 1_000,
+      });
+      const inferers: PostTurnActionInferer[] = [];
+      const agentLoop = {
+        handleMessage: vi.fn().mockResolvedValue({ content: 'ok' }),
+        followUp: vi.fn(),
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+        registerPostTurnActionInferer: vi.fn((inferer: PostTurnActionInferer) => {
+          inferers.push(inferer);
+          return () => {};
+        }),
+      };
+      const sender = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      const llmProvider = {
+        stream: vi.fn(),
+        complete: vi.fn().mockResolvedValue({
+          content: JSON.stringify({
+            decisions: [{
+              type: 'followUp',
+              priority: 'high',
+              reason: 'Background check should surface the pending reminder now.',
+              timing: 'soon',
+              followUp: {
+                content: 'Quick follow-up: how are you doing today?',
+              },
+            }],
+          }),
+          model: 'background-model',
+          toolCalls: [],
+          inputTokens: 48,
+          outputTokens: 31,
+          stopReason: 'stop',
+        }),
+      };
+
+      const postTurnActions = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop,
+        intervalMs: 1,
+      });
+
+      wireHeartbeatRuntime(
+        { registerTool: vi.fn() },
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+        undefined,
+        {
+          eventBus,
+          postTurnActions,
+          llmProvider: llmProvider as any,
+          sessionManager: {
+            resolveSessionChannelId: (channelId: string) => channelId,
+            getRecentMessages: vi.fn().mockReturnValue([]),
+          } as any,
+          getActiveConcerns: () => [{
+            title: 'Follow up soon',
+            dueAt: Date.now() + 1_000,
+            status: 'open',
+          }],
+          emotionState: {
+            getState: () => ({
+              vad: { valence: -0.2, arousal: 0.3, dominance: -0.1 },
+              mood: { valence: -0.15, arousal: 0.25, dominance: -0.05 },
+              discrete: { concern: 0.7 },
+              confidence: 0.8,
+            }),
+          },
+        },
+      );
+
+      expect(inferers).toHaveLength(1);
+      const inferer = inferers[0]!;
+      await inferer({
+        message: {
+          ...makeMessage(),
+          id: 'msg-intention-runtime-internal-1',
+          channelId: 'internal:reflection:whisper',
+          channelType: 'terminal',
+        },
+        response: makeResponse(),
+        turnMessages: [],
+        turnId: 'turn-intention-internal-1' as any,
+        completedAt: Date.now(),
+      } as any);
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await scheduler.tick();
+
+      expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+      expect(agentLoop.followUp).toHaveBeenCalledTimes(1);
+      expect(agentLoop.followUp).toHaveBeenCalledWith(expect.objectContaining({
+        channelId: 'internal:reflection:whisper',
+        channelType: 'terminal',
+        content: 'Quick follow-up: how are you doing today?',
+      }));
+    } finally {
+      nowSpy.mockRestore();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('defers intention follow-up execution until dueAt timestamp', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-scheduled-'));
     const nowSpy = vi.spyOn(Date, 'now');
@@ -312,9 +427,11 @@ describe('intention appraisal runtime integration', () => {
     }
   });
 
-  it('forces appraisal on sustained primary-contact negative mood via motivation bridge', async () => {
+  it('forces appraisal on sustained primary-contact negative mood without immediate foreground hijack', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-motivation-'));
+    const nowSpy = vi.spyOn(Date, 'now');
     try {
+      nowSpy.mockReturnValue(1_700_000_500_000);
       const eventBus = new EventBus();
       const scheduler = new Scheduler(eventBus, {
         tickIntervalMs: 50,
@@ -454,11 +571,17 @@ describe('intention appraisal runtime integration', () => {
       }
 
       expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+      expect(agentLoop.followUp).toHaveBeenCalledTimes(0);
+
+      nowSpy.mockReturnValue(1_700_000_800_001);
+      await scheduler.tick();
+
       expect(agentLoop.followUp).toHaveBeenCalledTimes(1);
       expect(agentLoop.followUp).toHaveBeenCalledWith(expect.objectContaining({
         content: 'Checking in because your mood has stayed low.',
       }));
     } finally {
+      nowSpy.mockRestore();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

@@ -156,6 +156,10 @@ export interface IntentionDecisionActionOptions {
   surfacePendingFollowUpsImmediately?: boolean;
 }
 
+export function isBackgroundAppraisalChannel(channelId: string): boolean {
+  return channelId.startsWith('internal:');
+}
+
 interface SessionAppraisalState {
   turnsSinceLastAppraisal: number;
   lastEmotion: EmotionStateSnapshot | null;

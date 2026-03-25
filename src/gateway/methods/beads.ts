@@ -3,6 +3,7 @@ import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type {
   BeadsAction,
   BeadsActionResult,
+  BeadsExternalSyncResult,
   BeadsCloseParams,
   BeadsCreateParams,
   BeadsIssueStatus,
@@ -15,6 +16,10 @@ import { GatewayErrors } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import {
+  syncAllBeadsToGitHubProject,
+  syncMutatedBeadToGitHubProject,
+} from './beads-github-project-sync.js';
 
 const DEFAULT_BD_TIMEOUT_MS = 12_000;
 const MAX_BD_OUTPUT_CHARS = 250_000;
@@ -277,11 +282,13 @@ async function executeBeadsAction(
   actor: string,
   target: string,
   buildArgs: () => string[],
+  afterSuccess?: (payload: unknown) => Promise<BeadsExternalSyncResult | undefined>,
 ): Promise<BeadsActionResult> {
   const startedAt = Date.now();
   try {
     const args = buildArgs();
     const payload = await runBdCommand(action, args, runtime);
+    const sync = afterSuccess ? await afterSuccess(payload) : undefined;
     recordBeadsAudit(runtime, {
       actor,
       action,
@@ -294,6 +301,7 @@ async function executeBeadsAction(
       target,
       result: 'success',
       payload,
+      ...(sync ? { sync: [sync] } : {}),
     };
   } catch (error) {
     const message = toErrorMessage(error);
@@ -349,30 +357,42 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'beads.create',
     handler: async (params: BeadsCreateParams, runtime) => {
       const actor = normalizeActor(params.actor);
-      return executeBeadsAction(runtime, 'create', actor, 'new', () => {
-        const title = parseIssueTitle(params.title);
-        const issueType = parseIssueType(params.issueType);
-        const priority = parsePriority(params.priority, 'beads.create priority');
-        const deps = parseDependencies(params.deps);
-        const parent = params.parent === undefined
-          ? undefined
-          : parseIssueRef(params.parent, 'parent');
+      return executeBeadsAction(
+        runtime,
+        'create',
+        actor,
+        'new',
+        () => {
+          const title = parseIssueTitle(params.title);
+          const issueType = parseIssueType(params.issueType);
+          const priority = parsePriority(params.priority, 'beads.create priority');
+          const deps = parseDependencies(params.deps);
+          const parent = params.parent === undefined
+            ? undefined
+            : parseIssueRef(params.parent, 'parent');
 
-        const args = [title];
-        if (issueType) {
-          args.push('-t', issueType);
-        }
-        if (priority !== undefined) {
-          args.push('-p', String(priority));
-        }
-        if (deps.length > 0) {
-          args.push('--deps', deps.join(','));
-        }
-        if (parent) {
-          args.push('--parent', parent);
-        }
-        return args;
-      });
+          const args = [title];
+          if (issueType) {
+            args.push('-t', issueType);
+          }
+          if (priority !== undefined) {
+            args.push('-p', String(priority));
+          }
+          if (deps.length > 0) {
+            args.push('--deps', deps.join(','));
+          }
+          if (parent) {
+            args.push('--parent', parent);
+          }
+          return args;
+        },
+        async (payload) => await syncMutatedBeadToGitHubProject(
+          runtime.workspacePath,
+          'create',
+          'new',
+          payload,
+        ),
+      );
     },
     summary: (params: BeadsCreateParams) => ({
       actor: summaryActor(params.actor),
@@ -390,22 +410,34 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: BeadsUpdateParams, runtime) => {
       const actor = normalizeActor(params.actor);
       const id = parseIssueRef(params.id, 'id');
-      return executeBeadsAction(runtime, 'update', actor, id, () => {
-        const status = parseIssueStatus(params.status);
-        const priority = parsePriority(params.priority, 'beads.update priority');
-        if (!status && priority === undefined) {
-          deny('beads.update requires at least one of status or priority');
-        }
+      return executeBeadsAction(
+        runtime,
+        'update',
+        actor,
+        id,
+        () => {
+          const status = parseIssueStatus(params.status);
+          const priority = parsePriority(params.priority, 'beads.update priority');
+          if (!status && priority === undefined) {
+            deny('beads.update requires at least one of status or priority');
+          }
 
-        const args = [id];
-        if (status) {
-          args.push('--status', status);
-        }
-        if (priority !== undefined) {
-          args.push('--priority', String(priority));
-        }
-        return args;
-      });
+          const args = [id];
+          if (status) {
+            args.push('--status', status);
+          }
+          if (priority !== undefined) {
+            args.push('--priority', String(priority));
+          }
+          return args;
+        },
+        async (payload) => await syncMutatedBeadToGitHubProject(
+          runtime.workspacePath,
+          'update',
+          id,
+          payload,
+        ),
+      );
     },
     summary: (params: BeadsUpdateParams) => ({
       actor: summaryActor(params.actor),
@@ -424,10 +456,22 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: BeadsCloseParams, runtime) => {
       const actor = normalizeActor(params.actor);
       const id = parseIssueRef(params.id, 'id');
-      return executeBeadsAction(runtime, 'close', actor, id, () => {
-        const reason = parseCloseReason(params.reason);
-        return [id, '--reason', reason];
-      });
+      return executeBeadsAction(
+        runtime,
+        'close',
+        actor,
+        id,
+        () => {
+          const reason = parseCloseReason(params.reason);
+          return [id, '--reason', reason];
+        },
+        async (payload) => await syncMutatedBeadToGitHubProject(
+          runtime.workspacePath,
+          'close',
+          id,
+          payload,
+        ),
+      );
     },
     summary: (params: BeadsCloseParams) => ({
       actor: summaryActor(params.actor),
@@ -443,7 +487,33 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'beads.sync',
     handler: async (params: BeadsSyncParams, runtime) => {
       const actor = normalizeActor(params.actor);
-      return executeBeadsAction(runtime, 'sync', actor, 'sync', () => []);
+      const startedAt = Date.now();
+      try {
+        const sync = await syncAllBeadsToGitHubProject(runtime.workspacePath);
+        recordBeadsAudit(runtime, {
+          actor,
+          action: 'sync',
+          target: 'sync',
+          result: 'success',
+        }, Date.now() - startedAt);
+        return {
+          actor,
+          action: 'sync',
+          target: 'sync',
+          result: 'success',
+          payload: sync,
+          sync: [sync],
+        };
+      } catch (error) {
+        const message = toErrorMessage(error);
+        recordBeadsAudit(runtime, {
+          actor,
+          action: 'sync',
+          target: 'sync',
+          result: 'error',
+        }, Date.now() - startedAt, message);
+        throw error;
+      }
     },
     summary: (params: BeadsSyncParams) => ({
       actor: summaryActor(params.actor),

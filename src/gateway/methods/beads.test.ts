@@ -12,9 +12,20 @@ vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
 
+vi.mock('./beads-github-project-sync.js', () => ({
+  syncMutatedBeadToGitHubProject: vi.fn(),
+  syncAllBeadsToGitHubProject: vi.fn(),
+}));
+
 import { spawn } from 'node:child_process';
+import {
+  syncAllBeadsToGitHubProject,
+  syncMutatedBeadToGitHubProject,
+} from './beads-github-project-sync.js';
 
 const mockedSpawn = vi.mocked(spawn);
+const mockedSyncMutatedBeadToGitHubProject = vi.mocked(syncMutatedBeadToGitHubProject);
+const mockedSyncAllBeadsToGitHubProject = vi.mocked(syncAllBeadsToGitHubProject);
 
 function makePolicy(allowActions: Array<'ready' | 'show' | 'create' | 'update' | 'close' | 'sync'>): PolicyConfig {
   return {
@@ -119,6 +130,8 @@ function createHarness(policyConfig: PolicyConfig): {
 describe('registerBeadsMethods', () => {
   afterEach(() => {
     mockedSpawn.mockReset();
+    mockedSyncMutatedBeadToGitHubProject.mockReset();
+    mockedSyncAllBeadsToGitHubProject.mockReset();
   });
 
   it('executes allowlisted beads.ready and records audit telemetry', async () => {
@@ -225,5 +238,84 @@ describe('registerBeadsMethods', () => {
         }),
       }),
     );
+  });
+
+  it('attaches GitHub Project sync status after a successful beads.create', async () => {
+    queueSpawnResult({
+      stdout: JSON.stringify({
+        id: 'PSFN-10',
+        title: 'created issue',
+      }),
+    });
+    mockedSyncMutatedBeadToGitHubProject.mockResolvedValue({
+      integration: 'github_project',
+      state: 'synced',
+      owner: 'axAilotl',
+      projectNumber: 2,
+      issueId: 'PSFN-10',
+      itemId: 'PVTI_test',
+      created: true,
+    });
+    const harness = createHarness(makePolicy(['create']));
+
+    const result = await harness.invoke('beads.create', {
+      actor: 'agent-main',
+      title: 'created issue',
+      issueType: 'task',
+    }) as {
+      payload: unknown;
+      sync?: unknown[];
+    };
+
+    expect(mockedSyncMutatedBeadToGitHubProject).toHaveBeenCalledWith(
+      process.cwd(),
+      'create',
+      'new',
+      expect.objectContaining({
+        id: 'PSFN-10',
+      }),
+    );
+    expect(result.sync).toEqual([
+      expect.objectContaining({
+        integration: 'github_project',
+        state: 'synced',
+        issueId: 'PSFN-10',
+      }),
+    ]);
+  });
+
+  it('returns the GitHub Projects reconciliation payload for beads.sync', async () => {
+    mockedSyncAllBeadsToGitHubProject.mockResolvedValue({
+      integration: 'github_project',
+      state: 'synced',
+      owner: 'axAilotl',
+      projectNumber: 2,
+      totalIssues: 3,
+      synced: 2,
+      archived: 1,
+      skipped: 0,
+    });
+    const harness = createHarness(makePolicy(['sync']));
+
+    const result = await harness.invoke('beads.sync', {
+      actor: 'agent-main',
+    }) as {
+      payload: unknown;
+      sync?: unknown[];
+    };
+
+    expect(mockedSpawn).not.toHaveBeenCalled();
+    expect(mockedSyncAllBeadsToGitHubProject).toHaveBeenCalledWith(process.cwd());
+    expect(result.payload).toMatchObject({
+      integration: 'github_project',
+      totalIssues: 3,
+      archived: 1,
+    });
+    expect(result.sync).toEqual([
+      expect.objectContaining({
+        integration: 'github_project',
+        state: 'synced',
+      }),
+    ]);
   });
 });

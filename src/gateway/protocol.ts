@@ -398,12 +398,44 @@ export interface GitOpenPRResult {
   url: string;
 }
 
+export interface GitHubProjectSyncResult {
+  integration: 'github_project';
+  state: 'disabled' | 'skipped' | 'synced' | 'archived' | 'error';
+  owner?: string;
+  projectNumber?: number;
+  issueId?: string;
+  itemId?: string;
+  reason?: string;
+  created?: boolean;
+  reopened?: boolean;
+}
+
+export interface GitHubProjectBulkSyncResult {
+  integration: 'github_project';
+  state: 'disabled' | 'synced' | 'error';
+  owner?: string;
+  projectNumber?: number;
+  totalIssues: number;
+  synced: number;
+  archived: number;
+  skipped: number;
+  errors?: Array<{
+    issueId: string;
+    message: string;
+  }>;
+}
+
+export type BeadsExternalSyncResult =
+  | GitHubProjectSyncResult
+  | GitHubProjectBulkSyncResult;
+
 export interface BeadsActionResult {
   actor: string;
   action: BeadsAction;
   target: string;
   result: 'success';
   payload: unknown;
+  sync?: BeadsExternalSyncResult[];
 }
 
 export type ImageGenerationRpcResult = ImageGenerationResult;

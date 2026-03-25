@@ -12,6 +12,7 @@ function formatActionResult(result: BeadsActionResult): string {
     target: result.target,
     result: result.result,
     payload: result.payload,
+    ...(result.sync ? { sync: result.sync } : {}),
   }, null, 2);
 }
 

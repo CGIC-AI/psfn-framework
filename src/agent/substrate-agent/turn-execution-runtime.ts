@@ -61,6 +61,7 @@ import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import { resolveModel } from '../stream-adapter.js';
 import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
+import type { MemoryScopeQuery } from '../../memory/types.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import {
   hasVisionAttachments,
@@ -92,6 +93,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
     canonicalContactId?: string,
     turnSnapshot?: import('../../turns/snapshot.js').TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    scopeQuery?: MemoryScopeQuery,
   ) => Promise<string>;
 }
 
@@ -323,6 +325,7 @@ export async function handleMessageForTurn(
   const turnBudgetCharacteristics = runtime.buildTurnBudgetCharacteristics(message, taskKind);
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
   const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
   let retrievalProvenanceRefs: string[] = [];
   let memoryManifestSeed: ContextManifestMemorySeed | undefined;
   const observedTurnStages: TurnStageTelemetryRecord[] = [];
@@ -475,6 +478,7 @@ export async function handleMessageForTurn(
           channelMeta,
           authorContext.canonicalContactKey,
           turnBudgetCharacteristics,
+          focusMemoryScopeQuery ?? undefined,
         )
         : Promise.resolve(undefined),
     ]);
@@ -508,6 +512,8 @@ export async function handleMessageForTurn(
             authorContext.canonicalContactKey,
             memorySnapshot,
             turnBudgetCharacteristics,
+            undefined,
+            focusMemoryScopeQuery ?? undefined,
           )
           : Promise.resolve('');
         const proactiveRecallBlockPromise = memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function'
@@ -518,6 +524,7 @@ export async function handleMessageForTurn(
             authorContext.canonicalContactKey,
             memorySnapshot,
             turnBudgetCharacteristics,
+            focusMemoryScopeQuery ?? undefined,
           )
           : Promise.resolve('');
         const [memoriesBlock, proactiveRecallBlock] = await Promise.all([

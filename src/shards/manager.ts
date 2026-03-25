@@ -89,6 +89,7 @@ export interface ShardManagerDeps {
   eventBus: EventBus;
   llmProvider: LLMProvider;
   sessionStore: SessionStore;
+  sessionManager?: SessionManager | null;
   embeddingService: EmbeddingService | null;
   memoryProvider: MemoryProvider | null;
   config: SubstrateConfig;
@@ -721,7 +722,11 @@ export class ShardManager {
     };
     const memorySyncDecision = this.evaluateSyncPolicy(memorySyncEnvelope);
     const memoryBlock = memorySyncDecision.allowed
-      ? await this.buildContextPackMemoryBlock(shardConfig.task, source.channelId)
+      ? await this.buildContextPackMemoryBlock(
+        shardConfig.task,
+        source.channelId,
+        this.resolveContextPackMemoryScopeQuery(source.channelId),
+      )
       : '';
     if (sessionEntries.length === 0 && memoryBlock.length === 0) {
       return null;
@@ -884,14 +889,31 @@ export class ShardManager {
   private async buildContextPackMemoryBlock(
     task: string,
     sourceChannelId: string,
+    scopeQuery: import('../memory/types.js').MemoryScopeQuery | undefined,
   ): Promise<string> {
     const query = task.trim();
     if (!query || !this.deps.memoryProvider) {
       return '';
     }
 
-    const memoryBlock = await this.deps.memoryProvider.retrieve(query, sourceChannelId);
+    const memoryBlock = await this.deps.memoryProvider.retrieve(
+      query,
+      sourceChannelId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scopeQuery,
+    );
     return this.truncateContextText(memoryBlock, CONTEXT_PACK_MEMORY_MAX_CHARS);
+  }
+
+  private resolveContextPackMemoryScopeQuery(
+    sourceChannelId: string,
+  ): import('../memory/types.js').MemoryScopeQuery | undefined {
+    return this.deps.sessionManager?.getActiveFocusMemoryScopeQuery(sourceChannelId) ?? undefined;
   }
 
   private resolveSystemPrompt(shardConfig: ShardConfig): string {

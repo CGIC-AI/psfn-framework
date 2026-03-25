@@ -5,6 +5,7 @@ import type {
   SubstrateConfig,
   TurnRecord,
 } from '../types.js';
+import type { MemoryScopeQuery } from '../memory/types.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type {
   SessionStore,
@@ -81,6 +82,7 @@ import type { ContextManifestMemorySeed } from './context-manifest.js';
 import {
   applyFocusCompactionRanges,
   FocusKnowledgeStore,
+  buildFocusMemoryScopeQuery,
   normalizeFocusEvidence,
   type FocusEvidenceRecord,
   type FocusKnowledgeBlock,
@@ -365,6 +367,12 @@ export class SessionManager {
   getProjectContextSummary(channelId: string, scope: string): FocusProjectContextSummary | null {
     const resolvedChannelId = this.resolveFocusChannelId(channelId);
     return this.focusKnowledgeStore.getProjectContextSummary(resolvedChannelId, scope);
+  }
+
+  getActiveFocusMemoryScopeQuery(channelId: string): MemoryScopeQuery | null {
+    const active = this.getActiveFocusSession(channelId);
+    if (!active) return null;
+    return buildFocusMemoryScopeQuery(active.scope);
   }
 
   private getFocusCompactionRanges(channelId: string) {

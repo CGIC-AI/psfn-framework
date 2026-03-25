@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { SessionEntry } from './types.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { createComponentLogger } from '../logger.js';
+import type { MemoryScopeQuery } from '../memory/types.js';
+import { normalizeMemoryScopeRefs, normalizeMemoryScopeTags } from '../memory/types.js';
 
 const log = createComponentLogger('FocusKnowledge');
 
@@ -80,6 +82,27 @@ function compactText(value: string): string {
 
 function normalizeScopeKey(value: string): string {
   return compactText(value).toLowerCase();
+}
+
+export function buildFocusMemoryScopeQuery(scope: string): MemoryScopeQuery | null {
+  const compactScope = compactText(scope);
+  if (!compactScope) return null;
+
+  const scopeKey = normalizeScopeKey(compactScope);
+  const refs = normalizeMemoryScopeRefs([
+    { kind: 'project', id: compactScope },
+    ...(scopeKey !== compactScope ? [{ kind: 'project', id: scopeKey }] : []),
+  ]);
+  const tags = normalizeMemoryScopeTags([
+    `project:${scopeKey}`,
+    `scope:${scopeKey}`,
+  ]);
+
+  return {
+    ...(refs.length > 0 ? { refs } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
+    mode: 'only',
+  };
 }
 
 function clampText(value: string, maxChars: number): string {

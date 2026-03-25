@@ -36,6 +36,7 @@ import {
 import { runExtractionOrchestration } from './extraction/orchestrator.js';
 import { refreshContactProfile as runProfileRefresh } from './extraction/profile-synthesis.js';
 import { persistEmotionalStateFromExtraction } from './extraction/emotional.js';
+import { resolveMentionOnlyContactForFact } from './extraction/mention-only-contacts.js';
 import {
   emitExtractionEnd as emitExtractionEndEvent,
   emitExtractionStart as emitExtractionStartEvent,
@@ -331,7 +332,15 @@ export class MemoryExtractor {
         this.adjustFactImportanceByEmotion(fact, resolveFormationVAD(), intensityWeight)
       ),
       processFact: (fact, sourceRef, maybeContactId) => (
-        this.processFact(fact, sourceRef, maybeContactId, resolveFormationVAD())
+        this.processFact(
+          fact,
+          sourceRef,
+          maybeContactId,
+          resolveFormationVAD(),
+          channelId,
+          canonicalContactName,
+          this.sessionManager.characterName,
+        )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
         emitExtractionStartEvent(this.eventBus, this.isTelemetryEnabled(), extractionChannelId, reason, extractionTurnId)
@@ -373,7 +382,26 @@ export class MemoryExtractor {
     sourceRef: string,
     canonicalContactId?: string,
     formationVAD?: MemoryFormationVAD,
+    channelId?: string,
+    canonicalContactName?: string,
+    companionName?: string,
   ): Promise<WriteResult> {
+    let factContactId = canonicalContactId;
+    if (fact.type === 'relational' && this.contactStore && channelId) {
+      const mentionOnlyContact = resolveMentionOnlyContactForFact({
+        fact,
+        channelId,
+        canonicalContactId,
+        canonicalContactName,
+        companionName,
+        contactStore: this.contactStore,
+        memoryStore: this.memoryStore,
+      });
+      if (mentionOnlyContact) {
+        factContactId = mentionOnlyContact.id;
+      }
+    }
+
     return this.writer.write({
       text: fact.text,
       type: fact.type,
@@ -384,7 +412,7 @@ export class MemoryExtractor {
       tags: fact.tags,
       sourceRef,
       sensitivity: fact.sensitivity,
-      contactId: canonicalContactId,
+      contactId: factContactId,
     });
   }
 

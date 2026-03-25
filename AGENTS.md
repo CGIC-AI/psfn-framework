@@ -191,6 +191,35 @@ Forbidden without approval:
 
 If you notice unexpected local changes that you did not create, stop and ask how to proceed.
 
+## Parallel Execution
+
+Use parallel streams only when the dependency graph supports it. Prefer up to three concurrent streams for multi-bead efforts; fewer is better when the ready queue is narrow or the merge surface is tightly coupled.
+
+### Integration branch policy
+
+- For a large multi-bead initiative, create a dedicated integration branch and keep parallel work scoped to that branch until the effort is validated.
+- Create each worktree from the integration branch and merge each completed stream back into the integration branch, not directly into the protected release branch.
+- Keep the release branch stable while the parallel effort is in flight. Merge the integration branch into the release branch only after the user or operator finishes the required manual verification.
+
+### Standard parallel loop
+
+1. Select the next highest-priority ready beads that are safe to run in parallel.
+2. Create one worktree per selected bead or stream.
+3. Spawn at most one sub-agent per worktree and give it explicit ownership of its bead, files, and validation scope.
+4. Require each sub-agent to implement only its assigned bead, run targeted validation, and commit its work inside its own worktree.
+5. Let the streams run without constant check-ins. Do not micro-manage active workers; check on them only when they report a blocker, finish, or have been silent for an unusually long interval such as 20 minutes.
+6. When the selected streams are complete, merge them back into the integration branch and resolve conflicts only at the orchestrator level.
+7. Run validation on the integration branch for every merged area, plus broader regression coverage when the combined change surface warrants it.
+8. Update bead state after integration: close completed beads with evidence, and reopen or create follow-up beads when new work is discovered.
+9. Repeat with the next set of ready beads until the non-deferred work for the initiative is complete.
+
+### Merge and validation policy
+
+- Merge blocker-unlocking or dependency-clearing beads first when merge order matters.
+- If two streams conflict, resolve the conflict once on the integration branch and rerun the impacted tests there.
+- Do not close a bead without validation evidence for the area it changed.
+- Keep the bead tracker aligned with the integrated branch state, not with partial work still isolated in side worktrees.
+
 ## Orchestration Hygiene
 
 If you spawn subagents or parallel workers:

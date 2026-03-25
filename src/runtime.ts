@@ -729,6 +729,8 @@ export class SubstrateRuntime implements Lifecycle {
       databasePath: this.config.databasePath,
       sessionsDir,
       memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
+      characterCardPath: this.config.characterCardPath,
+      characterCardHistoryPath: resolveCharacterCardHistoryPath(companionDataDir),
       config: backupConfig,
     });
     log.info('Scheduled backups enabled', {

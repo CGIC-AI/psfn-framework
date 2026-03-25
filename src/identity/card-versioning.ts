@@ -52,6 +52,29 @@ export interface CharacterCardPatch {
   extensions_visual_description?: string;
 }
 
+const DESTRUCTIVE_REPLACE_FIELDS = [
+  'description',
+  'personality',
+  'scenario',
+  'first_mes',
+  'mes_example',
+  'system_prompt',
+  'post_history_instructions',
+  'creator_notes',
+] as const;
+
+type DestructiveReplaceField = (typeof DESTRUCTIVE_REPLACE_FIELDS)[number];
+
+interface DestructivePatchRisk {
+  field: DestructiveReplaceField;
+  previousLength: number;
+  nextLength: number;
+}
+
+const MIN_DESTRUCTIVE_REPLACE_SOURCE_LENGTH = 400;
+const MIN_DESTRUCTIVE_REPLACE_REMOVED_CHARS = 200;
+const MAX_SAFE_REMAINING_RATIO = 0.6;
+
 export interface CharacterCardHistoryEntry {
   version: number;
   timestamp: string;
@@ -120,6 +143,81 @@ function sanitizeAlternateGreetingsPatchValue(value: unknown): string[] | undefi
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   return parsed;
+}
+
+function applyPatchToCharacterData(currentData: CharacterData, patch: CharacterCardPatch): CharacterData {
+  return {
+    ...currentData,
+    ...(patch.name !== undefined ? { name: patch.name } : {}),
+    ...(patch.description !== undefined ? { description: patch.description } : {}),
+    ...(patch.personality !== undefined ? { personality: patch.personality } : {}),
+    ...(patch.scenario !== undefined ? { scenario: patch.scenario } : {}),
+    ...(patch.first_mes !== undefined ? { first_mes: patch.first_mes } : {}),
+    ...(patch.mes_example !== undefined ? { mes_example: patch.mes_example } : {}),
+    ...(patch.system_prompt !== undefined ? { system_prompt: patch.system_prompt } : {}),
+    ...(patch.post_history_instructions !== undefined
+      ? { post_history_instructions: patch.post_history_instructions }
+      : {}),
+    ...(patch.tags !== undefined ? { tags: [...patch.tags] } : {}),
+    ...(patch.creator !== undefined ? { creator: patch.creator } : {}),
+    ...(patch.creator_notes !== undefined ? { creator_notes: patch.creator_notes } : {}),
+    ...(patch.alternate_greetings !== undefined
+      ? { alternate_greetings: [...patch.alternate_greetings] }
+      : {}),
+    ...(patch.extensions_visual_description !== undefined
+      ? {
+        extensions: {
+          ...(
+            typeof currentData.extensions === 'object'
+              ? currentData.extensions
+              : {}
+          ),
+          visual_description: patch.extensions_visual_description,
+        },
+      }
+      : {}),
+  };
+}
+
+function trimmedTextLength(value: unknown): number {
+  return typeof value === 'string' ? value.trim().length : 0;
+}
+
+function detectDestructivePatchRisks(
+  currentData: CharacterData,
+  patch: CharacterCardPatch,
+): DestructivePatchRisk[] {
+  const nextData = applyPatchToCharacterData(currentData, patch);
+  const currentRecord = currentData as Record<string, unknown>;
+  const nextRecord = nextData as Record<string, unknown>;
+  const patchRecord = patch as Record<string, unknown>;
+
+  return DESTRUCTIVE_REPLACE_FIELDS.flatMap((field) => {
+    if (!Object.prototype.hasOwnProperty.call(patchRecord, field)) {
+      return [];
+    }
+
+    const previousLength = trimmedTextLength(currentRecord[field]);
+    const nextLength = trimmedTextLength(nextRecord[field]);
+    const removedChars = previousLength - nextLength;
+    const remainingRatio = previousLength > 0 ? nextLength / previousLength : 1;
+
+    if (
+      previousLength >= MIN_DESTRUCTIVE_REPLACE_SOURCE_LENGTH
+      && removedChars >= MIN_DESTRUCTIVE_REPLACE_REMOVED_CHARS
+      && remainingRatio <= MAX_SAFE_REMAINING_RATIO
+    ) {
+      return [{ field, previousLength, nextLength }];
+    }
+
+    return [];
+  });
+}
+
+function formatDestructivePatchRisks(risks: DestructivePatchRisk[]): string {
+  return risks
+    .map((risk) => `${risk.field} ${risk.previousLength}->${risk.nextLength} chars`)
+    .join(', ');
 }
 
 export function extractCardPatchFromRecord(record: Record<string, unknown>): CharacterCardPatch {
@@ -235,38 +333,7 @@ export class CharacterCardVersionStore {
       throw new Error('Character card patch must include at least one field.');
     }
 
-    const currentData = this.card.data;
-    const nextData: CharacterData = {
-      ...currentData,
-      ...(patch.name !== undefined ? { name: patch.name } : {}),
-      ...(patch.description !== undefined ? { description: patch.description } : {}),
-      ...(patch.personality !== undefined ? { personality: patch.personality } : {}),
-      ...(patch.scenario !== undefined ? { scenario: patch.scenario } : {}),
-      ...(patch.first_mes !== undefined ? { first_mes: patch.first_mes } : {}),
-      ...(patch.mes_example !== undefined ? { mes_example: patch.mes_example } : {}),
-      ...(patch.system_prompt !== undefined ? { system_prompt: patch.system_prompt } : {}),
-      ...(patch.post_history_instructions !== undefined
-        ? { post_history_instructions: patch.post_history_instructions }
-        : {}),
-      ...(patch.tags !== undefined ? { tags: [...patch.tags] } : {}),
-      ...(patch.creator !== undefined ? { creator: patch.creator } : {}),
-      ...(patch.creator_notes !== undefined ? { creator_notes: patch.creator_notes } : {}),
-      ...(patch.alternate_greetings !== undefined
-        ? { alternate_greetings: [...patch.alternate_greetings] }
-        : {}),
-      ...(patch.extensions_visual_description !== undefined
-        ? {
-          extensions: {
-            ...(
-              typeof currentData.extensions === 'object'
-                ? currentData.extensions
-                : {}
-            ),
-            visual_description: patch.extensions_visual_description,
-          },
-        }
-        : {}),
-    };
+    const nextData = applyPatchToCharacterData(this.card.data, patch);
 
     const nextCard: CharacterCardV2 = {
       ...this.card,
@@ -332,6 +399,10 @@ export function createCharacterCardUpdateTool(
       tags: Type.Optional(Type.Array(Type.String(), { description: 'Updated tag list.' })),
       creator: Type.Optional(Type.String({ description: 'Updated creator attribution.' })),
       creator_notes: Type.Optional(Type.String({ description: 'Updated creator notes.' })),
+      allow_destructive_replace: Type.Optional(Type.Boolean({
+        description:
+          'Set true only when intentionally replacing most of a long field instead of appending or lightly editing it.',
+      })),
       reason: Type.Optional(Type.String({ description: 'Short rationale for the mutation.' })),
     }),
     execute: async (
@@ -348,6 +419,18 @@ export function createCharacterCardUpdateTool(
       const tier = getCapabilityTier();
 
       if (tier === 'autonomous') {
+        const destructivePatchRisks = detectDestructivePatchRisks(store.getCurrent().card.data, patch);
+        const allowDestructiveReplace = params.allow_destructive_replace === true;
+
+        if (destructivePatchRisks.length > 0 && !allowDestructiveReplace) {
+          return textResultWithError(
+            'Destructive character card update blocked: '
+            + `${formatDestructivePatchRisks(destructivePatchRisks)}. `
+            + 'Retry with allow_destructive_replace=true only if you intend to replace the full field content.',
+            true,
+          );
+        }
+
         try {
           const snapshot = store.updateData(patch, 'agent', reason);
           return textResult(

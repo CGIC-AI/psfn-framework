@@ -144,6 +144,27 @@ describe('character_card_update tool', () => {
     expect(store.getCurrent().card.data.personality).toBe('Autonomous personality update');
   });
 
+  it('blocks destructive autonomous rewrites of long fields without an explicit override', async () => {
+    const longDescription = Array.from({ length: 80 }, (_value, index) => `line ${index}`).join(' ');
+    store.updateData({ description: longDescription }, 'admin', 'Seed a long description');
+
+    const tool = gateToolWithCapabilities(
+      createCharacterCardUpdateTool(store, {
+        getCapabilityTier: () => 'autonomous',
+      }),
+      () => accessForTier('autonomous'),
+    );
+
+    const result = await tool.execute('tool-call', {
+      description: 'Birthday: November 19th, 2023.',
+      reason: 'Add birthday',
+    });
+
+    expect(resultText(result)).toContain('Destructive character card update blocked');
+    expect(store.getCurrent().version).toBe(2);
+    expect(store.getCurrent().card.data.description).toBe(longDescription);
+  });
+
   it('queues updates for confirmation in nursery tier and applies after approval', async () => {
     const queue = new ConfirmationQueue({ idFactory: () => 'card-1' });
     const tool = gateToolWithCapabilities(

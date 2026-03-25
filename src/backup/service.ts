@@ -34,6 +34,10 @@ export interface BackupRunOptions {
   maxMonthlyBackups?: number;
   /** Path to memories.jsonl (L0 memory journal); if set, included in backup. */
   memoriesJournalPath?: string;
+  /** Path to the current character card JSON; if set, included in backup. */
+  characterCardPath?: string;
+  /** Path to the character card history JSONL; if set, included in backup. */
+  characterCardHistoryPath?: string;
   /** When non-empty, mirror the completed backup to this directory. */
   mirrorDir?: string;
   verifyRestore?: boolean;
@@ -74,6 +78,8 @@ export interface RegisterScheduledBackupTaskOptions {
   databasePath: string;
   sessionsDir: string;
   memoriesJournalPath?: string;
+  characterCardPath?: string;
+  characterCardHistoryPath?: string;
   config: BackupRuntimeConfig;
   skipFirstRun?: boolean;
 }
@@ -102,6 +108,16 @@ function listSessionSnapshotFiles(directory: string): string[] {
     .filter(entry => entry.isFile() && entry.name.endsWith('.jsonl'))
     .map(entry => entry.name)
     .sort((a, b) => a.localeCompare(b));
+}
+
+function copyOptionalBackupFile(
+  sourcePath: string | undefined,
+  destinationDir: string,
+): void {
+  const normalizedPath = sourcePath?.trim();
+  if (!normalizedPath || !existsSync(normalizedPath)) return;
+  mkdirSync(destinationDir, { recursive: true });
+  copyFileSync(normalizedPath, join(destinationDir, basename(normalizedPath)));
 }
 
 /**
@@ -205,6 +221,10 @@ export async function runBackupCycle(
     copyFileSync(memoriesJournalPath, join(notesDir, basename(memoriesJournalPath)));
   }
 
+  const companionDir = join(backupDir, 'companion');
+  copyOptionalBackupFile(options.characterCardPath, companionDir);
+  copyOptionalBackupFile(options.characterCardHistoryPath, companionDir);
+
   // Apply tiered GFS retention (or fall back to flat count if tiering not configured).
   const maxRotating = options.maxRotatingBackups
     ?? options.retentionCount
@@ -277,6 +297,8 @@ export function registerScheduledBackupTask(
           databasePath: options.databasePath,
           sessionsDir: options.sessionsDir,
           memoriesJournalPath: options.memoriesJournalPath,
+          characterCardPath: options.characterCardPath,
+          characterCardHistoryPath: options.characterCardHistoryPath,
           backupRootDir: options.config.rootDir,
           maxRotatingBackups: options.config.maxRotatingBackups,
           maxWeeklyBackups: options.config.maxWeeklyBackups,

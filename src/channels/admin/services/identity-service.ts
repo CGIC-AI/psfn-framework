@@ -391,7 +391,7 @@ export class AdminIdentityDataService implements AdminIdentityService {
     return {
       ok: Boolean(entry),
       current,
-      target: entry?.newCard ?? current,
+      target: entry?.previousCard ?? current,
     };
   }
 

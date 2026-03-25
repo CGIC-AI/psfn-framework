@@ -624,6 +624,8 @@ async function main(): Promise<void> {
     databasePath: config.databasePath,
     sessionsDir,
     memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
+    characterCardPath: config.characterCardPath,
+    characterCardHistoryPath: resolveCharacterCardHistoryPath(companionDataDir),
     config: backupConfig,
   });
   log.info('Scheduled backups enabled', {

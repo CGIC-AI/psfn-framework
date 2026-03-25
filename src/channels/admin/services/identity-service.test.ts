@@ -245,6 +245,41 @@ describe('AdminIdentityDataService', () => {
     expect(rollback.message).toContain('Character Foundation sync warning');
   });
 
+  it('previews diffs against the selected historical version rather than the resulting new card', () => {
+    const root = makeTempDir();
+    const characterCardPath = writeCard(root, {
+      description: 'Original description kept in version 1',
+    });
+
+    const cardVersionStore = new CharacterCardVersionStore(
+      characterCardPath,
+      join(root, 'character-card-history.jsonl'),
+    );
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard('You are {{char}}.');
+
+    const service = new AdminIdentityDataService({
+      characterCard: loadCharacterCard(characterCardPath),
+      config: {} as SubstrateConfig,
+      cardVersionStore,
+      promptStore,
+    });
+
+    const update = service.updateIdentityField(JSON.stringify({
+      field: 'description',
+      value: 'Replacement description in version 2',
+    }));
+    expect(update.ok).toBe(true);
+
+    const preview = service.previewIdentityCardDiff(JSON.stringify({ version: 1 }));
+    expect(preview.ok).toBe(true);
+    expect(preview.current.data.description).toBe('Replacement description in version 2');
+    expect(preview.target.data.description).toBe('Original description kept in version 1');
+  });
+
   it('fails closed on rollback when target version has missing required identity fields', () => {
     const root = makeTempDir();
     const characterCardPath = writeCard(root);

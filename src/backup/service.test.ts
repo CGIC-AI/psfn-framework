@@ -43,10 +43,14 @@ describe('runBackupCycle', () => {
     const sessionsDir = join(root, 'sessions');
     const backupRootDir = join(root, 'backups');
     const databasePath = join(root, 'companion.db');
+    const characterCardPath = join(root, 'psfn.json');
+    const characterCardHistoryPath = join(root, 'character-card-history.jsonl');
     mkdirSync(sessionsDir, { recursive: true });
     writeFileSync(join(sessionsDir, 'alpha.jsonl'), '{"id":1}\n', 'utf-8');
     writeFileSync(join(sessionsDir, 'ignored.txt'), 'nope', 'utf-8');
     writeFileSync(databasePath, 'live-db', 'utf-8');
+    writeFileSync(characterCardPath, '{"name":"PSFN"}\n', 'utf-8');
+    writeFileSync(characterCardHistoryPath, '{"version":1}\n', 'utf-8');
 
     const backup = vi.fn(async (path: string) => {
       mkdirSync(dirname(path), { recursive: true });
@@ -58,6 +62,8 @@ describe('runBackupCycle', () => {
       databasePath,
       sessionsDir,
       backupRootDir,
+      characterCardPath,
+      characterCardHistoryPath,
       retentionCount: 7,
       now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
     });
@@ -67,6 +73,8 @@ describe('runBackupCycle', () => {
     expect(existsSync(result.databaseBackupPath)).toBe(true);
     expect(existsSync(join(result.sessionSnapshotDir, 'alpha.jsonl'))).toBe(true);
     expect(existsSync(join(result.sessionSnapshotDir, 'ignored.txt'))).toBe(false);
+    expect(existsSync(join(result.backupDir, 'companion', 'psfn.json'))).toBe(true);
+    expect(existsSync(join(result.backupDir, 'companion', 'character-card-history.jsonl'))).toBe(true);
     expect(result.copiedSessionFiles).toEqual(['alpha.jsonl']);
     expect(result.prunedBackupDirs).toEqual([]);
   });

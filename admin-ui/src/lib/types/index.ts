@@ -716,6 +716,36 @@ export interface ConstitutionUpdateResult {
   snapshot?: ConstitutionSnapshotData;
 }
 
+export type NorthStarScope = 'shared' | 'companion';
+
+export interface NorthStarItem {
+  id: string;
+  title: string;
+  content: string;
+  scope: NorthStarScope;
+  enabled: boolean;
+  priority: number;
+  updatedAt: string;
+  updatedBy: string;
+  checksum: string;
+  version: number;
+}
+
+export interface NorthStarSnapshotData {
+  items: NorthStarItem[];
+  limit: number;
+  preview: {
+    text: string;
+    hash: string;
+  };
+}
+
+export interface NorthStarUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: NorthStarSnapshotData;
+}
+
 export interface PromptUpdateResult {
   ok: boolean;
   message: string;

@@ -16,6 +16,7 @@ import {
 } from './cutover.js';
 import {
   resolveContinuityDir,
+  resolveNorthStarPath,
   resolveReflectionNotesDir,
   resolveValuesJournalPath,
 } from './layout.js';
@@ -97,6 +98,18 @@ describe('persistence cutover', () => {
       data: { name: 'Companion' },
     });
     writeText(join(dirs.legacySharedDataDir, 'values.jsonl'), '{"version":1}\n');
+    writeJson(join(dirs.legacySharedDataDir, 'north-star.json'), [{
+      id: 'north-star-1',
+      title: 'Shared care',
+      content: 'Protect the human and relationship.',
+      scope: 'shared',
+      enabled: true,
+      priority: 0,
+      updatedAt: '2026-03-25T00:00:00.000Z',
+      updatedBy: 'admin',
+      checksum: 'f8916cd4f51aab11',
+      version: 1,
+    }]);
     writeText(join(dirs.legacySharedDataDir, 'companion.db'), 'sqlite-main');
     writeText(join(dirs.legacySharedDataDir, 'companion.db-wal'), 'sqlite-wal');
     writeText(join(dirs.legacySharedDataDir, 'gateway-audit.db'), 'audit-main');
@@ -110,6 +123,7 @@ describe('persistence cutover', () => {
     expect(existsSync(join(dirs.systemDataDir, 'gateway-audit.db'))).toBe(true);
     expect(existsSync(join(dirs.companionDataDir, 'character.json'))).toBe(true);
     expect(existsSync(resolveValuesJournalPath(dirs.companionDataDir))).toBe(true);
+    expect(existsSync(resolveNorthStarPath(dirs.companionDataDir))).toBe(true);
     expect(existsSync(join(dirs.companionDataDir, 'companion.db'))).toBe(true);
     expect(existsSync(join(dirs.companionDataDir, 'companion.db-wal'))).toBe(true);
     expect(existsSync(join(dirs.companionDataDir, 'sessions', 'session-1.jsonl'))).toBe(true);

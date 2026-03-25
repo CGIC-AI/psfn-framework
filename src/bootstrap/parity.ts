@@ -58,6 +58,14 @@ import {
   createPromptLayerToggleTool,
   type PromptLayerUpdateToolOptions,
 } from '../identity/prompt-tools.js';
+import { NorthStarStore } from '../north-star/store.js';
+import {
+  createNorthStarCreateTool,
+  createNorthStarDeleteTool,
+  createNorthStarListTool,
+  createNorthStarReorderTool,
+  createNorthStarUpdateTool,
+} from '../north-star/tools.js';
 import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
 import {
   createHeartbeatGetPolicyTool,
@@ -77,6 +85,7 @@ import {
 import {
   resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,
+  resolveNorthStarPath,
   resolvePromptHistoryPath,
   resolvePromptLayersPath,
   resolvePromptRegistryHistoryPath,
@@ -257,19 +266,26 @@ export function wirePromptRuntime(
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });
+  const northStarStore = new NorthStarStore(resolveNorthStarPath(dataDir));
   promptStore.seedFromCharacterCard(baseSystemPrompt);
 
   target.promptComposer = new PromptComposer(promptStore, undefined, undefined, {
     enableConstitution: true,
     companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
+    northStarLayerProvider: () => northStarStore.buildPromptLayer(),
   });
   target.registerTool(createPromptLayerListTool(promptStore), 'core');
   target.registerTool(createPromptLayerGetTool(promptStore), 'core');
   target.registerTool(createIdentityDiffTool(promptStore), 'core');
+  target.registerTool(createNorthStarListTool(northStarStore), 'core');
   target.registerTool(createIdentityChangelogTool(promptStore), 'extended');
   target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
   target.registerTool(createPromptLayerRollbackTool(promptStore, options), 'extended');
   target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
+  target.registerTool(createNorthStarCreateTool(northStarStore), 'extended');
+  target.registerTool(createNorthStarUpdateTool(northStarStore), 'extended');
+  target.registerTool(createNorthStarDeleteTool(northStarStore), 'extended');
+  target.registerTool(createNorthStarReorderTool(northStarStore), 'extended');
 
   log.info(`Prompt stack enabled (${promptStore.count} layers)`);
   return promptStore;

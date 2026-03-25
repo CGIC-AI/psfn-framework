@@ -9,6 +9,7 @@ import {
   PromptComposer,
 } from './prompt-composer.js';
 import { ValuesJournalStore } from '../values/store.js';
+import { NorthStarStore } from '../north-star/store.js';
 
 describe('PromptComposer', () => {
   let tmpDir: string;
@@ -344,8 +345,9 @@ describe('PromptComposer', () => {
   });
 
   describe('constitution mode', () => {
-    it('prepends immutable amendments and a companion-derived values layer before mutable layers', () => {
+    it('prepends immutable amendments, companion values, and North Star before mutable layers', () => {
       const valuesStore = new ValuesJournalStore(join(tmpDir, 'values.jsonl'));
+      const northStarStore = new NorthStarStore(join(tmpDir, 'north-star.json'));
       valuesStore.append({
         templateId: 'values-reflection',
         templateName: 'Values Reflection',
@@ -370,6 +372,12 @@ describe('PromptComposer', () => {
           templateId: 'values-tool',
         },
       });
+      northStarStore.create({
+        title: 'Shared care',
+        content: 'Protect the human and the relationship over the long arc.',
+        scope: 'shared',
+        updatedBy: 'admin',
+      });
 
       const constitutionComposer = new PromptComposer(
         store,
@@ -378,6 +386,7 @@ describe('PromptComposer', () => {
         {
           enableConstitution: true,
           companionValuesLayerProvider: () => valuesStore.buildCompanionDerivedLayer(),
+          northStarLayerProvider: () => northStarStore.buildPromptLayer(),
         },
       );
       store.create({ type: 'base', name: 'Base', content: 'BASE' });
@@ -386,15 +395,18 @@ describe('PromptComposer', () => {
       const result = constitutionComposer.compose();
       const immutableIndex = result.text.indexOf(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
       const companionIndex = result.text.indexOf('[Companion-Derived Values Layer]');
+      const northStarIndex = result.text.indexOf('[North Star]');
       const baseIndex = result.text.indexOf('BASE');
       const runtimeIndex = result.text.indexOf('RUNTIME');
 
       expect(immutableIndex).toBeGreaterThanOrEqual(0);
       expect(companionIndex).toBeGreaterThan(immutableIndex);
-      expect(baseIndex).toBeGreaterThan(companionIndex);
+      expect(northStarIndex).toBeGreaterThan(companionIndex);
+      expect(baseIndex).toBeGreaterThan(northStarIndex);
       expect(runtimeIndex).toBeGreaterThan(baseIndex);
       expect(result.text).toContain('Companion value one');
       expect(result.text).not.toContain('Manual value should not be in companion layer');
+      expect(result.text).toContain('Shared care');
     });
 
     it('fails closed by keeping immutable amendments when the companion layer provider fails', () => {

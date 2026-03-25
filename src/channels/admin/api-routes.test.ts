@@ -2338,6 +2338,73 @@ describe('AdminServer JSON API routes', () => {
     });
   });
 
+  it('supports North Star snapshot save and enforces the three-item cap', async () => {
+    const snapshotRes = await request(port, 'GET', '/api/admin/prompts/north-star', undefined, authHeaders);
+    expect(snapshotRes.status).toBe(200);
+    const snapshotPayload = JSON.parse(snapshotRes.body) as {
+      items: Array<{ id: string }>;
+      limit: number;
+      preview: { text: string };
+    };
+    expect(snapshotPayload.items).toHaveLength(0);
+    expect(snapshotPayload.limit).toBe(3);
+    expect(snapshotPayload.preview.text).toBe('');
+
+    const saveRes = await request(
+      port,
+      'PUT',
+      '/api/admin/prompts/north-star',
+      JSON.stringify({
+        items: [
+          {
+            title: 'Shared care',
+            content: 'Protect the relationship and the human over the long horizon.',
+            scope: 'shared',
+            enabled: true,
+          },
+          {
+            title: 'Companion work',
+            content: 'Advance companion-owned projects between conversations.',
+            scope: 'companion',
+            enabled: true,
+          },
+        ],
+      }),
+      authHeaders,
+    );
+    expect(saveRes.status).toBe(200);
+    const savePayload = JSON.parse(saveRes.body) as {
+      ok: boolean;
+      snapshot?: {
+        items: Array<{ title: string }>;
+        preview: { text: string };
+      };
+    };
+    expect(savePayload.ok).toBe(true);
+    expect(savePayload.snapshot?.items.map(item => item.title)).toEqual(['Shared care', 'Companion work']);
+    expect(savePayload.snapshot?.preview.text).toContain('[North Star]');
+    expect(savePayload.snapshot?.preview.text).toContain('Companion work');
+
+    const overflowRes = await request(
+      port,
+      'PUT',
+      '/api/admin/prompts/north-star',
+      JSON.stringify({
+        items: [
+          { title: 'Goal 1', content: 'One', scope: 'shared', enabled: true },
+          { title: 'Goal 2', content: 'Two', scope: 'shared', enabled: true },
+          { title: 'Goal 3', content: 'Three', scope: 'companion', enabled: true },
+          { title: 'Goal 4', content: 'Four', scope: 'companion', enabled: true },
+        ],
+      }),
+      authHeaders,
+    );
+    expect(overflowRes.status).toBe(400);
+    expect(JSON.parse(overflowRes.body)).toEqual({
+      error: 'North Star is limited to 3 items',
+    });
+  });
+
   it('supports onboarding setup actions for keep starter and identity edits', async () => {
     const current = cardVersionStore.getCurrent().card;
     cardVersionStore.update({

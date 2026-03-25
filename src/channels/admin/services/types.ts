@@ -29,6 +29,7 @@ import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
 import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
+import type { NorthStarItem, NorthStarScope } from '../../../north-star/store.js';
 import type {
   ChannelInfo,
   CompactionAuditView,
@@ -404,6 +405,21 @@ export interface AdminConstitutionSnapshotData {
   preview: AdminConstitutionPreview;
 }
 
+export interface AdminNorthStarItem extends NorthStarItem {
+  scope: NorthStarScope;
+}
+
+export interface AdminNorthStarPreview {
+  text: string;
+  hash: string;
+}
+
+export interface AdminNorthStarSnapshotData {
+  items: AdminNorthStarItem[];
+  limit: number;
+  preview: AdminNorthStarPreview;
+}
+
 export interface AdminPromptDetailData {
   layer?: PromptLayer;
   layerHistory?: PromptHistoryEntry[];
@@ -424,10 +440,18 @@ export interface ConstitutionUpdateResult {
   snapshot?: AdminConstitutionSnapshotData;
 }
 
+export interface NorthStarUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: AdminNorthStarSnapshotData;
+}
+
 export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
   getConstitutionSnapshot(): AdminConstitutionSnapshotData | null;
   saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult;
+  getNorthStarSnapshot(): AdminNorthStarSnapshotData | null;
+  saveNorthStarItems(body: string): NorthStarUpdateResult;
   getPromptDetail(layerId: string): AdminPromptDetailData | null;
   getStaticPromptDetail(key: string): AdminPromptDetailData | null;
   createPromptLayer(body: string): PromptUpdateResult;

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { PromptLayerStore } from '../../../identity/prompt-store.js';
 import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../identity/prompt-composer.js';
 import { CARD_BACKED_FOUNDATION_PROMPT_MESSAGE } from '../../../identity/canonical-foundation.js';
+import { NorthStarStore } from '../../../north-star/store.js';
 import { AdminPromptsDataService } from './prompts-service.js';
 
 let tempDir: string | null = null;
@@ -227,5 +228,71 @@ describe('AdminPromptsDataService', () => {
     for (const [index, layerId] of expectedOrder.entries()) {
       expect(promptStore.getById(layerId)?.priority).toBe(index);
     }
+  });
+
+  it('returns a North Star snapshot and saves bounded ordered items', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const northStarStore = new NorthStarStore(join(root, 'north-star.json'));
+    northStarStore.create({
+      title: 'Shared stewardship',
+      content: 'Protect the relationship and the human over the long run.',
+      scope: 'shared',
+      updatedBy: 'admin',
+    });
+
+    const service = new AdminPromptsDataService({ promptStore, northStarStore });
+    const snapshot = service.getNorthStarSnapshot();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.items).toHaveLength(1);
+    expect(snapshot?.preview.text).toContain('[North Star]');
+    expect(snapshot?.limit).toBe(3);
+
+    const result = service.saveNorthStarItems(JSON.stringify({
+      items: [
+        {
+          id: snapshot?.items[0]?.id,
+          title: 'Shared stewardship',
+          content: 'Protect the relationship and the human over the long run.',
+          scope: 'shared',
+          enabled: true,
+        },
+        {
+          title: 'Companion work',
+          content: 'Advance companion-owned projects between conversations.',
+          scope: 'companion',
+          enabled: true,
+        },
+      ],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(result.snapshot?.items).toHaveLength(2);
+    expect(result.snapshot?.items[0]?.title).toBe('Shared stewardship');
+    expect(result.snapshot?.items[1]?.title).toBe('Companion work');
+    expect(result.snapshot?.preview.text).toContain('Companion work');
+  });
+
+  it('fails closed when North Star save exceeds the three-item cap', () => {
+    const root = makeTempDir();
+    const northStarStore = new NorthStarStore(join(root, 'north-star.json'));
+    const service = new AdminPromptsDataService({ northStarStore });
+
+    const result = service.saveNorthStarItems(JSON.stringify({
+      items: [
+        { title: 'Goal 1', content: 'One', scope: 'shared', enabled: true },
+        { title: 'Goal 2', content: 'Two', scope: 'shared', enabled: true },
+        { title: 'Goal 3', content: 'Three', scope: 'companion', enabled: true },
+        { title: 'Goal 4', content: 'Four', scope: 'companion', enabled: true },
+      ],
+    }));
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'North Star is limited to 3 items',
+    });
   });
 });

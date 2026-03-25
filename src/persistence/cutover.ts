@@ -25,6 +25,7 @@ import {
   resolveHeartbeatPolicyPath,
   resolveIdentityAssetsDir,
   resolveLastActiveSessionPath,
+  resolveNorthStarPath,
   resolveNotesDir,
   resolvePromptHistoryPath,
   resolvePromptLayersPath,
@@ -407,6 +408,17 @@ function buildCompanionSpecs(options: {
       sourceCandidates: uniqueResolvedPaths([
         join(options.legacyCompanionDir, 'prompt-registry-history.jsonl'),
         join(options.legacySharedDataDir, 'prompt-registry-history.jsonl'),
+      ]),
+    },
+    {
+      id: 'companion.north_star',
+      owner: 'companion',
+      kind: 'file',
+      description: 'north star goals',
+      targetPath: resolveNorthStarPath(options.companionDataDir),
+      sourceCandidates: uniqueResolvedPaths([
+        join(options.legacyCompanionDir, 'north-star.json'),
+        join(options.legacySharedDataDir, 'north-star.json'),
       ]),
     },
     {

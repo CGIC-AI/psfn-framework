@@ -2,6 +2,8 @@ import { apiGet, apiPatch, apiPost, apiPut } from '$lib/api/client';
 import type {
   ConstitutionUpdateResult,
   ConstitutionSnapshotData,
+  NorthStarSnapshotData,
+  NorthStarUpdateResult,
   AdminPromptListData,
   AdminPromptDetailData,
   PromptUpdateResult,
@@ -39,6 +41,22 @@ export function saveConstitutionMutableLayers(body: {
   }>;
 }): Promise<ConstitutionUpdateResult> {
   return apiPut<ConstitutionUpdateResult>('/api/admin/prompts/constitution', body);
+}
+
+export function getNorthStarSnapshot(): Promise<NorthStarSnapshotData> {
+  return apiGet<NorthStarSnapshotData>('/api/admin/prompts/north-star');
+}
+
+export function saveNorthStarItems(body: {
+  items: Array<{
+    id?: string;
+    title: string;
+    content: string;
+    scope: 'shared' | 'companion';
+    enabled: boolean;
+  }>;
+}): Promise<NorthStarUpdateResult> {
+  return apiPut<NorthStarUpdateResult>('/api/admin/prompts/north-star', body);
 }
 
 export function createPromptLayer(

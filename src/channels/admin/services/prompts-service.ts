@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
 import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
@@ -22,6 +23,12 @@ import {
   isCanonicalCharacterFoundationLayer,
 } from '../../../identity/canonical-foundation.js';
 import {
+  MAX_NORTH_STAR_ITEMS,
+  NORTH_STAR_SCOPES,
+  type NorthStarScope,
+  type NorthStarStore,
+} from '../../../north-star/store.js';
+import {
   containsStructuredPromptSections,
   getMalformedStructuredPromptErrors,
   parseStructuredPromptForm,
@@ -31,10 +38,12 @@ import type {
   AdminConstitutionImmutableBlock,
   AdminConstitutionMutableLayer,
   AdminConstitutionSnapshotData,
+  AdminNorthStarSnapshotData,
   AdminPromptDetailData,
   AdminPromptListData,
   AdminPromptsService,
   ConstitutionUpdateResult,
+  NorthStarUpdateResult,
   PromptUpdateResult,
 } from './types.js';
 
@@ -50,10 +59,19 @@ interface ConstitutionMutableLayerPatchInput {
   promptOrder?: number | null;
 }
 
+interface NorthStarItemInput {
+  id?: string;
+  title: string;
+  content: string;
+  scope: NorthStarScope;
+  enabled: boolean;
+}
+
 export class AdminPromptsDataService implements AdminPromptsService {
   constructor(private readonly deps: {
     promptStore?: PromptLayerStore | null;
     promptRegistry?: PromptRegistryStore | null;
+    northStarStore?: NorthStarStore | null;
     sessionStore?: SessionStore | null;
     sessionManager?: SessionManager | null;
     resolveCompanionName?: () => string;
@@ -68,6 +86,10 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
   private resolveCompanionName(): string {
     return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
+  }
+
+  private hashText(text: string): string {
+    return createHash('sha256').update(text).digest('hex').slice(0, 16);
   }
 
   private parseBody(body: string): URLSearchParams {
@@ -216,6 +238,70 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
   }
 
+  private getNorthStarStore(): NorthStarStore | null {
+    return this.deps.northStarStore ?? null;
+  }
+
+  private parseNorthStarItemInput(value: unknown): NorthStarItemInput | { error: string } {
+    if (!value || typeof value !== 'object') {
+      return { error: 'items entries must be objects' };
+    }
+
+    const item = value as Record<string, unknown>;
+    const parsed: NorthStarItemInput = {
+      title: '',
+      content: '',
+      scope: 'shared',
+      enabled: true,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(item, 'id')) {
+      if (typeof item.id !== 'string' || item.id.trim().length === 0) {
+        return { error: 'items entries with id must use a non-empty string id' };
+      }
+      parsed.id = item.id.trim();
+    }
+
+    if (typeof item.title !== 'string' || item.title.trim().length === 0) {
+      return { error: 'items entries require a non-empty title' };
+    }
+    parsed.title = item.title.trim();
+
+    if (typeof item.content !== 'string' || item.content.trim().length === 0) {
+      return { error: `North Star item "${parsed.title}" requires non-empty content` };
+    }
+    parsed.content = item.content.trim();
+
+    if (typeof item.scope !== 'string' || !NORTH_STAR_SCOPES.includes(item.scope as NorthStarScope)) {
+      return { error: `North Star item "${parsed.title}" scope must be one of: ${NORTH_STAR_SCOPES.join(', ')}` };
+    }
+    parsed.scope = item.scope as NorthStarScope;
+
+    if (Object.prototype.hasOwnProperty.call(item, 'enabled')) {
+      if (typeof item.enabled !== 'boolean') {
+        return { error: `North Star item "${parsed.title}" enabled must be a boolean` };
+      }
+      parsed.enabled = item.enabled;
+    }
+
+    return parsed;
+  }
+
+  getNorthStarSnapshot(): AdminNorthStarSnapshotData | null {
+    const northStarStore = this.getNorthStarStore();
+    if (!northStarStore) return null;
+
+    const previewText = northStarStore.buildPromptLayer()?.content ?? '';
+    return {
+      items: northStarStore.list().map(item => ({ ...item })),
+      limit: MAX_NORTH_STAR_ITEMS,
+      preview: {
+        text: previewText,
+        hash: this.hashText(previewText),
+      },
+    };
+  }
+
   getConstitutionSnapshot(): AdminConstitutionSnapshotData | null {
     const promptStore = this.deps.promptStore;
     if (!promptStore) return null;
@@ -241,6 +327,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
       {
         enableConstitution: true,
         companionValuesLayerProvider: this.deps.companionValuesLayerProvider,
+        northStarLayerProvider: () => this.getNorthStarStore()?.buildPromptLayer() ?? null,
         persistLastKnownGood: false,
       },
     );
@@ -450,6 +537,144 @@ export class AdminPromptsDataService implements AdminPromptsService {
     return {
       ok: true,
       message: 'Saved mutable constitution layers',
+      snapshot,
+    };
+  }
+
+  saveNorthStarItems(body: string): NorthStarUpdateResult {
+    const northStarStore = this.getNorthStarStore();
+    if (!northStarStore) {
+      return { ok: false, message: 'North Star store not configured' };
+    }
+
+    const params = this.parseBody(body);
+    const rawItems = params.get('items');
+    if (!rawItems) {
+      return { ok: false, message: 'items is required' };
+    }
+
+    let parsedItems: unknown;
+    try {
+      parsedItems = JSON.parse(rawItems);
+    } catch {
+      return { ok: false, message: 'items must be a JSON array' };
+    }
+
+    if (!Array.isArray(parsedItems)) {
+      return { ok: false, message: 'items must be a JSON array' };
+    }
+    if (parsedItems.length > MAX_NORTH_STAR_ITEMS) {
+      return { ok: false, message: `North Star is limited to ${String(MAX_NORTH_STAR_ITEMS)} items` };
+    }
+
+    const existingItems = northStarStore.list();
+    const existingById = new Map(existingItems.map(item => [item.id, item]));
+    const parsedInputs: NorthStarItemInput[] = [];
+    const seenIds = new Set<string>();
+
+    for (const entry of parsedItems) {
+      const parsedEntry = this.parseNorthStarItemInput(entry);
+      if ('error' in parsedEntry) {
+        return { ok: false, message: parsedEntry.error };
+      }
+      if (parsedEntry.id) {
+        if (!existingById.has(parsedEntry.id)) {
+          return { ok: false, message: `North Star item not found: ${parsedEntry.id}` };
+        }
+        if (seenIds.has(parsedEntry.id)) {
+          return { ok: false, message: `Duplicate North Star item id: ${parsedEntry.id}` };
+        }
+        seenIds.add(parsedEntry.id);
+      }
+      parsedInputs.push(parsedEntry);
+    }
+
+    const retainedIds = new Set(parsedInputs.flatMap(entry => entry.id ? [entry.id] : []));
+    for (const item of existingItems) {
+      if (!retainedIds.has(item.id)) {
+        try {
+          northStarStore.delete(item.id);
+        } catch (error) {
+          return { ok: false, message: String(error) };
+        }
+      }
+    }
+
+    const createdIds: string[] = [];
+    for (const entry of parsedInputs) {
+      if (entry.id) {
+        const existing = northStarStore.getById(entry.id);
+        if (!existing) {
+          return { ok: false, message: `North Star item not found: ${entry.id}` };
+        }
+        const needsUpdate = (
+          existing.title !== entry.title
+          || existing.content !== entry.content
+          || existing.scope !== entry.scope
+          || existing.enabled !== entry.enabled
+        );
+        if (!needsUpdate) {
+          continue;
+        }
+        try {
+          northStarStore.update(entry.id, {
+            title: entry.title,
+            content: entry.content,
+            scope: entry.scope,
+            enabled: entry.enabled,
+          }, 'admin');
+        } catch (error) {
+          return { ok: false, message: String(error) };
+        }
+        continue;
+      }
+
+      try {
+        const created = northStarStore.create({
+          title: entry.title,
+          content: entry.content,
+          scope: entry.scope,
+          enabled: entry.enabled,
+          updatedBy: 'admin',
+        });
+        createdIds.push(created.id);
+      } catch (error) {
+        return { ok: false, message: String(error) };
+      }
+    }
+
+    const desiredOrder: string[] = [];
+    let createdIndex = 0;
+    for (const entry of parsedInputs) {
+      if (entry.id) {
+        desiredOrder.push(entry.id);
+        continue;
+      }
+      const createdId = createdIds[createdIndex];
+      createdIndex += 1;
+      if (!createdId) {
+        return { ok: false, message: 'Failed to resolve created North Star item order' };
+      }
+      desiredOrder.push(createdId);
+    }
+
+    if (desiredOrder.length > 0) {
+      try {
+        northStarStore.reorder(desiredOrder, 'admin');
+      } catch (error) {
+        return { ok: false, message: String(error) };
+      }
+    }
+
+    const snapshot = this.getNorthStarSnapshot();
+    if (!snapshot) {
+      return { ok: false, message: 'Failed to load North Star snapshot after save' };
+    }
+
+    this.injectPromptEditSystemNote('Admin updated North Star goals.');
+    return {
+      ok: true,
+      message: 'Saved North Star goals',
       snapshot,
     };
   }

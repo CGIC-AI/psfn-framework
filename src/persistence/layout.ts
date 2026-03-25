@@ -535,6 +535,10 @@ export function resolvePromptRegistryHistoryPath(companionDataDir: string): stri
   return join(companionDataDir, 'prompt-registry-history.jsonl');
 }
 
+export function resolveNorthStarPath(companionDataDir: string): string {
+  return join(companionDataDir, 'north-star.json');
+}
+
 export function resolveHeartbeatPolicyPath(companionDataDir: string): string {
   return join(companionDataDir, 'heartbeat-policy.json');
 }

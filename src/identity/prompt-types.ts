@@ -53,6 +53,11 @@ export interface CompanionValuesLayerSnapshot {
   entryIds: string[];
 }
 
+export interface NorthStarLayerSnapshot {
+  content: string;
+  itemIds: string[];
+}
+
 export interface PromptComposerOptions {
   /**
    * When enabled, prepend immutable constitution amendments before mutable prompt layers.
@@ -62,6 +67,10 @@ export interface PromptComposerOptions {
    * Optional provider for the secondary companion-derived values layer.
    */
   companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
+  /**
+   * Optional provider for the North Star long-term goals layer that follows constitution content.
+   */
+  northStarLayerProvider?: () => NorthStarLayerSnapshot | null;
   /**
    * Persist last-known-good composed prompt snapshots to disk.
    * Defaults to true.

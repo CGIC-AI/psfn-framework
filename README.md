@@ -257,7 +257,7 @@ Your companion has access to these tools during conversation. Core tools are alw
 |----------|-------|
 | **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
 | **Contacts** | `contact_set_trust`, `contact_note`, `contact_set_channel_privacy`, `contact_link_identity`, `contact_lookup`, `contact_list` |
-| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `identity_diff`, `identity_changelog`, `character_card_update` |
+| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `north_star_list`, `north_star_create`, `north_star_update`, `north_star_delete`, `north_star_reorder`, `identity_diff`, `identity_changelog`, `character_card_update` |
 | **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
 | **Values** | `values_list`, `values_add`, `values_update` |

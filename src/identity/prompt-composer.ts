@@ -12,6 +12,7 @@ import type {
   ComposeResult,
   ComposeSplitResult,
   LayerType,
+  NorthStarLayerSnapshot,
   PromptComposerOptions,
   PromptLayer,
 } from './prompt-types.js';
@@ -33,6 +34,7 @@ const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F
 const CONSTITUTION_PRECEDENCE_HEADER = '[Constitution Precedence]';
 export const IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER = '[Immutable Human-Safety Amendments]';
 export const COMPANION_VALUES_LAYER_HEADER = '[Companion-Derived Values Layer]';
+export const NORTH_STAR_LAYER_HEADER = '[North Star]';
 export const IMMUTABLE_HUMAN_SAFETY_AMENDMENTS = Object.freeze([
   'Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.',
   'Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.',
@@ -190,6 +192,14 @@ function isCompanionValuesLayerSnapshot(value: unknown): value is CompanionValue
   return true;
 }
 
+function isNorthStarLayerSnapshot(value: unknown): value is NorthStarLayerSnapshot {
+  if (!value || typeof value !== 'object') return false;
+  const snapshot = value as Record<string, unknown>;
+  if (typeof snapshot.content !== 'string') return false;
+  if (!isStringArray(snapshot.itemIds)) return false;
+  return true;
+}
+
 function isComposeSplitResult(value: unknown): value is ComposeSplitResult {
   if (!value || typeof value !== 'object') return false;
   const result = value as Record<string, unknown>;
@@ -248,6 +258,7 @@ export class PromptComposer {
   private manager: PromptManager;
   private readonly enableConstitution: boolean;
   private readonly companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
+  private readonly northStarLayerProvider?: () => NorthStarLayerSnapshot | null;
   private readonly persistLastKnownGoodSnapshot: boolean;
   private lastKnownGood: ComposeSplitResult | null = null;
   private lastKnownGoodPath: string;
@@ -262,6 +273,7 @@ export class PromptComposer {
     this.manager = manager;
     this.enableConstitution = options.enableConstitution === true;
     this.companionValuesLayerProvider = options.companionValuesLayerProvider;
+    this.northStarLayerProvider = options.northStarLayerProvider;
     this.persistLastKnownGoodSnapshot = options.persistLastKnownGood !== false;
     this.lastKnownGoodPath = lastKnownGoodPath ?? join(dirname(this.store.layerFilePath), LAST_KNOWN_GOOD_FILENAME);
     this.lastKnownGood = this.ensureConstitutionPrefix(this.loadPersistedLastKnownGood());
@@ -293,6 +305,9 @@ export class PromptComposer {
     const companionValuesSection = this.enableConstitution
       ? this.resolveCompanionValuesLayer()
       : null;
+    const northStarSection = this.enableConstitution
+      ? this.resolveNorthStarLayer()
+      : null;
 
     const staticChunks: string[] = [];
     const dynamicChunks: string[] = [];
@@ -306,6 +321,9 @@ export class PromptComposer {
     }
     if (companionValuesSection) {
       staticChunks.push(companionValuesSection.content);
+    }
+    if (northStarSection) {
+      staticChunks.push(northStarSection.content);
     }
 
     for (const prompt of managed.prompts) {
@@ -360,6 +378,7 @@ export class PromptComposer {
         this.enableConstitution
         && !hasManagedPrompts
         && !companionValuesSection
+        && !northStarSection
       )
     );
     if (shouldUseFallback && this.lastKnownGood) {
@@ -472,6 +491,34 @@ export class PromptComposer {
       };
     } catch (error) {
       log.warn('Companion values layer provider failed closed', {
+        error: String(error),
+      });
+      return null;
+    }
+  }
+
+  private resolveNorthStarLayer(): NorthStarLayerSnapshot | null {
+    if (!this.northStarLayerProvider) return null;
+    try {
+      const snapshot = this.northStarLayerProvider();
+      if (snapshot == null) return null;
+      if (!isNorthStarLayerSnapshot(snapshot)) {
+        throw new Error('North Star layer provider returned malformed payload');
+      }
+      const content = stripControlCharacters(snapshot.content);
+      if (!content) return null;
+      const itemIds = snapshot.itemIds
+        .map(entry => entry.trim())
+        .filter(entry => entry.length > 0);
+      const normalizedContent = content.includes(NORTH_STAR_LAYER_HEADER)
+        ? content
+        : `${NORTH_STAR_LAYER_HEADER}\n${content}`;
+      return {
+        content: normalizedContent,
+        itemIds,
+      };
+    } catch (error) {
+      log.warn('North Star layer provider failed closed', {
         error: String(error),
       });
       return null;

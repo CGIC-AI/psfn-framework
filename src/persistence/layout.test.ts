@@ -35,6 +35,7 @@ import {
   resolvePersistenceRoots,
   resolvePromptHistoryPath,
   resolvePromptLayersPath,
+  resolveNorthStarPath,
   resolvePostTurnActionQueuePath,
   resolvePromptRegistryHistoryPath,
   resolvePromptRegistryPath,
@@ -98,6 +99,7 @@ describe('persistence layout', () => {
     expect(resolvePromptHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-history.jsonl'));
     expect(resolvePromptRegistryPath(dataDir)).toBe(join(dataDir, 'prompt-registry.json'));
     expect(resolvePromptRegistryHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-registry-history.jsonl'));
+    expect(resolveNorthStarPath(dataDir)).toBe(join(dataDir, 'north-star.json'));
     expect(resolveHeartbeatPolicyPath(dataDir)).toBe(join(dataDir, 'heartbeat-policy.json'));
     expect(resolvePostTurnActionQueuePath(dataDir)).toBe(join(dataDir, 'post-turn-actions.queue.json'));
     expect(resolveSafeguardAuditTrailPath(dataDir)).toBe(join(dataDir, 'safeguards-audit.jsonl'));

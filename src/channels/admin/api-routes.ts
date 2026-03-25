@@ -740,6 +740,34 @@ export function buildAdminApiRoutes(options: {
       },
     },
     {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/contacts/', 'id', '/conversation-channel/delete'),
+      handle: (req, res, { id }) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const deleteConversationChannel = (
+            contactsService as AdminContactsService & {
+              deleteConversationChannel?: (contactId: string, requestBody: string) => { ok: boolean; message: string };
+            }
+          ).deleteConversationChannel;
+          if (typeof deleteConversationChannel !== 'function') {
+            sendJson(res, 400, { error: 'Conversation channel deletion is not available' });
+            return;
+          }
+          const result = deleteConversationChannel(id, JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
       method: 'GET',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }) => {
@@ -1278,6 +1306,37 @@ export function buildAdminApiRoutes(options: {
             return;
           }
           const result = promptsService.saveConstitutionMutableLayers(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/prompts/north-star'),
+      handle: (_req, res) => {
+        const snapshot = promptsService.getNorthStarSnapshot();
+        if (!snapshot) {
+          sendJson(res, 400, { error: 'North Star store not configured' });
+          return;
+        }
+        sendJson(res, 200, snapshot);
+      },
+    },
+    {
+      method: 'PUT',
+      match: exactPath('/api/admin/prompts/north-star'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = promptsService.saveNorthStarItems(JSON.stringify(parsed.value));
           if (!result.ok) {
             sendJson(res, 400, { error: result.message });
             return;

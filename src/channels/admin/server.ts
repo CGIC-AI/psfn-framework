@@ -13,9 +13,11 @@ import { createComponentLogger } from '../../logger.js';
 import { toErrorMessage } from '../../utils/errors.js';
 import { readBodyWithLimit, sendText } from '../http/primitives.js';
 import { ValuesJournalStore } from '../../values/store.js';
+import { NorthStarStore } from '../../north-star/store.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveLegacyValuesJournalPath,
+  resolveNorthStarPath,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import type { AdminServerConfig } from './types.js';
@@ -112,9 +114,11 @@ export class AdminServer implements Lifecycle {
     this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
       legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
     });
+    const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
     this.promptsService = new AdminPromptsDataService({
       promptStore: config.promptStore,
       promptRegistry: config.promptRegistry,
+      northStarStore,
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
       resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),

@@ -87,6 +87,7 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'skill_view',
   'prompt_layer_list',
   'prompt_layer_get',
+  'north_star_list',
   'identity_diff',
 ]);
 

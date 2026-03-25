@@ -383,6 +383,35 @@ describe('resolveRoutingCandidates(import_processing)', () => {
   });
 });
 
+describe('resolveRoutingCandidates(memory)', () => {
+  it('prefers memory-primary candidates over background candidates', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'memory-primary',
+          rank: 20,
+          provider: 'openrouter',
+          model: 'memory/model',
+          maxOutputTokens: 2048,
+          contextWindow: 96_000,
+          purposes: [{ purpose: 'memory', primary: true }],
+        },
+        {
+          id: 'background-primary',
+          rank: 10,
+          provider: 'openrouter',
+          model: 'background/model',
+          maxOutputTokens: 4096,
+          contextWindow: 128_000,
+          purposes: [{ purpose: 'background', primary: true }],
+        },
+      ]),
+    }), 'memory');
+
+    expect(candidates.map((candidate) => candidate.model)).toEqual(['memory/model']);
+  });
+});
+
 describe('resolveRoutingCandidates fail-closed behavior', () => {
   it('returns no candidates when no eligible registry models exist for the requested purpose', () => {
     const candidates = resolveRoutingCandidates(makeConfig({

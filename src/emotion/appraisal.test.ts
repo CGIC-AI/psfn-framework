@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMProvider } from '../agent/contracts.js';
-import type { LLMContext, LLMResponse } from '../types.js';
+import type { CompletionPurpose, LLMContext, LLMResponse } from '../types.js';
 import { EmotionAppraisal } from './appraisal.js';
 import type { EmotionStateSnapshot } from './state.js';
 import { InternalStateComputer } from '../self-model/state.js';
@@ -21,7 +21,7 @@ function makeMockProvider(responses: string[]): { provider: LLMProvider; complet
   let index = 0;
   const complete = vi.fn(async (
     _context: LLMContext,
-    _purpose: 'background' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing',
+    _purpose: CompletionPurpose,
   ) => {
     const fallback = responses.length > 0 ? responses[responses.length - 1] : 'default appraisal';
     const content = responses[index] ?? fallback;

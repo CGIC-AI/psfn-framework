@@ -91,6 +91,7 @@ describe('subsystem config round-trip', () => {
           },
           purposes: [
             { purpose: 'background', primary: true },
+            { purpose: 'memory', primary: true },
             { purpose: 'extraction', primary: true },
             { purpose: 'import_processing', primary: true },
           ],
@@ -104,6 +105,7 @@ describe('subsystem config round-trip', () => {
     expect(saved.modelRegistry).toEqual(expected);
     expect(saved.modelRoleAssignments.chat).toBe('primary');
     expect(saved.modelRoleAssignments.background).toBe('extraction');
+    expect(saved.modelRoleAssignments.memory).toBe('extraction');
     expect(saved.modelRoleAssignments.extraction).toBe('extraction');
     expect(saved.modelRoleAssignments.import_processing).toBe('extraction');
     expect(saved.modelRoleAssignments.moa).toBe('primary');
@@ -146,6 +148,7 @@ describe('subsystem config round-trip', () => {
           purposes: [
             { purpose: 'chat', primary: true },
             { purpose: 'background', primary: true },
+            { purpose: 'memory', primary: true },
             { purpose: 'extraction', primary: true },
             { purpose: 'import_processing', primary: true },
           ],
@@ -197,6 +200,7 @@ describe('subsystem config round-trip', () => {
           },
           purposes: [
             { purpose: 'background', primary: true },
+            { purpose: 'memory', primary: true },
             { purpose: 'extraction', primary: true },
             { purpose: 'import_processing', primary: true },
           ],

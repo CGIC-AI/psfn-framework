@@ -3,7 +3,7 @@ import type { CapabilityTier } from './tier-types.js';
 import type { CapabilityToken } from './tokens.js';
 
 export type RuntimeTier = CapabilityTier;
-export type EligibilityLLMPurpose = 'chat' | 'background' | 'reasoning' | 'import_processing';
+export type EligibilityLLMPurpose = 'chat' | 'background' | 'memory' | 'reasoning' | 'import_processing';
 export type EligibilityPluginType = 'channel' | 'stt' | 'tts';
 
 export type EligibilityOperation =
@@ -41,6 +41,7 @@ export type EligibilityDecisionReporter = (decision: EligibilityDecision) => voi
 const DEFAULT_LLM_PURPOSE_REQUIREMENTS: Readonly<Record<EligibilityLLMPurpose, EligibilityRequirements>> = {
   chat: {},
   background: { requiredTokens: ['memory.write'] },
+  memory: { requiredTokens: ['memory.write'] },
   reasoning: {},
   import_processing: { requiredTokens: ['memory.write'] },
 };

@@ -768,6 +768,9 @@ export class LLMClient {
     if (purpose === 'import_processing') {
       return 'import_processing';
     }
+    if (purpose === 'memory') {
+      return 'memory';
+    }
     if (purpose === 'context') {
       return 'context';
     }
@@ -784,6 +787,7 @@ export class LLMClient {
     if (purpose === 'chat') return 'chat';
     if (purpose === 'reasoning') return 'reasoning';
     if (purpose === 'import_processing') return 'import_processing';
+    if (purpose === 'memory') return 'memory';
     return 'background';
   }
 

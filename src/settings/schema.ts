@@ -564,9 +564,6 @@ export function normalizeCanonicalModelRegistry(
     ? normalizeModelRegistryBudgetPolicy(value.budgetPolicy, `${sourcePath}.budgetPolicy`)
     : undefined;
 
-  const primaryPurposeCounts = new Map<CanonicalModelPurpose, number>(
-    CANONICAL_MODEL_PURPOSES.map((purpose) => [purpose, 0]),
-  );
   const seenIds = new Set<string>();
   const models = value.models.map((entry, index) => {
     const normalized = normalizeModelRegistryEntry(entry, `${sourcePath}.models[${index}]`);
@@ -574,13 +571,20 @@ export function normalizeCanonicalModelRegistry(
       throw new Error(`Invalid model registry at ${sourcePath}.models[${index}].id: duplicate "${normalized.id}"`);
     }
     seenIds.add(normalized.id);
-    for (const purposeTag of normalized.purposes) {
+    return normalized;
+  });
+  backfillPrimaryMemoryPurpose(models);
+
+  const primaryPurposeCounts = new Map<CanonicalModelPurpose, number>(
+    CANONICAL_MODEL_PURPOSES.map((purpose) => [purpose, 0]),
+  );
+  for (const model of models) {
+    for (const purposeTag of model.purposes) {
       if (!purposeTag.primary) continue;
       const previous = primaryPurposeCounts.get(purposeTag.purpose) ?? 0;
       primaryPurposeCounts.set(purposeTag.purpose, previous + 1);
     }
-    return normalized;
-  });
+  }
 
   for (const purpose of CANONICAL_MODEL_PURPOSES) {
     const primaryCount = primaryPurposeCounts.get(purpose) ?? 0;
@@ -596,6 +600,29 @@ export function normalizeCanonicalModelRegistry(
     models,
     ...(budgetPolicy ? { budgetPolicy } : {}),
   };
+}
+
+function backfillPrimaryMemoryPurpose(models: ModelRegistryEntry[]): void {
+  if (models.some((entry) => entry.purposes.some((tag) => tag.purpose === 'memory' && tag.primary))) {
+    return;
+  }
+
+  // Compatibility migration: before the dedicated memory route existed, extraction/background
+  // carried this workload. Preserve loadability by projecting memory onto that primary model.
+  const target = models.find((entry) => entry.purposes.some((tag) => tag.purpose === 'extraction' && tag.primary))
+    ?? models.find((entry) => entry.purposes.some((tag) => tag.purpose === 'background' && tag.primary));
+  if (!target) return;
+
+  const existingMemoryIndex = target.purposes.findIndex((tag) => tag.purpose === 'memory');
+  if (existingMemoryIndex >= 0) {
+    target.purposes[existingMemoryIndex] = {
+      ...target.purposes[existingMemoryIndex],
+      primary: true,
+    };
+    return;
+  }
+
+  target.purposes.push({ purpose: 'memory', primary: true });
 }
 
 function resolvePrimaryModelIdsByPurpose(registry: CanonicalModelRegistry): Record<CanonicalModelPurpose, string> {
@@ -678,6 +705,7 @@ function projectCanonicalModelRegistry(
   const chatModelId = primaryByPurpose.chat;
   const extractionModelId = primaryByPurpose.extraction;
   const backgroundModelId = primaryByPurpose.background;
+  const memoryModelId = primaryByPurpose.memory;
   const reasoningModelId = primaryByPurpose.reasoning;
   const longContextModelId = primaryByPurpose.longContext;
   const visionModelId = primaryByPurpose.vision;
@@ -685,16 +713,18 @@ function projectCanonicalModelRegistry(
   const chatEntry = registryById.get(chatModelId);
   const extractionEntry = registryById.get(extractionModelId);
   const backgroundEntry = registryById.get(backgroundModelId);
+  const memoryEntry = registryById.get(memoryModelId);
   const reasoningEntry = registryById.get(reasoningModelId);
   const longContextEntry = registryById.get(longContextModelId);
   const visionEntry = registryById.get(visionModelId);
-  if (!chatEntry || !extractionEntry || !backgroundEntry || !reasoningEntry || !longContextEntry || !visionEntry) {
+  if (!chatEntry || !extractionEntry || !backgroundEntry || !memoryEntry || !reasoningEntry || !longContextEntry || !visionEntry) {
     throw new Error('Invalid model registry: missing projected primary model entries');
   }
 
   const chatSlot = resolveModelSlotFromRegistryEntry(chatEntry, options?.defaultContextWindow);
   const extractionSlot = resolveModelSlotFromRegistryEntry(extractionEntry, options?.defaultContextWindow);
   const backgroundSlot = resolveModelSlotFromRegistryEntry(backgroundEntry, options?.defaultContextWindow);
+  const memorySlot = resolveModelSlotFromRegistryEntry(memoryEntry, options?.defaultContextWindow);
   const reasoningSlot = resolveModelSlotFromRegistryEntry(reasoningEntry, options?.defaultContextWindow);
   const longContextSlot = resolveModelSlotFromRegistryEntry(longContextEntry, options?.defaultContextWindow);
   const visionSlot = resolveModelSlotFromRegistryEntry(visionEntry, options?.defaultContextWindow);
@@ -706,6 +736,7 @@ function projectCanonicalModelRegistry(
     modelRoster: {
       chat: chatSlot,
       background: backgroundSlot,
+      memory: memorySlot,
       context: backgroundSlot,
       reasoning: reasoningSlot,
       longContext: longContextSlot,
@@ -902,7 +933,7 @@ function _mergeCatalogSlot(
 }
 
 function defaultSlotKeyForPurpose(purpose: string): string {
-  if (purpose === 'background' || purpose === 'context' || purpose === 'extraction') {
+  if (purpose === 'background' || purpose === 'memory' || purpose === 'context' || purpose === 'extraction') {
     return EXTRACTION_MODEL_SLOT_KEY;
   }
   if (purpose === 'chat' || purpose === 'summary' || purpose === 'reasoning' || purpose === 'longContext') {
@@ -919,6 +950,8 @@ function resolveCatalogSlotKey(
 ): string | undefined {
   const candidates = [
     assignments[purpose],
+    purpose === 'memory' ? assignments.extraction : undefined,
+    purpose === 'memory' ? assignments.background : undefined,
     purpose === 'context' ? assignments.background : undefined,
     purpose === 'context' ? assignments.extraction : undefined,
     purpose === 'background' ? assignments.extraction : undefined,

@@ -26,6 +26,7 @@ import type {
 import type { SettingsContractData } from '../../../config/settings-contract.js';
 import type { BackupJsonConfig } from '../../../config/backup-config.js';
 import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
+import type { ProvidersRuntimeConfig } from '../../../config/providers-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
 import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
@@ -287,6 +288,7 @@ export interface AdminIdentityService {
 
 export interface SettingsConfigEditors {
   models: ModelsRuntimeConfig;
+  providers: ProvidersRuntimeConfig;
   skills: SkillsRuntimeConfig;
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;

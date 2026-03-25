@@ -92,6 +92,7 @@
   let initialRawJsonByKey = $state<Record<RawEditorKey, string>>({
     settings: '',
     models: '',
+    providers: '',
     skills: '',
     scheduler: '',
     'trust-policy': '',
@@ -237,6 +238,7 @@
 
   // ── Raw editor states ──
   let modelsJson = $state('');
+  let providersJson = $state('');
   let skillsJson = $state('');
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
@@ -903,6 +905,7 @@
   function getRawJson(key: string): string {
     switch (key) {
       case 'models': return modelsJson;
+      case 'providers': return providersJson;
       case 'skills': return skillsJson;
       case 'scheduler': return schedulerJson;
       case 'trust-policy': return trustPolicyJson;
@@ -915,6 +918,7 @@
   function setRawJson(key: string, val: string) {
     switch (key) {
       case 'models': modelsJson = val; break;
+      case 'providers': providersJson = val; break;
       case 'skills': skillsJson = val; break;
       case 'scheduler': schedulerJson = val; break;
       case 'trust-policy': trustPolicyJson = val; break;
@@ -927,6 +931,7 @@
     return {
       settings: settingsJson,
       models: modelsJson,
+      providers: providersJson,
       skills: skillsJson,
       scheduler: schedulerJson,
       'trust-policy': trustPolicyJson,
@@ -1113,13 +1118,15 @@
     populateSimpleFields(nextSettingsData);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
-    const [skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
+    const [provConf, skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
+      getSubConfig('providers').catch(() => '{}'),
       getSubConfig('skills').catch(() => '{}'),
       getSubConfig('scheduler').catch(() => '{}'),
       getSubConfig('trust-policy').catch(() => '{}'),
       getSubConfig('capabilities').catch(() => '{}'),
       getSubConfig('backup').catch(() => '{}'),
     ]);
+    providersJson = tryPrettyPrint(provConf);
     skillsJson = tryPrettyPrint(skConf);
     schedulerJson = tryPrettyPrint(schConf);
     trustPolicyJson = tryPrettyPrint(tpConf);
@@ -1300,13 +1307,15 @@
       populateSimpleFields(data);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
-      const [skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
+      const [provConf, skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
+        getSubConfig('providers').catch(() => '{}'),
         getSubConfig('skills').catch(() => '{}'),
         getSubConfig('scheduler').catch(() => '{}'),
         getSubConfig('trust-policy').catch(() => '{}'),
         getSubConfig('capabilities').catch(() => '{}'),
         getSubConfig('backup').catch(() => '{}'),
       ]);
+      providersJson = tryPrettyPrint(provConf);
       skillsJson = tryPrettyPrint(skConf);
       schedulerJson = tryPrettyPrint(schConf);
       trustPolicyJson = tryPrettyPrint(tpConf);

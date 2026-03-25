@@ -169,6 +169,7 @@ export function listGardenSettingsFieldExposureKeys(): string[] {
 export const SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY = {
   settings: 'runtime',
   models: 'models',
+  providers: 'providers',
   skills: 'skills',
   scheduler: 'scheduler',
   'trust-policy': 'trustPolicy',
@@ -185,6 +186,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_KEYS = Object.keys(
 export const SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSettingsRawEditorKey, string> = {
   settings: 'settings.json',
   models: 'models.json',
+  providers: 'providers.json',
   skills: 'skills.json',
   scheduler: 'scheduler.json',
   'trust-policy': 'trust-policy.json',
@@ -195,6 +197,7 @@ export const SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSetti
 export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
   'runtime',
   'models',
+  'providers',
   'scheduler',
   'capabilities',
   'skills',

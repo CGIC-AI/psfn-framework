@@ -43,6 +43,10 @@ import {
   resolveCorrelationMetadata,
 } from './correlation.js';
 import { ModelBudgetController, ModelBudgetExceededError } from './model-budget.js';
+import {
+  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMBaseUrl,
+} from '../config/providers-config.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -104,6 +108,7 @@ export class LegacyModelHintError extends Error {
 export class LLMClient {
   private config: SubstrateConfig;
   private litellmBaseUrl: string | null;
+  private litellmApiKeyEnv: string;
   private fallbackRunner: FallbackRunner;
   private budgetController: ModelBudgetController;
   private eligibilityGate?: EligibilityGate;
@@ -118,7 +123,8 @@ export class LLMClient {
       ? { litellmBaseUrl: litellmBaseUrlOrOptions }
       : (litellmBaseUrlOrOptions ?? {});
     this.config = config;
-    this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? process.env.LITELLM_BASE_URL ?? null;
+    this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? resolveConfiguredLiteLLMBaseUrl(config);
+    this.litellmApiKeyEnv = resolveConfiguredLiteLLMApiKeyEnv(config);
     this.fallbackRunner = new FallbackRunner();
     this.budgetController = new ModelBudgetController(config);
     this.eligibilityGate = runtimeOptions.eligibilityGate;
@@ -142,12 +148,15 @@ export class LLMClient {
     if (this.litellmBaseUrl) {
       return {
         model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
-        apiKey: process.env.LITELLM_API_KEY ?? undefined,
+        apiKey: process.env[this.litellmApiKeyEnv] ?? undefined,
       };
     }
     const model = resolveRegisteredModel(candidate.provider, modelId);
     if (!model) {
-      throw new Error(`Unknown model "${modelId}" for provider "${candidate.provider}". Set LITELLM_BASE_URL or update the canonical model config in models.json`);
+      throw new Error(
+        `Unknown model "${modelId}" for provider "${candidate.provider}". `
+        + 'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
+      );
     }
     return {
       model,

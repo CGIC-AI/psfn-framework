@@ -529,10 +529,12 @@ export interface AdminSettingsData {
   env: Record<string, unknown>;
   editors: {
     models: unknown;
+    providers: unknown;
     skills: unknown;
     scheduler: unknown;
     trustPolicy: unknown;
     capabilities: unknown;
+    backup: unknown;
   };
   voiceProviders: {
     stt: Array<{

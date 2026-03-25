@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { loadBackupConfig } from '../../../config/backup-config.js';
 import { loadCapabilityTierConfig } from '../../../config/capability-tier-config.js';
 import { loadModelsConfig } from '../../../config/models-config.js';
+import { loadProvidersConfig } from '../../../config/providers-config.js';
 import { loadSchedulerConfig } from '../../../config/scheduler-config.js';
 import { loadSettings } from '../../../settings.js';
 import type { SubstrateConfig } from '../../../types.js';
@@ -26,6 +27,7 @@ function buildConfig(
 ): SubstrateConfig {
   const defaultContextWindow = 128_000;
   const models = loadModelsConfig(root, { defaultContextWindow });
+  const providers = loadProvidersConfig(root);
   loadSettings(root);
 
   return {
@@ -54,6 +56,11 @@ function buildConfig(
     modelCatalog: models.modelCatalog,
     modelRoleAssignments: models.modelRoleAssignments,
     modelRegistry: models.modelRegistry,
+    providerRegistry: providers.registry,
+    litellmBaseUrl: providers.litellmBaseUrl,
+    litellmApiKeyEnv: providers.litellmApiKeyEnv,
+    openRouterApiBaseUrl: providers.openRouterApiBaseUrl,
+    openRouterModelsApiUrl: providers.openRouterModelsApiUrl,
     runtimeHooks: hooks,
   };
 }
@@ -427,5 +434,51 @@ describe('AdminSettingsDataService', () => {
 
     const settingsData = await service.getSettingsData();
     expect(settingsData.editors.backup).toEqual(payload);
+  });
+
+  it('round-trips providers through providers.json owner-file saves and refreshes runtime routing', async () => {
+    const root = makeTempDir();
+    const refreshModelsSpy = vi.fn();
+    const config = buildConfig(root, {
+      refreshModels: refreshModelsSpy,
+    });
+    const service = new AdminSettingsDataService({ config });
+    const payload = {
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'litellm',
+          type: 'litellm_proxy',
+          enabled: true,
+          apiBaseUrl: 'http://127.0.0.1:4100/v1',
+          apiKeyEnv: 'LITELLM_API_KEY',
+        },
+        {
+          id: 'openrouter',
+          type: 'openrouter',
+          enabled: true,
+          apiBaseUrl: 'https://openrouter.ai/api/v1',
+          modelsApiUrl: 'https://openrouter.ai/api/v1/models',
+          apiKeyEnv: 'OPENROUTER_API_KEY',
+        },
+      ],
+    };
+
+    const result = service.saveSubConfigJson('providers', JSON.stringify(payload));
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'providers.json saved',
+    });
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+    expect(loadProvidersConfig(root).registry).toEqual(payload);
+    expect(config.litellmBaseUrl).toBe('http://127.0.0.1:4100/v1');
+    expect(JSON.parse(service.getSubConfigJson('providers') ?? '{}')).toEqual(payload);
+
+    const settingsData = await service.getSettingsData();
+    expect(settingsData.editors.providers).toEqual(expect.objectContaining({
+      registry: payload,
+      litellmBaseUrl: 'http://127.0.0.1:4100/v1',
+    }));
   });
 });

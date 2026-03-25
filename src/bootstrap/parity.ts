@@ -119,6 +119,7 @@ import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
   decisionsToPostTurnActionCandidates,
+  isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
   sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
@@ -1308,7 +1309,7 @@ export function wireHeartbeatRuntime(
           {
             message: context.message,
           },
-          motivationAssessment?.shouldTriggerAppraisal
+          isBackgroundAppraisalChannel(context.message.channelId)
             ? { surfacePendingFollowUpsImmediately: true }
             : {},
         );

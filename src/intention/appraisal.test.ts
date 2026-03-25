@@ -8,6 +8,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
   decisionsToPostTurnActionCandidates,
+  isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
   sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
@@ -85,6 +86,12 @@ function makeInternalState() {
 }
 
 describe('IntentionAppraisal', () => {
+  it('treats internal turns as background appraisal turns', () => {
+    expect(isBackgroundAppraisalChannel('internal:heartbeat')).toBe(true);
+    expect(isBackgroundAppraisalChannel('internal:reflection:whisper')).toBe(true);
+    expect(isBackgroundAppraisalChannel('api:test')).toBe(false);
+  });
+
   it('runs on appraisal cadence and parses follow-up decisions', async () => {
     const { provider, complete } = makeProvider([
       JSON.stringify({

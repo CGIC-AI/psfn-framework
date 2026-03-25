@@ -146,13 +146,13 @@ describe('runExtractionOrchestration naming fidelity', () => {
 
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('Alex: I really enjoy board games.'),
-    }), 'background');
+    }), 'extraction');
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('Lyra: I love hearing that.'),
-    }), 'background');
+    }), 'extraction');
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('Human participant name: Alex'),
-    }), 'background');
+    }), 'extraction');
     expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
       text: "Alex appreciates Lyra's patience.",
     }), expect.any(String), undefined);

@@ -391,7 +391,7 @@ export class CharacterCardVersionStore {
   }
 }
 
-export interface CharacterCardUpdateToolOptions {
+export interface PersonaUpdateToolOptions {
   getCapabilityTier?: () => CapabilityTier;
   confirmationQueue?: ConfirmationQueue;
 }
@@ -442,18 +442,19 @@ function enqueueCharacterCardUpdateProposal(
   );
 }
 
-export function createCharacterCardUpdateTool(
+export function createPersonaUpdateTool(
   store: CharacterCardVersionStore,
-  options: CharacterCardUpdateToolOptions = {},
+  options: PersonaUpdateToolOptions = {},
 ): AgentTool<any> {
   const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
   const confirmationQueue = options.confirmationQueue;
 
   const tool: AgentTool<any> = {
-    name: 'character_card_update',
+    name: 'persona_update',
     description:
-      'Propose or apply character card updates. Autonomous tier applies immediately; lower tiers queue proposals for confirmation.',
-    label: 'character_card_update',
+      'Dangerous: persona edits can radically alter or erase the companion\'s identity. '
+      + 'Protected persona fields require human confirmation; only low-risk metadata edits may apply autonomously.',
+    label: 'persona_update',
     parameters: Type.Object({
       name: Type.Optional(Type.String({ description: 'Updated character name.' })),
       description: Type.Optional(Type.String({ description: 'Updated character description.' })),
@@ -479,7 +480,7 @@ export function createCharacterCardUpdateTool(
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const patch = extractCardPatchFromRecord(params);
       if (!hasPatchFields(patch)) {
-        return textResultWithError('Provide at least one character card field to update.', true);
+        return textResultWithError('Provide at least one persona field to update.', true);
       }
 
       const reason = typeof params.reason === 'string' ? params.reason : undefined;
@@ -490,7 +491,7 @@ export function createCharacterCardUpdateTool(
         if (protectedAutonomousFields.length > 0) {
           if (!confirmationQueue) {
             return textResultWithError(
-              'Protected character card fields require confirmation queue support: '
+              'Protected persona fields require confirmation queue support: '
               + `${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}.`,
               true,
             );
@@ -505,7 +506,7 @@ export function createCharacterCardUpdateTool(
             `Protected identity fields (${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}) require operator confirmation.`,
           );
           return textResult(
-            `Character card update queued for confirmation (id: ${entry.id}). `
+            `Persona update queued for confirmation (id: ${entry.id}). `
             + `Protected identity fields (${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}) cannot be updated autonomously.`,
           );
         }
@@ -515,7 +516,7 @@ export function createCharacterCardUpdateTool(
 
         if (destructivePatchRisks.length > 0 && !allowDestructiveReplace) {
           return textResultWithError(
-            'Destructive character card update blocked: '
+            'Dangerous persona update blocked: '
             + `${formatDestructivePatchRisks(destructivePatchRisks)}. `
             + 'Retry with allow_destructive_replace=true only if you intend to replace the full field content.',
             true,
@@ -525,17 +526,17 @@ export function createCharacterCardUpdateTool(
         try {
           const snapshot = store.updateData(patch, 'agent', reason);
           return textResult(
-            `Updated character card to v${snapshot.version} (checksum: ${snapshot.checksum}).`,
+            `Updated persona to v${snapshot.version} (checksum: ${snapshot.checksum}).`,
           );
         } catch (error) {
           const message = toErrorMessage(error);
-          return textResultWithError(`Character card update failed: ${message}`, true);
+          return textResultWithError(`Persona update failed: ${message}`, true);
         }
       }
 
       if (!confirmationQueue) {
         return textResultWithError(
-          `Character card updates in ${tier} tier require confirmation queue support, but no queue is configured.`,
+          `Persona updates in ${tier} tier require confirmation queue support, but no queue is configured.`,
           true,
         );
       }
@@ -549,7 +550,7 @@ export function createCharacterCardUpdateTool(
       );
 
       return textResult(
-        `Character card update queued for confirmation (id: ${entry.id}). ` +
+        `Persona update queued for confirmation (id: ${entry.id}). ` +
         'Use the admin Confirmations page to approve, deny, or modify.',
       );
     },

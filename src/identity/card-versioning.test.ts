@@ -12,7 +12,7 @@ import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import type { CharacterCardV2 } from './types.js';
 import {
   CharacterCardVersionStore,
-  createCharacterCardUpdateTool,
+  createPersonaUpdateTool,
 } from './card-versioning.js';
 
 function resultText(result: AgentToolResult<any>): string {
@@ -108,7 +108,7 @@ describe('CharacterCardVersionStore', () => {
   });
 });
 
-describe('character_card_update tool', () => {
+describe('persona_update tool', () => {
   let tempDir: string;
   let cardPath: string;
   let historyPath: string;
@@ -128,7 +128,7 @@ describe('character_card_update tool', () => {
 
   it('applies low-risk updates immediately in autonomous tier', async () => {
     const tool = gateToolWithCapabilities(
-      createCharacterCardUpdateTool(store, {
+      createPersonaUpdateTool(store, {
         getCapabilityTier: () => 'autonomous',
       }),
       () => accessForTier('autonomous'),
@@ -140,7 +140,7 @@ describe('character_card_update tool', () => {
     });
     const text = resultText(result);
 
-    expect(text).toContain('Updated character card to v2');
+    expect(text).toContain('Updated persona to v2');
     expect(store.getCurrent().card.data.tags).toEqual(['test', 'safe-update']);
   });
 
@@ -149,7 +149,7 @@ describe('character_card_update tool', () => {
     store.updateData({ description: longDescription }, 'admin', 'Seed a long description');
 
     const tool = gateToolWithCapabilities(
-      createCharacterCardUpdateTool(store, {
+      createPersonaUpdateTool(store, {
         getCapabilityTier: () => 'autonomous',
       }),
       () => accessForTier('autonomous'),
@@ -160,7 +160,7 @@ describe('character_card_update tool', () => {
       reason: 'Add birthday',
     });
 
-    expect(resultText(result)).toContain('Protected character card fields require confirmation queue support');
+    expect(resultText(result)).toContain('Protected persona fields require confirmation queue support');
     expect(store.getCurrent().version).toBe(2);
     expect(store.getCurrent().card.data.description).toBe(longDescription);
   });
@@ -168,7 +168,7 @@ describe('character_card_update tool', () => {
   it('queues protected autonomous field edits for confirmation instead of applying them', async () => {
     const queue = new ConfirmationQueue({ idFactory: () => 'card-protected-1' });
     const tool = gateToolWithCapabilities(
-      createCharacterCardUpdateTool(store, {
+      createPersonaUpdateTool(store, {
         getCapabilityTier: () => 'autonomous',
         confirmationQueue: queue,
       }),
@@ -180,7 +180,7 @@ describe('character_card_update tool', () => {
       reason: 'Refine identity',
     });
 
-    expect(resultText(queued)).toContain('queued for confirmation');
+    expect(resultText(queued)).toContain('Persona update queued for confirmation');
     expect(resultText(queued)).toContain('Protected identity fields (description)');
     expect(queue.listPending()).toHaveLength(1);
     expect(store.getCurrent().card.data.description).toBe('A test character');
@@ -196,7 +196,7 @@ describe('character_card_update tool', () => {
   it('queues updates for confirmation in nursery tier and applies after approval', async () => {
     const queue = new ConfirmationQueue({ idFactory: () => 'card-1' });
     const tool = gateToolWithCapabilities(
-      createCharacterCardUpdateTool(store, {
+      createPersonaUpdateTool(store, {
         getCapabilityTier: () => 'nursery',
         confirmationQueue: queue,
       }),
@@ -207,7 +207,7 @@ describe('character_card_update tool', () => {
       personality: 'Queued personality update',
       reason: 'Needs operator review',
     });
-    expect(resultText(queued)).toContain('queued for confirmation');
+    expect(resultText(queued)).toContain('Persona update queued for confirmation');
     expect(queue.listPending()).toHaveLength(1);
     expect(store.getCurrent().card.data.personality).toBe('Friendly and helpful');
 

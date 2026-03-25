@@ -9,7 +9,7 @@ import type {
 const AGENT_IDENTITY_EDIT_TOOLS = new Set([
   'prompt_layer_update',
   'prompt_layer_toggle',
-  'character_card_update',
+  'persona_update',
 ]);
 
 export interface ActiveToolInvocation {

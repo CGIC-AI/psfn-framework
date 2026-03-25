@@ -43,8 +43,8 @@ import { PromptRegistryStore } from '../identity/prompt-registry.js';
 import { runDeliberation } from '../llm/deliberation.js';
 import type { DeliberationResult } from '../llm/deliberation.js';
 import {
-  createCharacterCardUpdateTool,
-  type CharacterCardUpdateToolOptions,
+  createPersonaUpdateTool,
+  type PersonaUpdateToolOptions,
   type CharacterCardVersionStore,
 } from '../identity/card-versioning.js';
 import { buildCharacterPromptTemplateVariables } from '../identity/loader.js';
@@ -278,11 +278,11 @@ export function wirePromptRuntime(
 export function wireCharacterCardRuntime(
   target: CharacterCardRuntimeTarget,
   cardStore: CharacterCardVersionStore,
-  options: CharacterCardUpdateToolOptions = {},
+  options: PersonaUpdateToolOptions = {},
 ): void {
-  target.registerTool(createCharacterCardUpdateTool(cardStore, options), 'extended');
+  target.registerTool(createPersonaUpdateTool(cardStore, options), 'extended');
   const snapshot = cardStore.getCurrent();
-  log.info(`Character card tooling enabled (v${snapshot.version})`);
+  log.info(`Persona tooling enabled (v${snapshot.version})`);
 }
 
 /**

@@ -116,6 +116,7 @@ import type { ChannelAdapter } from './channels/types.js';
 import { loadRuntimeChannelsConfig } from './channels/config.js';
 import {
   createApiServerChannelAdapterFactoryEntry,
+  createOpenHomeChannelAdapterFactoryEntry,
   requireChannelAdapter,
 } from './bootstrap/channel-runtime.js';
 import {
@@ -766,6 +767,7 @@ async function main(): Promise<void> {
     const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
     const apiChannelRegistry = new Map<string, ChannelAdapter>();
     const apiChannelManifest = buildChannelAdapterFactoryManifest([
+      createOpenHomeChannelAdapterFactoryEntry(),
       createApiServerChannelAdapterFactoryEntry({
         port: apiPort,
         host: apiHost,
@@ -921,7 +923,7 @@ async function main(): Promise<void> {
     await loadChannelAdaptersFromManifest(
       apiChannelRegistry,
       apiChannelManifest,
-      () => undefined,
+      registry => agentLoop.setChannelRegistry(registry),
       log,
       eligibilityGate,
     );

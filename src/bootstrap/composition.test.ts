@@ -495,10 +495,13 @@ describe('runtime composition wiring', () => {
     const gatewaySource = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
 
     expect(runtimeSource).toContain('createDiscordChannelAdapterFactoryEntry({');
+    expect(runtimeSource).toContain('createOpenHomeChannelAdapterFactoryEntry()');
     expect(runtimeSource).toContain('createTelegramChannelAdapterFactoryEntry({');
     expect(runtimeSource).toContain('createApiServerChannelAdapterFactoryEntry({');
+    expect(agentSource).toContain('createOpenHomeChannelAdapterFactoryEntry()');
     expect(agentSource).toContain('createApiServerChannelAdapterFactoryEntry({');
     expect(gatewaySource).toContain('createDiscordChannelAdapterFactoryEntry({');
+    expect(gatewaySource).toContain('createOpenHomeChannelAdapterFactoryEntry()');
     expect(gatewaySource).toContain('createTelegramChannelAdapterFactoryEntry({');
 
     expect(runtimeSource).not.toContain('new DiscordAdapter(');

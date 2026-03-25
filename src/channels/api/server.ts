@@ -8,6 +8,7 @@ import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type {
+  ChannelType,
   MessageModelOverride,
   MessagePromptOverride,
   MessageRoutingMetadata,
@@ -81,6 +82,7 @@ import {
   formatSseDataEvent,
   formatSseDoneEvent,
 } from './response-format.js';
+import { resolveApiTurnIdentity } from './external-channel-claim.js';
 
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
@@ -1020,15 +1022,28 @@ export class ApiServer implements ChannelAdapter {
     }
   }
 
-  private buildSubstrateMessage(
-    channelId: string,
-    content: string,
-    authorId: string,
-    authorName: string,
-    req: IncomingMessage,
-    overrides: TurnRoutingOverrides,
-    channelPrivacy?: ChannelVisibility,
-  ): SubstrateMessage {
+  private buildSubstrateMessage(params: {
+    channelId: string;
+    channelType: ChannelType;
+    source: NonNullable<MessageRoutingMetadata['source']>;
+    content: string;
+    authorId: string;
+    authorName: string;
+    req: IncomingMessage;
+    overrides: TurnRoutingOverrides;
+    channelPrivacy?: ChannelVisibility;
+  }): SubstrateMessage {
+    const {
+      channelId,
+      channelType,
+      source,
+      content,
+      authorId,
+      authorName,
+      req,
+      overrides,
+      channelPrivacy,
+    } = params;
     const approvalToken = this.clampHeader(
       this.singleHeader(req.headers['x-broadcast-approval-token']),
       256,
@@ -1045,7 +1060,7 @@ export class ApiServer implements ChannelAdapter {
       256,
     );
     const routing: MessageRoutingMetadata = {
-      source: 'api',
+      source,
       ...(approvalToken || visibilityScope
         ? {
           broadcast: {
@@ -1060,7 +1075,8 @@ export class ApiServer implements ChannelAdapter {
       ...(overrides.responseStyle ? { responseStyle: overrides.responseStyle } : {}),
       ...(canonicalContactId ? { canonicalContactId } : {}),
     };
-    const hasRouting = routing.broadcast
+    const hasRouting = source !== 'api'
+      || routing.broadcast
       || routing.channelPrivacy
       || routing.modelOverride
       || routing.promptOverride
@@ -1070,7 +1086,7 @@ export class ApiServer implements ChannelAdapter {
     return {
       id: `api-${randomUUID()}`,
       channelId,
-      channelType: 'api',
+      channelType,
       authorId,
       authorName,
       content,
@@ -1522,22 +1538,42 @@ export class ApiServer implements ChannelAdapter {
       return null;
     }
 
-    const channelId = this.deriveChannelId(req, principal);
-    const { authorId, authorName } = this.deriveAuthor(principal);
+    const defaultChannelId = this.deriveChannelId(req, principal);
+    const defaultAuthor = this.deriveAuthor(principal);
+    const turnIdentity = resolveApiTurnIdentity({
+      headers: req.headers,
+      principal,
+      defaultChannelId,
+      defaultAuthorId: defaultAuthor.authorId,
+      defaultAuthorName: defaultAuthor.authorName,
+    });
+    if (!turnIdentity.ok) {
+      this.sendError(res, turnIdentity.status, turnIdentity.type, turnIdentity.message);
+      return null;
+    }
+    const {
+      channelId,
+      channelType,
+      authorId,
+      authorName,
+      source,
+    } = turnIdentity.value;
     if (!this.enforceIdentityClaim(req, res, authorId)) {
       return null;
     }
 
     const lastUserMsg = this.getLastUserMessage(request.messages);
-    const substrateMsg = this.buildSubstrateMessage(
+    const substrateMsg = this.buildSubstrateMessage({
       channelId,
-      lastUserMsg,
+      channelType,
+      source,
+      content: lastUserMsg,
       authorId,
       authorName,
       req,
-      routingOverrides.value,
-      channelPrivacy.value,
-    );
+      overrides: routingOverrides.value,
+      channelPrivacy: channelPrivacy.value,
+    });
     this.seedSession(channelId, request.messages, authorId, authorName, channelPrivacy.value);
 
     const releaseChannel = await this.acquireChannel(channelId, req, res);

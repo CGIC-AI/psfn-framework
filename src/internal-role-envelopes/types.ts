@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ChannelType } from '../types.js';
+import { CHANNEL_TYPES, type ChannelType } from '../types.js';
 
 export const INTERNAL_ROLE_ENVELOPE_SCHEMA_VERSION = 1 as const;
 export const INTERNAL_ROLE_ENVELOPE_KINDS = [
@@ -194,7 +194,7 @@ const INTERNAL_ROLE_ENVELOPE_SOURCE_STAGE_SET = new Set<string>(INTERNAL_ROLE_EN
 const INTERNAL_ROLE_ENVELOPE_PROMOTION_TARGET_SET = new Set<string>(INTERNAL_ROLE_ENVELOPE_PROMOTION_TARGETS);
 const INTERNAL_ROLE_ENVELOPE_PROMOTION_STATUS_SET = new Set<string>(INTERNAL_ROLE_ENVELOPE_PROMOTION_STATUSES);
 const INTERNAL_ROLE_ENVELOPE_TOMBSTONE_ACTION_SET = new Set<string>(INTERNAL_ROLE_ENVELOPE_TOMBSTONE_ACTIONS);
-const INTERNAL_ROLE_ENVELOPE_CHANNEL_TYPE_SET = new Set<string>(['discord', 'terminal', 'api', 'telegram', 'internal']);
+const INTERNAL_ROLE_ENVELOPE_CHANNEL_TYPE_SET = new Set<string>([...CHANNEL_TYPES, 'internal']);
 const INTERNAL_ROLE_ENVELOPE_TRANSPORT_ROLE_SET = new Set<string>(['system', 'assistant', 'tool']);
 
 function normalizeRequiredString(value: string, field: string): string {

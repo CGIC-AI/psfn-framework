@@ -4,6 +4,7 @@ import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { EligibilityGate } from '../capabilities/eligibility.js';
 import { ApiServer, type ApiServerConfig } from '../channels/api/server.js';
 import { DiscordAdapter } from '../channels/discord/adapter.js';
+import { OpenHomeAdapter } from '../channels/openhome/adapter.js';
 import type { TelegramChannelConfig } from '../channels/config.js';
 import { TelegramAdapter } from '../channels/telegram/adapter.js';
 import type {
@@ -94,6 +95,23 @@ export function createApiServerChannelAdapterFactoryEntry(
     },
     create: async (): Promise<ChannelAdapter> => {
       const adapter = new ApiServer(config);
+      await adapter.init();
+      return adapter;
+    },
+  };
+}
+
+export function createOpenHomeChannelAdapterFactoryEntry(): ChannelAdapterFactoryEntry {
+  return {
+    manifest: {
+      id: 'openhome',
+      label: 'OpenHome',
+      enabled: true,
+      required: false,
+      eligibility: {},
+    },
+    create: async (): Promise<ChannelAdapter> => {
+      const adapter = new OpenHomeAdapter();
       await adapter.init();
       return adapter;
     },

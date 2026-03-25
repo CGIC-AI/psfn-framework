@@ -1,0 +1,53 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import type { TurnRecord } from '../types.js';
+import { appendTurnRecord, readRecentTurnRecords } from './turn-records.js';
+
+function createTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
+  return {
+    schemaVersion: 1,
+    turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+    requestId: 'req-openhome',
+    channelId: 'openhome:test:pi5',
+    channelType: 'openhome',
+    startedAt: 1_742_000_000_000,
+    completedAt: 1_742_000_000_500,
+    status: 'completed',
+    userMessage: {
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_742_000_000_000,
+      authorId: 'pi5',
+      authorName: 'Pi5',
+    },
+    assistantMessage: {
+      role: 'assistant',
+      content: 'ok',
+      timestamp: 1_742_000_000_500,
+      authorId: 'psfn',
+      authorName: 'PSFN',
+    },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: {
+      model: 'psfn',
+    },
+    provenanceRefs: [],
+    ...overrides,
+  };
+}
+
+describe('turn-records', () => {
+  it('persists and reads openhome turn records', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-openhome-turn-records-'));
+    const record = createTurnRecord();
+
+    appendTurnRecord(sessionsDir, record);
+
+    expect(readRecentTurnRecords(sessionsDir, record.channelId, 5)).toEqual([record]);
+  });
+});

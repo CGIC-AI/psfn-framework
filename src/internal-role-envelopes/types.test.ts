@@ -50,4 +50,20 @@ describe('internal role envelope ids', () => {
       target: 'none',
     });
   });
+
+  it('accepts openhome as a first-class external channel type', () => {
+    const envelope = createInternalRoleEnvelope({
+      turnId: 'turn-openhome',
+      channelId: 'openhome:test:pi5',
+      channelType: 'openhome',
+      transportRole: 'assistant',
+      internalRole: 'outreach_result',
+      sourceStage: 'turn_execution',
+      visibility: 'user_visible',
+      summary: 'Reply delivered through the satellite UX.',
+      body: 'The assistant answered through the OpenHome-backed Pi channel.',
+    });
+
+    expect(envelope.channelType).toBe('openhome');
+  });
 });

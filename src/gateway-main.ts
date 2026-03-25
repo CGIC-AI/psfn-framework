@@ -75,6 +75,7 @@ import {
 } from './gateway/discord-startup.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
+  createOpenHomeChannelAdapterFactoryEntry,
   createTelegramChannelAdapterFactoryEntry,
   getOptionalChannelAdapter,
   requireChannelAdapter,
@@ -637,6 +638,7 @@ async function main(): Promise<void> {
       eventBus,
       eligibilityGate,
     }),
+    createOpenHomeChannelAdapterFactoryEntry(),
     createTelegramChannelAdapterFactoryEntry({
       config: channelsConfig.telegram,
       eventBus,

@@ -1745,6 +1745,39 @@ describe('ApiServer with auth', () => {
     expect(call.channelId).toBe(`api:${principalId}:identity-session`);
   });
 
+  it('routes authenticated OpenHome claims into openhome channel sessions', async () => {
+    await server.stop();
+    const mockAgent = createMockAgentLoop(eventBus);
+    server = new ApiServer({
+      port,
+      agentLoop: mockAgent,
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'satellite hello' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Channel-Type': 'openhome',
+      'X-PSFN-Channel-ID': 'openhome:lab:pi5-display',
+      'X-PSFN-Author-ID': 'openhome-user:owner',
+      'X-PSFN-Author-Name': 'Lab Satellite',
+    });
+    expect(res.status).toBe(200);
+
+    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    expect(call.channelId).toBe('openhome:lab:pi5-display');
+    expect(call.channelType).toBe('openhome');
+    expect(call.authorId).toBe('openhome-user:owner');
+    expect(call.authorName).toBe('Lab Satellite');
+    expect(call.routing?.source).toBe('openhome');
+  });
+
   it('binds identity claims to the authenticated principal and prevents X-User-ID spoofing', async () => {
     const db = new Database(':memory:');
     const contactStore = new ContactStore(db);

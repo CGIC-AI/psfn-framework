@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
-import type {
-  ChannelType,
-  MessageRoutingMetadata,
-  ObservabilityCallType,
-  PostTurnActionCandidate,
-  SubstrateMessage,
+import {
+  CHANNEL_TYPES,
+  type ChannelType,
+  type MessageRoutingMetadata,
+  type ObservabilityCallType,
+  type PostTurnActionCandidate,
+  type SubstrateMessage,
 } from '../types.js';
 
 export const DEFERRED_TOOL_HANDOFF_ACTION_KIND = 'tool_handoff.continue';
@@ -12,7 +13,7 @@ export const DEFAULT_DEFERRED_TOOL_HANDOFF_MAX_RETRIES = 2;
 export const DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX = 'deferred-tool-handoff:';
 const MAX_DEFERRED_TOOL_HANDOFF_MAX_RETRIES = 4;
 
-const VALID_CHANNEL_TYPES = new Set<ChannelType>(['discord', 'terminal', 'api', 'telegram']);
+const VALID_CHANNEL_TYPES = new Set<ChannelType>(CHANNEL_TYPES);
 const VALID_CALL_TYPES = new Set<ObservabilityCallType>([
   'chat',
   'tool',

@@ -1,13 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendJsonLine } from '../persistence/jsonl.js';
-import type {
-  ChannelType,
-  TurnID,
-  TurnRecord,
-  TurnRecordMessage,
-  TurnRecordToolCall,
-  TurnRecordVersionPointers,
+import {
+  CHANNEL_TYPES,
+  type ChannelType,
+  type TurnID,
+  type TurnRecord,
+  type TurnRecordMessage,
+  type TurnRecordToolCall,
+  type TurnRecordVersionPointers,
 } from '../types.js';
 import { sanitizeChannelId } from './store-primitives.js';
 import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
@@ -22,7 +23,7 @@ import { cloneUnknownValue } from '../turns/observability.js';
 
 const TURN_RECORDS_DIR = '_turn_records';
 const TURN_RECORD_SCHEMA_VERSION = 1;
-const VALID_CHANNEL_TYPES = new Set<ChannelType>(['discord', 'terminal', 'api', 'telegram']);
+const VALID_CHANNEL_TYPES = new Set<ChannelType>(CHANNEL_TYPES);
 const VALID_TURN_STATUSES = new Set<TurnRecord['status']>(['completed', 'failed']);
 const VALID_OBSERVABILITY_CALL_TYPES = new Set<TurnObservabilityCallType>([
   'chat',

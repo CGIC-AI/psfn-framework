@@ -157,6 +157,7 @@ import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-
 import {
   createApiServerChannelAdapterFactoryEntry,
   createDiscordChannelAdapterFactoryEntry,
+  createOpenHomeChannelAdapterFactoryEntry,
   createTelegramChannelAdapterFactoryEntry,
   getOptionalChannelAdapter,
   requireChannelAdapter,
@@ -851,6 +852,7 @@ export class SubstrateRuntime implements Lifecycle {
         agentLoop: this.agentLoop,
         eligibilityGate,
       }),
+      createOpenHomeChannelAdapterFactoryEntry(),
       createTelegramChannelAdapterFactoryEntry({
         config: channelsConfig.telegram,
         eventBus: this.eventBus,

@@ -224,6 +224,101 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('Use image_create for a brand new selfie, portrait, or scene featuring you.');
   });
 
+  it('surfaces attention counts for pending whispers and active concerns', () => {
+    const runtimeContext = buildRuntimeContext({
+      message: makeMessage({
+        channelId: 'internal:reflection:whisper',
+        authorId: 'scheduler',
+        authorName: 'Whisper',
+        content: 'Review follow-ups before the next turn.',
+      }),
+      resolvedUserName: 'Companion',
+      trustLevel: 'primary',
+      channelType: 'internal',
+      canonicalContactKey: undefined,
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      taskKind: 'heartbeat',
+      templateVariables: {
+        char_name: 'Companion',
+      },
+      internalState: {
+        emotional: {
+          vad: { valence: 0, arousal: 0, dominance: 0 },
+          mood: { valence: 0, arousal: 0, dominance: 0 },
+          discreteEmotions: {},
+          confidence: 0,
+        },
+        cognitive: {
+          certaintyLevel: 0,
+          topicEngagement: 0,
+          processingQuality: 'fluent',
+        },
+        attention: {
+          activeConcerns: [
+            {
+              id: 'concern-1',
+              text: 'Check whether the contact summary is stale.',
+              priority: 'medium',
+              source: 'heartbeat',
+              createdAt: '2026-03-17T11:50:00.000Z',
+              expiresAt: '2026-03-17T13:50:00.000Z',
+            },
+            {
+              id: 'concern-2',
+              text: 'Avoid re-surfacing the same cleanup task repeatedly.',
+              priority: 'low',
+              source: 'heartbeat',
+              createdAt: '2026-03-17T11:55:00.000Z',
+              expiresAt: '2026-03-17T19:55:00.000Z',
+            },
+          ],
+          pendingFollowUps: [
+            {
+              id: 'follow-up-1',
+              content: 'Check back on the unresolved follow-up.',
+              priority: 'medium',
+              timing: 'soon',
+              channelId: 'internal:reflection:whisper',
+              channelType: 'terminal',
+              authorId: 'scheduler',
+              authorName: 'Whisper',
+              createdAt: '2026-03-17T11:58:00.000Z',
+            },
+          ],
+          salientEntities: ['contact summary', 'follow-up'],
+          conversationTrajectory: 'deepening',
+        },
+        relational: {
+          contactId: DEFAULT_COMPANION_ID,
+          trustLevel: 'primary',
+          baselineValence: 0,
+          moodDrift: 0,
+          recentInteractionFrequency: 0.5,
+          lastSeenDeltaSeconds: 42,
+        },
+      },
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 0,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).toContain('Attention: trajectory=deepening, salient_entities=2, active_concerns=2, pending_follow_ups=1');
+    expect(runtimeContext).toContain('Active concern refs: concern-1:medium, concern-2:low');
+    expect(runtimeContext).toContain('Pending follow-up refs: follow-up-1:soon');
+  });
+
   it('uses persisted conversation-channel privacy and records it on activity', () => {
     const recordedCalls: Array<{
       contactId: string;

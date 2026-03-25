@@ -21,6 +21,7 @@ export interface TurnSessionContextSnapshot {
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
   versionPointer: string;
 }

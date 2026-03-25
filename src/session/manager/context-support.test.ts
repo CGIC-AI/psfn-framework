@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { entriesToMessages } from './context-support.js';
+import { countIntentionAppraisalArtifacts, entriesToMessages } from './context-support.js';
 import type { SessionEntry } from '../types.js';
 
 function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
@@ -14,6 +14,36 @@ function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
 }
 
 describe('entriesToMessages', () => {
+  it('counts intention appraisal artifacts before they are stripped from runtime context', () => {
+    const entries = [
+      makeEntry({
+        role: 'user',
+        content: 'I am still investigating the message flow.',
+        authorId: '5435899b-56e0-4482-ab75-12fc19350e91',
+        authorName: 'Intention Appraisal',
+        metadata: JSON.stringify({
+          turn: {
+            schemaVersion: 1,
+            turnId: 'turn-1',
+            requestId: 'intention-follow-up:abc123',
+            sourceMessageId: 'intention-follow-up:abc123',
+            role: 'user',
+          },
+        }),
+      }),
+      makeEntry({
+        id: 2,
+        role: 'user',
+        content: 'This is the actual partner message.',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+        timestamp: 1_700_000_000_100,
+      }),
+    ];
+
+    expect(countIntentionAppraisalArtifacts(entries)).toBe(1);
+  });
+
   it('drops leaked legacy intention follow-ups from runtime context', () => {
     const messages = entriesToMessages([
       makeEntry({

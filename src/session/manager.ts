@@ -81,6 +81,7 @@ import {
   normalizeFocusEvidence,
   type FocusEvidenceRecord,
   type FocusKnowledgeBlock,
+  type FocusProjectContextSummary,
 } from './focus-knowledge.js';
 import {
   resolveCompressionFailureLogPath,
@@ -213,6 +214,7 @@ export interface FocusSessionSnapshot {
   startedAt: number;
   startEntryId: number;
   evidenceCount: number;
+  existingProjectContext: FocusProjectContextSummary | null;
 }
 
 export interface FocusSessionContextSnapshot {
@@ -230,6 +232,7 @@ export interface FocusSessionCompletionResult {
   rangeStartId: number | null;
   rangeEndId: number | null;
   knowledgeBlock: FocusKnowledgeBlock;
+  projectContext: FocusProjectContextSummary;
 }
 
 const MAX_ACTIVE_FOCUS_EVIDENCE_ITEMS = 64;
@@ -322,6 +325,10 @@ export class SessionManager {
       startedAt: session.startedAt,
       startEntryId: session.startEntryId,
       evidenceCount: session.evidence.length,
+      existingProjectContext: this.focusKnowledgeStore.getProjectContextSummary(
+        session.channelId,
+        session.scope,
+      ),
     };
   }
 
@@ -343,8 +350,18 @@ export class SessionManager {
 
   private getFocusKnowledgeTexts(channelId: string): string[] {
     return this.focusKnowledgeStore
-      .listByChannel(channelId)
-      .map(block => `[${block.scope}] ${block.knowledge}`);
+      .listProjectContextsByChannel(channelId)
+      .map((summary) => {
+        const projectContextSuffix = summary.knowledgeBlockCount > 1
+          ? ` (project context with ${summary.knowledgeBlockCount} distilled blocks, ${summary.totalEvidenceCount} evidence items)`
+          : '';
+        return `[${summary.scope}] ${summary.latestKnowledge}${projectContextSuffix}`;
+      });
+  }
+
+  getProjectContextSummary(channelId: string, scope: string): FocusProjectContextSummary | null {
+    const resolvedChannelId = this.resolveFocusChannelId(channelId);
+    return this.focusKnowledgeStore.getProjectContextSummary(resolvedChannelId, scope);
   }
 
   private getFocusCompactionRanges(channelId: string) {
@@ -457,6 +474,14 @@ export class SessionManager {
       evidence: active.evidence,
     });
 
+    const projectContext = this.focusKnowledgeStore.getProjectContextSummary(
+      resolvedChannelId,
+      active.scope,
+    );
+    if (!projectContext) {
+      throw new Error(`project context summary missing for focus scope "${active.scope}"`);
+    }
+
     this.activeFocusSessions.delete(resolvedChannelId);
     return {
       focusId: active.focusId,
@@ -465,6 +490,7 @@ export class SessionManager {
       rangeStartId: rangeIsValid ? context.rangeStartId : null,
       rangeEndId: rangeIsValid ? context.rangeEndId : null,
       knowledgeBlock,
+      projectContext,
     };
   }
 

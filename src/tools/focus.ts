@@ -14,6 +14,11 @@ interface FocusSessionManager {
     scope: string;
     startedAt: number;
     startEntryId: number;
+    existingProjectContext: {
+      knowledgeBlockCount: number;
+      totalEvidenceCount: number;
+      latestKnowledge: string;
+    } | null;
   };
   getFocusSessionContext(channelId: string): {
     session: {
@@ -46,6 +51,11 @@ interface FocusSessionManager {
       id: string;
       evidenceCount: number;
       createdAt: number;
+    };
+    projectContext: {
+      knowledgeBlockCount: number;
+      totalEvidenceCount: number;
+      latestKnowledge: string;
     };
   };
 }
@@ -177,12 +187,17 @@ export function createStartFocusTool(sessionManager: FocusSessionManager): Agent
 
       try {
         const started = sessionManager.startFocusSession(channelId, params.scope);
+        const resumedContextText = started.existingProjectContext
+          ? ` Resuming project context with ${started.existingProjectContext.knowledgeBlockCount} prior distilled block`
+            + `${started.existingProjectContext.knowledgeBlockCount === 1 ? '' : 's'}.`
+          : ' Starting a new project context.';
         return {
           content: [{
             type: 'text',
             text:
               `start_focus: tracking "${started.scope}" in ${started.channelId}`
-              + ` (focusId=${started.focusId}, from entry ${started.startEntryId}).`,
+              + ` (focusId=${started.focusId}, from entry ${started.startEntryId}).`
+              + resumedContextText,
           }] satisfies TextContent[],
           details: {
             focusId: started.focusId,
@@ -190,6 +205,8 @@ export function createStartFocusTool(sessionManager: FocusSessionManager): Agent
             scope: started.scope,
             startedAt: started.startedAt,
             startEntryId: started.startEntryId,
+            existingProjectContextBlockCount: started.existingProjectContext?.knowledgeBlockCount ?? 0,
+            existingProjectContextEvidenceCount: started.existingProjectContext?.totalEvidenceCount ?? 0,
           },
         };
       } catch (error) {
@@ -285,6 +302,8 @@ export function createCompleteFocusTool(
             type: 'text',
             text:
               `complete_focus: persisted knowledge block ${completed.knowledgeBlock.id} for "${completed.scope}".\n`
+              + `Project context now has ${completed.projectContext.knowledgeBlockCount} distilled block`
+              + `${completed.projectContext.knowledgeBlockCount === 1 ? '' : 's'}.\n`
               + `${distilledKnowledge}`,
           }] satisfies TextContent[],
           details: {
@@ -296,6 +315,8 @@ export function createCompleteFocusTool(
             knowledgeBlockId: completed.knowledgeBlock.id,
             knowledgeCreatedAt: completed.knowledgeBlock.createdAt,
             evidenceCount: completed.knowledgeBlock.evidenceCount,
+            projectContextBlockCount: completed.projectContext.knowledgeBlockCount,
+            projectContextEvidenceCount: completed.projectContext.totalEvidenceCount,
           },
         };
       } catch (error) {

@@ -450,10 +450,78 @@ export interface ContactConversationChannelView {
   lastSeen?: string;
 }
 
+export type SocialGraphEntitySource = 'contact' | 'memory' | 'manual' | 'system';
+export type SocialRelationshipKind =
+  | 'partner'
+  | 'family'
+  | 'friend'
+  | 'acquaintance'
+  | 'colleague'
+  | 'parent'
+  | 'child'
+  | 'sibling'
+  | 'caregiver'
+  | 'household'
+  | 'manager'
+  | 'direct_report'
+  | 'other';
+
+export interface AdminContactSocialGraphEntityView {
+  id: string;
+  displayName: string;
+  contactId?: string;
+  source: SocialGraphEntitySource;
+  sensitivity: string;
+  confidence: number;
+  provenanceRefs: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminContactSocialGraphNeighborView {
+  entityId: string;
+  contactId?: string;
+  displayName: string;
+  source: SocialGraphEntitySource;
+  sensitivity: string;
+  confidence: number;
+  provenanceRefs: string[];
+  mentionOnly: boolean;
+  trustLevel?: TrustLevel;
+  relationshipType?: RelationshipType;
+  profileSummary?: string;
+  profileUpdatedAt?: number;
+}
+
+export interface AdminContactSocialGraphConnectionView {
+  edgeId: string;
+  relationshipType: SocialRelationshipKind;
+  directional: boolean;
+  direction: 'incoming' | 'outgoing' | 'undirected';
+  sensitivity: string;
+  confidence: number;
+  provenanceRefs: string[];
+  evidenceMemoryIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  neighbor: AdminContactSocialGraphNeighborView;
+}
+
+export interface AdminContactSocialGraphView {
+  entity?: AdminContactSocialGraphEntityView;
+  edgeCount: number;
+  neighborCount: number;
+  evidenceCount: number;
+  provenanceCount: number;
+  mentionOnlyNeighborCount: number;
+  connections: AdminContactSocialGraphConnectionView[];
+}
+
 export interface AdminContactListData {
   contacts: Contact[];
   profileMap: Record<string, ContactProfileArtifact>;
   relatedChannelMap: Record<string, ContactConversationChannelView[]>;
+  socialGraphMap: Record<string, AdminContactSocialGraphView>;
   verifications: ContactIdentityLinkVerification[];
   mutationAudits: ContactMutationAuditEntry[];
   mutationAuditQuery: unknown;

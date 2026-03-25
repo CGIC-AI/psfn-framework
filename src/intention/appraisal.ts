@@ -29,6 +29,7 @@ const DEFAULT_MAX_MESSAGE_CHARS = 400;
 const DEFAULT_MAX_CONCERN_COUNT = 8;
 const DEFAULT_MAX_DECISIONS = 4;
 const DEFAULT_DUE_SOON_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_FOLLOW_UP_PENDING_DELAY_MS = 5 * 60 * 1_000;
 
 const DEFAULT_SYSTEM_PROMPT = [
   'Given the current emotional state and conversation, decide if autonomous follow-up actions are needed.',
@@ -149,6 +150,10 @@ export interface IntentionDecisionActionContext {
   message: Pick<SubstrateMessage, 'id' | 'channelId' | 'channelType'>;
   fallbackAuthorId?: string;
   fallbackAuthorName?: string;
+}
+
+export interface IntentionDecisionActionOptions {
+  surfacePendingFollowUpsImmediately?: boolean;
 }
 
 interface SessionAppraisalState {
@@ -811,15 +816,37 @@ function normalizeActionRunAt(value: unknown): number | undefined {
   return parseOptionalDueAt(value);
 }
 
-function resolveFollowUpRunAt(decision: IntentionActionDecision, now: number): number | undefined {
-  if (decision.timing !== 'soon' && decision.timing !== 'scheduled') {
-    return undefined;
-  }
+function resolveFollowUpRunAt(
+  decision: IntentionActionDecision,
+  now: number,
+  options: IntentionDecisionActionOptions = {},
+): number | undefined {
   const runAt = normalizeActionRunAt(decision.dueAt);
-  if (runAt === undefined) {
-    return undefined;
+  if (decision.timing === 'immediate') {
+    return runAt ?? now;
   }
-  return Math.max(now, runAt);
+
+  if (decision.timing === 'soon') {
+    if (runAt !== undefined) {
+      return Math.max(now, runAt);
+    }
+    if (options.surfacePendingFollowUpsImmediately) {
+      return now;
+    }
+    return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
+  }
+
+  if (decision.timing === 'scheduled') {
+    if (runAt !== undefined) {
+      return Math.max(now, runAt);
+    }
+    if (options.surfacePendingFollowUpsImmediately) {
+      return now;
+    }
+    return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
+  }
+
+  return undefined;
 }
 
 function normalizeCandidatePayload(payload: PostTurnActionCandidate['payload']): Record<string, unknown> {
@@ -1006,6 +1033,7 @@ function buildRuntimeAppraisalSystemPrompt(
 export function decisionsToPostTurnActionCandidates(
   decisions: readonly IntentionActionDecision[],
   context: IntentionDecisionActionContext,
+  options: IntentionDecisionActionOptions = {},
 ): PostTurnActionCandidate[] {
   const candidates: PostTurnActionCandidate[] = [];
 
@@ -1013,7 +1041,7 @@ export function decisionsToPostTurnActionCandidates(
     if (decision.type === 'followUp') {
       const content = decision.followUp?.content.trim() ?? '';
       if (!content) continue;
-      const runAt = resolveFollowUpRunAt(decision, Date.now());
+      const runAt = resolveFollowUpRunAt(decision, Date.now(), options);
       const channelId = decision.followUp?.channelId?.trim() || context.message.channelId;
       const channelType = decision.followUp?.channelType ?? context.message.channelType;
       const dedupeKey = `${INTENTION_FOLLOW_UP_ACTION_KIND}:${context.message.id}:${hashString(content)}`;

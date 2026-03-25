@@ -188,6 +188,10 @@ interface HeartbeatRuntimeOptions {
     channelId: string;
     canonicalContactKey?: string;
   }) => Promise<readonly ActiveConcernSnapshot[]> | readonly ActiveConcernSnapshot[];
+  getRecentResolvedConcerns?: (input: {
+    channelId: string;
+    canonicalContactKey?: string;
+  }) => Promise<readonly ActiveConcernSnapshot[]> | readonly ActiveConcernSnapshot[];
   onIntentionConcernDecision?: (input: {
     decision: IntentionActionDecision;
     channelId: string;
@@ -1235,12 +1239,19 @@ export function wireHeartbeatRuntime(
             canonicalContactKey: context.canonicalContactKey,
           }) ?? [],
         );
+        const recentlyResolvedConcerns = await Promise.resolve(
+          runtimeOptions.getRecentResolvedConcerns?.({
+            channelId: resolvedSessionId,
+            canonicalContactKey: context.canonicalContactKey,
+          }) ?? [],
+        );
         const decisions = await intentionAppraisal.evaluate({
           sessionId: resolvedSessionId,
           internalState,
           currentEmotion,
           recentMessages,
           activeConcerns,
+          recentlyResolvedConcerns,
           contactEmotionalSnapshot,
           conversationTrajectory: buildConversationTrajectory(context),
           ...(motivationAssessment?.shouldTriggerAppraisal

@@ -966,6 +966,7 @@ export class SubstrateRuntime implements Lifecycle {
         emotionState,
         contactStore,
         getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
+        getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns,
         onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
         onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
         coreMemoryStore,

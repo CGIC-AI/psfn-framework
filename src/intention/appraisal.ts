@@ -64,6 +64,7 @@ export interface ActiveConcernSnapshot {
   summary?: string;
   status?: string;
   dueAt?: number;
+  resolvedAt?: number;
   priority?: IntentionDecisionPriority | number;
 }
 
@@ -111,6 +112,7 @@ export interface IntentionAppraisalInput {
   currentEmotion?: EmotionStateSnapshot | null;
   recentMessages: readonly IntentionAppraisalMessage[];
   activeConcerns?: readonly ActiveConcernSnapshot[];
+  recentlyResolvedConcerns?: readonly ActiveConcernSnapshot[];
   contactEmotionalSnapshot?: EmotionalSnapshot | null;
   conversationTrajectory?: ConversationTrajectorySnapshot;
   triggerOverride?: 'motivation';
@@ -158,6 +160,7 @@ interface NormalizedIntentionAppraisalInput {
   currentEmotion: EmotionStateSnapshot | null;
   recentMessages: IntentionAppraisalMessage[];
   activeConcerns: ActiveConcernSnapshot[];
+  recentlyResolvedConcerns: ActiveConcernSnapshot[];
   contactEmotionalSnapshot: EmotionalSnapshot | null;
   conversationTrajectory: ConversationTrajectorySnapshot | null;
   triggerOverride: 'motivation' | null;
@@ -374,6 +377,9 @@ function normalizeActiveConcerns(
     const dueAt = (typeof concern.dueAt === 'number' && Number.isFinite(concern.dueAt) && concern.dueAt > 0)
       ? Math.floor(concern.dueAt)
       : undefined;
+    const resolvedAt = (typeof concern.resolvedAt === 'number' && Number.isFinite(concern.resolvedAt) && concern.resolvedAt > 0)
+      ? Math.floor(concern.resolvedAt)
+      : undefined;
     const priority = normalizeConcernPriority(concern.priority);
     normalized.push({
       ...(id ? { id } : {}),
@@ -381,6 +387,7 @@ function normalizeActiveConcerns(
       ...(summary ? { summary } : {}),
       ...(status ? { status } : {}),
       ...(dueAt !== undefined ? { dueAt } : {}),
+      ...(resolvedAt !== undefined ? { resolvedAt } : {}),
       ...(priority ? { priority } : {}),
     });
   }
@@ -491,6 +498,10 @@ function normalizeInput(
     input.activeConcerns ?? (internalState ? activeConcernsFromInternalState(internalState) : undefined),
     options.maxConcernCount,
   );
+  const recentlyResolvedConcerns = normalizeActiveConcerns(
+    input.recentlyResolvedConcerns,
+    options.maxConcernCount,
+  );
   const contactEmotionalSnapshot = normalizeContactEmotionalSnapshot(input.contactEmotionalSnapshot);
   const conversationTrajectory = normalizeConversationTrajectory(input.conversationTrajectory);
   const triggerOverride = normalizeTriggerOverride(input.triggerOverride);
@@ -509,6 +520,7 @@ function normalizeInput(
     currentEmotion,
     recentMessages,
     activeConcerns,
+    recentlyResolvedConcerns,
     contactEmotionalSnapshot,
     conversationTrajectory,
     triggerOverride,
@@ -1280,6 +1292,17 @@ export class IntentionAppraisal {
         ...(dueAtLabel ? { dueAt: dueAtLabel } : {}),
       };
     });
+    const promptRecentlyResolvedConcerns = normalized.recentlyResolvedConcerns.map((concern) => {
+      const resolvedAtLabel = formatPromptTimestamp(concern.resolvedAt);
+      return {
+        ...(concern.id ? { id: concern.id } : {}),
+        ...(concern.title ? { title: concern.title } : {}),
+        ...(concern.summary ? { summary: concern.summary } : {}),
+        ...(concern.status ? { status: concern.status } : {}),
+        ...(concern.priority !== undefined ? { priority: concern.priority } : {}),
+        ...(resolvedAtLabel ? { resolvedAt: resolvedAtLabel } : {}),
+      };
+    });
     let persona: AppraisalPersonaContext | null;
     try {
       persona = buildAppraisalPersonaContext(
@@ -1323,6 +1346,7 @@ export class IntentionAppraisal {
         : null,
       contactEmotionalSnapshot: normalized.contactEmotionalSnapshot,
       activeConcerns: promptActiveConcerns,
+      recentlyResolvedConcerns: promptRecentlyResolvedConcerns,
       conversationTrajectory: normalized.conversationTrajectory,
       ...(normalized.motivationSignals.length > 0 ? { motivationSignals: normalized.motivationSignals } : {}),
       recentMessages: promptRecentMessages,

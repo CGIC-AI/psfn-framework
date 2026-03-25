@@ -33,7 +33,7 @@ describe('importDiscordExportToL0', () => {
           author: {
             id: '388908766306893854',
             name: 'daisukearamaki',
-            nickname: 'Operator',
+            nickname: 'Alex',
             isBot: false,
           },
           attachments: [],

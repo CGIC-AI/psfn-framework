@@ -8,7 +8,7 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
     channelId: 'discord-channel',
     channelType: 'discord',
     authorId: 'user-1',
-    authorName: 'Operator',
+    authorName: 'Alex',
     content: 'My little satellite',
     timestamp: new Date(),
     attachments: [{

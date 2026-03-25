@@ -1,16 +1,16 @@
 # PSFN System Account Cutover
 
-This host currently runs `psfn.service` as a per-user `operator` unit.
+This host currently runs `psfn.service` as a per-user operator unit.
 
 That is not a viable long-term deployment shape for a dedicated runtime account on this machine because:
 
-- the live checkout sits under `/mnt/samesung`, which is `0700` and not traversable by other accounts
-- the current Node toolchain lives under `/home/operator/.nvm`, and `/home/operator` is `0750`
-- the live runtime still writes to the legacy shared `./data` root owned by `operator`
+- the live checkout sits under a private host-specific mount that is not traversable by other accounts
+- the current Node toolchain lives under `/home/<service-user>/.nvm`, and that home directory is not broadly traversable
+- the live runtime still writes to the legacy shared `./data` root owned by the operator account
 
 ## Provisioner
 
-Use [`scripts/system/install-psfn-service.sh`](/workspace/psfn-live-ssm/scripts/system/install-psfn-service.sh) to create a service-owned deployment that no longer depends on `operator`'s home or checkout:
+Use [`scripts/system/install-psfn-service.sh`](../../scripts/system/install-psfn-service.sh) to create a service-owned deployment that no longer depends on the operator home or checkout:
 
 - creates or reuses a `psfn` system user/group
 - clones the source repo into a service-owned app root

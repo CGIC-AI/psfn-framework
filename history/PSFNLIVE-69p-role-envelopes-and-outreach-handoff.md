@@ -26,13 +26,13 @@ This is design only. It intentionally does not introduce runtime code in this be
 
 The design must fit the current branch rather than replace it:
 
-- `SessionEntryRole` is fixed to `user | assistant | system | tool` in [`src/session/types.ts`](/workspace/psfn-live-69p/src/session/types.ts).
-- Session metadata already uses JSON envelope subdocuments for turn provenance, emotion state, and tool observation in [`src/session/turn-provenance.ts`](/workspace/psfn-live-69p/src/session/turn-provenance.ts), [`src/emotion/session-metadata.ts`](/workspace/psfn-live-69p/src/emotion/session-metadata.ts), and [`src/session/tool-observation.ts`](/workspace/psfn-live-69p/src/session/tool-observation.ts).
-- Internal reflection channels are intentionally kept out of session journals but are preserved through continuity in [`src/session/manager.ts`](/workspace/psfn-live-69p/src/session/manager.ts).
-- Deferred actions already have dedupe, persistence, and retry semantics in [`src/bootstrap/post-turn-actions.ts`](/workspace/psfn-live-69p/src/bootstrap/post-turn-actions.ts).
-- Broadcast/public safety already classifies risky drafts in [`src/broadcast/safety.ts`](/workspace/psfn-live-69p/src/broadcast/safety.ts) and is enforced in [`src/agent/substrate-agent/turn-execution-runtime.ts`](/workspace/psfn-live-69p/src/agent/substrate-agent/turn-execution-runtime.ts).
-- External outbound rate limiting already exists in [`src/capabilities/safeguards.ts`](/workspace/psfn-live-69p/src/capabilities/safeguards.ts).
-- Companion/private state belongs under `companion-data`, not env or repo-root docs/config, per [`src/persistence/layout.ts`](/workspace/psfn-live-69p/src/persistence/layout.ts).
+- `SessionEntryRole` is fixed to `user | assistant | system | tool` in ``src/session/types.ts``.
+- Session metadata already uses JSON envelope subdocuments for turn provenance, emotion state, and tool observation in ``src/session/turn-provenance.ts``, ``src/emotion/session-metadata.ts``, and ``src/session/tool-observation.ts``.
+- Internal reflection channels are intentionally kept out of session journals but are preserved through continuity in ``src/session/manager.ts``.
+- Deferred actions already have dedupe, persistence, and retry semantics in ``src/bootstrap/post-turn-actions.ts``.
+- Broadcast/public safety already classifies risky drafts in ``src/broadcast/safety.ts`` and is enforced in ``src/agent/substrate-agent/turn-execution-runtime.ts``.
+- External outbound rate limiting already exists in ``src/capabilities/safeguards.ts``.
+- Companion/private state belongs under `companion-data`, not env or repo-root docs/config, per ``src/persistence/layout.ts``.
 
 ## Design Decisions
 
@@ -165,7 +165,7 @@ Why event-sourced instead of mutable JSON blobs:
 
 - OpenAI-compatible API messages still use `system`, `user`, or `assistant`.
 - Session journals still persist `user`, `assistant`, `system`, or `tool`.
-- `PROMPT_LAYER_ROLES` stays unchanged in [`src/identity/prompt-types.ts`](/workspace/psfn-live-69p/src/identity/prompt-types.ts).
+- `PROMPT_LAYER_ROLES` stays unchanged in ``src/identity/prompt-types.ts``.
 
 ### Canonical prompt projection for internal models
 
@@ -209,7 +209,7 @@ Normal turns should consume only promoted summaries, not raw bodies. The project
 
 ### New persistence paths
 
-These should be added to [`src/persistence/layout.ts`](/workspace/psfn-live-69p/src/persistence/layout.ts):
+These should be added to ``src/persistence/layout.ts``:
 
 - `resolveInternalRoleEnvelopeLedgerPath(companionDataDir, channelId)`
   - `companion-data/internal-role-envelopes/<sanitized-channel-id>.jsonl`
@@ -447,7 +447,7 @@ Promotion is explicit and typed. Most envelopes should remain `ephemeral`.
 `values_reflection`
 
 - Promote to `values_journal`
-- Reuse the provenance pattern already present in [`src/values/store.ts`](/workspace/psfn-live-69p/src/values/store.ts)
+- Reuse the provenance pattern already present in ``src/values/store.ts``
 
 `concern_candidate`
 
@@ -556,7 +556,7 @@ This belongs in metadata, not the visible message body.
 
 Files:
 
-- [`src/persistence/layout.ts`](/workspace/psfn-live-69p/src/persistence/layout.ts)
+- ``src/persistence/layout.ts``
 - new `src/internal-role-envelopes/types.ts`
 - new `src/internal-role-envelopes/store.ts`
 - new `src/internal-role-envelopes/prompt-format.ts`
@@ -572,10 +572,10 @@ Acceptance:
 
 Files:
 
-- [`src/types.ts`](/workspace/psfn-live-69p/src/types.ts)
-- [`src/session/turn-provenance.ts`](/workspace/psfn-live-69p/src/session/turn-provenance.ts)
-- [`src/session/manager.ts`](/workspace/psfn-live-69p/src/session/manager.ts)
-- [`src/channels/admin/services/session-turn-observability.ts`](/workspace/psfn-live-69p/src/channels/admin/services/session-turn-observability.ts)
+- ``src/types.ts``
+- ``src/session/turn-provenance.ts``
+- ``src/session/manager.ts``
+- ``src/channels/admin/services/session-turn-observability.ts``
 - relevant admin types/tests
 
 Acceptance:
@@ -590,9 +590,9 @@ Files:
 - new `src/outreach/types.ts`
 - new `src/outreach/store.ts`
 - new `src/outreach/policy.ts`
-- [`src/bootstrap/post-turn-actions.ts`](/workspace/psfn-live-69p/src/bootstrap/post-turn-actions.ts)
-- [`src/agent/substrate-agent/post-turn-actions.ts`](/workspace/psfn-live-69p/src/agent/substrate-agent/post-turn-actions.ts)
-- [`src/intention/appraisal.ts`](/workspace/psfn-live-69p/src/intention/appraisal.ts)
+- ``src/bootstrap/post-turn-actions.ts``
+- ``src/agent/substrate-agent/post-turn-actions.ts``
+- ``src/intention/appraisal.ts``
 
 Acceptance:
 
@@ -603,9 +603,9 @@ Acceptance:
 
 Files:
 
-- [`src/agent/substrate-agent/turn-execution-runtime.ts`](/workspace/psfn-live-69p/src/agent/substrate-agent/turn-execution-runtime.ts)
+- ``src/agent/substrate-agent/turn-execution-runtime.ts``
 - channel adapters used for outbound DM delivery
-- [`src/capabilities/safeguards.ts`](/workspace/psfn-live-69p/src/capabilities/safeguards.ts)
+- ``src/capabilities/safeguards.ts``
 - admin/audit collectors and tests
 
 Acceptance:

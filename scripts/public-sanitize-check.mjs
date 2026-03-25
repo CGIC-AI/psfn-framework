@@ -8,6 +8,7 @@ export const DEFAULT_LOCAL_BLOCKLIST_PATH = 'workspace/sanitize/local-blocklist.
 
 // Beads history logs are machine-managed workspace artifacts, not public source/docs.
 const MACHINE_MANAGED_BEADS_HISTORY_FILES = new Set([
+  'daemon.log',
   'issues.jsonl',
   'beads.left.jsonl',
   'interactions.jsonl',

@@ -23,6 +23,8 @@ workspace/
 # Beads transient lock/socket files (keep .beads/issues.jsonl tracked)
 .beads/*.lock
 .beads/*.sock*
+.beads/beads.left.jsonl
+.beads/daemon.log
 
 # SvelteKit admin UI
 admin-ui/node_modules/

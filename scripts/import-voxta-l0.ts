@@ -41,7 +41,7 @@ function printUsage(): void {
       '',
       'Example:',
       '  tsx scripts/import-voxta-l0.ts \\',
-      '    --db /workspace/voxta/Data/Voxta.sqlite.db \\',
+      '    --db /path/to/voxta/Data/Voxta.sqlite.db \\',
       '    --sessions-dir /tmp/voxta-l0 \\',
       '    --character-id cf0a06ea-5b6c-9a4d-945a-1c32ad4349bd',
     ].join('\n'),

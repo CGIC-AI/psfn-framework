@@ -383,7 +383,7 @@ Extend intention appraisal output with:
   "reason": "check in after missed commitment",
   "timing": "soon",
   "outreach": {
-    "channelId": "telegram:operator",
+    "channelId": "telegram:primary-contact",
     "channelType": "telegram",
     "content": "Quick check-in text",
     "intent": "relationship_maintenance"

@@ -89,7 +89,7 @@ function seedVoxtaDatabase(databasePath: string): void {
         emotional_baseline, first_seen, last_seen, notes
       )
       VALUES (
-        'contact-1', '388908766306893854', 'Operator', NULL, 'primary', 'partner',
+        'contact-1', '388908766306893854', 'Alex', NULL, 'primary', 'partner',
         '{}', '2026-03-18T00:00:00.000Z', '2026-03-18T00:00:00.000Z', NULL
       )
     `).run();
@@ -243,7 +243,7 @@ describe('importVoxtaCharacterChats', () => {
     expect(journal.entries.map(entry => entry.channelId)).toEqual(['voxta', 'voxta', 'voxta']);
     expect(journal.entries.map(entry => entry.role)).toEqual(['assistant', 'user', 'system']);
     expect(journal.entries[1]?.authorId).toBe('388908766306893854');
-    expect(journal.entries[1]?.authorName).toBe('Operator');
+    expect(journal.entries[1]?.authorName).toBe('Alex');
     expect(journal.entries[2]?.content).toContain('Voxta attachment-only message');
   });
 

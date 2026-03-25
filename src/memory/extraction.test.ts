@@ -1798,8 +1798,8 @@ describe('MemoryExtractor crash recovery markers', () => {
     const contactStore = {
       getById: vi.fn().mockReturnValue({
         id: 'contact-1',
-        displayName: 'Operator Andromeda',
-        nickname: 'V',
+        displayName: 'Alex Example',
+        nickname: 'A',
       }),
     } as any;
 
@@ -1819,7 +1819,7 @@ describe('MemoryExtractor crash recovery markers', () => {
 
     expect(llmClient.complete).toHaveBeenCalledTimes(1);
     const prompt = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt as string;
-    expect(prompt).toContain('Human participant name: V');
-    expect(prompt).not.toContain('Human participant name: Operator Andromeda');
+    expect(prompt).toContain('Human participant name: A');
+    expect(prompt).not.toContain('Human participant name: Alex Example');
   });
 });

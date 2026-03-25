@@ -41,7 +41,7 @@ Usage: $(basename "$0") [options]
 
 Provision a dedicated psfn system-account deployment with:
 - a service-owned app checkout
-- a bundled node binary outside operator's home
+- a bundled node binary outside the operator home directory
 - a production runtime root
 - a systemd service unit
 

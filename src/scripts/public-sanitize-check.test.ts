@@ -15,6 +15,7 @@ describe('public-sanitize check', () => {
     expect(shouldScanTextContent('src/index.ts')).toBe(true);
     expect(shouldScanTextContent('docs/README.md')).toBe(true);
     expect(shouldScanTextContent('.beads/README.md')).toBe(true);
+    expect(shouldScanTextContent('.beads/daemon.log')).toBe(false);
     expect(shouldScanTextContent('.beads/issues.jsonl')).toBe(false);
     expect(shouldScanTextContent('.beads/beads.left.jsonl')).toBe(false);
     expect(shouldScanTextContent('.beads/interactions.jsonl')).toBe(false);
@@ -45,7 +46,7 @@ describe('public-sanitize check', () => {
     const tokenValue = buildOpenAiLikeToken();
     const reads: string[] = [];
     const result = scanPublicSanitizeTrackedFiles(
-      ['.beads/issues.jsonl', '.beads/beads.left.jsonl', '.beads/interactions.jsonl'],
+      ['.beads/daemon.log', '.beads/issues.jsonl', '.beads/beads.left.jsonl', '.beads/interactions.jsonl'],
       {
         localBlocklist: {
           localPath: 'workspace/sanitize/local-blocklist.json',

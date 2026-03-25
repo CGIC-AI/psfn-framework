@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file is the repo-specific operating contract for AI coding agents working in `/workspace/psfn-framework`.
+This file is the repo-specific operating contract for AI coding agents working in this repository.
 
 Use it together with the current code, not instead of it. When workflow text here conflicts with the live runtime or config contracts, the code wins.
 

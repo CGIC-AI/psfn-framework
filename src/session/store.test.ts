@@ -907,7 +907,7 @@ describe('SessionStore', () => {
 
   it('supports multiple L0 sessions for one logical channel', () => {
     const channelId = 'voxta:legacy:cf0a06ea';
-    writeFileSync(join(dir, '20241119_voxta-legacy-cf0a06ea_operator_111111.jsonl'), [
+    writeFileSync(join(dir, '20241119_voxta-legacy-cf0a06ea_alex_111111.jsonl'), [
       JSON.stringify({
         type: 'message',
         id: 1,
@@ -918,7 +918,7 @@ describe('SessionStore', () => {
       }),
       '',
     ].join('\n'));
-    writeFileSync(join(dir, '20241225_voxta-legacy-cf0a06ea_operator_222222.jsonl'), [
+    writeFileSync(join(dir, '20241225_voxta-legacy-cf0a06ea_alex_222222.jsonl'), [
       JSON.stringify({
         type: 'message',
         id: 1,

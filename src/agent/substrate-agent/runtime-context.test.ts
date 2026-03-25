@@ -162,19 +162,19 @@ describe('runtime subject identity', () => {
 
   it('exposes appearance context on ordinary turns when image tools are active', () => {
     const message = makeMessage({
-      channelId: 'discord:dm:operator',
+      channelId: 'discord:dm:alex',
       channelType: 'discord',
-      authorId: 'user-operator',
-      authorName: 'Operator',
+      authorId: 'user-alex',
+      authorName: 'Alex',
       content: 'send me a selfie',
     });
 
     const { templateVariables } = buildPromptTemplateVariables({
       message,
-      resolvedUserName: 'Operator',
+      resolvedUserName: 'Alex',
       trustLevel: 'trusted',
       channelType: 'discord_text',
-      canonicalContactKey: 'contact-operator',
+      canonicalContactKey: 'contact-alex',
       subjectIdentityKey: undefined,
       now: new Date('2026-03-17T12:00:00Z'),
       characterPromptVariables: {
@@ -187,10 +187,10 @@ describe('runtime subject identity', () => {
 
     const runtimeContext = buildRuntimeContext({
       message,
-      resolvedUserName: 'Operator',
+      resolvedUserName: 'Alex',
       trustLevel: 'trusted',
       channelType: 'discord_text',
-      canonicalContactKey: 'contact-operator',
+      canonicalContactKey: 'contact-alex',
       responseStyle: 'concise',
       now: new Date('2026-03-17T12:00:00Z'),
       templateVariables,
@@ -236,13 +236,13 @@ describe('runtime subject identity', () => {
         channelId: '1313001762793197678',
         channelType: 'discord',
         authorId: '388908766306893854',
-        authorName: 'Operator',
+        authorName: 'Alex',
         content: 'hi',
       }),
       contactStore: {
         resolveChannelIdentity: () => ({
-          id: 'contact-operator',
-          displayName: 'Operator',
+          id: 'contact-alex',
+          displayName: 'Alex',
           trustLevel: 'trusted',
           relationshipType: 'partner',
           firstSeen: '2026-03-18T00:00:00.000Z',
@@ -268,7 +268,7 @@ describe('runtime subject identity', () => {
 
     expect(authorContext.channelPrivacyLevel).toBe('private');
     expect(recordedCalls).toEqual([{
-      contactId: 'contact-operator',
+      contactId: 'contact-alex',
       channel: 'discord',
       channelId: '1313001762793197678',
       privacyLevel: 'private',

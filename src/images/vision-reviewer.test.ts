@@ -80,7 +80,7 @@ describe('DefaultImageVisionReviewer', () => {
     const reviewer = new DefaultImageVisionReviewer(
       {
         primaryProvider: 'openrouter',
-        comfyUiBaseUrl: 'https://comfy.local.operator.nyc',
+        comfyUiBaseUrl: 'https://comfy.local.example.test',
       } as any,
       {
         binaryFetcher,
@@ -90,14 +90,14 @@ describe('DefaultImageVisionReviewer', () => {
     );
 
     const result = await reviewer.analyze({
-      imageUrls: ['https://comfy.local.operator.nyc/view?filename=review.png'],
+      imageUrls: ['https://comfy.local.example.test/view?filename=review.png'],
       prompt: 'a new selfie',
       mode: 'create',
     });
 
     expect(binaryFetcher).toHaveBeenCalledTimes(1);
     expect(fetchImpl).toHaveBeenCalledWith(
-      'https://comfy.local.operator.nyc/view?filename=review.png',
+      'https://comfy.local.example.test/view?filename=review.png',
       expect.objectContaining({
         headers: {
           Accept: 'image/*',

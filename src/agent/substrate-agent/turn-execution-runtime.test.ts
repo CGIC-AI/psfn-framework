@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { getVisionToolRequestContext } from '../../images/request-context.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
@@ -605,5 +606,44 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       'proactive recall failed',
     );
     expect(buildContext).not.toHaveBeenCalled();
+  });
+
+  it('exposes current-turn image attachment context to tools during prompt execution', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    let observedContext: ReturnType<typeof getVisionToolRequestContext> | undefined;
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      observedContext = getVisionToolRequestContext();
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'assistant reply' });
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-vision-context', {
+      channelType: 'discord',
+      content: 'did you not see the image?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    expect(observedContext).toEqual({
+      userMessageText: 'did you not see the image?',
+      imageAttachmentUrls: ['https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh'],
+    });
   });
 });

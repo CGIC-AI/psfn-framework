@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
+import { runWithVisionToolRequestContext } from './request-context.js';
 import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool } from './tools.js';
 import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer } from './types.js';
 
@@ -104,5 +105,69 @@ describe('image tools', () => {
     expect(result.details.visionReview?.model).toBe('vision-model');
     expect(resultText(result)).toContain('Vision review:');
     expect(resultText(result)).toContain('appearance is consistent');
+  });
+
+  it('blocks stale Discord CDN urls when the current turn already has a live image attachment', async () => {
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'Does this still look like me?',
+        summary: 'Should not be reached.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+
+    const tool = createImageAnalyzeTool(reviewer);
+    const result = await runWithVisionToolRequestContext(
+      {
+        userMessageText: 'did you not see the image?',
+        imageAttachmentUrls: [
+          'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        ],
+      },
+      async () => tool.execute('tool-call-3', {
+        image_urls: [
+          'https://cdn.discordapp.com/attachments/9/8/expired-image.png?ex=stale',
+        ],
+        question: 'Does this still look like me?',
+      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+    );
+
+    expect(reviewer.analyze).not.toHaveBeenCalled();
+    expect(result.details.visionReview).toBeUndefined();
+    expect(result.details.visionReviewError).toContain('live image attachment bytes');
+    expect(resultText(result)).toContain('may be stale or expired');
+  });
+
+  it('allows a Discord CDN url that is explicitly present in the current user message', async () => {
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'What is in this image?',
+        summary: 'A cozy desk setup.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+    const explicitUrl = 'https://cdn.discordapp.com/attachments/4/5/explicit-image.png?ex=current';
+
+    const tool = createImageAnalyzeTool(reviewer);
+    const result = await runWithVisionToolRequestContext(
+      {
+        userMessageText: explicitUrl,
+        imageAttachmentUrls: [
+          'https://cdn.discordapp.com/attachments/1/2/current-attachment.png?ex=fresh',
+        ],
+      },
+      async () => tool.execute('tool-call-4', {
+        image_urls: [explicitUrl],
+        question: 'What is in this image?',
+      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+    );
+
+    expect(reviewer.analyze).toHaveBeenCalledWith({
+      imageUrls: [explicitUrl],
+      question: 'What is in this image?',
+    });
+    expect(result.details.visionReview?.summary).toContain('cozy desk setup');
   });
 });

@@ -2,6 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
+import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import {
@@ -21,6 +22,14 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Common values: 1:1 square, 3:4 portrait, 9:16 story, 4:3 landscape, 16:9 wide.',
   'Use only one of the supported presets.',
 ].join(' ');
+const DISCORD_VISION_ATTACHMENT_HOSTS = new Set([
+  'cdn.discordapp.com',
+  'media.discordapp.net',
+]);
+const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
+  '.discordapp.com',
+  '.discordapp.net',
+];
 
 function formatResult(result: ImageGenerationResult): string {
   return JSON.stringify(result, null, 2);
@@ -65,6 +74,57 @@ function aspectRatioSchema() {
       description: IMAGE_ASPECT_RATIO_DESCRIPTION,
     },
   ));
+}
+
+function isDiscordAttachmentUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.trim().toLowerCase();
+    if (!hostname) return false;
+    if (DISCORD_VISION_ATTACHMENT_HOSTS.has(hostname)) return true;
+    return DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+function normalizeUrlForTurnComparison(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin.toLowerCase()}${parsed.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+function resolveStaleDiscordTurnUrlNotice(imageUrls: readonly string[]): string | null {
+  const requestContext = getVisionToolRequestContext();
+  if (!requestContext || requestContext.imageAttachmentUrls.length === 0) {
+    return null;
+  }
+
+  const currentTurnAttachmentUrls = new Set(
+    requestContext.imageAttachmentUrls
+      .map(normalizeUrlForTurnComparison)
+      .filter((url): url is string => url !== null),
+  );
+
+  for (const rawUrl of imageUrls) {
+    const trimmedUrl = rawUrl.trim();
+    if (!trimmedUrl || !isDiscordAttachmentUrl(trimmedUrl)) continue;
+    if (requestContext.userMessageText.includes(trimmedUrl)) continue;
+
+    const normalizedUrl = normalizeUrlForTurnComparison(trimmedUrl);
+    if (normalizedUrl && currentTurnAttachmentUrls.has(normalizedUrl)) continue;
+
+    return [
+      'Current turn already includes live image attachment bytes.',
+      'The Discord CDN URL passed to image_analyze does not match a current-turn attachment and may be stale or expired.',
+      'Do not use an old Discord attachment URL for this turn.',
+      'Inspect the current attached image already in context, or ask the user to resend the specific URL if they want a different image checked.',
+    ].join(' ');
+  }
+
+  return null;
 }
 
 async function reviewGeneratedImages(
@@ -267,7 +327,7 @@ export function createImageAnalyzeTool(reviewer: ImageVisionReviewer): AgentTool
     name: 'image_analyze',
     label: 'image_analyze',
     description:
-      'Inspect one or more images with the vision pipeline. Use this to see what was actually generated or sent, including checking whether a selfie/edit still matches your appearance, instead of asking the user to go inspect it for you.',
+      'Inspect one or more images with the vision pipeline. Use this to see what was actually generated or sent, including checking whether a selfie/edit still matches your appearance, instead of asking the user to go inspect it for you. Discord attachment URLs expire, so do not pass an old CDN link for the current turn when the live attachment is already in context.',
     parameters: Type.Object({
       image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
       question: Type.Optional(Type.String({
@@ -283,6 +343,14 @@ export function createImageAnalyzeTool(reviewer: ImageVisionReviewer): AgentTool
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
+        const staleDiscordTurnUrlNotice = resolveStaleDiscordTurnUrlNotice(params.image_urls);
+        if (staleDiscordTurnUrlNotice) {
+          return {
+            content: [{ type: 'text', text: staleDiscordTurnUrlNotice }] satisfies TextContent[],
+            details: { visionReviewError: staleDiscordTurnUrlNotice },
+          };
+        }
+
         const visionReview = await reviewer.analyze({
           imageUrls: [...params.image_urls],
           question: params.question,

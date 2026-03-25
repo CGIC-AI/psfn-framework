@@ -45,6 +45,15 @@ export function hasVisionAttachments(message?: SubstrateMessage): boolean {
   return message.attachments.some((attachment) => resolveAttachmentImageContentType(attachment) !== null);
 }
 
+export function collectVisionAttachmentUrls(message?: SubstrateMessage): string[] {
+  if (!message?.attachments || message.attachments.length === 0) return [];
+  return message.attachments
+    .filter((attachment) => resolveAttachmentImageContentType(attachment) !== null)
+    .slice(0, VISION_ATTACHMENT_MAX_COUNT)
+    .map((attachment) => attachment.url.trim())
+    .filter((url) => url.length > 0);
+}
+
 export async function buildTurnUserContent(input: {
   message: SubstrateMessage;
   llmClient: LLMProvider;

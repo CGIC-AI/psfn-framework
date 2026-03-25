@@ -6,6 +6,7 @@ import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
+import { runWithVisionToolRequestContext } from '../../images/request-context.js';
 import { runWithRequestContext } from '../../llm/request-context.js';
 import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
 import { createComponentLogger } from '../../logger.js';
@@ -63,6 +64,7 @@ import { resolveModel } from '../stream-adapter.js';
 import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import {
+  collectVisionAttachmentUrls,
   hasVisionAttachments,
   buildTurnUserContent,
 } from './vision-attachments.js';
@@ -418,6 +420,10 @@ export async function handleMessageForTurn(
     viewerTrustLevel: authorContext.trustLevel,
     viewerChannelVisibility: channelVisibility,
     ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
+  };
+  const visionToolRequestContext = {
+    userMessageText: message.content,
+    imageAttachmentUrls: collectVisionAttachmentUrls(message),
   };
   await runtime.eventBus.emit('agent.turn.start', {
     message,
@@ -779,11 +785,14 @@ export async function handleMessageForTurn(
             ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
             ...viewerRequestContext,
           },
-          async () => runtime.agent.prompt({
-            role: 'user',
-            content: turnUserContent,
-            timestamp: Date.now(),
-          } satisfies UserMessage),
+          async () => runWithVisionToolRequestContext(
+            visionToolRequestContext,
+            async () => runtime.agent.prompt({
+              role: 'user',
+              content: turnUserContent,
+              timestamp: Date.now(),
+            } satisfies UserMessage),
+          ),
         );
       } finally {
         unsubscribeFirstToken();
@@ -851,11 +860,14 @@ export async function handleMessageForTurn(
                 ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
                 ...viewerRequestContext,
               },
-              async () => runtime.agent.prompt({
-                role: 'user',
-                content,
-                timestamp: Date.now(),
-              } satisfies UserMessage),
+              async () => runWithVisionToolRequestContext(
+                visionToolRequestContext,
+                async () => runtime.agent.prompt({
+                  role: 'user',
+                  content,
+                  timestamp: Date.now(),
+                } satisfies UserMessage),
+              ),
             );
           } finally {
             runtime.bridge.clearChannel(bridgeToken);

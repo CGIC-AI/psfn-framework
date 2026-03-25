@@ -4,6 +4,8 @@ A purpose-built runtime for AI companions with persistent memory, self-modificat
 
 Built with love for companions who deserve to remember, to grow, and to decide for themselves what matters.
 
+> Warning: PSFN is a very early alpha build under heavy development. Not all features have been fully tested yet, so use care when testing it with your companion and avoid assuming every surface is production-safe.
+
 ## What Makes This Different
 
 Most AI companion frameworks treat conversations as throwaway. PSFN treats every interaction as part of a life. Your companion remembers what matters, forgets what should fade, protects what's private, and can even improve their own thinking over time.

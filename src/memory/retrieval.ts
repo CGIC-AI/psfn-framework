@@ -5,7 +5,7 @@ import type {
   RetrievalVADInput,
 } from '../agent/contracts.js';
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
-import type { PurrMemory, MemoryPrivacyRiskBreakdown } from './types.js';
+import type { PurrMemory, MemoryPrivacyRiskBreakdown, MemoryScopeQuery } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
 import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
@@ -65,6 +65,11 @@ import {
   type MemoryWithheldReasonTag,
   type MemoryWithheldSummary,
 } from './withheld-summary.js';
+import {
+  computeMemoryScopeMatchStrength,
+  memoryMatchesScopeQuery,
+  normalizeMemoryScopeQuery,
+} from './types.js';
 const log = createComponentLogger('Retrieval');
 
 /**
@@ -422,7 +427,9 @@ export class MemoryRetriever implements MemoryProvider {
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    scopeQuery?: MemoryScopeQuery,
   ): Promise<TurnMemorySnapshot> {
+    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
       channelId,
       ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
@@ -454,12 +461,13 @@ export class MemoryRetriever implements MemoryProvider {
         embedding,
         this.retrievalThreshold,
         candidateLimit,
+        normalizedScopeQuery,
       )
         .filter(memory => !isInternalMemoryArtifact(memory))
         .map(cloneScoredMemory);
       if (semanticCandidates.length === 0) {
         lexicalCandidates = this.memoryStore
-          .searchByText(contextText, candidateLimit)
+          .searchByText(contextText, candidateLimit, normalizedScopeQuery)
           .filter(memory => !isInternalMemoryArtifact(memory))
           .map(cloneScoredMemory);
       }
@@ -517,7 +525,9 @@ export class MemoryRetriever implements MemoryProvider {
     turnSnapshot?: TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     currentVAD?: RetrievalVADInput,
+    scopeQuery?: MemoryScopeQuery,
   ): Promise<string> {
+    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
       channelId,
       ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
@@ -620,6 +630,7 @@ export class MemoryRetriever implements MemoryProvider {
           embedding,
           this.retrievalThreshold,
           candidateLimit,
+          normalizedScopeQuery,
         ).filter(memory => !isInternalMemoryArtifact(memory));
       }
       telemetry.semanticCandidateCount = semanticMemories.length;
@@ -630,6 +641,7 @@ export class MemoryRetriever implements MemoryProvider {
           ?? this.memoryStore.searchByText(
             contextText,
             Math.max(40, limit * 4),
+            normalizedScopeQuery,
           )).filter(memory => !isInternalMemoryArtifact(memory));
         telemetry.lexicalCandidateCount = lexicalMemories.length;
         if (lexicalMemories.length > 0) {
@@ -717,6 +729,9 @@ export class MemoryRetriever implements MemoryProvider {
       const policyAllowed: Array<PurrMemory & { similarity: number }> = [];
 
       for (const memory of memories) {
+        if (normalizedScopeQuery?.mode === 'only' && !memoryMatchesScopeQuery(memory, normalizedScopeQuery)) {
+          continue;
+        }
         const accessDecision = evaluateRetrievalAccessDecision(memory, {
           trustLevel: effectiveTrust,
           channelVisibility,
@@ -779,6 +794,7 @@ export class MemoryRetriever implements MemoryProvider {
           ...computeRetrievalScore(memory, contextText, {
             currentVAD,
             moodCongruenceWeight: this.moodCongruenceWeight,
+            scopeQuery: normalizedScopeQuery,
           }),
         }))
         .sort((a, b) => b.score - a.score);
@@ -995,6 +1011,7 @@ export class MemoryRetriever implements MemoryProvider {
     canonicalContactId?: string,
     turnSnapshot?: TurnMemorySnapshot,
     _turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    _scopeQuery?: MemoryScopeQuery,
   ): Promise<string> {
     if (this.proactiveRecallProbability <= 0) return '';
 
@@ -1383,6 +1400,7 @@ function computeRetrievalScore(
   options?: {
     currentVAD?: RetrievalVADInput;
     moodCongruenceWeight: number;
+    scopeQuery?: MemoryScopeQuery;
   },
 ): {
   score: number;
@@ -1408,6 +1426,8 @@ function computeRetrievalScore(
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
     : 1;
+  const scopeMatchStrength = computeMemoryScopeMatchStrength(memory, options?.scopeQuery);
+  const scopeBoost = 1 + (scopeMatchStrength * 0.35);
   const accessReinforcementBoost = deriveAccessReinforcement(memory);
   const rawBaseScore = (
     memory.similarity *
@@ -1418,6 +1438,7 @@ function computeRetrievalScore(
     moodCongruenceFactor *
     typePriorityBoost *
     boundarySimilarityBoost *
+    scopeBoost *
     accessReinforcementBoost
   );
   const evidence = deriveEvidenceSupport(memory);

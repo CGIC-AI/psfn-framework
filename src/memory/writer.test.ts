@@ -129,6 +129,33 @@ describe('MemoryWriter', () => {
       expect(result.memory.sourceRef).toBe('tool:memory_write');
     });
 
+    it('persists normalized scope refs and scope tags on create', async () => {
+      const result = await writer.write({
+        text: 'Scoped memory',
+        type: 'semantic',
+        scopeRef: { kind: 'PROJECT' as any, id: 'proj-1', label: ' Project One ' },
+        scopeTags: ['Project:Proj-1', 'scope:alpha'],
+      });
+
+      expect(result.memory.scopeRef).toEqual({
+        kind: 'project',
+        id: 'proj-1',
+        label: 'Project One',
+      });
+      expect(result.memory.scopeTags).toEqual(['project:proj-1', 'scope:alpha']);
+      expect(store.insertMemory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          scopeRef: {
+            kind: 'project',
+            id: 'proj-1',
+            label: 'Project One',
+          },
+          scopeTags: ['project:proj-1', 'scope:alpha'],
+        }),
+        expect.any(Float32Array),
+      );
+    });
+
     it('normalizes empty sourceRef values to defaults', async () => {
       const writeResult = await writer.write({
         text: 'Fallback source write',
@@ -215,6 +242,25 @@ describe('MemoryWriter', () => {
 
       // Should NOT have inserted a new memory
       expect(store.insertMemory).not.toHaveBeenCalled();
+    });
+
+    it('does not deduplicate across different scope refs', async () => {
+      const existing = makeExistingMemory({
+        type: 'semantic',
+        scopeRef: { kind: 'project', id: 'proj-a' },
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([existing]).mockReturnValueOnce([existing]);
+
+      const result = await writer.write({
+        text: 'Scoped memory',
+        type: 'semantic',
+        scopeRef: { kind: 'project', id: 'proj-b' },
+      });
+
+      expect(result.action).toBe('created');
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.insertMemory).toHaveBeenCalledOnce();
     });
 
     it('merges provenance references when deduplicating', async () => {

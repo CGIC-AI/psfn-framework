@@ -1,18 +1,29 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { base } from '$app/paths';
   import {
     getModelsConfigRaw,
     saveModelsConfigRaw,
     listDiscoveredModels,
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
+  import { getSettings } from '$lib/api/endpoints/settings';
   import { ApiError } from '$lib/api/client';
-  import type { DiscoveredModel } from '$lib/types';
+  import type {
+    AdminSettingsData,
+    CanonicalProviderRegistry,
+    DiscoveredModel,
+    ProviderRegistryEntry,
+  } from '$lib/types';
   import {
     buildUniqueModelId,
     deriveDiscoveryAutofill,
     resolveDiscoveredModelSelection,
   } from './discovery-autofill';
+  import {
+    normalizeProvidersRuntimeConfig,
+    PROVIDER_TYPE_LABELS,
+  } from '$lib/providers/registry';
 
   type CanonicalModelPurpose =
     | 'chat'
@@ -49,6 +60,9 @@
     rank: number;
     identity: ModelRegistryIdentityMetadata;
     purposes: ModelRegistryPurposeTag[];
+    routing?: {
+      providerOrder?: string[];
+    };
     capabilities?: Record<string, unknown>;
     tuning?: Record<string, unknown>;
     cost?: Record<string, unknown>;
@@ -124,11 +138,19 @@
   let models = $state<ModelRegistryEntry[]>([]);
   let budgetPolicy = $state<ModelRegistryBudgetPolicy>({ ...DEFAULT_BUDGET_POLICY });
   let discoveredModels = $state<DiscoveredModel[]>([]);
+  let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
   let expandedModelIds = $state<Set<string>>(new Set());
   let dragSourceIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
   let dirty = $state(false);
   let initialSnapshot = $state('');
+  let enabledProviders = $derived.by(() => providerRegistry.providers.filter((entry) => entry.enabled));
+  let providerEntriesById = $derived.by(() => (
+    new Map(providerRegistry.providers.map((entry) => [entry.id, entry] as const))
+  ));
+  let providerTypeOptions = $derived.by(() => (
+    [...new Set(providerRegistry.providers.map((entry) => entry.type))].sort()
+  ));
 
   let purposePrimaryCounts = $derived.by(() => {
     const counts = Object.fromEntries(
@@ -288,6 +310,15 @@
     return normalized;
   }
 
+  function normalizeRouting(value: unknown): { providerOrder?: string[] } | undefined {
+    if (!isRecord(value) || !Array.isArray(value.providerOrder)) return undefined;
+    const providerOrder = value.providerOrder
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map(entry => entry.trim().toLowerCase())
+      .filter((entry, index, array) => entry.length > 0 && array.indexOf(entry) === index);
+    return providerOrder.length > 0 ? { providerOrder } : undefined;
+  }
+
   function normalizeModelEntry(value: unknown, index: number): ModelRegistryEntry {
     const raw = isRecord(value) ? value : {};
     const identityRaw = isRecord(raw.identity) ? raw.identity : {};
@@ -316,6 +347,7 @@
         ...(toNonEmptyString(identityRaw.family) ? { family: toNonEmptyString(identityRaw.family) } : {}),
       },
       purposes,
+      ...(normalizeRouting(raw.routing) ? { routing: normalizeRouting(raw.routing) } : {}),
       ...(isRecord(raw.capabilities) ? { capabilities: { ...raw.capabilities } } : {}),
       ...(isRecord(raw.tuning) ? { tuning: { ...raw.tuning } } : {}),
       ...(isRecord(raw.cost) ? { cost: { ...raw.cost } } : {}),
@@ -336,6 +368,7 @@
         },
       },
       purposes: entry.purposes.map((purpose) => ({ ...purpose })),
+      ...(entry.routing ? { routing: { providerOrder: [...(entry.routing.providerOrder ?? [])] } } : {}),
       ...(isRecord(entry.capabilities) ? { capabilities: { ...entry.capabilities } } : {}),
       ...(isRecord(entry.tuning) ? { tuning: { ...entry.tuning } } : {}),
       ...(isRecord(entry.cost) ? { cost: { ...entry.cost } } : {}),
@@ -461,6 +494,12 @@
         }
       } else {
         entry.identity[key] = value;
+        if (key === 'provider') {
+          const normalizedProvider = value.trim().toLowerCase();
+          if (normalizedProvider.length > 0) {
+            applyProviderDefaults(entry, normalizedProvider);
+          }
+        }
         if (key === 'model') {
           const normalizedModel = value.trim();
           if (normalizedModel.length > 0) {
@@ -489,6 +528,70 @@
       }
       return entry;
     });
+  }
+
+  function providerLabel(entry: ProviderRegistryEntry | undefined): string {
+    if (!entry) return 'Unknown provider';
+    return entry.label?.trim() || PROVIDER_TYPE_LABELS[entry.type] || entry.id;
+  }
+
+  function providerAvailability(entry: ProviderRegistryEntry | undefined): string {
+    if (!entry) return 'not registered';
+    return entry.enabled ? 'enabled' : 'disabled';
+  }
+
+  function providerForModel(entry: ModelRegistryEntry): ProviderRegistryEntry | undefined {
+    return providerEntriesById.get(entry.identity.provider.trim().toLowerCase());
+  }
+
+  function applyProviderDefaults(entry: ModelRegistryEntry, providerId: string): ModelRegistryEntry {
+    const provider = providerEntriesById.get(providerId);
+    if (!provider) return entry;
+    entry.identity.provider = provider.id;
+    if (!entry.identity.source.type.trim()) {
+      entry.identity.source.type = provider.type;
+    }
+    if (!entry.identity.source.label?.trim()) {
+      entry.identity.source.label = provider.label ?? PROVIDER_TYPE_LABELS[provider.type];
+    }
+    if (!entry.identity.source.baseUrl?.trim() && provider.apiBaseUrl) {
+      entry.identity.source.baseUrl = provider.apiBaseUrl;
+    }
+    return entry;
+  }
+
+  function setRoutingProviderOrder(index: number, rawValue: string): void {
+    updateModelAt(index, (entry) => {
+      const providerOrder = rawValue
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .filter((value, orderIndex, array) => value.length > 0 && array.indexOf(value) === orderIndex);
+      if (providerOrder.length === 0) {
+        delete entry.routing;
+      } else {
+        entry.routing = { providerOrder };
+      }
+      return entry;
+    });
+  }
+
+  function toggleRoutingProvider(index: number, providerId: string): void {
+    updateModelAt(index, (entry) => {
+      const currentOrder = entry.routing?.providerOrder ?? [];
+      const nextOrder = currentOrder.includes(providerId)
+        ? currentOrder.filter((value) => value !== providerId)
+        : [...currentOrder, providerId];
+      if (nextOrder.length === 0) {
+        delete entry.routing;
+      } else {
+        entry.routing = { providerOrder: nextOrder };
+      }
+      return entry;
+    });
+  }
+
+  function routingProviderOrderValue(entry: ModelRegistryEntry): string {
+    return entry.routing?.providerOrder?.join(', ') ?? '';
   }
 
   function setContainerValue(
@@ -772,14 +875,23 @@
       } else {
         seenIds.add(id);
       }
-      if (!entry.identity.provider.trim()) {
+      const providerId = entry.identity.provider.trim().toLowerCase();
+      if (!providerId) {
         errors.push(`Model "${id || index + 1}" is missing provider.`);
+      } else if (providerRegistry.providers.length > 0 && !providerEntriesById.has(providerId)) {
+        errors.push(`Model "${id || index + 1}" references unknown provider "${providerId}".`);
       }
       if (!entry.identity.model.trim()) {
         errors.push(`Model "${id || index + 1}" is missing model name.`);
       }
       if (!entry.identity.source.type.trim()) {
         errors.push(`Model "${id || index + 1}" is missing source type.`);
+      }
+      const routingProviderOrder = entry.routing?.providerOrder ?? [];
+      for (const routedProviderId of routingProviderOrder) {
+        if (!providerEntriesById.has(routedProviderId)) {
+          errors.push(`Model "${id || index + 1}" routes through unknown provider "${routedProviderId}".`);
+        }
       }
       if (!Array.isArray(entry.purposes) || entry.purposes.length === 0) {
         errors.push(`Model "${id || index + 1}" must include at least one purpose tag.`);
@@ -817,7 +929,7 @@
         const id = entry.id.trim();
         const identity = {
           ...entry.identity,
-          provider: entry.identity.provider.trim(),
+          provider: entry.identity.provider.trim().toLowerCase(),
           model: entry.identity.model.trim(),
           source: {
             ...entry.identity.source,
@@ -839,6 +951,12 @@
           identity,
           purposes: normalizedPurposes,
         };
+        const normalizedRouting = normalizeRouting(entry.routing);
+        if (normalizedRouting) {
+          nextEntry.routing = normalizedRouting;
+        } else {
+          delete nextEntry.routing;
+        }
 
         if (isRecord(nextEntry.capabilities) && Object.keys(nextEntry.capabilities).length === 0) {
           delete nextEntry.capabilities;
@@ -861,7 +979,10 @@
     error = '';
     discoveryError = '';
     validationErrors = [];
-    const modelsRaw = await getModelsConfigRaw();
+    const [modelsRaw, settingsData] = await Promise.all([
+      getModelsConfigRaw(),
+      getSettings(),
+    ]);
     let discovered: DiscoveredModel[] = [];
     try {
       discovered = await listDiscoveredModels();
@@ -873,6 +994,7 @@
     models = registry.models;
     budgetPolicy = registry.budgetPolicy ?? { ...DEFAULT_BUDGET_POLICY };
     discoveredModels = discovered;
+    providerRegistry = normalizeProvidersRuntimeConfig((settingsData as AdminSettingsData).editors.providers).registry;
     initialSnapshot = JSON.stringify({
       models,
       budgetPolicy,
@@ -955,6 +1077,18 @@
   {/each}
 </datalist>
 
+<datalist id="provider-id-list">
+  {#each providerRegistry.providers as provider}
+    <option value={provider.id}>{providerLabel(provider)}</option>
+  {/each}
+</datalist>
+
+<datalist id="provider-type-list">
+  {#each providerTypeOptions as providerType}
+    <option value={providerType}></option>
+  {/each}
+</datalist>
+
 <div class="space-y-5">
   <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
     <div>
@@ -987,6 +1121,31 @@
   <div class="card-garden p-4 text-sm text-shadow-700">
     Model config is JSON-owned in <span class="font-mono">models.json</span>. Secrets stay in environment variables and are not edited here
     (for example <span class="font-mono">OPENROUTER_API_KEY</span> and <span class="font-mono">LITELLM_API_KEY</span>).
+  </div>
+
+  <div class="card-garden p-4 space-y-3">
+    <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+      <div>
+        <h2 class="text-sm font-serif font-semibold text-shadow-800">Provider Wiring</h2>
+        <p class="text-sm text-shadow-600">Models should target ids from the provider registry in Settings so runtime routing stays canonical.</p>
+      </div>
+      <a
+        href={`${base}/settings#settings-providers`}
+        class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+      >
+        Open Provider Registry
+      </a>
+    </div>
+    <div class="flex flex-wrap gap-2">
+      {#each providerRegistry.providers as provider}
+        <span class="rounded-full border px-2.5 py-1 text-sm {provider.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+          {provider.id} · {PROVIDER_TYPE_LABELS[provider.type]}
+        </span>
+      {/each}
+      {#if providerRegistry.providers.length === 0}
+        <span class="text-sm text-wilt-600">No providers registered. Configure providers in Settings before saving model wiring.</span>
+      {/if}
+    </div>
   </div>
 
   <div class="card-garden p-4 space-y-3">
@@ -1200,10 +1359,14 @@
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Provider</p>
                     <input
                       type="text"
+                      list="provider-id-list"
                       value={entry.identity.provider}
                       onchange={(event) => setIdentityField(index, 'provider', (event.target as HTMLInputElement).value)}
                       class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
                     />
+                    <p class="mt-1 text-xs text-shadow-500">
+                      {providerAvailability(providerForModel(entry))}{#if providerForModel(entry)} · {providerLabel(providerForModel(entry))}{/if}
+                    </p>
                   </div>
                   <div>
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Model</p>
@@ -1228,6 +1391,7 @@
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Source Type</p>
                     <input
                       type="text"
+                      list="provider-type-list"
                       value={entry.identity.source.type}
                       onchange={(event) => setSourceField(index, 'type', (event.target as HTMLInputElement).value)}
                       class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
@@ -1250,6 +1414,29 @@
                       onchange={(event) => setSourceField(index, 'baseUrl', (event.target as HTMLInputElement).value)}
                       class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
                     />
+                  </div>
+                  <div class="md:col-span-2 xl:col-span-3">
+                    <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Routing Provider Order</p>
+                    <input
+                      type="text"
+                      value={routingProviderOrderValue(entry)}
+                      onchange={(event) => setRoutingProviderOrder(index, (event.target as HTMLInputElement).value)}
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      placeholder="comma-separated provider ids for fallback routing"
+                    />
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      {#each enabledProviders as provider}
+                        {@const selected = entry.routing?.providerOrder?.includes(provider.id) ?? false}
+                        <button
+                          type="button"
+                          onclick={() => toggleRoutingProvider(index, provider.id)}
+                          class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors {selected ? 'border-gold-400 bg-gold-100 text-gold-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                        >
+                          {provider.id}
+                        </button>
+                      {/each}
+                    </div>
+                    <p class="mt-1 text-xs text-shadow-500">Optional per-slot provider fallback order written to <span class="font-mono">routing.providerOrder</span>.</p>
                   </div>
                   <div>
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Capabilities: Context Window</p>

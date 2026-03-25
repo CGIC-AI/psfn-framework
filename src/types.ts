@@ -8,7 +8,7 @@ import type { ContextManifest } from './session/context-manifest.js';
 import type { TurnID } from './turns/types.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
-import type { ChannelVisibility } from './trust/types.js';
+import type { ChannelVisibility, TrustLevel } from './trust/types.js';
 import type { ImageWorkflowSettings } from './images/types.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
 import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './config/seed-defaults.js';
@@ -161,6 +161,9 @@ export interface LLMRequestMetadata {
 export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;
   purpose: string;
+  viewerTrustLevel?: TrustLevel;
+  viewerChannelVisibility?: ChannelVisibility;
+  viewerIsDirectMessage?: boolean;
 }
 
 export interface MessageRoutingMetadata {

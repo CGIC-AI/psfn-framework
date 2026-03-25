@@ -414,6 +414,11 @@ export async function handleMessageForTurn(
   };
   const channelVisibility = classifyChannel(message.channelId, channelMeta);
   const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
+  const viewerRequestContext = {
+    viewerTrustLevel: authorContext.trustLevel,
+    viewerChannelVisibility: channelVisibility,
+    ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
+  };
   await runtime.eventBus.emit('agent.turn.start', {
     message,
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
@@ -489,7 +494,10 @@ export async function handleMessageForTurn(
 
     const memoryStageStart = Date.now();
     const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
-      runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.memory'),
+      {
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.memory'),
+        ...viewerRequestContext,
+      },
       async () => {
         const memoriesBlockPromise = memoryProvider
           ? memoryProvider.retrieve(
@@ -633,7 +641,10 @@ export async function handleMessageForTurn(
 
     const contextStageStart = Date.now();
     const context = await runWithRequestContext(
-      runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.context'),
+      {
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.context'),
+        ...viewerRequestContext,
+      },
       async () => runtime.sessionManager.buildContext(
         message.channelId,
         fullPrompt,
@@ -764,7 +775,10 @@ export async function handleMessageForTurn(
       });
       try {
         await runWithRequestContext(
-          runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
+          {
+            ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
+            ...viewerRequestContext,
+          },
           async () => runtime.agent.prompt({
             role: 'user',
             content: turnUserContent,
@@ -833,7 +847,10 @@ export async function handleMessageForTurn(
           runtime.setActiveTurnCorrelation(turnCorrelationBase);
           try {
             await runWithRequestContext(
-              runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
+              {
+                ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
+                ...viewerRequestContext,
+              },
               async () => runtime.agent.prompt({
                 role: 'user',
                 content,

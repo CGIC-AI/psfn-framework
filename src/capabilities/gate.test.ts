@@ -215,6 +215,24 @@ describe('capability tool gating', () => {
     expect(sessionList.executeSpy).not.toHaveBeenCalled();
     expect((listDenied.content[0] as any).text).toContain('identity.read');
 
+    const sessionSearch = createTool('session_search');
+    const searchGated = gateToolWithCapabilities(
+      sessionSearch.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const searchDenied = await searchGated.execute('session-search', {});
+    expect(sessionSearch.executeSpy).not.toHaveBeenCalled();
+    expect((searchDenied.content[0] as any).text).toContain('identity.read');
+
+    const sessionGrep = createTool('session_grep');
+    const grepGated = gateToolWithCapabilities(
+      sessionGrep.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const grepDenied = await grepGated.execute('session-grep', {});
+    expect(sessionGrep.executeSpy).not.toHaveBeenCalled();
+    expect((grepDenied.content[0] as any).text).toContain('identity.read');
+
     const sessionNew = createTool('session_new');
     const deniedGated = gateToolWithCapabilities(
       sessionNew.tool,

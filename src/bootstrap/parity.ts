@@ -36,6 +36,8 @@ import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../filesyst
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../core-memory/store.js';
 import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
+import { createSessionGrepTool, createSessionSearchTool } from '../tools/session-search.js';
+import { resolveSessionsDir } from '../persistence/layout.js';
 import { createCompleteFocusTool, createStartFocusTool } from '../tools/focus.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
@@ -353,6 +355,10 @@ export function wireSessionToolsRuntime(
   dataDir: string,
   llmProvider: LLMProvider,
 ): void {
+  target.registerTool(createSessionSearchTool(sessionManager, llmProvider), 'core');
+  target.registerTool(createSessionGrepTool({
+    sessionsDir: resolveSessionsDir(dataDir),
+  }), 'core');
   target.registerTool(createSessionNewTool({
     dataDir,
     setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),

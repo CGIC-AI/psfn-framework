@@ -66,13 +66,14 @@ describe('wireSessionToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers session tools with session_list in core and session mutations in extended', async () => {
+  it('registers session search/list tools in core and session mutations in extended', async () => {
     const target = {
       registerTool: vi.fn(),
     };
     const sessionManager = {
       appendSystemNote: vi.fn(),
       listRecentSessions: vi.fn(() => []),
+      searchTranscripts: vi.fn(() => []),
       getSessionActivity: vi.fn(() => null),
       setActiveContextSession: vi.fn(),
       getActiveContextSession: vi.fn(() => null),
@@ -101,18 +102,22 @@ describe('wireSessionToolsRuntime', () => {
     wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(7);
     expect(calls.map(([tool]) => tool.name).sort()).toEqual([
       'complete_focus',
+      'session_grep',
       'session_list',
       'session_new',
       'session_resume',
+      'session_search',
       'start_focus',
     ]);
     expect(calls.find(([tool]) => tool.name === 'session_list')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'session_search')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'session_grep')?.[1]).toBe('core');
     expect(
       calls
-        .filter(([tool]) => tool.name !== 'session_list')
+        .filter(([tool]) => !['session_list', 'session_search', 'session_grep'].includes(tool.name))
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
 

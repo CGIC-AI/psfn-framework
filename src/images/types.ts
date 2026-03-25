@@ -3,6 +3,16 @@ import { isRecord } from '../utils/types.js';
 export const FAL_CREATE_MODELS = [
   'fal-ai/nano-banana-2',
   'fal-ai/gpt-image-1.5',
+  'fal-ai/flux-2',
+  'fal-ai/flux-2-pro',
+  'fal-ai/flux-2-flex',
+  'fal-ai/flux/krea',
+  'fal-ai/flux-2/klein/4b',
+  'fal-ai/flux-2/klein/9b',
+  'fal-ai/z-image/base',
+  'fal-ai/z-image/turbo',
+  'fal-ai/qwen-image',
+  'fal-ai/qwen-image-2/text-to-image',
 ] as const;
 
 export const FAL_EDIT_MODELS = [
@@ -93,6 +103,13 @@ export interface ImageCreateParams {
   background?: string;
   outputFormat?: string;
   seed?: number;
+  guidanceScale?: number;
+  numInferenceSteps?: number;
+  acceleration?: string;
+  enablePromptExpansion?: boolean;
+  enableSafetyChecker?: boolean;
+  negativePrompt?: string;
+  useTurbo?: boolean;
 }
 
 export interface ImageEditParams {

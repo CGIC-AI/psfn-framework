@@ -20,6 +20,40 @@ function binaryResponse(body: Uint8Array, contentType = 'image/png'): Response {
   });
 }
 
+function createCompletedFalGenerationFetchMock(
+  endpoint: string,
+  requestId: string,
+  assertBody: (body: Record<string, unknown>) => void,
+) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === `https://queue.fal.run/${endpoint}`) {
+      expect(init?.method).toBe('POST');
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      assertBody(body);
+      return jsonResponse({
+        status: 'COMPLETED',
+        request_id: requestId,
+        response_url: `https://queue.fal.run/${endpoint}/requests/${requestId}`,
+      });
+    }
+
+    if (url === `https://queue.fal.run/${endpoint}/requests/${requestId}`) {
+      return jsonResponse({
+        images: [
+          {
+            url: `https://cdn.example.test/${requestId}.png`,
+            content_type: 'image/png',
+            file_name: `${requestId}.png`,
+          },
+        ],
+      });
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -81,6 +115,189 @@ describe('ImageService', () => {
         },
       ],
     });
+  });
+
+  it('maps Flux 2 generation options to the FAL payload', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'fal-ai/flux-2',
+      'fal-flux-2',
+      (body) => {
+        expect(body).toMatchObject({
+          prompt: 'cinematic portrait in golden hour light',
+          sync_mode: false,
+          num_images: 2,
+          seed: 7,
+          output_format: 'jpeg',
+          guidance_scale: 4,
+          num_inference_steps: 28,
+          acceleration: 'regular',
+          enable_prompt_expansion: true,
+          enable_safety_checker: false,
+        });
+        expect(body.image_size).toEqual({
+          width: 1536,
+          height: 1024,
+        });
+        expect(body).not.toHaveProperty('aspect_ratio');
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'cinematic portrait in golden hour light',
+      model: 'fal-ai/flux-2',
+      numImages: 2,
+      width: 1536,
+      height: 1024,
+      outputFormat: 'jpeg',
+      seed: 7,
+      guidanceScale: 4,
+      numInferenceSteps: 28,
+      acceleration: 'regular',
+      enablePromptExpansion: true,
+    });
+
+    expect(result.model).toBe('fal-ai/flux-2');
+    expect(result.requestId).toBe('fal-flux-2');
+  });
+
+  it('filters unsupported options from Flux 2 Pro generation payloads', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'fal-ai/flux-2-pro',
+      'fal-flux-2-pro',
+      (body) => {
+        expect(body).toMatchObject({
+          prompt: 'editorial product shot on marble',
+          sync_mode: false,
+          seed: 11,
+          output_format: 'png',
+          enable_safety_checker: true,
+          image_size: 'landscape_16_9',
+        });
+        expect(body).not.toHaveProperty('guidance_scale');
+        expect(body).not.toHaveProperty('num_inference_steps');
+        expect(body).not.toHaveProperty('acceleration');
+        expect(body).not.toHaveProperty('enable_prompt_expansion');
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'editorial product shot on marble',
+      model: 'fal-ai/flux-2-pro',
+      aspectRatio: '16:9',
+      outputFormat: 'png',
+      seed: 11,
+      guidanceScale: 5,
+      numInferenceSteps: 20,
+      acceleration: 'regular',
+      enablePromptExpansion: true,
+      enableSafetyChecker: true,
+    });
+
+    expect(result.model).toBe('fal-ai/flux-2-pro');
+    expect(result.requestId).toBe('fal-flux-2-pro');
+  });
+
+  it('maps Z-Image Base generation options to the FAL payload', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'fal-ai/z-image/base',
+      'fal-z-image-base',
+      (body) => {
+        expect(body).toMatchObject({
+          prompt: 'minimal poster with bold geometric forms',
+          sync_mode: false,
+          num_images: 1,
+          guidance_scale: 6,
+          num_inference_steps: 24,
+          acceleration: 'regular',
+          negative_prompt: 'text, watermark',
+          enable_safety_checker: false,
+          image_size: 'square_hd',
+        });
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'minimal poster with bold geometric forms',
+      model: 'fal-ai/z-image/base',
+      numImages: 1,
+      aspectRatio: '1:1',
+      guidanceScale: 6,
+      numInferenceSteps: 24,
+      acceleration: 'regular',
+      negativePrompt: 'text, watermark',
+    });
+
+    expect(result.model).toBe('fal-ai/z-image/base');
+    expect(result.requestId).toBe('fal-z-image-base');
+  });
+
+  it('maps Qwen Image 2 generation options to the FAL payload', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'fal-ai/qwen-image-2/text-to-image',
+      'fal-qwen-image-2',
+      (body) => {
+        expect(body).toMatchObject({
+          prompt: 'clean anime-style character sheet',
+          sync_mode: false,
+          num_images: 3,
+          seed: 19,
+          output_format: 'png',
+          enable_prompt_expansion: true,
+          enable_safety_checker: true,
+          negative_prompt: 'blurry, low detail',
+          image_size: 'portrait_4_3',
+        });
+        expect(body).not.toHaveProperty('guidance_scale');
+        expect(body).not.toHaveProperty('num_inference_steps');
+        expect(body).not.toHaveProperty('use_turbo');
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'clean anime-style character sheet',
+      model: 'fal-ai/qwen-image-2/text-to-image',
+      numImages: 3,
+      aspectRatio: '3:4',
+      outputFormat: 'png',
+      seed: 19,
+      negativePrompt: 'blurry, low detail',
+      enablePromptExpansion: true,
+      enableSafetyChecker: true,
+      guidanceScale: 8,
+      numInferenceSteps: 30,
+      useTurbo: true,
+    });
+
+    expect(result.model).toBe('fal-ai/qwen-image-2/text-to-image');
+    expect(result.requestId).toBe('fal-qwen-image-2');
   });
 
   it('defaults FAL nano-banana edits to 2K resolution', async () => {

@@ -30,12 +30,103 @@ interface FalImageOutput {
   }>;
 }
 
+interface ImageSizeCapableParams {
+  width?: number;
+  height?: number;
+  aspectRatio?: string;
+  imageSize?: string;
+}
+
+const IMAGE_SIZE_FROM_ASPECT_RATIO: Readonly<Record<string, string>> = {
+  '1:1': 'square_hd',
+  '4:3': 'landscape_4_3',
+  '3:4': 'portrait_4_3',
+  '16:9': 'landscape_16_9',
+  '9:16': 'portrait_16_9',
+};
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isNanoBananaModel(model: string): boolean {
   return model.startsWith('fal-ai/nano-banana-2');
+}
+
+function isGptImageModel(model: string): boolean {
+  return model.startsWith('fal-ai/gpt-image-1.5');
+}
+
+function isFlux2DevModel(model: string): boolean {
+  return model === 'fal-ai/flux-2';
+}
+
+function isFlux2ProModel(model: string): boolean {
+  return model === 'fal-ai/flux-2-pro';
+}
+
+function isFlux2FlexModel(model: string): boolean {
+  return model === 'fal-ai/flux-2-flex';
+}
+
+function isFluxKreaModel(model: string): boolean {
+  return model === 'fal-ai/flux/krea';
+}
+
+function isFlux2KleinModel(model: string): boolean {
+  return model === 'fal-ai/flux-2/klein/4b' || model === 'fal-ai/flux-2/klein/9b';
+}
+
+function isZImageBaseModel(model: string): boolean {
+  return model === 'fal-ai/z-image/base';
+}
+
+function isZImageTurboModel(model: string): boolean {
+  return model === 'fal-ai/z-image/turbo';
+}
+
+function isQwenImageModel(model: string): boolean {
+  return model === 'fal-ai/qwen-image';
+}
+
+function isQwenImage2Model(model: string): boolean {
+  return model === 'fal-ai/qwen-image-2/text-to-image';
+}
+
+function resolveImageSizeInput(params: ImageSizeCapableParams): string | Record<string, number> | undefined {
+  if (
+    typeof params.width === 'number'
+    && Number.isFinite(params.width)
+    && typeof params.height === 'number'
+    && Number.isFinite(params.height)
+  ) {
+    return {
+      width: params.width,
+      height: params.height,
+    };
+  }
+
+  const explicitImageSize = params.imageSize?.trim();
+  if (explicitImageSize) {
+    return explicitImageSize;
+  }
+
+  const mappedImageSize = params.aspectRatio ? IMAGE_SIZE_FROM_ASPECT_RATIO[params.aspectRatio] : undefined;
+  return mappedImageSize;
+}
+
+function resolveEnableSafetyChecker(value: boolean | undefined): boolean {
+  return value ?? false;
+}
+
+function assignImageSizeInput(
+  input: Record<string, unknown>,
+  params: ImageSizeCapableParams,
+): void {
+  const imageSize = resolveImageSizeInput(params);
+  if (imageSize !== undefined) {
+    input.image_size = imageSize;
+  }
 }
 
 function toAbsoluteFalUrl(pathOrUrl: string): string {
@@ -120,7 +211,6 @@ export class FalImageClient {
     const input: Record<string, unknown> = {
       prompt: params.prompt,
       sync_mode: false,
-      enable_safety_checker: false,
       ...(params.numImages !== undefined ? { num_images: params.numImages } : {}),
       ...(params.seed !== undefined ? { seed: params.seed } : {}),
       ...(params.outputFormat ? { output_format: params.outputFormat } : {}),
@@ -128,14 +218,90 @@ export class FalImageClient {
 
     if (isNanoBananaModel(model)) {
       Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
         ...(params.aspectRatio ? { aspect_ratio: params.aspectRatio } : {}),
         resolution: params.resolution ?? '2K',
         safety_tolerance: '6',
       });
-    } else {
+    } else if (isGptImageModel(model)) {
       Object.assign(input, {
         ...(params.imageSize ? { image_size: params.imageSize } : {}),
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
         ...(params.background ? { background: params.background } : {}),
+      });
+    } else if (isFlux2DevModel(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.guidanceScale !== undefined ? { guidance_scale: params.guidanceScale } : {}),
+        ...(params.numInferenceSteps !== undefined ? { num_inference_steps: params.numInferenceSteps } : {}),
+        ...(params.acceleration ? { acceleration: params.acceleration } : {}),
+        ...(params.enablePromptExpansion !== undefined ? { enable_prompt_expansion: params.enablePromptExpansion } : {}),
+      });
+    } else if (isFlux2ProModel(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+      });
+    } else if (isFlux2FlexModel(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.guidanceScale !== undefined ? { guidance_scale: params.guidanceScale } : {}),
+        ...(params.numInferenceSteps !== undefined ? { num_inference_steps: params.numInferenceSteps } : {}),
+      });
+    } else if (isFluxKreaModel(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.guidanceScale !== undefined ? { guidance_scale: params.guidanceScale } : {}),
+        ...(params.numInferenceSteps !== undefined ? { num_inference_steps: params.numInferenceSteps } : {}),
+        ...(params.acceleration ? { acceleration: params.acceleration } : {}),
+      });
+    } else if (isFlux2KleinModel(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.numInferenceSteps !== undefined ? { num_inference_steps: params.numInferenceSteps } : {}),
+      });
+    } else if (isZImageBaseModel(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.guidanceScale !== undefined ? { guidance_scale: params.guidanceScale } : {}),
+        ...(params.numInferenceSteps !== undefined ? { num_inference_steps: params.numInferenceSteps } : {}),
+        ...(params.acceleration ? { acceleration: params.acceleration } : {}),
+        ...(params.negativePrompt ? { negative_prompt: params.negativePrompt } : {}),
+      });
+    } else if (isZImageTurboModel(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.numInferenceSteps !== undefined ? { num_inference_steps: params.numInferenceSteps } : {}),
+        ...(params.acceleration ? { acceleration: params.acceleration } : {}),
+        ...(params.enablePromptExpansion !== undefined ? { enable_prompt_expansion: params.enablePromptExpansion } : {}),
+      });
+    } else if (isQwenImageModel(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.guidanceScale !== undefined ? { guidance_scale: params.guidanceScale } : {}),
+        ...(params.numInferenceSteps !== undefined ? { num_inference_steps: params.numInferenceSteps } : {}),
+        ...(params.acceleration ? { acceleration: params.acceleration } : {}),
+        ...(params.negativePrompt ? { negative_prompt: params.negativePrompt } : {}),
+        ...(params.useTurbo !== undefined ? { use_turbo: params.useTurbo } : {}),
+      });
+    } else if (isQwenImage2Model(model)) {
+      assignImageSizeInput(input, params);
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.negativePrompt ? { negative_prompt: params.negativePrompt } : {}),
+        ...(params.enablePromptExpansion !== undefined ? { enable_prompt_expansion: params.enablePromptExpansion } : {}),
+      });
+    } else {
+      Object.assign(input, {
+        enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
+        ...(params.imageSize ? { image_size: params.imageSize } : {}),
       });
     }
 

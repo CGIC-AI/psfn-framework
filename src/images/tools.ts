@@ -169,6 +169,13 @@ export function createImageCreateTool(
       background: Type.Optional(Type.String()),
       output_format: Type.Optional(Type.String()),
       seed: Type.Optional(Type.Integer({ minimum: 0 })),
+      guidance_scale: Type.Optional(Type.Number()),
+      num_inference_steps: Type.Optional(Type.Integer({ minimum: 1 })),
+      acceleration: Type.Optional(Type.String()),
+      enable_prompt_expansion: Type.Optional(Type.Boolean()),
+      enable_safety_checker: Type.Optional(Type.Boolean()),
+      negative_prompt: Type.Optional(Type.String()),
+      use_turbo: Type.Optional(Type.Boolean()),
     }),
     execute: async (
       _toolCallId: string,
@@ -185,6 +192,13 @@ export function createImageCreateTool(
         background?: string;
         output_format?: string;
         seed?: number;
+        guidance_scale?: number;
+        num_inference_steps?: number;
+        acceleration?: string;
+        enable_prompt_expansion?: boolean;
+        enable_safety_checker?: boolean;
+        negative_prompt?: string;
+        use_turbo?: boolean;
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
@@ -201,6 +215,13 @@ export function createImageCreateTool(
           background: params.background,
           outputFormat: params.output_format,
           seed: params.seed,
+          guidanceScale: params.guidance_scale,
+          numInferenceSteps: params.num_inference_steps,
+          acceleration: params.acceleration,
+          enablePromptExpansion: params.enable_prompt_expansion,
+          enableSafetyChecker: params.enable_safety_checker,
+          negativePrompt: params.negative_prompt,
+          useTurbo: params.use_turbo,
         });
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),

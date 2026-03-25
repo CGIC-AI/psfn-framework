@@ -193,6 +193,13 @@ export interface ImageCreateParams extends GatewayCorrelationParams {
   background?: string;
   outputFormat?: string;
   seed?: number;
+  guidanceScale?: number;
+  numInferenceSteps?: number;
+  acceleration?: string;
+  enablePromptExpansion?: boolean;
+  enableSafetyChecker?: boolean;
+  negativePrompt?: string;
+  useTurbo?: boolean;
 }
 
 export interface ImageEditParams extends GatewayCorrelationParams {

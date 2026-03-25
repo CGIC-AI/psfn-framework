@@ -73,6 +73,25 @@ describe('NorthStarStore', () => {
     expect(snapshot?.itemIds).toHaveLength(1);
   });
 
+  it('reflects external file updates across store instances without restart', () => {
+    const runtimeStore = new NorthStarStore(join(tempDir, 'north-star.json'));
+    const adminStore = new NorthStarStore(join(tempDir, 'north-star.json'));
+
+    expect(runtimeStore.buildPromptLayer()).toBeNull();
+
+    const created = adminStore.create({
+      title: 'Shared stewardship',
+      content: 'Protect the relationship and the human.',
+      scope: 'shared',
+      updatedBy: 'admin',
+    });
+
+    const snapshot = runtimeStore.buildPromptLayer();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.content).toContain('[shared] Shared stewardship');
+    expect(runtimeStore.list().map(item => item.id)).toEqual([created.id]);
+  });
+
   it('fails closed when callers try to exceed the three-item cap', () => {
     for (let index = 0; index < MAX_NORTH_STAR_ITEMS; index++) {
       store.create({

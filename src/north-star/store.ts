@@ -144,18 +144,22 @@ export class NorthStarStore {
   }
 
   get count(): number {
+    this.refresh();
     return this.items.length;
   }
 
   list(): NorthStarItem[] {
+    this.refresh();
     return [...this.items].sort((left, right) => left.priority - right.priority);
   }
 
   getById(id: string): NorthStarItem | undefined {
-    return this.items.find(item => item.id === id);
+    this.refresh();
+    return this.findById(id);
   }
 
   create(params: NorthStarCreateInput): NorthStarItem {
+    this.refresh();
     if (this.items.length >= MAX_NORTH_STAR_ITEMS) {
       throw new Error(`north star is limited to ${String(MAX_NORTH_STAR_ITEMS)} items`);
     }
@@ -190,7 +194,8 @@ export class NorthStarStore {
   }
 
   update(id: string, patch: NorthStarUpdatePatch, updatedBy: string): NorthStarItem {
-    const item = this.items.find(entry => entry.id === id);
+    this.refresh();
+    const item = this.findById(id);
     if (!item) {
       throw new Error(`North Star item not found: ${id}`);
     }
@@ -221,6 +226,7 @@ export class NorthStarStore {
   }
 
   delete(id: string): void {
+    this.refresh();
     const idx = this.items.findIndex(item => item.id === id);
     if (idx === -1) {
       throw new Error(`North Star item not found: ${id}`);
@@ -233,6 +239,7 @@ export class NorthStarStore {
   }
 
   reorder(itemIds: string[], updatedBy: string): NorthStarItem[] {
+    this.refresh();
     if (!Array.isArray(itemIds)) {
       throw new Error('itemIds must be an array');
     }
@@ -251,7 +258,7 @@ export class NorthStarStore {
         throw new Error(`Duplicate North Star item id in reorder payload: ${itemId}`);
       }
       seen.add(itemId);
-      const item = this.getById(itemId);
+      const item = this.findById(itemId);
       if (!item) {
         throw new Error(`North Star item not found: ${itemId}`);
       }
@@ -301,6 +308,14 @@ export class NorthStarStore {
     };
   }
 
+  private refresh(): void {
+    this.load();
+  }
+
+  private findById(id: string): NorthStarItem | undefined {
+    return this.items.find(item => item.id === id);
+  }
+
   private load(): void {
     if (!existsSync(this.filePath)) {
       this.items = [];
@@ -337,6 +352,10 @@ export class NorthStarStore {
 
   private save(): void {
     mkdirSync(dirname(this.filePath), { recursive: true });
-    writeJsonAtomic(this.filePath, this.list(), { trailingNewline: true });
+    writeJsonAtomic(
+      this.filePath,
+      [...this.items].sort((left, right) => left.priority - right.priority),
+      { trailingNewline: true },
+    );
   }
 }

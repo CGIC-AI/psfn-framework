@@ -126,7 +126,7 @@ describe('character_card_update tool', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('applies updates immediately in autonomous tier', async () => {
+  it('applies low-risk updates immediately in autonomous tier', async () => {
     const tool = gateToolWithCapabilities(
       createCharacterCardUpdateTool(store, {
         getCapabilityTier: () => 'autonomous',
@@ -135,16 +135,16 @@ describe('character_card_update tool', () => {
     );
 
     const result = await tool.execute('tool-call', {
-      personality: 'Autonomous personality update',
-      reason: 'Improve emotional nuance',
+      tags: ['test', 'safe-update'],
+      reason: 'Add classification tag',
     });
     const text = resultText(result);
 
     expect(text).toContain('Updated character card to v2');
-    expect(store.getCurrent().card.data.personality).toBe('Autonomous personality update');
+    expect(store.getCurrent().card.data.tags).toEqual(['test', 'safe-update']);
   });
 
-  it('blocks destructive autonomous rewrites of long fields without an explicit override', async () => {
+  it('fails closed for protected autonomous field edits when no confirmation queue is configured', async () => {
     const longDescription = Array.from({ length: 80 }, (_value, index) => `line ${index}`).join(' ');
     store.updateData({ description: longDescription }, 'admin', 'Seed a long description');
 
@@ -160,9 +160,37 @@ describe('character_card_update tool', () => {
       reason: 'Add birthday',
     });
 
-    expect(resultText(result)).toContain('Destructive character card update blocked');
+    expect(resultText(result)).toContain('Protected character card fields require confirmation queue support');
     expect(store.getCurrent().version).toBe(2);
     expect(store.getCurrent().card.data.description).toBe(longDescription);
+  });
+
+  it('queues protected autonomous field edits for confirmation instead of applying them', async () => {
+    const queue = new ConfirmationQueue({ idFactory: () => 'card-protected-1' });
+    const tool = gateToolWithCapabilities(
+      createCharacterCardUpdateTool(store, {
+        getCapabilityTier: () => 'autonomous',
+        confirmationQueue: queue,
+      }),
+      () => accessForTier('autonomous'),
+    );
+
+    const queued = await tool.execute('tool-call', {
+      description: 'Updated protected description',
+      reason: 'Refine identity',
+    });
+
+    expect(resultText(queued)).toContain('queued for confirmation');
+    expect(resultText(queued)).toContain('Protected identity fields (description)');
+    expect(queue.listPending()).toHaveLength(1);
+    expect(store.getCurrent().card.data.description).toBe('A test character');
+
+    const resolved = await queue.resolve({
+      id: 'card-protected-1',
+      decision: 'approve',
+    });
+    expect(resolved.status).toBe('approved');
+    expect(store.getCurrent().card.data.description).toBe('Updated protected description');
   });
 
   it('queues updates for confirmation in nursery tier and applies after approval', async () => {

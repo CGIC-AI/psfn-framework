@@ -53,6 +53,7 @@ export interface CharacterCardPatch {
 }
 
 const DESTRUCTIVE_REPLACE_FIELDS = [
+  'name',
   'description',
   'personality',
   'scenario',
@@ -74,6 +75,22 @@ interface DestructivePatchRisk {
 const MIN_DESTRUCTIVE_REPLACE_SOURCE_LENGTH = 400;
 const MIN_DESTRUCTIVE_REPLACE_REMOVED_CHARS = 200;
 const MAX_SAFE_REMAINING_RATIO = 0.6;
+
+const PROTECTED_AUTONOMOUS_UPDATE_FIELDS = [
+  'name',
+  'description',
+  'personality',
+  'scenario',
+  'first_mes',
+  'mes_example',
+  'system_prompt',
+  'post_history_instructions',
+  'creator_notes',
+  'alternate_greetings',
+  'extensions_visual_description',
+] as const;
+
+type ProtectedAutonomousUpdateField = (typeof PROTECTED_AUTONOMOUS_UPDATE_FIELDS)[number];
 
 export interface CharacterCardHistoryEntry {
   version: number;
@@ -218,6 +235,19 @@ function formatDestructivePatchRisks(risks: DestructivePatchRisk[]): string {
   return risks
     .map((risk) => `${risk.field} ${risk.previousLength}->${risk.nextLength} chars`)
     .join(', ');
+}
+
+function resolveProtectedAutonomousUpdateFields(
+  patch: CharacterCardPatch,
+): ProtectedAutonomousUpdateField[] {
+  const patchRecord = patch as Record<string, unknown>;
+  return PROTECTED_AUTONOMOUS_UPDATE_FIELDS.filter((field) =>
+    Object.prototype.hasOwnProperty.call(patchRecord, field)
+  );
+}
+
+function formatProtectedAutonomousUpdateFields(fields: ProtectedAutonomousUpdateField[]): string {
+  return fields.join(', ');
 }
 
 export function extractCardPatchFromRecord(record: Record<string, unknown>): CharacterCardPatch {
@@ -375,6 +405,43 @@ function proposalReason(reason: string | undefined, tier: CapabilityTier): strin
   return `Character card update proposed by ${tier} tier`;
 }
 
+function enqueueCharacterCardUpdateProposal(
+  store: CharacterCardVersionStore,
+  confirmationQueue: ConfirmationQueue,
+  patch: CharacterCardPatch,
+  tier: CapabilityTier,
+  reason?: string,
+  companionReasonPrefix?: string,
+): ConfirmationQueueEntry {
+  const current = store.getCurrent();
+  const companionReason = companionReasonPrefix
+    ? `${companionReasonPrefix} ${proposalReason(reason, tier)}`
+    : proposalReason(reason, tier);
+
+  return confirmationQueue.enqueue(
+    {
+      method: 'identity.card.update',
+      action: 'update',
+      scope: proposalScope(current),
+      params: {
+        ...patch,
+        ...(reason ? { reason } : {}),
+      },
+      companionReason,
+    },
+    async (approvedParams: Record<string, unknown>, queueEntry: ConfirmationQueueEntry) => {
+      const approvedPatch = extractCardPatchFromRecord(approvedParams);
+      if (!hasPatchFields(approvedPatch)) {
+        throw new Error('Approved character card proposal must include at least one field.');
+      }
+      const approvedReason = typeof approvedParams.reason === 'string'
+        ? approvedParams.reason
+        : queueEntry.companionReason;
+      store.updateData(approvedPatch, 'admin:confirmation', approvedReason);
+    },
+  );
+}
+
 export function createCharacterCardUpdateTool(
   store: CharacterCardVersionStore,
   options: CharacterCardUpdateToolOptions = {},
@@ -419,6 +486,30 @@ export function createCharacterCardUpdateTool(
       const tier = getCapabilityTier();
 
       if (tier === 'autonomous') {
+        const protectedAutonomousFields = resolveProtectedAutonomousUpdateFields(patch);
+        if (protectedAutonomousFields.length > 0) {
+          if (!confirmationQueue) {
+            return textResultWithError(
+              'Protected character card fields require confirmation queue support: '
+              + `${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}.`,
+              true,
+            );
+          }
+
+          const entry = enqueueCharacterCardUpdateProposal(
+            store,
+            confirmationQueue,
+            patch,
+            tier,
+            reason,
+            `Protected identity fields (${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}) require operator confirmation.`,
+          );
+          return textResult(
+            `Character card update queued for confirmation (id: ${entry.id}). `
+            + `Protected identity fields (${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}) cannot be updated autonomously.`,
+          );
+        }
+
         const destructivePatchRisks = detectDestructivePatchRisks(store.getCurrent().card.data, patch);
         const allowDestructiveReplace = params.allow_destructive_replace === true;
 
@@ -449,28 +540,12 @@ export function createCharacterCardUpdateTool(
         );
       }
 
-      const current = store.getCurrent();
-      const entry = confirmationQueue.enqueue(
-        {
-          method: 'identity.card.update',
-          action: 'update',
-          scope: proposalScope(current),
-          params: {
-            ...patch,
-            ...(reason ? { reason } : {}),
-          },
-          companionReason: proposalReason(reason, tier),
-        },
-        async (approvedParams: Record<string, unknown>, queueEntry: ConfirmationQueueEntry) => {
-          const approvedPatch = extractCardPatchFromRecord(approvedParams);
-          if (!hasPatchFields(approvedPatch)) {
-            throw new Error('Approved character card proposal must include at least one field.');
-          }
-          const approvedReason = typeof approvedParams.reason === 'string'
-            ? approvedParams.reason
-            : queueEntry.companionReason;
-          store.updateData(approvedPatch, 'admin:confirmation', approvedReason);
-        },
+      const entry = enqueueCharacterCardUpdateProposal(
+        store,
+        confirmationQueue,
+        patch,
+        tier,
+        reason,
       );
 
       return textResult(

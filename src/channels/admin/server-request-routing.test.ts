@@ -17,7 +17,7 @@ function makeResponse(): ServerResponse {
 }
 
 describe('handleAdminRequest', () => {
-  it('serves the Garden SPA for unmatched root-served client routes', () => {
+  it('serves the Garden SPA for canonical root-served client routes', () => {
     const req = makeRequest('GET', '/memory');
     const res = makeResponse();
     const serveGardenAsset = vi.fn();
@@ -57,8 +57,8 @@ describe('handleAdminRequest', () => {
     expect(serveGardenAsset).toHaveBeenCalledWith('/', res);
   });
 
-  it('keeps canonical non-UI routes out of the Garden SPA fallback', () => {
-    for (const path of ['/api/admin/missing', '/health', '/legacy', '/legacy/memory']) {
+  it('keeps non-canonical paths out of the Garden SPA fallback', () => {
+    for (const path of ['/api/admin/missing', '/health', '/missing', '/missing/memory']) {
       const req = makeRequest('GET', path);
       const res = makeResponse();
       const serveGardenAsset = vi.fn();

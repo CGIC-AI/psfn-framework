@@ -1472,7 +1472,7 @@ describe('AdminServer JSON API routes', () => {
     expect(memoryStore.listActiveMemories({ limit: 10, offset: 0 }).map(memory => memory.id)).not.toContain('bulk-mem-3');
   });
 
-  it('removes legacy memory page and keeps canonical /api/admin memory data', async () => {
+  it('fails closed for unknown client memory paths and keeps canonical /api/admin memory data', async () => {
     memoryStore.insertMemory({
       id: 'ui-memory-1',
       text: 'UI memory one',
@@ -1489,14 +1489,14 @@ describe('AdminServer JSON API routes', () => {
       sensitivity: 'personal',
     }, new Float32Array([0.3, 0.1, 0.2]));
 
-    const legacyRes = await request(
+    const missingRes = await request(
       port,
       'GET',
-      '/legacy/memory',
+      '/missing/memory',
       undefined,
       { Authorization: `Bearer ${token}` },
     );
-    expect(legacyRes.status).toBe(404);
+    expect(missingRes.status).toBe(404);
 
     const apiRes = await request(
       port,

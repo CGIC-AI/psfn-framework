@@ -4,6 +4,29 @@ import { parseRequestUrl } from './request-url.js';
 
 export const GARDEN_PREFIX = '/';
 
+const GARDEN_CLIENT_ROUTES = new Set([
+  '/',
+  '/chat',
+  '/confirmations',
+  '/contacts',
+  '/identity',
+  '/memory',
+  '/model-room',
+  '/models',
+  '/primer',
+  '/prompt-monitor',
+  '/prompts',
+  '/scheduler',
+  '/sessions',
+  '/settings',
+  '/shards',
+  '/skills',
+  '/telemetry',
+  '/theme',
+  '/tools',
+  '/values',
+]);
+
 interface AdminRequestRoutingDependencies {
   token?: string;
   checkAuth: (req: IncomingMessage, res: ServerResponse) => boolean;
@@ -31,12 +54,16 @@ function isGardenClientRoute(method: string | undefined, requestPath: string): b
     || requestPath.startsWith('/login/')
     || requestPath === '/static'
     || requestPath.startsWith('/static/')
-    || requestPath === '/legacy'
-    || requestPath.startsWith('/legacy/')
+    || requestPath === '/_app'
+    || requestPath.startsWith('/_app/')
   ) {
     return false;
   }
-  return true;
+
+  const normalizedPath = requestPath.length > 1 && requestPath.endsWith('/')
+    ? requestPath.replace(/\/+$/, '')
+    : requestPath;
+  return GARDEN_CLIENT_ROUTES.has(normalizedPath);
 }
 
 export function handleAdminRequest(

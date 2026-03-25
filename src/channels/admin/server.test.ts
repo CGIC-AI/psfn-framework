@@ -286,7 +286,7 @@ async function destroyHarness(harness: ServerHarness): Promise<void> {
   resetRuntimeTrustPolicy();
 }
 
-describe('AdminServer legacy UI removal', () => {
+describe('AdminServer Garden routing', () => {
   describe('routing without auth token', () => {
     let harness: ServerHarness;
 
@@ -306,16 +306,16 @@ describe('AdminServer legacy UI removal', () => {
       }
     });
 
-    it('serves SPA fallback only for live client routes', async () => {
-      const removedLegacyRoot = await request(harness.port, 'GET', '/legacy');
+    it('serves SPA fallback only for canonical client routes', async () => {
+      const missingRoute = await request(harness.port, 'GET', '/missing');
       const liveClientPage = await request(harness.port, 'GET', '/memory');
 
-      expect(removedLegacyRoot.status).toBe(404);
+      expect(missingRoute.status).toBe(404);
       expect([200, 404]).toContain(liveClientPage.status);
     });
 
     it('falls back gracefully when build assets are unavailable', async () => {
-      const res = await request(harness.port, 'GET', '/garden');
+      const res = await request(harness.port, 'GET', '/tools');
       expect([200, 404]).toContain(res.status);
       if (res.status === 200) {
         expect(res.headers['content-type']).toContain('text/html');
@@ -558,8 +558,8 @@ describe('AdminServer legacy UI removal', () => {
       expect(cleared).toContain('Max-Age=0');
     });
 
-    it('fails closed for removed legacy routes when authenticated', async () => {
-      const res = await request(harness.port, 'GET', '/legacy', undefined, bearerHeaders);
+    it('fails closed for unknown routes when authenticated', async () => {
+      const res = await request(harness.port, 'GET', '/missing', undefined, bearerHeaders);
       expect(res.status).toBe(404);
     });
 

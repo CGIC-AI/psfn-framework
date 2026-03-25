@@ -188,6 +188,16 @@ describe('contact tools', () => {
       expect(resultText(result)).toContain('Notes: Works in design');
     });
 
+    it('prefers nickname over display name in lookup output', async () => {
+      const contact = store.upsert({ displayName: 'Operator Andromeda', nickname: 'V' });
+      const tool = createContactLookupTool(store);
+
+      const result = await tool.execute('call-7b', { contactId: contact.id });
+
+      expect(resultText(result)).toContain('Contact: V');
+      expect(resultText(result)).not.toContain('Contact: Operator Andromeda');
+    });
+
     it('looks up a contact by Discord user ID', async () => {
       store.upsert({ displayName: 'Eve', discordUserId: 'eve-discord-456' });
       const tool = createContactLookupTool(store);
@@ -264,6 +274,16 @@ describe('contact tools', () => {
       expect(resultText(result)).toContain('Grace [trusted/friend]');
       expect(resultText(result)).toContain('Met at conf');
       expect(resultText(result)).toContain('Hank [regular/acquaintance]');
+    });
+
+    it('prefers nickname over display name in list output', async () => {
+      store.upsert({ displayName: 'Operator Andromeda', nickname: 'V' });
+      const tool = createContactListTool(store);
+
+      const result = await tool.execute('call-12b', {});
+
+      expect(resultText(result)).toContain('V [regular/stranger]');
+      expect(resultText(result)).not.toContain('Operator Andromeda [regular/stranger]');
     });
 
     it('omits notes dash when contact has no notes', async () => {

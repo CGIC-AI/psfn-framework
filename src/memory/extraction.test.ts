@@ -1772,4 +1772,54 @@ describe('MemoryExtractor crash recovery markers', () => {
     const afterRecovery = sessionStore.getCrashRecoveryExtractionCandidates();
     expect(afterRecovery).toHaveLength(0);
   });
+
+  it('prefers contact nickname in extraction naming guidance', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+    const sessionManager = {
+      getRecentMessages: vi.fn().mockReturnValue([
+        { id: 1, channelId: 'api:nickname-test', role: 'user', content: 'I like cardamom tea', authorName: 'user', timestamp: 1_000 },
+        { id: 2, channelId: 'api:nickname-test', role: 'assistant', content: 'Noted', authorName: 'assistant', timestamp: 2_000 },
+      ]),
+      getMessageCount: vi.fn().mockReturnValue(2),
+    } as any;
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+    } as any;
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+    const contactStore = {
+      getById: vi.fn().mockReturnValue({
+        id: 'contact-1',
+        displayName: 'Operator Andromeda',
+        nickname: 'V',
+      }),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      { extractionInterval: 5 },
+      null,
+      null,
+      contactStore,
+    );
+
+    await extractor.extract('api:nickname-test', 'contact-1');
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    const prompt = (llmClient.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt as string;
+    expect(prompt).toContain('Human participant name: V');
+    expect(prompt).not.toContain('Human participant name: Operator Andromeda');
+  });
 });

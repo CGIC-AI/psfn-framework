@@ -8,7 +8,7 @@ export interface ExtractionParticipantNames {
 
 export interface ResolveExtractionParticipantNamesParams {
   entries: readonly SessionEntry[];
-  canonicalContactDisplayName?: string;
+  canonicalContactName?: string;
   companionName?: string;
 }
 
@@ -92,9 +92,9 @@ function applyParticipantReplacement(
 export function resolveExtractionParticipantNames(
   params: ResolveExtractionParticipantNamesParams,
 ): ExtractionParticipantNames {
-  const canonicalContactDisplayName = normalizeTrimmed(params.canonicalContactDisplayName);
-  const userName = !isGenericLabel(canonicalContactDisplayName, GENERIC_USER_LABELS)
-    ? canonicalContactDisplayName
+  const canonicalContactName = normalizeTrimmed(params.canonicalContactName);
+  const userName = !isGenericLabel(canonicalContactName, GENERIC_USER_LABELS)
+    ? canonicalContactName
     : findRecentNamedSpeaker(params.entries, 'user', GENERIC_USER_LABELS);
 
   const configuredCompanionName = normalizeTrimmed(params.companionName);

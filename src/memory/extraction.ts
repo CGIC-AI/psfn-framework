@@ -2,6 +2,7 @@ import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
 import type { EventBus } from '../event-bus.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import type { ContactStore } from '../contacts/store.js';
+import { resolvePreferredContactName } from '../contacts/preferred-name.js';
 import type { SessionManager } from '../session/manager.js';
 import type { SessionStore } from '../session/store.js';
 import type { SessionEntry } from '../session/types.js';
@@ -296,10 +297,10 @@ export class MemoryExtractor {
       this.runtimeConfig,
       this.emotionalIntensityImportanceWeight,
     );
-    const canonicalContactDisplayName = canonicalContactId
+    const canonicalContactName = canonicalContactId
       && this.contactStore
       && typeof this.contactStore.getById === 'function'
-      ? this.contactStore.getById(canonicalContactId)?.displayName
+      ? resolvePreferredContactName(this.contactStore.getById(canonicalContactId))
       : undefined;
 
     await runExtractionOrchestration({
@@ -310,7 +311,7 @@ export class MemoryExtractor {
       recoveredEntries,
       resolveParticipantNames: (recentEntries, extractionCanonicalContactId) => resolveExtractionParticipantNames({
         entries: recentEntries,
-        canonicalContactDisplayName: extractionCanonicalContactId ? canonicalContactDisplayName : undefined,
+        canonicalContactName: extractionCanonicalContactId ? canonicalContactName : undefined,
         companionName: this.sessionManager.characterName,
       }),
       llmClient: this.llmClient,

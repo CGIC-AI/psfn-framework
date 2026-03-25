@@ -8,6 +8,7 @@ import type { TrustLevel } from '../trust/types.js';
 import { TRUST_LEVELS, isHighTierTrustLevel } from '../trust/types.js';
 import type { TrustDriftBehaviorSignals } from '../trust/policy.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel } from './types.js';
+import { resolvePreferredContactName } from './preferred-name.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -278,10 +279,11 @@ export function createContactLookupTool(contactStore: ContactStore): AgentTool<a
         const channels = contact.channels
           ?.map(channel => `${channel.channel}:${channel.userId}[${channel.privacyLevel}]`)
           .join(', ');
+        const contactName = resolvePreferredContactName(contact) ?? contact.displayName;
 
         return textResult(
           `Canonical ID: ${contact.id}\n` +
-          `Contact: ${contact.displayName}\n` +
+          `Contact: ${contactName}\n` +
           `Trust: ${contact.trustLevel}\n` +
           `Relationship: ${contact.relationshipType}\n` +
           (identities ? `Identities: ${identities}\n` : '') +
@@ -378,7 +380,7 @@ export function createContactListTool(contactStore: ContactStore): AgentTool<any
         }
 
         const lines = contacts.map(c =>
-          `- ${c.displayName} [${c.trustLevel}/${c.relationshipType}]` +
+          `- ${(resolvePreferredContactName(c) ?? c.displayName)} [${c.trustLevel}/${c.relationshipType}]` +
           ((c.channels?.length ?? 0) > 0 ? ` channels=${c.channels!.length}` : '') +
           (c.notes ? ` — ${c.notes}` : ''),
         );

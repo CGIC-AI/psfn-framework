@@ -24,6 +24,7 @@ import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js'
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { formatSignedDecimal } from '../substrate-agent-helpers.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
 import {
   formatActiveDateTimeIso,
   formatActiveDateTimeLabel,
@@ -490,12 +491,8 @@ export function collectContinuityFallbackKeys(
 }
 
 export function resolvePromptUserName(message: SubstrateMessage, contact?: Contact): string {
-  const nickname = contact?.nickname?.trim();
-  if (nickname) return nickname;
-
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Contact from mocks may lack displayName
-  const displayName = contact?.displayName?.trim();
-  if (displayName) return displayName;
+  const preferredContactName = resolvePreferredContactName(contact);
+  if (preferredContactName) return preferredContactName;
 
   const authorName = message.authorName.trim();
   if (authorName) return authorName;

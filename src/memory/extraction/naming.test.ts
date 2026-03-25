@@ -6,7 +6,7 @@ import {
 } from './naming.js';
 
 describe('resolveExtractionParticipantNames', () => {
-  it('prefers canonical contact and configured companion names over generic labels', () => {
+  it('prefers canonical contact name and configured companion names over generic labels', () => {
     const names = resolveExtractionParticipantNames({
       entries: [
         {
@@ -26,12 +26,12 @@ describe('resolveExtractionParticipantNames', () => {
           timestamp: 2,
         },
       ],
-      canonicalContactDisplayName: 'Operator',
+      canonicalContactName: 'V',
       companionName: 'PSFN',
     });
 
     expect(names).toEqual({
-      userName: 'Operator',
+      userName: 'V',
       companionName: 'PSFN',
     });
   });
@@ -56,7 +56,7 @@ describe('resolveExtractionParticipantNames', () => {
           timestamp: 2,
         },
       ],
-      canonicalContactDisplayName: 'user',
+      canonicalContactName: 'user',
       companionName: 'assistant',
     });
 

@@ -680,7 +680,7 @@
         </p>
         <div class="mt-3 flex flex-wrap gap-2">
           <a
-            href="/garden/identity"
+            href="/identity"
             class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-bark-100"
           >
             Import Character Card

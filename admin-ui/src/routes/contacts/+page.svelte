@@ -884,7 +884,7 @@
                   <div class="mt-1 flex flex-wrap gap-1">
                     {#each profile.sourceMemoryIds as memId}
                       <a
-                        href="/garden/memory?id={encodeURIComponent(memId)}"
+                        href="/memory?id={encodeURIComponent(memId)}"
                         class="text-sm bg-bark-200 px-1.5 py-0.5 rounded text-gold-700
                                hover:bg-gold-100 hover:text-gold-800 transition-colors font-mono break-all"
                         title="View memory {memId}"

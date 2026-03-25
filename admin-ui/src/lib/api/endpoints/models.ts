@@ -12,7 +12,7 @@ export async function getModelsConfigRaw(): Promise<string> {
     credentials: 'include',
   });
   if (res.status === 401) {
-    window.location.href = '/garden/login';
+    window.location.href = '/login';
     throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) {

@@ -32,7 +32,7 @@ export function updateSettings(
     body: JSON.stringify(patch),
   }).then(async (res) => {
     if (res.status === 401) {
-      window.location.href = '/garden/login';
+      window.location.href = '/login';
       throw new ApiError(401, 'Unauthorized');
     }
 

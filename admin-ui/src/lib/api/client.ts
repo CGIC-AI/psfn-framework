@@ -19,7 +19,7 @@ export async function apiGet<T>(path: string): Promise<T> {
     credentials: 'include',
   });
   if (res.status === 401) {
-    window.location.href = '/garden/login';
+    window.location.href = '/login';
     throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) throw new ApiError(res.status, res.statusText);
@@ -34,7 +34,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (res.status === 401) {
-    window.location.href = '/garden/login';
+    window.location.href = '/login';
     throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) throw new ApiError(res.status, res.statusText);
@@ -52,7 +52,7 @@ export async function apiPostMultipart<T>(
     body: formData,
   });
   if (res.status === 401) {
-    window.location.href = '/garden/login';
+    window.location.href = '/login';
     throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) throw new ApiError(res.status, res.statusText);
@@ -67,7 +67,7 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (res.status === 401) {
-    window.location.href = '/garden/login';
+    window.location.href = '/login';
     throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) throw new ApiError(res.status, res.statusText);
@@ -82,7 +82,7 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (res.status === 401) {
-    window.location.href = '/garden/login';
+    window.location.href = '/login';
     throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) throw new ApiError(res.status, res.statusText);
@@ -96,7 +96,7 @@ export async function apiDelete<T>(path: string): Promise<T> {
     credentials: 'include',
   });
   if (res.status === 401) {
-    window.location.href = '/garden/login';
+    window.location.href = '/login';
     throw new ApiError(401, 'Unauthorized');
   }
   if (!res.ok) throw new ApiError(res.status, res.statusText);

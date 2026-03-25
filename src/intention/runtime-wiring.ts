@@ -237,9 +237,9 @@ export function wireIntentionRuntime(
     });
   }
 
-  target.registerTool(createCreateConcernTool(concernStore), 'extended');
+  target.registerTool(createCreateConcernTool(concernStore));
   target.registerTool(createListConcernsTool(concernStore));
-  target.registerTool(createResolveConcernTool(concernStore), 'extended');
+  target.registerTool(createResolveConcernTool(concernStore));
   return {
     concernStore,
     behavioralPatternTracker,

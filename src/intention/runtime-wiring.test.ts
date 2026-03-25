@@ -14,10 +14,12 @@ class FakeTarget implements IntentionRuntimeTarget {
   activeConcernProvider: IntentionRuntimeTarget['activeConcernProvider'] = null;
   behavioralPatternProvider: IntentionRuntimeTarget['behavioralPatternProvider'] = null;
   tools: AgentTool<any>[] = [];
+  registrations: Array<{ name: string; category: 'core' | 'extended' }> = [];
   intentionHooks: Array<Parameters<NonNullable<IntentionRuntimeTarget['registerIntentionPostTurnHook']>>[0]> = [];
 
-  registerTool(tool: AgentTool<any>): void {
+  registerTool(tool: AgentTool<any>, category: 'core' | 'extended' = 'core'): void {
     this.tools.push(tool);
+    this.registrations.push({ name: tool.name, category });
   }
 
   registerIntentionPostTurnHook(
@@ -48,6 +50,11 @@ describe('wireIntentionRuntime', () => {
     expect(createTool).toBeDefined();
     expect(listTool).toBeDefined();
     expect(resolveTool).toBeDefined();
+    expect(target.registrations).toEqual(expect.arrayContaining([
+      { name: 'create_concern', category: 'core' },
+      { name: 'list_concerns', category: 'core' },
+      { name: 'resolve_concern', category: 'core' },
+    ]));
     expect(target.intentionHooks).toHaveLength(1);
   });
 

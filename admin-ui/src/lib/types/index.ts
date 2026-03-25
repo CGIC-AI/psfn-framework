@@ -592,12 +592,46 @@ export interface SettingsContractData {
   fields: Record<string, SettingsContractField>;
 }
 
+export type CanonicalProviderType =
+  | 'litellm_proxy'
+  | 'openrouter'
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'mistral'
+  | 'generic_openai';
+
+export interface ProviderRegistryEntry {
+  id: string;
+  type: CanonicalProviderType;
+  enabled: boolean;
+  label?: string;
+  apiBaseUrl?: string;
+  modelsApiUrl?: string;
+  apiKeyEnv?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CanonicalProviderRegistry {
+  schemaVersion: 1;
+  providers: ProviderRegistryEntry[];
+}
+
+export interface ProvidersRuntimeConfig {
+  registry: CanonicalProviderRegistry;
+  litellmBaseUrl?: string;
+  litellmApiKeyEnv?: string;
+  openRouterApiBaseUrl?: string;
+  openRouterModelsApiUrl?: string;
+  openRouterApiKeyEnv?: string;
+}
+
 export interface AdminSettingsData {
   config: Record<string, unknown>;
   env: Record<string, unknown>;
   editors: {
     models: unknown;
-    providers: unknown;
+    providers: ProvidersRuntimeConfig;
     skills: unknown;
     scheduler: unknown;
     trustPolicy: unknown;

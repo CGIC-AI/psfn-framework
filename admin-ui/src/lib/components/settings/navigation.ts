@@ -17,6 +17,12 @@ export const SETTINGS_SIMPLE_SECTIONS = [
     groupId: 'models',
   },
   {
+    id: 'providers',
+    title: 'Provider Registry',
+    description: 'Backend endpoints and API key env wiring',
+    groupId: 'models',
+  },
+  {
     id: 'channels',
     title: 'Channel Bridges',
     description: 'Discord and Telegram behavior',

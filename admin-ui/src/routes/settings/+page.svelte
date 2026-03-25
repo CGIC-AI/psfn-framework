@@ -10,7 +10,10 @@
   } from '$lib/api/endpoints/settings';
   import type {
     AdminSettingsData,
+    CanonicalProviderRegistry,
+    CanonicalProviderType,
     ConfigUpdateResult,
+    ProviderRegistryEntry,
     SettingsContractData,
     SettingsContractField,
   } from '$lib/types';
@@ -38,8 +41,18 @@
   import { resolveVoiceProviderSelection } from './voice-provider-selection';
   import type { ContextBudgetConfigLike } from '../../../../src/context-budget.js';
   import { buildContextBudgetPreview } from '$lib/settings/context-budget-preview';
+  import {
+    createEmptyProviderEntry,
+    normalizeProvidersRuntimeConfig,
+    PROVIDER_TYPE_LABELS,
+    PROVIDER_TYPES,
+    providerEnvNameIsValid,
+    providerIdIsValid,
+    providerSupportsModelsApi,
+  } from '$lib/providers/registry';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
+  type ProviderEditableField = 'id' | 'label' | 'apiBaseUrl' | 'modelsApiUrl' | 'apiKeyEnv';
 
   const DISABLED_PROVIDER_ID = 'disabled';
   const COMPOSITIONAL_TIER_OPTIONS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
@@ -84,6 +97,9 @@
   let saveMessage = $state('');
   let saveOk = $state(true);
   let settingsSchema = $state<SettingsContractData | null>(null);
+  let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
+  let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
+  let providerValidationErrors = $state<string[]>([]);
 
   // ── Dirty tracking ──
   let initialSnapshot = $state('');
@@ -141,6 +157,7 @@
       // Backup
       backupIntervalHours, backupMaxRotating, backupMaxWeekly,
       backupMaxMonthly, backupMirrorDir, backupVerifyRestore,
+      providerRegistry,
     });
   }
 
@@ -259,6 +276,7 @@
   // ── Simple mode IA navigation ──
   const SIMPLE_SECTION_ORDER: readonly SettingsSimpleSectionId[] = [
     'models',
+    'providers',
     'prompting',
     'memory-budget',
     'memory-extraction',
@@ -1107,6 +1125,178 @@
     };
   }
 
+  function setProviderRegistryState(nextRegistry: CanonicalProviderRegistry): void {
+    providerRegistry = {
+      schemaVersion: 1,
+      providers: nextRegistry.providers.map((entry) => ({
+        ...entry,
+        ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+      })),
+    };
+    providerRegistryInitialJson = JSON.stringify(providerRegistry, null, 2);
+    providerValidationErrors = [];
+  }
+
+  function providerRegistryDirty(): boolean {
+    return JSON.stringify(providerRegistry, null, 2) !== providerRegistryInitialJson;
+  }
+
+  function providerTypeSummary(type: CanonicalProviderType): string {
+    if (type === 'openrouter') return 'Model discovery + routed OpenRouter traffic';
+    if (type === 'litellm_proxy') return 'Proxy-backed provider routing';
+    if (type === 'generic_openai') return 'OpenAI-compatible backend';
+    return `${PROVIDER_TYPE_LABELS[type]} direct backend`;
+  }
+
+  function providerRuntimeRole(entry: ProviderRegistryEntry): string[] {
+    const roles: string[] = [];
+    if (entry.type === 'openrouter') {
+      roles.push('import routing');
+      roles.push('catalog discovery');
+    }
+    if (entry.type === 'litellm_proxy') {
+      roles.push('proxy routing');
+    }
+    if (!entry.enabled) {
+      roles.push('disabled');
+    }
+    return roles.length > 0 ? roles : ['direct backend'];
+  }
+
+  function updateProviderEntry(index: number, updater: (entry: ProviderRegistryEntry) => ProviderRegistryEntry): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: providerRegistry.providers.map((entry, entryIndex) => (
+        entryIndex === index
+          ? updater({
+            ...entry,
+            ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+          })
+          : entry
+      )),
+    };
+    providerValidationErrors = [];
+  }
+
+  function addProviderEntry(): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: [...providerRegistry.providers, createEmptyProviderEntry(providerRegistry.providers.length)],
+    };
+    providerValidationErrors = [];
+  }
+
+  function removeProviderEntry(index: number): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: providerRegistry.providers.filter((_, entryIndex) => entryIndex !== index),
+    };
+    providerValidationErrors = [];
+  }
+
+  function setProviderType(index: number, value: string): void {
+    updateProviderEntry(index, (entry) => {
+      const nextType = (PROVIDER_TYPES.includes(value as CanonicalProviderType)
+        ? value
+        : 'openai') as CanonicalProviderType;
+      const nextEntry: ProviderRegistryEntry = {
+        ...entry,
+        type: nextType,
+      };
+      if (!providerSupportsModelsApi(nextType)) {
+        delete nextEntry.modelsApiUrl;
+      }
+      return nextEntry;
+    });
+  }
+
+  function setProviderField(index: number, field: ProviderEditableField, value: string): void {
+    updateProviderEntry(index, (entry) => {
+      const trimmed = value.trim();
+      if (field === 'id') {
+        return {
+          ...entry,
+          id: trimmed.toLowerCase(),
+        };
+      }
+      if (trimmed.length === 0) {
+        const nextEntry = { ...entry };
+        delete nextEntry[field];
+        return nextEntry;
+      }
+      return {
+        ...entry,
+        [field]: trimmed,
+      };
+    });
+  }
+
+  function validateProviderRegistry(registry: CanonicalProviderRegistry): string[] {
+    const errors: string[] = [];
+    const seenIds = new Set<string>();
+    let enabledOpenRouterCount = 0;
+    let enabledLiteLLMCount = 0;
+
+    for (const [index, entry] of registry.providers.entries()) {
+      const label = entry.id || `provider #${index + 1}`;
+      if (!providerIdIsValid(entry.id)) {
+        errors.push(`${label}: id must use only letters, numbers, dot, underscore, or hyphen.`);
+      }
+      if (seenIds.has(entry.id)) {
+        errors.push(`${label}: duplicate provider id.`);
+      }
+      seenIds.add(entry.id);
+      if (entry.apiKeyEnv && !providerEnvNameIsValid(entry.apiKeyEnv)) {
+        errors.push(`${label}: apiKeyEnv must be an uppercase environment variable name.`);
+      }
+      if (!entry.apiBaseUrl?.trim()) {
+        errors.push(`${label}: apiBaseUrl is required for ${entry.type}.`);
+      }
+      if (entry.type === 'openrouter' && !entry.modelsApiUrl?.trim()) {
+        errors.push(`${label}: modelsApiUrl is required for openrouter.`);
+      }
+      if (entry.enabled && entry.type === 'openrouter') {
+        enabledOpenRouterCount += 1;
+      }
+      if (entry.enabled && entry.type === 'litellm_proxy') {
+        enabledLiteLLMCount += 1;
+      }
+    }
+
+    if (enabledOpenRouterCount > 1) {
+      errors.push('Only one enabled OpenRouter provider is supported.');
+    }
+    if (enabledLiteLLMCount > 1) {
+      errors.push('Only one enabled LiteLLM proxy provider is supported.');
+    }
+
+    return errors;
+  }
+
+  async function saveProviderRegistry(): Promise<void> {
+    saving = true;
+    try {
+      const errors = validateProviderRegistry(providerRegistry);
+      providerValidationErrors = errors;
+      if (errors.length > 0) {
+        flash(false, errors[0] ?? 'Provider registry validation failed');
+        return;
+      }
+      await saveSubConfig('providers', JSON.stringify(providerRegistry, null, 2));
+      await reloadSettingsState();
+      flash(true, 'providers.json saved');
+    } catch (error) {
+      flash(false, error instanceof Error ? error.message : 'Failed to save providers.json');
+    } finally {
+      saving = false;
+    }
+  }
+
+  function discardProviderRegistryChanges(): void {
+    const current = normalizeProvidersRuntimeConfig(data?.editors.providers).registry;
+    setProviderRegistryState(current);
+  }
+
   async function reloadSettingsState(options: {
     settingsData?: AdminSettingsData;
     schemaData?: SettingsContractData;
@@ -1116,6 +1306,7 @@
     data = nextSettingsData;
     settingsSchema = nextSchemaData;
     populateSimpleFields(nextSettingsData);
+    setProviderRegistryState(normalizeProvidersRuntimeConfig(nextSettingsData.editors.providers).registry);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
     const [provConf, skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
@@ -1142,6 +1333,11 @@
     const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
     let invalidFieldCount = 0;
     const ownerConfigSaves = [
+      {
+        key: 'providers' as const,
+        nextJson: JSON.stringify(providerRegistry, null, 2),
+        currentJson: providerRegistryInitialJson,
+      },
       {
         key: 'scheduler' as const,
         nextJson: JSON.stringify(buildSchedulerPayload(), null, 2),
@@ -1265,7 +1461,7 @@
       JSON.parse(json);
       await saveSubConfig(key, json);
       applyValidationErrors({ ok: true, message: '' });
-      if (key === 'scheduler' || key === 'capabilities') {
+      if (key === 'scheduler' || key === 'capabilities' || key === 'providers') {
         await reloadSettingsState();
       } else {
         markRawEditorsCommitted([key as RawEditorKey]);
@@ -1305,6 +1501,7 @@
       data = settingsData;
       settingsSchema = schemaData;
       populateSimpleFields(data);
+      setProviderRegistryState(normalizeProvidersRuntimeConfig(settingsData.editors.providers).registry);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
       const [provConf, skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
@@ -1352,6 +1549,7 @@
   const SLIDER_CLS = 'flex-1 h-2 rounded-full appearance-none bg-bark-300 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-gold-500 [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:cursor-pointer [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-gold-500 [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:cursor-pointer';
   const COMPACT_INPUT_CLS = 'w-20 px-2 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm text-center focus:outline-none focus:ring-2 focus:ring-gold-300';
   const TOGGLE_CLS = 'w-4 h-4 rounded border-bark-400 text-gold-600 focus:ring-gold-300';
+  const PROVIDER_CARD_CLS = 'rounded-2xl border border-bark-300 bg-white/90 p-4 space-y-4';
 </script>
 
 <datalist id="tts-provider-list">
@@ -1490,6 +1688,197 @@
             >
               Open Prompts
             </a>
+          </section>
+
+          <section
+            id={settingsSimpleSectionAnchorId('providers')}
+            use:simpleSectionAnchor={'providers'}
+            class="card-garden p-5 space-y-4"
+            data-settings-section="providers"
+          >
+            <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+              <div class="space-y-2">
+                <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Providers</p>
+                <h2 class="text-sm font-serif font-semibold text-shadow-800">Provider Registry and Backend Wiring</h2>
+                <p class="text-sm text-shadow-600">
+                  Manage canonical provider ids, backend base URLs, and API key env wiring in <span class="font-mono">providers.json</span>.
+                  Models reference these ids directly.
+                </p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
+                  {providerRegistry.providers.filter((entry) => entry.enabled).length} enabled / {providerRegistry.providers.length} total
+                </span>
+                <a
+                  href={`${base}/models`}
+                  class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+                >
+                  Open Models
+                </a>
+                <button
+                  onclick={addProviderEntry}
+                  type="button"
+                  class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+                >
+                  Add Provider
+                </button>
+              </div>
+            </div>
+
+            {#if providerValidationErrors.length > 0}
+              <div class="rounded-2xl border border-wilt-300 bg-wilt-50/60 p-4 space-y-2">
+                <h3 class="text-sm font-medium text-wilt-700">Provider validation</h3>
+                <ul class="space-y-1 text-sm text-wilt-700">
+                  {#each providerValidationErrors as issue}
+                    <li>{issue}</li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+
+            <div class="space-y-4">
+              {#each providerRegistry.providers as entry, index (entry.id)}
+                <article class={PROVIDER_CARD_CLS}>
+                  <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div class="space-y-2">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="rounded-full border px-2.5 py-1 text-xs font-medium {entry.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+                          {entry.enabled ? 'enabled' : 'disabled'}
+                        </span>
+                        <span class="rounded-full border border-bark-300 bg-bark-100 px-2.5 py-1 text-xs font-medium text-shadow-700">
+                          {PROVIDER_TYPE_LABELS[entry.type]}
+                        </span>
+                        {#each providerRuntimeRole(entry) as role}
+                          <span class="rounded-full border border-gold-300 bg-gold-50 px-2.5 py-1 text-xs text-gold-800">{role}</span>
+                        {/each}
+                      </div>
+                      <p class="text-sm text-shadow-600">{providerTypeSummary(entry.type)}</p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-3">
+                      <label class="inline-flex items-center gap-2 text-sm text-shadow-700">
+                        <input
+                          type="checkbox"
+                          checked={entry.enabled}
+                          onchange={(event) => updateProviderEntry(index, (nextEntry) => ({
+                            ...nextEntry,
+                            enabled: (event.currentTarget as HTMLInputElement).checked,
+                          }))}
+                          class={TOGGLE_CLS}
+                        />
+                        Enabled
+                      </label>
+                      <button
+                        onclick={() => removeProviderEntry(index)}
+                        type="button"
+                        class="inline-flex items-center rounded-lg border border-wilt-300 px-3 py-1.5 text-sm font-medium text-wilt-600 hover:bg-wilt-50 transition-colors"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div>
+                      <label class={LABEL_CLS}>Provider Id</label>
+                      <input
+                        type="text"
+                        value={entry.id}
+                        oninput={(event) => setProviderField(index, 'id', (event.currentTarget as HTMLInputElement).value)}
+                        class={INPUT_CLS}
+                        placeholder="openrouter"
+                      />
+                      <p class="mt-1 text-sm text-shadow-500">Models and routing provider orders reference this id directly.</p>
+                    </div>
+                    <div>
+                      <label class={LABEL_CLS}>Provider Type</label>
+                      <select
+                        value={entry.type}
+                        onchange={(event) => setProviderType(index, (event.currentTarget as HTMLSelectElement).value)}
+                        class={INPUT_CLS}
+                      >
+                        {#each PROVIDER_TYPES as type}
+                          <option value={type}>{PROVIDER_TYPE_LABELS[type]}</option>
+                        {/each}
+                      </select>
+                    </div>
+                    <div>
+                      <label class={LABEL_CLS}>Label</label>
+                      <input
+                        type="text"
+                        value={entry.label ?? ''}
+                        oninput={(event) => setProviderField(index, 'label', (event.currentTarget as HTMLInputElement).value)}
+                        class={INPUT_CLS}
+                        placeholder="OpenRouter primary"
+                      />
+                    </div>
+                    <div>
+                      <label class={LABEL_CLS}>API Base URL</label>
+                      <input
+                        type="text"
+                        value={entry.apiBaseUrl ?? ''}
+                        oninput={(event) => setProviderField(index, 'apiBaseUrl', (event.currentTarget as HTMLInputElement).value)}
+                        class={INPUT_CLS}
+                        placeholder="https://..."
+                      />
+                    </div>
+                    <div>
+                      <label class={LABEL_CLS}>Models API URL</label>
+                      <input
+                        type="text"
+                        value={entry.modelsApiUrl ?? ''}
+                        oninput={(event) => setProviderField(index, 'modelsApiUrl', (event.currentTarget as HTMLInputElement).value)}
+                        class={INPUT_CLS}
+                        placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for OpenRouter'}
+                        disabled={!providerSupportsModelsApi(entry.type)}
+                      />
+                    </div>
+                    <div>
+                      <label class={LABEL_CLS}>API Key Env</label>
+                      <input
+                        type="text"
+                        value={entry.apiKeyEnv ?? ''}
+                        oninput={(event) => setProviderField(index, 'apiKeyEnv', (event.currentTarget as HTMLInputElement).value)}
+                        class={INPUT_CLS}
+                        placeholder="OPENROUTER_API_KEY"
+                      />
+                    </div>
+                  </div>
+
+                  {#if entry.metadata && Object.keys(entry.metadata).length > 0}
+                    <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+                      <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Metadata</p>
+                      <pre class="mt-2 overflow-x-auto text-xs text-shadow-700">{JSON.stringify(entry.metadata, null, 2)}</pre>
+                    </div>
+                  {/if}
+                </article>
+              {/each}
+            </div>
+
+            {#if providerRegistry.providers.length === 0}
+              <div class="rounded-2xl border border-dashed border-bark-300 bg-bark-50/60 p-5 text-sm text-shadow-600">
+                No providers configured yet. Add at least one provider before wiring models to backend endpoints.
+              </div>
+            {/if}
+
+            <div class="flex flex-wrap items-center gap-3 pt-1">
+              <button
+                onclick={saveProviderRegistry}
+                disabled={saving || !providerRegistryDirty()}
+                class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+              >
+                {saving ? 'Saving...' : 'Save providers.json'}
+              </button>
+              <button
+                onclick={discardProviderRegistryChanges}
+                disabled={!providerRegistryDirty() || saving}
+                class="px-4 py-2 rounded-lg border border-bark-300 bg-white text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
+              >
+                Discard
+              </button>
+              {#if providerRegistryDirty()}
+                <span class="text-sm text-shadow-500">Provider changes can be saved here immediately or along with the general settings save.</span>
+              {/if}
+            </div>
           </section>
 
           <section

@@ -61,6 +61,10 @@
           "primary": true
         },
         {
+          "purpose": "memory",
+          "primary": true
+        },
+        {
           "purpose": "extraction",
           "primary": true
         },

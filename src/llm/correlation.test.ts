@@ -37,6 +37,7 @@ describe('correlation helpers', () => {
     it('maps completion purpose to a stable call type', () => {
       expect(inferCallType('chat')).toBe('chat');
       expect(inferCallType('reasoning')).toBe('tool');
+      expect(inferCallType('memory')).toBe('memory');
       expect(inferCallType('extraction')).toBe('memory');
       expect(inferCallType('summary')).toBe('summary');
       expect(inferCallType('context')).toBe('background');

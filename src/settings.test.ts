@@ -63,6 +63,7 @@ function makeConfig(): SubstrateConfig {
     modelRoleAssignments: {
       chat: 'primary',
       background: 'extraction',
+      memory: 'extraction',
       context: 'extraction',
       extraction: 'extraction',
       summary: 'primary',
@@ -72,6 +73,7 @@ function makeConfig(): SubstrateConfig {
     modelRoster: {
       chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
       background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      memory: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
       context: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
     },
     retryMaxAttempts: 3,
@@ -127,6 +129,7 @@ function makeCanonicalModelRegistry(options?: {
         },
         purposes: [
           { purpose: 'background', primary: true },
+          { purpose: 'memory', primary: true },
           { purpose: 'extraction', primary: true },
           { purpose: 'import_processing', primary: true },
         ],
@@ -361,10 +364,12 @@ describe('settings', () => {
 
       expect(normalized.modelRoleAssignments?.chat).toBe('primary');
       expect(normalized.modelRoleAssignments?.background).toBe('extraction');
+      expect(normalized.modelRoleAssignments?.memory).toBe('extraction');
       expect(normalized.modelRoleAssignments?.context).toBe('extraction');
       expect(normalized.modelRoleAssignments?.moa).toBe('primary');
       expect(normalized.modelRoster?.chat?.model).toBe('openai/gpt-4.1-mini');
       expect(normalized.modelRoster?.background?.model).toBe('deepseek/deepseek-v3.2');
+      expect(normalized.modelRoster?.memory?.model).toBe('deepseek/deepseek-v3.2');
       expect(normalized.primaryModel).toBe('openai/gpt-4.1-mini');
       expect(normalized.extractionModel).toBe('deepseek/deepseek-v3.2');
     });
@@ -842,8 +847,10 @@ describe('settings', () => {
       expect(config.extractionMaxTokens).toBe(3072);
       expect(config.modelRoleAssignments?.chat).toBe('chatfast');
       expect(config.modelRoleAssignments?.background).toBe('extract');
+      expect(config.modelRoleAssignments?.memory).toBe('extract');
       expect(config.modelRoster.chat?.model).toBe('openai/gpt-4.1-mini');
       expect(config.modelRoster.background?.model).toBe('deepseek/deepseek-v3.2');
+      expect(config.modelRoster.memory?.model).toBe('deepseek/deepseek-v3.2');
       expect(config.modelRegistry?.models).toHaveLength(2);
     });
 

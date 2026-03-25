@@ -18,6 +18,7 @@ export const EXTRACTION_MODEL_SLOT_KEY = 'extraction';
 export const KNOWN_MODEL_PURPOSES: ModelPurpose[] = [
   'chat',
   'background',
+  'memory',
   'context',
   'reasoning',
   'longContext',
@@ -57,6 +58,7 @@ export interface SettingsDomainSplit {
 export const DEFAULT_MODEL_ROLE_ASSIGNMENTS: Readonly<ModelRoleAssignments> = {
   chat: PRIMARY_MODEL_SLOT_KEY,
   background: EXTRACTION_MODEL_SLOT_KEY,
+  memory: EXTRACTION_MODEL_SLOT_KEY,
   context: EXTRACTION_MODEL_SLOT_KEY,
   extraction: EXTRACTION_MODEL_SLOT_KEY,
   summary: PRIMARY_MODEL_SLOT_KEY,

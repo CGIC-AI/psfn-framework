@@ -361,6 +361,7 @@ export type ModelRoleAssignments = Record<string, string>;
 export const CANONICAL_MODEL_PURPOSES = [
   'chat',
   'background',
+  'memory',
   'extraction',
   'summary',
   'reasoning',
@@ -478,8 +479,8 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   budget: ModelBudgetWindowSnapshot;
 }
 
-export type ModelPurpose = 'chat' | 'background' | 'context' | 'reasoning' | 'longContext' | 'vision';
-export type CompletionPurpose = 'background' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
+export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision';
+export type CompletionPurpose = 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
 export const COMPOSITIONAL_PURPOSES = [
   'extraction',
@@ -687,6 +688,7 @@ export interface SubstrateConfig {
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
   background: 'extraction',
+  memory: 'extraction',
   context: 'extraction',
   extraction: 'extraction',
   summary: 'primary',
@@ -797,6 +799,7 @@ export function loadConfig(): SubstrateConfig {
         },
         purposes: [
           { purpose: 'background', primary: true },
+          { purpose: 'memory', primary: true },
           { purpose: 'extraction', primary: true },
           { purpose: 'import_processing', primary: true },
         ],
@@ -904,6 +907,7 @@ export function loadConfig(): SubstrateConfig {
     modelRoster: {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
+      memory: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
       context: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
     },
     voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',

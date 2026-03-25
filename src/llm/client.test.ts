@@ -148,6 +148,7 @@ function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistr
         { purpose: 'background', primary: true },
       ]),
       createEntry('extraction', 30, extraction, [
+        { purpose: 'memory', primary: true },
         { purpose: 'extraction', primary: true },
         { purpose: 'import_processing', primary: true },
       ]),
@@ -695,6 +696,7 @@ describe('LLMClient correlation metadata', () => {
     expect(inferCallType('chat')).toBe('chat');
     expect(inferCallType('reasoning')).toBe('tool');
     expect(inferCallType('summary')).toBe('summary');
+    expect(inferCallType('memory')).toBe('memory');
     expect(inferCallType('extraction')).toBe('memory');
     expect(inferCallType('context')).toBe('background');
     expect(inferCallType('background', 'internal:heartbeat')).toBe('scheduled');
@@ -743,6 +745,129 @@ describe('LLMClient correlation metadata', () => {
     });
 
     runSpy.mockRestore();
+  });
+
+  it('routes memory completions through the dedicated memory-purpose candidate', async () => {
+    const config = makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chat',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'chat/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [
+              { purpose: 'chat', primary: true },
+              { purpose: 'summary', primary: true },
+              { purpose: 'moa', primary: true },
+            ],
+            capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 4096 },
+          },
+          {
+            id: 'background',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'background/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'background', primary: true }],
+            capabilities: { maxOutputTokens: 2048, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 2048 },
+          },
+          {
+            id: 'memory',
+            rank: 15,
+            identity: {
+              provider: 'openrouter',
+              model: 'memory/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'memory', primary: true }],
+            capabilities: { maxOutputTokens: 1536, contextWindow: 96_000 },
+            tuning: { maxOutputTokens: 1536, contextWindow: 96_000 },
+          },
+          {
+            id: 'extraction',
+            rank: 30,
+            identity: {
+              provider: 'openrouter',
+              model: 'extract/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [
+              { purpose: 'extraction', primary: true },
+              { purpose: 'import_processing', primary: true },
+            ],
+            capabilities: { maxOutputTokens: 1024, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 1024 },
+          },
+          {
+            id: 'reasoning',
+            rank: 40,
+            identity: {
+              provider: 'openrouter',
+              model: 'reason/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'reasoning', primary: true }],
+            capabilities: { maxOutputTokens: 2048, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 2048 },
+          },
+          {
+            id: 'long-context',
+            rank: 50,
+            identity: {
+              provider: 'openrouter',
+              model: 'long/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'longContext', primary: true }],
+            capabilities: { maxOutputTokens: 4096, contextWindow: 256_000 },
+            tuning: { maxOutputTokens: 4096, contextWindow: 256_000 },
+          },
+          {
+            id: 'vision',
+            rank: 60,
+            identity: {
+              provider: 'openrouter',
+              model: 'vision/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'vision', primary: true }],
+            capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 4096 },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'memory ok' }],
+      model: 'openrouter:memory/model',
+      usage: { input: 8, output: 5 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Refresh context' }],
+      },
+      'memory',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
+    expect(model.id).toBe('memory/model');
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
+    expect(requestOptions.maxTokens).toBe(1536);
   });
 });
 

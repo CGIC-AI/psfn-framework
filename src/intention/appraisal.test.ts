@@ -267,6 +267,50 @@ describe('IntentionAppraisal', () => {
     expect(promptPayload.activeConcerns?.[0]?.dueAt).toBeTypeOf('string');
   });
 
+  it('includes recently resolved concerns in the appraisal prompt for dedupe context', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'noop',
+          priority: 'low',
+          reason: 'No action required',
+          timing: 'none',
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:resolved-concerns',
+      currentEmotion: makeEmotionSnapshot(),
+      recentMessages: [{ role: 'user', content: 'We already handled that cleanup task.' }],
+      recentlyResolvedConcerns: [{
+        id: 'resolved-1',
+        title: 'Clean up the lingering profile reminder',
+        summary: 'Handled during the current run',
+        status: 'resolved',
+        resolvedAt: Date.parse('2026-03-10T15:45:00.000Z'),
+        priority: 'medium',
+      }],
+    });
+
+    const promptPayload = JSON.parse((complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}') as string) as {
+      recentlyResolvedConcerns?: Array<Record<string, unknown>>;
+    };
+    expect(promptPayload.recentlyResolvedConcerns?.[0]).toMatchObject({
+      id: 'resolved-1',
+      title: 'Clean up the lingering profile reminder',
+      status: 'resolved',
+      summary: 'Handled during the current run',
+      priority: 'medium',
+    });
+    expect(promptPayload.recentlyResolvedConcerns?.[0]?.resolvedAt).toBeTypeOf('string');
+  });
+
   it('fails closed when model output is malformed', async () => {
     const { provider } = makeProvider(['not valid json']);
     const onEvaluationError = vi.fn();

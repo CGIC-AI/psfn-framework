@@ -1123,6 +1123,7 @@ async function main(): Promise<void> {
       emotionState,
       contactStore,
       getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
+      getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns,
       onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,

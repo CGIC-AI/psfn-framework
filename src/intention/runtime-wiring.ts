@@ -26,6 +26,9 @@ import {
   createResolveConcernTool,
 } from './tools.js';
 
+const RECENT_RESOLVED_CONCERN_WINDOW_MS = 6 * 60 * 60 * 1_000;
+const RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT = 3;
+
 export interface IntentionRuntimeTarget {
   activeConcernProvider: ActiveConcernContextProvider | null;
   pendingFollowUpProvider?: PendingFollowUpContextProvider | null;
@@ -45,6 +48,10 @@ export interface IntentionRuntimeWiring {
 
 export interface IntentionAppraisalHooks {
   getActiveConcerns(input: {
+    channelId: string;
+    canonicalContactKey?: string;
+  }): readonly ActiveConcernSnapshot[];
+  getRecentResolvedConcerns(input: {
     channelId: string;
     canonicalContactKey?: string;
   }): readonly ActiveConcernSnapshot[];
@@ -141,6 +148,22 @@ function toActiveConcernSnapshot(concern: ReturnType<ActiveConcernStore['getActi
   };
 }
 
+function toRecentlyResolvedConcernSnapshot(
+  concern: ReturnType<ActiveConcernStore['listRecentlyResolvedConcerns']>[number],
+): ActiveConcernSnapshot {
+  const resolvedAtMs = concern.resolvedAt ? Date.parse(concern.resolvedAt) : Number.NaN;
+  return {
+    id: concern.id,
+    title: concern.text,
+    status: 'resolved',
+    priority: concern.priority,
+    ...(Number.isFinite(resolvedAtMs) ? { resolvedAt: resolvedAtMs } : {}),
+    ...(concern.resolutionOutcome
+      ? { summary: concern.resolutionOutcome }
+      : { summary: 'Resolved recently.' }),
+  };
+}
+
 function normalizeObservedAtIso(value: number | undefined): string | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -158,6 +181,14 @@ export function createIntentionAppraisalHooks(
         .getActiveConcerns(canonicalContactKey)
         .map(concern => toActiveConcernSnapshot(concern))
     ),
+    getRecentResolvedConcerns: ({ canonicalContactKey }) => (
+      concernStore
+        .listRecentlyResolvedConcerns(canonicalContactKey, {
+          withinMs: RECENT_RESOLVED_CONCERN_WINDOW_MS,
+          limit: RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT,
+        })
+        .map(concern => toRecentlyResolvedConcernSnapshot(concern))
+    ),
     onIntentionConcernDecision: ({
       decision,
       canonicalContactKey,
@@ -169,6 +200,13 @@ export function createIntentionAppraisalHooks(
       const expiresAt = normalizeFutureIsoTimestamp(
         decision.concern?.dueAt ?? decision.dueAt,
       );
+      const recentMatch = concernStore.findRecentlyResolvedSimilarConcern({
+        text,
+        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+      });
+      if (recentMatch) {
+        return;
+      }
       concernStore.create({
         text,
         priority: decision.concern?.priority ?? decision.priority,

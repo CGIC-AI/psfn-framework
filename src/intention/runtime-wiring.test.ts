@@ -109,6 +109,26 @@ describe('wireIntentionRuntime', () => {
     });
     expect(typeof active[0]?.dueAt).toBe('number');
 
+    const resolved = runtime.concernStore.create({
+      text: 'Recently resolved cleanup',
+      contactId: 'contact-a',
+      source: 'heartbeat',
+    });
+    runtime.concernStore.resolveConcern(resolved.id, {
+      outcome: 'Handled already',
+      resolvedAt: new Date().toISOString(),
+    });
+    const recentResolved = hooks.getRecentResolvedConcerns({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+    });
+    expect(recentResolved[0]).toMatchObject({
+      title: 'Recently resolved cleanup',
+      status: 'resolved',
+      summary: 'Handled already',
+    });
+    expect(typeof recentResolved[0]?.resolvedAt).toBe('number');
+
     hooks.onIntentionConcernDecision({
       decision: {
         type: 'concern',
@@ -181,6 +201,103 @@ describe('wireIntentionRuntime', () => {
     expect(activated?.activationReason).toBe('post_turn_action');
   });
 
+  it('includes recently resolved concerns in appraisal snapshots and suppresses near-duplicate recreation', () => {
+    const db = new Database(':memory:');
+    const target = new FakeTarget();
+    const runtime = wireIntentionRuntime(target, db);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+
+    const resolved = runtime.concernStore.create({
+      text: 'Clean up the profile synthesis reminder',
+      contactId: 'contact-a',
+      source: 'heartbeat',
+    });
+    runtime.concernStore.resolveConcern(resolved.id, {
+      outcome: 'Fixed during this session',
+      resolvedAt: new Date(Date.now() - (10 * 60 * 1000)).toISOString(),
+    });
+
+    const snapshots = hooks.getRecentResolvedConcerns({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+    });
+    expect(snapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: resolved.id,
+        title: 'Clean up the profile synthesis reminder',
+        status: 'resolved',
+        summary: 'Fixed during this session',
+      }),
+    ]));
+
+    hooks.onIntentionConcernDecision({
+      decision: {
+        type: 'concern',
+        priority: 'medium',
+        reason: 'same issue recurred',
+        timing: 'soon',
+        concern: {
+          title: 'Clean up the profile synthesis reminder',
+          summary: 'same issue recurred',
+        },
+      },
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-suppress-1',
+    });
+
+    const concerns = runtime.concernStore.list({
+      contactId: 'contact-a',
+      includeResolved: true,
+      includeExpired: true,
+      limit: 10,
+    });
+    expect(concerns).toHaveLength(1);
+    expect(concerns[0]?.resolvedAt).toBeDefined();
+  });
+
+  it('allows concern recreation when the prior resolution is outside the suppression window', () => {
+    const db = new Database(':memory:');
+    const target = new FakeTarget();
+    const runtime = wireIntentionRuntime(target, db);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+
+    const resolved = runtime.concernStore.create({
+      text: 'Check back on the deployment cleanup',
+      contactId: 'contact-a',
+      source: 'heartbeat',
+    });
+    runtime.concernStore.resolveConcern(resolved.id, {
+      outcome: 'Handled long ago',
+      resolvedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    hooks.onIntentionConcernDecision({
+      decision: {
+        type: 'concern',
+        priority: 'medium',
+        reason: 'issue came back',
+        timing: 'soon',
+        concern: {
+          title: 'Check back on the deployment cleanup',
+          summary: 'issue came back',
+        },
+      },
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-allow-1',
+    });
+
+    const concerns = runtime.concernStore.list({
+      contactId: 'contact-a',
+      includeResolved: true,
+      includeExpired: true,
+      limit: 10,
+    });
+    expect(concerns).toHaveLength(2);
+    expect(concerns.some(concern => concern.source === 'appraisal' && !concern.resolvedAt)).toBe(true);
+  });
+
   it('fails closed when concern decision payload omits title and summary', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
@@ -198,6 +315,47 @@ describe('wireIntentionRuntime', () => {
       channelId: 'api:test',
       sourceMessageId: 'msg-2',
     })).toThrow('Concern decision must include title or summary');
+  });
+
+  it('suppresses concern creation when a similar concern was just resolved', () => {
+    const db = new Database(':memory:');
+    const target = new FakeTarget();
+    const runtime = wireIntentionRuntime(target, db);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+
+    const resolved = runtime.concernStore.create({
+      text: 'Clean up the profile synthesis follow-up',
+      contactId: 'contact-a',
+      source: 'heartbeat',
+    });
+    runtime.concernStore.resolveConcern(resolved.id, {
+      outcome: 'Handled during the current run',
+      resolvedAt: new Date().toISOString(),
+    });
+
+    hooks.onIntentionConcernDecision({
+      decision: {
+        type: 'concern',
+        priority: 'medium',
+        reason: 'cleanup still seems relevant',
+        timing: 'soon',
+        concern: {
+          title: 'Clean up the profile synthesis follow-up',
+        },
+      },
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-3',
+    });
+
+    const concerns = runtime.concernStore.list({
+      contactId: 'contact-a',
+      includeResolved: true,
+      includeExpired: true,
+      limit: 10,
+    });
+    expect(concerns).toHaveLength(1);
+    expect(concerns[0]?.resolvedAt).toBeDefined();
   });
 
   it('records response strategies via registered intention post-turn hook', async () => {
@@ -276,6 +434,7 @@ describe('entrypoint composition', () => {
     expect(runtimeSource).toContain('createIntentionBehavioralPatternHooks(');
     expect(runtimeSource).toContain('setPromotionHook(');
     expect(runtimeSource).toContain('getActiveConcerns: intentionAppraisalHooks.getActiveConcerns');
+    expect(runtimeSource).toContain('getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns');
     expect(runtimeSource).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
     expect(runtimeSource).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
     expect(runtimeSource).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
@@ -289,6 +448,7 @@ describe('entrypoint composition', () => {
     expect(source).toContain('createIntentionBehavioralPatternHooks(');
     expect(source).toContain('setPromotionHook(');
     expect(source).toContain('getActiveConcerns: intentionAppraisalHooks.getActiveConcerns');
+    expect(source).toContain('getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns');
     expect(source).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
     expect(source).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
     expect(source).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');

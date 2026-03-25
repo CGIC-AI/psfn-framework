@@ -16,6 +16,12 @@ import type {
   ContactMutationAuditQuery,
   ChannelPrivacyLevel,
   RelationshipType,
+  SocialGraphEntity,
+  SocialGraphEntityQuery,
+  SocialGraphEntityUpsertInput,
+  SocialRelationshipEdge,
+  SocialRelationshipEdgeQuery,
+  SocialRelationshipEdgeUpsertInput,
 } from './types.js';
 import type { TrustLevel, LowTierTrustLevel, TrustMutationSource } from '../trust/types.js';
 import { isHighTierTrustLevel, isLowTierTrustLevel } from '../trust/types.js';
@@ -72,6 +78,16 @@ import {
   listIdentityLinkVerifications,
 } from './store/read-operations.js';
 import { initializeContactStoreSchema } from './store/schema.js';
+import {
+  ensureContactSocialGraphEntity,
+  getSocialGraphEntityByContactId,
+  getSocialGraphEntityById,
+  listRelatedContactIds,
+  listSocialGraphEntities,
+  listSocialRelationshipEdges,
+  upsertSocialGraphEntity,
+  upsertSocialRelationshipEdge,
+} from './store/social-graph.js';
 import {
   collectUpsertIdentities,
   findUpsertTarget,
@@ -282,6 +298,15 @@ export class ContactStore {
 
     const previousTrustLevel = target?.trustLevel ?? null;
     const contact = upsertContact(this.buildUpsertResolveContext(), partial);
+    const row = this.db.prepare(`
+      SELECT id, display_name, first_seen, last_seen
+      FROM contacts
+      WHERE id = ?
+      LIMIT 1
+    `).get(contact.id) as { id: string; display_name: string; first_seen: string; last_seen: string } | undefined;
+    if (row) {
+      ensureContactSocialGraphEntity(this.db, row);
+    }
     if (contact.trustLevel === 'primary' && previousTrustLevel !== 'primary') {
       this.recordPrimaryTrustMutationAudit({
         contactId: contact.id,
@@ -310,6 +335,38 @@ export class ContactStore {
 
   getByTrustLevel(trustLevel: TrustLevel): Contact[] {
     return getContactsByTrustLevel(this.db, trustLevel);
+  }
+
+  getSocialGraphEntityById(entityId: string): SocialGraphEntity | undefined {
+    return getSocialGraphEntityById(this.db, entityId);
+  }
+
+  getSocialGraphEntityByContactId(contactId: string): SocialGraphEntity | undefined {
+    return getSocialGraphEntityByContactId(this.db, contactId);
+  }
+
+  listSocialGraphEntities(query: SocialGraphEntityQuery = {}): SocialGraphEntity[] {
+    return listSocialGraphEntities(this.db, query);
+  }
+
+  upsertSocialGraphEntity(input: SocialGraphEntityUpsertInput): SocialGraphEntity {
+    const entity = upsertSocialGraphEntity(this.db, input);
+    this.syncContactExports();
+    return entity;
+  }
+
+  upsertSocialRelationshipEdge(input: SocialRelationshipEdgeUpsertInput): SocialRelationshipEdge {
+    return upsertSocialRelationshipEdge(this.db, input);
+  }
+
+  listSocialRelationshipEdges(query: SocialRelationshipEdgeQuery = {}): SocialRelationshipEdge[] {
+    return listSocialRelationshipEdges(this.db, query);
+  }
+
+  listRelatedContacts(contactId: string, query: SocialRelationshipEdgeQuery = {}): Contact[] {
+    return listRelatedContactIds(this.db, contactId, query)
+      .map(id => this.getById(id))
+      .filter((contact): contact is Contact => contact !== undefined);
   }
 
   private isBehaviorDriftMutationAllowed(
@@ -525,6 +582,12 @@ export class ContactStore {
       nickname,
     );
     if (updated) {
+      ensureContactSocialGraphEntity(this.db, {
+        id: contactId,
+        display_name: nextDisplayName,
+        first_seen: contact.firstSeen,
+        last_seen: contact.lastSeen,
+      });
       if (contact.displayName !== nextDisplayName) {
         appendMutationAuditEntry(this.db, contactId, 'display_name', contact.displayName, nextDisplayName, actor);
       }
@@ -833,12 +896,24 @@ export class ContactStore {
     displayName?: string,
   ): Contact {
     const contact = resolveChannelIdentity(this.buildUpsertResolveContext(), channel, channelUserId, displayName);
+    ensureContactSocialGraphEntity(this.db, {
+      id: contact.id,
+      display_name: contact.displayName,
+      first_seen: contact.firstSeen,
+      last_seen: contact.lastSeen,
+    });
     this.syncContactExports();
     return contact;
   }
 
   resolveUserId(discordUserId: string): Contact {
     const contact = resolveUserId(this.buildUpsertResolveContext(), discordUserId);
+    ensureContactSocialGraphEntity(this.db, {
+      id: contact.id,
+      display_name: contact.displayName,
+      first_seen: contact.firstSeen,
+      last_seen: contact.lastSeen,
+    });
     this.syncContactExports();
     return contact;
   }

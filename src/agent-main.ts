@@ -559,7 +559,10 @@ async function main(): Promise<void> {
 );
   const intentionRuntime = wireIntentionRuntime(agentLoop, db);
   wireSelfModelRuntime(agentLoop);
-  const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionRuntime.concernStore);
+  const intentionAppraisalHooks = createIntentionAppraisalHooks(
+    intentionRuntime.concernStore,
+    intentionRuntime.pendingFollowUpStore,
+  );
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
     intentionRuntime.behavioralPatternTracker,
   );
@@ -1121,6 +1124,8 @@ async function main(): Promise<void> {
       contactStore,
       getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
       onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
+      onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
+      onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       coreMemoryStore,
       postTurnActions,

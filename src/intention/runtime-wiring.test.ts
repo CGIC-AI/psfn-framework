@@ -12,6 +12,7 @@ import {
 
 class FakeTarget implements IntentionRuntimeTarget {
   activeConcernProvider: IntentionRuntimeTarget['activeConcernProvider'] = null;
+  pendingFollowUpProvider: IntentionRuntimeTarget['pendingFollowUpProvider'] = null;
   behavioralPatternProvider: IntentionRuntimeTarget['behavioralPatternProvider'] = null;
   tools: AgentTool<any>[] = [];
   registrations: Array<{ name: string; category: 'core' | 'extended' }> = [];
@@ -38,6 +39,7 @@ describe('wireIntentionRuntime', () => {
     const runtime = wireIntentionRuntime(target, db);
 
     expect(target.activeConcernProvider).toBe(runtime.concernStore);
+    expect(target.pendingFollowUpProvider).toBe(runtime.pendingFollowUpStore);
     expect(target.behavioralPatternProvider).toBe(runtime.behavioralPatternTracker);
     expect(target.tools.map(tool => tool.name).sort()).toEqual([
       'create_concern',
@@ -61,11 +63,14 @@ describe('wireIntentionRuntime', () => {
   it('prefers explicit provider setter surfaces when available', () => {
     const db = new Database(':memory:');
     const setActiveConcernProvider = vi.fn();
+    const setPendingFollowUpProvider = vi.fn();
     const setBehavioralPatternProvider = vi.fn();
     const target = {
       activeConcernProvider: null,
+      pendingFollowUpProvider: null,
       behavioralPatternProvider: null,
       setActiveConcernProvider,
+      setPendingFollowUpProvider,
       setBehavioralPatternProvider,
       registerTool: vi.fn(),
     } satisfies IntentionRuntimeTarget;
@@ -73,8 +78,10 @@ describe('wireIntentionRuntime', () => {
     const runtime = wireIntentionRuntime(target, db);
 
     expect(setActiveConcernProvider).toHaveBeenCalledWith(runtime.concernStore);
+    expect(setPendingFollowUpProvider).toHaveBeenCalledWith(runtime.pendingFollowUpStore);
     expect(setBehavioralPatternProvider).toHaveBeenCalledWith(runtime.behavioralPatternTracker);
     expect(target.activeConcernProvider).toBeNull();
+    expect(target.pendingFollowUpProvider).toBeNull();
     expect(target.behavioralPatternProvider).toBeNull();
   });
 
@@ -82,7 +89,7 @@ describe('wireIntentionRuntime', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
-    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore, runtime.pendingFollowUpStore);
 
     runtime.concernStore.create({
       text: 'Check hydration reminder',
@@ -134,13 +141,51 @@ describe('wireIntentionRuntime', () => {
       contactId: 'contact-a',
       text: 'Follow up on medication: Ping tomorrow morning',
     });
+
+    const pendingFollowUpId = hooks.onIntentionFollowUpDecision({
+      decision: {
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Keep this reminder out of the live context until it is due.',
+        timing: 'scheduled',
+        dueAt: Date.now() + 60_000,
+        followUp: {
+          content: 'Check in tomorrow about medication.',
+          channelType: 'api',
+        },
+      },
+      channelId: 'api:test',
+      channelType: 'api',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-3',
+    });
+    expect(pendingFollowUpId).toBeTruthy();
+
+    const pending = runtime.pendingFollowUpStore.getPendingFollowUps('contact-a');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      id: pendingFollowUpId,
+      content: 'Check in tomorrow about medication.',
+      priority: 'medium',
+      timing: 'scheduled',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-3',
+    });
+
+    hooks.onIntentionFollowUpActivated({
+      pendingFollowUpId: pendingFollowUpId!,
+      activationReason: 'post_turn_action',
+    });
+    const activated = runtime.pendingFollowUpStore.getById(pendingFollowUpId!);
+    expect(activated?.activatedAt).toBeTruthy();
+    expect(activated?.activationReason).toBe('post_turn_action');
   });
 
   it('fails closed when concern decision payload omits title and summary', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
-    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore, runtime.pendingFollowUpStore);
 
     expect(() => hooks.onIntentionConcernDecision({
       decision: {
@@ -232,6 +277,8 @@ describe('entrypoint composition', () => {
     expect(runtimeSource).toContain('setPromotionHook(');
     expect(runtimeSource).toContain('getActiveConcerns: intentionAppraisalHooks.getActiveConcerns');
     expect(runtimeSource).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
+    expect(runtimeSource).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
+    expect(runtimeSource).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
     expect(runtimeSource).toContain('onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome');
   });
 
@@ -243,6 +290,8 @@ describe('entrypoint composition', () => {
     expect(source).toContain('setPromotionHook(');
     expect(source).toContain('getActiveConcerns: intentionAppraisalHooks.getActiveConcerns');
     expect(source).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
+    expect(source).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
+    expect(source).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
     expect(source).toContain('onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome');
   });
 });

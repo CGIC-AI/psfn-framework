@@ -665,7 +665,10 @@ export class SubstrateRuntime implements Lifecycle {
   );
     const intentionRuntime = wireIntentionRuntime(this.agentLoop, this.db);
     wireSelfModelRuntime(this.agentLoop);
-    const intentionAppraisalHooks = createIntentionAppraisalHooks(intentionRuntime.concernStore);
+    const intentionAppraisalHooks = createIntentionAppraisalHooks(
+      intentionRuntime.concernStore,
+      intentionRuntime.pendingFollowUpStore,
+    );
     const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
       intentionRuntime.behavioralPatternTracker,
     );
@@ -967,6 +970,8 @@ export class SubstrateRuntime implements Lifecycle {
         contactStore,
         getActiveConcerns: intentionAppraisalHooks.getActiveConcerns,
         onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
+        onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
+        onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
         onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
         coreMemoryStore,
         postTurnActions,

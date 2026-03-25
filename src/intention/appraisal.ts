@@ -79,6 +79,7 @@ export interface IntentionFollowUpDecision {
   channelType?: ChannelType;
   authorId?: string;
   authorName?: string;
+  pendingFollowUpId?: string;
 }
 
 export interface IntentionConcernDecision {
@@ -139,6 +140,7 @@ export interface IntentionFollowUpActionPayload {
   authorId: string;
   authorName: string;
   content: string;
+  pendingFollowUpId?: string;
 }
 
 export interface IntentionDecisionActionContext {
@@ -621,7 +623,7 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
   if (!isRecord(value)) return undefined;
   const content = typeof value.content === 'string' ? value.content.trim() : '';
   if (!content) return undefined;
- const channelId = typeof value.channelId === 'string' ? value.channelId.trim() : '';
+  const channelId = typeof value.channelId === 'string' ? value.channelId.trim() : '';
   const channelType = (
     value.channelType === 'terminal'
     || value.channelType === 'api'
@@ -632,6 +634,9 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     : undefined;
   const authorId = typeof value.authorId === 'string' ? value.authorId.trim() : '';
   const authorName = typeof value.authorName === 'string' ? value.authorName.trim() : '';
+  const pendingFollowUpId = typeof value.pendingFollowUpId === 'string'
+    ? value.pendingFollowUpId.trim()
+    : '';
 
   return {
     content,
@@ -639,6 +644,7 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     ...(channelType ? { channelType } : {}),
     ...(authorId ? { authorId } : {}),
     ...(authorName ? { authorName } : {}),
+    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
   };
 }
 
@@ -1008,6 +1014,9 @@ export function decisionsToPostTurnActionCandidates(
           authorId: INTENTION_FOLLOW_UP_AUTHOR_ID,
           authorName: INTENTION_FOLLOW_UP_AUTHOR_NAME,
           content,
+          ...(decision.followUp?.pendingFollowUpId
+            ? { pendingFollowUpId: decision.followUp.pendingFollowUpId }
+            : {}),
         } satisfies IntentionFollowUpActionPayload,
         maxRetries: 1,
         ...(runAt !== undefined ? { runAt } : {}),
@@ -1042,6 +1051,9 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
   const authorId = typeof payload.authorId === 'string' ? payload.authorId.trim() : '';
   const authorName = typeof payload.authorName === 'string' ? payload.authorName.trim() : '';
   const content = typeof payload.content === 'string' ? payload.content.trim() : '';
+  const pendingFollowUpId = typeof payload.pendingFollowUpId === 'string'
+    ? payload.pendingFollowUpId.trim()
+    : '';
   const channelType = payload.channelType;
   if (!channelId || !authorId || !authorName || !content) return null;
   if (
@@ -1049,6 +1061,7 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
     && channelType !== 'api'
     && channelType !== 'discord'
     && channelType !== 'telegram'
+    && channelType !== 'psfn-amica'
   ) {
     return null;
   }
@@ -1059,6 +1072,7 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
     authorId,
     authorName,
     content,
+    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
   };
 }
 

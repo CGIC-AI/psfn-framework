@@ -34,6 +34,11 @@ const DISCORD_VISION_ATTACHMENT_HOST_SUFFIXES = [
   '.discordapp.com',
   '.discordapp.net',
 ];
+const LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION = [
+  'The current user message already includes live image attachment bytes.',
+  'Inspect those attached images directly.',
+  'Do not call image_analyze for the current attachment unless the user explicitly asks you to inspect a different URL.',
+].join(' ');
 
 export function hasVisionAttachments(message?: SubstrateMessage): boolean {
   if (!message?.attachments || message.attachments.length === 0) return false;
@@ -48,9 +53,13 @@ export async function buildTurnUserContent(input: {
 }): Promise<UserMessage['content']> {
   const imageBlocks = await resolveVisionImageContentBlocks(input);
   if (imageBlocks.length === 0) return input.message.content;
+  const normalizedContent = input.message.content.trim();
+  const textContent = normalizedContent.length > 0
+    ? `${normalizedContent}\n\n${LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION}`
+    : LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION;
 
   return [
-    { type: 'text', text: input.message.content },
+    { type: 'text', text: textContent },
     ...imageBlocks,
   ];
 }

@@ -178,4 +178,64 @@ describe('focus tools', () => {
     expect(reloadedMessages).not.toContain('Focus step 1 detail to compact later');
     expect(reloadedMessages).not.toContain('Focus step 2 finding to compact later');
   });
+
+  it('reuses prior focus knowledge as a first-class project context for repeated scopes', async () => {
+    const startTool = createStartFocusTool(manager);
+    const completeTool = createCompleteFocusTool(manager, llmProvider);
+    (llmProvider.complete as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        content: 'First Project Summary\n- Captured the initial direction.\nOpen questions: none',
+        toolCalls: [],
+        model: 'mock-context',
+        inputTokens: 20,
+        outputTokens: 24,
+        stopReason: 'stop',
+      })
+      .mockResolvedValueOnce({
+        content: 'Second Project Summary\n- Folded the latest findings into the project context.\nOpen questions: none',
+        toolCalls: [],
+        model: 'mock-context',
+        inputTokens: 24,
+        outputTokens: 28,
+        stopReason: 'stop',
+      });
+
+    await runWithRequestContext(
+      { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project' },
+      () => startTool.execute('focus-start-1', { scope: 'Memory workflow overhaul' }),
+    );
+    store.append({
+      channelId: 'api:focus-project',
+      role: 'user',
+      content: 'First focused work item.',
+      timestamp: 1_000,
+    });
+    await runWithRequestContext(
+      { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project', requestId: 'focus-project-1' },
+      () => completeTool.execute('focus-complete-1', {}),
+    );
+
+    const resumed = await runWithRequestContext(
+      { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project' },
+      () => startTool.execute('focus-start-2', { scope: '  memory workflow overhaul  ' }),
+    );
+    expect(toolText(resumed as any)).toContain('Resuming project context with 1 prior distilled block.');
+
+    store.append({
+      channelId: 'api:focus-project',
+      role: 'assistant',
+      content: 'Second focused work item.',
+      timestamp: 2_000,
+    });
+    const secondCompletion = await runWithRequestContext(
+      { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-project', requestId: 'focus-project-2' },
+      () => completeTool.execute('focus-complete-2', {}),
+    );
+    expect(toolText(secondCompletion as any)).toContain('Project context now has 2 distilled blocks.');
+
+    const context = await manager.buildContext('api:focus-project', 'System prompt', '');
+    expect((context.systemPrompt.match(/\[memory workflow overhaul\]/gi) ?? [])).toHaveLength(1);
+    expect(context.systemPrompt).toContain('Second Project Summary');
+    expect(context.systemPrompt).toContain('project context with 2 distilled blocks');
+  });
 });

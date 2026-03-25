@@ -40,6 +40,11 @@ interface AddChannelLink {
   privacyLevel?: ChannelPrivacyLevel;
 }
 
+interface ConversationChannelDeletePayload {
+  channel?: string;
+  channelId?: string;
+}
+
 interface ContactUpdatePayload {
   displayName?: string;
   nickname?: string;
@@ -334,6 +339,55 @@ export class AdminContactsDataService implements AdminContactsService {
     return {
       ok: true,
       message: 'Channel identity unlinked',
+      contact: updated,
+      relatedChannels: updated
+        ? buildRelatedConversationChannelMap({
+          contacts: [updated],
+          sessionStore: this.deps.sessionStore,
+        }).get(updated.id) ?? []
+        : [],
+    };
+  }
+
+  deleteConversationChannel(contactId: string, body: string): ContactUpdateResult {
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) {
+      return { ok: false, message: 'Contact store not available' };
+    }
+
+    let payload: ConversationChannelDeletePayload;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return { ok: false, message: 'Request body must be valid JSON' };
+    }
+
+    const channel = payload.channel?.trim();
+    const channelId = payload.channelId?.trim();
+    if (!channel || !channelId) {
+      return { ok: false, message: 'channel and channelId are required' };
+    }
+
+    const storeWithDeleteConversationChannel = contactStore as ContactStore & {
+      deleteConversationChannel?: (id: string, channel: string, channelId: string, actor?: string) => boolean;
+    };
+    if (typeof storeWithDeleteConversationChannel.deleteConversationChannel !== 'function') {
+      return { ok: false, message: 'Conversation channel deletion is not available' };
+    }
+
+    const contact = contactStore.getById(contactId);
+    if (!contact) {
+      return { ok: false, message: 'Contact not found' };
+    }
+
+    if (!storeWithDeleteConversationChannel.deleteConversationChannel(contactId, channel, channelId, 'admin:api')) {
+      return { ok: false, message: 'Conversation channel not found on contact' };
+    }
+
+    const updated = contactStore.getById(contactId);
+    return {
+      ok: true,
+      message: 'Conversation channel deleted',
       contact: updated,
       relatedChannels: updated
         ? buildRelatedConversationChannelMap({

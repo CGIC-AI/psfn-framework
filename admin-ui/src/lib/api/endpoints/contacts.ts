@@ -72,3 +72,14 @@ export function unlinkChannelIdentity(
     { channel, userId },
   );
 }
+
+export function deleteConversationChannel(
+  contactId: string,
+  channel: string,
+  channelId: string,
+): Promise<ContactUpdateResult> {
+  return apiPost<ContactUpdateResult>(
+    `/api/admin/contacts/${encodeURIComponent(contactId)}/conversation-channel/delete`,
+    { channel, channelId },
+  );
+}

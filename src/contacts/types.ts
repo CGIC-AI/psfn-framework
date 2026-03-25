@@ -106,6 +106,7 @@ export const CONTACT_MUTATION_AUDIT_FIELDS = [
   'relationship_type',
   'channel_privacy',
   'channel_link',
+  'conversation_channel',
 ] as const;
 
 export type ContactMutationAuditField = typeof CONTACT_MUTATION_AUDIT_FIELDS[number];

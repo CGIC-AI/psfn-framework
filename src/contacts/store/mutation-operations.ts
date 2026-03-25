@@ -216,3 +216,19 @@ export function unlinkChannelIdentity(
   ).run(contactId, identity.channel, identity.userId);
   return result.changes > 0;
 }
+
+export function deleteConversationChannel(
+  db: Database.Database,
+  contactId: string,
+  channel: string,
+  channelId: string,
+): boolean {
+  const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
+  const trimmedChannelId = channelId.trim();
+  if (!trimmedChannelId) return false;
+
+  const result = db.prepare(
+    'DELETE FROM contact_channel_activity WHERE contact_id = ? AND channel = ? AND channel_id = ?',
+  ).run(contactId, normalizedChannel, trimmedChannelId);
+  return result.changes > 0;
+}

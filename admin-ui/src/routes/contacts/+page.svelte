@@ -6,6 +6,7 @@
     createContact,
     deleteContact,
     mergeContacts,
+    deleteConversationChannel,
     unlinkChannelIdentity,
   } from '$lib/api/endpoints/contacts';
   import type { ContactUpdatePayload, ContactCreatePayload } from '$lib/api/endpoints/contacts';
@@ -160,6 +161,8 @@
         return 'Channel Privacy';
       case 'channel_link':
         return 'Channel Link';
+      case 'conversation_channel':
+        return 'Conversation Channel';
       case 'notes':
       case 'nickname':
         return field.charAt(0).toUpperCase() + field.slice(1);
@@ -174,6 +177,12 @@
 
   function conversationChannelKey(ch: { channel: string; channelId: string }): string {
     return `conversation:${ch.channel}:${ch.channelId}`;
+  }
+
+  function hasPersistedConversationChannel(contact: Contact, channel: { channel: string; channelId: string }): boolean {
+    return contact.conversationChannels?.some(entry => (
+      entry.channel === channel.channel && entry.channelId === channel.channelId
+    )) ?? false;
   }
 
   type ChannelPrivacyChangeCandidate =
@@ -450,6 +459,26 @@
       }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to unlink channel identity');
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function handleDeleteConversationChannel(contactId: string, channel: string, channelId: string) {
+    if (!confirm(`Delete observed channel ${channel}:${channelId} from this contact? If it returns later, it will show up as new.`)) return;
+    saving = true;
+    try {
+      const result = await deleteConversationChannel(contactId, channel, channelId);
+      if (result.ok) {
+        data = await listContacts();
+        const refreshed = data?.contacts.find(c => c.id === contactId);
+        if (refreshed && editingContactId === contactId) startEdit(refreshed);
+        flash(true, result.message || 'Conversation channel deleted');
+      } else {
+        flash(false, result.message || 'Delete failed');
+      }
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to delete conversation channel');
     } finally {
       saving = false;
     }
@@ -766,6 +795,7 @@
                       <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">User ID</th>
                       <th class="text-left py-1.5 pr-2 text-shadow-700 font-medium text-sm">Privacy</th>
                       <th class="text-left py-1.5 text-shadow-700 font-medium text-sm">Seen</th>
+                      <th class="text-right py-1.5 text-shadow-700 font-medium text-sm">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -794,6 +824,15 @@
                           {:else}
                             <span class="text-shadow-400 italic">-</span>
                           {/if}
+                        </td>
+                        <td class="py-1.5 text-right">
+                          <button
+                            onclick={() => handleUnlink(contact.id, ch.channel, ch.userId)}
+                            disabled={saving}
+                            class="px-2.5 py-1 text-xs font-medium rounded border border-wilt-300 text-wilt-700 hover:bg-wilt-50 disabled:opacity-50 transition-colors"
+                          >
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     {/each}
@@ -850,6 +889,15 @@
                     {/if}
                     {#if ch.lastSeen}
                       <span class="text-xs text-shadow-600">Last seen {formatDateTime(ch.lastSeen)}</span>
+                    {/if}
+                    {#if hasPersistedConversationChannel(contact, ch)}
+                      <button
+                        onclick={() => handleDeleteConversationChannel(contact.id, ch.channel, ch.channelId)}
+                        disabled={saving}
+                        class="px-2.5 py-1 text-xs font-medium rounded border border-wilt-300 text-wilt-700 hover:bg-wilt-50 disabled:opacity-50 transition-colors"
+                      >
+                        Delete
+                      </button>
                     {/if}
                   </div>
                 {/each}

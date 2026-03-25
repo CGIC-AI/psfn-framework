@@ -48,6 +48,7 @@ import {
 } from './store/identity-utils.js';
 import { mergeContacts as mergeContactsOperation } from './store/merge-operations.js';
 import {
+  deleteConversationChannel as deleteConversationChannelOperation,
   deleteContact as deleteContactOperation,
   recordContactChannelActivity,
   setContactTrustLevel,
@@ -128,6 +129,14 @@ function serializeChannelLinkAuditValue(params: {
   channel: string;
   userId: string;
   privacyLevel: ChannelPrivacyLevel;
+}): string {
+  return JSON.stringify(params);
+}
+
+function serializeConversationChannelAuditValue(params: {
+  channel: string;
+  channelId: string;
+  privacyLevel?: ChannelPrivacyLevel;
 }): string {
   return JSON.stringify(params);
 }
@@ -702,6 +711,39 @@ export class ContactStore {
     channelId: string,
   ): ChannelPrivacyLevel | undefined {
     return getConversationChannelPrivacy(this.db, contactId, channel, channelId);
+  }
+
+  deleteConversationChannel(contactId: string, channel: ContactChannel, channelId: string, actor?: string): boolean {
+    const contact = this.getById(contactId);
+    if (!contact) return false;
+
+    const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
+    const trimmedChannelId = channelId.trim();
+    if (!trimmedChannelId) return false;
+
+    const existingChannel = contact.conversationChannels?.find(entry => (
+      entry.channel === normalizedChannel && entry.channelId === trimmedChannelId
+    ));
+    if (!existingChannel) return false;
+
+    const deleted = deleteConversationChannelOperation(this.db, contactId, channel, channelId);
+    if (deleted) {
+      appendMutationAuditEntry(
+        this.db,
+        contactId,
+        'conversation_channel',
+        serializeConversationChannelAuditValue({
+          channel: normalizedChannel,
+          channelId: trimmedChannelId,
+          ...(existingChannel.privacyLevel ? { privacyLevel: existingChannel.privacyLevel } : {}),
+        }),
+        null,
+        actor,
+      );
+      this.syncContactExports();
+    }
+
+    return deleted;
   }
 
   createIdentityLinkChallenge(

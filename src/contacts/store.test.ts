@@ -1069,4 +1069,36 @@ describe('ContactStore', () => {
       expect(store.unlinkChannelIdentity(contact.id, 'discord', 'nope')).toBe(false);
     });
   });
+
+  describe('deleteConversationChannel', () => {
+    it('removes a specific persisted conversation channel', () => {
+      const contact = store.upsert({ displayName: 'Conversation User' });
+      store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:short-check', 'semi_private');
+      store.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:lab:pi5', 'private');
+
+      const result = store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:short-check');
+      expect(result).toBe(true);
+
+      expect(store.getById(contact.id)?.conversationChannels).toEqual([
+        expect.objectContaining({
+          channel: 'psfn-amica',
+          channelId: 'psfn-amica:lab:pi5',
+        }),
+      ]);
+
+      const entries = store.listMutationAuditEntries({ contactId: contact.id, field: 'conversation_channel', limit: 10 });
+      expect(entries[0]).toMatchObject({
+        contactId: contact.id,
+        field: 'conversation_channel',
+        newValue: null,
+      });
+      expect(entries[0].oldValue).toContain('"channel":"psfn-amica"');
+      expect(entries[0].oldValue).toContain('"channelId":"psfn-amica:short-check"');
+    });
+
+    it('returns false when the conversation channel is not linked to the contact', () => {
+      const contact = store.upsert({ displayName: 'Conversation User' });
+      expect(store.deleteConversationChannel(contact.id, 'psfn-amica', 'psfn-amica:missing')).toBe(false);
+    });
+  });
 });

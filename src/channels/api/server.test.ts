@@ -1725,7 +1725,7 @@ describe('ApiServer with auth', () => {
       apiKey: 'test-secret-key',
       externalChannelProfiles: {
         'psfn-amica': {
-          canonicalContactId: 'contact-operator',
+          canonicalContactId: 'contact-primary-user',
           channelPrivacy: 'semi_private',
         },
       },
@@ -1762,7 +1762,7 @@ describe('ApiServer with auth', () => {
       apiKey: 'test-secret-key',
       externalChannelProfiles: {
         'psfn-amica': {
-          canonicalContactId: 'contact-operator',
+          canonicalContactId: 'contact-primary-user',
           channelPrivacy: 'semi_private',
         },
       },
@@ -1776,19 +1776,19 @@ describe('ApiServer with auth', () => {
     }, {
       Authorization: 'Bearer test-secret-key',
       'X-PSFN-Channel-Type': 'psfn-amica',
-      'X-PSFN-Channel-ID': 'psfn-amica:lab:pi5-display',
-      'X-PSFN-Author-ID': 'admin-user',
-      'X-PSFN-Author-Name': 'Operator',
+      'X-PSFN-Channel-ID': 'psfn-amica:test:display',
+      'X-PSFN-Author-ID': 'primary-user',
+      'X-PSFN-Author-Name': 'Primary User',
     });
     expect(res.status).toBe(200);
 
     const call = (mockAgent.handleMessage as any).mock.calls[0][0];
-    expect(call.channelId).toBe('psfn-amica:lab:pi5-display');
+    expect(call.channelId).toBe('psfn-amica:test:display');
     expect(call.channelType).toBe('psfn-amica');
-    expect(call.authorId).toBe('admin-user');
-    expect(call.authorName).toBe('Operator');
+    expect(call.authorId).toBe('primary-user');
+    expect(call.authorName).toBe('Primary User');
     expect(call.routing?.source).toBe('psfn-amica');
-    expect(call.routing?.canonicalContactId).toBe('contact-operator');
+    expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
     expect(call.routing?.channelPrivacy).toBe('semi_private');
   });
 
@@ -1803,9 +1803,9 @@ describe('ApiServer with auth', () => {
       apiKey: 'test-secret-key',
       externalChannelProfiles: {
         'psfn-amica': {
-          authorId: 'admin-user',
-          authorName: 'Operator',
-          canonicalContactId: 'contact-operator',
+          authorId: 'primary-user',
+          authorName: 'Primary User',
+          canonicalContactId: 'contact-primary-user',
           channelPrivacy: 'semi_private',
         },
       },
@@ -1819,17 +1819,17 @@ describe('ApiServer with auth', () => {
     }, {
       Authorization: 'Bearer test-secret-key',
       'X-PSFN-Channel-Type': 'psfn-amica',
-      'X-PSFN-Channel-ID': 'psfn-amica:lab:pi5-display',
+      'X-PSFN-Channel-ID': 'psfn-amica:test:display',
     });
     expect(res.status).toBe(200);
 
     const call = (mockAgent.handleMessage as any).mock.calls[0][0];
-    expect(call.channelId).toBe('psfn-amica:lab:pi5-display');
+    expect(call.channelId).toBe('psfn-amica:test:display');
     expect(call.channelType).toBe('psfn-amica');
-    expect(call.authorId).toBe('admin-user');
-    expect(call.authorName).toBe('Operator');
+    expect(call.authorId).toBe('primary-user');
+    expect(call.authorName).toBe('Primary User');
     expect(call.routing?.source).toBe('psfn-amica');
-    expect(call.routing?.canonicalContactId).toBe('contact-operator');
+    expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
     expect(call.routing?.channelPrivacy).toBe('semi_private');
   });
 
@@ -1851,7 +1851,7 @@ describe('ApiServer with auth', () => {
     }, {
       Authorization: 'Bearer test-secret-key',
       'X-PSFN-Channel-Type': 'psfn-amica',
-      'X-PSFN-Channel-ID': 'psfn-amica:lab:pi5-display',
+      'X-PSFN-Channel-ID': 'psfn-amica:test:display',
     });
 
     expect(res.status).toBe(503);

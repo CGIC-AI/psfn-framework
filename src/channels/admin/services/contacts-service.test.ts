@@ -25,15 +25,15 @@ describe('AdminContactsDataService', () => {
   it('deletes a persisted conversation channel from a contact', () => {
     const { db, contactStore, service } = createServiceHarness();
     try {
-      const contact = contactStore.upsert({ displayName: 'Operator' });
-      contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:short-check', 'semi_private');
-      contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:lab:pi5', 'private');
+      const contact = contactStore.upsert({ displayName: 'Primary User' });
+      contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:test:stale-channel', 'semi_private');
+      contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:test:active-channel', 'private');
 
       const result = service.deleteConversationChannel(
         contact.id,
         JSON.stringify({
           channel: 'psfn-amica',
-          channelId: 'psfn-amica:short-check',
+          channelId: 'psfn-amica:test:stale-channel',
         }),
       );
 
@@ -41,13 +41,13 @@ describe('AdminContactsDataService', () => {
       expect(result.contact?.conversationChannels).toEqual([
         expect.objectContaining({
           channel: 'psfn-amica',
-          channelId: 'psfn-amica:lab:pi5',
+          channelId: 'psfn-amica:test:active-channel',
         }),
       ]);
       expect(result.relatedChannels).toEqual([
         expect.objectContaining({
           channel: 'psfn-amica',
-          channelId: 'psfn-amica:lab:pi5',
+          channelId: 'psfn-amica:test:active-channel',
         }),
       ]);
     } finally {
@@ -58,7 +58,7 @@ describe('AdminContactsDataService', () => {
   it('fails closed when the conversation channel is not on the contact', () => {
     const { db, contactStore, service } = createServiceHarness();
     try {
-      const contact = contactStore.upsert({ displayName: 'Operator' });
+      const contact = contactStore.upsert({ displayName: 'Primary User' });
 
       const result = service.deleteConversationChannel(
         contact.id,

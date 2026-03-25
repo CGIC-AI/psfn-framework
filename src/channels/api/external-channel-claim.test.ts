@@ -31,9 +31,9 @@ describe('resolveApiTurnIdentity', () => {
     const result = resolveApiTurnIdentity({
       headers: {
         'x-psfn-channel-type': 'psfn-amica',
-        'x-psfn-channel-id': 'psfn-amica:lab:pi5-display',
-        'x-psfn-author-id': 'admin-user',
-        'x-psfn-author-name': 'Operator',
+        'x-psfn-channel-id': 'psfn-amica:test:display',
+        'x-psfn-author-id': 'primary-user',
+        'x-psfn-author-name': 'Primary User',
       },
       principal: principalFromApiKeyToken('test-secret-key'),
       defaultChannelId: 'api:principal:session-1',
@@ -44,10 +44,10 @@ describe('resolveApiTurnIdentity', () => {
     expect(result).toEqual({
       ok: true,
       value: {
-        channelId: 'psfn-amica:lab:pi5-display',
+        channelId: 'psfn-amica:test:display',
         channelType: 'psfn-amica',
-        authorId: 'admin-user',
-        authorName: 'Operator',
+        authorId: 'primary-user',
+        authorName: 'Primary User',
         source: 'psfn-amica',
       },
     });
@@ -57,7 +57,7 @@ describe('resolveApiTurnIdentity', () => {
     const result = resolveApiTurnIdentity({
       headers: {
         'x-psfn-channel-type': 'psfn-amica',
-        'x-psfn-channel-id': 'psfn-amica:lab:pi5-display',
+        'x-psfn-channel-id': 'psfn-amica:test:display',
       },
       principal: principalFromApiKeyToken('test-secret-key'),
       defaultChannelId: 'api:principal:session-1',
@@ -65,9 +65,9 @@ describe('resolveApiTurnIdentity', () => {
       defaultAuthorName: 'API Principal',
       externalChannelProfiles: {
         'psfn-amica': {
-          authorId: 'admin-user',
-          authorName: 'Operator',
-          canonicalContactId: 'contact-operator',
+          authorId: 'primary-user',
+          authorName: 'Primary User',
+          canonicalContactId: 'contact-primary-user',
           channelPrivacy: 'semi_private',
         },
       },
@@ -76,12 +76,12 @@ describe('resolveApiTurnIdentity', () => {
     expect(result).toEqual({
       ok: true,
       value: {
-        channelId: 'psfn-amica:lab:pi5-display',
+        channelId: 'psfn-amica:test:display',
         channelType: 'psfn-amica',
-        authorId: 'admin-user',
-        authorName: 'Operator',
+        authorId: 'primary-user',
+        authorName: 'Primary User',
         source: 'psfn-amica',
-        canonicalContactId: 'contact-operator',
+        canonicalContactId: 'contact-primary-user',
         channelPrivacy: 'semi_private',
       },
     });
@@ -110,7 +110,7 @@ describe('resolveApiTurnIdentity', () => {
     const result = resolveApiTurnIdentity({
       headers: {
         'x-psfn-channel-type': 'psfn-amica',
-        'x-psfn-channel-id': 'psfn-amica:lab:pi5-display',
+        'x-psfn-channel-id': 'psfn-amica:test:display',
       },
       principal: principalFromApiKeyToken('test-secret-key'),
       defaultChannelId: 'api:principal:session-1',
@@ -130,7 +130,7 @@ describe('resolveApiTurnIdentity', () => {
     const result = resolveApiTurnIdentity({
       headers: {
         'x-psfn-channel-type': 'psfn-amica',
-        'x-psfn-channel-id': 'psfn-amica:lab:pi5-display',
+        'x-psfn-channel-id': 'psfn-amica:test:display',
       },
       principal: INSECURE_LOCAL_API_PRINCIPAL,
       defaultChannelId: 'api:local-insecure:session-1',

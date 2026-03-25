@@ -12,7 +12,7 @@ function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): Extraction
       channelId: 'api:test',
       role: 'user',
       content: 'I really enjoy board games.',
-      authorName: 'Operator',
+      authorName: 'Alex',
       timestamp: 1,
     },
     {
@@ -42,7 +42,7 @@ function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): Extraction
     } as ExtractionRunOptions['llmClient'],
     sessionManager: {
       getRecentMessages: vi.fn().mockReturnValue(recoveredEntries),
-      characterName: 'PSFN',
+      characterName: 'Lyra',
     } as ExtractionRunOptions['sessionManager'],
     memoryStore: {
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
@@ -137,24 +137,24 @@ describe('runExtractionOrchestration naming fidelity', () => {
       llmClient,
       processFact,
       resolveParticipantNames: () => ({
-        userName: 'Operator',
-        companionName: 'PSFN',
+        userName: 'Alex',
+        companionName: 'Lyra',
       }),
     });
 
     await runExtractionOrchestration(options);
 
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: expect.stringContaining('Operator: I really enjoy board games.'),
+      systemPrompt: expect.stringContaining('Alex: I really enjoy board games.'),
     }), 'background');
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: expect.stringContaining('PSFN: I love hearing that.'),
+      systemPrompt: expect.stringContaining('Lyra: I love hearing that.'),
     }), 'background');
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: expect.stringContaining('Human participant name: Operator'),
+      systemPrompt: expect.stringContaining('Human participant name: Alex'),
     }), 'background');
     expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
-      text: "Operator appreciates PSFN's patience.",
+      text: "Alex appreciates Lyra's patience.",
     }), expect.any(String), undefined);
   });
 });

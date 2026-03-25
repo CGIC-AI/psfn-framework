@@ -26,13 +26,13 @@ describe('resolveExtractionParticipantNames', () => {
           timestamp: 2,
         },
       ],
-      canonicalContactName: 'V',
-      companionName: 'PSFN',
+      canonicalContactName: 'Alex',
+      companionName: 'Lyra',
     });
 
     expect(names).toEqual({
-      userName: 'V',
-      companionName: 'PSFN',
+      userName: 'Alex',
+      companionName: 'Lyra',
     });
   });
 
@@ -44,7 +44,7 @@ describe('resolveExtractionParticipantNames', () => {
           channelId: 'psfn-amica:test',
           role: 'user',
           content: 'hello',
-          authorName: 'Operator',
+          authorName: 'Alex',
           timestamp: 1,
         },
         {
@@ -52,7 +52,7 @@ describe('resolveExtractionParticipantNames', () => {
           channelId: 'psfn-amica:test',
           role: 'assistant',
           content: 'hi',
-          authorName: 'PSFN',
+          authorName: 'Lyra',
           timestamp: 2,
         },
       ],
@@ -61,8 +61,8 @@ describe('resolveExtractionParticipantNames', () => {
     });
 
     expect(names).toEqual({
-      userName: 'Operator',
-      companionName: 'PSFN',
+      userName: 'Alex',
+      companionName: 'Lyra',
     });
   });
 });
@@ -77,11 +77,11 @@ describe('normalizeExtractedFactParticipantNames', () => {
       confidence: 0.95,
       tags: ['trust'],
     }, {
-      userName: 'Operator',
-      companionName: 'PSFN',
+      userName: 'Alex',
+      companionName: 'Lyra',
     });
 
-    expect(fact.text).toBe("Operator trusts PSFN's patience and PSFN's warmth.");
+    expect(fact.text).toBe("Alex trusts Lyra's patience and Lyra's warmth.");
   });
 
   it('leaves unrelated words intact', () => {
@@ -93,7 +93,7 @@ describe('normalizeExtractedFactParticipantNames', () => {
       confidence: 0.8,
       tags: ['ux'],
     }, {
-      userName: 'Operator',
+      userName: 'Alex',
     });
 
     expect(fact.text).toBe('The user-centric interface reduced friction.');
@@ -103,12 +103,12 @@ describe('normalizeExtractedFactParticipantNames', () => {
 describe('buildExtractionNamingGuidance', () => {
   it('emits explicit name fidelity instructions when names are available', () => {
     const guidance = buildExtractionNamingGuidance({
-      userName: 'Operator',
-      companionName: 'PSFN',
+      userName: 'Alex',
+      companionName: 'Lyra',
     });
 
-    expect(guidance).toContain('Human participant name: Operator');
-    expect(guidance).toContain('Companion participant name: PSFN');
+    expect(guidance).toContain('Human participant name: Alex');
+    expect(guidance).toContain('Companion participant name: Lyra');
     expect(guidance).toContain('Do not write generic placeholders');
   });
 });

@@ -94,9 +94,9 @@ describe('loadRuntimeChannelsConfig', () => {
         psfnAmica: {
           enabled: true,
           defaultIdentity: {
-            authorId: 'admin-user',
-            authorName: 'Operator',
-            canonicalContactId: 'contact-operator',
+            authorId: 'primary-user',
+            authorName: 'Primary User',
+            canonicalContactId: 'contact-primary-user',
             channelPrivacy: 'semi_private',
           },
         },
@@ -107,17 +107,17 @@ describe('loadRuntimeChannelsConfig', () => {
       expect(config.psfnAmica).toEqual({
         enabled: true,
         defaultIdentity: {
-          authorId: 'admin-user',
-          authorName: 'Operator',
-          canonicalContactId: 'contact-operator',
+          authorId: 'primary-user',
+          authorName: 'Primary User',
+          canonicalContactId: 'contact-primary-user',
           channelPrivacy: 'semi_private',
         },
       });
       expect(buildExternalChannelProfiles(config)).toEqual({
         'psfn-amica': {
-          authorId: 'admin-user',
-          authorName: 'Operator',
-          canonicalContactId: 'contact-operator',
+          authorId: 'primary-user',
+          authorName: 'Primary User',
+          canonicalContactId: 'contact-primary-user',
           channelPrivacy: 'semi_private',
         },
       });

@@ -6,6 +6,10 @@ import type {
   AdminMemoryListData,
   AdminMemorySearchResult,
   AdminMemoryDetailData,
+  AdminMemoryScopeDetailData,
+  AdminMemoryScopeListData,
+  AdminMemoryScopeMutationResult,
+  MemoryScopeRef,
 } from '$lib/types';
 
 export interface MemoryListParams {
@@ -41,6 +45,36 @@ export function getMemoryDetail(id: string): Promise<AdminMemoryDetailData> {
   return apiGet<AdminMemoryDetailData>(
     `/api/admin/memory/${encodeURIComponent(id)}`
   );
+}
+
+export function listManagedMemoryScopes(kind?: 'project' | 'north_star'): Promise<AdminMemoryScopeListData> {
+  const search = new URLSearchParams();
+  if (kind) search.set('kind', kind);
+  const qs = search.toString();
+  return apiGet<AdminMemoryScopeListData>(`/api/admin/memory/scopes${qs ? `?${qs}` : ''}`);
+}
+
+export function getManagedMemoryScopeDetail(
+  kind: 'project' | 'north_star',
+  id: string,
+): Promise<AdminMemoryScopeDetailData> {
+  return apiGet<AdminMemoryScopeDetailData>(
+    `/api/admin/memory/scopes/${encodeURIComponent(`${kind}:${id}`)}/detail`
+  );
+}
+
+export function updateMemoryScope(
+  id: string,
+  fields: {
+    scopeRef?: MemoryScopeRef | null;
+    scopeTags?: string[];
+    repair?: boolean;
+  }
+): Promise<AdminMemoryScopeMutationResult> {
+  return apiPost<AdminMemoryScopeMutationResult>('/api/admin/memory/scope-update', {
+    id,
+    ...fields,
+  });
 }
 
 export function deleteMemory(

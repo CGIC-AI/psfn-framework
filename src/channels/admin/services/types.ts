@@ -64,6 +64,10 @@ import type {
   TurnStageTelemetryRecord,
 } from '../../../turns/observability.js';
 import type { SessionRoleEnvelopePreview } from '../../../internal-role-envelopes/projections.js';
+import type {
+  AdminMemoryManagedScopeKind,
+  AdminMemoryScopeEvidenceItem,
+} from './memory-scope-evidence.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;
@@ -146,6 +150,8 @@ export interface AdminMemoryListData {
 export interface AdminMemoryDetailData {
   memory: PurrMemory;
   linkedContact?: AdminMemoryContactSummary;
+  scopeAssignments: AdminMemoryScopeAssignmentView[];
+  scopeRepair?: AdminMemoryScopeRepairView;
 }
 
 export interface AdminMemorySearchResult {
@@ -171,11 +177,70 @@ export interface AdminBulkMutationResult {
   message?: string;
 }
 
+export interface AdminMemoryScopeAssignmentView {
+  kind: AdminMemoryManagedScopeKind;
+  id: string;
+  label?: string;
+  canonicalTag: string;
+  evidence: AdminMemoryScopeEvidenceItem[];
+}
+
+export interface AdminMemoryScopeRepairView {
+  needsRepair: boolean;
+  suggestedScopeRef?: {
+    kind: string;
+    id: string;
+    label?: string;
+  };
+  suggestedScopeTags: string[];
+  notes: string[];
+}
+
+export interface AdminMemoryScopeSummary {
+  kind: AdminMemoryManagedScopeKind;
+  id: string;
+  label?: string;
+  canonicalTag: string;
+  memoryCount: number;
+  needsRepairCount: number;
+}
+
+export interface AdminMemoryScopedMemoryView {
+  memory: PurrMemory;
+  evidence: AdminMemoryScopeEvidenceItem[];
+  repair: AdminMemoryScopeRepairView;
+}
+
+export interface AdminMemoryScopeListData {
+  scopes: AdminMemoryScopeSummary[];
+}
+
+export interface AdminMemoryScopeDetailData {
+  scope: AdminMemoryScopeSummary;
+  memories: AdminMemoryScopedMemoryView[];
+}
+
+export interface AdminMemoryScopeMutationResult extends MemoryMutationResult {
+  memory?: AdminMemoryDetailData['memory'];
+  scopeAssignments?: AdminMemoryScopeAssignmentView[];
+  scopeRepair?: AdminMemoryScopeRepairView;
+}
+
 export interface AdminMemoryService {
   listMemories(params?: URLSearchParams): AdminMemoryListData;
   getMemoryDetail(id: string): AdminMemoryDetailData | null;
+  listManagedScopes(params?: URLSearchParams): AdminMemoryScopeListData;
+  getManagedScopeDetail(kind: string, id: string): AdminMemoryScopeDetailData | null;
   searchMemories(query: string): Promise<AdminMemorySearchResult>;
   supersedeMemory(id: string): MemoryMutationResult;
+  updateMemoryScope(
+    id: string,
+    fields: {
+      scopeRef?: { kind?: string; id?: string; label?: string } | null;
+      scopeTags?: string[];
+      repair?: boolean;
+    },
+  ): AdminMemoryScopeMutationResult;
   linkMemories(id1: string, id2: string, linkType?: string): AdminMemoryLinkResult;
   unlinkMemories(id1: string, id2: string): MemoryMutationResult;
   getMemoryLinks(id: string): MemoryLink[];

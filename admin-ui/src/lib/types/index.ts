@@ -86,6 +86,8 @@ export interface PurrMemory {
   accessCount: number;
   tags: string[];
   provenanceRefs?: string[];
+  scopeRef?: MemoryScopeRef;
+  scopeTags?: string[];
   sensitivity?: string;
   consentFlags?: Record<string, unknown>;
   contactId?: string;
@@ -97,6 +99,12 @@ export interface PurrMemory {
   updatedAt?: number;
   emotionalWeight?: number;
   supersededAt?: number;
+}
+
+export interface MemoryScopeRef {
+  kind: string;
+  id: string;
+  label?: string;
 }
 
 export interface AdminMemoryContactSummary {
@@ -119,6 +127,8 @@ export interface AdminMemoryListData {
 export interface AdminMemoryDetailData {
   memory: PurrMemory;
   linkedContact?: AdminMemoryContactSummary;
+  scopeAssignments: AdminMemoryScopeAssignmentView[];
+  scopeRepair?: AdminMemoryScopeRepairView;
 }
 
 export interface AdminMemorySearchResult {
@@ -144,6 +154,59 @@ export interface AdminBulkMutationResult {
   ok: boolean;
   count: number;
   message?: string;
+}
+
+export interface AdminMemoryScopeEvidenceItem {
+  type: string;
+  value: string;
+  detail: string;
+}
+
+export interface AdminMemoryScopeAssignmentView {
+  kind: 'project' | 'north_star';
+  id: string;
+  label?: string;
+  canonicalTag: string;
+  evidence: AdminMemoryScopeEvidenceItem[];
+}
+
+export interface AdminMemoryScopeRepairView {
+  needsRepair: boolean;
+  suggestedScopeRef?: MemoryScopeRef;
+  suggestedScopeTags: string[];
+  notes: string[];
+}
+
+export interface AdminMemoryScopeSummary {
+  kind: 'project' | 'north_star';
+  id: string;
+  label?: string;
+  canonicalTag: string;
+  memoryCount: number;
+  needsRepairCount: number;
+}
+
+export interface AdminMemoryScopedMemoryView {
+  memory: PurrMemory;
+  evidence: AdminMemoryScopeEvidenceItem[];
+  repair: AdminMemoryScopeRepairView;
+}
+
+export interface AdminMemoryScopeListData {
+  scopes: AdminMemoryScopeSummary[];
+}
+
+export interface AdminMemoryScopeDetailData {
+  scope: AdminMemoryScopeSummary;
+  memories: AdminMemoryScopedMemoryView[];
+}
+
+export interface AdminMemoryScopeMutationResult {
+  ok: boolean;
+  message?: string;
+  memory?: PurrMemory;
+  scopeAssignments?: AdminMemoryScopeAssignmentView[];
+  scopeRepair?: AdminMemoryScopeRepairView;
 }
 
 // Sessions

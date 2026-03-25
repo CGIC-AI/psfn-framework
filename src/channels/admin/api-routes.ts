@@ -488,6 +488,76 @@ export function buildAdminApiRoutes(options: {
         );
       },
     },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/memory/scopes'),
+      handle: (req, res) => {
+        const url = parseRequestUrl(req, '/api/admin/memory/scopes');
+        const kind = url.searchParams.get('kind');
+        if (kind && !['project', 'north_star'].includes(kind.trim().toLowerCase())) {
+          sendJson(res, 400, { error: 'Invalid managed memory scope kind' });
+          return;
+        }
+        sendJson(res, 200, memoryService.listManagedScopes(url.searchParams));
+      },
+    },
+    {
+      method: 'GET',
+      match: paramWithSuffix('/api/admin/memory/scopes/', 'scopeKey', '/detail'),
+      handle: (_req, res, { scopeKey }) => {
+        const separator = scopeKey.indexOf(':');
+        const kind = separator >= 0 ? scopeKey.slice(0, separator) : '';
+        const id = separator >= 0 ? scopeKey.slice(separator + 1) : '';
+        const detail = memoryService.getManagedScopeDetail(kind, id);
+        if (!detail) {
+          sendJson(res, 404, { error: 'Managed memory scope not found' });
+          return;
+        }
+        sendJson(res, 200, detail);
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/memory/scope-update'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const id = typeof payload.id === 'string' ? payload.id.trim() : '';
+          const rawScopeRef = payload.scopeRef;
+          const scopeRef = rawScopeRef === null
+            ? null
+            : (typeof rawScopeRef === 'object' && rawScopeRef !== null
+              ? rawScopeRef as { kind?: string; id?: string; label?: string }
+              : undefined);
+          const scopeTags = Array.isArray(payload.scopeTags)
+            ? payload.scopeTags.filter((value): value is string => typeof value === 'string')
+            : undefined;
+          const repair = payload.repair === true;
+
+          if (!id) {
+            sendJson(res, 400, { error: 'Memory id is required' });
+            return;
+          }
+          if (scopeRef === undefined && scopeTags === undefined && !repair) {
+            sendJson(res, 400, { error: 'scopeRef, scopeTags, or repair=true is required' });
+            return;
+          }
+
+          const result = memoryService.updateMemoryScope(id, { scopeRef, scopeTags, repair });
+          if (!result.ok) {
+            const status = result.message === 'Memory not found' ? 404 : 400;
+            sendJson(res, status, { error: result.message ?? 'Failed to update memory scope' });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
     // ── Memory Linking ──
     {
       method: 'POST',

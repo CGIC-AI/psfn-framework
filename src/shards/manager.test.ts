@@ -8,6 +8,7 @@ import { EventBus } from '../event-bus.js';
 import { SessionStore } from '../session/store.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import { buildSessionMetadataWithTurn } from '../session/turn-provenance.js';
+import { buildFocusMemoryScopeQuery } from '../session/focus-knowledge.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createSpawnShardTool } from './tools.js';
 import type { LLMProvider, MemoryProvider } from '../agent/contracts.js';
@@ -541,6 +542,13 @@ describe('ShardManager', () => {
     expect(memory.retrieve).toHaveBeenCalledWith(
       'Summarize the deployment blockers.',
       sourceChannelId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
     );
     expect(setSystemPromptSpy).toHaveBeenCalled();
     const setPromptCall = setSystemPromptSpy.mock.calls[0];
@@ -639,6 +647,69 @@ describe('ShardManager', () => {
       expect.objectContaining({ operation: 'context_pack_session', decision: 'ALLOW' }),
       expect.objectContaining({ operation: 'context_pack_memory', decision: 'ALLOW' }),
     ]));
+  });
+
+  it('threads active focus scope into shard memory retrieval', async () => {
+    const sourceTurnId = createTurnId();
+    const sourceChannelId = 'api:scoped-parent';
+    const scopeQuery = buildFocusMemoryScopeQuery('Memory Improvement');
+    sessionStore.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'Work the memory improvement project.',
+      authorId: 'user-1',
+      authorName: 'PrimaryUser',
+      timestamp: Date.now() - 100,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: sourceTurnId,
+        requestId: 'req-scoped-parent',
+        role: 'user',
+      }),
+    });
+    const memory = mockMemoryProvider('Scoped memory block.');
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      sessionManager: {
+        getActiveFocusMemoryScopeQuery: vi.fn(() => scopeQuery),
+      } as any,
+      embeddingService: null,
+      memoryProvider: memory,
+      config: {
+        ...TEST_CONFIG,
+        capabilityTier: 'autonomous',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['shard_context'],
+        },
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    await manager.spawn({
+      name: 'scoped-memory',
+      task: 'Summarize the memory improvement work.',
+      sourceContext: {
+        channelId: sourceChannelId,
+        requestId: 'req-scoped-parent',
+        turnId: sourceTurnId,
+      },
+    });
+
+    expect(memory.retrieve).toHaveBeenCalledWith(
+      'Summarize the memory improvement work.',
+      sourceChannelId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      scopeQuery,
+    );
   });
 
   it('injects default nursery shard toolset and blocks recursion tools', async () => {

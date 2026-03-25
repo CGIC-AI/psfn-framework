@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { FocusKnowledgeStore } from './focus-knowledge.js';
+import { buildFocusMemoryScopeQuery, FocusKnowledgeStore } from './focus-knowledge.js';
 
 describe('FocusKnowledgeStore project contexts', () => {
   let dir: string;
@@ -55,5 +55,19 @@ describe('FocusKnowledgeStore project contexts', () => {
     expect(memoryImprovement?.knowledgeBlockCount).toBe(2);
     expect(memoryImprovement?.totalEvidenceCount).toBe(5);
     expect(memoryImprovement?.latestKnowledge).toContain('superseded');
+  });
+
+  it('builds a project-only memory scope query from the focus scope', () => {
+    expect(buildFocusMemoryScopeQuery(' Memory Improvement ')).toEqual({
+      refs: [
+        { kind: 'project', id: 'Memory Improvement' },
+        { kind: 'project', id: 'memory improvement' },
+      ],
+      tags: [
+        'project:memory improvement',
+        'scope:memory improvement',
+      ],
+      mode: 'only',
+    });
   });
 });

@@ -280,6 +280,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
     sessionStore: options.sessionStore,
+    sessionManager: options.sessionManager,
     embeddingService: options.embeddingService,
     memoryProvider: options.agentLoop.memoryProvider,
     config: options.config,

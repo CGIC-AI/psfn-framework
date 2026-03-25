@@ -255,6 +255,7 @@ function makeMockSessionManager(): SessionManager {
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
     resolveSessionChannelId,
+    getActiveFocusMemoryScopeQuery: vi.fn().mockReturnValue(null),
     setActiveContextSession,
     getActiveContextSession,
     continuityStore: null,

@@ -369,6 +369,16 @@ describe('settings', () => {
       expect(normalized.extractionModel).toBe('deepseek/deepseek-v3.2');
     });
 
+    it('clamps profile synthesis source memory limit to the minimum source-memory threshold', () => {
+      const normalized = normalizeEditableSettings({
+        profileSynthesisSourceMemoryLimit: 16,
+        profileSynthesisMinSourceMemories: 20,
+      });
+
+      expect(normalized.profileSynthesisSourceMemoryLimit).toBe(20);
+      expect(normalized.profileSynthesisMinSourceMemories).toBe(20);
+    });
+
     it('fails closed for legacy model fields without canonical modelRegistry', () => {
       expect(() => normalizeEditableSettings({
         primaryModel: 'legacy/chat',

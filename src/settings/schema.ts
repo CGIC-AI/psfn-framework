@@ -1082,6 +1082,28 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
       : '';
   }
 
+  const profileSynthesisSourceMemoryLimit = toPositiveInteger(settings.profileSynthesisSourceMemoryLimit);
+  const profileSynthesisMinSourceMemories = toPositiveInteger(settings.profileSynthesisMinSourceMemories);
+  if (profileSynthesisMinSourceMemories !== undefined) {
+    normalized.profileSynthesisMinSourceMemories = profileSynthesisMinSourceMemories;
+  } else {
+    delete normalized.profileSynthesisMinSourceMemories;
+  }
+  if (
+    profileSynthesisSourceMemoryLimit !== undefined
+    || profileSynthesisMinSourceMemories !== undefined
+  ) {
+    const effectiveSourceMemoryLimit = profileSynthesisSourceMemoryLimit !== undefined
+      && profileSynthesisMinSourceMemories !== undefined
+      ? Math.max(profileSynthesisSourceMemoryLimit, profileSynthesisMinSourceMemories)
+      : profileSynthesisSourceMemoryLimit;
+    if (effectiveSourceMemoryLimit !== undefined) {
+      normalized.profileSynthesisSourceMemoryLimit = effectiveSourceMemoryLimit;
+    } else {
+      delete normalized.profileSynthesisSourceMemoryLimit;
+    }
+  }
+
   if ('importProcessingRouteMode' in settings) {
     normalized.importProcessingRouteMode = toImportProcessingRouteMode(settings.importProcessingRouteMode);
   }

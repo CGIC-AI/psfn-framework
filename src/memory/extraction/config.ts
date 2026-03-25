@@ -73,6 +73,12 @@ export function resolveTelemetryEnabled(
 }
 
 export function resolveProfileConfig(runtimeConfig: SubstrateConfig | null): ProfileSynthesisConfig {
+  const minSourceMemories = runtimeConfig?.profileSynthesisMinSourceMemories
+    ?? DEFAULT_PROFILE_MIN_SOURCE_MEMORIES;
+  const sourceMemoryLimit = Math.max(
+    runtimeConfig?.profileSynthesisSourceMemoryLimit ?? DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT,
+    minSourceMemories,
+  );
   return {
     enabled: runtimeConfig?.profileSynthesisEnabled ?? true,
     refreshIntervalMs: runtimeConfig?.profileSynthesisRefreshIntervalMs ?? DEFAULT_PROFILE_REFRESH_INTERVAL_MS,
@@ -81,7 +87,7 @@ export function resolveProfileConfig(runtimeConfig: SubstrateConfig | null): Pro
     minImportance: runtimeConfig?.profileSynthesisMinImportance ?? DEFAULT_PROFILE_MIN_IMPORTANCE,
     minConfidence: runtimeConfig?.profileSynthesisMinConfidence ?? DEFAULT_PROFILE_MIN_CONFIDENCE,
     minNovelty: runtimeConfig?.profileSynthesisMinNovelty ?? DEFAULT_PROFILE_MIN_NOVELTY,
-    sourceMemoryLimit: runtimeConfig?.profileSynthesisSourceMemoryLimit ?? DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT,
-    minSourceMemories: runtimeConfig?.profileSynthesisMinSourceMemories ?? DEFAULT_PROFILE_MIN_SOURCE_MEMORIES,
+    sourceMemoryLimit,
+    minSourceMemories,
   };
 }

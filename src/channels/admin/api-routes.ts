@@ -676,6 +676,7 @@ export function buildAdminApiRoutes(options: {
             ...data,
             profileMap: Object.fromEntries(data.profileMap.entries()),
             relatedChannelMap: Object.fromEntries(data.relatedChannelMap.entries()),
+            socialGraphMap: Object.fromEntries(data.socialGraphMap.entries()),
           },
           ADMIN_DYNAMIC_JSON_HEADERS,
         );

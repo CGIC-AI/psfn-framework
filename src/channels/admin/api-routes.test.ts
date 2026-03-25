@@ -1868,16 +1868,57 @@ describe('AdminServer JSON API routes', () => {
       relationshipType: 'friend',
       notes: 'before',
     });
+    const mentioned = contactStore.upsert({
+      displayName: 'Mentioned Friend',
+      relationshipType: 'friend',
+    });
     contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
       privacyLevel: 'semi_private',
     });
     contactStore.recordChannelActivity(contact.id, 'discord', '1313001762793197678');
+    const contactEntity = contactStore.getSocialGraphEntityByContactId(contact.id)!;
+    const mentionedEntity = contactStore.getSocialGraphEntityByContactId(mentioned.id)!;
+    contactStore.upsertSocialRelationshipEdge({
+      sourceEntityId: contactEntity.id,
+      targetEntityId: mentionedEntity.id,
+      relationshipType: 'friend',
+      directional: false,
+      sensitivity: 'personal',
+      provenanceRefs: ['memory:api-mention'],
+      evidenceMemoryIds: ['mem-api-mention-1'],
+      confidence: 0.88,
+    });
 
     const listRes = await request(port, 'GET', '/api/admin/contacts', undefined, authHeaders);
     expect(listRes.status).toBe(200);
     expect(listRes.headers['cache-control']).toBe('no-store');
-    const listPayload = JSON.parse(listRes.body) as { contacts: Array<{ id: string }> };
+    const listPayload = JSON.parse(listRes.body) as {
+      contacts: Array<{ id: string }>;
+      socialGraphMap: Record<string, {
+        edgeCount: number;
+        mentionOnlyNeighborCount: number;
+        connections: Array<{
+          relationshipType: string;
+          evidenceMemoryIds: string[];
+          neighbor: { contactId?: string; mentionOnly: boolean };
+        }>;
+      }>;
+    };
     expect(listPayload.contacts.some(entry => entry.id === contact.id)).toBe(true);
+    expect(listPayload.socialGraphMap[contact.id]).toMatchObject({
+      edgeCount: 1,
+      mentionOnlyNeighborCount: 1,
+      connections: [
+        expect.objectContaining({
+          relationshipType: 'friend',
+          evidenceMemoryIds: ['mem-api-mention-1'],
+          neighbor: expect.objectContaining({
+            contactId: mentioned.id,
+            mentionOnly: true,
+          }),
+        }),
+      ],
+    });
 
     const detailRes = await request(port, 'GET', `/api/admin/contacts/${contact.id}`, undefined, authHeaders);
     expect(detailRes.status).toBe(200);

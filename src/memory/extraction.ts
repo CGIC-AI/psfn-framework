@@ -45,6 +45,7 @@ import {
   scheduleProfileRefresh,
 } from './extraction/runtime-helpers.js';
 import { applyEmotionalIntensityImportanceMultiplier } from './extraction/importance.js';
+import { resolveExtractionParticipantNames } from './extraction/naming.js';
 import {
   computeNoveltyScore,
   computeProfileNovelty,
@@ -295,6 +296,11 @@ export class MemoryExtractor {
       this.runtimeConfig,
       this.emotionalIntensityImportanceWeight,
     );
+    const canonicalContactDisplayName = canonicalContactId
+      && this.contactStore
+      && typeof this.contactStore.getById === 'function'
+      ? this.contactStore.getById(canonicalContactId)?.displayName
+      : undefined;
 
     await runExtractionOrchestration({
       channelId,
@@ -302,6 +308,11 @@ export class MemoryExtractor {
       canonicalContactId,
       turnId,
       recoveredEntries,
+      resolveParticipantNames: (recentEntries, extractionCanonicalContactId) => resolveExtractionParticipantNames({
+        entries: recentEntries,
+        canonicalContactDisplayName: extractionCanonicalContactId ? canonicalContactDisplayName : undefined,
+        companionName: this.sessionManager.characterName,
+      }),
       llmClient: this.llmClient,
       sessionManager: this.sessionManager,
       memoryStore: this.memoryStore,

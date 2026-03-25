@@ -12,8 +12,15 @@ function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): Extraction
       channelId: 'api:test',
       role: 'user',
       content: 'I really enjoy board games.',
-      authorName: 'user',
+      authorName: 'Operator',
       timestamp: 1,
+    },
+    {
+      id: 2,
+      channelId: 'api:test',
+      role: 'assistant',
+      content: 'I love hearing that.',
+      timestamp: 2,
     },
   ];
 
@@ -35,6 +42,7 @@ function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): Extraction
     } as ExtractionRunOptions['llmClient'],
     sessionManager: {
       getRecentMessages: vi.fn().mockReturnValue(recoveredEntries),
+      characterName: 'PSFN',
     } as ExtractionRunOptions['sessionManager'],
     memoryStore: {
       getMemoriesByChannel: vi.fn().mockReturnValue([]),
@@ -55,7 +63,7 @@ function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): Extraction
     }),
     emitExtractionStart: vi.fn().mockResolvedValue(undefined),
     emitExtractionEnd: vi.fn().mockResolvedValue(undefined),
-    resolveCoveredUpToMessageId: vi.fn().mockReturnValue(1),
+    resolveCoveredUpToMessageId: vi.fn().mockReturnValue(2),
     recordExtractionMarker: vi.fn(),
     maybePersistEmotionalState: vi.fn(),
     maybeRefreshContactProfile: vi.fn(),
@@ -104,5 +112,49 @@ describe('runExtractionOrchestration fail-closed errors', () => {
       cause: llmFailure,
     });
     expect(options.emitExtractionEnd).not.toHaveBeenCalled();
+  });
+});
+
+describe('runExtractionOrchestration naming fidelity', () => {
+  it('feeds resolved names into extraction and normalizes generic fact text before writes', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>The user appreciates the companion's patience.</text>
+<type>relational</type>
+<importance>0.85</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+      }),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-1' },
+    });
+    const options = buildOptions({
+      llmClient,
+      processFact,
+      resolveParticipantNames: () => ({
+        userName: 'Operator',
+        companionName: 'PSFN',
+      }),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('Operator: I really enjoy board games.'),
+    }), 'background');
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('PSFN: I love hearing that.'),
+    }), 'background');
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('Human participant name: Operator'),
+    }), 'background');
+    expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
+      text: "Operator appreciates PSFN's patience.",
+    }), expect.any(String), undefined);
   });
 });

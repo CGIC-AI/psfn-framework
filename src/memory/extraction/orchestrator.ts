@@ -22,6 +22,11 @@ import {
   mergeExtractedFactGroups,
 } from './chunk-compose.js';
 import {
+  buildExtractionNamingGuidance,
+  normalizeExtractedFactParticipantNames,
+  type ExtractionParticipantNames,
+} from './naming.js';
+import {
   applyChannelImportanceCaps,
   buildExtractionSourceRef,
   compareAcceptedFactCandidates,
@@ -70,6 +75,10 @@ export interface ExtractionRunOptions {
   canonicalContactId?: string;
   turnId?: TurnID;
   recoveredEntries?: SessionEntry[];
+  resolveParticipantNames?: (
+    recentEntries: readonly SessionEntry[],
+    canonicalContactId?: string,
+  ) => ExtractionParticipantNames;
   llmClient: LLMProvider;
   sessionManager: SessionManager;
   memoryStore: MemoryStore;
@@ -118,6 +127,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const channelVisibility = classifyChannel(options.channelId);
     const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility, turnId);
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
+    const participantNames = options.resolveParticipantNames?.(recentEntries, options.canonicalContactId) ?? {};
 
     const existing = options.memoryStore.getMemoriesByChannel(options.channelId, 30);
     const noveltyCorpus = existing.map(m => m.text);
@@ -133,11 +143,16 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'legacy';
     const parsedFactGroups: ExtractedFact[][] = [];
     for (const [index, chunkEntries] of entryChunks.entries()) {
-      const prompt = injectPromptRuntimeTokens(extractionPrompt)
+      const renderedPrompt = injectPromptRuntimeTokens(extractionPrompt)
         .replace('{existing_facts}', existingFacts)
         .replace('{recent_messages}', formatExtractionTranscript(chunkEntries, {
-          charName: options.sessionManager.characterName,
+          charName: participantNames.companionName ?? options.sessionManager.characterName,
+          userName: participantNames.userName,
         }));
+      const namingGuidance = buildExtractionNamingGuidance(participantNames);
+      const prompt = namingGuidance
+        ? `${renderedPrompt}\n\n${namingGuidance}`
+        : renderedPrompt;
       const chunkRequestId = entryChunks.length > 1
         ? `${requestId}:chunk:${index + 1}`
         : requestId;
@@ -161,7 +176,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     }
     const rawParsedFactCount = parsedFactGroups
       .reduce((total, group) => total + group.length, 0);
-    const parsedFacts = mergeExtractedFactGroups(parsedFactGroups);
+    const parsedFacts = mergeExtractedFactGroups(parsedFactGroups)
+      .map(fact => normalizeExtractedFactParticipantNames(fact, participantNames));
     const crossChunkDeduplicatedCount = Math.max(0, rawParsedFactCount - parsedFacts.length);
     const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
     const adjustFactForWrite = options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact);

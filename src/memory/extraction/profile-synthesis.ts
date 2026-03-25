@@ -160,7 +160,7 @@ export async function refreshContactProfile(
         purpose: 'memory.profile_synthesis',
       },
     },
-    'background',
+    'memory',
   );
 
   const summary = normalizeProfileSummary(parseProfileSummary(response.content));

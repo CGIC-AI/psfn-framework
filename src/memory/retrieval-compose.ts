@@ -53,7 +53,7 @@ export async function composeRetrievalRanking(options: {
             purpose: 'memory.retrieval.evaluate',
           },
         },
-        'context',
+        'memory',
       );
 
       const parsed = parseEvaluationResponse(response.content, batch.map(candidate => candidate.id));
@@ -90,7 +90,7 @@ export async function composeRetrievalRanking(options: {
           purpose: 'memory.retrieval.compose',
         },
       },
-      'context',
+      'memory',
     );
 
     return {

@@ -321,8 +321,16 @@ export class SleeptimeMemoryAgent {
           '}',
         ].join('\n'),
         messages: [{ role: 'user', content: requestPrompt }],
+        correlation: {
+          requestId: `sleeptime:${sessionId}:${action.id}`,
+          channelId: action.channelId,
+          callType: 'memory',
+          purpose: 'memory.sleeptime.plan',
+          originType: 'memory',
+          originStage: 'memory.sleeptime.plan',
+        },
       },
-      'context',
+      'memory',
     );
     const plan = normalizeSleeptimePlan(response.content, this.maxMemoryWrites);
 

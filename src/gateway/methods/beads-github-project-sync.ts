@@ -17,6 +17,7 @@ const GH_PROJECT_SYNC_PROJECT_NUMBER_KEY = 'custom.github_project_sync.project_n
 const ITEM_OWNER_METADATA_KEY = 'github_project_sync_owner';
 const ITEM_PROJECT_NUMBER_METADATA_KEY = 'github_project_sync_project_number';
 const ITEM_ID_METADATA_KEY = 'github_project_sync_item_id';
+const DRAFT_CONTENT_ID_METADATA_KEY = 'github_project_sync_draft_content_id';
 const ITEM_ARCHIVED_METADATA_KEY = 'github_project_sync_archived';
 const PROJECT_URL_PATTERN = /^https:\/\/github\.com\/(?:users|orgs)\/([^/]+)\/projects\/(\d+)\/?$/i;
 
@@ -305,6 +306,19 @@ function getMatchingItemId(
   return itemId;
 }
 
+function getMatchingDraftContentId(
+  issue: BeadsIssueRecord,
+  config: GitHubProjectSyncConfig,
+): string | undefined {
+  const owner = getMetadataValue(issue, ITEM_OWNER_METADATA_KEY);
+  const projectNumber = parsePositiveInteger(issue.metadata?.[ITEM_PROJECT_NUMBER_METADATA_KEY]);
+  const draftContentId = getMetadataValue(issue, DRAFT_CONTENT_ID_METADATA_KEY);
+  if (!draftContentId) return undefined;
+  if (owner && owner !== config.owner) return undefined;
+  if (projectNumber && projectNumber !== config.projectNumber) return undefined;
+  return draftContentId;
+}
+
 function extractIssueId(action: BeadsAction, target: string, payload: unknown): string | undefined {
   if (action !== 'create') {
     return target === 'new' ? undefined : target;
@@ -391,12 +405,53 @@ async function exportIssues(
   return parseJsonLines<BeadsIssueRecord>(stdout, 'bd export');
 }
 
+async function lookupDraftContentIdByItemId(
+  runner: CommandRunner,
+  workspacePath: string,
+  itemId: string,
+): Promise<string> {
+  const stdout = await runner.run(
+    'gh',
+    [
+      'api',
+      'graphql',
+      '-f',
+      'query=query($itemId:ID!) { node(id:$itemId) { ... on ProjectV2Item { id content { __typename ... on DraftIssue { id } } } } }',
+      '-F',
+      `itemId=${itemId}`,
+    ],
+    {
+      cwd: workspacePath,
+      label: `gh api graphql draft content ${itemId}`,
+    },
+  );
+  const payload = parseJson<{
+    data?: {
+      node?: {
+        content?: {
+          __typename?: string;
+          id?: string;
+        };
+      };
+    };
+  }>(stdout, `gh api graphql draft content ${itemId}`);
+  const content = payload.data?.node?.content;
+  if (!content || content.__typename !== 'DraftIssue' || !content.id) {
+    throw new JSONRPCErrorException(
+      `gh api graphql draft content ${itemId} did not resolve a draft issue content id`,
+      GatewayErrors.PROVIDER_ERROR,
+    );
+  }
+  return content.id;
+}
+
 async function persistItemMetadata(
   runner: CommandRunner,
   workspacePath: string,
   issueId: string,
   config: GitHubProjectSyncConfig,
   itemId: string,
+  draftContentId: string,
   archived: boolean,
 ): Promise<void> {
   const args = [
@@ -408,6 +463,8 @@ async function persistItemMetadata(
     `${ITEM_PROJECT_NUMBER_METADATA_KEY}=${config.projectNumber}`,
     '--set-metadata',
     `${ITEM_ID_METADATA_KEY}=${itemId}`,
+    '--set-metadata',
+    `${DRAFT_CONTENT_ID_METADATA_KEY}=${draftContentId}`,
   ];
   if (archived) {
     args.push('--set-metadata', `${ITEM_ARCHIVED_METADATA_KEY}=1`);
@@ -460,7 +517,8 @@ async function createItem(
       GatewayErrors.PROVIDER_ERROR,
     );
   }
-  await persistItemMetadata(runner, workspacePath, issue.id, config, itemId, false);
+  const draftContentId = await lookupDraftContentIdByItemId(runner, workspacePath, itemId);
+  await persistItemMetadata(runner, workspacePath, issue.id, config, itemId, draftContentId, false);
   return {
     integration: 'github_project',
     state: 'synced',
@@ -468,6 +526,7 @@ async function createItem(
     projectNumber: config.projectNumber,
     issueId: issue.id,
     itemId,
+    draftContentId,
     created: true,
   };
 }
@@ -509,6 +568,8 @@ async function syncOpenIssue(
   if (!itemId) {
     return await createItem(runner, workspacePath, config, issue);
   }
+  const draftContentId = getMatchingDraftContentId(issue, config)
+    ?? await lookupDraftContentIdByItemId(runner, workspacePath, itemId);
 
   let reopened = false;
   if (isMetadataArchived(issue)) {
@@ -526,7 +587,7 @@ async function syncOpenIssue(
       'project',
       'item-edit',
       '--id',
-      itemId,
+      draftContentId,
       '--title',
       buildDraftTitle(issue),
       '--body',
@@ -540,8 +601,8 @@ async function syncOpenIssue(
     },
   );
 
-  if (isMetadataArchived(issue)) {
-    await persistItemMetadata(runner, workspacePath, issue.id, config, itemId, false);
+  if (isMetadataArchived(issue) || !getMatchingDraftContentId(issue, config)) {
+    await persistItemMetadata(runner, workspacePath, issue.id, config, itemId, draftContentId, false);
   }
 
   return {
@@ -551,6 +612,7 @@ async function syncOpenIssue(
     projectNumber: config.projectNumber,
     issueId: issue.id,
     itemId,
+    draftContentId,
     reopened,
   };
 }
@@ -602,7 +664,9 @@ async function syncClosedIssue(
       label: `gh project item-archive ${issue.id}`,
     },
   );
-  await persistItemMetadata(runner, workspacePath, issue.id, config, itemId, true);
+  const draftContentId = getMatchingDraftContentId(issue, config)
+    ?? await lookupDraftContentIdByItemId(runner, workspacePath, itemId);
+  await persistItemMetadata(runner, workspacePath, issue.id, config, itemId, draftContentId, true);
 
   return {
     integration: 'github_project',
@@ -611,6 +675,7 @@ async function syncClosedIssue(
     projectNumber: config.projectNumber,
     issueId: issue.id,
     itemId,
+    draftContentId,
   };
 }
 

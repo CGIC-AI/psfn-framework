@@ -412,6 +412,7 @@ export interface GitHubProjectSyncResult {
   projectNumber?: number;
   issueId?: string;
   itemId?: string;
+  draftContentId?: string;
   reason?: string;
   created?: boolean;
   reopened?: boolean;

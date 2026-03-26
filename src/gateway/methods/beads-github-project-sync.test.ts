@@ -63,6 +63,18 @@ describe('beads GitHub Project sync helper', () => {
         }]),
       },
       { stdout: JSON.stringify({ id: 'PVTI_item_1' }) },
+      {
+        stdout: JSON.stringify({
+          data: {
+            node: {
+              content: {
+                __typename: 'DraftIssue',
+                id: 'DI_item_1',
+              },
+            },
+          },
+        }),
+      },
       { stdout: JSON.stringify([{ id: 'PSFN-1' }]) },
     ]);
 
@@ -81,6 +93,7 @@ describe('beads GitHub Project sync helper', () => {
       projectNumber: 2,
       issueId: 'PSFN-1',
       itemId: 'PVTI_item_1',
+      draftContentId: 'DI_item_1',
       created: true,
     });
     expect(runner.calls.map((call) => call.command)).toEqual([
@@ -88,16 +101,96 @@ describe('beads GitHub Project sync helper', () => {
       'gh',
       'bd',
       'gh',
+      'gh',
       'bd',
     ]);
     expect(runner.calls[3]?.args).toContain('item-create');
     expect(runner.calls[4]?.args).toEqual(expect.arrayContaining([
+      'api',
+      'graphql',
+      '-F',
+      'itemId=PVTI_item_1',
+    ]));
+    expect(runner.calls[5]?.args).toEqual(expect.arrayContaining([
       '--set-metadata',
       'github_project_sync_owner=axAilotl',
       '--set-metadata',
       'github_project_sync_project_number=2',
       '--set-metadata',
       'github_project_sync_item_id=PVTI_item_1',
+      '--set-metadata',
+      'github_project_sync_draft_content_id=DI_item_1',
+    ]));
+  });
+
+  it('repairs missing draft content metadata before editing an existing synced draft issue', async () => {
+    const runner = new FakeRunner([
+      {
+        stdout: JSON.stringify({
+          'custom.github_project_sync.project_url': 'https://github.com/users/axAilotl/projects/2',
+        }),
+      },
+      { stdout: JSON.stringify({ id: 'PVT_x' }) },
+      {
+        stdout: JSON.stringify([{
+          id: 'PSFN-2',
+          title: 'Repair synced item',
+          status: 'open',
+          metadata: {
+            github_project_sync_owner: 'axAilotl',
+            github_project_sync_project_number: 2,
+            github_project_sync_item_id: 'PVTI_item_2',
+          },
+        }]),
+      },
+      {
+        stdout: JSON.stringify({
+          data: {
+            node: {
+              content: {
+                __typename: 'DraftIssue',
+                id: 'DI_item_2',
+              },
+            },
+          },
+        }),
+      },
+      { stdout: JSON.stringify({ id: 'DI_item_2' }) },
+      { stdout: JSON.stringify([{ id: 'PSFN-2' }]) },
+    ]);
+
+    const result = await syncMutatedBeadToGitHubProject(
+      '/workspace',
+      'update',
+      'PSFN-2',
+      {},
+      runner as any,
+    );
+
+    expect(result).toMatchObject({
+      integration: 'github_project',
+      state: 'synced',
+      owner: 'axAilotl',
+      projectNumber: 2,
+      issueId: 'PSFN-2',
+      itemId: 'PVTI_item_2',
+      draftContentId: 'DI_item_2',
+    });
+    expect(runner.calls[3]?.args).toEqual(expect.arrayContaining([
+      'api',
+      'graphql',
+      '-F',
+      'itemId=PVTI_item_2',
+    ]));
+    expect(runner.calls[4]?.args).toEqual(expect.arrayContaining([
+      'project',
+      'item-edit',
+      '--id',
+      'DI_item_2',
+    ]));
+    expect(runner.calls[5]?.args).toEqual(expect.arrayContaining([
+      '--set-metadata',
+      'github_project_sync_draft_content_id=DI_item_2',
     ]));
   });
 
@@ -111,25 +204,26 @@ describe('beads GitHub Project sync helper', () => {
       { stdout: JSON.stringify({ id: 'PVT_x' }) },
       {
         stdout: JSON.stringify([{
-          id: 'PSFN-2',
+          id: 'PSFN-5',
           title: 'Close sync item',
           status: 'closed',
           metadata: {
             github_project_sync_owner: 'axAilotl',
             github_project_sync_project_number: 2,
-            github_project_sync_item_id: 'PVTI_item_2',
+            github_project_sync_item_id: 'PVTI_item_5',
+            github_project_sync_draft_content_id: 'DI_item_5',
           },
         }]),
       },
-      { stdout: JSON.stringify({ id: 'PVTI_item_2' }) },
-      { stdout: JSON.stringify([{ id: 'PSFN-2' }]) },
+      { stdout: JSON.stringify({ id: 'PVTI_item_5' }) },
+      { stdout: JSON.stringify([{ id: 'PSFN-5' }]) },
     ]);
 
     const result = await syncMutatedBeadToGitHubProject(
       '/workspace',
       'close',
-      'PSFN-2',
-      [{ id: 'PSFN-2' }],
+      'PSFN-5',
+      [{ id: 'PSFN-5' }],
       runner as any,
     );
 
@@ -138,8 +232,9 @@ describe('beads GitHub Project sync helper', () => {
       state: 'archived',
       owner: 'axAilotl',
       projectNumber: 2,
-      issueId: 'PSFN-2',
-      itemId: 'PVTI_item_2',
+      issueId: 'PSFN-5',
+      itemId: 'PVTI_item_5',
+      draftContentId: 'DI_item_5',
     });
     expect(runner.calls[3]?.args).toEqual(expect.arrayContaining([
       'project',
@@ -148,7 +243,7 @@ describe('beads GitHub Project sync helper', () => {
       '--owner',
       'axAilotl',
       '--id',
-      'PVTI_item_2',
+      'PVTI_item_5',
     ]));
     expect(runner.calls[4]?.args).toEqual(expect.arrayContaining([
       '--set-metadata',
@@ -186,6 +281,18 @@ describe('beads GitHub Project sync helper', () => {
         ].join('\n'),
       },
       { stdout: JSON.stringify({ id: 'PVTI_item_3' }) },
+      {
+        stdout: JSON.stringify({
+          data: {
+            node: {
+              content: {
+                __typename: 'DraftIssue',
+                id: 'DI_item_3',
+              },
+            },
+          },
+        }),
+      },
       { stdout: JSON.stringify([{ id: 'PSFN-3' }]) },
       { error: new Error('missing project scope') },
     ]);

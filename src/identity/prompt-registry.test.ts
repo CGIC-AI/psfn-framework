@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -7,6 +7,7 @@ import {
   EXTRACTION_PROMPT_KEY,
   COMPACTION_SUMMARY_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
+  getDefaultPromptText,
 } from './prompt-registry.js';
 
 describe('PromptRegistryStore', () => {
@@ -19,6 +20,38 @@ describe('PromptRegistryStore', () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'psfn-prompt-registry-'));
     filePath = join(tmpDir, 'prompt-registry.json');
     historyPath = join(tmpDir, 'prompt-registry-history.jsonl');
+    writeFileSync(filePath, JSON.stringify([
+      {
+        key: EXTRACTION_PROMPT_KEY,
+        text: getDefaultPromptText(EXTRACTION_PROMPT_KEY),
+        description: 'Memory extraction system prompt.',
+        consumers: ['src/memory/extraction.ts'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'system',
+        checksum: 'seed',
+      },
+      {
+        key: COMPACTION_SUMMARY_PROMPT_KEY,
+        text: getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY),
+        description: 'Session compaction system prompt used when conversation context exceeds budget.',
+        consumers: ['src/session/manager.ts'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'system',
+        checksum: 'seed',
+      },
+      {
+        key: PROFILE_SYNTHESIS_PROMPT_KEY,
+        text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
+        description: 'Canonical contact profile synthesis prompt.',
+        consumers: ['src/memory/extraction.ts'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'system',
+        checksum: 'seed',
+      },
+    ]), 'utf-8');
     store = new PromptRegistryStore(filePath, historyPath);
   });
 
@@ -26,17 +59,9 @@ describe('PromptRegistryStore', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('seeds required prompt keys when registry file is missing', () => {
-    expect(existsSync(filePath)).toBe(true);
-    const entries = store.list();
-    expect(entries.map(e => e.key)).toEqual([
-      EXTRACTION_PROMPT_KEY,
-      PROFILE_SYNTHESIS_PROMPT_KEY,
-      COMPACTION_SUMMARY_PROMPT_KEY,
-    ]);
-    expect(store.getPrompt(EXTRACTION_PROMPT_KEY)).toContain('{existing_facts}');
-    expect(store.getPrompt(EXTRACTION_PROMPT_KEY)).toContain('{recent_messages}');
-    expect(store.getPrompt(PROFILE_SYNTHESIS_PROMPT_KEY)).toContain('{memory_facts}');
+  it('fails closed when the registry file is missing', () => {
+    rmSync(filePath, { force: true });
+    expect(() => new PromptRegistryStore(filePath, historyPath)).toThrow('Prompt registry file not found');
   });
 
   it('updates prompt text and writes history entry', () => {
@@ -81,12 +106,11 @@ describe('PromptRegistryStore', () => {
     expect(store.getByKey(COMPACTION_SUMMARY_PROMPT_KEY)?.version).toBe(7);
   });
 
-  it('falls back to last known good prompts when file becomes invalid', () => {
-    const knownGood = store.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY);
+  it('fails closed when the registry file becomes invalid', () => {
     writeFileSync(filePath, '{"broken":', 'utf-8');
     const now = new Date(Date.now() + 1500);
     utimesSync(filePath, now, now);
 
-    expect(store.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)).toBe(knownGood);
+    expect(() => store.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)).toThrow('Failed to load prompt registry');
   });
 });

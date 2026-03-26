@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file is the repo-specific operating contract for AI coding agents working in `/mnt/samesung/ai/psfn-live`.
+This file is the repo-specific operating contract for AI coding agents working in this repository.
 
 Use it together with the current code, not instead of it. When workflow text here conflicts with the live runtime or config contracts, the code wins.
 
@@ -38,23 +38,6 @@ Rules:
 - If `bd ready --json` is empty but you are doing user-requested tracked work, create a self-contained issue before editing code.
 - Link discovered follow-up work with `discovered-from:<parent-id>`.
 - Keep issue descriptions self-contained: summary, files, concrete steps, and an example when useful.
-
-## Current Phase V Reality
-
-This branch already contains major implemented Phase V work. Do not treat it like a pure planning branch.
-
-Implemented foundations on this branch include:
-
-- registry-driven plugin seams for channels, STT, and TTS
-- schema-owned settings and owner-file enforcement
-- two-root persistence topology (`system-data` and `companion-data`)
-- compositional extraction, retrieval, appraisal, nested think, shard context packs, and diagnostics
-- observation masking, context manifests, stable-prefix context optimization, and context feedback scoring
-- emotion state, active concerns, self-model snapshots, and metacognitive flags
-- background continuation slices and shard lifecycle hardening
-- Telegram, Wyoming, Garden, backup/restore verification, and beads gateway tools
-
-Use [PHASE_V.md](./PHASE_V.md) as the branch status ledger.
 
 ## Source Of Truth
 
@@ -110,7 +93,7 @@ Guardrails:
 
 ## Live Deployment Boundary
 
-For the live running app in this repo, everything operationally authoritative must live under `/mnt/samesung/ai/psfn-live`.
+For the live running app in this repo, everything operationally authoritative must live under this repo tree.
 
 Rules:
 

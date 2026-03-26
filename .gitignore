@@ -18,6 +18,7 @@ __pycache__/
 .bv/
 
 # Internal planning/audit artifacts (non-product docs)
+working_doc/
 working_docs/
 workspace/
 

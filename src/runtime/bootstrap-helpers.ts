@@ -41,6 +41,11 @@ import {
 } from './plugin-eligibility.js';
 import { loadModelsConfigWithLegacyMigration, type ModelsLoadResult } from '../config/models-config.js';
 import {
+  applyProvidersRuntimeConfig,
+  loadProvidersConfigWithLegacyMigration,
+  type ProvidersLoadResult,
+} from '../config/providers-config.js';
+import {
   CAPABILITY_TIER_FILE_NAME,
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
@@ -97,6 +102,8 @@ export interface StartupHydrationLegacyMigrationDiagnostics {
 export interface StartupConfigHydrationDiagnostics {
   modelsMigratedFromLegacySettings: boolean;
   modelsLegacyDriftDetected: boolean;
+  providersMigratedFromLegacyConfig: boolean;
+  providersLegacyDriftDetected: boolean;
   maintenanceIntervalMigration: StartupHydrationLegacyMigrationDiagnostics;
   capabilityTierMigration: StartupHydrationLegacyMigrationDiagnostics;
   removedLegacyKeys: string[];
@@ -109,6 +116,7 @@ export interface StartupConfigHydrationResult {
   runtimePathLayout: RuntimePathLayout;
   settingsDomains: SettingsDomainSplit;
   modelsLoadResult: ModelsLoadResult;
+  providersLoadResult: ProvidersLoadResult;
   trustPolicyConfig: TrustPolicyConfig;
   schedulerConfig: SchedulerRuntimeConfig;
   diagnostics: StartupConfigHydrationDiagnostics;
@@ -394,10 +402,18 @@ export function hydrateCanonicalStartupConfig(
     legacySettings: settingsDomains.models,
   });
   applySettings(config, modelsLoadResult.config);
+  const providersLoadResult = loadProvidersConfigWithLegacyMigration(systemDataDir, {
+    seedDir: env.CONFIG_DIR,
+    legacyLiteLLMBaseUrl: env.LITELLM_BASE_URL,
+    legacyOpenRouterModelsApiUrl: config.openRouterModelsApiUrl,
+  });
+  applyProvidersRuntimeConfig(config, providersLoadResult.config);
 
   const diagnostics: StartupConfigHydrationDiagnostics = {
     modelsMigratedFromLegacySettings: modelsLoadResult.migratedFromLegacySettings,
     modelsLegacyDriftDetected: modelsLoadResult.legacyDriftDetected,
+    providersMigratedFromLegacyConfig: providersLoadResult.migratedFromLegacyConfig,
+    providersLegacyDriftDetected: providersLoadResult.legacyDriftDetected,
     maintenanceIntervalMigration: { state: 'none' },
     capabilityTierMigration: { state: 'none' },
     removedLegacyKeys: [...settingsDomains.legacyKeys],
@@ -494,6 +510,7 @@ export function hydrateCanonicalStartupConfig(
     runtimePathLayout,
     settingsDomains,
     modelsLoadResult,
+    providersLoadResult,
     trustPolicyConfig,
     schedulerConfig,
     diagnostics,

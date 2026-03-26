@@ -7,6 +7,13 @@ import {
   type ActiveConcern,
   type ActiveConcernPriority,
 } from '../intention/concerns.js';
+import {
+  PENDING_FOLLOW_UP_PRIORITIES,
+  PENDING_FOLLOW_UP_TIMINGS,
+  type PendingFollowUp,
+  type PendingFollowUpPriority,
+  type PendingFollowUpTiming,
+} from '../intention/pending-follow-ups.js';
 import { TRUST_LEVELS, type TrustLevel } from '../trust/types.js';
 
 export const INTERNAL_STATE_PROCESSING_QUALITIES = ['fluent', 'deliberate', 'struggling'] as const;
@@ -29,6 +36,7 @@ export interface InternalState {
   };
   attention: {
     activeConcerns: ActiveConcern[];
+    pendingFollowUps?: PendingFollowUp[];
     salientEntities: string[];
     conversationTrajectory: InternalStateConversationTrajectory;
   };
@@ -53,6 +61,7 @@ export interface InternalStateSessionMetrics {
 export interface InternalStateComputeInput {
   emotionState: EmotionStateSnapshot;
   activeConcerns: readonly ActiveConcern[];
+  pendingFollowUps?: readonly PendingFollowUp[];
   trustLevel: TrustLevel;
   contactId?: string;
   contactEmotionalSnapshot?: EmotionalSnapshot | null;
@@ -62,6 +71,7 @@ export interface InternalStateComputeInput {
 interface NormalizedInternalStateComputeInput {
   emotionState: EmotionStateSnapshot;
   activeConcerns: ActiveConcern[];
+  pendingFollowUps: PendingFollowUp[];
   trustLevel: TrustLevel;
   contactId: string | null;
   contactEmotionalSnapshot: EmotionalSnapshot | null;
@@ -190,6 +200,7 @@ export class InternalStateComputer {
       },
       attention: {
         activeConcerns: normalized.activeConcerns,
+        pendingFollowUps: normalized.pendingFollowUps,
         salientEntities: resolveSalientEntities(
           normalized.sessionMetrics.userMessageText,
           normalized.sessionMetrics.responseText,
@@ -236,6 +247,7 @@ function normalizeComputeInput(input: InternalStateComputeInput): NormalizedInte
   return {
     emotionState: normalizeEmotionStateSnapshot(input.emotionState),
     activeConcerns: normalizeActiveConcerns(input.activeConcerns),
+    pendingFollowUps: normalizePendingFollowUps(input.pendingFollowUps ?? []),
     trustLevel: normalizeTrustLevel(input.trustLevel),
     contactId: normalizeOptionalIdentifier(input.contactId, 'contactId'),
     contactEmotionalSnapshot: normalizeOptionalEmotionalSnapshot(input.contactEmotionalSnapshot),
@@ -312,6 +324,15 @@ function normalizeActiveConcerns(value: readonly ActiveConcern[]): ActiveConcern
     .sort(compareConcerns);
 }
 
+function normalizePendingFollowUps(value: readonly PendingFollowUp[]): PendingFollowUp[] {
+  if (!Array.isArray(value)) {
+    throw new Error('InternalState pendingFollowUps must be an array');
+  }
+  return value
+    .map((followUp, index) => normalizePendingFollowUp(followUp, index))
+    .sort(comparePendingFollowUps);
+}
+
 function normalizeConcern(concern: ActiveConcern, index: number): ActiveConcern {
   if (!isRecord(concern)) {
     throw new Error(`InternalState activeConcern[${String(index)}] must be an object`);
@@ -348,6 +369,48 @@ function normalizeConcern(concern: ActiveConcern, index: number): ActiveConcern 
   };
 }
 
+function normalizePendingFollowUp(followUp: PendingFollowUp, index: number): PendingFollowUp {
+  if (!isRecord(followUp)) {
+    throw new Error(`InternalState pendingFollowUp[${String(index)}] must be an object`);
+  }
+  const prefix = `pendingFollowUp[${String(index)}]`;
+  const priority = normalizePendingFollowUpPriority(followUp.priority, `${prefix}.priority`);
+  const timing = normalizePendingFollowUpTiming(followUp.timing, `${prefix}.timing`);
+  const createdAt = normalizeIsoTimestamp(followUp.createdAt, `${prefix}.createdAt`);
+  const dueAt = followUp.dueAt === undefined
+    ? undefined
+    : normalizeIsoTimestamp(followUp.dueAt, `${prefix}.dueAt`);
+  const contactId = followUp.contactId === undefined
+    ? undefined
+    : normalizeOptionalIdentifier(followUp.contactId, `${prefix}.contactId`) ?? undefined;
+  const sourceMessageId = followUp.sourceMessageId === undefined
+    ? undefined
+    : normalizeOptionalIdentifier(followUp.sourceMessageId, `${prefix}.sourceMessageId`) ?? undefined;
+  const activatedAt = followUp.activatedAt === undefined
+    ? undefined
+    : normalizeIsoTimestamp(followUp.activatedAt, `${prefix}.activatedAt`);
+  const activationReason = followUp.activationReason === undefined
+    ? undefined
+    : normalizeOptionalText(followUp.activationReason, `${prefix}.activationReason`);
+
+  return {
+    id: normalizeIdentifier(followUp.id, `${prefix}.id`),
+    content: normalizeText(followUp.content, `${prefix}.content`),
+    priority,
+    timing,
+    createdAt,
+    channelId: normalizeIdentifier(followUp.channelId, `${prefix}.channelId`),
+    channelType: normalizePendingFollowUpChannelType(followUp.channelType, `${prefix}.channelType`),
+    authorId: normalizeIdentifier(followUp.authorId, `${prefix}.authorId`),
+    authorName: normalizeText(followUp.authorName, `${prefix}.authorName`),
+    ...(dueAt ? { dueAt } : {}),
+    ...(contactId ? { contactId } : {}),
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(activatedAt ? { activatedAt } : {}),
+    ...(activationReason ? { activationReason } : {}),
+  };
+}
+
 function normalizeFormationVAD(value: ActiveConcern['formationVAD'], fieldName: string) {
   if (!value || !isRecord(value)) {
     throw new Error(`InternalState field "${fieldName}" must be an object`);
@@ -373,11 +436,49 @@ function normalizeConcernSource(value: string, fieldName: string): ActiveConcern
   return value as ActiveConcern['source'];
 }
 
+function normalizePendingFollowUpPriority(value: string, fieldName: string): PendingFollowUpPriority {
+  if (!PENDING_FOLLOW_UP_PRIORITIES.includes(value as PendingFollowUpPriority)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported priority "${String(value)}"`);
+  }
+  return value as PendingFollowUpPriority;
+}
+
+function normalizePendingFollowUpTiming(value: string, fieldName: string): PendingFollowUpTiming {
+  if (!PENDING_FOLLOW_UP_TIMINGS.includes(value as PendingFollowUpTiming)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported timing "${String(value)}"`);
+  }
+  return value as PendingFollowUpTiming;
+}
+
+function normalizePendingFollowUpChannelType(
+  value: string,
+  fieldName: string,
+): PendingFollowUp['channelType'] {
+  if (
+    value !== 'terminal'
+    && value !== 'api'
+    && value !== 'discord'
+    && value !== 'telegram'
+    && value !== 'psfn-amica'
+  ) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported channelType "${String(value)}"`);
+  }
+  return value;
+}
+
 function compareConcerns(left: ActiveConcern, right: ActiveConcern): number {
   const priorityDelta = PRIORITY_RANK[left.priority] - PRIORITY_RANK[right.priority];
   if (priorityDelta !== 0) return priorityDelta;
   const expiresAtDelta = Date.parse(left.expiresAt) - Date.parse(right.expiresAt);
   if (expiresAtDelta !== 0) return expiresAtDelta;
+  const createdAtDelta = Date.parse(left.createdAt) - Date.parse(right.createdAt);
+  if (createdAtDelta !== 0) return createdAtDelta;
+  return left.id.localeCompare(right.id);
+}
+
+function comparePendingFollowUps(left: PendingFollowUp, right: PendingFollowUp): number {
+  const dueAtDelta = Date.parse(left.dueAt ?? left.createdAt) - Date.parse(right.dueAt ?? right.createdAt);
+  if (dueAtDelta !== 0) return dueAtDelta;
   const createdAtDelta = Date.parse(left.createdAt) - Date.parse(right.createdAt);
   if (createdAtDelta !== 0) return createdAtDelta;
   return left.id.localeCompare(right.id);
@@ -453,6 +554,7 @@ function normalizeInternalState(state: InternalState): InternalState {
     },
     attention: {
       activeConcerns: normalizeActiveConcerns(state.attention.activeConcerns),
+      pendingFollowUps: normalizePendingFollowUps(state.attention.pendingFollowUps ?? []),
       salientEntities: normalizeSalientEntities(state.attention.salientEntities),
       conversationTrajectory: normalizeConversationTrajectory(state.attention.conversationTrajectory),
     },

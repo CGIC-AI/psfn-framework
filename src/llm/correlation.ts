@@ -43,6 +43,7 @@ export function inferCallType(
       return 'chat';
     case 'reasoning':
       return 'tool';
+    case 'memory':
     case 'extraction':
       return 'memory';
     case 'summary':

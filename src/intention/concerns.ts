@@ -42,6 +42,12 @@ export interface ActiveConcernResolveOptions {
   resolvedAt?: string;
 }
 
+export interface ActiveConcernRecentResolutionOptions {
+  withinMs?: number;
+  asOf?: string;
+  limit?: number;
+}
+
 export interface ActiveConcernListOptions {
   contactId?: string;
   includeResolved?: boolean;
@@ -79,6 +85,9 @@ const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
 const DEFAULT_RUNTIME_CONTEXT_LIMIT = 6;
 const MAX_RUNTIME_CONTEXT_TEXT_CHARS = 180;
+const DEFAULT_RECENT_RESOLUTION_WINDOW_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_RECENT_RESOLUTION_LIMIT = 8;
+const CONCERN_DUPLICATE_SIMILARITY_THRESHOLD = 0.72;
 
 export const DEFAULT_CONCERN_TTL_MS_BY_PRIORITY: Record<ActiveConcernPriority, number> = {
   high: 48 * 60 * 60 * 1000,
@@ -179,6 +188,59 @@ function clampListLimit(limit: number | undefined): number {
   const floored = Math.floor(limit);
   if (floored < 1) return 1;
   return Math.min(floored, MAX_LIST_LIMIT);
+}
+
+function normalizeRecentResolutionWindowMs(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return DEFAULT_RECENT_RESOLUTION_WINDOW_MS;
+  }
+  const floored = Math.floor(value);
+  if (floored < 1) {
+    throw new Error('Active concern recent resolution window must be a positive number');
+  }
+  return floored;
+}
+
+function normalizeConcernSimilarityText(value: string): string {
+  return compactWhitespace(value.toLowerCase().replace(/[^a-z0-9]+/g, ' '));
+}
+
+function tokenizeConcernSimilarityText(value: string): string[] {
+  const normalized = normalizeConcernSimilarityText(value);
+  if (!normalized) {
+    return [];
+  }
+  return Array.from(new Set(normalized.split(' ').filter(token => token.length >= 3)));
+}
+
+function scoreConcernTextSimilarity(left: string, right: string): number {
+  const normalizedLeft = normalizeConcernSimilarityText(left);
+  const normalizedRight = normalizeConcernSimilarityText(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return 0;
+  }
+  if (normalizedLeft === normalizedRight) {
+    return 1;
+  }
+
+  const leftTokens = tokenizeConcernSimilarityText(normalizedLeft);
+  const rightTokens = tokenizeConcernSimilarityText(normalizedRight);
+  if (leftTokens.length === 0 || rightTokens.length === 0) {
+    return 0;
+  }
+
+  const rightSet = new Set(rightTokens);
+  let intersection = 0;
+  for (const token of leftTokens) {
+    if (rightSet.has(token)) {
+      intersection += 1;
+    }
+  }
+  if (intersection === 0) {
+    return 0;
+  }
+
+  return (2 * intersection) / (leftTokens.length + rightTokens.length);
 }
 
 function serializeFormationVAD(value: ActiveConcernVAD | undefined): string | null {
@@ -452,6 +514,78 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     }) as ActiveConcernRow[];
 
     return rows.map(mapRow);
+  }
+
+  listRecentlyResolvedConcerns(
+    contactId?: string,
+    options: ActiveConcernRecentResolutionOptions = {},
+  ): ActiveConcern[] {
+    const asOf = options.asOf
+      ? normalizeIsoTimestamp(options.asOf, 'asOf')
+      : this.now().toISOString();
+    const normalizedContactId = normalizeOptionalId(contactId);
+    const limit = clampListLimit(options.limit ?? DEFAULT_RECENT_RESOLUTION_LIMIT);
+    const withinMs = normalizeRecentResolutionWindowMs(options.withinMs);
+    const resolvedAfter = new Date(Date.parse(asOf) - withinMs).toISOString();
+
+    const whereClauses = [
+      'resolved_at IS NOT NULL',
+      'resolved_at >= @resolvedAfter',
+    ];
+    if (normalizedContactId) {
+      whereClauses.push('(contact_id IS NULL OR contact_id = @contactId)');
+    }
+
+    const rows = this.db.prepare(`
+      SELECT
+        id,
+        text,
+        priority,
+        source,
+        created_at,
+        expires_at,
+        resolved_at,
+        resolution_outcome,
+        contact_id,
+        formation_vad
+      FROM active_concerns
+      WHERE ${whereClauses.join(' AND ')}
+      ORDER BY resolved_at DESC, created_at DESC, id DESC
+      LIMIT @limit
+    `).all({
+      resolvedAfter,
+      contactId: normalizedContactId ?? null,
+      limit,
+    }) as ActiveConcernRow[];
+
+    return rows.map(mapRow);
+  }
+
+  findRecentlyResolvedSimilarConcern(input: {
+    text: string;
+    contactId?: string;
+    withinMs?: number;
+    asOf?: string;
+  }): ActiveConcern | null {
+    const text = normalizeRequiredText(input.text, 'text', MAX_CONCERN_TEXT_CHARS);
+    const recentResolved = this.listRecentlyResolvedConcerns(input.contactId, {
+      withinMs: input.withinMs,
+      asOf: input.asOf,
+      limit: DEFAULT_RECENT_RESOLUTION_LIMIT,
+    });
+
+    let bestMatch: ActiveConcern | null = null;
+    let bestScore = 0;
+    for (const concern of recentResolved) {
+      const score = scoreConcernTextSimilarity(text, concern.text);
+      if (score < CONCERN_DUPLICATE_SIMILARITY_THRESHOLD || score <= bestScore) {
+        continue;
+      }
+      bestMatch = concern;
+      bestScore = score;
+    }
+
+    return bestMatch;
   }
 
   resolveConcern(id: string, options: ActiveConcernResolveOptions = {}): ActiveConcern | null {

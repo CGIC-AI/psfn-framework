@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { SessionEntry } from './types.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { createComponentLogger } from '../logger.js';
+import type { MemoryScopeQuery } from '../memory/types.js';
+import { normalizeMemoryScopeRefs, normalizeMemoryScopeTags } from '../memory/types.js';
 
 const log = createComponentLogger('FocusKnowledge');
 
@@ -41,6 +43,18 @@ export interface FocusKnowledgeBlock {
   evidence: FocusEvidenceRecord[];
 }
 
+export interface FocusProjectContextSummary {
+  channelId: string;
+  scope: string;
+  scopeKey: string;
+  knowledgeBlockCount: number;
+  totalEvidenceCount: number;
+  latestKnowledgeBlockId: string;
+  latestKnowledge: string;
+  latestCompletedAt: number;
+  startedAt: number;
+}
+
 export interface FocusKnowledgeAppendInput {
   channelId: string;
   focusId: string;
@@ -64,6 +78,31 @@ interface FocusKnowledgeStoreOptions {
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeScopeKey(value: string): string {
+  return compactText(value).toLowerCase();
+}
+
+export function buildFocusMemoryScopeQuery(scope: string): MemoryScopeQuery | null {
+  const compactScope = compactText(scope);
+  if (!compactScope) return null;
+
+  const scopeKey = normalizeScopeKey(compactScope);
+  const refs = normalizeMemoryScopeRefs([
+    { kind: 'project', id: compactScope },
+    ...(scopeKey !== compactScope ? [{ kind: 'project', id: scopeKey }] : []),
+  ]);
+  const tags = normalizeMemoryScopeTags([
+    `project:${scopeKey}`,
+    `scope:${scopeKey}`,
+  ]);
+
+  return {
+    ...(refs.length > 0 ? { refs } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
+    mode: 'only',
+  };
 }
 
 function clampText(value: string, maxChars: number): string {
@@ -290,6 +329,59 @@ export class FocusKnowledgeStore {
 
     if (channelBlocks.length <= limit) return [...channelBlocks];
     return channelBlocks.slice(channelBlocks.length - limit);
+  }
+
+  listProjectContextsByChannel(
+    channelId: string,
+    options: FocusKnowledgeListOptions = {},
+  ): FocusProjectContextSummary[] {
+    const channelBlocks = this.listByChannel(channelId, { limit: Number.MAX_SAFE_INTEGER });
+    if (channelBlocks.length === 0) return [];
+
+    const summaries = new Map<string, FocusProjectContextSummary>();
+    for (const block of channelBlocks) {
+      const scopeKey = normalizeScopeKey(block.scope);
+      if (!scopeKey) continue;
+
+      const existing = summaries.get(scopeKey);
+      if (!existing) {
+        summaries.set(scopeKey, {
+          channelId: block.channelId,
+          scope: block.scope,
+          scopeKey,
+          knowledgeBlockCount: 1,
+          totalEvidenceCount: block.evidenceCount,
+          latestKnowledgeBlockId: block.id,
+          latestKnowledge: block.knowledge,
+          latestCompletedAt: block.completedAt,
+          startedAt: block.startedAt,
+        });
+        continue;
+      }
+
+      existing.scope = block.scope;
+      existing.knowledgeBlockCount += 1;
+      existing.totalEvidenceCount += block.evidenceCount;
+      existing.latestKnowledgeBlockId = block.id;
+      existing.latestKnowledge = block.knowledge;
+      existing.latestCompletedAt = block.completedAt;
+      existing.startedAt = Math.min(existing.startedAt, block.startedAt);
+    }
+
+    const limit = normalizeListLimit(options.limit);
+    const grouped = [...summaries.values()]
+      .sort((left, right) => left.latestCompletedAt - right.latestCompletedAt);
+    if (grouped.length <= limit) return grouped;
+    return grouped.slice(grouped.length - limit);
+  }
+
+  getProjectContextSummary(channelId: string, scope: string): FocusProjectContextSummary | null {
+    const scopeKey = normalizeScopeKey(scope);
+    if (!scopeKey) return null;
+
+    return this.listProjectContextsByChannel(channelId, { limit: Number.MAX_SAFE_INTEGER })
+      .find(summary => summary.scopeKey === scopeKey)
+      ?? null;
   }
 
   getCompactionRanges(channelId: string): FocusCompactionRange[] {

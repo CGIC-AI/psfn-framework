@@ -10,7 +10,7 @@ import type {
 import type { PromptHistoryEntry, PromptLayer } from '../../../identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { EditableSettings } from '../../../settings.js';
-import type { MemoryLink } from '../../../memory/store.js';
+import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
 import type { SessionEntry } from '../../../session/types.js';
 import type { SubstrateConfig, TurnRecord } from '../../../types.js';
@@ -19,13 +19,18 @@ import type {
   ContactIdentityLinkVerification,
   ContactMutationAuditEntry,
   ContactMutationAuditQuery,
+  RelationshipType,
+  SocialGraphEntitySource,
+  SocialRelationshipKind,
 } from '../../../contacts/types.js';
+import type { SensitivityLevel, TrustLevel } from '../../../trust/types.js';
 import type {
   CapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
 import type { SettingsContractData } from '../../../config/settings-contract.js';
 import type { BackupJsonConfig } from '../../../config/backup-config.js';
 import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
+import type { ProvidersRuntimeConfig } from '../../../config/providers-config.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
 import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
@@ -59,6 +64,10 @@ import type {
   TurnStageTelemetryRecord,
 } from '../../../turns/observability.js';
 import type { SessionRoleEnvelopePreview } from '../../../internal-role-envelopes/projections.js';
+import type {
+  AdminMemoryManagedScopeKind,
+  AdminMemoryScopeEvidenceItem,
+} from './memory-scope-evidence.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;
@@ -141,6 +150,8 @@ export interface AdminMemoryListData {
 export interface AdminMemoryDetailData {
   memory: PurrMemory;
   linkedContact?: AdminMemoryContactSummary;
+  scopeAssignments: AdminMemoryScopeAssignmentView[];
+  scopeRepair?: AdminMemoryScopeRepairView;
 }
 
 export interface AdminMemorySearchResult {
@@ -166,11 +177,70 @@ export interface AdminBulkMutationResult {
   message?: string;
 }
 
+export interface AdminMemoryScopeAssignmentView {
+  kind: AdminMemoryManagedScopeKind;
+  id: string;
+  label?: string;
+  canonicalTag: string;
+  evidence: AdminMemoryScopeEvidenceItem[];
+}
+
+export interface AdminMemoryScopeRepairView {
+  needsRepair: boolean;
+  suggestedScopeRef?: {
+    kind: string;
+    id: string;
+    label?: string;
+  };
+  suggestedScopeTags: string[];
+  notes: string[];
+}
+
+export interface AdminMemoryScopeSummary {
+  kind: AdminMemoryManagedScopeKind;
+  id: string;
+  label?: string;
+  canonicalTag: string;
+  memoryCount: number;
+  needsRepairCount: number;
+}
+
+export interface AdminMemoryScopedMemoryView {
+  memory: PurrMemory;
+  evidence: AdminMemoryScopeEvidenceItem[];
+  repair: AdminMemoryScopeRepairView;
+}
+
+export interface AdminMemoryScopeListData {
+  scopes: AdminMemoryScopeSummary[];
+}
+
+export interface AdminMemoryScopeDetailData {
+  scope: AdminMemoryScopeSummary;
+  memories: AdminMemoryScopedMemoryView[];
+}
+
+export interface AdminMemoryScopeMutationResult extends MemoryMutationResult {
+  memory?: AdminMemoryDetailData['memory'];
+  scopeAssignments?: AdminMemoryScopeAssignmentView[];
+  scopeRepair?: AdminMemoryScopeRepairView;
+}
+
 export interface AdminMemoryService {
   listMemories(params?: URLSearchParams): AdminMemoryListData;
   getMemoryDetail(id: string): AdminMemoryDetailData | null;
+  listManagedScopes(params?: URLSearchParams): AdminMemoryScopeListData;
+  getManagedScopeDetail(kind: string, id: string): AdminMemoryScopeDetailData | null;
   searchMemories(query: string): Promise<AdminMemorySearchResult>;
   supersedeMemory(id: string): MemoryMutationResult;
+  updateMemoryScope(
+    id: string,
+    fields: {
+      scopeRef?: { kind?: string; id?: string; label?: string } | null;
+      scopeTags?: string[];
+      repair?: boolean;
+    },
+  ): AdminMemoryScopeMutationResult;
   linkMemories(id1: string, id2: string, linkType?: string): AdminMemoryLinkResult;
   unlinkMemories(id1: string, id2: string): MemoryMutationResult;
   getMemoryLinks(id: string): MemoryLink[];
@@ -287,6 +357,7 @@ export interface AdminIdentityService {
 
 export interface SettingsConfigEditors {
   models: ModelsRuntimeConfig;
+  providers: ProvidersRuntimeConfig;
   skills: SkillsRuntimeConfig;
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;
@@ -336,6 +407,7 @@ export interface AdminContactListData {
   contacts: Contact[];
   profileMap: Map<string, ContactProfileArtifact>;
   relatedChannelMap: Map<string, ContactConversationChannelView[]>;
+  socialGraphMap: Map<string, AdminContactSocialGraphView>;
   verifications: ContactIdentityLinkVerification[];
   mutationAudits: ContactMutationAuditEntry[];
   mutationAuditQuery: ContactMutationAuditQuery;
@@ -352,6 +424,57 @@ export interface ContactUpdateResult {
   message: string;
   contact?: Contact;
   relatedChannels?: ContactConversationChannelView[];
+}
+
+export interface AdminContactSocialGraphEntityView {
+  id: string;
+  displayName: string;
+  contactId?: string;
+  source: SocialGraphEntitySource;
+  sensitivity: SensitivityLevel;
+  confidence: number;
+  provenanceRefs: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminContactSocialGraphNeighborView {
+  entityId: string;
+  contactId?: string;
+  displayName: string;
+  source: SocialGraphEntitySource;
+  sensitivity: SensitivityLevel;
+  confidence: number;
+  provenanceRefs: string[];
+  mentionOnly: boolean;
+  trustLevel?: TrustLevel;
+  relationshipType?: RelationshipType;
+  profileSummary?: string;
+  profileUpdatedAt?: number;
+}
+
+export interface AdminContactSocialGraphConnectionView {
+  edgeId: string;
+  relationshipType: SocialRelationshipKind;
+  directional: boolean;
+  direction: 'incoming' | 'outgoing' | 'undirected';
+  sensitivity: SensitivityLevel;
+  confidence: number;
+  provenanceRefs: string[];
+  evidenceMemoryIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  neighbor: AdminContactSocialGraphNeighborView;
+}
+
+export interface AdminContactSocialGraphView {
+  entity?: AdminContactSocialGraphEntityView;
+  edgeCount: number;
+  neighborCount: number;
+  evidenceCount: number;
+  provenanceCount: number;
+  mentionOnlyNeighborCount: number;
+  connections: AdminContactSocialGraphConnectionView[];
 }
 
 export interface AdminContactsService {

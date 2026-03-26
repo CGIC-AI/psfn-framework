@@ -5,11 +5,14 @@
     bulkUpdateMemories,
     deleteMemory,
     getMemoryDetail,
+    getManagedMemoryScopeDetail,
     getMemoryLinks,
     linkMemories,
+    listManagedMemoryScopes,
     listMemories,
     searchMemories,
     unlinkMemories,
+    updateMemoryScope,
   } from '$lib/api/endpoints/memory';
   import type {
     AdminBulkMutationResult,
@@ -18,12 +21,18 @@
     AdminMemoryLink,
     AdminMemoryListData,
     AdminMemorySearchResult,
+    AdminMemoryScopeDetailData,
+    AdminMemoryScopeSummary,
     PurrMemory,
   } from '$lib/types';
 
   const MEMORY_TYPES = ['', 'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational'];
   const SENSITIVITY_LEVELS = ['', 'public', 'personal', 'intimate', 'confidential'];
   const MEMORY_LINK_TYPES = ['related', 'supports', 'conflicts', 'sequence', 'causal'];
+  const MANAGED_SCOPE_KINDS = [
+    { value: 'project', label: 'Project' },
+    { value: 'north_star', label: 'North Star' },
+  ] as const;
   const PAGE_SIZE = 20;
 
   let data = $state<AdminMemoryListData | null>(null);
@@ -57,6 +66,17 @@
   let linkTargetById = $state<Record<string, string>>({});
   let linkTypeById = $state<Record<string, string>>({});
   let loadingLinksFor = $state<string | null>(null);
+  let managedScopes = $state<AdminMemoryScopeSummary[]>([]);
+  let managedScopeLoading = $state(false);
+  let managedScopeError = $state('');
+  let managedScopeKindFilter = $state<'project' | 'north_star'>('project');
+  let selectedManagedScopeKey = $state<string | null>(null);
+  let selectedManagedScopeDetail = $state<AdminMemoryScopeDetailData | null>(null);
+  let selectedManagedScopeLoading = $state(false);
+  let selectedManagedScopeError = $state('');
+  let scopeEditorRefLabel = $state('');
+  let scopeEditorTags = $state('');
+  let scopeMutating = $state(false);
 
   let selectedCount = $derived(selectedIds.length);
 
@@ -214,6 +234,8 @@
     detailModalLoading = false;
     detailModalError = '';
     supersedeConfirmId = null;
+    scopeEditorRefLabel = '';
+    scopeEditorTags = '';
   }
 
   async function openDetailModal(id: string): Promise<void> {
@@ -225,6 +247,7 @@
 
     try {
       detailModalData = await getMemoryDetail(id);
+      syncScopeEditorFromDetail();
       await ensureLinksLoaded(id);
     } catch (e) {
       detailModalError = e instanceof Error ? e.message : 'Failed to load memory detail';
@@ -453,8 +476,142 @@
     return String(m.tags ?? '');
   }
 
+  function managedScopeKey(kind: string, id: string): string {
+    return `${kind}:${id}`;
+  }
+
+  function scopeLabel(scope: { kind: string; id: string; label?: string }): string {
+    return scope.label?.trim() || scope.id;
+  }
+
+  function scopeKindLabel(kind: string): string {
+    return kind === 'north_star' ? 'North Star' : 'Project';
+  }
+
+  function syncScopeEditorFromDetail(): void {
+    scopeEditorRefLabel = detailModalData?.memory.scopeRef?.label ?? '';
+    scopeEditorTags = (detailModalData?.memory.scopeTags ?? []).join(', ');
+  }
+
+  async function loadManagedScopes(selectKey?: string | null) {
+    managedScopeLoading = true;
+    managedScopeError = '';
+    try {
+      const result = await listManagedMemoryScopes(managedScopeKindFilter);
+      managedScopes = result.scopes ?? [];
+      const nextKey = selectKey
+        ?? selectedManagedScopeKey
+        ?? (managedScopes[0] ? managedScopeKey(managedScopes[0].kind, managedScopes[0].id) : null);
+      if (nextKey) {
+        await loadManagedScopeDetail(nextKey);
+      } else {
+        selectedManagedScopeKey = null;
+        selectedManagedScopeDetail = null;
+      }
+    } catch (e) {
+      managedScopeError = e instanceof Error ? e.message : 'Failed to load managed scopes';
+    } finally {
+      managedScopeLoading = false;
+    }
+  }
+
+  async function loadManagedScopeDetail(key: string): Promise<void> {
+    selectedManagedScopeKey = key;
+    selectedManagedScopeLoading = true;
+    selectedManagedScopeError = '';
+    const separator = key.indexOf(':');
+    const kind = key.slice(0, separator) as 'project' | 'north_star';
+    const id = key.slice(separator + 1);
+    try {
+      selectedManagedScopeDetail = await getManagedMemoryScopeDetail(kind, id);
+    } catch (e) {
+      selectedManagedScopeDetail = null;
+      selectedManagedScopeError = e instanceof Error ? e.message : 'Failed to load managed scope detail';
+    } finally {
+      selectedManagedScopeLoading = false;
+    }
+  }
+
+  async function refreshScopeViewsForMemory(memory: PurrMemory): Promise<void> {
+    const managedAssignments = detailModalData?.scopeAssignments ?? [];
+    const memoryManagedScopeKey = managedAssignments[0]
+      ? managedScopeKey(managedAssignments[0].kind, managedAssignments[0].id)
+      : selectedManagedScopeKey;
+    await loadManagedScopes(memoryManagedScopeKey);
+  }
+
+  async function handleScopeRepair(id: string): Promise<void> {
+    scopeMutating = true;
+    try {
+      const result = await updateMemoryScope(id, { repair: true });
+      if (!result.ok) {
+        flash(false, result.message ?? 'Scope repair failed');
+        return;
+      }
+      if (detailModalData && result.memory) {
+        detailModalData = {
+          ...detailModalData,
+          memory: result.memory,
+          scopeAssignments: result.scopeAssignments ?? [],
+          scopeRepair: result.scopeRepair,
+        };
+        syncScopeEditorFromDetail();
+        await refreshScopeViewsForMemory(result.memory);
+      }
+      await loadMemories();
+      flash(true, 'Scope tags repaired');
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Scope repair failed');
+    } finally {
+      scopeMutating = false;
+    }
+  }
+
+  async function handleScopeSave(id: string): Promise<void> {
+    const sourceMemory = detailModalData?.memory;
+    if (!sourceMemory?.scopeRef) {
+      flash(false, 'This memory does not have a managed scopeRef to edit');
+      return;
+    }
+    scopeMutating = true;
+    try {
+      const result = await updateMemoryScope(id, {
+        scopeRef: {
+          kind: sourceMemory.scopeRef.kind,
+          id: sourceMemory.scopeRef.id,
+          ...(scopeEditorRefLabel.trim() ? { label: scopeEditorRefLabel.trim() } : {}),
+        },
+        scopeTags: scopeEditorTags
+          .split(',')
+          .map(tag => tag.trim())
+          .filter(Boolean),
+      });
+      if (!result.ok) {
+        flash(false, result.message ?? 'Scope update failed');
+        return;
+      }
+      if (detailModalData && result.memory) {
+        detailModalData = {
+          ...detailModalData,
+          memory: result.memory,
+          scopeAssignments: result.scopeAssignments ?? [],
+          scopeRepair: result.scopeRepair,
+        };
+        syncScopeEditorFromDetail();
+        await refreshScopeViewsForMemory(result.memory);
+      }
+      await loadMemories();
+      flash(true, 'Scope tags updated');
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Scope update failed');
+    } finally {
+      scopeMutating = false;
+    }
+  }
+
   onMount(() => {
     loadMemories();
+    loadManagedScopes();
   });
 
   onDestroy(() => {
@@ -480,6 +637,156 @@
       {actionMessage}
     </div>
   {/if}
+
+  <div class="card-garden p-4 space-y-4">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+      <div>
+        <h2 class="font-serif text-lg text-shadow-900 font-semibold">Scoped Memory Tags</h2>
+        <p class="text-shadow-600 text-sm mt-1">
+          Browse project and north-star scope attachments, inspect provenance, and spot memories that need repair.
+        </p>
+      </div>
+      <div class="flex items-center gap-2">
+        {#each MANAGED_SCOPE_KINDS as option}
+          <button
+            onclick={() => {
+              managedScopeKindFilter = option.value;
+              void loadManagedScopes();
+            }}
+            class={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+              managedScopeKindFilter === option.value
+                ? 'border-gold-500 bg-gold-100 text-gold-800'
+                : 'border-bark-300 text-shadow-700 hover:bg-bark-200'
+            }`}
+          >
+            {option.label}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    {#if managedScopeError}
+      <p class="text-sm text-wilt-600">{managedScopeError}</p>
+    {/if}
+
+    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[22rem_minmax(0,1fr)]">
+      <div class="space-y-2">
+        {#if managedScopeLoading}
+          {#each Array(4) as _}
+            <div class="rounded-lg border border-bark-200 bg-bark-50 p-3 animate-pulse">
+              <div class="h-4 w-40 rounded bg-bark-200"></div>
+            </div>
+          {/each}
+        {:else if managedScopes.length === 0}
+          <div class="rounded-lg border border-bark-200 bg-bark-50 p-4 text-sm text-shadow-600">
+            No {scopeKindLabel(managedScopeKindFilter).toLowerCase()} scopes found.
+          </div>
+        {:else}
+          {#each managedScopes as scope}
+            <button
+              onclick={() => { void loadManagedScopeDetail(managedScopeKey(scope.kind, scope.id)); }}
+              class={`w-full rounded-xl border p-3 text-left transition-colors ${
+                selectedManagedScopeKey === managedScopeKey(scope.kind, scope.id)
+                  ? 'border-gold-500 bg-gold-50'
+                  : 'border-bark-200 bg-bark-50 hover:bg-bark-100'
+              }`}
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <p class="text-shadow-900 font-medium">{scopeLabel(scope)}</p>
+                  <p class="text-xs text-shadow-600 mt-1">
+                    <code>{scope.canonicalTag}</code>
+                  </p>
+                </div>
+                <span class="rounded-full bg-bark-200 px-2 py-0.5 text-xs text-shadow-700">
+                  {scope.memoryCount} mem
+                </span>
+              </div>
+              {#if scope.needsRepairCount > 0}
+                <p class="mt-2 text-xs text-wilt-600">
+                  {scope.needsRepairCount} attachment{scope.needsRepairCount === 1 ? '' : 's'} need repair
+                </p>
+              {/if}
+            </button>
+          {/each}
+        {/if}
+      </div>
+
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-4">
+        {#if selectedManagedScopeLoading}
+          <div class="space-y-2">
+            <div class="h-4 w-56 rounded bg-bark-200 animate-pulse"></div>
+            <div class="h-3 w-full rounded bg-bark-200 animate-pulse"></div>
+            <div class="h-3 w-5/6 rounded bg-bark-200 animate-pulse"></div>
+          </div>
+        {:else if selectedManagedScopeError}
+          <p class="text-sm text-wilt-600">{selectedManagedScopeError}</p>
+        {:else if selectedManagedScopeDetail}
+          <div class="space-y-4">
+            <div>
+              <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">
+                {scopeKindLabel(selectedManagedScopeDetail.scope.kind)}
+              </p>
+              <h3 class="mt-1 font-serif text-xl text-shadow-900 font-semibold">
+                {scopeLabel(selectedManagedScopeDetail.scope)}
+              </h3>
+              <p class="mt-1 text-sm text-shadow-600">
+                <code>{selectedManagedScopeDetail.scope.canonicalTag}</code> •
+                {selectedManagedScopeDetail.scope.memoryCount === 1
+                  ? ` ${selectedManagedScopeDetail.scope.memoryCount} memory`
+                  : ` ${selectedManagedScopeDetail.scope.memoryCount} memories`}
+              </p>
+            </div>
+
+            <div class="space-y-3">
+              {#each selectedManagedScopeDetail.memories as entry}
+                <div class="rounded-lg border border-bark-200 bg-white/60 p-3">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <p class="text-sm font-medium text-shadow-900">{entry.memory.id}</p>
+                      <p class="mt-1 text-sm text-shadow-700">
+                        {memText(entry.memory).slice(0, 180)}{memText(entry.memory).length > 180 ? '...' : ''}
+                      </p>
+                    </div>
+                    <button
+                      onclick={() => { void openDetailModal(entry.memory.id); }}
+                      class="shrink-0 text-sm font-medium text-gold-700 hover:text-gold-600"
+                    >
+                      Open
+                    </button>
+                  </div>
+                  <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                    {#if entry.repair.needsRepair}
+                      <span class="rounded-full bg-wilt-50 px-2 py-0.5 text-wilt-700 border border-wilt-200">
+                        Repair suggested
+                      </span>
+                    {/if}
+                    <span class="rounded-full bg-bark-200 px-2 py-0.5 text-shadow-700">
+                      {entry.memory.type}
+                    </span>
+                    <span class="rounded-full bg-bark-200 px-2 py-0.5 text-shadow-700">
+                      {formatDate(memCreated(entry.memory))}
+                    </span>
+                  </div>
+                  <div class="mt-3 space-y-1">
+                    {#each entry.evidence as evidence}
+                      <div class="rounded border border-bark-200 bg-bark-50 px-2 py-1 text-xs text-shadow-700">
+                        <span class="font-medium text-shadow-900">{evidence.type}:</span>
+                        <code class="ml-1">{evidence.value}</code>
+                        <span class="ml-1">{evidence.detail}</span>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {:else}
+          <p class="text-sm text-shadow-600">Select a managed scope to inspect matching memories.</p>
+        {/if}
+      </div>
+    </div>
+  </div>
 
   <!-- Filter bar -->
   <div class="card-garden p-4 space-y-3">
@@ -854,6 +1161,95 @@
             {/if}
             {#if memTags(detailModalData.memory)}
               <span class="sm:col-span-2">Tags: <span class="text-shadow-800">{memTags(detailModalData.memory)}</span></span>
+            {/if}
+          </div>
+
+          <div class="rounded-xl border border-bark-200 bg-bark-50 p-4 space-y-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="font-medium text-shadow-900">Managed Scope Attachment</p>
+                <p class="mt-1 text-xs text-shadow-600">
+                  Project and north-star scope refs and tags persisted on this memory.
+                </p>
+              </div>
+              {#if detailModalData.scopeRepair?.needsRepair}
+                <button
+                  onclick={() => handleScopeRepair(detailMemoryId)}
+                  disabled={scopeMutating}
+                  class="px-3 py-1.5 rounded-lg border border-gold-500 text-gold-800 text-sm font-medium hover:bg-gold-50 disabled:opacity-50"
+                >
+                  Repair Tags
+                </button>
+              {/if}
+            </div>
+
+            {#if detailModalData.scopeAssignments.length === 0}
+              <p class="text-sm text-shadow-600">No managed project or north-star scope is attached.</p>
+            {:else}
+              <div class="space-y-3">
+                {#each detailModalData.scopeAssignments as assignment}
+                  <div class="rounded-lg border border-bark-200 bg-white/70 p-3">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="rounded-full bg-bark-200 px-2 py-0.5 text-xs text-shadow-700">
+                        {scopeKindLabel(assignment.kind)}
+                      </span>
+                      <span class="text-sm font-medium text-shadow-900">{scopeLabel(assignment)}</span>
+                      <code class="text-xs text-shadow-700">{assignment.canonicalTag}</code>
+                    </div>
+                    <div class="mt-2 space-y-1">
+                      {#each assignment.evidence as evidence}
+                        <div class="rounded border border-bark-200 bg-bark-50 px-2 py-1 text-xs text-shadow-700">
+                          <span class="font-medium text-shadow-900">{evidence.type}:</span>
+                          <code class="ml-1">{evidence.value}</code>
+                          <span class="ml-1">{evidence.detail}</span>
+                        </div>
+                      {/each}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+
+            {#if detailModalData.memory.scopeRef}
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto]">
+                <input
+                  type="text"
+                  bind:value={scopeEditorRefLabel}
+                  placeholder="Scope label"
+                  class="px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm"
+                />
+                <input
+                  type="text"
+                  bind:value={scopeEditorTags}
+                  placeholder="Comma-separated scope tags"
+                  class="px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm"
+                />
+                <button
+                  onclick={() => handleScopeSave(detailMemoryId)}
+                  disabled={scopeMutating}
+                  class="px-3 py-2 rounded-lg bg-moss-500 text-white text-sm font-medium hover:bg-moss-600 disabled:opacity-50"
+                >
+                  Save Scope
+                </button>
+              </div>
+            {/if}
+
+            {#if detailModalData.scopeRepair}
+              <div class="text-xs text-shadow-600 space-y-1">
+                {#if detailModalData.scopeRepair.suggestedScopeRef}
+                  <p>
+                    Suggested scopeRef:
+                    <code>{detailModalData.scopeRepair.suggestedScopeRef.kind}:{detailModalData.scopeRepair.suggestedScopeRef.id}</code>
+                  </p>
+                {/if}
+                <p>
+                  Suggested tags:
+                  <code>{detailModalData.scopeRepair.suggestedScopeTags.join(', ') || 'none'}</code>
+                </p>
+                {#each detailModalData.scopeRepair.notes as note}
+                  <p>{note}</p>
+                {/each}
+              </div>
             {/if}
           </div>
 

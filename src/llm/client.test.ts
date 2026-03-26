@@ -148,6 +148,7 @@ function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistr
         { purpose: 'background', primary: true },
       ]),
       createEntry('extraction', 30, extraction, [
+        { purpose: 'memory', primary: true },
         { purpose: 'extraction', primary: true },
         { purpose: 'import_processing', primary: true },
       ]),
@@ -359,6 +360,36 @@ describe('LLMClient completion model hints', () => {
     )).rejects.toBeInstanceOf(LegacyModelHintError);
 
     expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it('uses provider-configured LiteLLM routing when runtime options do not override it', async () => {
+    process.env.CUSTOM_LITELLM_KEY = 'provider-key';
+    const client = new LLMClient(makeConfig({
+      litellmBaseUrl: 'http://provider-config.test/v1',
+      litellmApiKeyEnv: 'CUSTOM_LITELLM_KEY',
+    }));
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'provider-config response' }],
+      model: 'z-ai/glm-5',
+      usage: { input: 12, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'chat',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { baseUrl: string };
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
+    expect(model.baseUrl).toBe('http://provider-config.test/v1');
+    expect(requestOptions.apiKey).toBe('provider-key');
+    delete process.env.CUSTOM_LITELLM_KEY;
   });
 });
 
@@ -695,6 +726,7 @@ describe('LLMClient correlation metadata', () => {
     expect(inferCallType('chat')).toBe('chat');
     expect(inferCallType('reasoning')).toBe('tool');
     expect(inferCallType('summary')).toBe('summary');
+    expect(inferCallType('memory')).toBe('memory');
     expect(inferCallType('extraction')).toBe('memory');
     expect(inferCallType('context')).toBe('background');
     expect(inferCallType('background', 'internal:heartbeat')).toBe('scheduled');
@@ -743,6 +775,144 @@ describe('LLMClient correlation metadata', () => {
     });
 
     runSpy.mockRestore();
+  });
+
+  it('routes memory completions through the dedicated memory-purpose candidate', async () => {
+    const config = makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chat',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'chat/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [
+              { purpose: 'chat', primary: true },
+              { purpose: 'summary', primary: true },
+              { purpose: 'moa', primary: true },
+            ],
+            capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 4096 },
+          },
+          {
+            id: 'background',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'background/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'background', primary: true }],
+            capabilities: { maxOutputTokens: 2048, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 2048 },
+          },
+          {
+            id: 'memory',
+            rank: 15,
+            identity: {
+              provider: 'openrouter',
+              model: 'memory/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'memory', primary: true }],
+            capabilities: { maxOutputTokens: 1536, contextWindow: 96_000 },
+            tuning: { maxOutputTokens: 1536, contextWindow: 96_000 },
+          },
+          {
+            id: 'extraction',
+            rank: 30,
+            identity: {
+              provider: 'openrouter',
+              model: 'extract/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [
+              { purpose: 'extraction', primary: true },
+              { purpose: 'import_processing', primary: true },
+            ],
+            capabilities: { maxOutputTokens: 1024, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 1024 },
+          },
+          {
+            id: 'reasoning',
+            rank: 40,
+            identity: {
+              provider: 'openrouter',
+              model: 'reason/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'reasoning', primary: true }],
+            capabilities: { maxOutputTokens: 2048, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 2048 },
+          },
+          {
+            id: 'long-context',
+            rank: 50,
+            identity: {
+              provider: 'openrouter',
+              model: 'long/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'longContext', primary: true }],
+            capabilities: { maxOutputTokens: 4096, contextWindow: 256_000 },
+            tuning: { maxOutputTokens: 4096, contextWindow: 256_000 },
+          },
+          {
+            id: 'vision',
+            rank: 60,
+            identity: {
+              provider: 'openrouter',
+              model: 'vision/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'vision', primary: true }],
+            capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 4096 },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'memory ok' }],
+      model: 'openrouter:memory/model',
+      usage: { input: 8, output: 5 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Refresh context' }],
+        correlation: {
+          channelId: 'internal:heartbeat',
+        },
+      },
+      'memory',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
+    expect(model.id).toBe('memory/model');
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
+    expect(requestOptions.maxTokens).toBe(1536);
+
+    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
+    const parsed = JSON.parse(raw) as { schemaVersion: number; records: Array<Record<string, unknown>> };
+    expect(parsed.schemaVersion).toBe(1);
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.records[0]).toMatchObject({
+      purpose: 'memory',
+      service: 'memory',
+      process: 'memory',
+      inputTokens: 8,
+      outputTokens: 5,
+    });
   });
 });
 

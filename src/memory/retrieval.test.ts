@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
 import {
   MemoryRetriever,
   RetrievalIntegrityError,
@@ -11,6 +12,7 @@ import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
 import type { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
+import { ContactStore } from '../contacts/store.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
 
@@ -254,6 +256,75 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(approvedScope).toContain('Personal detail');
     expect(approvedScope).toContain('Intimate memory');
     expect(approvedScope).toContain('Confidential secret');
+  });
+
+  it('biases retrieval toward matching scope selectors when scope query is preferred', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Alpha scoped memory',
+        similarity: 0.85,
+        scopeRef: { kind: 'project', id: 'alpha' },
+        scopeTags: ['project:alpha'],
+      }),
+      makeMemory({
+        text: 'Beta scoped memory',
+        similarity: 0.9,
+        scopeRef: { kind: 'project', id: 'beta' },
+        scopeTags: ['project:beta'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'memory check',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { tags: ['project:alpha'] },
+    );
+
+    expect(result).toContain('Alpha scoped memory');
+    expect(result).toContain('Beta scoped memory');
+    expect(result.indexOf('Alpha scoped memory')).toBeLessThan(result.indexOf('Beta scoped memory'));
+  });
+
+  it('filters retrieval to matching scope selectors when scope query mode is only', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Alpha only memory',
+        scopeRef: { kind: 'project', id: 'alpha' },
+        scopeTags: ['project:alpha'],
+      }),
+      makeMemory({
+        text: 'Beta only memory',
+        scopeRef: { kind: 'project', id: 'beta' },
+        scopeTags: ['project:beta'],
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'memory check',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { refs: [{ kind: 'project', id: 'beta' }], mode: 'only' },
+    );
+
+    expect(result).toContain('Beta only memory');
+    expect(result).not.toContain('Alpha only memory');
   });
 
   it('primary trust + semi_private channel returns public + personal only', async () => {
@@ -1081,6 +1152,143 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).not.toContain('What you remember about this person:');
   });
 
+  it('uses visible social graph context to separate related people from canonical memories', async () => {
+    const db = new Database(':memory:');
+    const contactStore = new ContactStore(db, 'primary-user');
+    const primary = contactStore.upsert({
+      displayName: 'PrimaryUser',
+      discordUserId: 'primary-user',
+    });
+    const sibling = contactStore.upsert({
+      displayName: 'Alice',
+      discordUserId: 'alice-1',
+      trustLevel: 'trusted',
+      relationshipType: 'family',
+    });
+    const unrelated = contactStore.upsert({
+      displayName: 'Mallory',
+      discordUserId: 'mallory-1',
+      trustLevel: 'regular',
+      relationshipType: 'stranger',
+    });
+    contactStore.upsertSocialRelationshipEdge({
+      sourceEntityId: contactStore.getSocialGraphEntityByContactId(primary.id)!.id,
+      targetEntityId: contactStore.getSocialGraphEntityByContactId(sibling.id)!.id,
+      relationshipType: 'family',
+      directional: false,
+      sensitivity: 'personal',
+      confidence: 0.9,
+    });
+
+    const store = makeMockStore([
+      makeMemory({
+        id: 'self-memory',
+        text: 'PrimaryUser likes direct and candid communication.',
+        contactId: primary.id,
+        sensitivity: 'public',
+        similarity: 0.93,
+      }),
+      makeMemory({
+        id: 'related-memory',
+        text: 'Alice is recovering from a long week and could use a gentle check-in.',
+        contactId: sibling.id,
+        sensitivity: 'public',
+        similarity: 0.91,
+      }),
+      makeMemory({
+        id: 'other-memory',
+        text: 'Mallory is dealing with a delayed shipment.',
+        contactId: unrelated.id,
+        sensitivity: 'public',
+        similarity: 0.89,
+      }),
+    ]);
+    const retriever = new MemoryRetriever(
+      store,
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      undefined,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'How is your family doing lately?',
+      'api:test',
+      'primary',
+      undefined,
+      primary.id,
+    );
+
+    expect(result).toContain('Relationship context for this person:');
+    expect(result).toContain('Alice is a separate person connected to PrimaryUser as family.');
+    expect(result).toContain('What you remember about this person:');
+    expect(result).toContain('PrimaryUser likes direct and candid communication.');
+    expect(result).toContain('Relevant memories about other people in their social context:');
+    expect(result).toContain('Alice [family; trusted contact]: Alice is recovering from a long week');
+    expect(result).toContain('Relevant memories about other separate people:');
+    expect(result).toContain('Mallory [stranger; regular contact]: Mallory is dealing with a delayed shipment.');
+    expect(result).toContain('Keep memories about related people attributed to the named person');
+  });
+
+  it('does not expose relationship framing when graph visibility is hidden at the current trust tier', async () => {
+    const db = new Database(':memory:');
+    const contactStore = new ContactStore(db, 'primary-user');
+    const primary = contactStore.upsert({
+      displayName: 'PrimaryUser',
+      discordUserId: 'primary-user',
+    });
+    const sibling = contactStore.upsert({
+      displayName: 'Alice',
+      discordUserId: 'alice-1',
+      trustLevel: 'trusted',
+      relationshipType: 'family',
+    });
+    contactStore.upsertSocialRelationshipEdge({
+      sourceEntityId: contactStore.getSocialGraphEntityByContactId(primary.id)!.id,
+      targetEntityId: contactStore.getSocialGraphEntityByContactId(sibling.id)!.id,
+      relationshipType: 'family',
+      directional: false,
+      sensitivity: 'personal',
+      confidence: 0.9,
+    });
+
+    const store = makeMockStore([
+      makeMemory({
+        id: 'self-memory',
+        text: 'PrimaryUser likes direct and candid communication.',
+        contactId: primary.id,
+        sensitivity: 'public',
+        similarity: 0.93,
+      }),
+      makeMemory({
+        id: 'related-memory',
+        text: 'Alice is recovering from a long week and could use a gentle check-in.',
+        contactId: sibling.id,
+        sensitivity: 'public',
+        similarity: 0.91,
+      }),
+    ]);
+    const retriever = new MemoryRetriever(
+      store,
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      undefined,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'How is your family doing lately?',
+      '1234567890',
+      'regular',
+      undefined,
+      primary.id,
+    );
+
+    expect(result).not.toContain('Relationship context for this person:');
+    expect(result).toContain('Relevant memories about other separate people:');
+    expect(result).toContain('Alice [family; trusted contact]: Alice is recovering from a long week');
+  });
+
   it('injects emotional continuity snapshot when contact mood metadata is available', async () => {
     const memories = [
       makeMemory({ text: 'A semantic fact', type: 'semantic', sensitivity: 'public', similarity: 0.9 }),
@@ -1792,7 +2000,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     );
     expect(llmProvider.complete).toHaveBeenCalledTimes(3);
     const llmCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls;
-    expect(llmCalls.every((call) => call[1] === 'context')).toBe(true);
+    expect(llmCalls.every((call) => call[1] === 'memory')).toBe(true);
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt).toContain('Alpha baseline memory');
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[2][0].systemPrompt).toContain('Delta best continuity anchor');
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;

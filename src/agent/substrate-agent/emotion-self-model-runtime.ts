@@ -3,6 +3,7 @@ import type { EmotionObserver, EmotionObserverResult } from '../../emotion/obser
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from '../../emotion/state.js';
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
 import type { ActiveConcern, ActiveConcernContextProvider } from '../../intention/concerns.js';
+import type { PendingFollowUp, PendingFollowUpContextProvider } from '../../intention/pending-follow-ups.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { Contact } from '../../contacts/types.js';
@@ -38,6 +39,7 @@ export interface EmotionSelfModelRuntimeOptions {
   llmProvider: LLMProvider;
   emotionRuntime?: EmotionSelfModelRuntimeWiring;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
+  getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
   getContactStore: () => ContactStore | null;
   getSelfModelRuntimeRequired: () => boolean;
   logger: EmotionSelfModelRuntimeLogger;
@@ -55,6 +57,7 @@ export class EmotionSelfModelRuntime {
 
   private readonly sessionManager: SessionManager;
   private readonly getActiveConcernProvider: () => ActiveConcernContextProvider | null;
+  private readonly getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
   private readonly getContactStore: () => ContactStore | null;
   private readonly getSelfModelRuntimeRequired: () => boolean;
   private readonly logger: EmotionSelfModelRuntimeLogger;
@@ -62,6 +65,7 @@ export class EmotionSelfModelRuntime {
   constructor(options: EmotionSelfModelRuntimeOptions) {
     this.sessionManager = options.sessionManager;
     this.getActiveConcernProvider = options.getActiveConcernProvider;
+    this.getPendingFollowUpProvider = options.getPendingFollowUpProvider;
     this.getContactStore = options.getContactStore;
     this.getSelfModelRuntimeRequired = options.getSelfModelRuntimeRequired;
     this.logger = options.logger;
@@ -98,6 +102,10 @@ export class EmotionSelfModelRuntime {
     const activeConcernProvider = this.getActiveConcernProvider();
     if (!activeConcernProvider) {
       throw new Error('Self-model runtime wiring is required but ActiveConcernProvider is not configured');
+    }
+    const pendingFollowUpProvider = this.getPendingFollowUpProvider();
+    if (!pendingFollowUpProvider) {
+      throw new Error('Self-model runtime wiring is required but PendingFollowUpProvider is not configured');
     }
 
     const contactStore = this.getContactStore();
@@ -147,6 +155,7 @@ export class EmotionSelfModelRuntime {
     sessionChannelId: string;
   }): InternalState {
     const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
+    const pendingFollowUps = this.resolveInternalStatePendingFollowUps(input.canonicalContactKey);
     const contactEmotionalSnapshot = this.resolveContactEmotionalSnapshot(input.canonicalContactKey);
     const recentTurnCount = this.resolveRecentTurnCount(input.sessionChannelId);
     const lastSeenDeltaSeconds = this.resolveContactLastSeenDeltaSeconds(
@@ -158,6 +167,7 @@ export class EmotionSelfModelRuntime {
     return this.internalStateComputer.computeState({
       emotionState,
       activeConcerns,
+      pendingFollowUps,
       trustLevel: input.trustLevel,
       ...(input.canonicalContactKey ? { contactId: input.canonicalContactKey } : {}),
       contactEmotionalSnapshot,
@@ -313,6 +323,16 @@ export class EmotionSelfModelRuntime {
       throw new Error('Active concern provider returned an invalid payload for InternalState computation');
     }
     return concerns;
+  }
+
+  private resolveInternalStatePendingFollowUps(canonicalContactKey?: string): PendingFollowUp[] {
+    const pendingFollowUpProvider = this.getPendingFollowUpProvider();
+    if (!pendingFollowUpProvider) return [];
+    const followUps = pendingFollowUpProvider.getPendingFollowUps(canonicalContactKey);
+    if (!Array.isArray(followUps)) {
+      throw new Error('Pending follow-up provider returned an invalid payload for InternalState computation');
+    }
+    return followUps;
   }
 
   private resolveContactEmotionalSnapshot(canonicalContactKey?: string): EmotionalSnapshot | null {

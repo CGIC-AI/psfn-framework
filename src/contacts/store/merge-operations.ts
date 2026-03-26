@@ -9,6 +9,7 @@ import {
 } from './identity-utils.js';
 import { mergeChannelActivityRows, mergeChannelIdentityRows } from './merge.js';
 import { maybeHasContactLinkedTable } from './schema.js';
+import { mergeSocialGraphForContacts } from './social-graph.js';
 
 export interface MergeContext {
   db: Database.Database;
@@ -30,6 +31,7 @@ export function mergeContacts(
 
     mergeChannelIdentityRows(context.db, sourceId, targetId);
     mergeChannelActivityRows(context.db, sourceId, targetId);
+    mergeSocialGraphForContacts(context.db, sourceId, targetId);
 
     if (maybeHasContactLinkedTable(context.db, 'l2_memories', 'contact_id')) {
       context.db.prepare('UPDATE l2_memories SET contact_id = ? WHERE contact_id = ?')

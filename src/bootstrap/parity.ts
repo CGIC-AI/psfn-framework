@@ -119,6 +119,7 @@ import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
   decisionsToPostTurnActionCandidates,
+  isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
   sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
@@ -188,11 +189,26 @@ interface HeartbeatRuntimeOptions {
     channelId: string;
     canonicalContactKey?: string;
   }) => Promise<readonly ActiveConcernSnapshot[]> | readonly ActiveConcernSnapshot[];
+  getRecentResolvedConcerns?: (input: {
+    channelId: string;
+    canonicalContactKey?: string;
+  }) => Promise<readonly ActiveConcernSnapshot[]> | readonly ActiveConcernSnapshot[];
   onIntentionConcernDecision?: (input: {
     decision: IntentionActionDecision;
     channelId: string;
     canonicalContactKey?: string;
     sourceMessageId: string;
+  }) => Promise<void> | void;
+  onIntentionFollowUpDecision?: (input: {
+    decision: IntentionActionDecision;
+    channelId: string;
+    channelType: SubstrateMessage['channelType'];
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+  }) => Promise<string | undefined> | string | undefined;
+  onIntentionFollowUpActivated?: (input: {
+    pendingFollowUpId: string;
+    activationReason?: string;
   }) => Promise<void> | void;
   onBehavioralPatternOutcome?: (input: {
     channelId: string;
@@ -1235,12 +1251,19 @@ export function wireHeartbeatRuntime(
             canonicalContactKey: context.canonicalContactKey,
           }) ?? [],
         );
+        const recentlyResolvedConcerns = await Promise.resolve(
+          runtimeOptions.getRecentResolvedConcerns?.({
+            channelId: resolvedSessionId,
+            canonicalContactKey: context.canonicalContactKey,
+          }) ?? [],
+        );
         const decisions = await intentionAppraisal.evaluate({
           sessionId: resolvedSessionId,
           internalState,
           currentEmotion,
           recentMessages,
           activeConcerns,
+          recentlyResolvedConcerns,
           contactEmotionalSnapshot,
           conversationTrajectory: buildConversationTrajectory(context),
           ...(motivationAssessment?.shouldTriggerAppraisal
@@ -1262,10 +1285,34 @@ export function wireHeartbeatRuntime(
             });
           }
         }
+        if (runtimeOptions.onIntentionFollowUpDecision) {
+          for (const decision of decisions) {
+            if (decision.type !== 'followUp') continue;
+            const pendingFollowUpId = await runtimeOptions.onIntentionFollowUpDecision({
+              decision,
+              channelId: resolvedSessionId,
+              channelType: context.message.channelType,
+              canonicalContactKey: context.canonicalContactKey,
+              sourceMessageId: context.message.id,
+            });
+            if (pendingFollowUpId) {
+              decision.followUp = {
+                ...decision.followUp,
+                pendingFollowUpId,
+              };
+            }
+          }
+        }
 
-        const candidates = decisionsToPostTurnActionCandidates(decisions, {
-          message: context.message,
-        });
+        const candidates = decisionsToPostTurnActionCandidates(
+          decisions,
+          {
+            message: context.message,
+          },
+          isBackgroundAppraisalChannel(context.message.channelId)
+            ? { surfacePendingFollowUpsImmediately: true }
+            : {},
+        );
         if (candidates.length === 0) {
           return;
         }
@@ -1450,6 +1497,12 @@ export function wireHeartbeatRuntime(
             const payload = normalizeIntentionFollowUpActionPayload(action.payload);
             if (!payload) {
               throw new Error(`Intention follow-up action "${action.id}" payload is missing required fields`);
+            }
+            if (payload.pendingFollowUpId && runtimeOptions.onIntentionFollowUpActivated) {
+              await runtimeOptions.onIntentionFollowUpActivated({
+                pendingFollowUpId: payload.pendingFollowUpId,
+                activationReason: 'post_turn_action',
+              });
             }
             agentLoop.followUp?.({
               id: `intention-follow-up:${action.id}`,

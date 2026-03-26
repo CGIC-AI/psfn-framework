@@ -77,6 +77,31 @@ psfn_first_existing_file() {
   return 1
 }
 
+psfn_source_dotenv_preserving_existing_env() {
+  local dotenv_file="${1:-}"
+  if [ -z "${dotenv_file}" ] || [ ! -f "${dotenv_file}" ]; then
+    return 0
+  fi
+
+  local -A existing_env=()
+  local entry name value
+  while IFS= read -r -d '' entry; do
+    name="${entry%%=*}"
+    value="${entry#*=}"
+    existing_env["${name}"]="${value}"
+  done < <(env -0)
+
+  set -a
+  # shellcheck disable=SC1090
+  source "${dotenv_file}"
+  set +a
+
+  for name in "${!existing_env[@]}"; do
+    printf -v "${name}" '%s' "${existing_env[${name}]}"
+    export "${name}"
+  done
+}
+
 psfn_detect_module_registry_path() {
   local workspace_path
   workspace_path="$(psfn_resolve_runtime_workspace_path)"

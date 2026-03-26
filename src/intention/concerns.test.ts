@@ -118,6 +118,61 @@ describe('ActiveConcernStore', () => {
     expect(active[0].text).toBe('Still active');
   });
 
+  it('lists recently resolved concerns within the configured lookback window', () => {
+    const recent = store.create({
+      text: 'Recent cleanup reminder',
+      contactId: 'contact-a',
+    });
+    const stale = store.create({
+      text: 'Old cleanup reminder',
+      contactId: 'contact-a',
+    });
+
+    store.resolveConcern(recent.id, {
+      outcome: 'Handled during this conversation',
+      resolvedAt: '2026-02-01T09:30:00.000Z',
+    });
+    store.resolveConcern(stale.id, {
+      outcome: 'Handled yesterday',
+      resolvedAt: '2026-01-31T23:00:00.000Z',
+    });
+
+    const recentResolved = store.listRecentlyResolvedConcerns('contact-a', {
+      asOf: '2026-02-01T10:00:00.000Z',
+      withinMs: 2 * 60 * 60 * 1000,
+    });
+    expect(recentResolved.map(concern => concern.text)).toEqual([
+      'Recent cleanup reminder',
+    ]);
+  });
+
+  it('matches similar recently resolved concerns to suppress duplicate recreation', () => {
+    const created = store.create({
+      text: 'Follow up on medication tomorrow morning',
+      contactId: 'contact-a',
+    });
+    store.resolveConcern(created.id, {
+      outcome: 'Handled already',
+      resolvedAt: '2026-02-01T09:45:00.000Z',
+    });
+
+    const match = store.findRecentlyResolvedSimilarConcern({
+      text: 'Follow up on medication tomorrow',
+      contactId: 'contact-a',
+      asOf: '2026-02-01T10:00:00.000Z',
+      withinMs: 60 * 60 * 1000,
+    });
+    expect(match?.id).toBe(created.id);
+
+    const staleMatch = store.findRecentlyResolvedSimilarConcern({
+      text: 'Follow up on medication tomorrow',
+      contactId: 'contact-a',
+      asOf: '2026-02-02T10:00:00.000Z',
+      withinMs: 60 * 60 * 1000,
+    });
+    expect(staleMatch).toBeNull();
+  });
+
   it('throws when expiresAt is not after createdAt', () => {
     expect(() => store.create({
       text: 'Bad expiry',

@@ -5,7 +5,7 @@ import type {
   RetrievalVADInput,
 } from '../agent/contracts.js';
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
-import type { PurrMemory, MemoryPrivacyRiskBreakdown } from './types.js';
+import type { PurrMemory, MemoryPrivacyRiskBreakdown, MemoryScopeQuery } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
 import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';
@@ -35,6 +35,7 @@ import {
 import { computeBoundarySimilarityBoost, isBoundaryMemory } from './boundary-log.js';
 import { createComponentLogger } from '../logger.js';
 import type { ContactStore } from '../contacts/store.js';
+import type { Contact, SocialRelationshipEdge } from '../contacts/types.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
 import { getRequestContext } from '../llm/request-context.js';
@@ -65,6 +66,11 @@ import {
   type MemoryWithheldReasonTag,
   type MemoryWithheldSummary,
 } from './withheld-summary.js';
+import {
+  computeMemoryScopeMatchStrength,
+  memoryMatchesScopeQuery,
+  normalizeMemoryScopeQuery,
+} from './types.js';
 const log = createComponentLogger('Retrieval');
 
 /**
@@ -196,6 +202,21 @@ interface CompositionalRetrievalDecision {
 interface ProactiveWeightedMemory {
   memory: PurrMemory;
   weight: number;
+}
+
+interface RetrievalContactContext {
+  contactId: string;
+  displayName: string;
+  trustLevel: TrustLevel;
+  relationshipType: string;
+  relationshipLabels: string[];
+  relatedToCanonical: boolean;
+}
+
+interface RetrievalSocialContext {
+  canonicalContactId: string;
+  canonicalDisplayName: string;
+  relatedContactsById: ReadonlyMap<string, RetrievalContactContext>;
 }
 
 type RetrievalAccessRejectionKind = 'contact_scope' | 'sensitivity' | 'policy';
@@ -422,7 +443,9 @@ export class MemoryRetriever implements MemoryProvider {
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    scopeQuery?: MemoryScopeQuery,
   ): Promise<TurnMemorySnapshot> {
+    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
       channelId,
       ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
@@ -454,12 +477,13 @@ export class MemoryRetriever implements MemoryProvider {
         embedding,
         this.retrievalThreshold,
         candidateLimit,
+        normalizedScopeQuery,
       )
         .filter(memory => !isInternalMemoryArtifact(memory))
         .map(cloneScoredMemory);
       if (semanticCandidates.length === 0) {
         lexicalCandidates = this.memoryStore
-          .searchByText(contextText, candidateLimit)
+          .searchByText(contextText, candidateLimit, normalizedScopeQuery)
           .filter(memory => !isInternalMemoryArtifact(memory))
           .map(cloneScoredMemory);
       }
@@ -517,7 +541,9 @@ export class MemoryRetriever implements MemoryProvider {
     turnSnapshot?: TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     currentVAD?: RetrievalVADInput,
+    scopeQuery?: MemoryScopeQuery,
   ): Promise<string> {
+    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
       channelId,
       ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
@@ -529,6 +555,9 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
+    const socialContext = canonicalContactId
+      ? this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelVisibility)
+      : undefined;
     const telemetry: RetrievalTelemetry = {
       channelId,
       count: 0,
@@ -607,6 +636,7 @@ export class MemoryRetriever implements MemoryProvider {
         emotionalSnapshot,
         emotionalContinuityMemories: fallbackEmotionalContinuity,
         withheldSummary,
+        socialContext,
       });
     }
 
@@ -620,6 +650,7 @@ export class MemoryRetriever implements MemoryProvider {
           embedding,
           this.retrievalThreshold,
           candidateLimit,
+          normalizedScopeQuery,
         ).filter(memory => !isInternalMemoryArtifact(memory));
       }
       telemetry.semanticCandidateCount = semanticMemories.length;
@@ -630,6 +661,7 @@ export class MemoryRetriever implements MemoryProvider {
           ?? this.memoryStore.searchByText(
             contextText,
             Math.max(40, limit * 4),
+            normalizedScopeQuery,
           )).filter(memory => !isInternalMemoryArtifact(memory));
         telemetry.lexicalCandidateCount = lexicalMemories.length;
         if (lexicalMemories.length > 0) {
@@ -674,6 +706,7 @@ export class MemoryRetriever implements MemoryProvider {
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
+            socialContext,
           });
         }
       }
@@ -717,6 +750,9 @@ export class MemoryRetriever implements MemoryProvider {
       const policyAllowed: Array<PurrMemory & { similarity: number }> = [];
 
       for (const memory of memories) {
+        if (normalizedScopeQuery?.mode === 'only' && !memoryMatchesScopeQuery(memory, normalizedScopeQuery)) {
+          continue;
+        }
         const accessDecision = evaluateRetrievalAccessDecision(memory, {
           trustLevel: effectiveTrust,
           channelVisibility,
@@ -766,6 +802,7 @@ export class MemoryRetriever implements MemoryProvider {
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
+          socialContext,
         });
       }
 
@@ -779,6 +816,7 @@ export class MemoryRetriever implements MemoryProvider {
           ...computeRetrievalScore(memory, contextText, {
             currentVAD,
             moodCongruenceWeight: this.moodCongruenceWeight,
+            scopeQuery: normalizedScopeQuery,
           }),
         }))
         .sort((a, b) => b.score - a.score);
@@ -787,7 +825,11 @@ export class MemoryRetriever implements MemoryProvider {
         channelId,
         allScored,
       );
-      const scoredCandidates = rerankDecision.ranked ?? allScored;
+      const scoredCandidates = this.applySocialContextRankingAdjustments(
+        rerankDecision.ranked ?? allScored,
+        contextText,
+        socialContext,
+      );
       telemetry.compositionalMode = rerankDecision.mode;
       telemetry.compositionalCandidateCount = rerankDecision.candidateCount;
       telemetry.compositionalEvaluationBatchCount = rerankDecision.evaluationBatchCount;
@@ -862,6 +904,7 @@ export class MemoryRetriever implements MemoryProvider {
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
+          socialContext,
         });
       }
 
@@ -935,6 +978,7 @@ export class MemoryRetriever implements MemoryProvider {
         selected,
         telemetry.retrievalSource,
       );
+      const selectedContactContextById = this.buildSelectedContactContext(selected, socialContext);
 
       // Update access stats; fail closed if persistence fails.
       for (const s of selected) {
@@ -964,6 +1008,8 @@ export class MemoryRetriever implements MemoryProvider {
         emotionalSnapshot,
         emotionalContinuityMemories,
         withheldSummary,
+        socialContext,
+        contactContextById: selectedContactContextById,
       });
     } catch (error) {
       telemetry.reason = 'error';
@@ -995,6 +1041,7 @@ export class MemoryRetriever implements MemoryProvider {
     canonicalContactId?: string,
     turnSnapshot?: TurnMemorySnapshot,
     _turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    _scopeQuery?: MemoryScopeQuery,
   ): Promise<string> {
     if (this.proactiveRecallProbability <= 0) return '';
 
@@ -1105,6 +1152,161 @@ export class MemoryRetriever implements MemoryProvider {
       moodSamples,
       lastMoodUpdateEpochMs,
     };
+  }
+
+  private resolveRetrievalSocialContext(
+    canonicalContactId: string,
+    trustLevel: TrustLevel,
+    channelVisibility: ChannelVisibility,
+  ): RetrievalSocialContext | undefined {
+    if (!this.contactStore) return undefined;
+
+    const canonicalContact = this.contactStore.getById(canonicalContactId);
+    if (!canonicalContact) return undefined;
+
+    const canonicalEntity = this.contactStore.getSocialGraphEntityByContactId(canonicalContactId);
+    if (!canonicalEntity) {
+      return {
+        canonicalContactId,
+        canonicalDisplayName: canonicalContact.displayName,
+        relatedContactsById: new Map(),
+      };
+    }
+
+    const edges = this.contactStore.listSocialRelationshipEdges({
+      contactId: canonicalContactId,
+      viewerTrustLevel: trustLevel,
+      viewerChannelVisibility: channelVisibility,
+    });
+    const relatedContactsById = new Map<string, RetrievalContactContext>();
+    for (const edge of edges) {
+      const relatedContact = this.resolveRelatedContactFromEdge(
+        canonicalEntity.id,
+        edge,
+      );
+      if (!relatedContact) continue;
+
+      const existing = relatedContactsById.get(relatedContact.id);
+      relatedContactsById.set(
+        relatedContact.id,
+        mergeRetrievalContactContext(
+          existing,
+          this.buildRelatedContactContext(relatedContact, edge),
+        ),
+      );
+    }
+
+    return {
+      canonicalContactId,
+      canonicalDisplayName: canonicalContact.displayName,
+      relatedContactsById,
+    };
+  }
+
+  private resolveRelatedContactFromEdge(
+    canonicalEntityId: string,
+    edge: SocialRelationshipEdge,
+  ): Contact | undefined {
+    if (!this.contactStore) return undefined;
+
+    const otherEntityId = edge.sourceEntityId === canonicalEntityId
+      ? edge.targetEntityId
+      : edge.sourceEntityId;
+    const otherEntity = this.contactStore.getSocialGraphEntityById(otherEntityId);
+    if (!otherEntity?.contactId) return undefined;
+    return this.contactStore.getById(otherEntity.contactId);
+  }
+
+  private buildRelatedContactContext(
+    contact: Contact,
+    edge: SocialRelationshipEdge,
+  ): RetrievalContactContext {
+    return {
+      contactId: contact.id,
+      displayName: contact.displayName,
+      trustLevel: contact.trustLevel,
+      relationshipType: contact.relationshipType,
+      relationshipLabels: [normalizeRelationCue(edge.relationshipType)],
+      relatedToCanonical: true,
+    };
+  }
+
+  private buildSelectedContactContext(
+    selected: readonly ScoredMemory[],
+    socialContext?: RetrievalSocialContext,
+  ): ReadonlyMap<string, RetrievalContactContext> | undefined {
+    if (!this.contactStore) {
+      return socialContext?.relatedContactsById;
+    }
+
+    const contexts = new Map<string, RetrievalContactContext>(socialContext?.relatedContactsById ?? []);
+    for (const item of selected) {
+      const contactId = item.memory.contactId?.trim();
+      if (!contactId || contactId === socialContext?.canonicalContactId || contexts.has(contactId)) {
+        continue;
+      }
+      const contact = this.contactStore.getById(contactId);
+      if (!contact) continue;
+      contexts.set(contactId, {
+        contactId,
+        displayName: contact.displayName,
+        trustLevel: contact.trustLevel,
+        relationshipType: contact.relationshipType,
+        relationshipLabels: [],
+        relatedToCanonical: false,
+      });
+    }
+
+    return contexts.size > 0 ? contexts : undefined;
+  }
+
+  private applySocialContextRankingAdjustments(
+    candidates: readonly ScoredMemory[],
+    contextText: string,
+    socialContext?: RetrievalSocialContext,
+  ): ScoredMemory[] {
+    if (!socialContext) return [...candidates];
+
+    const queryTokens = new Set(tokenizeForExplicitMatch(contextText));
+    return candidates
+      .map((candidate) => ({
+        ...candidate,
+        score: candidate.score * this.resolveSocialContextScoreMultiplier(
+          candidate.memory,
+          queryTokens,
+          socialContext,
+        ),
+      }))
+      .sort((left, right) => right.score - left.score);
+  }
+
+  private resolveSocialContextScoreMultiplier(
+    memory: Pick<PurrMemory, 'contactId'>,
+    queryTokens: ReadonlySet<string>,
+    socialContext: RetrievalSocialContext,
+  ): number {
+    const contactId = memory.contactId?.trim();
+    if (!contactId) return 1;
+    if (contactId === socialContext.canonicalContactId) return 1.1;
+
+    const related = socialContext.relatedContactsById.get(contactId);
+    if (related) {
+      return querySuggestsContactFocus(queryTokens, related) ? 1.05 : 0.85;
+    }
+
+    const contact = this.contactStore?.getById(contactId);
+    if (contact && querySuggestsContactFocus(queryTokens, {
+      contactId,
+      displayName: contact.displayName,
+      trustLevel: contact.trustLevel,
+      relationshipType: contact.relationshipType,
+      relationshipLabels: [],
+      relatedToCanonical: false,
+    })) {
+      return 0.9;
+    }
+
+    return 0.45;
   }
 
   private collectEmotionalContinuityMemories(
@@ -1383,6 +1585,7 @@ function computeRetrievalScore(
   options?: {
     currentVAD?: RetrievalVADInput;
     moodCongruenceWeight: number;
+    scopeQuery?: MemoryScopeQuery;
   },
 ): {
   score: number;
@@ -1408,6 +1611,8 @@ function computeRetrievalScore(
   const boundarySimilarityBoost = isBoundaryMemory(memory)
     ? computeBoundarySimilarityBoost(contextText, memory)
     : 1;
+  const scopeMatchStrength = computeMemoryScopeMatchStrength(memory, options?.scopeQuery);
+  const scopeBoost = 1 + (scopeMatchStrength * 0.35);
   const accessReinforcementBoost = deriveAccessReinforcement(memory);
   const rawBaseScore = (
     memory.similarity *
@@ -1418,6 +1623,7 @@ function computeRetrievalScore(
     moodCongruenceFactor *
     typePriorityBoost *
     boundarySimilarityBoost *
+    scopeBoost *
     accessReinforcementBoost
   );
   const evidence = deriveEvidenceSupport(memory);
@@ -1622,11 +1828,16 @@ function renderPromptBlock(
     emotionalSnapshot?: EmotionalSnapshot;
     emotionalContinuityMemories?: PurrMemory[];
     withheldSummary?: MemoryWithheldSummary;
+    socialContext?: RetrievalSocialContext;
+    contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
   },
 ): string {
   const sections: string[] = [];
   if (profile && profile.summary.trim().length > 0) {
     sections.push(`Core profile for this person:\n${profile.summary.trim()}`);
+  }
+  if ((options?.socialContext?.relatedContactsById.size ?? 0) > 0) {
+    sections.push(renderSocialContext(options.socialContext!));
   }
   if (options?.emotionalSnapshot) {
     sections.push(renderEmotionalSnapshot(options.emotionalSnapshot));
@@ -1638,9 +1849,26 @@ function renderPromptBlock(
     sections.push(renderWithheldSummary(options.withheldSummary));
   }
   if (scored.length > 0) {
-    sections.push(formatMemoriesForPrompt(scored));
+    sections.push(formatMemoriesForPrompt(
+      scored,
+      options?.socialContext,
+      options?.contactContextById,
+    ));
   }
   return sections.join('\n\n');
+}
+
+function renderSocialContext(context: RetrievalSocialContext): string {
+  const lines = [...context.relatedContactsById.values()]
+    .sort((left, right) => left.displayName.localeCompare(right.displayName))
+    .map(contact => {
+      const relation = contact.relationshipLabels.length > 0
+        ? contact.relationshipLabels.join(', ')
+        : 'known relation';
+      return `- ${contact.displayName} is a separate person connected to ${context.canonicalDisplayName} as ${relation}.`;
+    });
+  lines.push(`- Keep memories about related people attributed to the named person instead of merging them into ${context.canonicalDisplayName}.`);
+  return `Relationship context for this person:\n${lines.join('\n')}`;
 }
 
 function renderEmotionalSnapshot(snapshot: EmotionalSnapshot): string {
@@ -1697,7 +1925,11 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
   ].join('\n');
 }
 
-function formatMemoriesForPrompt(scored: ScoredMemory[]): string {
+function formatMemoriesForPrompt(
+  scored: ScoredMemory[],
+  socialContext?: RetrievalSocialContext,
+  contactContextById?: ReadonlyMap<string, RetrievalContactContext>,
+): string {
   const boundaryMemories = scored.filter(item => isBoundaryMemory(item.memory));
   const nonBoundaryMemories = scored.filter(item => !isBoundaryMemory(item.memory));
   const sections: string[] = [];
@@ -1709,13 +1941,65 @@ function formatMemoriesForPrompt(scored: ScoredMemory[]): string {
     ));
   }
   if (nonBoundaryMemories.length > 0) {
-    sections.push(renderMemorySection(
-      'What you remember about this person:',
-      nonBoundaryMemories,
-    ));
+    if (socialContext) {
+      sections.push(...renderSociallyScopedMemorySections(
+        nonBoundaryMemories,
+        socialContext,
+        contactContextById,
+      ));
+    } else {
+      sections.push(renderMemorySection(
+        'What you remember about this person:',
+        nonBoundaryMemories,
+      ));
+    }
   }
 
   return sections.join('\n\n');
+}
+
+function renderSociallyScopedMemorySections(
+  scored: ScoredMemory[],
+  socialContext: RetrievalSocialContext,
+  contactContextById?: ReadonlyMap<string, RetrievalContactContext>,
+): string[] {
+  const canonical: ScoredMemory[] = [];
+  const related: ScoredMemory[] = [];
+  const separatePeople: ScoredMemory[] = [];
+
+  for (const item of scored) {
+    const contactId = item.memory.contactId?.trim();
+    if (!contactId || contactId === socialContext.canonicalContactId) {
+      canonical.push(item);
+      continue;
+    }
+    if (socialContext.relatedContactsById.has(contactId)) {
+      related.push(item);
+      continue;
+    }
+    separatePeople.push(item);
+  }
+
+  const sections: string[] = [];
+  if (canonical.length > 0) {
+    sections.push(renderMemorySection('What you remember about this person:', canonical));
+  }
+  if (related.length > 0) {
+    sections.push(renderAttributedMemorySection(
+      'Relevant memories about other people in their social context:',
+      related,
+      contactContextById,
+    ));
+  }
+  if (separatePeople.length > 0) {
+    sections.push(renderAttributedMemorySection(
+      'Relevant memories about other separate people:',
+      separatePeople,
+      contactContextById,
+    ));
+  }
+
+  return sections;
 }
 
 function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
@@ -1728,6 +2012,36 @@ function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
   });
 
   return `${heading}\n${lines.join('\n')}`;
+}
+
+function renderAttributedMemorySection(
+  heading: string,
+  scored: ScoredMemory[],
+  contactContextById?: ReadonlyMap<string, RetrievalContactContext>,
+): string {
+  const lines = scored.map(s => {
+    const memory = s.memory;
+    const valence =
+      memory.emotionalValence > 0.3 ? ' (+)' :
+      memory.emotionalValence < -0.3 ? ' (-)' : '';
+    const descriptor = memory.contactId ? contactContextById?.get(memory.contactId) : undefined;
+    const subjectPrefix = descriptor
+      ? `${descriptor.displayName}${formatContactDescriptorSuffix(descriptor)}: `
+      : '';
+    return `- [${memory.type}] ${subjectPrefix}${memory.text}${valence}`;
+  });
+  return `${heading}\n${lines.join('\n')}`;
+}
+
+function formatContactDescriptorSuffix(descriptor: RetrievalContactContext): string {
+  const cues: string[] = [];
+  if (descriptor.relatedToCanonical && descriptor.relationshipLabels.length > 0) {
+    cues.push(descriptor.relationshipLabels.join(', '));
+  } else if (descriptor.relationshipType.trim().length > 0) {
+    cues.push(descriptor.relationshipType);
+  }
+  cues.push(`${descriptor.trustLevel} contact`);
+  return ` [${cues.join('; ')}]`;
 }
 
 function clamp(val: number, min: number, max: number): number {
@@ -1793,4 +2107,47 @@ function renderProactiveRecall(memory: PurrMemory): string {
     'Spontaneous recall:',
     `- [${memory.type}] ${memory.text}${valenceSuffix}`,
   ].join('\n');
+}
+
+function normalizeRelationCue(value: string): string {
+  return value.trim().toLowerCase().replace(/_/g, ' ');
+}
+
+function mergeRetrievalContactContext(
+  existing: RetrievalContactContext | undefined,
+  incoming: RetrievalContactContext,
+): RetrievalContactContext {
+  if (!existing) return incoming;
+  return {
+    ...existing,
+    relationshipLabels: [...new Set([
+      ...existing.relationshipLabels,
+      ...incoming.relationshipLabels,
+    ])],
+    relatedToCanonical: existing.relatedToCanonical || incoming.relatedToCanonical,
+  };
+}
+
+function querySuggestsContactFocus(
+  queryTokens: ReadonlySet<string>,
+  contact: Pick<RetrievalContactContext, 'displayName' | 'relationshipType' | 'relationshipLabels'>,
+): boolean {
+  if (queryTokens.size === 0) return false;
+
+  const cues = new Set<string>([
+    ...tokenizeForExplicitMatch(contact.displayName),
+    ...tokenizeForExplicitMatch(normalizeRelationCue(contact.relationshipType)),
+  ]);
+  for (const label of contact.relationshipLabels) {
+    for (const token of tokenizeForExplicitMatch(label)) {
+      cues.add(token);
+    }
+  }
+
+  for (const cue of cues) {
+    if (queryTokens.has(cue)) {
+      return true;
+    }
+  }
+  return false;
 }

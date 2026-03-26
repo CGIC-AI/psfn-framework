@@ -169,7 +169,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             purpose: 'memory.extraction',
           },
         },
-        'background',
+        'extraction',
       );
 
       parsedFactGroups.push(parseFactsXml(response.content));

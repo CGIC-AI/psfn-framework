@@ -29,6 +29,7 @@ const DEFAULT_MAX_MESSAGE_CHARS = 400;
 const DEFAULT_MAX_CONCERN_COUNT = 8;
 const DEFAULT_MAX_DECISIONS = 4;
 const DEFAULT_DUE_SOON_WINDOW_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_FOLLOW_UP_PENDING_DELAY_MS = 5 * 60 * 1_000;
 
 const DEFAULT_SYSTEM_PROMPT = [
   'Given the current emotional state and conversation, decide if autonomous follow-up actions are needed.',
@@ -64,6 +65,7 @@ export interface ActiveConcernSnapshot {
   summary?: string;
   status?: string;
   dueAt?: number;
+  resolvedAt?: number;
   priority?: IntentionDecisionPriority | number;
 }
 
@@ -79,6 +81,7 @@ export interface IntentionFollowUpDecision {
   channelType?: ChannelType;
   authorId?: string;
   authorName?: string;
+  pendingFollowUpId?: string;
 }
 
 export interface IntentionConcernDecision {
@@ -111,6 +114,7 @@ export interface IntentionAppraisalInput {
   currentEmotion?: EmotionStateSnapshot | null;
   recentMessages: readonly IntentionAppraisalMessage[];
   activeConcerns?: readonly ActiveConcernSnapshot[];
+  recentlyResolvedConcerns?: readonly ActiveConcernSnapshot[];
   contactEmotionalSnapshot?: EmotionalSnapshot | null;
   conversationTrajectory?: ConversationTrajectorySnapshot;
   triggerOverride?: 'motivation';
@@ -139,12 +143,21 @@ export interface IntentionFollowUpActionPayload {
   authorId: string;
   authorName: string;
   content: string;
+  pendingFollowUpId?: string;
 }
 
 export interface IntentionDecisionActionContext {
   message: Pick<SubstrateMessage, 'id' | 'channelId' | 'channelType'>;
   fallbackAuthorId?: string;
   fallbackAuthorName?: string;
+}
+
+export interface IntentionDecisionActionOptions {
+  surfacePendingFollowUpsImmediately?: boolean;
+}
+
+export function isBackgroundAppraisalChannel(channelId: string): boolean {
+  return channelId.startsWith('internal:');
 }
 
 interface SessionAppraisalState {
@@ -158,6 +171,7 @@ interface NormalizedIntentionAppraisalInput {
   currentEmotion: EmotionStateSnapshot | null;
   recentMessages: IntentionAppraisalMessage[];
   activeConcerns: ActiveConcernSnapshot[];
+  recentlyResolvedConcerns: ActiveConcernSnapshot[];
   contactEmotionalSnapshot: EmotionalSnapshot | null;
   conversationTrajectory: ConversationTrajectorySnapshot | null;
   triggerOverride: 'motivation' | null;
@@ -374,6 +388,9 @@ function normalizeActiveConcerns(
     const dueAt = (typeof concern.dueAt === 'number' && Number.isFinite(concern.dueAt) && concern.dueAt > 0)
       ? Math.floor(concern.dueAt)
       : undefined;
+    const resolvedAt = (typeof concern.resolvedAt === 'number' && Number.isFinite(concern.resolvedAt) && concern.resolvedAt > 0)
+      ? Math.floor(concern.resolvedAt)
+      : undefined;
     const priority = normalizeConcernPriority(concern.priority);
     normalized.push({
       ...(id ? { id } : {}),
@@ -381,6 +398,7 @@ function normalizeActiveConcerns(
       ...(summary ? { summary } : {}),
       ...(status ? { status } : {}),
       ...(dueAt !== undefined ? { dueAt } : {}),
+      ...(resolvedAt !== undefined ? { resolvedAt } : {}),
       ...(priority ? { priority } : {}),
     });
   }
@@ -491,6 +509,10 @@ function normalizeInput(
     input.activeConcerns ?? (internalState ? activeConcernsFromInternalState(internalState) : undefined),
     options.maxConcernCount,
   );
+  const recentlyResolvedConcerns = normalizeActiveConcerns(
+    input.recentlyResolvedConcerns,
+    options.maxConcernCount,
+  );
   const contactEmotionalSnapshot = normalizeContactEmotionalSnapshot(input.contactEmotionalSnapshot);
   const conversationTrajectory = normalizeConversationTrajectory(input.conversationTrajectory);
   const triggerOverride = normalizeTriggerOverride(input.triggerOverride);
@@ -509,6 +531,7 @@ function normalizeInput(
     currentEmotion,
     recentMessages,
     activeConcerns,
+    recentlyResolvedConcerns,
     contactEmotionalSnapshot,
     conversationTrajectory,
     triggerOverride,
@@ -621,7 +644,7 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
   if (!isRecord(value)) return undefined;
   const content = typeof value.content === 'string' ? value.content.trim() : '';
   if (!content) return undefined;
- const channelId = typeof value.channelId === 'string' ? value.channelId.trim() : '';
+  const channelId = typeof value.channelId === 'string' ? value.channelId.trim() : '';
   const channelType = (
     value.channelType === 'terminal'
     || value.channelType === 'api'
@@ -632,6 +655,9 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     : undefined;
   const authorId = typeof value.authorId === 'string' ? value.authorId.trim() : '';
   const authorName = typeof value.authorName === 'string' ? value.authorName.trim() : '';
+  const pendingFollowUpId = typeof value.pendingFollowUpId === 'string'
+    ? value.pendingFollowUpId.trim()
+    : '';
 
   return {
     content,
@@ -639,6 +665,7 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     ...(channelType ? { channelType } : {}),
     ...(authorId ? { authorId } : {}),
     ...(authorName ? { authorName } : {}),
+    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
   };
 }
 
@@ -793,15 +820,37 @@ function normalizeActionRunAt(value: unknown): number | undefined {
   return parseOptionalDueAt(value);
 }
 
-function resolveFollowUpRunAt(decision: IntentionActionDecision, now: number): number | undefined {
-  if (decision.timing !== 'soon' && decision.timing !== 'scheduled') {
-    return undefined;
-  }
+function resolveFollowUpRunAt(
+  decision: IntentionActionDecision,
+  now: number,
+  options: IntentionDecisionActionOptions = {},
+): number | undefined {
   const runAt = normalizeActionRunAt(decision.dueAt);
-  if (runAt === undefined) {
-    return undefined;
+  if (decision.timing === 'immediate') {
+    return runAt ?? now;
   }
-  return Math.max(now, runAt);
+
+  if (decision.timing === 'soon') {
+    if (runAt !== undefined) {
+      return Math.max(now, runAt);
+    }
+    if (options.surfacePendingFollowUpsImmediately) {
+      return now;
+    }
+    return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
+  }
+
+  if (decision.timing === 'scheduled') {
+    if (runAt !== undefined) {
+      return Math.max(now, runAt);
+    }
+    if (options.surfacePendingFollowUpsImmediately) {
+      return now;
+    }
+    return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
+  }
+
+  return undefined;
 }
 
 function normalizeCandidatePayload(payload: PostTurnActionCandidate['payload']): Record<string, unknown> {
@@ -988,6 +1037,7 @@ function buildRuntimeAppraisalSystemPrompt(
 export function decisionsToPostTurnActionCandidates(
   decisions: readonly IntentionActionDecision[],
   context: IntentionDecisionActionContext,
+  options: IntentionDecisionActionOptions = {},
 ): PostTurnActionCandidate[] {
   const candidates: PostTurnActionCandidate[] = [];
 
@@ -995,7 +1045,7 @@ export function decisionsToPostTurnActionCandidates(
     if (decision.type === 'followUp') {
       const content = decision.followUp?.content.trim() ?? '';
       if (!content) continue;
-      const runAt = resolveFollowUpRunAt(decision, Date.now());
+      const runAt = resolveFollowUpRunAt(decision, Date.now(), options);
       const channelId = decision.followUp?.channelId?.trim() || context.message.channelId;
       const channelType = decision.followUp?.channelType ?? context.message.channelType;
       const dedupeKey = `${INTENTION_FOLLOW_UP_ACTION_KIND}:${context.message.id}:${hashString(content)}`;
@@ -1008,6 +1058,9 @@ export function decisionsToPostTurnActionCandidates(
           authorId: INTENTION_FOLLOW_UP_AUTHOR_ID,
           authorName: INTENTION_FOLLOW_UP_AUTHOR_NAME,
           content,
+          ...(decision.followUp?.pendingFollowUpId
+            ? { pendingFollowUpId: decision.followUp.pendingFollowUpId }
+            : {}),
         } satisfies IntentionFollowUpActionPayload,
         maxRetries: 1,
         ...(runAt !== undefined ? { runAt } : {}),
@@ -1042,6 +1095,9 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
   const authorId = typeof payload.authorId === 'string' ? payload.authorId.trim() : '';
   const authorName = typeof payload.authorName === 'string' ? payload.authorName.trim() : '';
   const content = typeof payload.content === 'string' ? payload.content.trim() : '';
+  const pendingFollowUpId = typeof payload.pendingFollowUpId === 'string'
+    ? payload.pendingFollowUpId.trim()
+    : '';
   const channelType = payload.channelType;
   if (!channelId || !authorId || !authorName || !content) return null;
   if (
@@ -1049,6 +1105,7 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
     && channelType !== 'api'
     && channelType !== 'discord'
     && channelType !== 'telegram'
+    && channelType !== 'psfn-amica'
   ) {
     return null;
   }
@@ -1059,6 +1116,7 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
     authorId,
     authorName,
     content,
+    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
   };
 }
 
@@ -1277,6 +1335,17 @@ export class IntentionAppraisal {
         ...(dueAtLabel ? { dueAt: dueAtLabel } : {}),
       };
     });
+    const promptRecentlyResolvedConcerns = normalized.recentlyResolvedConcerns.map((concern) => {
+      const resolvedAtLabel = formatPromptTimestamp(concern.resolvedAt);
+      return {
+        ...(concern.id ? { id: concern.id } : {}),
+        ...(concern.title ? { title: concern.title } : {}),
+        ...(concern.summary ? { summary: concern.summary } : {}),
+        ...(concern.status ? { status: concern.status } : {}),
+        ...(concern.priority !== undefined ? { priority: concern.priority } : {}),
+        ...(resolvedAtLabel ? { resolvedAt: resolvedAtLabel } : {}),
+      };
+    });
     let persona: AppraisalPersonaContext | null;
     try {
       persona = buildAppraisalPersonaContext(
@@ -1320,6 +1389,7 @@ export class IntentionAppraisal {
         : null,
       contactEmotionalSnapshot: normalized.contactEmotionalSnapshot,
       activeConcerns: promptActiveConcerns,
+      recentlyResolvedConcerns: promptRecentlyResolvedConcerns,
       conversationTrajectory: normalized.conversationTrajectory,
       ...(normalized.motivationSignals.length > 0 ? { motivationSignals: normalized.motivationSignals } : {}),
       recentMessages: promptRecentMessages,

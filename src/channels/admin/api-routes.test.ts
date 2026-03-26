@@ -1472,6 +1472,156 @@ describe('AdminServer JSON API routes', () => {
     expect(memoryStore.listActiveMemories({ limit: 10, offset: 0 }).map(memory => memory.id)).not.toContain('bulk-mem-3');
   });
 
+  it('supports managed memory scope browsing, provenance inspection, and repair', async () => {
+    const now = Date.now();
+    memoryStore.insertMemory({
+      id: 'scope-mem-1',
+      text: 'Alpha scoped memory',
+      type: 'semantic',
+      importance: 0.7,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.7,
+      sourceRef: 'api:scope:1',
+      extractedAt: now,
+      lastAccessed: now,
+      accessCount: 0,
+      tags: ['scope'],
+      scopeRef: { kind: 'project', id: 'alpha', label: 'Alpha Project' },
+      scopeTags: ['scope:alpha'],
+      provenanceRefs: ['turn:scope-alpha'],
+      sensitivity: 'personal',
+    }, new Float32Array([0.11, 0.12, 0.13]));
+    memoryStore.insertMemory({
+      id: 'scope-mem-2',
+      text: 'North star scoped memory',
+      type: 'reflection',
+      importance: 0.65,
+      confidence: 0.84,
+      emotionalValence: 0.1,
+      salience: 0.6,
+      sourceRef: 'api:scope:2',
+      extractedAt: now + 1,
+      lastAccessed: now + 1,
+      accessCount: 0,
+      tags: ['scope'],
+      scopeRef: { kind: 'north_star', id: 'steady-growth', label: 'Steady Growth' },
+      scopeTags: ['north_star:steady-growth'],
+      provenanceRefs: ['memory:scope-root'],
+      sensitivity: 'personal',
+    }, new Float32Array([0.21, 0.22, 0.23]));
+
+    const scopeListRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory/scopes?kind=project',
+      undefined,
+      authHeaders,
+    );
+    expect(scopeListRes.status).toBe(200);
+    const scopeListPayload = JSON.parse(scopeListRes.body) as {
+      scopes: Array<{ kind: string; id: string; needsRepairCount: number; canonicalTag: string }>;
+    };
+    expect(scopeListPayload.scopes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'project',
+        id: 'alpha',
+        canonicalTag: 'project:alpha',
+        needsRepairCount: 1,
+      }),
+    ]));
+
+    const scopeDetailRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory/scopes/project:alpha/detail',
+      undefined,
+      authHeaders,
+    );
+    expect(scopeDetailRes.status).toBe(200);
+    const scopeDetailPayload = JSON.parse(scopeDetailRes.body) as {
+      scope: { canonicalTag: string; needsRepairCount: number };
+      memories: Array<{
+        memory: { id: string };
+        evidence: Array<{ type: string; value: string }>;
+        repair: { needsRepair: boolean; suggestedScopeTags: string[] };
+      }>;
+    };
+    expect(scopeDetailPayload.scope.canonicalTag).toBe('project:alpha');
+    expect(scopeDetailPayload.scope.needsRepairCount).toBe(1);
+    expect(scopeDetailPayload.memories).toHaveLength(1);
+    expect(scopeDetailPayload.memories[0]?.memory.id).toBe('scope-mem-1');
+    expect(scopeDetailPayload.memories[0]?.evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'scope_ref', value: 'project:alpha' }),
+      expect.objectContaining({ type: 'provenance_ref', value: 'turn:scope-alpha' }),
+    ]));
+    expect(scopeDetailPayload.memories[0]?.repair.suggestedScopeTags).toContain('project:alpha');
+
+    const detailBeforeRepairRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory/scope-mem-1',
+      undefined,
+      authHeaders,
+    );
+    expect(detailBeforeRepairRes.status).toBe(200);
+    const detailBeforeRepair = JSON.parse(detailBeforeRepairRes.body) as {
+      scopeRepair: { needsRepair: boolean; suggestedScopeTags: string[] };
+      scopeAssignments: Array<{ canonicalTag: string }>;
+    };
+    expect(detailBeforeRepair.scopeRepair.needsRepair).toBe(true);
+    expect(detailBeforeRepair.scopeAssignments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ canonicalTag: 'project:alpha' }),
+    ]));
+
+    const repairRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/scope-update',
+      JSON.stringify({ id: 'scope-mem-1', repair: true }),
+      authHeaders,
+    );
+    expect(repairRes.status).toBe(200);
+    const repairPayload = JSON.parse(repairRes.body) as {
+      ok: boolean;
+      memory: { scopeTags: string[]; scopeRef: { kind: string; id: string } };
+      scopeRepair: { needsRepair: boolean };
+    };
+    expect(repairPayload.ok).toBe(true);
+    expect(repairPayload.memory.scopeRef).toEqual({ kind: 'project', id: 'alpha', label: 'Alpha Project' });
+    expect(repairPayload.memory.scopeTags).toEqual(expect.arrayContaining(['project:alpha', 'scope:alpha']));
+    expect(repairPayload.scopeRepair.needsRepair).toBe(false);
+
+    const manualUpdateRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/scope-update',
+      JSON.stringify({
+        id: 'scope-mem-2',
+        scopeRef: { kind: 'north_star', id: 'steady-growth', label: 'Steady Growth v2' },
+        scopeTags: ['north_star:steady-growth', 'vision:steady'],
+      }),
+      authHeaders,
+    );
+    expect(manualUpdateRes.status).toBe(200);
+    const manualUpdatePayload = JSON.parse(manualUpdateRes.body) as {
+      ok: boolean;
+      memory: { scopeRef?: { label?: string }; scopeTags?: string[] };
+    };
+    expect(manualUpdatePayload.ok).toBe(true);
+    expect(manualUpdatePayload.memory.scopeRef?.label).toBe('Steady Growth v2');
+    expect(manualUpdatePayload.memory.scopeTags).toEqual(['north_star:steady-growth', 'vision:steady']);
+
+    const invalidScopeKindRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory/scopes?kind=conversation',
+      undefined,
+      authHeaders,
+    );
+    expect(invalidScopeKindRes.status).toBe(400);
+  });
+
   it('fails closed for unknown client memory paths and keeps canonical /api/admin memory data', async () => {
     memoryStore.insertMemory({
       id: 'ui-memory-1',
@@ -1868,16 +2018,57 @@ describe('AdminServer JSON API routes', () => {
       relationshipType: 'friend',
       notes: 'before',
     });
+    const mentioned = contactStore.upsert({
+      displayName: 'Mentioned Friend',
+      relationshipType: 'friend',
+    });
     contactStore.linkChannelIdentity(contact.id, 'discord', 'api-contact-user', {
       privacyLevel: 'semi_private',
     });
     contactStore.recordChannelActivity(contact.id, 'discord', '1313001762793197678');
+    const contactEntity = contactStore.getSocialGraphEntityByContactId(contact.id)!;
+    const mentionedEntity = contactStore.getSocialGraphEntityByContactId(mentioned.id)!;
+    contactStore.upsertSocialRelationshipEdge({
+      sourceEntityId: contactEntity.id,
+      targetEntityId: mentionedEntity.id,
+      relationshipType: 'friend',
+      directional: false,
+      sensitivity: 'personal',
+      provenanceRefs: ['memory:api-mention'],
+      evidenceMemoryIds: ['mem-api-mention-1'],
+      confidence: 0.88,
+    });
 
     const listRes = await request(port, 'GET', '/api/admin/contacts', undefined, authHeaders);
     expect(listRes.status).toBe(200);
     expect(listRes.headers['cache-control']).toBe('no-store');
-    const listPayload = JSON.parse(listRes.body) as { contacts: Array<{ id: string }> };
+    const listPayload = JSON.parse(listRes.body) as {
+      contacts: Array<{ id: string }>;
+      socialGraphMap: Record<string, {
+        edgeCount: number;
+        mentionOnlyNeighborCount: number;
+        connections: Array<{
+          relationshipType: string;
+          evidenceMemoryIds: string[];
+          neighbor: { contactId?: string; mentionOnly: boolean };
+        }>;
+      }>;
+    };
     expect(listPayload.contacts.some(entry => entry.id === contact.id)).toBe(true);
+    expect(listPayload.socialGraphMap[contact.id]).toMatchObject({
+      edgeCount: 1,
+      mentionOnlyNeighborCount: 1,
+      connections: [
+        expect.objectContaining({
+          relationshipType: 'friend',
+          evidenceMemoryIds: ['mem-api-mention-1'],
+          neighbor: expect.objectContaining({
+            contactId: mentioned.id,
+            mentionOnly: true,
+          }),
+        }),
+      ],
+    });
 
     const detailRes = await request(port, 'GET', `/api/admin/contacts/${contact.id}`, undefined, authHeaders);
     expect(detailRes.status).toBe(200);

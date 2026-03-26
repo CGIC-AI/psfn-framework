@@ -4,8 +4,21 @@ import type { ContactStore } from '../../../contacts/store.js';
 import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import { isInternalMemoryArtifact } from '../../../memory/internal-artifacts.js';
 import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
-import { VALID_MEMORY_TYPES, type MemoryType } from '../../../memory/types.js';
+import {
+  normalizeMemoryScopeRef,
+  normalizeMemoryScopeTags,
+  VALID_MEMORY_TYPES,
+  type MemoryType,
+} from '../../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../trust/types.js';
+import {
+  buildManagedScopeEvidence,
+  buildManagedScopeRepairPreview,
+  collectManagedScopeDescriptors,
+  parseManagedScopeParams,
+  toManagedScopeDescriptor,
+  type AdminMemoryManagedScopeKind,
+} from './memory-scope-evidence.js';
 import type {
   AdminBulkMutationResult,
   AdminMemoryDetailData,
@@ -82,6 +95,15 @@ function parsePositiveInteger(
   return Math.max(min, Math.min(max, parsed));
 }
 
+function compareMemoryRecency(
+  left: { extractedAt?: number; createdAt?: number; id: string },
+  right: { extractedAt?: number; createdAt?: number; id: string },
+): number {
+  const timestampDelta = memoryTimestamp(right) - memoryTimestamp(left);
+  if (timestampDelta !== 0) return timestampDelta;
+  return right.id.localeCompare(left.id);
+}
+
 export class AdminMemoryDataService implements AdminMemoryService {
   constructor(private readonly deps: {
     memoryStore: MemoryStore;
@@ -110,6 +132,31 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return map;
   }
 
+  private listManagedScopeMemories(): ReturnType<MemoryStore['getAllActiveMemories']> {
+    return this.deps.memoryStore
+      .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN)
+      .filter(memory => !isInternalMemoryArtifact(memory));
+  }
+
+  private buildScopeAssignments(
+    memory: AdminMemoryDetailData['memory'],
+  ): AdminMemoryDetailData['scopeAssignments'] {
+    return collectManagedScopeDescriptors(memory).map(scope => ({
+      ...scope,
+      evidence: buildManagedScopeEvidence(memory, scope),
+    }));
+  }
+
+  private buildScopeRepair(memory: AdminMemoryDetailData['memory']): AdminMemoryDetailData['scopeRepair'] {
+    const preview = buildManagedScopeRepairPreview(memory);
+    return {
+      needsRepair: preview.needsRepair,
+      ...(preview.scopeRef ? { suggestedScopeRef: preview.scopeRef } : {}),
+      suggestedScopeTags: preview.scopeTags,
+      notes: preview.notes,
+    };
+  }
+
   listMemories(params?: URLSearchParams): AdminMemoryListData {
     const limit = parsePositiveInteger(
       params?.get('limit'),
@@ -135,9 +182,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         return true;
       })
       .sort((a, b) => {
-        const timestampDelta = memoryTimestamp(b) - memoryTimestamp(a);
-        if (timestampDelta !== 0) return timestampDelta;
-        return b.id.localeCompare(a.id);
+        return compareMemoryRecency(a, b);
       });
 
     const total = filtered.length;
@@ -164,6 +209,97 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return {
       memory,
       linkedContact,
+      scopeAssignments: this.buildScopeAssignments(memory),
+      scopeRepair: this.buildScopeRepair(memory),
+    };
+  }
+
+  listManagedScopes(params?: URLSearchParams) {
+    const kindFilterRaw = params?.get('kind')?.trim().toLowerCase();
+    const kindFilter = kindFilterRaw === 'project' || kindFilterRaw === 'north_star'
+      ? kindFilterRaw as AdminMemoryManagedScopeKind
+      : undefined;
+    const summaryMap = new Map<string, {
+      kind: AdminMemoryManagedScopeKind;
+      id: string;
+      label?: string;
+      canonicalTag: string;
+      memoryIds: Set<string>;
+      needsRepairCount: number;
+    }>();
+
+    for (const memory of this.listManagedScopeMemories()) {
+      const scopeDescriptors = collectManagedScopeDescriptors(memory)
+        .filter(scope => !kindFilter || scope.kind === kindFilter);
+      if (scopeDescriptors.length === 0) continue;
+      const repair = buildManagedScopeRepairPreview(memory);
+      for (const scope of scopeDescriptors) {
+        const key = `${scope.kind}:${scope.id}`;
+        const existing = summaryMap.get(key);
+        if (!existing) {
+          summaryMap.set(key, {
+            ...scope,
+            memoryIds: new Set([memory.id]),
+            needsRepairCount: repair.needsRepair ? 1 : 0,
+          });
+          continue;
+        }
+        existing.memoryIds.add(memory.id);
+        if (!existing.label && scope.label) existing.label = scope.label;
+        if (repair.needsRepair) existing.needsRepairCount += 1;
+      }
+    }
+
+    return {
+      scopes: [...summaryMap.values()]
+        .map(scope => ({
+          kind: scope.kind,
+          id: scope.id,
+          ...(scope.label ? { label: scope.label } : {}),
+          canonicalTag: scope.canonicalTag,
+          memoryCount: scope.memoryIds.size,
+          needsRepairCount: scope.needsRepairCount,
+        }))
+        .sort((left, right) => {
+          if (right.memoryCount !== left.memoryCount) return right.memoryCount - left.memoryCount;
+          return left.canonicalTag.localeCompare(right.canonicalTag);
+        }),
+    };
+  }
+
+  getManagedScopeDetail(kind: string, id: string) {
+    const scope = parseManagedScopeParams(kind, id);
+    if (!scope) return null;
+
+    const memories = this.listManagedScopeMemories()
+      .filter(memory => collectManagedScopeDescriptors(memory).some(descriptor => (
+        descriptor.kind === scope.kind && descriptor.id === scope.id
+      )))
+      .sort(compareMemoryRecency)
+      .map(memory => ({
+        memory,
+        evidence: buildManagedScopeEvidence(memory, scope),
+        repair: this.buildScopeRepair(memory),
+      }));
+
+    if (memories.length === 0) return null;
+
+    const labels = memories
+      .map(item => toManagedScopeDescriptor(item.memory.scopeRef))
+      .filter((value): value is NonNullable<typeof value> => value !== null)
+      .filter(value => value.kind === scope.kind && value.id === scope.id && Boolean(value.label))
+      .map(value => value.label!);
+
+    return {
+      scope: {
+        kind: scope.kind,
+        id: scope.id,
+        ...(labels[0] ? { label: labels[0] } : {}),
+        canonicalTag: scope.canonicalTag,
+        memoryCount: memories.length,
+        needsRepairCount: memories.filter(item => item.repair.needsRepair).length,
+      },
+      memories,
     };
   }
 
@@ -208,6 +344,77 @@ export class AdminMemoryDataService implements AdminMemoryService {
       [`source=${memory.sourceRef}`],
     );
     return { ok: true };
+  }
+
+  updateMemoryScope(
+    id: string,
+    fields: {
+      scopeRef?: { kind?: string; id?: string; label?: string } | null;
+      scopeTags?: string[];
+      repair?: boolean;
+    },
+  ) {
+    const memory = this.deps.memoryStore.getById(id);
+    if (!memory) {
+      return {
+        ok: false,
+        message: 'Memory not found',
+      };
+    }
+
+    const explicitScopeRef = fields.scopeRef === null ? undefined : normalizeMemoryScopeRef(fields.scopeRef ?? undefined);
+    if (fields.scopeRef !== undefined && fields.scopeRef !== null && !explicitScopeRef) {
+      return {
+        ok: false,
+        message: 'Invalid scopeRef',
+      };
+    }
+    const explicitScopeTags = fields.scopeTags !== undefined
+      ? normalizeMemoryScopeTags(fields.scopeTags)
+      : undefined;
+
+    const repairPreview = buildManagedScopeRepairPreview({
+      scopeRef: explicitScopeRef ?? memory.scopeRef,
+      scopeTags: explicitScopeTags ?? memory.scopeTags,
+    });
+
+    const nextScopeRef = fields.repair
+      ? repairPreview.scopeRef
+      : (fields.scopeRef !== undefined ? explicitScopeRef : memory.scopeRef);
+    const nextScopeTags = fields.repair
+      ? repairPreview.scopeTags
+      : (explicitScopeTags ?? memory.scopeTags ?? []);
+
+    this.deps.memoryStore.updateMemory(memory.id, {
+      scopeRef: nextScopeRef,
+      scopeTags: nextScopeTags,
+    });
+
+    const updated = this.deps.memoryStore.getById(memory.id);
+    if (!updated) {
+      return {
+        ok: false,
+        message: 'Memory update failed',
+      };
+    }
+
+    this.deps.appendAuditTimelineEntry?.(
+      'memory_mutation',
+      'allowed',
+      `${this.resolveCompanionName()} updated scope tags for memory "${updated.id}".`,
+      [
+        `scopeRef=${updated.scopeRef ? `${updated.scopeRef.kind}:${updated.scopeRef.id}` : 'none'}`,
+        `scopeTags=${(updated.scopeTags ?? []).join(',') || 'none'}`,
+        fields.repair ? 'repair=true' : null,
+      ],
+    );
+
+    return {
+      ok: true,
+      memory: updated,
+      scopeAssignments: this.buildScopeAssignments(updated),
+      scopeRepair: this.buildScopeRepair(updated),
+    };
   }
 
   linkMemories(id1: string, id2: string, linkType?: string): AdminMemoryLinkResult {

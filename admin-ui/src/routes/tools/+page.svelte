@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { base } from '$app/paths';
   import { getAdaptiveTools } from '$lib/api/endpoints/tools';
   import type {
     AdminAdaptiveToolsData,
@@ -64,10 +65,61 @@
     not_applicable: 'border-bark-300 bg-bark-100 text-shadow-700',
   };
 
+  const MEMORY_WORKFLOW_TOOL_NAMES = [
+    'memory_write',
+    'start_focus',
+    'complete_focus',
+    'session_search',
+    'session_grep',
+    'contact_lookup',
+    'contact_list',
+    'contact_set_trust',
+    'contact_note',
+    'contact_set_channel_privacy',
+    'contact_link_identity',
+  ] as const;
+
+  const MEMORY_ADMIN_LINKS = [
+    {
+      title: 'Memory Browser',
+      detail: 'Inspect scoped memories, repair scope tags, and manage links.',
+      href: `${base}/memory`,
+    },
+    {
+      title: 'Contacts',
+      detail: 'Review profiles, relationship state, and social graph data.',
+      href: `${base}/contacts`,
+    },
+    {
+      title: 'Models',
+      detail: 'Assign memory-purpose models and provider routing.',
+      href: `${base}/models`,
+    },
+    {
+      title: 'Providers',
+      detail: 'Edit LiteLLM, OpenRouter, and direct backend provider wiring.',
+      href: `${base}/settings#settings-providers`,
+    },
+  ] as const;
+
   let data = $state<AdminAdaptiveToolsData | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
   let errorMessage = $state('');
+
+  let toolHealthByName = $derived.by(() => (
+    new Map((data?.toolHealth ?? []).map((tool) => [tool.name, tool] as const))
+  ));
+
+  let memoryWorkflowTools = $derived.by(() => (
+    MEMORY_WORKFLOW_TOOL_NAMES
+      .map((name) => toolHealthByName.get(name))
+      .filter((tool): tool is AdminToolHealthView => Boolean(tool))
+  ));
+
+  let missingMemoryWorkflowTools = $derived.by(() => (
+    MEMORY_WORKFLOW_TOOL_NAMES.filter((name) => !toolHealthByName.has(name))
+  ));
 
   let toolGroups = $derived.by(() => {
     const tools = data?.toolHealth ?? [];
@@ -171,6 +223,83 @@
       <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent Failures</p>
       <p class="mt-3 text-4xl font-serif font-bold text-wilt-500">{summary.recentFailures}</p>
       <p class="mt-2 text-sm text-shadow-600">Latest soft and hard tool failures observed by admin telemetry.</p>
+    </div>
+  </div>
+
+  <div class="grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
+    <div class="card-garden p-5">
+      <div class="flex items-baseline justify-between gap-3 flex-wrap">
+        <div>
+          <h2 class="text-lg font-serif font-semibold text-shadow-900">Memory / Social Workflow</h2>
+          <p class="mt-1 text-sm text-shadow-600">
+            Spotlight on the runtime tools that affect memory, focus, and contacts.
+          </p>
+        </div>
+        <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-xs font-medium text-shadow-700">
+          {memoryWorkflowTools.length} visible / {MEMORY_WORKFLOW_TOOL_NAMES.length} expected
+        </span>
+      </div>
+
+      <div class="mt-4 space-y-3">
+        {#each memoryWorkflowTools as tool}
+          <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <code class="text-sm font-medium text-shadow-900">{tool.name}</code>
+                <p class="mt-1 text-sm text-shadow-700">{tool.description}</p>
+              </div>
+              <span class="rounded-full border px-2.5 py-1 text-xs font-medium {HEALTH_BADGE[tool.health.status]}">
+                {HEALTH_LABELS[tool.health.status]}
+              </span>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2 text-xs">
+              <span class="rounded-full border border-bark-300 bg-white px-2.5 py-1 text-shadow-700">
+                scope: {tool.scope}
+              </span>
+              <span class="rounded-full border px-2.5 py-1 {AVAILABILITY_BADGE[tool.contexts.chat.status]}">
+                chat: {AVAILABILITY_LABELS[tool.contexts.chat.status]}
+              </span>
+              <span class="rounded-full border px-2.5 py-1 {AVAILABILITY_BADGE[tool.contexts.internalHeartbeat.status]}">
+                heartbeat: {AVAILABILITY_LABELS[tool.contexts.internalHeartbeat.status]}
+              </span>
+            </div>
+          </div>
+        {/each}
+        {#if memoryWorkflowTools.length === 0}
+          <p class="text-sm text-shadow-500">No memory-oriented tools are visible in the runtime catalog.</p>
+        {/if}
+      </div>
+
+      {#if missingMemoryWorkflowTools.length > 0}
+        <div class="mt-4 rounded-2xl border border-wilt-200 bg-wilt-50 px-4 py-3">
+          <p class="text-sm font-medium text-wilt-700">Expected but not registered</p>
+          <div class="mt-3 flex flex-wrap gap-2">
+            {#each missingMemoryWorkflowTools as toolName}
+              <span class="rounded-full border border-wilt-200 bg-white px-2.5 py-1 text-xs font-medium text-wilt-700">
+                {toolName}
+              </span>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
+
+    <div class="card-garden p-5">
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Admin Surfaces</h2>
+      <p class="mt-1 text-sm text-shadow-600">
+        The memory-system admin controls live across a few dedicated pages. These links keep them one click away from the runtime tool view.
+      </p>
+      <div class="mt-4 space-y-3">
+        {#each MEMORY_ADMIN_LINKS as link}
+          <a
+            href={link.href}
+            class="block rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3 transition-colors hover:bg-bark-100"
+          >
+            <p class="text-sm font-medium text-shadow-900">{link.title}</p>
+            <p class="mt-1 text-sm text-shadow-600">{link.detail}</p>
+          </a>
+        {/each}
+      </div>
     </div>
   </div>
 

@@ -1,8 +1,24 @@
-import type { TrustLevel, ChannelVisibility } from '../trust/types.js';
+import type { TrustLevel, ChannelVisibility, SensitivityLevel } from '../trust/types.js';
 
 export type RelationshipType = 'partner' | 'family' | 'friend' | 'acquaintance' | 'stranger' | 'ai_companion';
 export type ContactChannel = string;
 export type ChannelPrivacyLevel = ChannelVisibility;
+export type SocialGraphEntityKind = 'person';
+export type SocialGraphEntitySource = 'contact' | 'memory' | 'manual' | 'system';
+export type SocialRelationshipKind =
+  | 'partner'
+  | 'family'
+  | 'friend'
+  | 'acquaintance'
+  | 'colleague'
+  | 'parent'
+  | 'child'
+  | 'sibling'
+  | 'caregiver'
+  | 'household'
+  | 'manager'
+  | 'direct_report'
+  | 'other';
 
 export interface ContactChannelIdentity {
   channel: ContactChannel;
@@ -138,6 +154,89 @@ export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
 export const VALID_RELATIONSHIP_TYPES: RelationshipType[] = [
   'partner', 'family', 'friend', 'acquaintance', 'stranger', 'ai_companion',
 ];
+export const VALID_SOCIAL_GRAPH_ENTITY_KINDS: SocialGraphEntityKind[] = ['person'];
+export const VALID_SOCIAL_GRAPH_SOURCES: SocialGraphEntitySource[] = ['contact', 'memory', 'manual', 'system'];
+export const VALID_SOCIAL_RELATIONSHIP_KINDS: SocialRelationshipKind[] = [
+  'partner',
+  'family',
+  'friend',
+  'acquaintance',
+  'colleague',
+  'parent',
+  'child',
+  'sibling',
+  'caregiver',
+  'household',
+  'manager',
+  'direct_report',
+  'other',
+];
+
+export interface SocialGraphEntity {
+  id: string;
+  entityKind: SocialGraphEntityKind;
+  displayName: string;
+  contactId?: string;
+  sensitivity: SensitivityLevel;
+  provenanceRefs: string[];
+  confidence: number;
+  source: SocialGraphEntitySource;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SocialGraphEntityUpsertInput {
+  id?: string;
+  entityKind?: SocialGraphEntityKind;
+  displayName: string;
+  contactId?: string;
+  sensitivity?: SensitivityLevel;
+  provenanceRefs?: string[];
+  confidence?: number;
+  source?: SocialGraphEntitySource;
+}
+
+export interface SocialGraphQueryOptions {
+  viewerTrustLevel?: TrustLevel;
+  viewerChannelVisibility?: ChannelPrivacyLevel;
+  limit?: number;
+}
+
+export interface SocialGraphEntityQuery extends SocialGraphQueryOptions {
+  contactId?: string;
+}
+
+export interface SocialRelationshipEdge {
+  id: string;
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationshipType: SocialRelationshipKind;
+  directional: boolean;
+  sensitivity: SensitivityLevel;
+  provenanceRefs: string[];
+  evidenceMemoryIds: string[];
+  confidence: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SocialRelationshipEdgeUpsertInput {
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationshipType: SocialRelationshipKind;
+  directional?: boolean;
+  sensitivity?: SensitivityLevel;
+  provenanceRefs?: string[];
+  evidenceMemoryIds?: string[];
+  confidence?: number;
+}
+
+export interface SocialRelationshipEdgeQuery extends SocialGraphQueryOptions {
+  contactId?: string;
+  entityId?: string;
+  relationshipType?: SocialRelationshipKind;
+  minConfidence?: number;
+}
 
 export interface Contact {
   id: string;

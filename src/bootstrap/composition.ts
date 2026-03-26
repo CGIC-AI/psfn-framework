@@ -110,19 +110,13 @@ export function createEmbeddingProviderFromConfig(config: SubstrateConfig): Embe
 export interface IdentityComposition {
   card: CharacterCardV2;
   systemPrompt: string;
-  initializedCard: boolean;
-  migratedLegacyBootstrap: boolean;
 }
 
 export function composeIdentity(config: SubstrateConfig): IdentityComposition {
-  const { card, initialized, migratedLegacyBootstrap } = loadOrInitializeCharacterCard(
-    config.characterCardPath,
-  );
+  const card = loadOrInitializeCharacterCard(config.characterCardPath);
   return {
     card,
     systemPrompt: composeSystemPrompt(card),
-    initializedCard: initialized,
-    migratedLegacyBootstrap,
   };
 }
 
@@ -280,6 +274,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
     sessionStore: options.sessionStore,
+    sessionManager: options.sessionManager,
     embeddingService: options.embeddingService,
     memoryProvider: options.agentLoop.memoryProvider,
     config: options.config,

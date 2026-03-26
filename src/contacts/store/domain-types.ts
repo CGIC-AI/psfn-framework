@@ -55,3 +55,30 @@ export interface ContactMutationAuditRow {
   new_value: string | null;
   timestamp: string;
 }
+
+export interface SocialGraphEntityRow {
+  id: string;
+  entity_kind: string;
+  display_name: string;
+  contact_id: string | null;
+  sensitivity: string;
+  provenance_refs: string;
+  confidence: number;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SocialRelationshipEdgeRow {
+  id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  relationship_type: string;
+  directional: number;
+  sensitivity: string;
+  provenance_refs: string;
+  evidence_memory_ids: string;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+}

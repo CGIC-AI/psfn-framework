@@ -21,6 +21,7 @@ export interface TurnSessionContextSnapshot {
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
   versionPointer: string;
 }
@@ -137,6 +138,8 @@ export function cloneMemory<T extends PurrMemory>(memory: T): T {
   return {
     ...memory,
     tags: [...memory.tags],
+    ...(memory.scopeRef ? { scopeRef: { ...memory.scopeRef } } : {}),
+    ...(memory.scopeTags ? { scopeTags: [...memory.scopeTags] } : {}),
     ...(memory.provenanceRefs ? { provenanceRefs: [...memory.provenanceRefs] } : {}),
     ...(memory.consentFlags ? { consentFlags: { ...memory.consentFlags } } : {}),
     ...(memory.embedding ? { embedding: new Float32Array(memory.embedding) } : {}),

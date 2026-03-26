@@ -5,6 +5,7 @@ import type {
   SubstrateConfig,
   TurnRecord,
 } from '../types.js';
+import type { MemoryScopeQuery } from '../memory/types.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type {
   SessionStore,
@@ -68,7 +69,10 @@ import {
   buildSnapshotVersionPointer,
   cloneSessionEntry,
 } from '../turns/snapshot.js';
-import { getMergedContinuity } from './manager/context-support.js';
+import {
+  countIntentionAppraisalArtifacts,
+  getMergedContinuity,
+} from './manager/context-support.js';
 import {
   buildToolObservationMetadata,
   normalizeToolObservation,
@@ -78,9 +82,11 @@ import type { ContextManifestMemorySeed } from './context-manifest.js';
 import {
   applyFocusCompactionRanges,
   FocusKnowledgeStore,
+  buildFocusMemoryScopeQuery,
   normalizeFocusEvidence,
   type FocusEvidenceRecord,
   type FocusKnowledgeBlock,
+  type FocusProjectContextSummary,
 } from './focus-knowledge.js';
 import {
   resolveCompressionFailureLogPath,
@@ -213,6 +219,7 @@ export interface FocusSessionSnapshot {
   startedAt: number;
   startEntryId: number;
   evidenceCount: number;
+  existingProjectContext: FocusProjectContextSummary | null;
 }
 
 export interface FocusSessionContextSnapshot {
@@ -230,6 +237,7 @@ export interface FocusSessionCompletionResult {
   rangeStartId: number | null;
   rangeEndId: number | null;
   knowledgeBlock: FocusKnowledgeBlock;
+  projectContext: FocusProjectContextSummary;
 }
 
 const MAX_ACTIVE_FOCUS_EVIDENCE_ITEMS = 64;
@@ -322,6 +330,10 @@ export class SessionManager {
       startedAt: session.startedAt,
       startEntryId: session.startEntryId,
       evidenceCount: session.evidence.length,
+      existingProjectContext: this.focusKnowledgeStore.getProjectContextSummary(
+        session.channelId,
+        session.scope,
+      ),
     };
   }
 
@@ -343,8 +355,24 @@ export class SessionManager {
 
   private getFocusKnowledgeTexts(channelId: string): string[] {
     return this.focusKnowledgeStore
-      .listByChannel(channelId)
-      .map(block => `[${block.scope}] ${block.knowledge}`);
+      .listProjectContextsByChannel(channelId)
+      .map((summary) => {
+        const projectContextSuffix = summary.knowledgeBlockCount > 1
+          ? ` (project context with ${summary.knowledgeBlockCount} distilled blocks, ${summary.totalEvidenceCount} evidence items)`
+          : '';
+        return `[${summary.scope}] ${summary.latestKnowledge}${projectContextSuffix}`;
+      });
+  }
+
+  getProjectContextSummary(channelId: string, scope: string): FocusProjectContextSummary | null {
+    const resolvedChannelId = this.resolveFocusChannelId(channelId);
+    return this.focusKnowledgeStore.getProjectContextSummary(resolvedChannelId, scope);
+  }
+
+  getActiveFocusMemoryScopeQuery(channelId: string): MemoryScopeQuery | null {
+    const active = this.getActiveFocusSession(channelId);
+    if (!active) return null;
+    return buildFocusMemoryScopeQuery(active.scope);
   }
 
   private getFocusCompactionRanges(channelId: string) {
@@ -457,6 +485,14 @@ export class SessionManager {
       evidence: active.evidence,
     });
 
+    const projectContext = this.focusKnowledgeStore.getProjectContextSummary(
+      resolvedChannelId,
+      active.scope,
+    );
+    if (!projectContext) {
+      throw new Error(`project context summary missing for focus scope "${active.scope}"`);
+    }
+
     this.activeFocusSessions.delete(resolvedChannelId);
     return {
       focusId: active.focusId,
@@ -465,6 +501,7 @@ export class SessionManager {
       rangeStartId: rangeIsValid ? context.rangeStartId : null,
       rangeEndId: rangeIsValid ? context.rangeEndId : null,
       knowledgeBlock,
+      projectContext,
     };
   }
 
@@ -941,6 +978,7 @@ export class SessionManager {
       this.getFocusCompactionRanges(resolvedChannelId),
     );
     recent = focusCompaction.entries;
+    const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
     const focusKnowledgeTexts = this.getFocusKnowledgeTexts(resolvedChannelId);
 
     const continuityEntries = userId && this.continuityStore
@@ -966,6 +1004,7 @@ export class SessionManager {
       compactionSummaryTexts: [...compactionSummaryTexts],
       focusKnowledgeTexts: [...focusKnowledgeTexts],
       continuityEntries: continuityEntries.map(cloneSessionEntry),
+      intentionAppraisalArtifactCount,
       compactionPromptText,
       versionPointer: buildSnapshotVersionPointer([
         resolvedChannelId,

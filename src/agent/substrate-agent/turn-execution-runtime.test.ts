@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { getVisionToolRequestContext } from '../../images/request-context.js';
+import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
@@ -102,6 +103,8 @@ function createRuntime(params: {
       appendSystemNote: vi.fn(),
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
+      getActiveFocusMemoryScopeQuery: vi.fn(() => null),
+      ...((params.sessionManager ?? {}) as Record<string, unknown>),
     } as unknown as SessionManager,
     config: {
       primaryModel: 'test-model',
@@ -577,6 +580,68 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     });
 
     await expect(responsePromise).resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+  });
+
+  it('threads the active focus scope into subagent memory retrieval calls', async () => {
+    const eventBus = new EventBus();
+    const focusScopeQuery = buildFocusMemoryScopeQuery('Memory Improvement');
+    const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
+    const retrieve = vi.fn(async () => 'memories');
+    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
+    const sessionManager = {
+      getActiveFocusMemoryScopeQuery: vi.fn(() => focusScopeQuery),
+    } as unknown as SessionManager;
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        captureTurnMemorySnapshot,
+        retrieve,
+        retrieveProactiveRecall,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-focus-scope'));
+
+    expect(captureTurnMemorySnapshot).toHaveBeenCalledWith(
+      'Hello there',
+      'ch1',
+      'regular',
+      {},
+      'contact-1',
+      expect.any(Object),
+      focusScopeQuery,
+    );
+    expect(retrieve).toHaveBeenCalledWith(
+      'Hello there',
+      'ch1',
+      'regular',
+      {},
+      'contact-1',
+      expect.any(Object),
+      expect.any(Object),
+      undefined,
+      focusScopeQuery,
+    );
+    expect(retrieveProactiveRecall).toHaveBeenCalledWith(
+      'ch1',
+      'regular',
+      {},
+      'contact-1',
+      expect.any(Object),
+      expect.any(Object),
+      focusScopeQuery,
+    );
   });
 
   it('fails closed when proactive recall rejects before the response is built', async () => {

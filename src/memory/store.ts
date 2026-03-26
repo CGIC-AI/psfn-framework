@@ -10,8 +10,13 @@ import { writeJsonAtomic } from '../utils/fs.js';
 import { createComponentLogger } from '../logger.js';
 import type { MemoryJournal } from './journal.js';
 import {
+  normalizeMemoryScopeQuery,
+  normalizeMemoryScopeRef,
+  normalizeMemoryScopeTags,
   normalizeConsentFlags,
   normalizeFormationVAD,
+  type MemoryScopeQuery,
+  type MemoryScopeRef,
   type PurrMemory,
   type SensitivityLevel,
   type ConsentFlags,
@@ -74,6 +79,10 @@ interface MemoryRow {
   access_count: number;
   superseded_by: string | null;
   tags: string;
+  scope_ref_kind: string | null;
+  scope_ref_id: string | null;
+  scope_ref_label: string | null;
+  scope_tags: string | null;
   provenance_refs: string | null;
   sensitivity: string | null;
   consent_flags: string | null;
@@ -239,13 +248,23 @@ function mapMemoryAbstractionLinkRow(row: MemoryAbstractionLinkRow): MemoryAbstr
 
 function mapMemoryRow(row: MemoryRow): PurrMemory {
   let tags: string[] = [];
+  let scopeTags: string[] = [];
   let provenanceRefs: string[] = [];
   let consentFlags: ConsentFlags = {};
   let formationVAD: MemoryFormationVAD | undefined;
+  let scopeRef: MemoryScopeRef | undefined;
   try {
     tags = JSON.parse(row.tags) as string[];
   } catch {
     tags = [];
+  }
+  try {
+    const parsed = JSON.parse(row.scope_tags ?? '[]');
+    scopeTags = Array.isArray(parsed)
+      ? normalizeMemoryScopeTags(parsed.filter((entry): entry is string => typeof entry === 'string'))
+      : [];
+  } catch {
+    scopeTags = [];
   }
   try {
     const parsed = JSON.parse(row.provenance_refs ?? '[]');
@@ -266,6 +285,11 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
   } catch {
     formationVAD = undefined;
   }
+  scopeRef = normalizeMemoryScopeRef({
+    kind: row.scope_ref_kind ?? '',
+    id: row.scope_ref_id ?? '',
+    ...(row.scope_ref_label ? { label: row.scope_ref_label } : {}),
+  });
 
   return {
     id: row.id,
@@ -282,6 +306,8 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
     accessCount: row.access_count,
     supersededBy: row.superseded_by ?? undefined,
     tags,
+    ...(scopeRef ? { scopeRef } : {}),
+    ...(scopeTags.length > 0 ? { scopeTags } : {}),
     provenanceRefs,
     sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
     consentFlags,
@@ -369,6 +395,35 @@ function lexicalScoreToSimilarity(score: number): number {
   return Math.max(0.3, Math.min(0.98, 0.3 + normalized * 0.68));
 }
 
+function buildScopeQuerySql(
+  scopeQuery: MemoryScopeQuery | undefined,
+): { clause: string; params: unknown[] } {
+  if (!scopeQuery || scopeQuery.mode !== 'only') {
+    return { clause: '', params: [] };
+  }
+
+  const fragments: string[] = [];
+  const params: unknown[] = [];
+
+  for (const ref of scopeQuery.refs ?? []) {
+    fragments.push('(scope_ref_kind = ? AND scope_ref_id = ?)');
+    params.push(ref.kind, ref.id);
+  }
+  for (const tag of scopeQuery.tags ?? []) {
+    fragments.push('LOWER(scope_tags) LIKE ?');
+    params.push(`%\"${tag}\"%`);
+  }
+
+  if (fragments.length === 0) {
+    return { clause: '', params: [] };
+  }
+
+  return {
+    clause: `AND (${fragments.join(' OR ')})`,
+    params,
+  };
+}
+
 export class MemoryStore {
   private db: Database.Database;
   private embeddingDims: number;
@@ -421,6 +476,10 @@ export class MemoryStore {
         access_count INTEGER NOT NULL DEFAULT 1,
         superseded_by TEXT,
         tags TEXT NOT NULL DEFAULT '[]',
+        scope_ref_kind TEXT,
+        scope_ref_id TEXT,
+        scope_ref_label TEXT,
+        scope_tags TEXT NOT NULL DEFAULT '[]',
         provenance_refs TEXT NOT NULL DEFAULT '[]',
         contact_id TEXT,
         deleted_at INTEGER,
@@ -513,6 +572,19 @@ export class MemoryStore {
     if (!hasColumn(this.db, 'l2_memories', 'provenance_refs')) {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_refs TEXT NOT NULL DEFAULT '[]'`);
     }
+    if (!hasColumn(this.db, 'l2_memories', 'scope_ref_kind')) {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_kind TEXT`);
+    }
+    if (!hasColumn(this.db, 'l2_memories', 'scope_ref_id')) {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_id TEXT`);
+    }
+    if (!hasColumn(this.db, 'l2_memories', 'scope_ref_label')) {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_label TEXT`);
+    }
+    if (!hasColumn(this.db, 'l2_memories', 'scope_tags')) {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_tags TEXT NOT NULL DEFAULT '[]'`);
+    }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_scope_ref ON l2_memories(scope_ref_kind, scope_ref_id)`);
 
     if (!hasColumn(this.db, 'l2_memories', 'formation_vad')) {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN formation_vad TEXT`);
@@ -590,8 +662,9 @@ export class MemoryStore {
     const insertMem = this.db.prepare(`
       INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence, formation_vad,
         salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
-        provenance_refs, sensitivity, consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs, sensitivity,
+        consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = this.db.prepare(`
@@ -615,6 +688,10 @@ export class MemoryStore {
         memory.accessCount,
         memory.supersededBy ?? null,
         JSON.stringify(memory.tags),
+        memory.scopeRef?.kind ?? null,
+        memory.scopeRef?.id ?? null,
+        memory.scopeRef?.label ?? null,
+        JSON.stringify(normalizeMemoryScopeTags(memory.scopeTags)),
         JSON.stringify(memory.provenanceRefs ?? []),
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- default for callers without sensitivity
         memory.sensitivity ?? 'personal',
@@ -639,7 +716,10 @@ export class MemoryStore {
     embedding: Float32Array,
     threshold: number,
     limit: number,
+    scopeQuery?: MemoryScopeQuery,
   ): Array<PurrMemory & { similarity: number }> {
+    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
+    const scopeSql = buildScopeQuerySql(normalizedScopeQuery);
     const stmt = this.db.prepare(`
       SELECT
         m.*,
@@ -650,10 +730,15 @@ export class MemoryStore {
         AND k = ?
         AND m.superseded_by IS NULL
         AND m.deleted_at IS NULL
+        ${scopeSql.clause}
       ORDER BY v.distance ASC
     `);
 
-    const rows = stmt.all(embeddingToBuffer(embedding), limit * 2) as Array<MemoryRow & {
+    const rows = stmt.all(
+      embeddingToBuffer(embedding),
+      limit * 2,
+      ...scopeSql.params,
+    ) as Array<MemoryRow & {
       distance: number;
     }>;
 
@@ -672,11 +757,14 @@ export class MemoryStore {
   searchByText(
     query: string,
     limit: number,
+    scopeQuery?: MemoryScopeQuery,
   ): Array<PurrMemory & { similarity: number }> {
     const normalizedQuery = normalizeLexicalQuery(query);
     if (!normalizedQuery) return [];
     const tokens = tokenizeLexicalQuery(normalizedQuery);
     if (tokens.length === 0) return [];
+    const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
+    const scopeSql = buildScopeQuerySql(normalizedScopeQuery);
 
     const clauses = tokens.map(() => '(LOWER(text) LIKE ? OR LOWER(tags) LIKE ?)');
     const params: unknown[] = [];
@@ -698,11 +786,12 @@ export class MemoryStore {
       WHERE superseded_by IS NULL
         AND deleted_at IS NULL
         AND (${clauses.join(' OR ')})
+        ${scopeSql.clause}
       ORDER BY extracted_at DESC, id DESC
       LIMIT ?
     `);
 
-    const rows = stmt.all(...params, scanLimit) as MemoryRow[];
+    const rows = stmt.all(...params, ...scopeSql.params, scanLimit) as MemoryRow[];
     return rows
       .map(mapMemoryRow)
       .map(memory => {
@@ -726,7 +815,7 @@ export class MemoryStore {
       .slice(0, normalizedLimit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'consentFlags' | 'tags' | 'provenanceRefs' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
+  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'consentFlags' | 'tags' | 'scopeRef' | 'scopeTags' | 'provenanceRefs' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -757,6 +846,19 @@ export class MemoryStore {
     if (updates.tags !== undefined) {
       setClauses.push('tags = ?');
       values.push(JSON.stringify(updates.tags));
+    }
+    if (updates.scopeRef !== undefined) {
+      const normalizedScopeRef = normalizeMemoryScopeRef(updates.scopeRef);
+      setClauses.push('scope_ref_kind = ?');
+      values.push(normalizedScopeRef?.kind ?? null);
+      setClauses.push('scope_ref_id = ?');
+      values.push(normalizedScopeRef?.id ?? null);
+      setClauses.push('scope_ref_label = ?');
+      values.push(normalizedScopeRef?.label ?? null);
+    }
+    if (updates.scopeTags !== undefined) {
+      setClauses.push('scope_tags = ?');
+      values.push(JSON.stringify(normalizeMemoryScopeTags(updates.scopeTags)));
     }
     if (updates.provenanceRefs !== undefined) {
       setClauses.push('provenance_refs = ?');

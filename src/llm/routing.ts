@@ -239,7 +239,7 @@ function capabilityWeightsForPurpose(
   if (purpose === 'longContext') {
     return { contextWindow: 0.8, maxTokens: 0.2 };
   }
-  if (purpose === 'background' || purpose === 'extraction' || purpose === 'import_processing') {
+  if (purpose === 'background' || purpose === 'memory' || purpose === 'extraction' || purpose === 'import_processing') {
     return { contextWindow: 0.35, maxTokens: 0.65 };
   }
   return { contextWindow: 0.5, maxTokens: 0.5 };

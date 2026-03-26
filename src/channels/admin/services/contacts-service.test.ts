@@ -12,13 +12,24 @@ function createServiceHarness() {
     listChannels: () => [],
     getLastEntry: () => undefined,
   } as unknown as SessionStore;
-  const memoryStore = {} as MemoryStore;
+  const profiles = new Map<string, {
+    contactId: string;
+    summary: string;
+    sourceMemoryIds: string[];
+    confidenceScore: number;
+    noveltyScore: number;
+    updatedAt: number;
+  }>();
+  const memoryStore = {
+    listContactProfiles: () => [...profiles.values()],
+    getContactProfile: (contactId: string) => profiles.get(contactId),
+  } as unknown as MemoryStore;
   const service = new AdminContactsDataService({
     contactStore,
     memoryStore,
     sessionStore,
   });
-  return { db, contactStore, service };
+  return { db, contactStore, service, profiles };
 }
 
 describe('AdminContactsDataService', () => {
@@ -72,6 +83,88 @@ describe('AdminContactsDataService', () => {
         ok: false,
         message: 'Conversation channel not found on contact',
       });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('includes social graph inspector data for linked and mention-only contacts', () => {
+    const { db, contactStore, service, profiles } = createServiceHarness();
+    try {
+      const owner = contactStore.upsert({ displayName: 'Owner', trustLevel: 'trusted', relationshipType: 'friend' });
+      const friend = contactStore.upsert({ displayName: 'Friend', trustLevel: 'trusted', relationshipType: 'friend' });
+      const sibling = contactStore.upsert({ displayName: 'Sibling', relationshipType: 'family' });
+
+      profiles.set(friend.id, {
+        contactId: friend.id,
+        summary: 'Shows up often in supportive contexts.',
+        sourceMemoryIds: ['mem-friend-1'],
+        confidenceScore: 0.81,
+        noveltyScore: 0.4,
+        updatedAt: 1_740_000_000_000,
+      });
+
+      contactStore.linkChannelIdentity(friend.id, 'discord', 'friend-user', { privacyLevel: 'private' });
+
+      const ownerEntity = contactStore.getSocialGraphEntityByContactId(owner.id)!;
+      const friendEntity = contactStore.getSocialGraphEntityByContactId(friend.id)!;
+      const siblingEntity = contactStore.getSocialGraphEntityByContactId(sibling.id)!;
+
+      contactStore.upsertSocialRelationshipEdge({
+        sourceEntityId: ownerEntity.id,
+        targetEntityId: friendEntity.id,
+        relationshipType: 'friend',
+        directional: false,
+        sensitivity: 'personal',
+        provenanceRefs: ['memory:friendship'],
+        evidenceMemoryIds: ['mem-friend-1'],
+        confidence: 0.91,
+      });
+      contactStore.upsertSocialRelationshipEdge({
+        sourceEntityId: siblingEntity.id,
+        targetEntityId: ownerEntity.id,
+        relationshipType: 'sibling',
+        directional: true,
+        sensitivity: 'private',
+        provenanceRefs: ['memory:family'],
+        evidenceMemoryIds: ['mem-family-1'],
+        confidence: 0.78,
+      });
+
+      const result = service.listContacts();
+      const graph = result.socialGraphMap.get(owner.id);
+
+      expect(graph?.entity).toMatchObject({
+        id: ownerEntity.id,
+        displayName: 'Owner',
+        source: 'contact',
+      });
+      expect(graph?.edgeCount).toBe(2);
+      expect(graph?.neighborCount).toBe(2);
+      expect(graph?.evidenceCount).toBe(2);
+      expect(graph?.mentionOnlyNeighborCount).toBe(1);
+      expect(graph?.connections).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          relationshipType: 'friend',
+          direction: 'undirected',
+          evidenceMemoryIds: ['mem-friend-1'],
+          neighbor: expect.objectContaining({
+            contactId: friend.id,
+            mentionOnly: false,
+            trustLevel: 'trusted',
+            profileSummary: 'Shows up often in supportive contexts.',
+          }),
+        }),
+        expect.objectContaining({
+          relationshipType: 'sibling',
+          direction: 'incoming',
+          neighbor: expect.objectContaining({
+            contactId: sibling.id,
+            mentionOnly: true,
+            relationshipType: 'family',
+          }),
+        }),
+      ]));
     } finally {
       db.close();
     }

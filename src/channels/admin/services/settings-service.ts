@@ -16,6 +16,11 @@ import {
   saveModelsConfig,
 } from '../../../config/models-config.js';
 import {
+  applyProvidersRuntimeConfig,
+  loadProvidersConfig,
+  saveProvidersConfig,
+} from '../../../config/providers-config.js';
+import {
   loadSkillsConfig,
   saveSkillsConfig,
 } from '../../../config/skills-config.js';
@@ -173,6 +178,27 @@ export function applyAdminSettingsMutation(options: {
   saveSettings(config.dataDir, mergedRuntimeSettings);
   applySettings(config, mergedRuntimeSettings);
 
+  if (Object.hasOwn(domainSplit.runtime, 'openRouterModelsApiUrl')) {
+    try {
+      const currentProviders = loadProvidersConfig(config.dataDir, {
+        seedDir: process.env.CONFIG_DIR,
+      });
+      const nextRegistry = structuredClone(currentProviders.registry);
+      const openrouterProvider = nextRegistry.providers.find((entry) => entry.type === 'openrouter');
+      const nextUrl = mergedRuntimeSettings.openRouterModelsApiUrl?.trim();
+      if (openrouterProvider && nextUrl) {
+        openrouterProvider.modelsApiUrl = nextUrl;
+        const savedProviders = saveProvidersConfig(config.dataDir, nextRegistry);
+        applyProvidersRuntimeConfig(config, savedProviders);
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        message: `Settings saved but providers config update failed: ${toErrorMessage(error)}`,
+      };
+    }
+  }
+
   if (hasModelSettings(domainSplit.models)) {
     try {
       const currentModels = loadModelsConfig(config.dataDir, {
@@ -310,6 +336,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
   private loadSettingsConfigEditors(): SettingsConfigEditors {
     return {
       models: loadModelsConfig(this.deps.config.dataDir),
+      providers: loadProvidersConfig(this.deps.config.dataDir),
       skills: loadSkillsConfig(this.deps.config.dataDir),
       scheduler: loadSchedulerConfig(this.deps.config.dataDir),
       trustPolicy: loadTrustPolicyConfig(this.deps.config.dataDir),
@@ -779,6 +806,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
             loadModelsConfig(this.companionDataDir, { defaultContextWindow: this.deps.config.defaultContextWindow }),
             null, 2,
           );
+        case 'providers':
+          return JSON.stringify(loadProvidersConfig(this.companionDataDir).registry, null, 2);
         case 'skills':
           return JSON.stringify(loadSkillsConfig(this.companionDataDir), null, 2);
         case 'scheduler':
@@ -829,6 +858,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
         case 'backup': {
           saveBackupConfig(this.companionDataDir, parsed);
           return { ok: true, message: 'backup.json saved' };
+        }
+        case 'providers': {
+          const saved = saveProvidersConfig(this.companionDataDir, parsed);
+          applyProvidersRuntimeConfig(this.deps.config, saved);
+          refreshModels(this.deps.config);
+          return { ok: true, message: 'providers.json saved' };
         }
         case 'skills': {
           saveSkillsConfig(this.companionDataDir, parsed);

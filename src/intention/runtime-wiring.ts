@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { ChannelType } from '../types.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
@@ -6,6 +7,10 @@ import {
   ActiveConcernStore,
   type ActiveConcernContextProvider,
 } from './concerns.js';
+import {
+  PendingFollowUpStore,
+  type PendingFollowUpContextProvider,
+} from './pending-follow-ups.js';
 import type {
   ActiveConcernSnapshot,
   IntentionActionDecision,
@@ -21,10 +26,15 @@ import {
   createResolveConcernTool,
 } from './tools.js';
 
+const RECENT_RESOLVED_CONCERN_WINDOW_MS = 6 * 60 * 60 * 1_000;
+const RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT = 3;
+
 export interface IntentionRuntimeTarget {
   activeConcernProvider: ActiveConcernContextProvider | null;
+  pendingFollowUpProvider?: PendingFollowUpContextProvider | null;
   behavioralPatternProvider?: BehavioralPatternContextProvider | null;
   setActiveConcernProvider?: (provider: ActiveConcernContextProvider | null) => void;
+  setPendingFollowUpProvider?: (provider: PendingFollowUpContextProvider | null) => void;
   setBehavioralPatternProvider?: (provider: BehavioralPatternContextProvider | null) => void;
   registerIntentionPostTurnHook?: (hook: IntentionPostTurnHook) => (() => void) | void;
   registerTool: ToolRegistrar;
@@ -32,6 +42,7 @@ export interface IntentionRuntimeTarget {
 
 export interface IntentionRuntimeWiring {
   concernStore: ActiveConcernStore;
+  pendingFollowUpStore: PendingFollowUpStore;
   behavioralPatternTracker: BehavioralPatternTracker;
 }
 
@@ -40,11 +51,26 @@ export interface IntentionAppraisalHooks {
     channelId: string;
     canonicalContactKey?: string;
   }): readonly ActiveConcernSnapshot[];
+  getRecentResolvedConcerns(input: {
+    channelId: string;
+    canonicalContactKey?: string;
+  }): readonly ActiveConcernSnapshot[];
   onIntentionConcernDecision(input: {
     decision: IntentionActionDecision;
     channelId: string;
     canonicalContactKey?: string;
     sourceMessageId: string;
+  }): void;
+  onIntentionFollowUpDecision(input: {
+    decision: IntentionActionDecision;
+    channelId: string;
+    channelType: ChannelType;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+  }): string | undefined;
+  onIntentionFollowUpActivated(input: {
+    pendingFollowUpId: string;
+    activationReason?: string;
   }): void;
 }
 
@@ -89,6 +115,17 @@ function resolveConcernDecisionText(decision: IntentionActionDecision): string {
   return title ?? summary ?? '';
 }
 
+function resolveFollowUpDecisionContent(decision: IntentionActionDecision): string {
+  if (decision.type !== 'followUp') {
+    throw new Error(`Expected followUp decision, received "${decision.type}"`);
+  }
+  const content = normalizeOptionalText(decision.followUp?.content);
+  if (!content) {
+    throw new Error('Follow-up decision must include followUp.content');
+  }
+  return content;
+}
+
 function normalizeFutureIsoTimestamp(value: number | undefined): string | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -111,6 +148,22 @@ function toActiveConcernSnapshot(concern: ReturnType<ActiveConcernStore['getActi
   };
 }
 
+function toRecentlyResolvedConcernSnapshot(
+  concern: ReturnType<ActiveConcernStore['listRecentlyResolvedConcerns']>[number],
+): ActiveConcernSnapshot {
+  const resolvedAtMs = concern.resolvedAt ? Date.parse(concern.resolvedAt) : Number.NaN;
+  return {
+    id: concern.id,
+    title: concern.text,
+    status: 'resolved',
+    priority: concern.priority,
+    ...(Number.isFinite(resolvedAtMs) ? { resolvedAt: resolvedAtMs } : {}),
+    ...(concern.resolutionOutcome
+      ? { summary: concern.resolutionOutcome }
+      : { summary: 'Resolved recently.' }),
+  };
+}
+
 function normalizeObservedAtIso(value: number | undefined): string | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -120,12 +173,21 @@ function normalizeObservedAtIso(value: number | undefined): string | undefined {
 
 export function createIntentionAppraisalHooks(
   concernStore: ActiveConcernStore,
+  pendingFollowUpStore: PendingFollowUpStore,
 ): IntentionAppraisalHooks {
   return {
     getActiveConcerns: ({ canonicalContactKey }) => (
       concernStore
         .getActiveConcerns(canonicalContactKey)
         .map(concern => toActiveConcernSnapshot(concern))
+    ),
+    getRecentResolvedConcerns: ({ canonicalContactKey }) => (
+      concernStore
+        .listRecentlyResolvedConcerns(canonicalContactKey, {
+          withinMs: RECENT_RESOLVED_CONCERN_WINDOW_MS,
+          limit: RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT,
+        })
+        .map(concern => toRecentlyResolvedConcernSnapshot(concern))
     ),
     onIntentionConcernDecision: ({
       decision,
@@ -138,12 +200,52 @@ export function createIntentionAppraisalHooks(
       const expiresAt = normalizeFutureIsoTimestamp(
         decision.concern?.dueAt ?? decision.dueAt,
       );
+      const recentMatch = concernStore.findRecentlyResolvedSimilarConcern({
+        text,
+        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+      });
+      if (recentMatch) {
+        return;
+      }
       concernStore.create({
         text,
         priority: decision.concern?.priority ?? decision.priority,
         source: 'appraisal',
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         ...(expiresAt ? { expiresAt } : {}),
+      });
+    },
+    onIntentionFollowUpDecision: ({
+      decision,
+      channelId,
+      channelType,
+      canonicalContactKey,
+      sourceMessageId,
+    }) => {
+      if (decision.type !== 'followUp') {
+        return undefined;
+      }
+      const content = resolveFollowUpDecisionContent(decision);
+      const followUp = pendingFollowUpStore.create({
+        content,
+        priority: decision.priority,
+        timing: decision.timing === 'none' ? 'immediate' : decision.timing,
+        channelId: normalizeOptionalText(decision.followUp?.channelId) ?? channelId,
+        channelType: decision.followUp?.channelType ?? channelType,
+        authorId: 'system:intention',
+        authorName: 'Whisper',
+        ...(decision.dueAt ? { dueAt: normalizeFutureIsoTimestamp(decision.dueAt) } : {}),
+        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+        sourceMessageId,
+      });
+      return followUp.id;
+    },
+    onIntentionFollowUpActivated: ({
+      pendingFollowUpId,
+      activationReason,
+    }) => {
+      pendingFollowUpStore.markActivated(pendingFollowUpId, {
+        ...(activationReason ? { activationReason } : {}),
       });
     },
   };
@@ -211,6 +313,7 @@ export function wireIntentionRuntime(
   db: Database.Database,
 ): IntentionRuntimeWiring {
   const concernStore = new ActiveConcernStore(db);
+  const pendingFollowUpStore = new PendingFollowUpStore(db);
   const behavioralPatternTracker = new BehavioralPatternTracker(db);
   const behavioralHooks = createIntentionBehavioralPatternHooks(behavioralPatternTracker);
 
@@ -218,6 +321,12 @@ export function wireIntentionRuntime(
     target.setActiveConcernProvider(concernStore);
   } else {
     target.activeConcernProvider = concernStore;
+  }
+
+  if (typeof target.setPendingFollowUpProvider === 'function') {
+    target.setPendingFollowUpProvider(pendingFollowUpStore);
+  } else {
+    target.pendingFollowUpProvider = pendingFollowUpStore;
   }
 
   if (typeof target.setBehavioralPatternProvider === 'function') {
@@ -242,6 +351,7 @@ export function wireIntentionRuntime(
   target.registerTool(createResolveConcernTool(concernStore));
   return {
     concernStore,
+    pendingFollowUpStore,
     behavioralPatternTracker,
   };
 }

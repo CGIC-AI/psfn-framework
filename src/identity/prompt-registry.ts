@@ -187,7 +187,6 @@ export class PromptRegistryStore {
   private historyPath: string;
   private seedByKey: Map<PromptRegistryKey, PromptSeed>;
   private entries: Map<string, PromptRegistryEntry>;
-  private lastKnownGood: Map<string, PromptRegistryEntry>;
   private lastLoadedMtimeMs: number;
 
   constructor(filePath: string, historyPath: string) {
@@ -195,9 +194,8 @@ export class PromptRegistryStore {
     this.historyPath = historyPath;
     this.seedByKey = new Map(PROMPT_SEEDS.map(seed => [seed.key, seed]));
     this.entries = new Map();
-    this.lastKnownGood = new Map();
     this.lastLoadedMtimeMs = 0;
-    this.loadWithRecovery(true);
+    this.loadStrict();
   }
 
   list(): PromptRegistryEntry[] {
@@ -217,8 +215,6 @@ export class PromptRegistryStore {
     this.maybeReload();
     const entry = this.entries.get(key);
     if (entry) return entry.text;
-    const fallback = this.seedByKey.get(key);
-    if (fallback) return fallback.text;
     throw new Error(`Prompt key not found: ${key}`);
   }
 
@@ -281,38 +277,31 @@ export class PromptRegistryStore {
   }
 
   private maybeReload(): void {
-    if (!existsSync(this.filePath)) return;
+    if (!existsSync(this.filePath)) {
+      throw new Error(`Prompt registry file not found: ${this.filePath}`);
+    }
     try {
       const mtimeMs = statSync(this.filePath).mtimeMs;
       if (mtimeMs > this.lastLoadedMtimeMs) {
-        this.loadWithRecovery(false);
+        this.loadStrict();
       }
     } catch (err) {
-      log.warn('Failed to stat prompt registry file', { error: String(err) });
+      throw new Error(`Failed to reload prompt registry: ${String(err)}`);
     }
   }
 
-  private loadWithRecovery(seedIfMissing: boolean): void {
+  private loadStrict(): void {
     if (!existsSync(this.filePath)) {
-      if (seedIfMissing || this.entries.size === 0) {
-        this.seedDefaults();
-      }
-      return;
+      throw new Error(`Prompt registry file not found: ${this.filePath}`);
     }
 
     try {
       const raw = readFileSync(this.filePath, 'utf-8');
       const parsed = this.parseEntries(raw);
       this.entries = parsed;
-      this.lastKnownGood = cloneMap(parsed);
       this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
     } catch (err) {
-      log.error('Failed to load prompt registry; using last known good prompts', { error: String(err) });
-      if (this.lastKnownGood.size > 0) {
-        this.entries = cloneMap(this.lastKnownGood);
-        return;
-      }
-      this.seedDefaults();
+      throw new Error(`Failed to load prompt registry: ${String(err)}`);
     }
   }
 
@@ -371,31 +360,12 @@ export class PromptRegistryStore {
     return parsed;
   }
 
-  private seedDefaults(): void {
-    const now = new Date().toISOString();
-    this.entries.clear();
-    for (const seed of PROMPT_SEEDS) {
-      this.entries.set(seed.key, {
-        key: seed.key,
-        text: seed.text,
-        description: seed.description,
-        consumers: [...seed.consumers],
-        version: 1,
-        updatedAt: now,
-        updatedBy: 'system',
-        checksum: contentChecksum(seed.text),
-      });
-    }
-    this.save();
-  }
-
   private save(): void {
     const output = [...this.entries.values()]
       .sort((a, b) => a.key.localeCompare(b.key))
       .map(cloneEntry);
     writeJsonAtomic(this.filePath, output, { trailingNewline: false });
     this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
-    this.lastKnownGood = cloneMap(this.entries);
   }
 
   private appendHistory(entry: PromptRegistryHistoryEntry): void {

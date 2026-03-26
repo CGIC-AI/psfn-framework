@@ -8,6 +8,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
   decisionsToPostTurnActionCandidates,
+  isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
   sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
@@ -85,6 +86,12 @@ function makeInternalState() {
 }
 
 describe('IntentionAppraisal', () => {
+  it('treats internal turns as background appraisal turns', () => {
+    expect(isBackgroundAppraisalChannel('internal:heartbeat')).toBe(true);
+    expect(isBackgroundAppraisalChannel('internal:reflection:whisper')).toBe(true);
+    expect(isBackgroundAppraisalChannel('api:test')).toBe(false);
+  });
+
   it('runs on appraisal cadence and parses follow-up decisions', async () => {
     const { provider, complete } = makeProvider([
       JSON.stringify({
@@ -267,6 +274,50 @@ describe('IntentionAppraisal', () => {
     expect(promptPayload.activeConcerns?.[0]?.dueAt).toBeTypeOf('string');
   });
 
+  it('includes recently resolved concerns in the appraisal prompt for dedupe context', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'noop',
+          priority: 'low',
+          reason: 'No action required',
+          timing: 'none',
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:resolved-concerns',
+      currentEmotion: makeEmotionSnapshot(),
+      recentMessages: [{ role: 'user', content: 'We already handled that cleanup task.' }],
+      recentlyResolvedConcerns: [{
+        id: 'resolved-1',
+        title: 'Clean up the lingering profile reminder',
+        summary: 'Handled during the current run',
+        status: 'resolved',
+        resolvedAt: Date.parse('2026-03-10T15:45:00.000Z'),
+        priority: 'medium',
+      }],
+    });
+
+    const promptPayload = JSON.parse((complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}') as string) as {
+      recentlyResolvedConcerns?: Array<Record<string, unknown>>;
+    };
+    expect(promptPayload.recentlyResolvedConcerns?.[0]).toMatchObject({
+      id: 'resolved-1',
+      title: 'Clean up the lingering profile reminder',
+      status: 'resolved',
+      summary: 'Handled during the current run',
+      priority: 'medium',
+    });
+    expect(promptPayload.recentlyResolvedConcerns?.[0]?.resolvedAt).toBeTypeOf('string');
+  });
+
   it('fails closed when model output is malformed', async () => {
     const { provider } = makeProvider(['not valid json']);
     const onEvaluationError = vi.fn();
@@ -438,6 +489,66 @@ describe('intention appraisal action mapping', () => {
         content: 'Checking in after our last conversation.',
       });
       expect(inferred[0]?.runAt).toBe(1_700_000_460_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('delays soon follow-ups without explicit dueAt before surfacing them', () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_500_000);
+
+      const candidates = decisionsToPostTurnActionCandidates([{
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Needs a check-in but not right this second.',
+        timing: 'soon',
+        followUp: {
+          content: 'Checking in a little later.',
+        },
+      }], {
+        message: {
+          id: 'msg-intention-3',
+          channelId: 'api:test',
+          channelType: 'api',
+        },
+      });
+
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]?.kind).toBe(INTENTION_FOLLOW_UP_ACTION_KIND);
+      expect(candidates[0]?.runAt).toBe(1_700_000_800_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('surfaces pending follow-ups immediately during explicit proactive rechecks', () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_500_000);
+
+      const candidates = decisionsToPostTurnActionCandidates([{
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Needs an explicit recheck.',
+        timing: 'soon',
+        followUp: {
+          content: 'Checking in now because I rechecked the situation.',
+        },
+      }], {
+        message: {
+          id: 'msg-intention-4',
+          channelId: 'api:test',
+          channelType: 'api',
+        },
+      }, {
+        surfacePendingFollowUpsImmediately: true,
+      });
+
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]?.kind).toBe(INTENTION_FOLLOW_UP_ACTION_KIND);
+      expect(candidates[0]?.runAt).toBe(1_700_000_500_000);
     } finally {
       nowSpy.mockRestore();
     }

@@ -14,11 +14,14 @@ import type {
   MemoryRedactionOperation,
   MemoryRetentionClass,
   MemoryFormationVAD,
+  MemoryScopeRef,
 } from './types.js';
 import {
   DEDUP_THRESHOLD,
   DURABLE_RETENTION_TAG,
   MEMORY_CONFIG,
+  normalizeMemoryScopeRef,
+  normalizeMemoryScopeTags,
   VALID_MEMORY_TYPES,
   getSensitivityWriteThreshold,
   inferMemoryRetentionClass,
@@ -46,6 +49,8 @@ export interface MemoryWriteOptions {
   consentFlags?: ConsentFlags;       // default {}
   retentionClass?: MemoryRetentionClass;
   contactId?: string;
+  scopeRef?: MemoryScopeRef;
+  scopeTags?: string[];
 }
 
 export interface WriteResult {
@@ -173,6 +178,30 @@ function normalizeProvenanceRefs(
   const fallback = fallbackRef?.trim();
   if (fallback && fallback.length > 0) out.add(fallback);
   return [...out];
+}
+
+function mergeScopeTags(
+  existing: readonly string[] | undefined,
+  incoming: readonly string[] | undefined,
+): string[] {
+  return normalizeMemoryScopeTags([...(existing ?? []), ...(incoming ?? [])]);
+}
+
+function scopeRefEquals(
+  left: MemoryScopeRef | undefined,
+  right: MemoryScopeRef | undefined,
+): boolean {
+  return left?.kind === right?.kind
+    && left?.id === right?.id
+    && left?.label === right?.label;
+}
+
+function shouldConsiderDuplicateForScope(
+  memory: Pick<PurrMemory, 'scopeRef'>,
+  scopeRef: MemoryScopeRef | undefined,
+): boolean {
+  if (!scopeRef) return true;
+  return memory.scopeRef?.kind === scopeRef.kind && memory.scopeRef?.id === scopeRef.id;
 }
 
 function mergeProvenanceRefs(
@@ -341,6 +370,8 @@ export class MemoryWriter {
       consentFlags,
       retentionClass,
       contactId,
+      scopeRef,
+      scopeTags,
     } = opts;
 
     // Validate type
@@ -360,6 +391,8 @@ export class MemoryWriter {
     const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
     const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_write');
     const incomingProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
+    const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
+    const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
     const targetSalience = clampUnit(salience ?? importance, importance);
 
     // 1. Check for exact duplicates (high threshold per type)
@@ -373,7 +406,7 @@ export class MemoryWriter {
       d.type === type && (
         !contactId
         || d.contactId === contactId
-      )
+      ) && shouldConsiderDuplicateForScope(d, normalizedScopeRef)
     ));
     if (sameTypeDups.length > 0) {
       // Duplicate found -- bump access count and salience
@@ -385,6 +418,8 @@ export class MemoryWriter {
         tags?: string[];
         provenanceRefs?: string[];
         consentFlags?: ConsentFlags;
+        scopeRef?: MemoryScopeRef;
+        scopeTags?: string[];
       } = {
         lastAccessed: Date.now(),
         accessCount: existing.accessCount + 1,
@@ -415,6 +450,16 @@ export class MemoryWriter {
       if (!consentFlagsEqual(existing.consentFlags, mergedConsentFlags)) {
         updates.consentFlags = mergedConsentFlags;
       }
+      if (!scopeRefEquals(existing.scopeRef, normalizedScopeRef) && normalizedScopeRef) {
+        updates.scopeRef = normalizedScopeRef;
+      }
+      const mergedScopeTags = mergeScopeTags(existing.scopeTags, normalizedScopeTags);
+      if (
+        mergedScopeTags.length !== (existing.scopeTags?.length ?? 0)
+        || mergedScopeTags.some((tag, idx) => tag !== existing.scopeTags?.[idx])
+      ) {
+        updates.scopeTags = mergedScopeTags;
+      }
 
       // If this write is durable, upgrade duplicate memory tags so durability survives persistence.
       if (retention.retentionClass === 'durable' && !isDurableMemory(existing)) {
@@ -443,6 +488,8 @@ export class MemoryWriter {
           provenanceRefs: updates.provenanceRefs ?? existingProvenanceRefs,
           consentFlags: updates.consentFlags ?? existing.consentFlags,
           retentionClass: retention.retentionClass ?? existing.retentionClass,
+          scopeRef: updates.scopeRef ?? existing.scopeRef,
+          scopeTags: updates.scopeTags ?? existing.scopeTags,
         },
         existingId: existing.id,
       };
@@ -455,7 +502,10 @@ export class MemoryWriter {
       5,
     );
 
-    const sameTypeBroader = broader.filter(b => b.type === type);
+    const sameTypeBroader = broader.filter(b => (
+      b.type === type
+      && shouldConsiderDuplicateForScope(b, normalizedScopeRef)
+    ));
     const sameContactBroader = contactId
       ? sameTypeBroader.filter(b => b.contactId === contactId)
       : sameTypeBroader;
@@ -517,6 +567,8 @@ export class MemoryWriter {
       lastAccessed: now,
       accessCount: 1,
       tags: retention.tags,
+      ...(normalizedScopeRef ? { scopeRef: normalizedScopeRef } : {}),
+      ...(normalizedScopeTags.length > 0 ? { scopeTags: normalizedScopeTags } : {}),
       provenanceRefs: incomingProvenanceRefs,
       retentionClass: retention.retentionClass,
       sensitivity,
@@ -563,6 +615,8 @@ export class MemoryWriter {
       consentFlags,
       retentionClass,
       contactId,
+      scopeRef,
+      scopeTags,
     } = opts;
 
     if (!VALID_MEMORY_TYPES.includes(type)) {
@@ -578,6 +632,8 @@ export class MemoryWriter {
     const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
     const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_upsert');
     const normalizedProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
+    const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
+    const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
     const targetSalience = clampUnit(salience ?? importance, importance);
 
     const embedding = await this.embeddingService.embed(text);
@@ -593,7 +649,7 @@ export class MemoryWriter {
       s.type === type && (
         !contactId
         || s.contactId === contactId
-      )
+      ) && shouldConsiderDuplicateForScope(s, normalizedScopeRef)
     ));
     const mergedIncomingConsentFlags = sameType.reduce<ConsentFlags | undefined>(
       (merged, old) => mergeConsentFlags(merged, old.consentFlags),
@@ -657,6 +713,8 @@ export class MemoryWriter {
       lastAccessed: now,
       accessCount: 1,
       tags: retention.tags,
+      ...(normalizedScopeRef ? { scopeRef: normalizedScopeRef } : {}),
+      ...(normalizedScopeTags.length > 0 ? { scopeTags: normalizedScopeTags } : {}),
       provenanceRefs: normalizedProvenanceRefs,
       retentionClass: retention.retentionClass,
       sensitivity,

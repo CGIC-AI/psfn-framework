@@ -13,15 +13,20 @@ import type {
   ContactMutationAuditField,
   ContactMutationAuditQuery,
   RelationshipType,
+  SocialGraphEntity,
+  SocialRelationshipEdge,
 } from '../../../contacts/types.js';
 import type { TrustLevel } from '../../../trust/types.js';
 import { TRUST_LEVELS } from '../../../trust/types.js';
+import type { ContactProfileArtifact } from '../../../memory/store.js';
 import {
   buildRelatedConversationChannelMap,
 } from './contact-session-linker.js';
 import type {
+  AdminContactSocialGraphConnectionView,
   AdminContactDetailData,
   AdminContactListData,
+  AdminContactSocialGraphView,
   AdminContactsService,
   ContactUpdateResult,
 } from './types.js';
@@ -53,6 +58,13 @@ interface ContactUpdatePayload {
   notes?: string;
   channelPrivacy?: ChannelPrivacyUpdate[];
   addChannel?: AddChannelLink;
+}
+
+function isMentionOnlyContact(contact: Contact | undefined): boolean {
+  if (!contact) return false;
+  return (contact.channels?.length ?? 0) === 0
+    && (contact.channelIdentities?.length ?? 0) === 0
+    && (contact.conversationChannels?.length ?? 0) === 0;
 }
 
 export class AdminContactsDataService implements AdminContactsService {
@@ -96,6 +108,144 @@ export class AdminContactsDataService implements AdminContactsService {
     return storeWithAuditList.listMutationAuditEntries(query);
   }
 
+  private buildSocialGraphMap(
+    contacts: Contact[],
+    profileMap: Map<string, ContactProfileArtifact>,
+  ): Map<string, AdminContactSocialGraphView> {
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) return new Map();
+
+    const contactById = new Map(contacts.map(contact => [contact.id, contact] as const));
+    const entities = contactStore.listSocialGraphEntities({
+      viewerTrustLevel: 'primary',
+      viewerChannelVisibility: 'private',
+      limit: Math.max(contacts.length * 4, 100),
+    });
+    const entityById = new Map(entities.map(entity => [entity.id, entity] as const));
+    const entityByContactId = new Map(
+      entities
+        .filter((entity): entity is SocialGraphEntity & { contactId: string } => typeof entity.contactId === 'string')
+        .map(entity => [entity.contactId, entity] as const),
+    );
+    const edges = contactStore.listSocialRelationshipEdges({
+      viewerTrustLevel: 'primary',
+      viewerChannelVisibility: 'private',
+      limit: Math.max(contacts.length * 8, 200),
+    });
+    const edgesByEntityId = new Map<string, SocialRelationshipEdge[]>();
+
+    const addEdge = (entityId: string, edge: SocialRelationshipEdge): void => {
+      const existing = edgesByEntityId.get(entityId);
+      if (existing) {
+        existing.push(edge);
+        return;
+      }
+      edgesByEntityId.set(entityId, [edge]);
+    };
+
+    for (const edge of edges) {
+      addEdge(edge.sourceEntityId, edge);
+      addEdge(edge.targetEntityId, edge);
+    }
+
+    const buildConnection = (
+      entity: SocialGraphEntity,
+      edge: SocialRelationshipEdge,
+    ): AdminContactSocialGraphConnectionView | null => {
+      const neighborEntityId = edge.sourceEntityId === entity.id ? edge.targetEntityId : edge.sourceEntityId;
+      const neighborEntity = entityById.get(neighborEntityId);
+      if (!neighborEntity) return null;
+
+      const neighborContact = neighborEntity.contactId ? contactById.get(neighborEntity.contactId) : undefined;
+      const neighborProfile = neighborContact ? profileMap.get(neighborContact.id) : undefined;
+      const direction = edge.directional
+        ? (edge.sourceEntityId === entity.id ? 'outgoing' : 'incoming')
+        : 'undirected';
+
+      return {
+        edgeId: edge.id,
+        relationshipType: edge.relationshipType,
+        directional: edge.directional,
+        direction,
+        sensitivity: edge.sensitivity,
+        confidence: edge.confidence,
+        provenanceRefs: edge.provenanceRefs,
+        evidenceMemoryIds: edge.evidenceMemoryIds,
+        createdAt: edge.createdAt,
+        updatedAt: edge.updatedAt,
+        neighbor: {
+          entityId: neighborEntity.id,
+          contactId: neighborEntity.contactId,
+          displayName: neighborContact?.displayName ?? neighborEntity.displayName,
+          source: neighborEntity.source,
+          sensitivity: neighborEntity.sensitivity,
+          confidence: neighborEntity.confidence,
+          provenanceRefs: neighborEntity.provenanceRefs,
+          mentionOnly: isMentionOnlyContact(neighborContact),
+          trustLevel: neighborContact?.trustLevel,
+          relationshipType: neighborContact?.relationshipType,
+          profileSummary: neighborProfile?.summary,
+          profileUpdatedAt: neighborProfile?.updatedAt,
+        },
+      };
+    };
+
+    return new Map(contacts.map((contact) => {
+      const entity = entityByContactId.get(contact.id);
+      if (!entity) {
+        return [contact.id, {
+          edgeCount: 0,
+          neighborCount: 0,
+          evidenceCount: 0,
+          provenanceCount: 0,
+          mentionOnlyNeighborCount: 0,
+          connections: [],
+        } satisfies AdminContactSocialGraphView] as const;
+      }
+
+      const localEdges = edgesByEntityId.get(entity.id) ?? [];
+      const connections = localEdges
+        .map(edge => buildConnection(entity, edge))
+        .filter((connection): connection is AdminContactSocialGraphConnectionView => connection !== null)
+        .sort((left, right) => {
+          if (right.confidence !== left.confidence) return right.confidence - left.confidence;
+          return left.neighbor.displayName.localeCompare(right.neighbor.displayName);
+        });
+      const uniqueNeighborIds = new Set(connections.map(connection => connection.neighbor.entityId));
+      const uniqueMentionOnlyNeighborIds = new Set(
+        connections
+          .filter(connection => connection.neighbor.mentionOnly)
+          .map(connection => connection.neighbor.entityId),
+      );
+      const evidenceIds = new Set(connections.flatMap(connection => connection.evidenceMemoryIds));
+      const provenanceRefs = new Set([
+        ...entity.provenanceRefs,
+        ...connections.flatMap(connection => connection.provenanceRefs),
+        ...connections.flatMap(connection => connection.neighbor.provenanceRefs),
+      ]);
+
+      return [contact.id, {
+        entity: {
+          id: entity.id,
+          displayName: entity.displayName,
+          contactId: entity.contactId,
+          source: entity.source,
+          sensitivity: entity.sensitivity,
+          confidence: entity.confidence,
+          provenanceRefs: entity.provenanceRefs,
+          createdAt: entity.createdAt,
+          updatedAt: entity.updatedAt,
+        },
+        edgeCount: localEdges.length,
+        neighborCount: uniqueNeighborIds.size,
+        evidenceCount: evidenceIds.size,
+        provenanceCount: provenanceRefs.size,
+        mentionOnlyNeighborCount: uniqueMentionOnlyNeighborIds.size,
+        connections,
+      } satisfies AdminContactSocialGraphView] as const;
+    }));
+  }
+
   listContacts(params?: URLSearchParams): AdminContactListData {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
@@ -103,6 +253,7 @@ export class AdminContactsDataService implements AdminContactsService {
         contacts: [],
         profileMap: new Map(),
         relatedChannelMap: new Map(),
+        socialGraphMap: new Map(),
         verifications: [],
         mutationAudits: [],
         mutationAuditQuery: this.parseContactMutationAuditQuery(params),
@@ -117,6 +268,7 @@ export class AdminContactsDataService implements AdminContactsService {
       contacts,
       sessionStore: this.deps.sessionStore,
     });
+    const socialGraphMap = this.buildSocialGraphMap(contacts, profileMap);
 
     const maybeVerificationLister = contactStore as ContactStore & {
       listIdentityLinkVerifications?: (limit?: number) => ContactIdentityLinkVerification[];
@@ -131,6 +283,7 @@ export class AdminContactsDataService implements AdminContactsService {
       contacts,
       profileMap,
       relatedChannelMap,
+      socialGraphMap,
       verifications,
       mutationAudits,
       mutationAuditQuery,

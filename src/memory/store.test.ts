@@ -225,6 +225,69 @@ describe('MemoryStore', () => {
       expect(mem!.sensitivity).toBe('intimate');
     });
 
+    it('stores and retrieves structured scope refs and scope tags', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(
+        makeMemory('m-scope', 'Scoped project fact', {
+          scopeRef: { kind: 'project', id: 'proj-alpha', label: 'Alpha' },
+          scopeTags: ['project:proj-alpha', 'scope:alpha'],
+        }),
+        emb,
+      );
+
+      const mem = store.getById('m-scope');
+      expect(mem).toBeDefined();
+      expect(mem!.scopeRef).toEqual({ kind: 'project', id: 'proj-alpha', label: 'Alpha' });
+      expect(mem!.scopeTags).toEqual(['project:proj-alpha', 'scope:alpha']);
+    });
+
+    it('filters embedding search by scope query when mode is only', () => {
+      const emb = makeEmbedding(2);
+      store.insertMemory(
+        makeMemory('m-scope-a', 'Project alpha memory', {
+          scopeRef: { kind: 'project', id: 'alpha' },
+          scopeTags: ['project:alpha'],
+        }),
+        emb,
+      );
+      store.insertMemory(
+        makeMemory('m-scope-b', 'Project beta memory', {
+          scopeRef: { kind: 'project', id: 'beta' },
+          scopeTags: ['project:beta'],
+        }),
+        emb,
+      );
+
+      const results = store.searchByEmbedding(emb, 0.5, 10, {
+        refs: [{ kind: 'project', id: 'alpha' }],
+        mode: 'only',
+      });
+
+      expect(results.map(result => result.id)).toEqual(['m-scope-a']);
+    });
+
+    it('filters lexical search by scope tags when mode is only', () => {
+      store.insertMemory(
+        makeMemory('m-text-alpha', 'Memory about deployment plan', {
+          scopeTags: ['project:alpha'],
+        }),
+        makeEmbedding(3),
+      );
+      store.insertMemory(
+        makeMemory('m-text-beta', 'Memory about deployment plan', {
+          scopeTags: ['project:beta'],
+        }),
+        makeEmbedding(4),
+      );
+
+      const results = store.searchByText('deployment', 10, {
+        tags: ['project:beta'],
+        mode: 'only',
+      });
+
+      expect(results.map(result => result.id)).toEqual(['m-text-beta']);
+    });
+
     it('stores and retrieves consentFlags', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(
@@ -548,11 +611,16 @@ describe('MemoryStore', () => {
       expect(columns.some(column => column.name === 'contact_id')).toBe(true);
       expect(columns.some(column => column.name === 'provenance_refs')).toBe(true);
       expect(columns.some(column => column.name === 'formation_vad')).toBe(true);
+      expect(columns.some(column => column.name === 'scope_ref_kind')).toBe(true);
+      expect(columns.some(column => column.name === 'scope_ref_id')).toBe(true);
+      expect(columns.some(column => column.name === 'scope_tags')).toBe(true);
 
       const emb = makeEmbedding(1);
       migratedStore.insertMemory(
         makeMemory('legacy-migrated', 'Legacy schema now supports contact', {
           contactId: 'contact-legacy-1',
+          scopeRef: { kind: 'project', id: 'legacy-project' },
+          scopeTags: ['project:legacy-project'],
           formationVAD: {
             valence: 0.2,
             arousal: -0.1,
@@ -563,6 +631,8 @@ describe('MemoryStore', () => {
       );
       const inserted = migratedStore.getById('legacy-migrated');
       expect(inserted?.contactId).toBe('contact-legacy-1');
+      expect(inserted?.scopeRef).toEqual({ kind: 'project', id: 'legacy-project' });
+      expect(inserted?.scopeTags).toEqual(['project:legacy-project']);
       expect(inserted?.formationVAD).toEqual({
         valence: 0.2,
         arousal: -0.1,

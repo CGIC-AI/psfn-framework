@@ -86,6 +86,8 @@ export interface PurrMemory {
   accessCount: number;
   tags: string[];
   provenanceRefs?: string[];
+  scopeRef?: MemoryScopeRef;
+  scopeTags?: string[];
   sensitivity?: string;
   consentFlags?: Record<string, unknown>;
   contactId?: string;
@@ -97,6 +99,12 @@ export interface PurrMemory {
   updatedAt?: number;
   emotionalWeight?: number;
   supersededAt?: number;
+}
+
+export interface MemoryScopeRef {
+  kind: string;
+  id: string;
+  label?: string;
 }
 
 export interface AdminMemoryContactSummary {
@@ -119,6 +127,8 @@ export interface AdminMemoryListData {
 export interface AdminMemoryDetailData {
   memory: PurrMemory;
   linkedContact?: AdminMemoryContactSummary;
+  scopeAssignments: AdminMemoryScopeAssignmentView[];
+  scopeRepair?: AdminMemoryScopeRepairView;
 }
 
 export interface AdminMemorySearchResult {
@@ -144,6 +154,59 @@ export interface AdminBulkMutationResult {
   ok: boolean;
   count: number;
   message?: string;
+}
+
+export interface AdminMemoryScopeEvidenceItem {
+  type: string;
+  value: string;
+  detail: string;
+}
+
+export interface AdminMemoryScopeAssignmentView {
+  kind: 'project' | 'north_star';
+  id: string;
+  label?: string;
+  canonicalTag: string;
+  evidence: AdminMemoryScopeEvidenceItem[];
+}
+
+export interface AdminMemoryScopeRepairView {
+  needsRepair: boolean;
+  suggestedScopeRef?: MemoryScopeRef;
+  suggestedScopeTags: string[];
+  notes: string[];
+}
+
+export interface AdminMemoryScopeSummary {
+  kind: 'project' | 'north_star';
+  id: string;
+  label?: string;
+  canonicalTag: string;
+  memoryCount: number;
+  needsRepairCount: number;
+}
+
+export interface AdminMemoryScopedMemoryView {
+  memory: PurrMemory;
+  evidence: AdminMemoryScopeEvidenceItem[];
+  repair: AdminMemoryScopeRepairView;
+}
+
+export interface AdminMemoryScopeListData {
+  scopes: AdminMemoryScopeSummary[];
+}
+
+export interface AdminMemoryScopeDetailData {
+  scope: AdminMemoryScopeSummary;
+  memories: AdminMemoryScopedMemoryView[];
+}
+
+export interface AdminMemoryScopeMutationResult {
+  ok: boolean;
+  message?: string;
+  memory?: PurrMemory;
+  scopeAssignments?: AdminMemoryScopeAssignmentView[];
+  scopeRepair?: AdminMemoryScopeRepairView;
 }
 
 // Sessions
@@ -450,10 +513,78 @@ export interface ContactConversationChannelView {
   lastSeen?: string;
 }
 
+export type SocialGraphEntitySource = 'contact' | 'memory' | 'manual' | 'system';
+export type SocialRelationshipKind =
+  | 'partner'
+  | 'family'
+  | 'friend'
+  | 'acquaintance'
+  | 'colleague'
+  | 'parent'
+  | 'child'
+  | 'sibling'
+  | 'caregiver'
+  | 'household'
+  | 'manager'
+  | 'direct_report'
+  | 'other';
+
+export interface AdminContactSocialGraphEntityView {
+  id: string;
+  displayName: string;
+  contactId?: string;
+  source: SocialGraphEntitySource;
+  sensitivity: string;
+  confidence: number;
+  provenanceRefs: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminContactSocialGraphNeighborView {
+  entityId: string;
+  contactId?: string;
+  displayName: string;
+  source: SocialGraphEntitySource;
+  sensitivity: string;
+  confidence: number;
+  provenanceRefs: string[];
+  mentionOnly: boolean;
+  trustLevel?: TrustLevel;
+  relationshipType?: RelationshipType;
+  profileSummary?: string;
+  profileUpdatedAt?: number;
+}
+
+export interface AdminContactSocialGraphConnectionView {
+  edgeId: string;
+  relationshipType: SocialRelationshipKind;
+  directional: boolean;
+  direction: 'incoming' | 'outgoing' | 'undirected';
+  sensitivity: string;
+  confidence: number;
+  provenanceRefs: string[];
+  evidenceMemoryIds: string[];
+  createdAt: string;
+  updatedAt: string;
+  neighbor: AdminContactSocialGraphNeighborView;
+}
+
+export interface AdminContactSocialGraphView {
+  entity?: AdminContactSocialGraphEntityView;
+  edgeCount: number;
+  neighborCount: number;
+  evidenceCount: number;
+  provenanceCount: number;
+  mentionOnlyNeighborCount: number;
+  connections: AdminContactSocialGraphConnectionView[];
+}
+
 export interface AdminContactListData {
   contacts: Contact[];
   profileMap: Record<string, ContactProfileArtifact>;
   relatedChannelMap: Record<string, ContactConversationChannelView[]>;
+  socialGraphMap: Record<string, AdminContactSocialGraphView>;
   verifications: ContactIdentityLinkVerification[];
   mutationAudits: ContactMutationAuditEntry[];
   mutationAuditQuery: unknown;
@@ -524,15 +655,51 @@ export interface SettingsContractData {
   fields: Record<string, SettingsContractField>;
 }
 
+export type CanonicalProviderType =
+  | 'litellm_proxy'
+  | 'openrouter'
+  | 'openai'
+  | 'anthropic'
+  | 'google'
+  | 'mistral'
+  | 'generic_openai';
+
+export interface ProviderRegistryEntry {
+  id: string;
+  type: CanonicalProviderType;
+  enabled: boolean;
+  label?: string;
+  apiBaseUrl?: string;
+  modelsApiUrl?: string;
+  apiKeyEnv?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CanonicalProviderRegistry {
+  schemaVersion: 1;
+  providers: ProviderRegistryEntry[];
+}
+
+export interface ProvidersRuntimeConfig {
+  registry: CanonicalProviderRegistry;
+  litellmBaseUrl?: string;
+  litellmApiKeyEnv?: string;
+  openRouterApiBaseUrl?: string;
+  openRouterModelsApiUrl?: string;
+  openRouterApiKeyEnv?: string;
+}
+
 export interface AdminSettingsData {
   config: Record<string, unknown>;
   env: Record<string, unknown>;
   editors: {
     models: unknown;
+    providers: ProvidersRuntimeConfig;
     skills: unknown;
     scheduler: unknown;
     trustPolicy: unknown;
     capabilities: unknown;
+    backup: unknown;
   };
   voiceProviders: {
     stt: Array<{

@@ -1,22 +1,41 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { base } from '$app/paths';
   import {
     getModelsConfigRaw,
     saveModelsConfigRaw,
     listDiscoveredModels,
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
+  import { getSettings, saveSubConfig } from '$lib/api/endpoints/settings';
   import { ApiError } from '$lib/api/client';
-  import type { DiscoveredModel } from '$lib/types';
+  import type {
+    AdminSettingsData,
+    CanonicalProviderRegistry,
+    CanonicalProviderType,
+    DiscoveredModel,
+    ProviderRegistryEntry,
+  } from '$lib/types';
   import {
     buildUniqueModelId,
     deriveDiscoveryAutofill,
     resolveDiscoveredModelSelection,
   } from './discovery-autofill';
+  import {
+    createEmptyProviderEntry,
+    normalizeProvidersRuntimeConfig,
+    PROVIDER_TYPE_LABELS,
+    PROVIDER_TYPES,
+    providerEnvNameIsValid,
+    providerIdIsValid,
+    providerSupportsModelsApi,
+  } from '$lib/providers/registry';
 
+  type ProviderEditableField = 'id' | 'label' | 'apiBaseUrl' | 'modelsApiUrl' | 'apiKeyEnv';
   type CanonicalModelPurpose =
     | 'chat'
     | 'background'
+    | 'memory'
     | 'extraction'
     | 'summary'
     | 'reasoning'
@@ -49,6 +68,9 @@
     rank: number;
     identity: ModelRegistryIdentityMetadata;
     purposes: ModelRegistryPurposeTag[];
+    routing?: {
+      providerOrder?: string[];
+    };
     capabilities?: Record<string, unknown>;
     tuning?: Record<string, unknown>;
     cost?: Record<string, unknown>;
@@ -78,6 +100,7 @@
   const CANONICAL_PURPOSES = [
     'chat',
     'background',
+    'memory',
     'extraction',
     'summary',
     'reasoning',
@@ -90,6 +113,7 @@
   const PURPOSE_LABELS: Record<CanonicalModelPurpose, string> = {
     chat: 'chat',
     background: 'background',
+    memory: 'memory',
     extraction: 'extraction',
     summary: 'summary',
     reasoning: 'reasoning',
@@ -124,11 +148,21 @@
   let models = $state<ModelRegistryEntry[]>([]);
   let budgetPolicy = $state<ModelRegistryBudgetPolicy>({ ...DEFAULT_BUDGET_POLICY });
   let discoveredModels = $state<DiscoveredModel[]>([]);
+  let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
+  let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
+  let providerValidationErrors = $state<string[]>([]);
   let expandedModelIds = $state<Set<string>>(new Set());
   let dragSourceIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
   let dirty = $state(false);
   let initialSnapshot = $state('');
+  let enabledProviders = $derived.by(() => providerRegistry.providers.filter((entry) => entry.enabled));
+  let providerEntriesById = $derived.by(() => (
+    new Map(providerRegistry.providers.map((entry) => [entry.id, entry] as const))
+  ));
+  let providerTypeOptions = $derived.by(() => (
+    [...new Set(providerRegistry.providers.map((entry) => entry.type))].sort()
+  ));
 
   let purposePrimaryCounts = $derived.by(() => {
     const counts = Object.fromEntries(
@@ -192,7 +226,7 @@
 
   $effect(() => {
     if (!initialSnapshot) return;
-    dirty = JSON.stringify({ models, budgetPolicy }) !== initialSnapshot;
+    dirty = JSON.stringify({ models, budgetPolicy, providerRegistry }) !== initialSnapshot;
   });
 
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -235,6 +269,192 @@
       // Non-JSON response body; fall back to raw text
     }
     return rawBody;
+  }
+
+  function setProviderRegistryState(nextRegistry: CanonicalProviderRegistry): void {
+    providerRegistry = {
+      schemaVersion: 1,
+      providers: nextRegistry.providers.map((entry) => ({
+        ...entry,
+        ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+      })),
+    };
+    providerRegistryInitialJson = JSON.stringify(providerRegistry, null, 2);
+    providerValidationErrors = [];
+  }
+
+  function providerRegistryDirty(): boolean {
+    return JSON.stringify(providerRegistry, null, 2) !== providerRegistryInitialJson;
+  }
+
+  function providerTypeSummary(type: CanonicalProviderType): string {
+    if (type === 'openrouter') return 'Model discovery + routed OpenRouter traffic';
+    if (type === 'litellm_proxy') return 'Proxy-backed provider routing';
+    if (type === 'generic_openai') return 'OpenAI-compatible backend';
+    return `${PROVIDER_TYPE_LABELS[type]} direct backend`;
+  }
+
+  function providerRuntimeRole(entry: ProviderRegistryEntry): string[] {
+    const roles: string[] = [];
+    if (entry.type === 'openrouter') {
+      roles.push('import routing');
+      roles.push('catalog discovery');
+    }
+    if (entry.type === 'litellm_proxy') {
+      roles.push('proxy routing');
+    }
+    if (!entry.enabled) {
+      roles.push('disabled');
+    }
+    return roles.length > 0 ? roles : ['direct backend'];
+  }
+
+  function updateProviderEntry(index: number, updater: (entry: ProviderRegistryEntry) => ProviderRegistryEntry): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: providerRegistry.providers.map((entry, entryIndex) => (
+        entryIndex === index
+          ? updater({
+            ...entry,
+            ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+          })
+          : entry
+      )),
+    };
+    providerValidationErrors = [];
+  }
+
+  function addProviderEntry(): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: [...providerRegistry.providers, createEmptyProviderEntry(providerRegistry.providers.length)],
+    };
+    providerValidationErrors = [];
+  }
+
+  function removeProviderEntry(index: number): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: providerRegistry.providers.filter((_, entryIndex) => entryIndex !== index),
+    };
+    providerValidationErrors = [];
+  }
+
+  function setProviderType(index: number, value: string): void {
+    updateProviderEntry(index, (entry) => {
+      const nextType = (PROVIDER_TYPES.includes(value as CanonicalProviderType)
+        ? value
+        : 'openai') as CanonicalProviderType;
+      const nextEntry: ProviderRegistryEntry = {
+        ...entry,
+        type: nextType,
+      };
+      if (!providerSupportsModelsApi(nextType)) {
+        delete nextEntry.modelsApiUrl;
+      }
+      return nextEntry;
+    });
+  }
+
+  function setProviderField(index: number, field: ProviderEditableField, value: string): void {
+    updateProviderEntry(index, (entry) => {
+      const trimmed = value.trim();
+      if (field === 'id') {
+        return {
+          ...entry,
+          id: trimmed.toLowerCase(),
+        };
+      }
+      if (trimmed.length === 0) {
+        const nextEntry = { ...entry };
+        delete nextEntry[field];
+        return nextEntry;
+      }
+      return {
+        ...entry,
+        [field]: trimmed,
+      };
+    });
+  }
+
+  function validateProviderRegistry(registry: CanonicalProviderRegistry): string[] {
+    const errors: string[] = [];
+    const seenIds = new Set<string>();
+    let enabledOpenRouterCount = 0;
+    let enabledLiteLLMCount = 0;
+
+    for (const [index, entry] of registry.providers.entries()) {
+      const label = entry.id || `provider #${index + 1}`;
+      if (!providerIdIsValid(entry.id)) {
+        errors.push(`${label}: id must use only letters, numbers, dot, underscore, or hyphen.`);
+      }
+      if (seenIds.has(entry.id)) {
+        errors.push(`${label}: duplicate provider id.`);
+      }
+      seenIds.add(entry.id);
+      if (entry.apiKeyEnv && !providerEnvNameIsValid(entry.apiKeyEnv)) {
+        errors.push(`${label}: apiKeyEnv must be an uppercase environment variable name.`);
+      }
+      if (!entry.apiBaseUrl?.trim()) {
+        errors.push(`${label}: apiBaseUrl is required for ${entry.type}.`);
+      }
+      if (entry.type === 'openrouter' && !entry.modelsApiUrl?.trim()) {
+        errors.push(`${label}: modelsApiUrl is required for openrouter.`);
+      }
+      if (entry.enabled && entry.type === 'openrouter') {
+        enabledOpenRouterCount += 1;
+      }
+      if (entry.enabled && entry.type === 'litellm_proxy') {
+        enabledLiteLLMCount += 1;
+      }
+    }
+
+    if (enabledOpenRouterCount > 1) {
+      errors.push('Only one enabled OpenRouter provider is supported.');
+    }
+    if (enabledLiteLLMCount > 1) {
+      errors.push('Only one enabled LiteLLM proxy provider is supported.');
+    }
+
+    return errors;
+  }
+
+  async function saveProviderRegistry(): Promise<void> {
+    saving = true;
+    try {
+      const errors = validateProviderRegistry(providerRegistry);
+      providerValidationErrors = errors;
+      if (errors.length > 0) {
+        flashOk = false;
+        flashMessage = errors[0] ?? 'Provider registry validation failed';
+        return;
+      }
+      await saveSubConfig('providers', JSON.stringify(providerRegistry, null, 2));
+      const settingsData = await getSettings();
+      setProviderRegistryState(normalizeProvidersRuntimeConfig((settingsData as AdminSettingsData).editors.providers).registry);
+      initialSnapshot = JSON.stringify({
+        models,
+        budgetPolicy,
+        providerRegistry,
+      });
+      flashOk = true;
+      flashMessage = 'providers.json saved';
+    } catch (error) {
+      flashOk = false;
+      flashMessage = error instanceof Error ? error.message : 'Failed to save providers.json';
+    } finally {
+      saving = false;
+    }
+  }
+
+  function discardProviderRegistryChanges(): void {
+    try {
+      providerRegistry = JSON.parse(providerRegistryInitialJson) as CanonicalProviderRegistry;
+      providerValidationErrors = [];
+    } catch {
+      providerRegistry = { schemaVersion: 1, providers: [] };
+      providerValidationErrors = [];
+    }
   }
 
   function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
@@ -288,6 +508,15 @@
     return normalized;
   }
 
+  function normalizeRouting(value: unknown): { providerOrder?: string[] } | undefined {
+    if (!isRecord(value) || !Array.isArray(value.providerOrder)) return undefined;
+    const providerOrder = value.providerOrder
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map(entry => entry.trim().toLowerCase())
+      .filter((entry, index, array) => entry.length > 0 && array.indexOf(entry) === index);
+    return providerOrder.length > 0 ? { providerOrder } : undefined;
+  }
+
   function normalizeModelEntry(value: unknown, index: number): ModelRegistryEntry {
     const raw = isRecord(value) ? value : {};
     const identityRaw = isRecord(raw.identity) ? raw.identity : {};
@@ -316,6 +545,7 @@
         ...(toNonEmptyString(identityRaw.family) ? { family: toNonEmptyString(identityRaw.family) } : {}),
       },
       purposes,
+      ...(normalizeRouting(raw.routing) ? { routing: normalizeRouting(raw.routing) } : {}),
       ...(isRecord(raw.capabilities) ? { capabilities: { ...raw.capabilities } } : {}),
       ...(isRecord(raw.tuning) ? { tuning: { ...raw.tuning } } : {}),
       ...(isRecord(raw.cost) ? { cost: { ...raw.cost } } : {}),
@@ -336,6 +566,7 @@
         },
       },
       purposes: entry.purposes.map((purpose) => ({ ...purpose })),
+      ...(entry.routing ? { routing: { providerOrder: [...(entry.routing.providerOrder ?? [])] } } : {}),
       ...(isRecord(entry.capabilities) ? { capabilities: { ...entry.capabilities } } : {}),
       ...(isRecord(entry.tuning) ? { tuning: { ...entry.tuning } } : {}),
       ...(isRecord(entry.cost) ? { cost: { ...entry.cost } } : {}),
@@ -461,6 +692,12 @@
         }
       } else {
         entry.identity[key] = value;
+        if (key === 'provider') {
+          const normalizedProvider = value.trim().toLowerCase();
+          if (normalizedProvider.length > 0) {
+            applyProviderDefaults(entry, normalizedProvider);
+          }
+        }
         if (key === 'model') {
           const normalizedModel = value.trim();
           if (normalizedModel.length > 0) {
@@ -489,6 +726,70 @@
       }
       return entry;
     });
+  }
+
+  function providerLabel(entry: ProviderRegistryEntry | undefined): string {
+    if (!entry) return 'Unknown provider';
+    return entry.label?.trim() || PROVIDER_TYPE_LABELS[entry.type] || entry.id;
+  }
+
+  function providerAvailability(entry: ProviderRegistryEntry | undefined): string {
+    if (!entry) return 'not registered';
+    return entry.enabled ? 'enabled' : 'disabled';
+  }
+
+  function providerForModel(entry: ModelRegistryEntry): ProviderRegistryEntry | undefined {
+    return providerEntriesById.get(entry.identity.provider.trim().toLowerCase());
+  }
+
+  function applyProviderDefaults(entry: ModelRegistryEntry, providerId: string): ModelRegistryEntry {
+    const provider = providerEntriesById.get(providerId);
+    if (!provider) return entry;
+    entry.identity.provider = provider.id;
+    if (!entry.identity.source.type.trim()) {
+      entry.identity.source.type = provider.type;
+    }
+    if (!entry.identity.source.label?.trim()) {
+      entry.identity.source.label = provider.label ?? PROVIDER_TYPE_LABELS[provider.type];
+    }
+    if (!entry.identity.source.baseUrl?.trim() && provider.apiBaseUrl) {
+      entry.identity.source.baseUrl = provider.apiBaseUrl;
+    }
+    return entry;
+  }
+
+  function setRoutingProviderOrder(index: number, rawValue: string): void {
+    updateModelAt(index, (entry) => {
+      const providerOrder = rawValue
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .filter((value, orderIndex, array) => value.length > 0 && array.indexOf(value) === orderIndex);
+      if (providerOrder.length === 0) {
+        delete entry.routing;
+      } else {
+        entry.routing = { providerOrder };
+      }
+      return entry;
+    });
+  }
+
+  function toggleRoutingProvider(index: number, providerId: string): void {
+    updateModelAt(index, (entry) => {
+      const currentOrder = entry.routing?.providerOrder ?? [];
+      const nextOrder = currentOrder.includes(providerId)
+        ? currentOrder.filter((value) => value !== providerId)
+        : [...currentOrder, providerId];
+      if (nextOrder.length === 0) {
+        delete entry.routing;
+      } else {
+        entry.routing = { providerOrder: nextOrder };
+      }
+      return entry;
+    });
+  }
+
+  function routingProviderOrderValue(entry: ModelRegistryEntry): string {
+    return entry.routing?.providerOrder?.join(', ') ?? '';
   }
 
   function setContainerValue(
@@ -772,14 +1073,23 @@
       } else {
         seenIds.add(id);
       }
-      if (!entry.identity.provider.trim()) {
+      const providerId = entry.identity.provider.trim().toLowerCase();
+      if (!providerId) {
         errors.push(`Model "${id || index + 1}" is missing provider.`);
+      } else if (providerRegistry.providers.length > 0 && !providerEntriesById.has(providerId)) {
+        errors.push(`Model "${id || index + 1}" references unknown provider "${providerId}".`);
       }
       if (!entry.identity.model.trim()) {
         errors.push(`Model "${id || index + 1}" is missing model name.`);
       }
       if (!entry.identity.source.type.trim()) {
         errors.push(`Model "${id || index + 1}" is missing source type.`);
+      }
+      const routingProviderOrder = entry.routing?.providerOrder ?? [];
+      for (const routedProviderId of routingProviderOrder) {
+        if (!providerEntriesById.has(routedProviderId)) {
+          errors.push(`Model "${id || index + 1}" routes through unknown provider "${routedProviderId}".`);
+        }
       }
       if (!Array.isArray(entry.purposes) || entry.purposes.length === 0) {
         errors.push(`Model "${id || index + 1}" must include at least one purpose tag.`);
@@ -817,7 +1127,7 @@
         const id = entry.id.trim();
         const identity = {
           ...entry.identity,
-          provider: entry.identity.provider.trim(),
+          provider: entry.identity.provider.trim().toLowerCase(),
           model: entry.identity.model.trim(),
           source: {
             ...entry.identity.source,
@@ -839,6 +1149,12 @@
           identity,
           purposes: normalizedPurposes,
         };
+        const normalizedRouting = normalizeRouting(entry.routing);
+        if (normalizedRouting) {
+          nextEntry.routing = normalizedRouting;
+        } else {
+          delete nextEntry.routing;
+        }
 
         if (isRecord(nextEntry.capabilities) && Object.keys(nextEntry.capabilities).length === 0) {
           delete nextEntry.capabilities;
@@ -861,7 +1177,10 @@
     error = '';
     discoveryError = '';
     validationErrors = [];
-    const modelsRaw = await getModelsConfigRaw();
+    const [modelsRaw, settingsData] = await Promise.all([
+      getModelsConfigRaw(),
+      getSettings(),
+    ]);
     let discovered: DiscoveredModel[] = [];
     try {
       discovered = await listDiscoveredModels();
@@ -873,9 +1192,11 @@
     models = registry.models;
     budgetPolicy = registry.budgetPolicy ?? { ...DEFAULT_BUDGET_POLICY };
     discoveredModels = discovered;
+    setProviderRegistryState(normalizeProvidersRuntimeConfig((settingsData as AdminSettingsData).editors.providers).registry);
     initialSnapshot = JSON.stringify({
       models,
       budgetPolicy,
+      providerRegistry,
     });
   }
 
@@ -955,6 +1276,18 @@
   {/each}
 </datalist>
 
+<datalist id="provider-id-list">
+  {#each providerRegistry.providers as provider}
+    <option value={provider.id}>{providerLabel(provider)}</option>
+  {/each}
+</datalist>
+
+<datalist id="provider-type-list">
+  {#each providerTypeOptions as providerType}
+    <option value={providerType}></option>
+  {/each}
+</datalist>
+
 <div class="space-y-5">
   <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
     <div>
@@ -990,6 +1323,182 @@
   </div>
 
   <div class="card-garden p-4 space-y-3">
+    <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+      <div>
+        <h2 class="text-sm font-serif font-semibold text-shadow-800">Provider Wiring</h2>
+        <p class="text-sm text-shadow-600">Models target canonical provider ids from <span class="font-mono">providers.json</span>. Manage LiteLLM, OpenRouter, and direct provider endpoints here instead of hunting through Settings.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
+          {providerRegistry.providers.filter((entry) => entry.enabled).length} enabled / {providerRegistry.providers.length} total
+        </span>
+        <a
+          href={`${base}/settings#settings-providers`}
+          class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+        >
+          Open Settings Mirror
+        </a>
+        <button
+          onclick={addProviderEntry}
+          type="button"
+          class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+        >
+          Add Provider
+        </button>
+      </div>
+    </div>
+    {#if providerValidationErrors.length > 0}
+      <div class="rounded-2xl border border-wilt-300 bg-wilt-50/60 p-4 space-y-2">
+        <h3 class="text-sm font-medium text-wilt-700">Provider validation</h3>
+        <ul class="space-y-1 text-sm text-wilt-700">
+          {#each providerValidationErrors as issue}
+            <li>{issue}</li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+    <div class="space-y-4">
+      {#each providerRegistry.providers as entry, index (entry.id)}
+        <article class="rounded-2xl border border-bark-300 bg-white/90 p-4 space-y-4">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div class="space-y-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="rounded-full border px-2.5 py-1 text-xs font-medium {entry.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+                  {entry.enabled ? 'enabled' : 'disabled'}
+                </span>
+                <span class="rounded-full border border-bark-300 bg-bark-100 px-2.5 py-1 text-xs font-medium text-shadow-700">
+                  {PROVIDER_TYPE_LABELS[entry.type]}
+                </span>
+                {#each providerRuntimeRole(entry) as role}
+                  <span class="rounded-full border border-gold-300 bg-gold-50 px-2.5 py-1 text-xs text-gold-800">{role}</span>
+                {/each}
+              </div>
+              <p class="text-sm text-shadow-600">{providerTypeSummary(entry.type)}</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="inline-flex items-center gap-2 text-sm text-shadow-700">
+                <input
+                  type="checkbox"
+                  checked={entry.enabled}
+                  onchange={(event) => updateProviderEntry(index, (nextEntry) => ({
+                    ...nextEntry,
+                    enabled: (event.currentTarget as HTMLInputElement).checked,
+                  }))}
+                  class="rounded border-bark-300 text-gold-600 focus:ring-gold-500"
+                />
+                Enabled
+              </label>
+              <button
+                onclick={() => removeProviderEntry(index)}
+                type="button"
+                class="inline-flex items-center rounded-lg border border-wilt-300 px-3 py-1.5 text-sm font-medium text-wilt-600 hover:bg-wilt-50 transition-colors"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div>
+              <label for={`provider-id-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">Provider Id</label>
+              <input
+                id={`provider-id-${index}`}
+                type="text"
+                value={entry.id}
+                oninput={(event) => setProviderField(index, 'id', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+                placeholder="openrouter"
+              />
+            </div>
+            <div>
+              <label for={`provider-type-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">Provider Type</label>
+              <select
+                id={`provider-type-${index}`}
+                value={entry.type}
+                onchange={(event) => setProviderType(index, (event.currentTarget as HTMLSelectElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+              >
+                {#each PROVIDER_TYPES as type}
+                  <option value={type}>{PROVIDER_TYPE_LABELS[type]}</option>
+                {/each}
+              </select>
+            </div>
+            <div>
+              <label for={`provider-label-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">Label</label>
+              <input
+                id={`provider-label-${index}`}
+                type="text"
+                value={entry.label ?? ''}
+                oninput={(event) => setProviderField(index, 'label', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+                placeholder="LiteLLM primary"
+              />
+            </div>
+            <div>
+              <label for={`provider-api-base-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">API Base URL</label>
+              <input
+                id={`provider-api-base-${index}`}
+                type="text"
+                value={entry.apiBaseUrl ?? ''}
+                oninput={(event) => setProviderField(index, 'apiBaseUrl', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+                placeholder="https://..."
+              />
+            </div>
+            <div>
+              <label for={`provider-models-api-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">Models API URL</label>
+              <input
+                id={`provider-models-api-${index}`}
+                type="text"
+                value={entry.modelsApiUrl ?? ''}
+                oninput={(event) => setProviderField(index, 'modelsApiUrl', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none disabled:bg-bark-100"
+                placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for OpenRouter'}
+                disabled={!providerSupportsModelsApi(entry.type)}
+              />
+            </div>
+            <div>
+              <label for={`provider-api-key-env-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">API Key Env</label>
+              <input
+                id={`provider-api-key-env-${index}`}
+                type="text"
+                value={entry.apiKeyEnv ?? ''}
+                oninput={(event) => setProviderField(index, 'apiKeyEnv', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+                placeholder="LITELLM_API_KEY"
+              />
+            </div>
+          </div>
+        </article>
+      {/each}
+    </div>
+    {#if providerRegistry.providers.length === 0}
+      <div class="rounded-2xl border border-dashed border-bark-300 bg-bark-50/60 p-5 text-sm text-shadow-600">
+        No providers configured yet. Add LiteLLM, OpenRouter, or direct backend providers here before wiring models.
+      </div>
+    {/if}
+    <div class="flex flex-wrap items-center gap-3 pt-1">
+      <button
+        onclick={saveProviderRegistry}
+        disabled={saving || !providerRegistryDirty()}
+        class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+      >
+        {saving ? 'Saving...' : 'Save providers.json'}
+      </button>
+      <button
+        onclick={discardProviderRegistryChanges}
+        disabled={!providerRegistryDirty() || saving}
+        class="px-4 py-2 rounded-lg border border-bark-300 bg-white text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
+      >
+        Discard
+      </button>
+      {#if providerRegistryDirty()}
+        <span class="text-sm text-shadow-500">Provider changes are saved separately from models.json and take effect through canonical provider ids.</span>
+      {/if}
+    </div>
+  </div>
+
+  <div class="card-garden p-4 space-y-3">
     <div class="flex flex-wrap gap-2">
       {#each CANONICAL_PURPOSES as purpose}
         {@const count = purposePrimaryCounts[purpose] ?? 0}
@@ -998,7 +1507,7 @@
         </span>
       {/each}
     </div>
-    <p class="text-sm text-shadow-600">Each purpose must have exactly one primary model before save. Purpose chips cycle off → standard → primary.</p>
+    <p class="text-sm text-shadow-600">Each purpose, including the dedicated memory route, must have exactly one primary model before save. Purpose chips cycle off → standard → primary.</p>
   </div>
 
   <div class="card-garden p-4 space-y-3">
@@ -1200,10 +1709,14 @@
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Provider</p>
                     <input
                       type="text"
+                      list="provider-id-list"
                       value={entry.identity.provider}
                       onchange={(event) => setIdentityField(index, 'provider', (event.target as HTMLInputElement).value)}
                       class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
                     />
+                    <p class="mt-1 text-xs text-shadow-500">
+                      {providerAvailability(providerForModel(entry))}{#if providerForModel(entry)} · {providerLabel(providerForModel(entry))}{/if}
+                    </p>
                   </div>
                   <div>
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Model</p>
@@ -1228,6 +1741,7 @@
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Source Type</p>
                     <input
                       type="text"
+                      list="provider-type-list"
                       value={entry.identity.source.type}
                       onchange={(event) => setSourceField(index, 'type', (event.target as HTMLInputElement).value)}
                       class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
@@ -1250,6 +1764,29 @@
                       onchange={(event) => setSourceField(index, 'baseUrl', (event.target as HTMLInputElement).value)}
                       class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
                     />
+                  </div>
+                  <div class="md:col-span-2 xl:col-span-3">
+                    <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Routing Provider Order</p>
+                    <input
+                      type="text"
+                      value={routingProviderOrderValue(entry)}
+                      onchange={(event) => setRoutingProviderOrder(index, (event.target as HTMLInputElement).value)}
+                      class="w-full px-3 py-2 rounded border border-bark-300 bg-white text-sm text-shadow-800 font-mono"
+                      placeholder="comma-separated provider ids for fallback routing"
+                    />
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      {#each enabledProviders as provider}
+                        {@const selected = entry.routing?.providerOrder?.includes(provider.id) ?? false}
+                        <button
+                          type="button"
+                          onclick={() => toggleRoutingProvider(index, provider.id)}
+                          class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors {selected ? 'border-gold-400 bg-gold-100 text-gold-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
+                        >
+                          {provider.id}
+                        </button>
+                      {/each}
+                    </div>
+                    <p class="mt-1 text-xs text-shadow-500">Optional per-slot provider fallback order written to <span class="font-mono">routing.providerOrder</span>.</p>
                   </div>
                   <div>
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Capabilities: Context Window</p>

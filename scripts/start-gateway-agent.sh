@@ -26,11 +26,8 @@ else
   RESOLVED_DOTENV_FILE="${ROOT_DIR}/${DOTENV_FILE#./}"
 fi
 
-if [ "${PSFN_SKIP_DOTENV:-false}" != "true" ] && [ -f "${RESOLVED_DOTENV_FILE}" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "${RESOLVED_DOTENV_FILE}"
-  set +a
+if [ "${PSFN_SKIP_DOTENV:-false}" != "true" ]; then
+  psfn_source_dotenv_preserving_existing_env "${RESOLVED_DOTENV_FILE}"
 fi
 
 psfn_export_default_module_registry_path

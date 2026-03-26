@@ -88,21 +88,32 @@ const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
 };
 
 const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
-  enabled: true,
+  enabled: false,
 };
 
-function interpolateEnvTokens(value: unknown, env: NodeJS.ProcessEnv): unknown {
+function interpolateEnvTokens(
+  value: unknown,
+  env: NodeJS.ProcessEnv,
+  missingTokens: Set<string>,
+): unknown {
   if (typeof value === 'string') {
-    return value.replace(ENV_TOKEN_PATTERN, (_match, token: string) => env[token] ?? '');
+    return value.replace(ENV_TOKEN_PATTERN, (match, token: string) => {
+      const envValue = env[token];
+      if (envValue === undefined) {
+        missingTokens.add(token);
+        return match;
+      }
+      return envValue;
+    });
   }
   if (Array.isArray(value)) {
-    return value.map(item => interpolateEnvTokens(item, env));
+    return value.map(item => interpolateEnvTokens(item, env, missingTokens));
   }
   if (!isRecord(value)) return value;
 
   const mapped: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value)) {
-    mapped[key] = interpolateEnvTokens(nested, env);
+    mapped[key] = interpolateEnvTokens(nested, env, missingTokens);
   }
   return mapped;
 }
@@ -134,7 +145,65 @@ function parseString(value: unknown): string | undefined {
   return value.trim();
 }
 
-function parseStringArray(value: unknown): string[] {
+function parseConfiguredString(value: unknown, fieldName: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`${fieldName} must be a string`);
+  }
+  const parsed = value.trim();
+  if (!parsed) {
+    throw new Error(`${fieldName} must not be empty`);
+  }
+  return parsed;
+}
+
+function parseConfiguredBoolean(value: unknown, fieldName: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  const parsed = parseBoolean(value);
+  if (parsed === undefined) {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return parsed;
+}
+
+function parseConfiguredPositiveInteger(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = parsePositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error(`${fieldName} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseConfiguredTelegramMode(value: unknown, fieldName: string): TelegramMode | undefined {
+  if (value === undefined) return undefined;
+  const parsed = parseTelegramMode(value);
+  if (parsed === undefined) {
+    throw new Error(`${fieldName} must be "polling" or "webhook"`);
+  }
+  return parsed;
+}
+
+function parseConfiguredStringArray(value: unknown, fieldName: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${fieldName} must be an array of strings`);
+  }
+  const parsed: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      throw new Error(`${fieldName} must contain only strings`);
+    }
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      throw new Error(`${fieldName} must not contain empty strings`);
+    }
+    parsed.push(trimmed);
+  }
+  return parsed;
+}
+
+function parseOverrideStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((entry): entry is string => typeof entry === 'string')
@@ -160,22 +229,48 @@ function deriveWebhookPathFromUrl(webhookUrl: string): string | undefined {
   }
 }
 
-function parseExternalChannelProfile(value: unknown): ExternalChannelProfileConfig | undefined {
-  if (!isRecord(value)) return undefined;
+function parseExternalChannelProfile(
+  value: unknown,
+  fieldName: string,
+): ExternalChannelProfileConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
 
-  const authorId = parseString(value.authorId);
-  const authorName = parseString(value.authorName);
-  const canonicalContactId = parseString(value.canonicalContactId);
-  const channelPrivacy = normalizeChannelVisibility(parseString(value.channelPrivacy));
-  const hasValues = authorId || authorName || canonicalContactId || channelPrivacy;
-  if (!hasValues) return undefined;
+  const authorId = parseConfiguredString(value.authorId, `${fieldName}.authorId`);
+  const authorName = parseConfiguredString(value.authorName, `${fieldName}.authorName`);
+  const canonicalContactId = parseConfiguredString(value.canonicalContactId, `${fieldName}.canonicalContactId`);
+  const channelPrivacyRaw = parseConfiguredString(value.channelPrivacy, `${fieldName}.channelPrivacy`);
+  const channelPrivacy = channelPrivacyRaw
+    ? normalizeChannelVisibility(channelPrivacyRaw)
+    : undefined;
+  if (channelPrivacyRaw && !channelPrivacy) {
+    throw new Error(`${fieldName}.channelPrivacy must be one of: private, semi_private, public, broadcast`);
+  }
 
-  return {
+  const profile: ExternalChannelProfileConfig = {
     ...(authorId ? { authorId } : {}),
     ...(authorName ? { authorName } : {}),
     ...(canonicalContactId ? { canonicalContactId } : {}),
     ...(channelPrivacy ? { channelPrivacy } : {}),
   };
+  if (Object.keys(profile).length === 0) {
+    throw new Error(`${fieldName} must define at least one field`);
+  }
+  return profile;
+}
+
+function parseSectionObject(
+  root: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  if (!Object.hasOwn(root, key)) return undefined;
+  const value = root[key];
+  if (!isRecord(value)) {
+    throw new Error(`channels.json.${key} must be an object`);
+  }
+  return value;
 }
 
 function loadRawChannelsConfig(dataDir: string): Record<string, unknown> {
@@ -187,14 +282,12 @@ function loadRawChannelsConfig(dataDir: string): Record<string, unknown> {
   try {
     const text = readFileSync(filePath, 'utf8');
     const parsed = JSON.parse(text);
-    if (!isRecord(parsed)) return {};
+    if (!isRecord(parsed)) {
+      throw new Error('channels.json must contain a JSON object at the root');
+    }
     return parsed;
   } catch (error) {
-    log.warn('Failed to parse channels config JSON, using defaults', {
-      filePath,
-      error: toErrorMessage(error),
-    });
-    return {};
+    throw new Error(`Failed to load channels config from ${filePath}: ${toErrorMessage(error)}`);
   }
 }
 
@@ -211,60 +304,83 @@ export function loadRuntimeChannelsConfig(
   }
 
   const rawConfig = loadRawChannelsConfig(dataDir);
-  const interpolated = interpolateEnvTokens(rawConfig, env);
+  const missingEnvTokens = new Set<string>();
+  const interpolated = interpolateEnvTokens(rawConfig, env, missingEnvTokens);
+  if (missingEnvTokens.size > 0) {
+    throw new Error(`channels.json references missing environment variables: ${Array.from(missingEnvTokens).sort().join(', ')}`);
+  }
   const root = isRecord(interpolated) ? interpolated : {};
-  const scopedRoot = isRecord(root.channels) ? root.channels : root;
-  const discordConfig = isRecord(scopedRoot.discord)
-    ? scopedRoot.discord
-    : {};
-  const psfnAmicaConfig = isRecord(scopedRoot.psfnAmica)
-    ? scopedRoot.psfnAmica
-    : {};
-  const psfnAmicaDefaultIdentity = parseExternalChannelProfile(psfnAmicaConfig.defaultIdentity);
-  const telegramConfig = isRecord(scopedRoot.telegram)
-    ? scopedRoot.telegram
-    : {};
+  const scopedRoot = parseSectionObject(root, 'channels') ?? root;
+  const discordConfig = parseSectionObject(scopedRoot, 'discord') ?? {};
+  const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
+  if (Object.keys(psfnAmicaConfig).length > 0 && !Object.hasOwn(psfnAmicaConfig, 'enabled')) {
+    throw new Error('channels.json.psfnAmica.enabled must be configured when psfnAmica settings are present');
+  }
+  const psfnAmicaEnabled = parseConfiguredBoolean(psfnAmicaConfig.enabled, 'channels.json.psfnAmica.enabled')
+    ?? DEFAULT_PSFN_AMICA_CHANNEL_CONFIG.enabled;
+  const psfnAmicaDefaultIdentity = parseExternalChannelProfile(
+    psfnAmicaConfig.defaultIdentity,
+    'channels.json.psfnAmica.defaultIdentity',
+  );
+  const telegramConfig = parseSectionObject(scopedRoot, 'telegram') ?? {};
+  if (Object.keys(telegramConfig).length > 0 && !Object.hasOwn(telegramConfig, 'enabled')) {
+    throw new Error('channels.json.telegram.enabled must be configured when telegram settings are present');
+  }
   const telegramOverride = overrides.telegram ?? {};
   const enabledOverride = typeof telegramOverride.enabled === 'boolean'
     ? telegramOverride.enabled
     : undefined;
   const allowedUsersOverride = Array.isArray(telegramOverride.allowedUsers)
-    ? parseStringArray(telegramOverride.allowedUsers)
+    ? parseOverrideStringArray(telegramOverride.allowedUsers)
     : undefined;
 
   const enabled = enabledOverride
-    ?? parseBoolean(telegramConfig.enabled)
+    ?? parseConfiguredBoolean(telegramConfig.enabled, 'channels.json.telegram.enabled')
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.enabled;
 
-  const tokenFromFile = typeof telegramConfig.token === 'string'
-    ? telegramConfig.token.trim()
-    : DEFAULT_TELEGRAM_CHANNEL_CONFIG.token;
+  const tokenFromFile = parseConfiguredString(telegramConfig.token, 'channels.json.telegram.token')
+    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.token;
   const token = (env.TELEGRAM_BOT_TOKEN ?? tokenFromFile).trim();
+  if (enabled && !token) {
+    throw new Error('channels.json.telegram.token or TELEGRAM_BOT_TOKEN must be configured when telegram is enabled');
+  }
 
   const allowedUsers = allowedUsersOverride
-    ?? parseStringArray(telegramConfig.allowedUsers);
+    ?? parseConfiguredStringArray(telegramConfig.allowedUsers, 'channels.json.telegram.allowedUsers')
+    ?? [];
 
-  const mode = parseTelegramMode(telegramConfig.mode)
-    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.mode;
+  const mode = parseConfiguredTelegramMode(
+    telegramConfig.mode,
+    'channels.json.telegram.mode',
+  ) ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.mode;
+  if (enabled && !Object.hasOwn(telegramConfig, 'mode')) {
+    throw new Error('channels.json.telegram.mode must be configured when telegram is enabled');
+  }
 
-  const pollIntervalMs = parsePositiveInteger(telegramConfig.pollIntervalMs)
+  const pollIntervalMs = parseConfiguredPositiveInteger(telegramConfig.pollIntervalMs, 'channels.json.telegram.pollIntervalMs')
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.pollIntervalMs;
+  if (enabled && !Object.hasOwn(telegramConfig, 'pollIntervalMs')) {
+    throw new Error('channels.json.telegram.pollIntervalMs must be configured when telegram is enabled');
+  }
 
-  const webhookConfig = isRecord(telegramConfig.webhook)
-    ? telegramConfig.webhook
-    : {};
+  const webhookConfig = parseSectionObject(telegramConfig, 'webhook') ?? {};
+  const hasWebhookUrl = env.TELEGRAM_WEBHOOK_URL !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'url');
+  const hasWebhookSecret = env.TELEGRAM_WEBHOOK_SECRET !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'secret');
+  const hasWebhookHost = env.TELEGRAM_WEBHOOK_HOST !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'host');
+  const hasWebhookPort = env.TELEGRAM_WEBHOOK_PORT !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'port');
+  const hasWebhookPath = env.TELEGRAM_WEBHOOK_PATH !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'path');
   const webhookUrl = (env.TELEGRAM_WEBHOOK_URL
-    ?? parseString(webhookConfig.url)
+    ?? parseConfiguredString(webhookConfig.url, 'channels.json.telegram.webhook.url')
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.url).trim();
   const webhookSecret = (env.TELEGRAM_WEBHOOK_SECRET
-    ?? parseString(webhookConfig.secret)
+    ?? parseConfiguredString(webhookConfig.secret, 'channels.json.telegram.webhook.secret')
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.secret).trim();
   const webhookHost = (env.TELEGRAM_WEBHOOK_HOST
-    ?? parseString(webhookConfig.host)
+    ?? parseConfiguredString(webhookConfig.host, 'channels.json.telegram.webhook.host')
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.host).trim();
-  const webhookPort = parsePositiveInteger(env.TELEGRAM_WEBHOOK_PORT)
-    ?? parsePositiveInteger(webhookConfig.port)
-    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.port;
+  const webhookPort = parseConfiguredPositiveInteger(env.TELEGRAM_WEBHOOK_PORT, 'TELEGRAM_WEBHOOK_PORT')
+    ?? parseConfiguredPositiveInteger(webhookConfig.port, 'channels.json.telegram.webhook.port')
+    ?? DEFAULT_TELEGRAM_WEBHOOK_PORT;
   const webhookPathFallback = deriveWebhookPathFromUrl(webhookUrl)
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.path;
   const webhookPath = parseWebhookPath(
@@ -272,15 +388,32 @@ export function loadRuntimeChannelsConfig(
     webhookPathFallback,
   );
 
+  if (enabled && mode === 'webhook') {
+    if (!hasWebhookUrl || !webhookUrl) {
+      throw new Error('channels.json.telegram.webhook.url or TELEGRAM_WEBHOOK_URL must be configured when telegram is enabled in webhook mode');
+    }
+    if (!hasWebhookSecret || !webhookSecret) {
+      throw new Error('channels.json.telegram.webhook.secret or TELEGRAM_WEBHOOK_SECRET must be configured when telegram is enabled in webhook mode');
+    }
+    if (!hasWebhookHost || !webhookHost) {
+      throw new Error('channels.json.telegram.webhook.host or TELEGRAM_WEBHOOK_HOST must be configured when telegram is enabled in webhook mode');
+    }
+    if (!hasWebhookPort || !webhookPort) {
+      throw new Error('channels.json.telegram.webhook.port or TELEGRAM_WEBHOOK_PORT must be configured when telegram is enabled in webhook mode');
+    }
+    if (!hasWebhookPath || !webhookPath) {
+      throw new Error('channels.json.telegram.webhook.path or TELEGRAM_WEBHOOK_PATH must be configured when telegram is enabled in webhook mode');
+    }
+  }
+
   return {
     discord: {
-      heartbeatChannelId: parseString(discordConfig.heartbeatChannelId)
+      heartbeatChannelId: parseConfiguredString(discordConfig.heartbeatChannelId, 'channels.json.discord.heartbeatChannelId')
         ?? DEFAULT_DISCORD_CHANNEL_CONFIG.heartbeatChannelId,
     },
     psfnAmica: {
-      enabled: parseBoolean(psfnAmicaConfig.enabled)
-        ?? DEFAULT_PSFN_AMICA_CHANNEL_CONFIG.enabled,
-      ...(psfnAmicaDefaultIdentity ? { defaultIdentity: psfnAmicaDefaultIdentity } : {}),
+      enabled: psfnAmicaEnabled,
+      ...(psfnAmicaDefaultIdentity && psfnAmicaEnabled ? { defaultIdentity: psfnAmicaDefaultIdentity } : {}),
     },
     telegram: {
       enabled,
@@ -302,7 +435,7 @@ export function loadRuntimeChannelsConfig(
 export function buildExternalChannelProfiles(
   config: RuntimeChannelsConfig,
 ): Partial<Record<ChannelType, ExternalChannelProfileConfig>> {
-  return config.psfnAmica.defaultIdentity
+  return config.psfnAmica.enabled && config.psfnAmica.defaultIdentity
     ? { 'psfn-amica': config.psfnAmica.defaultIdentity }
     : {};
 }

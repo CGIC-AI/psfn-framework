@@ -4,7 +4,7 @@
 // Includes context-aware filtering (channelType, taskKind).
 
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type {
   CompanionValuesLayerSnapshot,
@@ -200,33 +200,6 @@ function isNorthStarLayerSnapshot(value: unknown): value is NorthStarLayerSnapsh
   return true;
 }
 
-function isComposeSplitResult(value: unknown): value is ComposeSplitResult {
-  if (!value || typeof value !== 'object') return false;
-  const result = value as Record<string, unknown>;
-  if (typeof result.staticPrefix !== 'string') return false;
-  if (typeof result.dynamicSuffix !== 'string') return false;
-  if (typeof result.staticHash !== 'string') return false;
-  if (typeof result.dynamicHash !== 'string') return false;
-  if (typeof result.text !== 'string') return false;
-  if (typeof result.hash !== 'string') return false;
-  if (typeof result.layerCount !== 'number') return false;
-  if (!isStringArray(result.layerIds)) return false;
-  if (!isStringArray(result.staticLayerIds)) return false;
-  if (!isStringArray(result.dynamicLayerIds)) return false;
-  if (result.promptIdentifiers !== undefined && !isStringArray(result.promptIdentifiers)) return false;
-  if (result.autoHealedPromptIdentifiers !== undefined && !isStringArray(result.autoHealedPromptIdentifiers)) return false;
-  return true;
-}
-
-function isPersistedLastKnownGood(value: unknown): value is PersistedLastKnownGood {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  if (record.version !== LAST_KNOWN_GOOD_VERSION) return false;
-  if (typeof record.savedAt !== 'string') return false;
-  if (!isComposeSplitResult(record.compose)) return false;
-  return true;
-}
-
 function areStringArraysEqual(left: string[] | undefined, right: string[] | undefined): boolean {
   const a = left ?? [];
   const b = right ?? [];
@@ -276,7 +249,7 @@ export class PromptComposer {
     this.northStarLayerProvider = options.northStarLayerProvider;
     this.persistLastKnownGoodSnapshot = options.persistLastKnownGood !== false;
     this.lastKnownGoodPath = lastKnownGoodPath ?? join(dirname(this.store.layerFilePath), LAST_KNOWN_GOOD_FILENAME);
-    this.lastKnownGood = this.ensureConstitutionPrefix(this.loadPersistedLastKnownGood());
+    this.lastKnownGood = null;
   }
 
   compose(ctx?: ComposeContext): ComposeResult {
@@ -295,9 +268,8 @@ export class PromptComposer {
     const layers = this.store.getAll();
     const sorted = this.resolveSortedLayers(layers, ctx);
 
-    // Prompt-manager composition (required prompts, deterministic prompt ordering, auto-heal)
+    // Prompt-manager composition (required prompts, deterministic prompt ordering)
     const managed = this.manager.compose(sorted);
-    const hasManagedPrompts = managed.prompts.length > 0;
     const layerById = new Map(sorted.map(layer => [layer.id, layer]));
     const immutableSection = this.enableConstitution
       ? buildImmutableHumanSafetySection()
@@ -371,21 +343,6 @@ export class PromptComposer {
       autoHealedPromptIdentifiers: managed.autoHealedIdentifiers,
     };
 
-    // Fallback guard. In constitution mode, allow fallback when no mutable content matched.
-    const shouldUseFallback = (
-      (!text)
-      || (
-        this.enableConstitution
-        && !hasManagedPrompts
-        && !companionValuesSection
-        && !northStarSection
-      )
-    );
-    if (shouldUseFallback && this.lastKnownGood) {
-      const recovered = this.ensureConstitutionPrefix(this.lastKnownGood);
-      return recovered ?? this.lastKnownGood;
-    }
-
     if (text) {
       const shouldPersist = !this.lastKnownGood || !composeSplitResultsEqual(this.lastKnownGood, result);
       const normalizedResult = this.ensureConstitutionPrefix(result) ?? result;
@@ -396,24 +353,6 @@ export class PromptComposer {
     }
 
     return this.ensureConstitutionPrefix(result) ?? result;
-  }
-
-  private loadPersistedLastKnownGood(): ComposeSplitResult | null {
-    if (!existsSync(this.lastKnownGoodPath)) return null;
-    try {
-      const raw = readFileSync(this.lastKnownGoodPath, 'utf-8');
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isPersistedLastKnownGood(parsed)) {
-        throw new Error('Invalid persisted last-known-good format');
-      }
-      return parsed.compose;
-    } catch (error) {
-      log.warn('Failed to load persisted last-known-good prompt', {
-        path: this.lastKnownGoodPath,
-        error: String(error),
-      });
-      return null;
-    }
   }
 
   private persistLastKnownGood(result: ComposeSplitResult): void {

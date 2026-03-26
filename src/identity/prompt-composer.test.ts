@@ -240,44 +240,8 @@ describe('PromptComposer', () => {
     });
   });
 
-  describe('fallback to lastKnownGood', () => {
-    it('returns lastKnownGood when all layers are disabled', () => {
-      const base1 = store.create({ type: 'base', name: 'Base 1', content: 'BASE 1' });
-      const _base2 = store.create({ type: 'base', name: 'Base 2', content: 'BASE 2' });
-
-      // Compose once to set lastKnownGood
-      const good = composer.compose();
-      expect(good.text).toContain('BASE 1');
-
-      // Disable both via direct toggle (bypassing protection for test)
-      store.toggle(base1.id);
-      // base2 is still enabled, so toggling base1 is fine
-      // Now base2 is the only one. To test fallback, we need to
-      // simulate empty compose some other way.
-      // Actually we can test with channel layers — add a channel layer,
-      // compose with that channel to get lastKnownGood, then compose with
-      // a different channel context that matches nothing.
-
-      // Reset with fresh store
-      const store2 = new PromptLayerStore(
-        join(tmpDir, 'layers2.json'),
-        join(tmpDir, 'history2.jsonl'),
-      );
-      const composer2 = new PromptComposer(store2);
-
-      // Only a channel layer — no base, no always-on layers
-      store2.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
-
-      // Compose with matching context to set lastKnownGood
-      const goodResult = composer2.compose({ channelType: 'discord_text' });
-      expect(goodResult.text).toBe('DISCORD');
-
-      // Compose with non-matching context — no layers match
-      const fallback = composer2.compose({ channelType: 'nonexistent' });
-      expect(fallback.text).toBe('DISCORD'); // lastKnownGood
-    });
-
-    it('returns empty result when no layers and no lastKnownGood', () => {
+  describe('fail closed when no prompt content is available', () => {
+    it('returns an empty result when no layers match and no recovery is available', () => {
       const result = composer.compose();
 
       expect(result.text).toBe('');
@@ -285,7 +249,7 @@ describe('PromptComposer', () => {
       expect(result.layerIds).toEqual([]);
     });
 
-    it('persists lastKnownGood to disk and round-trips on restart', () => {
+    it('persists a snapshot for diagnostics without reusing it on restart', () => {
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
       const warm = composer.compose({ channelType: 'discord_text' });
       expect(warm.text).toBe('DISCORD');
@@ -309,11 +273,11 @@ describe('PromptComposer', () => {
       const restartedComposer = new PromptComposer(restartedStore);
       const cold = restartedComposer.compose({ channelType: 'api' });
 
-      expect(cold.text).toBe('DISCORD');
-      expect(cold.hash).toBe(warm.hash);
+      expect(cold.text).toBe('');
+      expect(cold.hash).not.toBe(warm.hash);
     });
 
-    it('uses persisted lastKnownGood on cold start when prompt layers are broken', () => {
+    it('does not reuse persisted snapshots when prompt layers are broken', () => {
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
       composer.compose({ channelType: 'discord_text' });
       expect(existsSync(lastKnownGoodPath)).toBe(true);
@@ -323,9 +287,9 @@ describe('PromptComposer', () => {
       const restartedComposer = new PromptComposer(restartedStore);
       const fallback = restartedComposer.compose({ channelType: 'api' });
 
-      expect(fallback.text).toBe('DISCORD');
-      expect(fallback.layerCount).toBe(1);
-      expect(fallback.layerIds).toHaveLength(1);
+      expect(fallback.text).toBe('');
+      expect(fallback.layerCount).toBe(0);
+      expect(fallback.layerIds).toEqual([]);
     });
   });
 

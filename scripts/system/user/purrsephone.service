@@ -1,0 +1,27 @@
+[Unit]
+Description=Purrsephone Substrate Runtime (yolo mode)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/samesung/ai/psfn-live-memory_improvement
+Environment=PATH=/home/vega/.nvm/versions/node/v22.21.1/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PSFN_DOTENV_FILE=/mnt/samesung/ai/psfn-live/.env
+Environment=DATA_DIR=/mnt/samesung/ai/psfn-live/data
+Environment=DATABASE_PATH=/mnt/samesung/ai/psfn-live/data/purrsephone.db
+Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/workspace
+Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/purrsephone/purrsephone.json
+ExecStart=/home/vega/.nvm/versions/node/v22.21.1/bin/npm run yolo
+Restart=on-failure
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=purrsephone
+
+[Install]
+WantedBy=default.target

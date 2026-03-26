@@ -2,7 +2,9 @@ import { isRecord } from '../utils/types.js';
 
 export const FAL_CREATE_MODELS = [
   'fal-ai/nano-banana-2',
+  'fal-ai/nano-banana-pro',
   'fal-ai/gpt-image-1.5',
+  'xai/grok-imagine-image',
   'fal-ai/flux-2',
   'fal-ai/flux-2-pro',
   'fal-ai/flux-2-flex',

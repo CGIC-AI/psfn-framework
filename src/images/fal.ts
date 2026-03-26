@@ -50,11 +50,15 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isNanoBananaModel(model: string): boolean {
-  return model.startsWith('fal-ai/nano-banana-2');
+  return model.startsWith('fal-ai/nano-banana-');
 }
 
 function isGptImageModel(model: string): boolean {
   return model.startsWith('fal-ai/gpt-image-1.5');
+}
+
+function isGrokImagineModel(model: string): boolean {
+  return model === 'xai/grok-imagine-image';
 }
 
 function isFlux2DevModel(model: string): boolean {
@@ -228,6 +232,10 @@ export class FalImageClient {
         ...(params.imageSize ? { image_size: params.imageSize } : {}),
         enable_safety_checker: resolveEnableSafetyChecker(params.enableSafetyChecker),
         ...(params.background ? { background: params.background } : {}),
+      });
+    } else if (isGrokImagineModel(model)) {
+      Object.assign(input, {
+        ...(params.aspectRatio ? { aspect_ratio: params.aspectRatio } : {}),
       });
     } else if (isFlux2DevModel(model)) {
       assignImageSizeInput(input, params);

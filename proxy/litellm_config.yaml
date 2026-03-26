@@ -33,6 +33,105 @@ model_list:
       model: openrouter/*
       api_key: os.environ/OPENROUTER_API_KEY
 
+  # ── FAL image generation models ──
+  - model_name: fal-ai/nano-banana-2
+    litellm_params:
+      model: fal_ai/fal-ai/nano-banana-2
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/nano-banana-pro
+    litellm_params:
+      model: fal_ai/fal-ai/nano-banana-pro
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/gpt-image-1.5
+    litellm_params:
+      model: fal_ai/fal-ai/gpt-image-1.5
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: xai/grok-imagine-image
+    litellm_params:
+      model: fal_ai/xai/grok-imagine-image
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/flux-2
+    litellm_params:
+      model: fal_ai/fal-ai/flux-2
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/flux-2-pro
+    litellm_params:
+      model: fal_ai/fal-ai/flux-2-pro
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/flux-2-flex
+    litellm_params:
+      model: fal_ai/fal-ai/flux-2-flex
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/flux/krea
+    litellm_params:
+      model: fal_ai/fal-ai/flux/krea
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/flux-2/klein/4b
+    litellm_params:
+      model: fal_ai/fal-ai/flux-2/klein/4b
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/flux-2/klein/9b
+    litellm_params:
+      model: fal_ai/fal-ai/flux-2/klein/9b
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/z-image/base
+    litellm_params:
+      model: fal_ai/fal-ai/z-image/base
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/z-image/turbo
+    litellm_params:
+      model: fal_ai/fal-ai/z-image/turbo
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/qwen-image
+    litellm_params:
+      model: fal_ai/fal-ai/qwen-image
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
+  - model_name: fal-ai/qwen-image-2/text-to-image
+    litellm_params:
+      model: fal_ai/fal-ai/qwen-image-2/text-to-image
+      api_key: os.environ/FAL_AI_API_KEY
+    model_info:
+      mode: image_generation
+
 litellm_settings:
   # Drop any requests that include real API keys in message content
   drop_params: true

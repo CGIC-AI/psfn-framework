@@ -1,7 +1,9 @@
 # LiteLLM Proxy — credential isolation for PSFN
 #
-# Usage:
-#   cd proxy && docker compose up -d
+# Usage from repo root:
+#   npm run proxy:up
+# Or manually:
+#   docker compose --env-file .env -f proxy/docker-compose.yml up -d
 #
 # The proxy listens on localhost:4000 and routes LLM requests
 # to upstream providers using real API keys held in .env.
@@ -13,19 +15,21 @@
 
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:1.82.6
+    image: ghcr.io/berriai/litellm@sha256:9e1536c6a9219519f024f221706b20b012ca5176988164798adc5c7fe011e5d5
     container_name: psfn-litellm
     restart: unless-stopped
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./litellm_config.yaml:/app/config.yaml:ro
+      - ./overrides/fal_ai_image_generation_transformation.py:/usr/lib/python3.13/site-packages/litellm/llms/fal_ai/image_generation/transformation.py:ro
       # ── TLS certificate mounts (uncomment to enable HTTPS) ──
       # - ../certs/<domain>/fullchain.pem:/certs/cert.pem:ro
       # - ../certs/<domain>/key.pem:/certs/key.pem:ro
     env_file:
       - .env
-    # environment:
+    environment:
+      FAL_AI_API_KEY: ${FAL_API_KEY:?Set FAL_API_KEY for LiteLLM FAL image routes}
       # ── TLS environment (uncomment to enable HTTPS) ──
       # SSL_CERTIFICATE: /certs/cert.pem
       # SSL_KEYFILE: /certs/key.pem
@@ -40,7 +44,11 @@ services:
       # - "--ssl_keyfile"
       # - "/certs/key.pem"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import os, urllib.request; req = urllib.request.Request('http://localhost:4000/v1/models', headers={'Authorization': 'Bearer ' + os.environ['LITELLM_MASTER_KEY']}); urllib.request.urlopen(req, timeout=10).read()\" >/dev/null",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

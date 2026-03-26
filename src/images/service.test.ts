@@ -167,6 +167,44 @@ describe('ImageService', () => {
     expect(result.requestId).toBe('fal-flux-2');
   });
 
+  it('maps Nano Banana Pro generation options to the FAL payload', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'fal-ai/nano-banana-pro',
+      'fal-nano-banana-pro',
+      (body) => {
+        expect(body).toMatchObject({
+          prompt: 'high-fashion portrait with dramatic lighting',
+          sync_mode: false,
+          num_images: 1,
+          output_format: 'png',
+          enable_safety_checker: false,
+          aspect_ratio: '4:5',
+          resolution: '4K',
+          safety_tolerance: '6',
+        });
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'high-fashion portrait with dramatic lighting',
+      model: 'fal-ai/nano-banana-pro',
+      numImages: 1,
+      aspectRatio: '4:5',
+      resolution: '4K',
+      outputFormat: 'png',
+    });
+
+    expect(result.model).toBe('fal-ai/nano-banana-pro');
+    expect(result.requestId).toBe('fal-nano-banana-pro');
+  });
+
   it('filters unsupported options from Flux 2 Pro generation payloads', async () => {
     const fetchMock = createCompletedFalGenerationFetchMock(
       'fal-ai/flux-2-pro',
@@ -298,6 +336,42 @@ describe('ImageService', () => {
 
     expect(result.model).toBe('fal-ai/qwen-image-2/text-to-image');
     expect(result.requestId).toBe('fal-qwen-image-2');
+  });
+
+  it('maps Grok Imagine generation options to the FAL payload', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'xai/grok-imagine-image',
+      'fal-grok-imagine',
+      (body) => {
+        expect(body).toMatchObject({
+          prompt: 'surreal fashion editorial with chrome accents',
+          sync_mode: false,
+          num_images: 1,
+          output_format: 'webp',
+          aspect_ratio: '9:16',
+        });
+        expect(body).not.toHaveProperty('image_size');
+        expect(body).not.toHaveProperty('enable_safety_checker');
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'surreal fashion editorial with chrome accents',
+      model: 'xai/grok-imagine-image',
+      numImages: 1,
+      aspectRatio: '9:16',
+      outputFormat: 'webp',
+    });
+
+    expect(result.model).toBe('xai/grok-imagine-image');
+    expect(result.requestId).toBe('fal-grok-imagine');
   });
 
   it('defaults FAL nano-banana edits to 2K resolution', async () => {

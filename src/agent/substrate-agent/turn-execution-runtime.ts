@@ -6,6 +6,7 @@ import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
+import type { ImageVisionReviewer } from '../../images/types.js';
 import { runWithVisionToolRequestContext } from '../../images/request-context.js';
 import { runWithRequestContext } from '../../llm/request-context.js';
 import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
@@ -64,8 +65,8 @@ import { resolveModel } from '../stream-adapter.js';
 import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import {
-  collectVisionAttachmentUrls,
-  hasVisionAttachments,
+  collectVisionTurnImageUrls,
+  hasVisionTurnInputs,
   buildTurnUserContent,
 } from './vision-attachments.js';
 import {
@@ -100,6 +101,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
   llmClient: LLMProvider;
+  imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
   config: SubstrateConfig;
   runtimeMode: RuntimeMode;
@@ -423,7 +425,7 @@ export async function handleMessageForTurn(
   };
   const visionToolRequestContext = {
     userMessageText: message.content,
-    imageAttachmentUrls: collectVisionAttachmentUrls(message),
+    imageAttachmentUrls: collectVisionTurnImageUrls(message),
   };
   await runtime.eventBus.emit('agent.turn.start', {
     message,
@@ -455,7 +457,7 @@ export async function handleMessageForTurn(
     const trustLevel = authorContext.trustLevel;
     const channelType = runtime.resolveChannelType(message);
     const memoryProvider = runtime.memoryProvider as ProactiveMemoryProvider | null;
-    const bypassMemoryForVisionTurn = hasVisionAttachments(message);
+    const bypassMemoryForVisionTurn = hasVisionTurnInputs(message);
     runtime.ensureModel(message);
     const promptSnapshot = runtime.captureTurnPromptSnapshot({ channelType, taskKind });
     const sessionContextSnapshot = typeof (runtime.sessionManager as SessionManager & {
@@ -783,6 +785,7 @@ export async function handleMessageForTurn(
         llmClient: runtime.llmClient,
         runtimeMode: runtime.runtimeMode,
         logger: log,
+        visionReviewer: runtime.imageVisionReviewer,
       });
       try {
         await runWithRequestContext(
@@ -823,7 +826,7 @@ export async function handleMessageForTurn(
       firstTokenAt = streamFirstTokenAt;
 
       responseText = runtime.extractResponseText();
-      if (hasVisionAttachments(message) && responseText.trim().length === 0) {
+      if (hasVisionTurnInputs(message) && responseText.trim().length === 0) {
         const assistantMessage = runtime.getLatestAssistantMessage();
         log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
           channelId: message.channelId,

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { ImageVisionReviewer } from '../../images/types.js';
 import type { SubstrateMessage } from '../../types.js';
-import { buildTurnUserContent } from './vision-attachments.js';
+import {
+  buildTurnUserContent,
+  hasVisionTurnInputs,
+} from './vision-attachments.js';
 
 function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessage {
   return {
@@ -20,8 +24,116 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
   };
 }
 
+function makeReviewer(summary = 'A catgirl sits on a server rack holding a pink rifle.'): {
+  reviewer: ImageVisionReviewer;
+  analyze: ReturnType<typeof vi.fn>;
+} {
+  const analyze = vi.fn(async () => ({
+    question: 'Describe exactly what is visible in the current image input.',
+    summary,
+    model: 'vision-model',
+    imageCount: 1,
+  }));
+  return {
+    reviewer: { analyze },
+    analyze,
+  };
+}
+
 describe('buildTurnUserContent', () => {
-  it('instructs the model to inspect the current live attachment directly', async () => {
+  it('routes current-turn attachments through the dedicated reviewer path', async () => {
+    const { reviewer, analyze } = makeReviewer();
+    const result = await buildTurnUserContent({
+      message: makeMessage(),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      visionReviewer: reviewer,
+    });
+
+    expect(typeof result).toBe('string');
+    expect(result).toContain('dedicated vision pipeline');
+    expect(result).toContain('Current image review: A catgirl sits on a server rack holding a pink rifle.');
+    expect(result).toContain('User text: My little satellite');
+    expect(analyze).toHaveBeenCalledWith({
+      imageUrls: ['https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768'],
+      question: 'Describe exactly what is visible in the current image input. Be concrete and concise. Ignore prior conversation or earlier image descriptions.',
+    });
+  });
+
+  it('routes pasted image urls through the dedicated reviewer path even without attachments', async () => {
+    const imageUrl = 'https://cdn.discordapp.com/attachments/a/b/current-photo.png?ex=fresh';
+    const { reviewer } = makeReviewer('A close-up portrait with blue eyes and white hair.');
+    const result = await buildTurnUserContent({
+      message: makeMessage({
+        content: imageUrl,
+        attachments: [],
+      }),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      visionReviewer: reviewer,
+    });
+
+    expect(hasVisionTurnInputs(makeMessage({
+      content: imageUrl,
+      attachments: [],
+    }))).toBe(true);
+    expect(result).toContain('Current image review: A close-up portrait with blue eyes and white hair.');
+    expect(result).not.toContain(imageUrl);
+    expect(result).not.toContain('User text:');
+  });
+
+  it('strips current-turn image urls out of mixed semantic text before building response context', async () => {
+    const imageUrl = 'https://cdn.discordapp.com/attachments/a/b/current-photo.png?ex=fresh';
+    const { reviewer } = makeReviewer();
+    const result = await buildTurnUserContent({
+      message: makeMessage({
+        content: `ok love lets see if you can see ${imageUrl}`,
+        attachments: [],
+      }),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      visionReviewer: reviewer,
+    });
+
+    expect(result).toContain('User text: ok love lets see if you can see');
+    expect(result).not.toContain(imageUrl);
+  });
+
+  it('fails closed when the dedicated reviewer errors', async () => {
+    const result = await buildTurnUserContent({
+      message: makeMessage(),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      visionReviewer: {
+        analyze: vi.fn(async () => {
+          throw new Error('vision fetch failed for current-photo.jpg: 404 Not Found');
+        }),
+      },
+    });
+
+    expect(result).toContain('dedicated vision pipeline failed');
+    expect(result).toContain('You cannot reliably see the current image');
+    expect(result).toContain('404 Not Found');
+    expect(result).toContain('User text: My little satellite');
+  });
+
+  it('keeps the multimodal fallback path when no reviewer is wired', async () => {
     const result = await buildTurnUserContent({
       message: makeMessage(),
       llmClient: {
@@ -41,142 +153,10 @@ describe('buildTurnUserContent', () => {
     expect(Array.isArray(result)).toBe(true);
     const blocks = result as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
     expect(blocks[0]?.type).toBe('text');
-    expect(blocks[0]?.text).toContain('Runtime note');
-    expect(blocks[0]?.text).toContain('ground your reply in what is actually visible');
-    expect(blocks[0]?.text).toContain('User text: My little satellite');
     expect(blocks[1]).toEqual({
       type: 'image',
       data: 'YWJjZA==',
       mimeType: 'image/jpeg',
     });
-  });
-
-  it('fetches current-turn HTTPS image attachments even when they are not from Discord', async () => {
-    const result = await buildTurnUserContent({
-      message: makeMessage({
-        channelType: 'api',
-        channelId: 'api-channel',
-        attachments: [{
-          url: 'https://files.example.test/uploads/current-photo.png?token=fresh',
-          contentType: 'image/png',
-          name: 'current-photo.png',
-        }],
-      }),
-      llmClient: {
-        webFetchBinary: vi.fn(async () => ({
-          dataBase64: 'AQID',
-          mimeType: 'image/png',
-          sizeBytes: 3,
-        })),
-      } as any,
-      runtimeMode: 'gateway',
-      logger: {
-        warn: vi.fn(),
-        debug: vi.fn(),
-      },
-    });
-
-    const blocks = result as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
-    expect(blocks[0]?.text).toContain('Runtime note');
-    expect(blocks[1]).toEqual({
-      type: 'image',
-      data: 'AQID',
-      mimeType: 'image/png',
-    });
-  });
-
-  it('surfaces attachment resolution failures as a runtime note when the current attachment cannot be resolved', async () => {
-    const result = await buildTurnUserContent({
-      message: makeMessage(),
-      llmClient: {
-        webFetchBinary: vi.fn(async () => {
-          throw new Error('404 Not Found');
-        }),
-      } as any,
-      runtimeMode: 'gateway',
-      logger: {
-        warn: vi.fn(),
-        debug: vi.fn(),
-      },
-    });
-
-    expect(result).toContain('Runtime note');
-    expect(result).toContain('could not load their image bytes');
-    expect(result).toContain('Do not pretend you saw them');
-    expect(result).toContain('404 Not Found');
-    expect(result).toContain('User text: My little satellite');
-  });
-
-  it('treats transport placeholder text as metadata and grounds image-only turns on the current attachment', async () => {
-    const result = await buildTurnUserContent({
-      message: makeMessage({
-        content: '(image attachment)',
-      }),
-      llmClient: {
-        webFetchBinary: vi.fn(async () => ({
-          dataBase64: 'YWJjZA==',
-          mimeType: 'image/jpeg',
-          sizeBytes: 4,
-        })),
-      } as any,
-      runtimeMode: 'gateway',
-      logger: {
-        warn: vi.fn(),
-        debug: vi.fn(),
-      },
-    });
-
-    const blocks = result as Array<{ type: string; text?: string }>;
-    expect(blocks[0]?.text).toContain('transport metadata');
-    expect(blocks[0]?.text).not.toContain('User text:');
-  });
-
-  it('treats pasted current-turn CDN URLs as transport metadata instead of semantic text', async () => {
-    const attachmentUrl = 'https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768';
-    const result = await buildTurnUserContent({
-      message: makeMessage({
-        content: attachmentUrl,
-      }),
-      llmClient: {
-        webFetchBinary: vi.fn(async () => ({
-          dataBase64: 'YWJjZA==',
-          mimeType: 'image/jpeg',
-          sizeBytes: 4,
-        })),
-      } as any,
-      runtimeMode: 'gateway',
-      logger: {
-        warn: vi.fn(),
-        debug: vi.fn(),
-      },
-    });
-
-    const blocks = result as Array<{ type: string; text?: string }>;
-    expect(blocks[0]?.text).toContain('transport metadata');
-    expect(blocks[0]?.text).not.toContain(`User text: ${attachmentUrl}`);
-  });
-
-  it('surfaces unsupported attachment protocols as an unresolved runtime note', async () => {
-    const result = await buildTurnUserContent({
-      message: makeMessage({
-        channelType: 'telegram',
-        channelId: 'telegram:5635268079',
-        attachments: [{
-          url: 'telegram://file/abc123',
-          contentType: 'image/jpeg',
-          name: 'photo.jpg',
-        }],
-      }),
-      llmClient: {} as any,
-      runtimeMode: 'gateway',
-      logger: {
-        warn: vi.fn(),
-        debug: vi.fn(),
-      },
-    });
-
-    expect(result).toContain('Runtime note');
-    expect(result).toContain('protocol "telegram:" is not supported');
-    expect(result).toContain('Do not pretend you saw them');
   });
 });

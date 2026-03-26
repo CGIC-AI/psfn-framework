@@ -24,6 +24,7 @@ import type { ChannelMeta } from '../../trust/policy.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../context-budget.js';
+import type { ImageVisionReviewer } from '../../images/types.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -101,6 +102,7 @@ interface TurnExecutionAdapterCallbacks {
 export interface TurnExecutionAdapterOptions {
   eventBus: EventBus;
   llmClient: LLMProvider;
+  imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
   config: SubstrateConfig;
   runtimeMode: RuntimeMode;
@@ -123,6 +125,7 @@ export function createTurnExecutionRuntimeAdapter(
   return {
     eventBus: options.eventBus,
     llmClient: options.llmClient,
+    imageVisionReviewer: options.imageVisionReviewer,
     sessionManager: options.sessionManager,
     config: options.config,
     runtimeMode: options.runtimeMode,

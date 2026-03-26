@@ -72,6 +72,7 @@ function createRuntime(params: {
   recordUserMessage: ReturnType<typeof vi.fn>;
   recordAssistantMessage: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
+  imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
 }) {
   const agentState = {
@@ -94,6 +95,7 @@ function createRuntime(params: {
       stream: vi.fn(),
       complete: vi.fn(),
     },
+    imageVisionReviewer: params.imageVisionReviewer ?? null,
     sessionManager: {
       buildContext: params.buildContext,
       recordTurn: vi.fn(),
@@ -645,6 +647,53 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect(retrieve).not.toHaveBeenCalled();
     expect(retrieveProactiveRecall).not.toHaveBeenCalled();
     expect(buildContext.mock.calls[0]?.[2]).toBe('');
+  });
+
+  it('injects dedicated current-turn image review text before response generation', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
+    const awaitPendingAutoCompaction = vi.fn(async () => undefined);
+    const recordUserMessage = vi.fn(() => 1);
+    const recordAssistantMessage = vi.fn(() => 2);
+    const analyze = vi.fn(async () => ({
+      question: 'Describe exactly what is visible in the current image input.',
+      summary: 'A catgirl sits on a server rack holding a pink rifle.',
+      model: 'vision-model',
+      imageCount: 1,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns,
+      awaitPendingAutoCompaction,
+      recordUserMessage,
+      recordAssistantMessage,
+      imageVisionReviewer: { analyze },
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-vision-review', {
+      channelType: 'discord',
+      content: 'do you see it?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    expect(analyze).toHaveBeenCalledWith({
+      imageUrls: ['https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh'],
+      question: 'Describe exactly what is visible in the current image input. Be concrete and concise. Ignore prior conversation or earlier image descriptions.',
+    });
+    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
+      'Current image review: A catgirl sits on a server rack holding a pink rifle.',
+    );
   });
 
   it('exposes current-turn image attachment context to tools during prompt execution', async () => {

@@ -11,7 +11,7 @@ import {
   resolveModel,
   resolveModelSelection,
 } from '../stream-adapter.js';
-import { hasVisionAttachments } from './vision-attachments.js';
+import { hasVisionTurnInputs } from './vision-attachments.js';
 
 export interface ModelRuntimeState {
   modelResolved: boolean;
@@ -41,7 +41,7 @@ export function getModelSignatureForPurpose(
 export function resolveTurnModelPurpose(
   message?: SubstrateMessage,
 ): ModelPurpose {
-  return hasVisionAttachments(message) ? 'vision' : 'chat';
+  return hasVisionTurnInputs(message) ? 'vision' : 'chat';
 }
 
 export function normalizeTurnModelOverride(

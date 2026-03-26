@@ -509,12 +509,14 @@ async function main(): Promise<void> {
     repoRoot: process.cwd(),
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
+  const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
+    binaryFetcher: gateway.webFetchBinary.bind(gateway),
+  });
   registerImageTools(agentLoop, new GatewayImageOps(gateway), {
     gatewayMode: true,
-    reviewer: new DefaultImageVisionReviewer(config, {
-      binaryFetcher: gateway.webFetchBinary.bind(gateway),
-    }),
+    reviewer: imageVisionReviewer,
   });
+  agentLoop.imageVisionReviewer = imageVisionReviewer;
 
   // Prompt stack — layered, editable system prompt
   const promptStore = wirePromptRuntime(agentLoop, companionDataDir, composeSystemPromptTemplate(), {

@@ -29,6 +29,7 @@ import type {
   SubstrateMessage,
 } from '../types.js';
 import type { ContactStore } from '../contacts/store.js';
+import type { ImageVisionReviewer } from '../images/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../trust/types.js';
 import {
@@ -253,6 +254,7 @@ export class SubstrateAgent {
 
   // SKILL.md runtime — null until skills system is wired
   skillsRuntime: SkillsRuntime | null = null;
+  imageVisionReviewer: ImageVisionReviewer | null = null;
 
   constructor(
     eventBus: EventBus,
@@ -699,6 +701,7 @@ export class SubstrateAgent {
     return handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       llmClient: this.llmClient,
+      imageVisionReviewer: this.imageVisionReviewer,
       sessionManager: this.sessionManager,
       config: this.config,
       runtimeMode: this.runtimeMode,

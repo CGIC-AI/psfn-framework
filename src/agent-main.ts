@@ -389,19 +389,7 @@ async function main(): Promise<void> {
   const {
     card,
     systemPrompt,
-    initializedCard,
-    migratedLegacyBootstrap,
   } = composeIdentity(config);
-  if (initializedCard) {
-    log.warn('Character card file was missing and has been initialized with defaults', {
-      characterCardPath: config.characterCardPath,
-    });
-  }
-  if (migratedLegacyBootstrap) {
-    log.warn('Legacy bootstrap character card was migrated to neutral starter defaults', {
-      characterCardPath: config.characterCardPath,
-    });
-  }
   const cardVersionStore = new CharacterCardVersionStore(
     config.characterCardPath,
     resolveCharacterCardHistoryPath(companionDataDir),

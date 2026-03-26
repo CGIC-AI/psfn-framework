@@ -467,19 +467,7 @@ export class SubstrateRuntime implements Lifecycle {
     const {
       card,
       systemPrompt,
-      initializedCard,
-      migratedLegacyBootstrap,
     } = composeIdentity(this.config);
-    if (initializedCard) {
-      log.warn('Character card file was missing and has been initialized with defaults', {
-        characterCardPath: this.config.characterCardPath,
-      });
-    }
-    if (migratedLegacyBootstrap) {
-      log.warn('Legacy bootstrap character card was migrated to neutral starter defaults', {
-        characterCardPath: this.config.characterCardPath,
-      });
-    }
     const cardVersionStore = new CharacterCardVersionStore(
       this.config.characterCardPath,
       resolveCharacterCardHistoryPath(companionDataDir),

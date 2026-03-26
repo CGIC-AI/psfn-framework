@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect } from 'vitest';
@@ -7,7 +7,6 @@ import {
   composeSystemPromptTemplate,
   loadCharacterCard,
   loadOrInitializeCharacterCard,
-  isBootstrapStarterCard,
   composeSystemPrompt,
 } from './loader.js';
 import type { CharacterCardV2 } from './types.js';
@@ -143,54 +142,30 @@ describe('loadCharacterCard', () => {
 });
 
 describe('loadOrInitializeCharacterCard', () => {
-  it('creates a default card when the file is missing', () => {
-    const root = makeTempDir();
-    const path = join(root, 'nested', 'character.json');
-    expect(existsSync(path)).toBe(false);
-
-    const first = loadOrInitializeCharacterCard(path);
-    expect(first.initialized).toBe(true);
-    expect(first.migratedLegacyBootstrap).toBe(false);
-    expect(existsSync(path)).toBe(true);
-    expect(first.card.data.name).toBe('Companion');
-    expect(first.card.data.personality.length).toBeGreaterThan(0);
-    expect(isBootstrapStarterCard(first.card)).toBe(true);
-
-    const second = loadOrInitializeCharacterCard(path);
-    expect(second.initialized).toBe(false);
-    expect(second.migratedLegacyBootstrap).toBe(false);
-    expect(second.card.data.name).toBe('Companion');
-    expect(isBootstrapStarterCard(second.card)).toBe(true);
-  });
-
-  it('migrates legacy bootstrap default cards to neutral starter card', () => {
+  it('loads a required card from disk without initializing a default', () => {
     const root = makeTempDir();
     const path = join(root, 'character.json');
-    writeFileSync(path, JSON.stringify({
-      spec: 'chara_card_v2',
-      spec_version: '2.0',
-      data: {
-        name: 'PSFN',
-        description: 'A gentle, curious, and supportive AI companion.',
-        personality: 'Warm, emotionally intelligent, and precise when helping with technical work.',
-        scenario: '',
-        first_mes: '',
-        mes_example: '',
-        system_prompt: '',
-        post_history_instructions: '',
-        tags: ['default', 'bootstrap'],
-        creator: 'system',
-      },
-    }), 'utf-8');
+    writeFileSync(path, `${JSON.stringify(TEST_CARD, null, 2)}\n`, 'utf-8');
 
-    const migrated = loadOrInitializeCharacterCard(path);
-    expect(migrated.initialized).toBe(false);
-    expect(migrated.migratedLegacyBootstrap).toBe(true);
-    expect(migrated.card.data.name).toBe('Companion');
-    expect(migrated.card.data.tags).toEqual(['bootstrap']);
+    const card = loadOrInitializeCharacterCard(path);
+    expect(card.data.name).toBe('TestChar');
+    expect(card.spec).toBe('chara_card_v2');
+  });
 
-    const fromDisk = loadCharacterCard(path);
-    expect(fromDisk.data.name).toBe('Companion');
-    expect(fromDisk.data.tags).toEqual(['bootstrap']);
+  it('throws a clear error when the character card is missing', () => {
+    const root = makeTempDir();
+    const path = join(root, 'nested', 'character.json');
+
+    expect(() => loadOrInitializeCharacterCard(path)).toThrow(
+      `Missing character card at ${path}: explicit companion identity is required before startup`,
+    );
+  });
+
+  it('throws a clear error when the character card is invalid JSON', () => {
+    const root = makeTempDir();
+    const path = join(root, 'character.json');
+    writeFileSync(path, '{not json', 'utf-8');
+
+    expect(() => loadOrInitializeCharacterCard(path)).toThrow(`Invalid character card at ${path}:`);
   });
 });

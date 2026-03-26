@@ -3,6 +3,7 @@ import type { Attachment, SubstrateMessage } from '../../types.js';
 import type { LLMProvider } from '../contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
+import type { CurrentTurnVisionReviewContext } from '../../images/request-context.js';
 import { inferImageMimeTypeFromAttachmentCandidate } from '../substrate-agent-helpers.js';
 import { toErrorMessage } from '../../utils/errors.js';
 
@@ -44,6 +45,11 @@ type VisionAttachmentResolutionResult =
 interface ResolvedVisionAttachmentSet {
   blocks: ImageContent[];
   failures: VisionAttachmentResolutionFailure[];
+}
+
+export interface TurnUserContentBuildResult {
+  content: UserMessage['content'];
+  currentTurnVisionReview?: CurrentTurnVisionReviewContext;
 }
 
 const VISION_ATTACHMENT_MAX_COUNT = 4;
@@ -123,7 +129,7 @@ export async function buildTurnUserContent(input: {
   runtimeMode: RuntimeMode;
   logger: VisionLogger;
   visionReviewer?: ImageVisionReviewer | null;
-}): Promise<UserMessage['content']> {
+}): Promise<TurnUserContentBuildResult> {
   const visionUrls = collectVisionTurnImageUrls(input.message);
   const semanticText = extractSemanticVisionTurnText(
     input.message.content,
@@ -135,10 +141,17 @@ export async function buildTurnUserContent(input: {
         imageUrls: visionUrls,
         question: DEDICATED_VISION_REVIEW_QUESTION,
       });
-      return buildReviewedVisionTurnText({
-        summary: review.summary,
-        semanticText,
-      });
+      return {
+        content: buildReviewedVisionTurnText({
+          summary: review.summary,
+          semanticText,
+        }),
+        currentTurnVisionReview: {
+          imageUrls: [...visionUrls],
+          question: review.question,
+          summary: review.summary,
+        },
+      };
     } catch (error) {
       const errorMessage = toErrorMessage(error);
       input.logger.warn('Dedicated current-turn image review failed', {
@@ -147,10 +160,12 @@ export async function buildTurnUserContent(input: {
         imageUrls: visionUrls,
         error: errorMessage,
       });
-      return buildVisionReviewFailureText({
-        semanticText,
-        errorMessage,
-      });
+      return {
+        content: buildVisionReviewFailureText({
+          semanticText,
+          errorMessage,
+        }),
+      };
     }
   }
 
@@ -159,11 +174,15 @@ export async function buildTurnUserContent(input: {
   const hasTransportMetadataOnlyText = input.message.content.trim().length > 0 && !hasSemanticText;
 
   if (resolved.blocks.length === 0) {
-    if (resolved.failures.length === 0) return input.message.content;
-    return buildUnresolvedVisionTurnText({
-      semanticText,
-      failures: resolved.failures,
-    });
+    if (resolved.failures.length === 0) {
+      return { content: input.message.content };
+    }
+    return {
+      content: buildUnresolvedVisionTurnText({
+        semanticText,
+        failures: resolved.failures,
+      }),
+    };
   }
 
   const noteParts = [LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION];
@@ -180,10 +199,12 @@ export async function buildTurnUserContent(input: {
     textParts.push(`User text: ${semanticText}`);
   }
 
-  return [
-    { type: 'text', text: textParts.join('\n\n') },
-    ...resolved.blocks,
-  ];
+  return {
+    content: [
+      { type: 'text', text: textParts.join('\n\n') },
+      ...resolved.blocks,
+    ],
+  };
 }
 
 function resolveAttachmentImageContentType(attachment: Attachment): string | null {

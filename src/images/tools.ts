@@ -114,6 +114,28 @@ function resolveMismatchedCurrentTurnUrlNotice(imageUrls: readonly string[]): st
   return null;
 }
 
+function resolveCurrentTurnVisionReviewFallback(
+  imageUrls: readonly string[],
+  question?: string,
+): ImageVisionReview | null {
+  const mismatchedCurrentTurnUrlNotice = resolveMismatchedCurrentTurnUrlNotice(imageUrls);
+  if (!mismatchedCurrentTurnUrlNotice) {
+    return null;
+  }
+
+  const currentTurnVisionReview = getVisionToolRequestContext()?.currentTurnVisionReview;
+  if (!currentTurnVisionReview) {
+    return null;
+  }
+
+  return {
+    question: question?.trim() || currentTurnVisionReview.question,
+    summary: currentTurnVisionReview.summary,
+    model: 'current-turn-review',
+    imageCount: currentTurnVisionReview.imageUrls.length,
+  };
+}
+
 async function reviewGeneratedImages(
   reviewer: ImageVisionReviewer | undefined,
   input: {
@@ -351,6 +373,20 @@ export function createImageAnalyzeTool(reviewer: ImageVisionReviewer): AgentTool
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
+        const currentTurnVisionReviewFallback = resolveCurrentTurnVisionReviewFallback(
+          params.image_urls,
+          params.question,
+        );
+        if (currentTurnVisionReviewFallback) {
+          return {
+            content: [{
+              type: 'text',
+              text: formatVisionReview(currentTurnVisionReviewFallback),
+            }] satisfies TextContent[],
+            details: { visionReview: currentTurnVisionReviewFallback },
+          };
+        }
+
         const mismatchedCurrentTurnUrlNotice = resolveMismatchedCurrentTurnUrlNotice(params.image_urls);
         if (mismatchedCurrentTurnUrlNotice) {
           return {

@@ -423,7 +423,7 @@ export async function handleMessageForTurn(
     viewerChannelVisibility: channelVisibility,
     ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
   };
-  const visionToolRequestContext = {
+  const baseVisionToolRequestContext = {
     userMessageText: message.content,
     imageAttachmentUrls: collectVisionTurnImageUrls(message),
   };
@@ -780,13 +780,19 @@ export async function handleMessageForTurn(
         purpose: 'agent.turn.prompt',
       });
       runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, autoloadOutcome.intent);
-      const turnUserContent = await buildTurnUserContent({
+      const turnUserContentBuildResult = await buildTurnUserContent({
         message,
         llmClient: runtime.llmClient,
         runtimeMode: runtime.runtimeMode,
         logger: log,
         visionReviewer: runtime.imageVisionReviewer,
       });
+      const visionToolRequestContext = {
+        ...baseVisionToolRequestContext,
+        ...(turnUserContentBuildResult.currentTurnVisionReview
+          ? { currentTurnVisionReview: turnUserContentBuildResult.currentTurnVisionReview }
+          : {}),
+      };
       try {
         await runWithRequestContext(
           {
@@ -797,7 +803,7 @@ export async function handleMessageForTurn(
             visionToolRequestContext,
             async () => runtime.agent.prompt({
               role: 'user',
-              content: turnUserContent,
+              content: turnUserContentBuildResult.content,
               timestamp: Date.now(),
             } satisfies UserMessage),
           ),

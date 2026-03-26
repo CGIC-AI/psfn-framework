@@ -734,4 +734,55 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       imageAttachmentUrls: ['https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh'],
     });
   });
+
+  it('exposes the dedicated current-turn image review to tools during prompt execution', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const analyze = vi.fn(async () => ({
+      question: 'Describe exactly what is visible in the current image input.',
+      summary: 'A catgirl sits on a server rack holding a pink rifle.',
+      model: 'vision-model',
+      imageCount: 1,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      imageVisionReviewer: { analyze },
+    });
+    let observedContext: ReturnType<typeof getVisionToolRequestContext> | undefined;
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      observedContext = getVisionToolRequestContext();
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'assistant reply' });
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-vision-review-context', {
+      channelType: 'discord',
+      content: 'lets see if its fixed',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    expect(observedContext).toEqual({
+      userMessageText: 'lets see if its fixed',
+      imageAttachmentUrls: ['https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh'],
+      currentTurnVisionReview: {
+        imageUrls: ['https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh'],
+        question: 'Describe exactly what is visible in the current image input.',
+        summary: 'A catgirl sits on a server rack holding a pink rifle.',
+      },
+    });
+  });
 });

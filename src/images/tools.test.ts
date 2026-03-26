@@ -107,7 +107,7 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('appearance is consistent');
   });
 
-  it('blocks mismatched image urls when the current turn already has a live image attachment', async () => {
+  it('reuses the current-turn vision review when image_analyze is called with a mismatched stale url', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Does this still look like me?',
@@ -124,8 +124,46 @@ describe('image tools', () => {
         imageAttachmentUrls: [
           'https://files.example.test/uploads/current-image.png?token=fresh',
         ],
+        currentTurnVisionReview: {
+          imageUrls: ['https://files.example.test/uploads/current-image.png?token=fresh'],
+          question: 'Describe exactly what is visible in the current image input.',
+          summary: 'A catgirl sits on a server rack holding a pink rifle.',
+        },
       },
       async () => tool.execute('tool-call-3', {
+        image_urls: [
+          'https://files.example.test/uploads/other-image.png?token=stale',
+        ],
+        question: 'Does this still look like me?',
+      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+    );
+
+    expect(reviewer.analyze).not.toHaveBeenCalled();
+    expect(result.details.visionReview?.summary).toBe('A catgirl sits on a server rack holding a pink rifle.');
+    expect(result.details.visionReviewError).toBeUndefined();
+    expect(resultText(result)).toContain('Vision review:');
+    expect(resultText(result)).toContain('server rack holding a pink rifle');
+  });
+
+  it('still blocks mismatched image urls when no current-turn review is available', async () => {
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'Should not be reached.',
+        summary: 'Should not be reached.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+
+    const tool = createImageAnalyzeTool(reviewer);
+    const result = await runWithVisionToolRequestContext(
+      {
+        userMessageText: 'did you not see the image?',
+        imageAttachmentUrls: [
+          'https://files.example.test/uploads/current-image.png?token=fresh',
+        ],
+      },
+      async () => tool.execute('tool-call-3b', {
         image_urls: [
           'https://files.example.test/uploads/other-image.png?token=stale',
         ],

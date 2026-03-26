@@ -54,10 +54,15 @@ describe('buildTurnUserContent', () => {
       visionReviewer: reviewer,
     });
 
-    expect(typeof result).toBe('string');
-    expect(result).toContain('dedicated vision pipeline');
-    expect(result).toContain('Current image review: A catgirl sits on a server rack holding a pink rifle.');
-    expect(result).toContain('User text: My little satellite');
+    expect(typeof result.content).toBe('string');
+    expect(result.content).toContain('dedicated vision pipeline');
+    expect(result.content).toContain('Current image review: A catgirl sits on a server rack holding a pink rifle.');
+    expect(result.content).toContain('User text: My little satellite');
+    expect(result.currentTurnVisionReview).toEqual({
+      imageUrls: ['https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768'],
+      question: 'Describe exactly what is visible in the current image input.',
+      summary: 'A catgirl sits on a server rack holding a pink rifle.',
+    });
     expect(analyze).toHaveBeenCalledWith({
       imageUrls: ['https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768'],
       question: 'Describe exactly what is visible in the current image input. Be concrete and concise. Ignore prior conversation or earlier image descriptions.',
@@ -85,9 +90,9 @@ describe('buildTurnUserContent', () => {
       content: imageUrl,
       attachments: [],
     }))).toBe(true);
-    expect(result).toContain('Current image review: A close-up portrait with blue eyes and white hair.');
-    expect(result).not.toContain(imageUrl);
-    expect(result).not.toContain('User text:');
+    expect(result.content).toContain('Current image review: A close-up portrait with blue eyes and white hair.');
+    expect(result.content).not.toContain(imageUrl);
+    expect(result.content).not.toContain('User text:');
   });
 
   it('strips current-turn image urls out of mixed semantic text before building response context', async () => {
@@ -107,8 +112,8 @@ describe('buildTurnUserContent', () => {
       visionReviewer: reviewer,
     });
 
-    expect(result).toContain('User text: ok love lets see if you can see');
-    expect(result).not.toContain(imageUrl);
+    expect(result.content).toContain('User text: ok love lets see if you can see');
+    expect(result.content).not.toContain(imageUrl);
   });
 
   it('fails closed when the dedicated reviewer errors', async () => {
@@ -127,10 +132,11 @@ describe('buildTurnUserContent', () => {
       },
     });
 
-    expect(result).toContain('dedicated vision pipeline failed');
-    expect(result).toContain('You cannot reliably see the current image');
-    expect(result).toContain('404 Not Found');
-    expect(result).toContain('User text: My little satellite');
+    expect(result.content).toContain('dedicated vision pipeline failed');
+    expect(result.content).toContain('You cannot reliably see the current image');
+    expect(result.content).toContain('404 Not Found');
+    expect(result.content).toContain('User text: My little satellite');
+    expect(result.currentTurnVisionReview).toBeUndefined();
   });
 
   it('keeps the multimodal fallback path when no reviewer is wired', async () => {
@@ -150,8 +156,8 @@ describe('buildTurnUserContent', () => {
       },
     });
 
-    expect(Array.isArray(result)).toBe(true);
-    const blocks = result as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+    expect(Array.isArray(result.content)).toBe(true);
+    const blocks = result.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
     expect(blocks[0]?.type).toBe('text');
     expect(blocks[1]).toEqual({
       type: 'image',

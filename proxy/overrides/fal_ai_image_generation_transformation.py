@@ -71,7 +71,7 @@ def _map_openai_size_to_image_size(size: Any) -> Any:
                 "width": int(width_str),
                 "height": int(height_str),
             }
-        except (AttributeError, ValueError, ZeroDivisionError):
+        except (AttributeError, ValueError):
             return size
 
     return size

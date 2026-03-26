@@ -16,16 +16,13 @@ export function resolveContextWindow(
   config: SubstrateConfig,
   runtimeModel: { contextWindow?: unknown } | undefined,
 ): number {
-  // Config-level contextWindow takes precedence (user-configured via settings).
-  // Only fall back to model-object contextWindow for per-turn overrides,
-  // since LiteLLM models always bake in a 128k default.
   const configWindow = config.modelRoster.chat?.contextWindow ?? config.defaultContextWindow;
   if (configWindow > 0) return configWindow;
   const modelWindow = runtimeModel?.contextWindow;
   if (typeof modelWindow === 'number' && Number.isFinite(modelWindow) && modelWindow > 0) {
     return modelWindow;
   }
-  return 128_000; // sensible fallback
+  throw new Error('No positive context window is configured for the active chat model.');
 }
 
 export function getLatestAssistantMessage(messages: readonly unknown[]): AssistantMessage | null {

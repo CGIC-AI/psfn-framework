@@ -7,11 +7,12 @@
     listDiscoveredModels,
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
-  import { getSettings } from '$lib/api/endpoints/settings';
+  import { getSettings, saveSubConfig } from '$lib/api/endpoints/settings';
   import { ApiError } from '$lib/api/client';
   import type {
     AdminSettingsData,
     CanonicalProviderRegistry,
+    CanonicalProviderType,
     DiscoveredModel,
     ProviderRegistryEntry,
   } from '$lib/types';
@@ -21,13 +22,20 @@
     resolveDiscoveredModelSelection,
   } from './discovery-autofill';
   import {
+    createEmptyProviderEntry,
     normalizeProvidersRuntimeConfig,
     PROVIDER_TYPE_LABELS,
+    PROVIDER_TYPES,
+    providerEnvNameIsValid,
+    providerIdIsValid,
+    providerSupportsModelsApi,
   } from '$lib/providers/registry';
 
+  type ProviderEditableField = 'id' | 'label' | 'apiBaseUrl' | 'modelsApiUrl' | 'apiKeyEnv';
   type CanonicalModelPurpose =
     | 'chat'
     | 'background'
+    | 'memory'
     | 'extraction'
     | 'summary'
     | 'reasoning'
@@ -92,6 +100,7 @@
   const CANONICAL_PURPOSES = [
     'chat',
     'background',
+    'memory',
     'extraction',
     'summary',
     'reasoning',
@@ -104,6 +113,7 @@
   const PURPOSE_LABELS: Record<CanonicalModelPurpose, string> = {
     chat: 'chat',
     background: 'background',
+    memory: 'memory',
     extraction: 'extraction',
     summary: 'summary',
     reasoning: 'reasoning',
@@ -139,6 +149,8 @@
   let budgetPolicy = $state<ModelRegistryBudgetPolicy>({ ...DEFAULT_BUDGET_POLICY });
   let discoveredModels = $state<DiscoveredModel[]>([]);
   let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
+  let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
+  let providerValidationErrors = $state<string[]>([]);
   let expandedModelIds = $state<Set<string>>(new Set());
   let dragSourceIndex = $state<number | null>(null);
   let dragOverIndex = $state<number | null>(null);
@@ -214,7 +226,7 @@
 
   $effect(() => {
     if (!initialSnapshot) return;
-    dirty = JSON.stringify({ models, budgetPolicy }) !== initialSnapshot;
+    dirty = JSON.stringify({ models, budgetPolicy, providerRegistry }) !== initialSnapshot;
   });
 
   function isRecord(value: unknown): value is Record<string, unknown> {
@@ -257,6 +269,192 @@
       // Non-JSON response body; fall back to raw text
     }
     return rawBody;
+  }
+
+  function setProviderRegistryState(nextRegistry: CanonicalProviderRegistry): void {
+    providerRegistry = {
+      schemaVersion: 1,
+      providers: nextRegistry.providers.map((entry) => ({
+        ...entry,
+        ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+      })),
+    };
+    providerRegistryInitialJson = JSON.stringify(providerRegistry, null, 2);
+    providerValidationErrors = [];
+  }
+
+  function providerRegistryDirty(): boolean {
+    return JSON.stringify(providerRegistry, null, 2) !== providerRegistryInitialJson;
+  }
+
+  function providerTypeSummary(type: CanonicalProviderType): string {
+    if (type === 'openrouter') return 'Model discovery + routed OpenRouter traffic';
+    if (type === 'litellm_proxy') return 'Proxy-backed provider routing';
+    if (type === 'generic_openai') return 'OpenAI-compatible backend';
+    return `${PROVIDER_TYPE_LABELS[type]} direct backend`;
+  }
+
+  function providerRuntimeRole(entry: ProviderRegistryEntry): string[] {
+    const roles: string[] = [];
+    if (entry.type === 'openrouter') {
+      roles.push('import routing');
+      roles.push('catalog discovery');
+    }
+    if (entry.type === 'litellm_proxy') {
+      roles.push('proxy routing');
+    }
+    if (!entry.enabled) {
+      roles.push('disabled');
+    }
+    return roles.length > 0 ? roles : ['direct backend'];
+  }
+
+  function updateProviderEntry(index: number, updater: (entry: ProviderRegistryEntry) => ProviderRegistryEntry): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: providerRegistry.providers.map((entry, entryIndex) => (
+        entryIndex === index
+          ? updater({
+            ...entry,
+            ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+          })
+          : entry
+      )),
+    };
+    providerValidationErrors = [];
+  }
+
+  function addProviderEntry(): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: [...providerRegistry.providers, createEmptyProviderEntry(providerRegistry.providers.length)],
+    };
+    providerValidationErrors = [];
+  }
+
+  function removeProviderEntry(index: number): void {
+    providerRegistry = {
+      ...providerRegistry,
+      providers: providerRegistry.providers.filter((_, entryIndex) => entryIndex !== index),
+    };
+    providerValidationErrors = [];
+  }
+
+  function setProviderType(index: number, value: string): void {
+    updateProviderEntry(index, (entry) => {
+      const nextType = (PROVIDER_TYPES.includes(value as CanonicalProviderType)
+        ? value
+        : 'openai') as CanonicalProviderType;
+      const nextEntry: ProviderRegistryEntry = {
+        ...entry,
+        type: nextType,
+      };
+      if (!providerSupportsModelsApi(nextType)) {
+        delete nextEntry.modelsApiUrl;
+      }
+      return nextEntry;
+    });
+  }
+
+  function setProviderField(index: number, field: ProviderEditableField, value: string): void {
+    updateProviderEntry(index, (entry) => {
+      const trimmed = value.trim();
+      if (field === 'id') {
+        return {
+          ...entry,
+          id: trimmed.toLowerCase(),
+        };
+      }
+      if (trimmed.length === 0) {
+        const nextEntry = { ...entry };
+        delete nextEntry[field];
+        return nextEntry;
+      }
+      return {
+        ...entry,
+        [field]: trimmed,
+      };
+    });
+  }
+
+  function validateProviderRegistry(registry: CanonicalProviderRegistry): string[] {
+    const errors: string[] = [];
+    const seenIds = new Set<string>();
+    let enabledOpenRouterCount = 0;
+    let enabledLiteLLMCount = 0;
+
+    for (const [index, entry] of registry.providers.entries()) {
+      const label = entry.id || `provider #${index + 1}`;
+      if (!providerIdIsValid(entry.id)) {
+        errors.push(`${label}: id must use only letters, numbers, dot, underscore, or hyphen.`);
+      }
+      if (seenIds.has(entry.id)) {
+        errors.push(`${label}: duplicate provider id.`);
+      }
+      seenIds.add(entry.id);
+      if (entry.apiKeyEnv && !providerEnvNameIsValid(entry.apiKeyEnv)) {
+        errors.push(`${label}: apiKeyEnv must be an uppercase environment variable name.`);
+      }
+      if (!entry.apiBaseUrl?.trim()) {
+        errors.push(`${label}: apiBaseUrl is required for ${entry.type}.`);
+      }
+      if (entry.type === 'openrouter' && !entry.modelsApiUrl?.trim()) {
+        errors.push(`${label}: modelsApiUrl is required for openrouter.`);
+      }
+      if (entry.enabled && entry.type === 'openrouter') {
+        enabledOpenRouterCount += 1;
+      }
+      if (entry.enabled && entry.type === 'litellm_proxy') {
+        enabledLiteLLMCount += 1;
+      }
+    }
+
+    if (enabledOpenRouterCount > 1) {
+      errors.push('Only one enabled OpenRouter provider is supported.');
+    }
+    if (enabledLiteLLMCount > 1) {
+      errors.push('Only one enabled LiteLLM proxy provider is supported.');
+    }
+
+    return errors;
+  }
+
+  async function saveProviderRegistry(): Promise<void> {
+    saving = true;
+    try {
+      const errors = validateProviderRegistry(providerRegistry);
+      providerValidationErrors = errors;
+      if (errors.length > 0) {
+        flashOk = false;
+        flashMessage = errors[0] ?? 'Provider registry validation failed';
+        return;
+      }
+      await saveSubConfig('providers', JSON.stringify(providerRegistry, null, 2));
+      const settingsData = await getSettings();
+      setProviderRegistryState(normalizeProvidersRuntimeConfig((settingsData as AdminSettingsData).editors.providers).registry);
+      initialSnapshot = JSON.stringify({
+        models,
+        budgetPolicy,
+        providerRegistry,
+      });
+      flashOk = true;
+      flashMessage = 'providers.json saved';
+    } catch (error) {
+      flashOk = false;
+      flashMessage = error instanceof Error ? error.message : 'Failed to save providers.json';
+    } finally {
+      saving = false;
+    }
+  }
+
+  function discardProviderRegistryChanges(): void {
+    try {
+      providerRegistry = JSON.parse(providerRegistryInitialJson) as CanonicalProviderRegistry;
+      providerValidationErrors = [];
+    } catch {
+      providerRegistry = { schemaVersion: 1, providers: [] };
+      providerValidationErrors = [];
+    }
   }
 
   function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
@@ -994,10 +1192,11 @@
     models = registry.models;
     budgetPolicy = registry.budgetPolicy ?? { ...DEFAULT_BUDGET_POLICY };
     discoveredModels = discovered;
-    providerRegistry = normalizeProvidersRuntimeConfig((settingsData as AdminSettingsData).editors.providers).registry;
+    setProviderRegistryState(normalizeProvidersRuntimeConfig((settingsData as AdminSettingsData).editors.providers).registry);
     initialSnapshot = JSON.stringify({
       models,
       budgetPolicy,
+      providerRegistry,
     });
   }
 
@@ -1127,23 +1326,174 @@
     <div class="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
       <div>
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Provider Wiring</h2>
-        <p class="text-sm text-shadow-600">Models should target ids from the provider registry in Settings so runtime routing stays canonical.</p>
+        <p class="text-sm text-shadow-600">Models target canonical provider ids from <span class="font-mono">providers.json</span>. Manage LiteLLM, OpenRouter, and direct provider endpoints here instead of hunting through Settings.</p>
       </div>
-      <a
-        href={`${base}/settings#settings-providers`}
-        class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
-      >
-        Open Provider Registry
-      </a>
-    </div>
-    <div class="flex flex-wrap gap-2">
-      {#each providerRegistry.providers as provider}
-        <span class="rounded-full border px-2.5 py-1 text-sm {provider.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
-          {provider.id} · {PROVIDER_TYPE_LABELS[provider.type]}
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
+          {providerRegistry.providers.filter((entry) => entry.enabled).length} enabled / {providerRegistry.providers.length} total
         </span>
+        <a
+          href={`${base}/settings#settings-providers`}
+          class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+        >
+          Open Settings Mirror
+        </a>
+        <button
+          onclick={addProviderEntry}
+          type="button"
+          class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+        >
+          Add Provider
+        </button>
+      </div>
+    </div>
+    {#if providerValidationErrors.length > 0}
+      <div class="rounded-2xl border border-wilt-300 bg-wilt-50/60 p-4 space-y-2">
+        <h3 class="text-sm font-medium text-wilt-700">Provider validation</h3>
+        <ul class="space-y-1 text-sm text-wilt-700">
+          {#each providerValidationErrors as issue}
+            <li>{issue}</li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+    <div class="space-y-4">
+      {#each providerRegistry.providers as entry, index (entry.id)}
+        <article class="rounded-2xl border border-bark-300 bg-white/90 p-4 space-y-4">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div class="space-y-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="rounded-full border px-2.5 py-1 text-xs font-medium {entry.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+                  {entry.enabled ? 'enabled' : 'disabled'}
+                </span>
+                <span class="rounded-full border border-bark-300 bg-bark-100 px-2.5 py-1 text-xs font-medium text-shadow-700">
+                  {PROVIDER_TYPE_LABELS[entry.type]}
+                </span>
+                {#each providerRuntimeRole(entry) as role}
+                  <span class="rounded-full border border-gold-300 bg-gold-50 px-2.5 py-1 text-xs text-gold-800">{role}</span>
+                {/each}
+              </div>
+              <p class="text-sm text-shadow-600">{providerTypeSummary(entry.type)}</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="inline-flex items-center gap-2 text-sm text-shadow-700">
+                <input
+                  type="checkbox"
+                  checked={entry.enabled}
+                  onchange={(event) => updateProviderEntry(index, (nextEntry) => ({
+                    ...nextEntry,
+                    enabled: (event.currentTarget as HTMLInputElement).checked,
+                  }))}
+                  class="rounded border-bark-300 text-gold-600 focus:ring-gold-500"
+                />
+                Enabled
+              </label>
+              <button
+                onclick={() => removeProviderEntry(index)}
+                type="button"
+                class="inline-flex items-center rounded-lg border border-wilt-300 px-3 py-1.5 text-sm font-medium text-wilt-600 hover:bg-wilt-50 transition-colors"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div>
+              <label for={`provider-id-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">Provider Id</label>
+              <input
+                id={`provider-id-${index}`}
+                type="text"
+                value={entry.id}
+                oninput={(event) => setProviderField(index, 'id', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+                placeholder="openrouter"
+              />
+            </div>
+            <div>
+              <label for={`provider-type-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">Provider Type</label>
+              <select
+                id={`provider-type-${index}`}
+                value={entry.type}
+                onchange={(event) => setProviderType(index, (event.currentTarget as HTMLSelectElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+              >
+                {#each PROVIDER_TYPES as type}
+                  <option value={type}>{PROVIDER_TYPE_LABELS[type]}</option>
+                {/each}
+              </select>
+            </div>
+            <div>
+              <label for={`provider-label-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">Label</label>
+              <input
+                id={`provider-label-${index}`}
+                type="text"
+                value={entry.label ?? ''}
+                oninput={(event) => setProviderField(index, 'label', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+                placeholder="LiteLLM primary"
+              />
+            </div>
+            <div>
+              <label for={`provider-api-base-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">API Base URL</label>
+              <input
+                id={`provider-api-base-${index}`}
+                type="text"
+                value={entry.apiBaseUrl ?? ''}
+                oninput={(event) => setProviderField(index, 'apiBaseUrl', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+                placeholder="https://..."
+              />
+            </div>
+            <div>
+              <label for={`provider-models-api-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">Models API URL</label>
+              <input
+                id={`provider-models-api-${index}`}
+                type="text"
+                value={entry.modelsApiUrl ?? ''}
+                oninput={(event) => setProviderField(index, 'modelsApiUrl', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none disabled:bg-bark-100"
+                placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for OpenRouter'}
+                disabled={!providerSupportsModelsApi(entry.type)}
+              />
+            </div>
+            <div>
+              <label for={`provider-api-key-env-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">API Key Env</label>
+              <input
+                id={`provider-api-key-env-${index}`}
+                type="text"
+                value={entry.apiKeyEnv ?? ''}
+                oninput={(event) => setProviderField(index, 'apiKeyEnv', (event.currentTarget as HTMLInputElement).value)}
+                class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
+                placeholder="LITELLM_API_KEY"
+              />
+            </div>
+          </div>
+        </article>
       {/each}
-      {#if providerRegistry.providers.length === 0}
-        <span class="text-sm text-wilt-600">No providers registered. Configure providers in Settings before saving model wiring.</span>
+    </div>
+    {#if providerRegistry.providers.length === 0}
+      <div class="rounded-2xl border border-dashed border-bark-300 bg-bark-50/60 p-5 text-sm text-shadow-600">
+        No providers configured yet. Add LiteLLM, OpenRouter, or direct backend providers here before wiring models.
+      </div>
+    {/if}
+    <div class="flex flex-wrap items-center gap-3 pt-1">
+      <button
+        onclick={saveProviderRegistry}
+        disabled={saving || !providerRegistryDirty()}
+        class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+      >
+        {saving ? 'Saving...' : 'Save providers.json'}
+      </button>
+      <button
+        onclick={discardProviderRegistryChanges}
+        disabled={!providerRegistryDirty() || saving}
+        class="px-4 py-2 rounded-lg border border-bark-300 bg-white text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
+      >
+        Discard
+      </button>
+      {#if providerRegistryDirty()}
+        <span class="text-sm text-shadow-500">Provider changes are saved separately from models.json and take effect through canonical provider ids.</span>
       {/if}
     </div>
   </div>
@@ -1157,7 +1507,7 @@
         </span>
       {/each}
     </div>
-    <p class="text-sm text-shadow-600">Each purpose must have exactly one primary model before save. Purpose chips cycle off → standard → primary.</p>
+    <p class="text-sm text-shadow-600">Each purpose, including the dedicated memory route, must have exactly one primary model before save. Purpose chips cycle off → standard → primary.</p>
   </div>
 
   <div class="card-garden p-4 space-y-3">

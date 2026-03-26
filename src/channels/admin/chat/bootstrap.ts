@@ -33,22 +33,24 @@ const VOICE_WEBSOCKET_PATH = '/v1/voice/ws';
 const OPENAI_API_BASE_PATH = '/v1';
 const PI_WEB_UI_MODULE_ROUTE = '/static/pi-web-ui/index.js';
 const PI_WEB_UI_STYLESHEET_ROUTE = '/static/pi-web-ui/app.css';
-const DEFAULT_RUNTIME_PROVIDER = 'openai';
-const DEFAULT_RUNTIME_MODEL_ID = 'openai/gpt-4.1-mini';
-const DEFAULT_RUNTIME_MODEL_NAME = 'Garden Chat';
-const DEFAULT_ASSISTANT_NAME = 'Assistant';
-const SYNTHETIC_CONTACT_ID = 'admin.synthetic.default';
-const SYNTHETIC_DISPLAY_NAME = 'Primary Contact';
-const SYNTHETIC_CHANNEL = 'api';
-const SYNTHETIC_USER_ID = 'admin-user';
 const DEFAULT_MODEL_ROOM_ID = 'garden-model-room';
 const STARTER_IDENTITY_ONBOARDING_MESSAGE = 'Starter identity is active. Import a character card or edit Identity to personalize your companion.';
 const MODEL_ROOM_DIRECT_PROVIDERS = new Set(['anthropic', 'openai', 'google']);
 
+export class AdminChatBootstrapSetupError extends Error {
+  readonly issues: string[];
+
+  constructor(issues: string[]) {
+    const normalized = issues.map(issue => issue.trim()).filter(Boolean);
+    super(`Admin chat bootstrap incomplete: ${normalized.join('; ')}`);
+    this.name = 'AdminChatBootstrapSetupError';
+    this.issues = normalized;
+  }
+}
+
 interface ContactCandidate extends AdminChatContactOption {
   trustLevel: TrustLevel;
   relationshipType: RelationshipType;
-  synthetic: boolean;
 }
 
 interface SelectionState {
@@ -118,6 +120,10 @@ function resolveParticipantDisplayName(slotKey: string, entry: ModelCatalogEntry
   return humanizeSlotKey(slotKey);
 }
 
+function throwBootstrapSetupError(...issues: string[]): never {
+  throw new AdminChatBootstrapSetupError(issues);
+}
+
 export class AdminChatBootstrapService {
   private readonly contactStore: ContactStore | null;
   private readonly configuredApiKey?: string;
@@ -172,6 +178,12 @@ export class AdminChatBootstrapService {
     });
     const chatCompletionsUrl = buildAbsoluteAdminChatApiUrl(CHAT_COMPLETIONS_PATH, apiBaseUrl);
     const participants = this.resolveModelRoomParticipants(config);
+    if (participants.length === 0) {
+      throwBootstrapSetupError(
+        'no direct model-room participants are configured',
+        'configure at least one direct provider model slot in models.json before opening model room bootstrap',
+      );
+    }
 
     return {
       api: {
@@ -277,7 +289,6 @@ export class AdminChatBootstrapService {
 
     const contacts = this.loadContacts();
     const selectedContact = this.resolveSelectedContact(contacts, this.selection.canonicalContactId);
-    if (selectedContact.synthetic) return;
 
     if (selectedChannelId) {
       if (!input.privacyLevel) return;
@@ -475,16 +486,20 @@ export class AdminChatBootstrapService {
     const catalogEntry = slotKey ? config.modelCatalog?.[slotKey] : undefined;
     const provider = normalizeTrimmed(catalogEntry?.provider)
       ?? normalizeTrimmed(chatSlot?.provider)
-      ?? normalizeTrimmed(config?.primaryProvider)
-      ?? DEFAULT_RUNTIME_PROVIDER;
+      ?? normalizeTrimmed(config?.primaryProvider);
     const modelId = normalizeTrimmed(catalogEntry?.model)
       ?? normalizeTrimmed(chatSlot?.model)
-      ?? normalizeTrimmed(config?.primaryModel)
-      ?? DEFAULT_RUNTIME_MODEL_ID;
+      ?? normalizeTrimmed(config?.primaryModel);
+    if (!provider || !modelId) {
+      throwBootstrapSetupError(
+        !provider ? 'chat runtime provider is not configured' : '',
+        !modelId ? 'chat runtime model is not configured' : '',
+      );
+    }
     const modelName = normalizeTrimmed(catalogEntry?.defaults?.description)
       ?? normalizeTrimmed(chatSlot?.model)
       ?? normalizeTrimmed(config?.primaryModel)
-      ?? DEFAULT_RUNTIME_MODEL_NAME;
+      ?? modelId;
 
     return {
       id: modelId,
@@ -531,13 +546,20 @@ export class AdminChatBootstrapService {
       : undefined;
     if (preferred) return preferred;
 
-    const primary = contacts.find(contact => contact.trustLevel === 'primary');
+    const selectableContacts = contacts.filter(contact => contact.linkedChannels.length > 0);
+    const primary = selectableContacts.find(contact => contact.trustLevel === 'primary');
     if (primary) return primary;
 
-    const partner = contacts.find(contact => contact.relationshipType === 'partner');
+    const partner = selectableContacts.find(contact => contact.relationshipType === 'partner');
     if (partner) return partner;
 
-    return contacts[0];
+    const firstSelectable = selectableContacts[0];
+    if (firstSelectable) return firstSelectable;
+
+    throwBootstrapSetupError(
+      'no selectable contacts are available',
+      'contacts must have at least one linked channel for admin chat bootstrap',
+    );
   }
 
   private resolveSelectedTarget(
@@ -554,12 +576,9 @@ export class AdminChatBootstrapService {
       ));
       if (conversation) return conversation;
 
-      return {
-        targetKind: 'conversation',
-        channel: preferredChannel,
-        channelId: preferredChannelId,
-        privacyLevel: this.defaultPrivacyForChannel(preferredChannel),
-      };
+      throwBootstrapSetupError(
+        `selected contact does not have conversation target ${preferredChannel}:${preferredChannelId}`,
+      );
     }
 
     if (preferredChannel && preferredUserId) {
@@ -570,15 +589,17 @@ export class AdminChatBootstrapService {
       ));
       if (linked) return linked;
 
-      return {
-        targetKind: 'identity',
-        channel: preferredChannel,
-        userId: preferredUserId,
-        privacyLevel: this.defaultPrivacyForChannel(preferredChannel),
-      };
+      throwBootstrapSetupError(
+        `selected contact does not have linked identity ${preferredChannel}:${preferredUserId}`,
+      );
     }
 
-    return selectedContact.linkedChannels[0];
+    const firstLinkedChannel = selectedContact.linkedChannels[0];
+    if (firstLinkedChannel) return firstLinkedChannel;
+
+    throwBootstrapSetupError(
+      `contact ${selectedContact.canonicalContactId} has no linked channels for admin chat bootstrap`,
+    );
   }
 
   private resolveDefaultAuthorId(
@@ -600,10 +621,14 @@ export class AdminChatBootstrapService {
   }
 
   private loadContacts(): ContactCandidate[] {
-    if (!this.contactStore) return [this.syntheticContact()];
+    if (!this.contactStore) {
+      throwBootstrapSetupError('contact store is not configured');
+    }
 
     const contacts = this.contactStore.listAll();
-    if (contacts.length === 0) return [this.syntheticContact()];
+    if (contacts.length === 0) {
+      throwBootstrapSetupError('no contacts are available for admin chat bootstrap');
+    }
 
     return contacts.map(contact => this.contactToCandidate(contact));
   }
@@ -614,12 +639,9 @@ export class AdminChatBootstrapService {
       canonicalContactId: contact.id,
       displayName: contact.displayName,
       nickname: normalizeTrimmed(contact.nickname),
-      linkedChannels: linkedChannels.length > 0
-        ? linkedChannels
-        : [this.fallbackContactChannel(contact.id)],
+      linkedChannels,
       trustLevel: contact.trustLevel,
       relationshipType: contact.relationshipType,
-      synthetic: false,
     };
   }
 
@@ -686,38 +708,15 @@ export class AdminChatBootstrapService {
     return links;
   }
 
-  private fallbackContactChannel(contactId: string): AdminChatLinkedChannelOption {
-    return {
-      targetKind: 'identity',
-      channel: 'contact',
-      userId: contactId,
-      privacyLevel: 'private',
-    };
-  }
-
-  private syntheticContact(): ContactCandidate {
-    return {
-      canonicalContactId: SYNTHETIC_CONTACT_ID,
-      displayName: SYNTHETIC_DISPLAY_NAME,
-      nickname: undefined,
-      linkedChannels: [{
-        targetKind: 'identity',
-        channel: SYNTHETIC_CHANNEL,
-        userId: SYNTHETIC_USER_ID,
-        privacyLevel: this.defaultPrivacyForChannel(SYNTHETIC_CHANNEL),
-      }],
-      trustLevel: 'regular',
-      relationshipType: 'stranger',
-      synthetic: true,
-    };
-  }
-
   private resolveAssistantName(): string {
     const cardName = normalizeTrimmed(this.loadCurrentCharacterCard()?.data.name);
     if (cardName) return cardName;
     const configuredName = normalizeTrimmed(this.runtimeConfig?.characterName);
     if (configuredName) return configuredName;
-    return DEFAULT_ASSISTANT_NAME;
+    throwBootstrapSetupError(
+      'assistant name is not configured',
+      'provide a character card name or runtime characterName before opening admin chat',
+    );
   }
 
   private resolveOnboardingMetadata(): AdminChatOnboardingMetadata {

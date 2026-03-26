@@ -13,7 +13,6 @@ This repo uses `bd` for all tracked work.
 Required session start for tracked work:
 
 ```bash
-bd onboard
 bd prime
 ```
 

@@ -157,4 +157,72 @@ describe('runExtractionOrchestration naming fidelity', () => {
       text: "Alex appreciates Lyra's patience.",
     }), expect.any(String), undefined);
   });
+
+  it('uses neutral role labels when explicit participant names are unavailable', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>assistant noted the follow-up and user asked for clarity.</text>
+<type>semantic</type>
+<importance>0.6</importance>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+      }),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-1' },
+    });
+    const options = buildOptions({
+      llmClient,
+      processFact,
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'Please keep it simple.',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'api:test',
+          role: 'assistant',
+          content: 'I will keep it simple.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      sessionManager: {
+        getRecentMessages: vi.fn().mockReturnValue([
+          {
+            id: 1,
+            channelId: 'api:test',
+            role: 'user',
+            content: 'Please keep it simple.',
+            timestamp: 1,
+          },
+          {
+            id: 2,
+            channelId: 'api:test',
+            role: 'assistant',
+            content: 'I will keep it simple.',
+            timestamp: 2,
+          },
+        ]),
+        characterName: '',
+      } as ExtractionRunOptions['sessionManager'],
+      resolveParticipantNames: () => ({}),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('user: Please keep it simple.'),
+    }), 'extraction');
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('assistant: I will keep it simple.'),
+    }), 'extraction');
+  });
 });

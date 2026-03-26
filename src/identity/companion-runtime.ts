@@ -1,31 +1,28 @@
 import type { SubstrateConfig } from '../types.js';
 import { loadCharacterCard } from './loader.js';
 import type { CharacterCardV2 } from './types.js';
-import {
-  DEFAULT_COMPANION_NAME,
-  normalizeCompanionName,
-} from './companion-naming.js';
+
+function requireCompanionName(value: string | null | undefined, source: string): string {
+  const trimmed = value?.trim();
+  if (trimmed) return trimmed;
+  throw new Error(`Missing companion name from ${source}: explicit identity is required`);
+}
 
 export function resolveCompanionNameFromCard(
   card: CharacterCardV2 | null | undefined,
-  fallback = DEFAULT_COMPANION_NAME,
 ): string {
-  return normalizeCompanionName(card?.data.name, fallback);
+  return requireCompanionName(card?.data.name, 'character card');
 }
 
 export function resolveCompanionNameFromConfig(
   config: Pick<SubstrateConfig, 'characterCardPath' | 'characterName'> | null | undefined,
-  fallback = DEFAULT_COMPANION_NAME,
 ): string {
-  const configuredName = normalizeCompanionName(config?.characterName, fallback);
   const cardPath = typeof config?.characterCardPath === 'string'
     ? config.characterCardPath.trim()
     : '';
-  if (!cardPath) return configuredName;
-
-  try {
-    return resolveCompanionNameFromCard(loadCharacterCard(cardPath), configuredName);
-  } catch {
-    return configuredName;
+  if (cardPath) {
+    return resolveCompanionNameFromCard(loadCharacterCard(cardPath));
   }
+
+  return requireCompanionName(config?.characterName, 'configured character name');
 }

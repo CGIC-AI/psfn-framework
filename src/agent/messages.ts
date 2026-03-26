@@ -10,7 +10,6 @@ import type {
   ToolResultMessage,
 } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import { DEFAULT_COMPANION_NAME } from '../identity/companion-naming.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 import { parseToolObservationMetadata } from '../session/tool-observation.js';
 
@@ -151,8 +150,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       // Skip in LLM conversion.
       continue;
     } else if (isMirrorMessage(msg)) {
-      const speaker = msg.sourceAuthorName
-        ?? (msg.sourceRole === 'assistant' ? DEFAULT_COMPANION_NAME : 'User');
+      const speaker = msg.sourceAuthorName?.trim() || msg.sourceRole;
       result.push({
         role: 'user',
         content: `[Mirror note from ${msg.originChannelId}] ${speaker}: ${compactMirrorText(msg.content)}`,

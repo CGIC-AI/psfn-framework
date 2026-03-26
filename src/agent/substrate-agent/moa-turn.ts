@@ -71,7 +71,7 @@ export function resolveMoaSettings(config: SubstrateConfig, logger: MoaLogger): 
 
 function buildMoaPrompt(context: LLMContext): string {
   const transcript = context.messages
-    .map(message => `${message.role === 'assistant' ? 'Assistant' : 'User'}:\n${message.content}`)
+    .map(message => `${message.role}:\n${message.content}`)
     .join('\n\n');
   return [
     'Produce the best final assistant reply for the latest user turn.',

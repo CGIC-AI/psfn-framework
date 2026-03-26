@@ -44,9 +44,9 @@ export function formatExtractionTranscript(
     .map((entry) => {
       let speaker: string;
       if (entry.role === 'assistant') {
-        speaker = roleNames.charName?.trim() || entry.authorName || 'Assistant';
+        speaker = roleNames.charName?.trim() || entry.authorName?.trim() || 'assistant';
       } else {
-        speaker = entry.authorName || roleNames.userName?.trim() || 'User';
+        speaker = entry.authorName?.trim() || roleNames.userName?.trim() || 'user';
       }
       return `${speaker}: ${entry.content}`;
     })

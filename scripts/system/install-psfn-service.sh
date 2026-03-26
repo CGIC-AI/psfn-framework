@@ -278,6 +278,7 @@ sync_app_checkout() {
   git -C "${APP_ROOT}" checkout --force "${source_ref}" >/dev/null 2>&1 || git -C "${APP_ROOT}" checkout --force "$(git -C "${SOURCE_REPO_ROOT}" rev-parse HEAD)"
 
   rsync -a --delete \
+    --exclude '.git' \
     --exclude '.git/' \
     --exclude '.beads/' \
     --exclude '.env' \

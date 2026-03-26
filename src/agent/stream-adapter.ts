@@ -596,10 +596,7 @@ function buildTerminalFailureEvent(input: {
     reason: 'error',
     error: {
       role: 'assistant',
-      content: [{
-        type: 'text',
-        text: buildTerminalFailureText(input.correlation),
-      }],
+      content: [],
       api: input.fallbackModel.api,
       provider,
       model,
@@ -622,16 +619,6 @@ function buildTerminalFailureEvent(input: {
       timestamp: Date.now(),
     },
   };
-}
-
-function buildTerminalFailureText(correlation: Partial<CorrelationMetadata> | undefined): string {
-  const channelId = typeof correlation?.channelId === 'string'
-    ? correlation.channelId.trim().toLowerCase()
-    : '';
-  if (correlation?.callType === 'scheduled' || channelId.startsWith('internal:')) {
-    return 'Scheduled generation failed because all configured model candidates were unavailable.';
-  }
-  return 'I hit an upstream model failure and could not finish that reply. Please try again in a moment.';
 }
 
 function sleep(delayMs: number): Promise<void> {

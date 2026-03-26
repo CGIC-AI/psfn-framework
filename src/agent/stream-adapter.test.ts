@@ -496,8 +496,8 @@ describe('createSubstrateStreamFn', () => {
 
     expect(events).toHaveLength(1);
     expect((events[0] as { type: string }).type).toBe('error');
-    expect((events[0] as { error: { content: Array<{ text: string }>; errorMessage: string } }).error.content[0]?.text)
-      .toContain('could not finish that reply');
+    expect((events[0] as { error: { content: Array<{ text: string }>; errorMessage: string } }).error.content)
+      .toHaveLength(0);
     expect((events[0] as { error: { errorMessage: string } }).error.errorMessage).toContain('fatal failure');
     expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(2);
     expect(onTerminalFailure).toHaveBeenCalledTimes(1);

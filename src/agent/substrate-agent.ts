@@ -611,7 +611,7 @@ export class SubstrateAgent {
         role: 'custom',
         type: 'whisper',
         content: message.content,
-        speakerName: message.authorName?.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
+        speakerName: message.authorName.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
         timestamp: Date.now(),
       } satisfies WhisperMessage);
       log.debug('Queued follow-up', {

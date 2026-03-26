@@ -582,7 +582,7 @@ export class GatewayServer {
       if (status.state === 'registering') summary.registering += 1;
       else if (status.state === 'ready') summary.ready += 1;
       else if (status.state === 'degraded') summary.degraded += 1;
-      else if (status.state === 'offline') summary.offline += 1;
+      else summary.offline += 1;
     }
 
     return summary;

@@ -224,7 +224,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
           }
 
           if (event.type === 'done') {
-            assertValidTerminalAssistantMessage(event.message, event.reason, candidate);
+            assertValidTerminalAssistantMessage(event.message, candidate);
             if (!committed) {
               committed = true;
               for (const bufferedEvent of bufferedEvents) {
@@ -237,8 +237,8 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
               purpose: params.purpose,
               service: params.service,
               process: params.processName,
-              inputTokens: toUsageCount(event.message.usage?.input),
-              outputTokens: toUsageCount(event.message.usage?.output),
+              inputTokens: toUsageCount(event.message.usage.input),
+              outputTokens: toUsageCount(event.message.usage.output),
               correlation: params.requestContext,
             });
 
@@ -409,7 +409,7 @@ function buildStreamRequestOptions(
 }
 
 function getModelAndKey(
-  config: SubstrateConfig,
+  _config: SubstrateConfig,
   litellmBaseUrl: string | null,
   candidate: RoutingCandidate,
 ): { model: Model<any>; apiKey: string | undefined } {
@@ -535,10 +535,9 @@ function shouldCommitBufferedEvent(event: AssistantMessageEvent): boolean {
 
 function assertValidTerminalAssistantMessage(
   message: AssistantMessage,
-  reason: string,
   candidate: RoutingCandidate,
 ): void {
-  const stopReason = message.stopReason ?? reason;
+  const stopReason = message.stopReason;
   if (stopReason === 'error' || stopReason === 'aborted') {
     throw new Error(message.errorMessage ?? `LLM request failed for ${candidate.provider}/${candidate.model}`);
   }

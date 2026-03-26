@@ -16,7 +16,7 @@ interface RecentHandleMessageResult {
 }
 
 function buildMessageDedupKey(route: 'handle' | 'discord', message: SubstrateMessage): string | null {
-  const messageId = message.id?.trim();
+  const messageId = message.id.trim();
   if (!messageId) return null;
   return `${route}:${message.channelId}:${messageId}`;
 }

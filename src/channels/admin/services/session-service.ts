@@ -142,9 +142,9 @@ export class AdminSessionDataService implements AdminSessionService {
   getSessionMessages(sessionId: string): AdminSessionMessagesData {
     const messages = this.deps.sessionStore.getRecent(sessionId, 100);
     const sessionActivity = this.deps.sessionStore.getSessionActivity(sessionId);
-    const channelId = messages[0]?.channelId
-      ?? sessionActivity?.channelId
-      ?? sessionId;
+    const channelId = messages.length > 0
+      ? messages[0]!.channelId
+      : (sessionActivity?.channelId ?? sessionId);
     const roleEnvelopePreviews = messages.flatMap((entry) => {
       const preview = resolveSessionEntryRoleEnvelopePreview(entry);
       return preview ? [{ sessionEntryId: entry.id, preview }] : [];

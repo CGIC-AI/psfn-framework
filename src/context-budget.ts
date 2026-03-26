@@ -257,8 +257,8 @@ function resolveCatalogSlotKey(
 ): string | undefined {
   for (const candidate of resolvePurposeChain(purpose)) {
     const slotKey = assignments?.[candidate];
-    if (slotKey && catalog[slotKey]) return slotKey;
-    if (catalog[candidate]) return candidate;
+    if (slotKey && Object.hasOwn(catalog, slotKey)) return slotKey;
+    if (Object.hasOwn(catalog, candidate)) return candidate;
   }
   return undefined;
 }

@@ -1144,9 +1144,6 @@ export function sessionEntriesToIntentionMessages(
       channelId: entry.channelId ?? '',
     });
     const role = normalized.role;
-    if (role !== 'user' && role !== 'assistant' && role !== 'system' && role !== 'tool') {
-      continue;
-    }
     const content = (
       role === 'system'
         ? formatAttributedSystemContent(entry.content, normalized.authorName)

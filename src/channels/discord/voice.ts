@@ -638,7 +638,7 @@ export class DiscordVoiceRuntime {
   }
 
   private isPlaybackActive(): boolean {
-    return this.player?.state?.status === AudioPlayerStatus.Playing;
+    return this.player?.state.status === AudioPlayerStatus.Playing;
   }
 
   private async handleConnectionStateChange(params: VoiceConnectionStateChange): Promise<void> {

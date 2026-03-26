@@ -379,7 +379,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
     (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mockImplementation(() => {
-      runtime.agent.setTools?.([
+      runtime.agent.setTools([
         {
           name: 'contact_lookup',
           description: 'Look up a contact.',

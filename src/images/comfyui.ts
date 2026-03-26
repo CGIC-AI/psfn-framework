@@ -275,8 +275,8 @@ export class ComfyUiImageClient {
       if (!response.ok) continue;
 
       const payload = await response.json() as Record<string, ComfyHistoryResponse>;
-      const history = payload[promptId];
-      if (!history) continue;
+      if (!Object.hasOwn(payload, promptId)) continue;
+      const history = payload[promptId]!;
 
       const status = history.status?.status_str;
       if (status === 'success') {
@@ -332,7 +332,7 @@ export class ComfyUiImageClient {
         throw new Error('Unsupported data URL image payload');
       }
       const mimeType = match[1] || 'application/octet-stream';
-      const encoded = match[3] ?? '';
+      const encoded = match[3];
       const bytes = match[2]
         ? Uint8Array.from(Buffer.from(encoded, 'base64'))
         : Uint8Array.from(Buffer.from(decodeURIComponent(encoded), 'utf8'));

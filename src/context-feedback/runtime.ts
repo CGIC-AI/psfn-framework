@@ -9,7 +9,6 @@ import type { PostTurnActionCandidate } from '../types.js';
 import { isRecord } from '../utils/types.js';
 import {
   ContextEvaluator,
-  type ContextEvaluationResult,
   type ContextFeedbackSignalKey,
 } from './evaluator.js';
 

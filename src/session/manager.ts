@@ -819,8 +819,9 @@ export class SessionManager {
       if (entryId <= 0 || seenEntryIds.has(entryId)) continue;
       seenEntryIds.add(entryId);
 
-      const entry = this.store.getEntriesInRange(resolvedChannelId, entryId, entryId)[0];
-      if (!entry) continue;
+      const entries = this.store.getEntriesInRange(resolvedChannelId, entryId, entryId);
+      if (entries.length === 0) continue;
+      const [entry] = entries;
 
       const preview = resolveSessionEntryRoleEnvelopePreview(entry);
       if (!preview) continue;

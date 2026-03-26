@@ -8,9 +8,9 @@ function normalizeOffset(raw: string): string {
   if (!match) {
     throw new Error(`Unsupported timezone offset format "${raw}"`);
   }
-  const [, sign, hoursRaw, minutesRaw] = match;
+  const [, sign, hoursRaw, minutesRaw = '00'] = match;
   const hours = hoursRaw.padStart(2, '0');
-  const minutes = (minutesRaw ?? '00').padStart(2, '0');
+  const minutes = minutesRaw.padStart(2, '0');
   return `${sign}${hours}:${minutes}`;
 }
 

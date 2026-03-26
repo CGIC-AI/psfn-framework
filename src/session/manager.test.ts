@@ -275,7 +275,7 @@ describe('SessionManager', () => {
 
     const [entry] = store.getRecent('api:role-envelope-preview', 1);
     expect(entry).toBeDefined();
-    expect(entry?.content).toBe('Queued a quiet follow-up reminder.');
+    expect(entry.content).toBe('Queued a quiet follow-up reminder.');
     expect(resolveSessionEntryRoleEnvelopePreview(entry!)).toEqual({
       schemaVersion: 1,
       envelopeId: 'env_preview_1',
@@ -285,7 +285,7 @@ describe('SessionManager', () => {
       promotionTarget: 'turn_record_summary',
       promotedRef: 'turn_record_summary:env_preview_1',
     });
-    expect(entry?.metadata ?? '').not.toContain(hiddenBody);
+    expect(entry.metadata ?? '').not.toContain(hiddenBody);
 
     expect(store.searchByKeywords('quiet follow-up', 10)).toHaveLength(1);
     expect(store.searchByKeywords(hiddenBody, 10)).toHaveLength(0);

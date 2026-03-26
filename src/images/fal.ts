@@ -162,9 +162,11 @@ function payloadToString(payload: unknown): string {
 
 function normalizeFalImages(payload: FalImageOutput): ImageResultAsset[] {
   return (payload.images ?? [])
-    .filter((image): image is NonNullable<FalImageOutput['images']>[number] => Boolean(image?.url))
+    .filter((image): image is { url: string; content_type?: string; file_name?: string } => (
+      typeof image.url === 'string' && image.url.length > 0
+    ))
     .map((image) => ({
-      url: image.url!,
+      url: image.url,
       ...(image.content_type ? { contentType: image.content_type } : {}),
       ...(image.file_name ? { fileName: image.file_name } : {}),
     }));

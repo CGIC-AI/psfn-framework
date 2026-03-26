@@ -559,26 +559,18 @@ export function resolveAuthorContext(input: {
         : input.contactStore.resolveUserId(input.message.authorId));
     if (hintedContact) {
       // Still update last seen so the contact record stays fresh.
-      const maybeLastSeenUpdater = input.contactStore as ContactStore & {
-        updateLastSeen?: (id: string) => void;
-      };
-      maybeLastSeenUpdater.updateLastSeen?.(hintedContact.id);
+      input.contactStore.updateLastSeen(hintedContact.id);
     }
     const canonicalContactKey = contact.id;
     const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
-    const maybeChannelPrivacyReader = input.contactStore as ContactStore & {
-      getConversationChannelPrivacy?: (contactId: string, channel: string, channelId: string) => ChannelVisibility | undefined;
-    };
     const channelPrivacyLevel = explicitChannelPrivacy
-      ?? (typeof maybeChannelPrivacyReader.getConversationChannelPrivacy === 'function'
-        ? normalizeChannelVisibility(
-          maybeChannelPrivacyReader.getConversationChannelPrivacy(
-            canonicalContactKey,
-            channel,
-            input.message.channelId,
-          ),
-        )
-        : undefined);
+      ?? normalizeChannelVisibility(
+        input.contactStore.getConversationChannelPrivacy(
+          canonicalContactKey,
+          channel,
+          input.message.channelId,
+        ),
+      );
 
     const maybeActivityRecorder = input.contactStore as ContactStore & {
       recordChannelActivity?: (

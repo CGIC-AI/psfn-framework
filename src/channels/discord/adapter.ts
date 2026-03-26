@@ -283,7 +283,7 @@ export class DiscordAdapter implements ChannelAdapter {
     const channel = await this.client.channels.fetch(ctx.channelId);
     if (!channel?.isTextBased()) return;
 
-    const fileName = media.name?.trim() || 'attachment';
+    const fileName = media.name.trim() || 'attachment';
     const localPath = media.localPath?.trim();
     const file = localPath && existsSync(localPath)
       ? localPath

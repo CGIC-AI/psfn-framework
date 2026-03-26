@@ -2,7 +2,6 @@ import { MemoryWriter } from '../../memory/writer.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
 import type { MemoryStore } from '../../memory/store.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { SessionEntry } from '../../session/types.js';
 import type { MemoryType, MemoryRedactionOperation } from '../../memory/types.js';
 import {
   VALID_MEMORY_TYPES,

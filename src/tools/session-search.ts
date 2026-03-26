@@ -146,7 +146,7 @@ function buildSessionMatchSnippet(
       const match = regex.exec(normalized);
       if (match && typeof match.index === 'number') {
         matchIndex = match.index;
-        matchLength = Math.max(1, match[0]?.length ?? pattern.length);
+        matchLength = Math.max(1, match[0].length);
       }
     } catch {
       return truncateSessionSearchSnippet(normalized);
@@ -183,14 +183,6 @@ function parseJournalMessageEntry(lineText: string): (JournalEntry & {
       || !Number.isFinite(parsed.timestamp)
       || typeof parsed.id !== 'number'
       || !Number.isFinite(parsed.id)
-    ) {
-      return null;
-    }
-    if (
-      parsed.role !== 'user'
-      && parsed.role !== 'assistant'
-      && parsed.role !== 'system'
-      && parsed.role !== 'tool'
     ) {
       return null;
     }

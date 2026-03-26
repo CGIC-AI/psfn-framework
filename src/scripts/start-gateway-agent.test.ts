@@ -1,0 +1,64 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, expect, it } from 'vitest';
+
+const repoRoot = process.cwd();
+const runtimeEnvPath = join(repoRoot, 'scripts/system/runtime-env.sh');
+
+describe('psfn_source_dotenv_preserving_existing_env', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop();
+      if (dir) {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('keeps explicit env values while still loading missing dotenv values', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-env-'));
+    tempDirs.push(workDir);
+
+    const dotenvPath = join(workDir, '.env');
+    writeFileSync(
+      dotenvPath,
+      [
+        'DATA_DIR=./dotenv-data',
+        'DATABASE_PATH=./dotenv.db',
+        'WORKSPACE_PATH=./dotenv-workspace',
+        'CHARACTER_CARD_PATH=./dotenv-card.json',
+        'NEW_DOTENV_ONLY=loaded',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const output = execFileSync(
+      'bash',
+      [
+        '-lc',
+        [
+          `source ${JSON.stringify(runtimeEnvPath)}`,
+          `export DATA_DIR=/explicit/data`,
+          `export DATABASE_PATH=/explicit/db.sqlite`,
+          `export WORKSPACE_PATH=/explicit/workspace`,
+          `export CHARACTER_CARD_PATH=/explicit/card.json`,
+          `psfn_source_dotenv_preserving_existing_env ${JSON.stringify(dotenvPath)}`,
+          'printf "%s\\n" "$DATA_DIR" "$DATABASE_PATH" "$WORKSPACE_PATH" "$CHARACTER_CARD_PATH" "$NEW_DOTENV_ONLY"',
+        ].join('; '),
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ).trim().split('\n');
+
+    expect(output).toEqual([
+      '/explicit/data',
+      '/explicit/db.sqlite',
+      '/explicit/workspace',
+      '/explicit/card.json',
+      'loaded',
+    ]);
+  });
+});

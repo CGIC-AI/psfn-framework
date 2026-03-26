@@ -22,7 +22,39 @@ describe('loadRuntimeChannelsConfig', () => {
         port: 8080,
         path: '/telegram/webhook',
       });
-      expect(config.psfnAmica).toEqual({ enabled: true });
+      expect(config.psfnAmica).toEqual({ enabled: false });
+      expect(buildExternalChannelProfiles(config)).toEqual({});
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when channels.json is malformed', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), '{"telegram":');
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow('Failed to load channels config');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when channels.json references a missing env token', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: true,
+          token: '${TELEGRAM_BOT_TOKEN}',
+          mode: 'polling',
+          pollIntervalMs: 2500,
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json references missing environment variables: TELEGRAM_BOT_TOKEN',
+      );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -65,6 +97,25 @@ describe('loadRuntimeChannelsConfig', () => {
         port: 9091,
         path: '/hooks/telegram',
       });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('requires explicit telegram wiring when telegram is enabled', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: true,
+          mode: 'webhook',
+          pollIntervalMs: 2500,
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.telegram.token or TELEGRAM_BOT_TOKEN must be configured when telegram is enabled',
+      );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -126,6 +177,30 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('does not expose psfn-amica external profiles when disabled', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        psfnAmica: {
+          enabled: false,
+          defaultIdentity: {
+            authorId: 'primary-user',
+            authorName: 'Primary User',
+            canonicalContactId: 'contact-primary-user',
+            channelPrivacy: 'semi_private',
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.psfnAmica.enabled).toBe(false);
+      expect(buildExternalChannelProfiles(config)).toEqual({});
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps mutable telegram settings in file/override ownership while still allowing env secrets and webhook wiring', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
@@ -182,7 +257,10 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: false,
+          token: 'token-from-file',
           allowedUsers: ['from-file'],
+          mode: 'polling',
+          pollIntervalMs: 1200,
         },
       }));
 
@@ -206,7 +284,10 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: true,
+          token: 'token-from-file',
           allowedUsers: ['from-file'],
+          mode: 'polling',
+          pollIntervalMs: 1200,
         },
       }));
 
@@ -233,7 +314,10 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: true,
+          token: 'token-from-file',
           allowedUsers: ['from-file'],
+          mode: 'polling',
+          pollIntervalMs: 1200,
         },
       }));
 
@@ -252,6 +336,7 @@ describe('loadRuntimeChannelsConfig', () => {
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
+          enabled: false,
           mode: 'webhook',
           webhook: {
             url: 'https://public.example.com/telegram/callback',
@@ -272,6 +357,9 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: 'YES',
+          token: 'token-from-file',
+          mode: 'polling',
+          pollIntervalMs: 500,
         },
       }));
 

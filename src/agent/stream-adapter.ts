@@ -419,7 +419,7 @@ function buildStreamRequestOptions(
 }
 
 function getModelAndKey(
-  _config: SubstrateConfig,
+  config: SubstrateConfig,
   litellmBaseUrl: string | null,
   candidate: RoutingCandidate,
 ): { model: Model<any>; apiKey: string | undefined } {

@@ -513,6 +513,57 @@ describe('createSubstrateStreamFn', () => {
     });
   });
 
+  it('uses the configured LiteLLM API key env without referencing an undefined config variable', async () => {
+    const previousEnv = process.env.PSFN_TEST_LITELLM_KEY;
+    delete process.env.LITELLM_BASE_URL;
+    process.env.PSFN_TEST_LITELLM_KEY = 'test-litellm-key';
+
+    try {
+      const config = makeConfig({
+        litellmBaseUrl: 'http://localhost:4000/v1',
+        litellmApiKeyEnv: 'PSFN_TEST_LITELLM_KEY',
+      });
+
+      streamAdapterMocks.streamSimple.mockImplementation((_resolvedModel: { id: string }, _context, _requestOptions) => (
+        (async function* success() {
+          yield {
+            type: 'done',
+            reason: 'stop',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'ok' }],
+              api: 'openai-completions',
+              provider: 'litellm',
+              model: 'openrouter/deepseek/deepseek-v3.2',
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+              stopReason: 'stop',
+              timestamp: Date.now(),
+            },
+          };
+        })()
+      ) as any);
+
+      const streamFn = createSubstrateStreamFn(config);
+      const model = resolveModel(config, 'chat');
+      const stream = await streamFn(model, {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'hello' }],
+      } as any, {});
+      const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+      expect(events).toHaveLength(1);
+      expect((events[0] as { type: string }).type).toBe('done');
+      expect((streamAdapterMocks.streamSimple.mock.calls[0]?.[1] as { systemPrompt: string }).systemPrompt).toBe('System');
+      expect((streamAdapterMocks.streamSimple.mock.calls[0]?.[2] as { apiKey: string }).apiKey).toBe('test-litellm-key');
+    } finally {
+      if (previousEnv === undefined) {
+        delete process.env.PSFN_TEST_LITELLM_KEY;
+      } else {
+        process.env.PSFN_TEST_LITELLM_KEY = previousEnv;
+      }
+    }
+  });
+
   it('does not switch candidates after output has already started streaming', async () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const baseConfig = makeConfig();

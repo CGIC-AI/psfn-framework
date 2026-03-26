@@ -381,7 +381,11 @@ If you're building a companion on this framework, check out:
 
 - **`companion_docs/`** — Welcome documentation and a verification checklist for onboarding new companions
 - **`CLAUDE.md`** — Technical reference for AI development assistants working on the codebase
-- **`docs/PSFN_SUBSTRATE_SPEC.md`** — Full architecture specification
+- **`docs/setup.md`** — Bootstrap and local bring-up
+- **`docs/architecture.md`** — Current runtime shape and subsystem map
+- **`docs/memory.md`** — Implemented memory model
+- **`docs/specifications.md`** — Config, persistence, and fail-closed contracts
+- **`docs/operations.md`** — Deployment, migration, TLS, and validation
 
 ## License
 

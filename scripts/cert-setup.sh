@@ -66,7 +66,7 @@ Examples:
 
 After issuing, add to your .env:
   GATEWAY_TLS_CA_PATH=./certs/<domain>/ca.pem
-  # For LiteLLM proxy, mount cert/key into docker-compose — see docs/TLS_SETUP.md
+  # For LiteLLM proxy, mount cert/key into docker-compose — see docs/operations.md
 EOF
   exit 0
 }
@@ -298,4 +298,4 @@ fi
 echo ""
 echo "=== Done ==="
 echo "Certificate will auto-renew via acme.sh cron job."
-echo "See docs/TLS_SETUP.md for full configuration guide."
+echo "See docs/operations.md for full configuration guide."

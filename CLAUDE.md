@@ -37,7 +37,11 @@ When checking behavior, prefer this order:
    - `src/persistence/layout.ts`
 3. Product/runtime overview and deeper design docs
    - `README.md`
-   - `docs/PSFN_SUBSTRATE_SPEC.md`
+   - `docs/specifications.md`
+   - `docs/architecture.md`
+   - `docs/memory.md`
+   - `docs/operations.md`
+   - `docs/setup.md`
 4. Bootstrap template only
    - `.env.example`
 

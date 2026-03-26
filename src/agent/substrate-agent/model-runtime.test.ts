@@ -4,6 +4,7 @@ import { resolveTurnModelPurpose } from './model-runtime.js';
 function makeMessage(channelId: string) {
   return {
     channelId,
+    content: '',
   } as const;
 }
 

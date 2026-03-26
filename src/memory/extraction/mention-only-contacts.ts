@@ -177,11 +177,12 @@ export function extractMentionOnlyContactCandidate(params: {
 
   const relationBeforeName = RELATIONSHIP_BEFORE_NAME.exec(params.fact.text);
   if (relationBeforeName) {
-    const candidateName = cleanCandidateName(relationBeforeName[2] ?? '');
+    const [, relationKeyword, relationName] = relationBeforeName;
+    const candidateName = cleanCandidateName(relationName);
     if (!isExcludedCandidateName(candidateName, excludedNames)) {
       return {
         name: candidateName,
-        relationshipType: inferRelationshipTypeFromKeyword(relationBeforeName[1] ?? '') || inferredRelationship,
+        relationshipType: inferRelationshipTypeFromKeyword(relationKeyword),
         normalizedKey: normalizeNameKey(candidateName),
       };
     }
@@ -189,18 +190,20 @@ export function extractMentionOnlyContactCandidate(params: {
 
   const nameBeforeRelationship = NAME_BEFORE_RELATIONSHIP.exec(params.fact.text);
   if (nameBeforeRelationship) {
-    const candidateName = cleanCandidateName(nameBeforeRelationship[1] ?? '');
+    const [, relationName, relationKeyword] = nameBeforeRelationship;
+    const candidateName = cleanCandidateName(relationName);
     if (!isExcludedCandidateName(candidateName, excludedNames)) {
       return {
         name: candidateName,
-        relationshipType: inferRelationshipTypeFromKeyword(nameBeforeRelationship[2] ?? '') || inferredRelationship,
+        relationshipType: inferRelationshipTypeFromKeyword(relationKeyword),
         normalizedKey: normalizeNameKey(candidateName),
       };
     }
   }
 
   for (const match of params.fact.text.matchAll(CAPITALIZED_NAME)) {
-    const candidateName = cleanCandidateName(match[1] ?? '');
+    const [, matchedName] = match;
+    const candidateName = cleanCandidateName(matchedName);
     if (isExcludedCandidateName(candidateName, excludedNames)) continue;
     return {
       name: candidateName,

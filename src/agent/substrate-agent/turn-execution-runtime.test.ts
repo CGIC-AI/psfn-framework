@@ -104,7 +104,7 @@ function createRuntime(params: {
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
       getActiveFocusMemoryScopeQuery: vi.fn(() => null),
-      ...((params.sessionManager ?? {}) as Record<string, unknown>),
+      ...(params.sessionManager as Record<string, unknown>),
     } as unknown as SessionManager,
     config: {
       primaryModel: 'test-model',

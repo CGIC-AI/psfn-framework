@@ -201,7 +201,7 @@ function shouldConsiderDuplicateForScope(
   scopeRef: MemoryScopeRef | undefined,
 ): boolean {
   if (!scopeRef) return true;
-  return memory.scopeRef?.kind === scopeRef.kind && memory.scopeRef?.id === scopeRef.id;
+  return memory.scopeRef?.kind === scopeRef.kind && memory.scopeRef.id === scopeRef.id;
 }
 
 function mergeProvenanceRefs(

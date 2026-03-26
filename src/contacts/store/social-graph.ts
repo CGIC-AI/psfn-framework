@@ -674,8 +674,8 @@ export function mergeSocialGraphForContacts(
       duplicate.directional,
     ) as SocialRelationshipEdgeRow[];
 
+    if (rows.length < 2) continue;
     const [primaryRow, ...rest] = rows;
-    if (!primaryRow || rest.length === 0) continue;
     const primary = mapSocialRelationshipEdgeRow(primaryRow);
     let mergedEdge = { ...primary };
     for (const row of rest) {

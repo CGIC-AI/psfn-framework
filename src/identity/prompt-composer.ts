@@ -4,7 +4,6 @@
 // Includes context-aware filtering (channelType, taskKind).
 
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type {
   CompanionValuesLayerSnapshot,

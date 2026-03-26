@@ -553,7 +553,7 @@ export class AdminChatBootstrapService {
     const partner = selectableContacts.find(contact => contact.relationshipType === 'partner');
     if (partner) return partner;
 
-    const firstSelectable = selectableContacts[0];
+    const firstSelectable = selectableContacts.at(0);
     if (firstSelectable) return firstSelectable;
 
     throwBootstrapSetupError(
@@ -594,7 +594,7 @@ export class AdminChatBootstrapService {
       );
     }
 
-    const firstLinkedChannel = selectedContact.linkedChannels[0];
+    const firstLinkedChannel = selectedContact.linkedChannels.at(0);
     if (firstLinkedChannel) return firstLinkedChannel;
 
     throwBootstrapSetupError(

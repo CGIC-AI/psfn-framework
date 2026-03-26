@@ -311,7 +311,7 @@ export function memoryMatchesScopeQuery(
   if (!normalized) return true;
   const refMatch = normalized.refs?.some((ref) => (
     memory.scopeRef?.kind === ref.kind
-    && memory.scopeRef?.id === ref.id
+    && memory.scopeRef.id === ref.id
   )) ?? false;
   const memoryScopeTags = new Set(normalizeMemoryScopeTags(memory.scopeTags));
   const tagMatch = normalized.tags?.some(tag => memoryScopeTags.has(tag)) ?? false;
@@ -327,7 +327,7 @@ export function computeMemoryScopeMatchStrength(
   let strength = 0;
   if (normalized.refs?.some((ref) => (
     memory.scopeRef?.kind === ref.kind
-    && memory.scopeRef?.id === ref.id
+    && memory.scopeRef.id === ref.id
   ))) {
     strength = Math.max(strength, 1);
   }

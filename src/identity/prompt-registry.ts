@@ -131,10 +131,6 @@ function cloneEntry(entry: PromptRegistryEntry): PromptRegistryEntry {
   return { ...entry, consumers: [...entry.consumers] };
 }
 
-function cloneMap(input: Map<string, PromptRegistryEntry>): Map<string, PromptRegistryEntry> {
-  return new Map([...input.entries()].map(([key, value]) => [key, cloneEntry(value)]));
-}
-
 function validVersion(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
     return 1;

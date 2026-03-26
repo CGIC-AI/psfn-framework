@@ -531,7 +531,7 @@ export function buildAdminApiRoutes(options: {
           const rawScopeRef = payload.scopeRef;
           const scopeRef = rawScopeRef === null
             ? null
-            : (typeof rawScopeRef === 'object' && rawScopeRef !== null
+            : (typeof rawScopeRef === 'object'
               ? rawScopeRef as { kind?: string; id?: string; label?: string }
               : undefined);
           const scopeTags = Array.isArray(payload.scopeTags)

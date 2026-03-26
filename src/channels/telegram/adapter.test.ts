@@ -481,6 +481,51 @@ describe('TelegramAdapter', () => {
     expect(sendDocumentCall?.body.document).toBe('https://example.com/spec.pdf');
   });
 
+  it('sends response attachments after the text reply', async () => {
+    const { fetchImpl, calls } = makeFetchMock({
+      sendChatAction: () => true,
+      sendMessage: () => ({ message_id: 801 }),
+      sendPhoto: () => ({ message_id: 802 }),
+    });
+
+    const adapter = new TelegramAdapter(makeConfig(), new EventBus(), { fetchImpl });
+    adapter.onMessage(async (message) => ({
+      content: 'selfie sent',
+      channelId: message.channelId,
+      attachments: [{
+        url: 'https://images.example.test/selfie.png',
+        contentType: 'image/png',
+        name: 'selfie.png',
+      }],
+      metadata: {
+        model: 'test',
+        inputTokens: 1,
+        outputTokens: 1,
+        durationMs: 1,
+      },
+    }));
+
+    await (adapter as any).handleUpdate({
+      update_id: 2,
+      message: {
+        message_id: 99,
+        date: 1_700_000_000,
+        chat: { id: 321, type: 'private' },
+        from: { id: 7, is_bot: false, username: 'media_user' },
+        text: 'send me a selfie',
+      },
+    });
+
+    const sendMessageCall = calls.find(call => call.method === 'sendMessage');
+    expect(sendMessageCall?.body.chat_id).toBe('321');
+    expect(sendMessageCall?.body.text).toBe('selfie sent');
+    expect(sendMessageCall?.body.reply_to_message_id).toBe(99);
+
+    const sendPhotoCall = calls.find(call => call.method === 'sendPhoto');
+    expect(sendPhotoCall?.body.chat_id).toBe('321');
+    expect(sendPhotoCall?.body.photo).toBe('https://images.example.test/selfie.png');
+  });
+
   it('emits channel.message.error diagnostics without sending canned fallback text when handler throws', async () => {
     const { fetchImpl, calls } = makeFetchMock({
       sendChatAction: () => true,

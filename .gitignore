@@ -11,6 +11,8 @@ proxy/.env
 logs/
 import/
 certs/
+__pycache__/
+*.pyc
 
 # bv (beads viewer) local config and caches
 .bv/

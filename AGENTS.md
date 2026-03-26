@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This file is the repo-specific operating contract for AI coding agents working in this repository.
+This file is the repo-specific operating contract for AI coding agents working in `/mnt/samesung/ai/psfn-live`.
 
 Use it together with the current code, not instead of it. When workflow text here conflicts with the live runtime or config contracts, the code wins.
 
@@ -39,6 +39,23 @@ Rules:
 - If `bd ready --json` is empty but you are doing user-requested tracked work, create a self-contained issue before editing code.
 - Link discovered follow-up work with `discovered-from:<parent-id>`.
 - Keep issue descriptions self-contained: summary, files, concrete steps, and an example when useful.
+
+## Current Phase V Reality
+
+This branch already contains major implemented Phase V work. Do not treat it like a pure planning branch.
+
+Implemented foundations on this branch include:
+
+- registry-driven plugin seams for channels, STT, and TTS
+- schema-owned settings and owner-file enforcement
+- two-root persistence topology (`system-data` and `companion-data`)
+- compositional extraction, retrieval, appraisal, nested think, shard context packs, and diagnostics
+- observation masking, context manifests, stable-prefix context optimization, and context feedback scoring
+- emotion state, active concerns, self-model snapshots, and metacognitive flags
+- background continuation slices and shard lifecycle hardening
+- Telegram, Wyoming, Garden, backup/restore verification, and beads gateway tools
+
+Use [PHASE_V.md](./PHASE_V.md) as the branch status ledger.
 
 ## Source Of Truth
 
@@ -91,6 +108,18 @@ Guardrails:
 - Production layout roots must not overlap.
 - New settings must be wired through the owner-file contract, Garden exposure, and tests.
 - Run `npm run verify:settings-contract` when touching settings or settings UI.
+
+## Live Deployment Boundary
+
+For the live running app in this repo, everything operationally authoritative must live under `/mnt/samesung/ai/psfn-live`.
+
+Rules:
+
+- Do not create, edit, or rely on live runtime/service/env config outside this repo tree without explicit user permission.
+- Forbidden without explicit permission: `~/.config/systemd/user/*`, home-directory env files, ad hoc supervisor drop-ins, and any other off-repo runtime overrides.
+- Do not create shadow copies of live unit files, env files, or runtime wiring in `$HOME`, `/tmp`, or other side locations just to avoid a restart or make a workaround stick.
+- If the live service must change, change the repo-owned file in this directory and restart the service if needed. A required restart is acceptable; hidden off-repo config is not.
+- If the supervisor requires a registration artifact outside the repo, it must only be a thin pointer to a repo-owned file, never the authoritative config itself, unless the user explicitly approves otherwise.
 
 ## Runtime Entry Points
 
@@ -155,11 +184,15 @@ If your change touches code, run the smallest set of quality gates that proves i
 
 Common expectations:
 
+- `npm run lint`
 - `npm run build`
 - targeted `npm test -- --run ...`
 - `npm run verify:settings-contract` for settings/config changes
 - `npm run verify:repository-hygiene` for repo-surface changes
 - smoke or reachability verification for new runtime wiring
+
+`npm run lint` is mandatory for every tracked code change before closing or pushing work. If lint cannot run, stop and surface the blocker instead of silently skipping it.
+No worker or sub-agent may mark a bead done, ask for closure, or close a bead until `npm run lint` has passed in that worktree for the change it made.
 
 Include the result in your handoff.
 
@@ -206,7 +239,7 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 1. Select the next highest-priority ready beads that are safe to run in parallel.
 2. Create one worktree per selected bead or stream.
 3. Spawn at most one sub-agent per worktree and give it explicit ownership of its bead, files, and validation scope.
-4. Require each sub-agent to implement only its assigned bead, run targeted validation, and commit its work inside its own worktree.
+4. Require each sub-agent to implement only its assigned bead, run targeted validation, run `npm run lint`, and commit its work inside its own worktree.
 5. Let the streams run without constant check-ins. Do not micro-manage active workers; check on them only when they report a blocker, finish, or have been silent for an unusually long interval such as 20 minutes.
 6. When the selected streams are complete, merge them back into the integration branch and resolve conflicts only at the orchestrator level.
 7. Run validation on the integration branch for every merged area, plus broader regression coverage when the combined change surface warrants it.
@@ -218,6 +251,7 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 - Merge blocker-unlocking or dependency-clearing beads first when merge order matters.
 - If two streams conflict, resolve the conflict once on the integration branch and rerun the impacted tests there.
 - Do not close a bead without validation evidence for the area it changed.
+- Do not close a bead unless `npm run lint` passed for the worker or worktree that produced the change.
 - Keep the bead tracker aligned with the integrated branch state, not with partial work still isolated in side worktrees.
 
 ## Orchestration Hygiene
@@ -239,6 +273,7 @@ Required sequence:
 
 1. File issues for remaining follow-up work.
 2. Run quality gates appropriate to the change.
+   `npm run lint` is a mandatory gate for every tracked code change.
 3. Update bead status.
 4. Push git state:
    ```bash
@@ -259,3 +294,4 @@ Rules:
 - Never stop at "ready to push". Push.
 - If push fails, resolve it and retry.
 - Keep bead state aligned with the shipped git state.
+- Do not close a worker bead before its worktree has a passing `npm run lint` result.

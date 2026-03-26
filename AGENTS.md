@@ -184,15 +184,11 @@ Include the result in your handoff.
 
 ## Planning Documents
 
-Put AI-generated planning or audit docs in `history/`, not the repo root.
+Do not add AI-generated planning, audit, review, or scratch documents to the repo unless the user explicitly asks for a repo-visible artifact.
 
-Examples:
+Use beads for tracked work and keep transient planning in the session, not in ad hoc markdown files or dump directories such as `history/`.
 
-- `history/PLAN.md`
-- `history/ARCHITECTURE.md`
-- `history/TESTING_GUIDE.md`
-
-Do not add ad hoc planning files at the top level unless the user explicitly asks for that.
+If the user explicitly requests a repo document, use the location they specify. If they do not specify a location, ask before creating it.
 
 ## Parallel Work Safety
 

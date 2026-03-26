@@ -11,6 +11,7 @@ const MACHINE_MANAGED_BEADS_HISTORY_FILES = new Set([
   'daemon.log',
   'issues.jsonl',
   'beads.left.jsonl',
+  'beads.left.meta.json',
   'interactions.jsonl',
 ]);
 

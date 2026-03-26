@@ -48,7 +48,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **OpenAI-Compatible API** — `/v1/chat/completions` with SSE streaming for WebUI integration
 - **WebSocket Voice Runtime** — Transport primitives for browser/app clients using `voice-wire-v1` session frames
 - **Wyoming** — TCP server and service registry for Home Assistant Voice PE integration
-- **Admin GUI (the Garden)** — Svelte 5 SPA at `/garden` with 17+ pages: memory browser, session viewer, contacts, scheduler, settings, prompt editor, model discovery, chat cockpit. WebSocket telemetry endpoint.
+- **Admin GUI (the Garden)** — Svelte 5 SPA on the admin host root (`/`, `/memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, sessions, contacts, scheduler, settings, prompts, model discovery, chat, and telemetry
 
 ### Infrastructure
 - **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
@@ -179,9 +179,10 @@ ADMIN_TOKEN=your-token
 ADMIN_HOST=127.0.0.1
 ```
 
-Svelte 5 SPA served at `/garden`. JSON API at `/api/admin/*`. WebSocket telemetry at `WS /api/admin/events`.
+JSON API at `/api/admin/*`. WebSocket telemetry at `WS /api/admin/events`.
+When `admin-ui/build` exists, the integrated Garden SPA is served on the admin host root (`/`, `/memory`, `/settings`, etc.). If the build assets are missing, the admin server still exposes the JSON API/login surfaces but the SPA route stays disabled.
 
-Build with `npm run garden:build` or dev with `npm run garden:dev`.
+Build the integrated SPA with `npm run garden:build` or run the separate UI dev server with `npm run garden:dev`.
 
 **OpenAI-compatible API:**
 ```bash
@@ -263,7 +264,7 @@ Gateway (host)                    Agent (container, --network=none)
 | **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
 | **Git Self-Modification** | GitOps service, 6 tools (status, diff, patch, commit, branch, PR), path allowlist, audit log |
 | **Module System** | Runtime module registry and loader |
-| **Channel Layer** | Discord (text + voice), Telegram, OpenAI API, admin GUI (Svelte SPA at `/garden`), Wyoming |
+| **Channel Layer** | Discord (text + voice), Telegram, OpenAI API, admin GUI (Svelte SPA on the admin host root), Wyoming |
 | **Scheduler** | Heartbeat reflections, one-shot tasks, maintenance workers |
 
 ### Storage
@@ -336,7 +337,7 @@ src/
     telegram/               # Telegram adapter (polling + webhook)
     wyoming/                # Wyoming protocol adapter
 
-admin-ui/                   # Svelte 5 SPA — the Garden at /garden
+admin-ui/                   # Svelte 5 SPA build served by the admin host root when built
 companion_docs/             # Generic companion-facing documentation
 docker/                     # Agent container configuration
 proxy/                      # LiteLLM proxy configuration

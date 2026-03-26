@@ -608,6 +608,45 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect(buildContext).not.toHaveBeenCalled();
   });
 
+  it('bypasses generic memory retrieval for live image turns', async () => {
+    const eventBus = new EventBus();
+    const retrieve = vi.fn(async () => 'stale image memory');
+    const retrieveProactiveRecall = vi.fn(async () => 'more stale image memory');
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
+        retrieve,
+        retrieveProactiveRecall,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-vision-memory-bypass', {
+      channelType: 'discord',
+      content: 'do you see it?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(buildContext.mock.calls[0]?.[2]).toBe('');
+  });
+
   it('exposes current-turn image attachment context to tools during prompt execution', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({

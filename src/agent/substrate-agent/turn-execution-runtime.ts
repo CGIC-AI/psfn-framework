@@ -455,6 +455,7 @@ export async function handleMessageForTurn(
     const trustLevel = authorContext.trustLevel;
     const channelType = runtime.resolveChannelType(message);
     const memoryProvider = runtime.memoryProvider as ProactiveMemoryProvider | null;
+    const bypassMemoryForVisionTurn = hasVisionAttachments(message);
     runtime.ensureModel(message);
     const promptSnapshot = runtime.captureTurnPromptSnapshot({ channelType, taskKind });
     const sessionContextSnapshot = typeof (runtime.sessionManager as SessionManager & {
@@ -506,6 +507,7 @@ export async function handleMessageForTurn(
       },
       async () => {
         const memoriesBlockPromise = memoryProvider
+          && !bypassMemoryForVisionTurn
           ? memoryProvider.retrieve(
             message.content,
             message.channelId,
@@ -516,7 +518,9 @@ export async function handleMessageForTurn(
             turnBudgetCharacteristics,
           )
           : Promise.resolve('');
-        const proactiveRecallBlockPromise = memoryProvider && typeof memoryProvider.retrieveProactiveRecall === 'function'
+        const proactiveRecallBlockPromise = memoryProvider
+          && !bypassMemoryForVisionTurn
+          && typeof memoryProvider.retrieveProactiveRecall === 'function'
           ? memoryProvider.retrieveProactiveRecall(
             message.channelId,
             trustLevel,
@@ -544,6 +548,7 @@ export async function handleMessageForTurn(
       memoryChars: memoryContextBlock.length,
       proactiveRecallChars: proactiveRecallBlock.length,
       proactiveRecallIncluded: proactiveRecallBlock.length > 0,
+      memoryBypassedForVisionTurn: bypassMemoryForVisionTurn,
       scratchpadChars: scratchpadBlock.length,
       scratchpadIncluded: scratchpadBlock.length > 0,
     });

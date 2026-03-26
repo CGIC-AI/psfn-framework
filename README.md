@@ -20,7 +20,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ### Core
 - **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and lazy tool loading (built on [pi-agent-core](https://github.com/nickvdyck/pi-ai))
 - **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
-- **Pluggable Embeddings** — Provider-agnostic embedding via `EMBEDDING_PROVIDER`: Ollama (local HTTP), transformers.js (in-process ONNX, zero network overhead), or any OpenAI-compatible API
+- **Pluggable Embeddings** — Runtime-configured embeddings in `settings.json`: local `@huggingface/transformers`, Ollama, or any OpenAI-compatible embeddings API
 - **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
 - **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots (including vision)
 - **Capabilities System** — Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
@@ -63,27 +63,29 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ### Prerequisites
 
 - **Node.js 22+**
-- **Ollama** running locally (for embeddings — [install guide](https://ollama.ai))
-- **Discord bot** token and application ID
-- **OpenRouter** API key (or other LLM provider via LiteLLM)
+- **One LLM provider credential** for the provider/model registry you plan to use. The shipped seed files enable OpenRouter, so a fresh install usually means `OPENROUTER_API_KEY`.
+- **Discord bot** token and application ID only if you plan to use the Discord channel
+- **Ollama only if you choose the Ollama embedding provider**. PSFN also supports local in-process transformers embeddings.
 
-### Setup
+### Install
 
 ```bash
-git clone <repo-url> && cd psfn-framework
+git clone <repo-url> && cd psfn-live
 npm install
 cp .env.example .env
 ```
 
 The root `npm install` also provisions the Garden admin UI dependencies automatically.
 
-Edit `.env` for secrets and bootstrap/process wiring:
+Edit `.env` only for secrets and process/bootstrap wiring:
 
 ```bash
-# Required secrets
+# Default-seed provider secret
 OPENROUTER_API_KEY=sk-or-...
-DISCORD_TOKEN=...
-DISCORD_BOT_ID=...
+
+# Discord only if you enable the Discord channel
+# DISCORD_TOKEN=...
+# DISCORD_BOT_ID=...
 
 # Bootstrap paths
 CHARACTER_CARD_PATH=./data/character.json
@@ -98,17 +100,42 @@ DATABASE_PATH=./data/companion.db
 # COMPANION_DATA_DIR=./runtime/production/companion-data
 ```
 
-Mutable runtime config is owned by canonical JSON files under the system-data config domain, not by `.env`:
+### Config Ownership
+
+Mutable runtime/admin config is owned by canonical JSON files under the system-data config domain, not by `.env`:
 
 - `settings.json`
 - `models.json`
+- `providers.json`
 - `scheduler.json`
 - `capability-tier.json`
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `backup.json`
 
-Most of those files seed from `config/*.seed.json` on first boot and can be edited through Garden or the admin API. In production, set both `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR`; startup rejects overlap or only-one-set configurations. See `.env.example` for the full bootstrap surface.
+The runtime seeds most of those files from `config/*.seed.json` on first boot. `channels.json` is created and managed as channel settings are saved. Edit the owner files directly or through Garden / the admin API.
+
+Do not put JSON-owned settings such as `EMBEDDING_PROVIDER`, `TRANSFORMERS_MODEL`, `OLLAMA_URL`, `CAPABILITY_TIER`, `MAINTENANCE_INTERVAL_MS`, or `OBSIDIAN_*` in `.env`. The runtime ignores those env values; the authoritative values live in the JSON owner files above.
+
+In production, set both `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR`; startup rejects overlap or only-one-set configurations.
+
+### Embeddings
+
+Embedding selection lives in `settings.json` or, before first boot, `config/settings.seed.json`.
+
+**Local transformers example:**
+```json
+{
+  "embeddingProvider": "transformers",
+  "transformersModel": "Xenova/all-MiniLM-L6-v2",
+  "embeddingDims": 384
+}
+```
+
+That path runs in-process via `@huggingface/transformers` and caches models under `models/transformers` by default. `HF_TOKEN` is only needed for gated or private Hugging Face repos.
+
+The shipped `config/settings.seed.json` currently defaults to the Ollama profile (`snowflake-arctic-embed2`, `1024` dims). If you do not want Ollama, change the seed or the generated `settings.json` before relying on first-boot defaults.
 
 ### Running
 
@@ -171,7 +198,7 @@ TELEGRAM_BOT_TOKEN=...
 PRIMARY_TELEGRAM_USER_ID=123456789      # auto-link to primary contact at startup
 ```
 
-Mutable Telegram enable/allowlist settings live in `settings.json` / `channels.json`.
+Telegram routing, allowlists, and webhook/polling behavior live in `channels.json`. Keep only secrets/bootstrap identity wiring in `.env`.
 
 **Voice (Discord):**
 ```bash
@@ -184,7 +211,7 @@ DEEPGRAM_API_KEY=...
 ELEVENLABS_API_KEY=...
 ```
 
-STT/TTS provider selection, voices, and runtime tuning live in `settings.json`. Keep `.env` for secrets and bootstrap wiring; use `.env.example` for the current voice-related env surface.
+STT/TTS provider selection, voices, and runtime tuning live in `settings.json`. Keep `.env` for provider secrets and target wiring only.
 
 **Wyoming (Home Assistant):**
 ```bash
@@ -194,19 +221,17 @@ WYOMING_PORT=10400
 ```
 
 **Obsidian Vault:**
-```bash
-OBSIDIAN_VAULT_NAME=YourVault
-OBSIDIAN_CLI_PATH=obsidian
-OBSIDIAN_AUTO_PUBLISH=false
-```
+Configure vault name, CLI path, and auto-publish in `settings.json`, not `.env`.
 
-Requires Obsidian desktop app with CLI enabled. In gateway mode, add `obsidian` to `SHELL_EXEC_ALLOWLIST`.
+Requires Obsidian desktop app with CLI enabled. In gateway mode, add `obsidian` to `SHELL_EXEC_ALLOWLIST` if you enable vault tools.
 
 **LiteLLM proxy (credential isolation):**
 ```bash
 npm run proxy:up
-LITELLM_BASE_URL=http://localhost:4000/v1
+LITELLM_API_KEY=sk-litellm-virtual-...
 ```
+
+Enable and point the proxy in `providers.json`. Do not use `LITELLM_BASE_URL` as your primary config path here.
 
 ## Architecture
 
@@ -328,6 +353,9 @@ npm run build         # Compile with tsup
 npm run chat          # CLI chat interface
 npm run garden:dev    # Svelte admin UI dev server
 npm run garden:build  # Build admin UI for production
+npm run verify:settings-contract
+npm run verify:repository-hygiene
+npm run verify:backup-restore
 npm run smoke:chat    # Chat cockpit smoke test
 npm run e2e           # End-to-end integration tests
 npm run e2e:voice     # Voice pipeline round-trip test

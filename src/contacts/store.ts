@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from './persistence/db-adapter.js';
 import { mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
@@ -158,21 +158,24 @@ function serializeConversationChannelAuditValue(params: {
 }
 
 export class ContactStore {
-  private db: Database.Database;
+  private adapter: DatabaseAdapter;
   private primaryUserId?: string;
   private exportDir: string | null;
 
-  constructor(db: Database.Database, primaryUserId?: string, options: ContactStoreOptions = {}) {
-    this.db = db;
+  constructor(adapter: DatabaseAdapter, primaryUserId?: string, options: ContactStoreOptions = {}) {
+    this.adapter = adapter;
     this.primaryUserId = primaryUserId;
     this.exportDir = options.exportDir?.trim() ? options.exportDir.trim() : null;
-    initializeContactStoreSchema(this.db);
-    this.syncContactExports();
+  }
+
+  async init(): Promise<void> {
+    await initializeContactStoreSchema(this.adapter);
+    await this.syncContactExports();
   }
 
   private buildUpsertResolveContext(): UpsertResolveContext {
     return {
-      db: this.db,
+      adapter: this.adapter,
       primaryUserId: this.primaryUserId,
       getById: id => this.getById(id),
       getByDiscordUserId: discordUserId => this.getByDiscordUserId(discordUserId),
@@ -188,10 +191,10 @@ export class ContactStore {
     };
   }
 
-  private resolveUpsertTarget(
+  private async resolveUpsertTarget(
     partial: Partial<Contact>,
     identities: ContactChannelIdentity[],
-  ): Contact | undefined {
+  ): Promise<Contact | undefined> {
     return findUpsertTarget(partial, identities, {
       getById: id => this.getById(id),
       getByDiscordUserId: discordUserId => this.getByDiscordUserId(discordUserId),
@@ -223,20 +226,20 @@ export class ContactStore {
     return candidates.some(identity => isPrimaryIdentity(identity, configuredPrimaryUserId));
   }
 
-  private recordPrimaryTrustMutationAudit(params: {
+  private async recordPrimaryTrustMutationAudit(params: {
     contactId?: string;
     previousTrustLevel: TrustLevel | null;
     actor?: string;
     source: PrimaryTrustMutationSource;
     outcome: PrimaryTrustMutationOutcome;
     details?: Record<string, unknown>;
-  }): void {
+  }): Promise<void> {
     const baseActor = params.actor?.trim() || `system:contact_store:${params.source}`;
     const auditActor = `${baseActor}:primary_${params.outcome}`;
 
     if (params.contactId) {
-      appendMutationAuditEntry(
-        this.db,
+      await appendMutationAuditEntry(
+        this.adapter,
         params.contactId,
         'trust_level',
         params.previousTrustLevel,
@@ -262,12 +265,12 @@ export class ContactStore {
     log.warn(message, payload);
   }
 
-  upsert(
+  async upsert(
     partial: Partial<Contact> & { displayName: string },
     options: UpsertMutationOptions = {},
-  ): Contact {
+  ): Promise<Contact> {
     const identities = collectUpsertIdentities(partial);
-    const target = this.resolveUpsertTarget(partial, identities);
+    const target = await this.resolveUpsertTarget(partial, identities);
     const mutationSource = resolveTrustMutationSource(options.actor, options.mutationSource);
 
     if (
@@ -282,7 +285,7 @@ export class ContactStore {
       partial.trustLevel === 'primary'
       && !this.isPrimaryTrustAssignmentAuthorized(target, identities, partial.discordUserId, options)
     ) {
-      this.recordPrimaryTrustMutationAudit({
+      await this.recordPrimaryTrustMutationAudit({
         contactId: target?.id,
         previousTrustLevel: target?.trustLevel ?? null,
         actor: options.actor,
@@ -297,18 +300,18 @@ export class ContactStore {
     }
 
     const previousTrustLevel = target?.trustLevel ?? null;
-    const contact = upsertContact(this.buildUpsertResolveContext(), partial);
-    const row = this.db.prepare(`
+    const contact = await upsertContact(this.buildUpsertResolveContext(), partial);
+    const row = await this.adapter.queryOne<{ id: string; display_name: string; first_seen: string; last_seen: string }>(`
       SELECT id, display_name, first_seen, last_seen
       FROM contacts
       WHERE id = ?
       LIMIT 1
-    `).get(contact.id) as { id: string; display_name: string; first_seen: string; last_seen: string } | undefined;
+    `, [contact.id]);
     if (row) {
-      ensureContactSocialGraphEntity(this.db, row);
+      await ensureContactSocialGraphEntity(this.adapter, row);
     }
     if (contact.trustLevel === 'primary' && previousTrustLevel !== 'primary') {
-      this.recordPrimaryTrustMutationAudit({
+      await this.recordPrimaryTrustMutationAudit({
         contactId: contact.id,
         previousTrustLevel,
         actor: options.actor,
@@ -317,56 +320,60 @@ export class ContactStore {
       });
     }
     log.debug('Upserted contact', { id: contact.id, displayName: partial.displayName });
-    this.syncContactExports();
+    await this.syncContactExports();
     return contact;
   }
 
-  getById(id: string): Contact | undefined {
-    return getContactById(this.db, id);
+  async getById(id: string): Promise<Contact | undefined> {
+    return getContactById(this.adapter, id);
   }
 
-  getByDiscordUserId(discordUserId: string): Contact | undefined {
-    return getContactByDiscordUserId(this.db, discordUserId);
+  async getByDiscordUserId(discordUserId: string): Promise<Contact | undefined> {
+    return getContactByDiscordUserId(this.adapter, discordUserId);
   }
 
-  getByChannelIdentity(channel: ContactChannel, channelUserId: string): Contact | undefined {
-    return getContactByChannelIdentity(this.db, channel, channelUserId);
+  async getByChannelIdentity(channel: ContactChannel, channelUserId: string): Promise<Contact | undefined> {
+    return getContactByChannelIdentity(this.adapter, channel, channelUserId);
   }
 
-  getByTrustLevel(trustLevel: TrustLevel): Contact[] {
-    return getContactsByTrustLevel(this.db, trustLevel);
+  async getByTrustLevel(trustLevel: TrustLevel): Promise<Contact[]> {
+    return getContactsByTrustLevel(this.adapter, trustLevel);
   }
 
-  getSocialGraphEntityById(entityId: string): SocialGraphEntity | undefined {
-    return getSocialGraphEntityById(this.db, entityId);
+  async getSocialGraphEntityById(entityId: string): Promise<SocialGraphEntity | undefined> {
+    return getSocialGraphEntityById(this.adapter, entityId);
   }
 
-  getSocialGraphEntityByContactId(contactId: string): SocialGraphEntity | undefined {
-    return getSocialGraphEntityByContactId(this.db, contactId);
+  async getSocialGraphEntityByContactId(contactId: string): Promise<SocialGraphEntity | undefined> {
+    return getSocialGraphEntityByContactId(this.adapter, contactId);
   }
 
-  listSocialGraphEntities(query: SocialGraphEntityQuery = {}): SocialGraphEntity[] {
-    return listSocialGraphEntities(this.db, query);
+  async listSocialGraphEntities(query: SocialGraphEntityQuery = {}): Promise<SocialGraphEntity[]> {
+    return listSocialGraphEntities(this.adapter, query);
   }
 
-  upsertSocialGraphEntity(input: SocialGraphEntityUpsertInput): SocialGraphEntity {
-    const entity = upsertSocialGraphEntity(this.db, input);
-    this.syncContactExports();
+  async upsertSocialGraphEntity(input: SocialGraphEntityUpsertInput): Promise<SocialGraphEntity> {
+    const entity = await upsertSocialGraphEntity(this.adapter, input);
+    await this.syncContactExports();
     return entity;
   }
 
-  upsertSocialRelationshipEdge(input: SocialRelationshipEdgeUpsertInput): SocialRelationshipEdge {
-    return upsertSocialRelationshipEdge(this.db, input);
+  async upsertSocialRelationshipEdge(input: SocialRelationshipEdgeUpsertInput): Promise<SocialRelationshipEdge> {
+    return upsertSocialRelationshipEdge(this.adapter, input);
   }
 
-  listSocialRelationshipEdges(query: SocialRelationshipEdgeQuery = {}): SocialRelationshipEdge[] {
-    return listSocialRelationshipEdges(this.db, query);
+  async listSocialRelationshipEdges(query: SocialRelationshipEdgeQuery = {}): Promise<SocialRelationshipEdge[]> {
+    return listSocialRelationshipEdges(this.adapter, query);
   }
 
-  listRelatedContacts(contactId: string, query: SocialRelationshipEdgeQuery = {}): Contact[] {
-    return listRelatedContactIds(this.db, contactId, query)
-      .map(id => this.getById(id))
-      .filter((contact): contact is Contact => contact !== undefined);
+  async listRelatedContacts(contactId: string, query: SocialRelationshipEdgeQuery = {}): Promise<Contact[]> {
+    const relatedIds = await listRelatedContactIds(this.adapter, contactId, query);
+    const contacts: Contact[] = [];
+    for (const id of relatedIds) {
+      const contact = await this.getById(id);
+      if (contact) contacts.push(contact);
+    }
+    return contacts;
   }
 
   private isBehaviorDriftMutationAllowed(
@@ -412,12 +419,12 @@ export class ContactStore {
     return false;
   }
 
-  suggestLowTierTrustDrift(
+  async suggestLowTierTrustDrift(
     id: string,
     signals: TrustDriftBehaviorSignals,
     actor?: string,
-  ): ContactTrustDriftSuggestion | null {
-    const contact = this.getById(id);
+  ): Promise<ContactTrustDriftSuggestion | null> {
+    const contact = await this.getById(id);
     if (!contact) return null;
 
     const suggestion = evaluateLowTierTrustDriftSuggestion(contact.trustLevel, signals);
@@ -438,12 +445,12 @@ export class ContactStore {
     return contactSuggestion;
   }
 
-  applyLowTierTrustDriftSuggestion(
+  async applyLowTierTrustDriftSuggestion(
     id: string,
     suggestion: ContactTrustDriftSuggestion,
     actor?: string,
-  ): ContactTrustDriftApplyResult {
-    const contact = this.getById(id);
+  ): Promise<ContactTrustDriftApplyResult> {
+    const contact = await this.getById(id);
     if (!contact) {
       return { applied: false, reason: `Contact ${id} not found` };
     }
@@ -471,7 +478,7 @@ export class ContactStore {
       };
     }
 
-    const applied = this.setTrustLevel(
+    const applied = await this.setTrustLevel(
       id,
       suggestion.suggestedTrustLevel,
       actor,
@@ -487,13 +494,13 @@ export class ContactStore {
     };
   }
 
-  setTrustLevel(
+  async setTrustLevel(
     id: string,
     trustLevel: TrustLevel,
     actor?: string,
     options: TrustMutationOptions = {},
-  ): boolean {
-    const contact = this.getById(id);
+  ): Promise<boolean> {
+    const contact = await this.getById(id);
     if (!contact) return false;
 
     if (contact.trustLevel === trustLevel) return true;
@@ -523,7 +530,7 @@ export class ContactStore {
         options,
       );
       if (!authorized) {
-        this.recordPrimaryTrustMutationAudit({
+        await this.recordPrimaryTrustMutationAudit({
           contactId: contact.id,
           previousTrustLevel: contact.trustLevel,
           actor,
@@ -538,9 +545,9 @@ export class ContactStore {
       }
     }
 
-    setContactTrustLevel(this.db, id, trustLevel);
+    await setContactTrustLevel(this.adapter, id, trustLevel);
     if (trustLevel === 'primary') {
-      this.recordPrimaryTrustMutationAudit({
+      await this.recordPrimaryTrustMutationAudit({
         contactId: id,
         previousTrustLevel: contact.trustLevel,
         actor,
@@ -548,19 +555,19 @@ export class ContactStore {
         outcome: 'allowed',
       });
     } else {
-      appendMutationAuditEntry(this.db, id, 'trust_level', contact.trustLevel, trustLevel, actor);
+      await appendMutationAuditEntry(this.adapter, id, 'trust_level', contact.trustLevel, trustLevel, actor);
     }
     log.debug('Updated trust level', { id, trustLevel });
-    this.syncContactExports();
+    await this.syncContactExports();
     return true;
   }
 
-  updateLastSeen(id: string): void {
-    updateContactLastSeen(this.db, id);
+  async updateLastSeen(id: string): Promise<void> {
+    await updateContactLastSeen(this.adapter, id);
   }
 
-  updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): boolean {
-    const contact = this.getById(contactId);
+  async updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Promise<boolean> {
+    const contact = await this.getById(contactId);
     if (!contact) return false;
 
     const nextDisplayName = displayName.trim() || contact.displayName;
@@ -573,8 +580,8 @@ export class ContactStore {
       return true;
     }
 
-    const updated = updateContactIdentityProfile(
-      this.db,
+    const updated = await updateContactIdentityProfile(
+      this.adapter,
       contactId,
       contact.displayName,
       contact.nickname,
@@ -582,93 +589,93 @@ export class ContactStore {
       nickname,
     );
     if (updated) {
-      ensureContactSocialGraphEntity(this.db, {
+      await ensureContactSocialGraphEntity(this.adapter, {
         id: contactId,
         display_name: nextDisplayName,
         first_seen: contact.firstSeen,
         last_seen: contact.lastSeen,
       });
       if (contact.displayName !== nextDisplayName) {
-        appendMutationAuditEntry(this.db, contactId, 'display_name', contact.displayName, nextDisplayName, actor);
+        await appendMutationAuditEntry(this.adapter, contactId, 'display_name', contact.displayName, nextDisplayName, actor);
       }
       if ((contact.nickname ?? null) !== nextNickname) {
-        appendMutationAuditEntry(this.db, contactId, 'nickname', contact.nickname ?? null, nextNickname, actor);
+        await appendMutationAuditEntry(this.adapter, contactId, 'nickname', contact.nickname ?? null, nextNickname, actor);
       }
-      this.syncContactExports();
+      await this.syncContactExports();
     }
     return updated;
   }
 
-  recordChannelActivity(
+  async recordChannelActivity(
     contactId: string,
     channel: ContactChannel,
     channelId: string,
     privacyLevel?: ChannelPrivacyLevel,
-  ): void {
-    recordContactChannelActivity(this.db, contactId, channel, channelId, privacyLevel);
-    this.syncContactExports();
+  ): Promise<void> {
+    await recordContactChannelActivity(this.adapter, contactId, channel, channelId, privacyLevel);
+    await this.syncContactExports();
   }
 
-  mergeContacts(sourceContactId: string, targetContactId: string): boolean {
-    const merged = mergeContactsOperation(
-      { db: this.db },
+  async mergeContacts(sourceContactId: string, targetContactId: string): Promise<boolean> {
+    const merged = await mergeContactsOperation(
+      { adapter: this.adapter },
       sourceContactId,
       targetContactId,
     );
     if (merged) {
-      this.syncContactExports();
+      await this.syncContactExports();
     }
     return merged;
   }
 
-  updateNotes(id: string, notes: string, actor?: string): boolean {
-    const contact = this.getById(id);
+  async updateNotes(id: string, notes: string, actor?: string): Promise<boolean> {
+    const contact = await this.getById(id);
     if (!contact) return false;
 
     const previousNotes = contact.notes ?? null;
     if (previousNotes === notes) return true;
 
-    updateContactNotes(this.db, id, notes);
-    appendMutationAuditEntry(this.db, id, 'notes', previousNotes, notes, actor);
-    this.syncContactExports();
+    await updateContactNotes(this.adapter, id, notes);
+    await appendMutationAuditEntry(this.adapter, id, 'notes', previousNotes, notes, actor);
+    await this.syncContactExports();
     return true;
   }
 
-  updateEmotionalBaseline(
+  async updateEmotionalBaseline(
     id: string,
     observation: {
       valence: number;
       confidence?: number;
       observedAtMs?: number;
     },
-  ): Contact | undefined {
-    const contact = this.getById(id);
+  ): Promise<Contact | undefined> {
+    const contact = await this.getById(id);
     if (!contact) return undefined;
 
     const updatedBaseline = computeUpdatedEmotionalBaseline(contact.emotionalBaseline, observation);
-    updateContactEmotionalBaseline(this.db, id, updatedBaseline);
-    this.syncContactExports();
+    await updateContactEmotionalBaseline(this.adapter, id, updatedBaseline);
+    await this.syncContactExports();
     return this.getById(id);
   }
 
-  getEmotionalSnapshot(
+  async getEmotionalSnapshot(
     id: string,
-  ): {
+  ): Promise<{
     baselineValence: number;
     moodValence: number;
     moodDrift: number;
     moodSamples: number;
     lastMoodUpdateEpochMs?: number;
-  } | undefined {
-    const contact = this.getById(id);
+  } | undefined> {
+    const contact = await this.getById(id);
     if (!contact) return undefined;
 
     const snapshot = parseMoodSnapshot(contact.emotionalBaseline);
     return hasLearnedMoodSnapshot(snapshot) ? snapshot : undefined;
   }
 
-  updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): boolean {
-    const contact = this.getById(id);
+  async updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): Promise<boolean> {
+    const contact = await this.getById(id);
     if (!contact) return false;
     if (contact.relationshipType === relationshipType) return true;
 
@@ -677,21 +684,21 @@ export class ContactStore {
       return false;
     }
 
-    updateContactRelationshipType(this.db, id, relationshipType);
-    appendMutationAuditEntry(this.db, id, 'relationship_type', contact.relationshipType, relationshipType, actor);
-    this.syncContactExports();
+    await updateContactRelationshipType(this.adapter, id, relationshipType);
+    await appendMutationAuditEntry(this.adapter, id, 'relationship_type', contact.relationshipType, relationshipType, actor);
+    await this.syncContactExports();
     return true;
   }
 
-  setChannelPrivacy(
+  async setChannelPrivacy(
     contactId: string,
     channel: ContactChannel,
     channelUserId: string,
     privacyLevel: ChannelPrivacyLevel,
     actor?: string,
-  ): boolean {
+  ): Promise<boolean> {
     if (!isValidChannelPrivacyLevel(privacyLevel)) return false;
-    const contact = this.getById(contactId);
+    const contact = await this.getById(contactId);
     if (!contact) return false;
     const normalizedIdentity = normalizeIdentity(channel, channelUserId);
     const existingLink = contact.channels?.find(link => (
@@ -700,10 +707,10 @@ export class ContactStore {
     if (!existingLink) return false;
     if (existingLink.privacyLevel === privacyLevel) return true;
 
-    const updated = updateContactChannelPrivacy(this.db, contactId, channel, channelUserId, privacyLevel);
+    const updated = await updateContactChannelPrivacy(this.adapter, contactId, channel, channelUserId, privacyLevel);
     if (updated) {
-      appendMutationAuditEntry(
-        this.db,
+      await appendMutationAuditEntry(
+        this.adapter,
         contactId,
         'channel_privacy',
         serializeChannelPrivacyAuditValue({
@@ -718,20 +725,20 @@ export class ContactStore {
         }),
         actor,
       );
-      this.syncContactExports();
+      await this.syncContactExports();
     }
     return updated;
   }
 
-  setConversationChannelPrivacy(
+  async setConversationChannelPrivacy(
     contactId: string,
     channel: ContactChannel,
     channelId: string,
     privacyLevel: ChannelPrivacyLevel,
     actor?: string,
-  ): boolean {
+  ): Promise<boolean> {
     if (!isValidChannelPrivacyLevel(privacyLevel)) return false;
-    const contact = this.getById(contactId);
+    const contact = await this.getById(contactId);
     if (!contact) return false;
     const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
     const trimmedChannelId = channelId.trim();
@@ -743,10 +750,10 @@ export class ContactStore {
     const normalizedPrivacyLevel = normalizePrivacyLevel(privacyLevel, normalizedChannel);
     if (previousPrivacyLevel === normalizedPrivacyLevel) return true;
 
-    const updated = updateConversationChannelPrivacy(this.db, contactId, channel, channelId, privacyLevel);
+    const updated = await updateConversationChannelPrivacy(this.adapter, contactId, channel, channelId, privacyLevel);
     if (updated) {
-      appendMutationAuditEntry(
-        this.db,
+      await appendMutationAuditEntry(
+        this.adapter,
         contactId,
         'channel_privacy',
         previousPrivacyLevel
@@ -763,21 +770,21 @@ export class ContactStore {
         }),
         actor,
       );
-      this.syncContactExports();
+      await this.syncContactExports();
     }
     return updated;
   }
 
-  getConversationChannelPrivacy(
+  async getConversationChannelPrivacy(
     contactId: string,
     channel: ContactChannel,
     channelId: string,
-  ): ChannelPrivacyLevel | undefined {
-    return getConversationChannelPrivacy(this.db, contactId, channel, channelId);
+  ): Promise<ChannelPrivacyLevel | undefined> {
+    return getConversationChannelPrivacy(this.adapter, contactId, channel, channelId);
   }
 
-  deleteConversationChannel(contactId: string, channel: ContactChannel, channelId: string, actor?: string): boolean {
-    const contact = this.getById(contactId);
+  async deleteConversationChannel(contactId: string, channel: ContactChannel, channelId: string, actor?: string): Promise<boolean> {
+    const contact = await this.getById(contactId);
     if (!contact) return false;
 
     const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
@@ -789,10 +796,10 @@ export class ContactStore {
     ));
     if (!existingChannel) return false;
 
-    const deleted = deleteConversationChannelOperation(this.db, contactId, channel, channelId);
+    const deleted = await deleteConversationChannelOperation(this.adapter, contactId, channel, channelId);
     if (deleted) {
-      appendMutationAuditEntry(
-        this.db,
+      await appendMutationAuditEntry(
+        this.adapter,
         contactId,
         'conversation_channel',
         serializeConversationChannelAuditValue({
@@ -803,21 +810,21 @@ export class ContactStore {
         null,
         actor,
       );
-      this.syncContactExports();
+      await this.syncContactExports();
     }
 
     return deleted;
   }
 
-  createIdentityLinkChallenge(
+  async createIdentityLinkChallenge(
     input: ContactIdentityLinkChallengeInput,
-  ): ContactIdentityLinkChallengeResult {
+  ): Promise<ContactIdentityLinkChallengeResult> {
     return createIdentityLinkChallenge(
       {
-        db: this.db,
+        adapter: this.adapter,
         getById: contactId => this.getById(contactId),
         getByChannelIdentity: (channel, channelUserId) => this.getByChannelIdentity(channel, channelUserId),
-        linkChannelIdentity: (contactId, channel, channelUserId, options) => (
+        linkChannelIdentity: async (contactId, channel, channelUserId, options) => (
           this.linkChannelIdentity(contactId, channel, channelUserId, options)
         ),
       },
@@ -825,15 +832,15 @@ export class ContactStore {
     );
   }
 
-  verifyIdentityLinkChallenge(
+  async verifyIdentityLinkChallenge(
     input: ContactIdentityLinkVerificationInput,
-  ): ContactIdentityLinkVerificationResult {
+  ): Promise<ContactIdentityLinkVerificationResult> {
     return verifyIdentityLinkChallenge(
       {
-        db: this.db,
+        adapter: this.adapter,
         getById: contactId => this.getById(contactId),
         getByChannelIdentity: (channel, channelUserId) => this.getByChannelIdentity(channel, channelUserId),
-        linkChannelIdentity: (contactId, channel, channelUserId, options) => (
+        linkChannelIdentity: async (contactId, channel, channelUserId, options) => (
           this.linkChannelIdentity(contactId, channel, channelUserId, options)
         ),
       },
@@ -841,14 +848,14 @@ export class ContactStore {
     );
   }
 
-  linkChannelIdentity(
+  async linkChannelIdentity(
     contactId: string,
     channel: ContactChannel,
     channelUserId: string,
     options?: ContactIdentityLinkOptions,
     actor?: string,
-  ): ContactIdentityLinkResult {
-    const result = linkChannelIdentity(
+  ): Promise<ContactIdentityLinkResult> {
+    const result = await linkChannelIdentity(
       this.buildUpsertResolveContext(),
       contactId,
       channel,
@@ -857,12 +864,12 @@ export class ContactStore {
     );
     if (result === 'linked') {
       const normalizedIdentity = normalizeIdentity(channel, channelUserId);
-      const updatedContact = this.getById(contactId);
+      const updatedContact = await this.getById(contactId);
       const linkedChannel = updatedContact?.channels?.find(link => (
         link.channel === normalizedIdentity.channel && link.userId === normalizedIdentity.userId
       ));
-      appendMutationAuditEntry(
-        this.db,
+      await appendMutationAuditEntry(
+        this.adapter,
         contactId,
         'channel_link',
         null,
@@ -874,80 +881,80 @@ export class ContactStore {
         actor,
       );
     }
-    this.syncContactExports();
+    await this.syncContactExports();
     return result;
   }
 
-  listAll(): Contact[] {
-    return listAllContacts(this.db);
+  async listAll(): Promise<Contact[]> {
+    return listAllContacts(this.adapter);
   }
 
-  listIdentityLinkVerifications(limit = 25): ContactIdentityLinkVerification[] {
-    return listIdentityLinkVerifications(this.db, limit);
+  async listIdentityLinkVerifications(limit = 25): Promise<ContactIdentityLinkVerification[]> {
+    return listIdentityLinkVerifications(this.adapter, limit);
   }
 
-  listMutationAuditEntries(query: ContactMutationAuditQuery = {}): ContactMutationAuditEntry[] {
-    return listMutationAuditEntries(this.db, query);
+  async listMutationAuditEntries(query: ContactMutationAuditQuery = {}): Promise<ContactMutationAuditEntry[]> {
+    return listMutationAuditEntries(this.adapter, query);
   }
 
-  resolveChannelIdentity(
+  async resolveChannelIdentity(
     channel: ContactChannel,
     channelUserId: string,
     displayName?: string,
-  ): Contact {
-    const contact = resolveChannelIdentity(this.buildUpsertResolveContext(), channel, channelUserId, displayName);
-    ensureContactSocialGraphEntity(this.db, {
+  ): Promise<Contact> {
+    const contact = await resolveChannelIdentity(this.buildUpsertResolveContext(), channel, channelUserId, displayName);
+    await ensureContactSocialGraphEntity(this.adapter, {
       id: contact.id,
       display_name: contact.displayName,
       first_seen: contact.firstSeen,
       last_seen: contact.lastSeen,
     });
-    this.syncContactExports();
+    await this.syncContactExports();
     return contact;
   }
 
-  resolveUserId(discordUserId: string): Contact {
-    const contact = resolveUserId(this.buildUpsertResolveContext(), discordUserId);
-    ensureContactSocialGraphEntity(this.db, {
+  async resolveUserId(discordUserId: string): Promise<Contact> {
+    const contact = await resolveUserId(this.buildUpsertResolveContext(), discordUserId);
+    await ensureContactSocialGraphEntity(this.adapter, {
       id: contact.id,
       display_name: contact.displayName,
       first_seen: contact.firstSeen,
       last_seen: contact.lastSeen,
     });
-    this.syncContactExports();
+    await this.syncContactExports();
     return contact;
   }
 
-  getCanonicalContactKey(channel: ContactChannel, channelUserId: string): string | undefined {
-    return getCanonicalContactKey(this.db, channel, channelUserId);
+  async getCanonicalContactKey(channel: ContactChannel, channelUserId: string): Promise<string | undefined> {
+    return getCanonicalContactKey(this.adapter, channel, channelUserId);
   }
 
-  deleteContact(id: string): boolean {
-    const contact = this.getById(id);
+  async deleteContact(id: string): Promise<boolean> {
+    const contact = await this.getById(id);
     if (!contact) return false;
     if (contact.trustLevel === 'primary') {
       log.warn('Attempted to delete primary user contact', { id });
       return false;
     }
-    const deleted = deleteContactOperation(this.db, id);
+    const deleted = await deleteContactOperation(this.adapter, id);
     if (deleted) {
-      this.syncContactExports();
+      await this.syncContactExports();
     }
     return deleted;
   }
 
-  unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): boolean {
-    const contact = this.getById(contactId);
+  async unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): Promise<boolean> {
+    const contact = await this.getById(contactId);
     if (!contact) return false;
     const normalizedIdentity = normalizeIdentity(channel, channelUserId);
     const existingLink = contact.channels?.find(link => (
       link.channel === normalizedIdentity.channel && link.userId === normalizedIdentity.userId
     ));
     if (!existingLink) return false;
-    const unlinked = unlinkChannelIdentityOperation(this.db, contactId, channel, channelUserId);
+    const unlinked = await unlinkChannelIdentityOperation(this.adapter, contactId, channel, channelUserId);
     if (unlinked) {
-      appendMutationAuditEntry(
-        this.db,
+      await appendMutationAuditEntry(
+        this.adapter,
         contactId,
         'channel_link',
         serializeChannelLinkAuditValue({
@@ -958,17 +965,17 @@ export class ContactStore {
         null,
         actor,
       );
-      this.syncContactExports();
+      await this.syncContactExports();
     }
     return unlinked;
   }
 
-  private syncContactExports(): void {
+  private async syncContactExports(): Promise<void> {
     if (!this.exportDir) return;
 
     try {
       mkdirSync(this.exportDir, { recursive: true });
-      const contacts = listAllContacts(this.db);
+      const contacts = await listAllContacts(this.adapter);
       const indexPath = join(this.exportDir, 'index.json');
 
       writeJsonAtomic(indexPath, {

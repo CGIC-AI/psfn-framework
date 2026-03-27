@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import { CONTACT_MUTATION_AUDIT_FIELDS } from '../types.js';
 import type {
   ContactMutationAuditEntry,
@@ -34,15 +34,15 @@ function normalizeAuditActor(actor: string | undefined): string {
   return trimmed.slice(0, 120);
 }
 
-export function appendMutationAuditEntry(
-  db: Database.Database,
+export async function appendMutationAuditEntry(
+  adapter: DatabaseAdapter,
   contactId: string,
   field: ContactMutationAuditField,
   oldValue: string | null,
   newValue: string | null,
   actor?: string,
-): void {
-  db.prepare(`
+): Promise<void> {
+  await adapter.run(`
     INSERT INTO contact_mutation_audit (
       contact_id,
       actor,
@@ -52,20 +52,20 @@ export function appendMutationAuditEntry(
       timestamp
     )
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     contactId,
     normalizeAuditActor(actor),
     field,
     oldValue,
     newValue,
     new Date().toISOString(),
-  );
+  ]);
 }
 
-export function listMutationAuditEntries(
-  db: Database.Database,
+export async function listMutationAuditEntries(
+  adapter: DatabaseAdapter,
   query: ContactMutationAuditQuery = {},
-): ContactMutationAuditEntry[] {
+): Promise<ContactMutationAuditEntry[]> {
   const normalizedLimit = Number.isFinite(query.limit)
     ? Math.max(1, Math.min(Math.floor(query.limit ?? 25), 200))
     : 25;
@@ -91,13 +91,13 @@ export function listMutationAuditEntries(
   }
 
   const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-  const rows = db.prepare(`
+  const rows = await adapter.query<ContactMutationAuditRow>(`
     SELECT id, contact_id, actor, field, old_value, new_value, timestamp
     FROM contact_mutation_audit
     ${whereClause}
     ORDER BY timestamp DESC, id DESC
     LIMIT ?
-  `).all(...params, normalizedLimit) as ContactMutationAuditRow[];
+  `, [...params, normalizedLimit]);
 
   return rows.flatMap((row) => {
     const mapped = toMutationAuditEntry(row);

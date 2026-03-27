@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import type {
   Contact,
   ContactChannel,
@@ -26,15 +26,15 @@ import {
   upsertIdentityLink,
 } from './upsert.js';
 
-function touchContactLastSeen(db: Database.Database, id: string): void {
+async function touchContactLastSeen(adapter: DatabaseAdapter, id: string): Promise<void> {
   const now = new Date().toISOString();
-  db.prepare('UPDATE contacts SET last_seen = ? WHERE id = ?').run(now, id);
-  db.prepare('UPDATE contact_channel_ids SET last_seen = ? WHERE contact_id = ?').run(now, id);
-  db.prepare('UPDATE contact_channel_activity SET last_seen = ? WHERE contact_id = ?').run(now, id);
+  await adapter.run('UPDATE contacts SET last_seen = ? WHERE id = ?', [now, id]);
+  await adapter.run('UPDATE contact_channel_ids SET last_seen = ? WHERE contact_id = ?', [now, id]);
+  await adapter.run('UPDATE contact_channel_activity SET last_seen = ? WHERE contact_id = ?', [now, id]);
 }
 
 export interface UpsertResolveContext {
-  db: Database.Database;
+  adapter: DatabaseAdapter;
   primaryUserId?: string;
   getById: (id: string) => Contact | undefined;
   getByDiscordUserId: (discordUserId: string) => Contact | undefined;
@@ -47,25 +47,25 @@ export interface UpsertResolveContext {
   }) => void;
 }
 
-export function promoteContactToPrimary(db: Database.Database, contactId: string): void {
-  db.prepare(`
+export async function promoteContactToPrimary(adapter: DatabaseAdapter, contactId: string): Promise<void> {
+  await adapter.run(`
     UPDATE contacts
     SET trust_level = 'primary',
         relationship_type = 'partner'
     WHERE id = ?
-  `).run(contactId);
+  `, [contactId]);
 }
 
-export function reconcilePrimaryContactDuplicates(
+export async function reconcilePrimaryContactDuplicates(
   context: UpsertResolveContext,
   canonicalContactId: string,
-): string {
-  const duplicates = context.db.prepare(`
+): Promise<string> {
+  const duplicates = await context.adapter.query<{ id: string }>(`
     SELECT id
     FROM contacts
     WHERE id <> ? AND trust_level = 'primary'
     ORDER BY first_seen ASC
-  `).all(canonicalContactId) as Array<{ id: string }>;
+  `, [canonicalContactId]);
 
   for (const duplicate of duplicates) {
     context.mergeContacts(duplicate.id, canonicalContactId);
@@ -74,10 +74,10 @@ export function reconcilePrimaryContactDuplicates(
   return canonicalContactId;
 }
 
-export function upsertContact(
+export async function upsertContact(
   context: UpsertResolveContext,
   partial: Partial<Contact> & { displayName: string },
-): Contact {
+): Promise<Contact> {
   const now = new Date().toISOString();
   const identities = collectUpsertIdentities(partial);
   const existing = findUpsertTarget(partial, identities, {
@@ -105,7 +105,7 @@ export function upsertContact(
       ? (existing.nickname ?? null)
       : requestedNickname;
 
-    context.db.prepare(`
+    await context.adapter.run(`
       UPDATE contacts SET
         discord_user_id = COALESCE(discord_user_id, ?),
         display_name = ?,
@@ -116,7 +116,7 @@ export function upsertContact(
         last_seen = ?,
         notes = ?
       WHERE id = ?
-    `).run(
+    `, [
       legacyDiscordUserId ?? null,
       partial.displayName,
       nickname,
@@ -126,10 +126,10 @@ export function upsertContact(
       now,
       partial.notes ?? existing.notes ?? null,
       existing.id,
-    );
+    ]);
 
-    applyIdentityLinks(
-      context.db,
+    await applyIdentityLinks(
+      context.adapter,
       existing.id,
       identities,
       existing.firstSeen,
@@ -165,11 +165,11 @@ export function upsertContact(
     notes: partial.notes,
   };
 
-  context.db.prepare(`
+  await context.adapter.run(`
     INSERT INTO contacts (id, discord_user_id, display_name, trust_level, relationship_type,
       nickname, emotional_baseline, first_seen, last_seen, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     contact.id,
     contact.discordUserId ?? null,
     contact.displayName,
@@ -180,60 +180,60 @@ export function upsertContact(
     contact.firstSeen,
     contact.lastSeen,
     contact.notes ?? null,
-  );
+  ]);
 
-  applyIdentityLinks(context.db, contact.id, identities, contact.firstSeen, contact.lastSeen);
+  await applyIdentityLinks(context.adapter, contact.id, identities, contact.firstSeen, contact.lastSeen);
 
   return context.getById(contact.id)!;
 }
 
-export function linkChannelIdentity(
+export async function linkChannelIdentity(
   context: UpsertResolveContext,
   contactId: string,
   channel: ContactChannel,
   channelUserId: string,
   options?: ContactIdentityLinkOptions,
-): ContactIdentityLinkResult {
+): Promise<ContactIdentityLinkResult> {
   const contact = context.getById(contactId);
   if (!contact) return 'contact_not_found';
 
   const now = new Date().toISOString();
   const identity = normalizeIdentity(channel, channelUserId);
-  const result = upsertIdentityLink(context.db, contactId, identity, contact.firstSeen, now, options);
+  const result = await upsertIdentityLink(context.adapter, contactId, identity, contact.firstSeen, now, options);
 
   if (result !== 'identity_conflict' && identity.channel === LEGACY_DISCORD_CHANNEL) {
-    ensureLegacyDiscordUserId(context.db, contactId, identity.userId);
+    await ensureLegacyDiscordUserId(context.adapter, contactId, identity.userId);
   }
 
   if (result !== 'identity_conflict' && isPrimaryIdentity(identity, context.primaryUserId)) {
-    promoteContactToPrimary(context.db, contactId);
-    reconcilePrimaryContactDuplicates(context, contactId);
+    await promoteContactToPrimary(context.adapter, contactId);
+    await reconcilePrimaryContactDuplicates(context, contactId);
   }
 
   return result;
 }
 
-export function resolveChannelIdentity(
+export async function resolveChannelIdentity(
   context: UpsertResolveContext,
   channel: ContactChannel,
   channelUserId: string,
   displayName?: string,
-): Contact {
+): Promise<Contact> {
   const identity = normalizeIdentity(channel, channelUserId);
   const existing = context.getByChannelIdentity(identity.channel, identity.userId);
 
   if (existing) {
     const now = new Date().toISOString();
-    touchContactLastSeen(context.db, existing.id);
-    upsertIdentityLink(context.db, existing.id, identity, existing.firstSeen, now);
+    await touchContactLastSeen(context.adapter, existing.id);
+    await upsertIdentityLink(context.adapter, existing.id, identity, existing.firstSeen, now);
     if (identity.channel === LEGACY_DISCORD_CHANNEL) {
-      ensureLegacyDiscordUserId(context.db, existing.id, identity.userId);
+      await ensureLegacyDiscordUserId(context.adapter, existing.id, identity.userId);
     }
 
     let canonicalContactId = existing.id;
     if (isPrimaryIdentity(identity, context.primaryUserId)) {
-      promoteContactToPrimary(context.db, canonicalContactId);
-      canonicalContactId = reconcilePrimaryContactDuplicates(context, canonicalContactId);
+      await promoteContactToPrimary(context.adapter, canonicalContactId);
+      canonicalContactId = await reconcilePrimaryContactDuplicates(context, canonicalContactId);
     }
 
     const candidateDisplayName = displayName?.trim();
@@ -242,8 +242,7 @@ export function resolveChannelIdentity(
       && candidateDisplayName !== existing.displayName
       && looksLikeOpaqueIdentifier(existing.displayName)
     ) {
-      context.db.prepare('UPDATE contacts SET display_name = ? WHERE id = ?')
-        .run(candidateDisplayName, canonicalContactId);
+      await context.adapter.run('UPDATE contacts SET display_name = ? WHERE id = ?', [candidateDisplayName, canonicalContactId]);
     }
 
     return context.getById(canonicalContactId)!;
@@ -266,6 +265,6 @@ export function resolveChannelIdentity(
   });
 }
 
-export function resolveUserId(context: UpsertResolveContext, discordUserId: string): Contact {
+export async function resolveUserId(context: UpsertResolveContext, discordUserId: string): Promise<Contact> {
   return resolveChannelIdentity(context, LEGACY_DISCORD_CHANNEL, discordUserId, discordUserId);
 }

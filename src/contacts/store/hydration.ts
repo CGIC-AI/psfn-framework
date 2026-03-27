@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import type {
   Contact,
   ContactChannelLink,
@@ -42,17 +42,17 @@ export function rowToContact(row: ContactRow): Contact {
   };
 }
 
-export function getChannelLinks(
-  db: Database.Database,
+export async function getChannelLinks(
+  adapter: DatabaseAdapter,
   contactId: string,
   legacyDiscordUserId?: string,
-): ContactChannelLink[] {
-  const rows = db.prepare(`
+): Promise<ContactChannelLink[]> {
+  const rows = await adapter.query<ContactIdentityRow>(`
     SELECT contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
     FROM contact_channel_ids
     WHERE contact_id = ?
     ORDER BY channel ASC, channel_user_id ASC
-  `).all(contactId) as ContactIdentityRow[];
+  `, [contactId]);
 
   const identities = rows.map((row): ContactChannelLink => ({
     channel: row.channel,
@@ -83,16 +83,16 @@ export function getChannelLinks(
   return identities;
 }
 
-export function getConversationChannels(
-  db: Database.Database,
+export async function getConversationChannels(
+  adapter: DatabaseAdapter,
   contactId: string,
-): ContactConversationChannel[] {
-  const rows = db.prepare(`
+): Promise<ContactConversationChannel[]> {
+  const rows = await adapter.query<ContactChannelActivityRow>(`
     SELECT contact_id, channel, channel_id, privacy_level, first_seen, last_seen
     FROM contact_channel_activity
     WHERE contact_id = ?
     ORDER BY last_seen DESC, channel ASC, channel_id ASC
-  `).all(contactId) as ContactChannelActivityRow[];
+  `, [contactId]);
 
   return rows.map((row): ContactConversationChannel => ({
     channel: row.channel,
@@ -110,10 +110,10 @@ export function getConversationChannels(
   }));
 }
 
-export function hydrateContact(db: Database.Database, row: ContactRow): Contact {
+export async function hydrateContact(adapter: DatabaseAdapter, row: ContactRow): Promise<Contact> {
   const contact = rowToContact(row);
-  const identities = getChannelLinks(db, contact.id, contact.discordUserId);
-  const conversationChannels = getConversationChannels(db, contact.id);
+  const identities = await getChannelLinks(adapter, contact.id, contact.discordUserId);
+  const conversationChannels = await getConversationChannels(adapter, contact.id);
 
   if (identities.length > 0) {
     contact.channelIdentities = identities.map(identity => ({

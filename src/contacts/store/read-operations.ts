@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import type {
   Contact,
   ContactChannel,
@@ -19,117 +19,124 @@ import {
 } from './identity-utils.js';
 import { upsertIdentityLink } from './upsert.js';
 
-export function getContactById(db: Database.Database, id: string): Contact | undefined {
-  const row = db.prepare('SELECT * FROM contacts WHERE id = ?').get(id) as ContactRow | undefined;
-  return row ? hydrateContact(db, row) : undefined;
+export async function getContactById(adapter: DatabaseAdapter, id: string): Promise<Contact | undefined> {
+  const row = await adapter.queryOne<ContactRow>('SELECT * FROM contacts WHERE id = ?', [id]);
+  return row ? await hydrateContact(adapter, row) : undefined;
 }
 
-export function getContactByChannelIdentity(
-  db: Database.Database,
+export async function getContactByChannelIdentity(
+  adapter: DatabaseAdapter,
   channel: ContactChannel,
   channelUserId: string,
-): Contact | undefined {
+): Promise<Contact | undefined> {
   const identity = normalizeIdentity(channel, channelUserId);
 
-  const row = db.prepare(`
+  const row = await adapter.queryOne<ContactRow>(`
     SELECT c.*
     FROM contacts c
     INNER JOIN contact_channel_ids i ON i.contact_id = c.id
     WHERE i.channel = ? AND i.channel_user_id = ?
     LIMIT 1
-  `).get(identity.channel, identity.userId) as ContactRow | undefined;
+  `, [identity.channel, identity.userId]);
 
-  if (row) return hydrateContact(db, row);
+  if (row) return await hydrateContact(adapter, row);
 
   if (identity.channel === LEGACY_DISCORD_CHANNEL) {
-    const legacyRow = db.prepare('SELECT * FROM contacts WHERE discord_user_id = ?')
-      .get(identity.userId) as ContactRow | undefined;
+    const legacyRow = await adapter.queryOne<ContactRow>('SELECT * FROM contacts WHERE discord_user_id = ?', [identity.userId]);
     if (legacyRow) {
-      upsertIdentityLink(
-        db,
+      await upsertIdentityLink(
+        adapter,
         legacyRow.id,
         identity,
         legacyRow.first_seen,
         legacyRow.last_seen,
       );
-      return hydrateContact(db, legacyRow);
+      return await hydrateContact(adapter, legacyRow);
     }
   }
 
   return undefined;
 }
 
-export function getContactByDiscordUserId(
-  db: Database.Database,
+export async function getContactByDiscordUserId(
+  adapter: DatabaseAdapter,
   discordUserId: string,
-): Contact | undefined {
+): Promise<Contact | undefined> {
   const trimmedDiscordId = discordUserId.trim();
   if (!trimmedDiscordId) return undefined;
 
-  const row = db.prepare('SELECT * FROM contacts WHERE discord_user_id = ?')
-    .get(trimmedDiscordId) as ContactRow | undefined;
+  const row = await adapter.queryOne<ContactRow>('SELECT * FROM contacts WHERE discord_user_id = ?', [trimmedDiscordId]);
 
-  if (row) return hydrateContact(db, row);
-  return getContactByChannelIdentity(db, LEGACY_DISCORD_CHANNEL, trimmedDiscordId);
+  if (row) return await hydrateContact(adapter, row);
+  return getContactByChannelIdentity(adapter, LEGACY_DISCORD_CHANNEL, trimmedDiscordId);
 }
 
-export function getContactsByTrustLevel(
-  db: Database.Database,
+export async function getContactsByTrustLevel(
+  adapter: DatabaseAdapter,
   trustLevel: TrustLevel,
-): Contact[] {
-  const rows = db.prepare('SELECT * FROM contacts WHERE trust_level = ?')
-    .all(trustLevel) as ContactRow[];
-  return rows.map(row => hydrateContact(db, row));
+): Promise<Contact[]> {
+  const rows = await adapter.query<ContactRow>('SELECT * FROM contacts WHERE trust_level = ?', [trustLevel]);
+  const contacts: Contact[] = [];
+  for (const row of rows) {
+    const contact = await hydrateContact(adapter, row);
+    contacts.push(contact);
+  }
+  return contacts;
 }
 
-export function listAllContacts(db: Database.Database): Contact[] {
-  const rows = db.prepare('SELECT * FROM contacts ORDER BY last_seen DESC').all() as ContactRow[];
-  return rows.map(row => hydrateContact(db, row));
+export async function listAllContacts(adapter: DatabaseAdapter): Promise<Contact[]> {
+  const rows = await adapter.query<ContactRow>('SELECT * FROM contacts ORDER BY last_seen DESC');
+  const contacts: Contact[] = [];
+  for (const row of rows) {
+    const contact = await hydrateContact(adapter, row);
+    contacts.push(contact);
+  }
+  return contacts;
 }
 
-export function listIdentityLinkVerifications(
-  db: Database.Database,
+export async function listIdentityLinkVerifications(
+  adapter: DatabaseAdapter,
   limit = 25,
-): ContactIdentityLinkVerification[] {
+): Promise<ContactIdentityLinkVerification[]> {
   const normalizedLimit = Number.isFinite(limit)
     ? Math.max(1, Math.min(Math.floor(limit), 200))
     : 25;
 
-  const rows = db.prepare(`
+  const rows = await adapter.query<ContactIdentityVerificationRow>(`
     SELECT *
     FROM contact_identity_link_verifications
     ORDER BY created_at DESC
     LIMIT ?
-  `).all(normalizedLimit) as ContactIdentityVerificationRow[];
+  `, [normalizedLimit]);
 
   return rows.map(row => toIdentityLinkVerification(row));
 }
 
-export function getCanonicalContactKey(
-  db: Database.Database,
+export async function getCanonicalContactKey(
+  adapter: DatabaseAdapter,
   channel: ContactChannel,
   channelUserId: string,
-): string | undefined {
-  const contact = getContactByChannelIdentity(db, channel, channelUserId);
+): Promise<string | undefined> {
+  const contact = await getContactByChannelIdentity(adapter, channel, channelUserId);
   return contact?.id;
 }
 
-export function getConversationChannelPrivacy(
-  db: Database.Database,
+export async function getConversationChannelPrivacy(
+  adapter: DatabaseAdapter,
   contactId: string,
   channel: ContactChannel,
   channelId: string,
-): ChannelPrivacyLevel | undefined {
+): Promise<ChannelPrivacyLevel | undefined> {
   const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
   const trimmedChannelId = channelId.trim();
   if (!trimmedChannelId) return undefined;
 
-  const row = db.prepare(`
+  const row = await adapter.queryOne<{ privacy_level?: string | null }>(`
     SELECT privacy_level
     FROM contact_channel_activity
     WHERE contact_id = ? AND channel = ? AND channel_id = ?
     LIMIT 1
-  `).get(contactId, normalizedChannel, trimmedChannelId) as { privacy_level?: string | null } | undefined;
+  `, [contactId, normalizedChannel, trimmedChannelId]);
 
   if (!row?.privacy_level) return undefined;
   return normalizePrivacyLevel(row.privacy_level as ChannelPrivacyLevel, normalizedChannel);

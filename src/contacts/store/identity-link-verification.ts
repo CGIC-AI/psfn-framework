@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import type {
   Contact,
   ContactIdentityLinkChallengeInput,
@@ -24,53 +24,53 @@ interface LinkIdentityFn {
     channel: string,
     channelUserId: string,
     options?: { privacyLevel?: ContactIdentityLinkVerificationInput['privacyLevel'] },
-  ): ContactIdentityLinkResult;
+  ): Promise<ContactIdentityLinkResult>;
 }
 
 export interface IdentityVerificationContext {
-  db: Database.Database;
+  adapter: DatabaseAdapter;
   getById: (contactId: string) => Contact | undefined;
   getByChannelIdentity: (channel: string, channelUserId: string) => Contact | undefined;
   linkChannelIdentity: LinkIdentityFn;
 }
 
-export function markIdentityLinkVerification(
-  db: Database.Database,
+export async function markIdentityLinkVerification(
+  adapter: DatabaseAdapter,
   verificationId: string,
   status: ContactIdentityLinkVerificationState,
   failureReason?: string,
   verifiedAt?: string,
-): ContactIdentityLinkVerification | undefined {
+): Promise<ContactIdentityLinkVerification | undefined> {
   const now = new Date().toISOString();
-  db.prepare(`
+  await adapter.run(`
     UPDATE contact_identity_link_verifications
     SET status = ?,
         updated_at = ?,
         verified_at = COALESCE(?, verified_at),
         failure_reason = ?
     WHERE id = ?
-  `).run(
+  `, [
     status,
     now,
     verifiedAt ?? null,
     failureReason ?? null,
     verificationId,
-  );
+  ]);
 
-  const row = db.prepare(`
+  const row = await adapter.queryOne<ContactIdentityVerificationRow>(`
     SELECT *
     FROM contact_identity_link_verifications
     WHERE id = ?
     LIMIT 1
-  `).get(verificationId) as ContactIdentityVerificationRow | undefined;
+  `, [verificationId]);
 
   return row ? toIdentityLinkVerification(row) : undefined;
 }
 
-export function createIdentityLinkChallenge(
+export async function createIdentityLinkChallenge(
   context: IdentityVerificationContext,
   input: ContactIdentityLinkChallengeInput,
-): ContactIdentityLinkChallengeResult {
+): Promise<ContactIdentityLinkChallengeResult> {
   const contact = context.getById(input.contactId);
   if (!contact) return { status: 'contact_not_found' };
 
@@ -89,7 +89,7 @@ export function createIdentityLinkChallenge(
     return { status: 'already_linked' };
   }
 
-  const existingPending = context.db.prepare(`
+  const existingPending = await context.adapter.queryOne<ContactIdentityVerificationRow>(`
     SELECT *
     FROM contact_identity_link_verifications
     WHERE contact_id = ?
@@ -100,13 +100,13 @@ export function createIdentityLinkChallenge(
       AND status = 'pending'
     ORDER BY created_at DESC
     LIMIT 1
-  `).get(
+  `, [
     contact.id,
     sourceIdentity.channel,
     sourceIdentity.userId,
     targetIdentity.channel,
     targetIdentity.userId,
-  ) as ContactIdentityVerificationRow | undefined;
+  ]);
 
   if (existingPending) {
     const expiresAtMs = Date.parse(existingPending.expires_at);
@@ -116,7 +116,7 @@ export function createIdentityLinkChallenge(
         verification: toIdentityLinkVerification(existingPending),
       };
     }
-    markIdentityLinkVerification(context.db, existingPending.id, 'expired', 'expired');
+    await markIdentityLinkVerification(context.adapter, existingPending.id, 'expired', 'expired');
   }
 
   const now = new Date();
@@ -139,7 +139,7 @@ export function createIdentityLinkChallenge(
     updatedAt: createdAt,
   };
 
-  context.db.prepare(`
+  await context.adapter.run(`
     INSERT INTO contact_identity_link_verifications (
       id,
       contact_id,
@@ -157,7 +157,7 @@ export function createIdentityLinkChallenge(
       failure_reason
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     verification.id,
     verification.contactId,
     verification.sourceChannel,
@@ -172,22 +172,22 @@ export function createIdentityLinkChallenge(
     verification.updatedAt,
     null,
     null,
-  );
+  ]);
 
   return { status: 'challenge_created', verification };
 }
 
-export function verifyIdentityLinkChallenge(
+export async function verifyIdentityLinkChallenge(
   context: IdentityVerificationContext,
   input: ContactIdentityLinkVerificationInput,
-): ContactIdentityLinkVerificationResult {
+): Promise<ContactIdentityLinkVerificationResult> {
   const contact = context.getById(input.contactId);
   if (!contact) return { status: 'contact_not_found' };
 
   const sourceIdentity = normalizeIdentity(input.sourceChannel, input.sourceUserId);
   const targetIdentity = normalizeIdentity(input.targetChannel, input.targetUserId);
 
-  const row = context.db.prepare(`
+  const row = await context.adapter.queryOne<ContactIdentityVerificationRow>(`
     SELECT *
     FROM contact_identity_link_verifications
     WHERE contact_id = ?
@@ -198,14 +198,14 @@ export function verifyIdentityLinkChallenge(
       AND nonce = ?
     ORDER BY created_at DESC
     LIMIT 1
-  `).get(
+  `, [
     input.contactId,
     sourceIdentity.channel,
     sourceIdentity.userId,
     targetIdentity.channel,
     targetIdentity.userId,
     input.nonce.trim(),
-  ) as ContactIdentityVerificationRow | undefined;
+  ]);
 
   if (!row) {
     return { status: 'verification_not_found' };
@@ -217,7 +217,7 @@ export function verifyIdentityLinkChallenge(
   }
 
   if (row.expires_at !== input.expiresAt.trim()) {
-    const failed = markIdentityLinkVerification(context.db, row.id, 'failed', 'claim_mismatch')
+    const failed = await markIdentityLinkVerification(context.adapter, row.id, 'failed', 'claim_mismatch')
       ?? mappedRow;
     return { status: 'claim_mismatch', verification: failed };
   }
@@ -225,25 +225,25 @@ export function verifyIdentityLinkChallenge(
   const now = Date.now();
   const expiresAtMs = Date.parse(row.expires_at);
   if (!Number.isFinite(expiresAtMs) || now > expiresAtMs) {
-    const expired = markIdentityLinkVerification(context.db, row.id, 'expired', 'expired')
+    const expired = await markIdentityLinkVerification(context.adapter, row.id, 'expired', 'expired')
       ?? mappedRow;
     return { status: 'verification_expired', verification: expired };
   }
 
   if (row.signature !== input.signature.trim()) {
-    const failed = markIdentityLinkVerification(context.db, row.id, 'failed', 'invalid_signature')
+    const failed = await markIdentityLinkVerification(context.adapter, row.id, 'failed', 'invalid_signature')
       ?? mappedRow;
     return { status: 'invalid_signature', verification: failed };
   }
 
   const sourceOwner = context.getByChannelIdentity(sourceIdentity.channel, sourceIdentity.userId);
   if (!sourceOwner || sourceOwner.id !== input.contactId) {
-    const failed = markIdentityLinkVerification(context.db, row.id, 'failed', 'source_identity_not_linked')
+    const failed = await markIdentityLinkVerification(context.adapter, row.id, 'failed', 'source_identity_not_linked')
       ?? mappedRow;
     return { status: 'source_identity_not_linked', verification: failed };
   }
 
-  const linkResult = context.linkChannelIdentity(
+  const linkResult = await context.linkChannelIdentity(
     input.contactId,
     targetIdentity.channel,
     targetIdentity.userId,
@@ -251,7 +251,7 @@ export function verifyIdentityLinkChallenge(
   );
 
   if (linkResult === 'identity_conflict') {
-    const failed = markIdentityLinkVerification(context.db, row.id, 'failed', 'identity_conflict')
+    const failed = await markIdentityLinkVerification(context.adapter, row.id, 'failed', 'identity_conflict')
       ?? mappedRow;
     return { status: 'identity_conflict', verification: failed };
   }
@@ -260,8 +260,8 @@ export function verifyIdentityLinkChallenge(
     return { status: 'contact_not_found' };
   }
 
-  const verified = markIdentityLinkVerification(
-    context.db,
+  const verified = await markIdentityLinkVerification(
+    context.adapter,
     row.id,
     'verified',
     undefined,

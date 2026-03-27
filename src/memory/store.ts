@@ -1,13 +1,8 @@
-import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import * as sqliteVec from 'sqlite-vec';
-import {
-  hasColumn,
-  runInTransaction as runSqliteTransaction,
-} from '../persistence/sqlite-utils.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 import { createComponentLogger } from '../logger.js';
+import type { DatabaseAdapter } from '../persistence/db-adapter.js';
 import type { MemoryJournal } from './journal.js';
 import {
   normalizeMemoryScopeQuery,
@@ -59,10 +54,6 @@ const LEXICAL_STOPWORDS = new Set([
   'your',
 ]);
 const log = createComponentLogger('MemoryStore');
-
-function embeddingToBuffer(embedding: Float32Array): Buffer {
-  return Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
-}
 
 interface MemoryRow {
   id: string;
@@ -411,7 +402,7 @@ function buildScopeQuerySql(
   }
   for (const tag of scopeQuery.tags ?? []) {
     fragments.push('LOWER(scope_tags) LIKE ?');
-    params.push(`%\"${tag}\"%`);
+    params.push(`%"${tag}"%`);
   }
 
   if (fragments.length === 0) {
@@ -425,24 +416,50 @@ function buildScopeQuerySql(
 }
 
 export class MemoryStore {
-  private db: Database.Database;
+  private adapter: DatabaseAdapter;
   private embeddingDims: number;
   private scratchpadMirrorPath: string | null;
   private journal: MemoryJournal | null;
+  private initialized: boolean = false;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor(
-    db: Database.Database,
+    adapter: DatabaseAdapter,
     embeddingDims: number = 1024,
     options: MemoryStoreOptions = {},
   ) {
-    this.db = db;
+    this.adapter = adapter;
     this.embeddingDims = embeddingDims;
     this.scratchpadMirrorPath = this.resolveScratchpadMirrorPath(options);
     this.journal = options.journal ?? null;
-    this.loadExtensions();
-    this.createTables();
-    this.migrateSchema();
-    this.syncScratchpadMirror();
+  }
+
+  async init(): Promise<void> {
+    if (this.initialized) return;
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+
+    this.initializationPromise = (async () => {
+      await this.adapter.initialize();
+      await this.createTables();
+      await this.migrateSchema();
+      this.initialized = true;
+      await this.syncScratchpadMirror();
+    })();
+
+    try {
+      await this.initializationPromise;
+    } finally {
+      this.initializationPromise = null;
+    }
+  }
+
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.init();
+    }
   }
 
   private resolveScratchpadMirrorPath(options: MemoryStoreOptions): string | null {
@@ -455,12 +472,8 @@ export class MemoryStore {
     return null;
   }
 
-  private loadExtensions(): void {
-    sqliteVec.load(this.db);
-  }
-
-  private createTables(): void {
-    this.db.exec(`
+  private async createTables(): Promise<void> {
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS l2_memories (
         id TEXT PRIMARY KEY,
         text TEXT NOT NULL,
@@ -549,61 +562,61 @@ export class MemoryStore {
     `);
   }
 
-  private migrateSchema(): void {
+  private async migrateSchema(): Promise<void> {
     // Add sensitivity column (default 'personal' — safe default for existing data)
     try {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'personal'`);
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'personal'`);
     } catch { /* column already exists */ }
 
     // Add consent_flags column (default '{}' — no restrictions)
     try {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN consent_flags TEXT NOT NULL DEFAULT '{}'`);
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN consent_flags TEXT NOT NULL DEFAULT '{}'`);
     } catch { /* column already exists */ }
 
     // Add contact_id column for canonical contact linking
-    if (!hasColumn(this.db, 'l2_memories', 'contact_id')) {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN contact_id TEXT`);
+    if (!await this.adapter.hasColumn('l2_memories', 'contact_id')) {
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN contact_id TEXT`);
     }
 
-    if (hasColumn(this.db, 'l2_memories', 'contact_id')) {
-      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id)`);
+    if (await this.adapter.hasColumn('l2_memories', 'contact_id')) {
+      await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_l2_contact ON l2_memories(contact_id)`);
     }
 
-    if (!hasColumn(this.db, 'l2_memories', 'provenance_refs')) {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_refs TEXT NOT NULL DEFAULT '[]'`);
+    if (!await this.adapter.hasColumn('l2_memories', 'provenance_refs')) {
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_refs TEXT NOT NULL DEFAULT '[]'`);
     }
-    if (!hasColumn(this.db, 'l2_memories', 'scope_ref_kind')) {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_kind TEXT`);
+    if (!await this.adapter.hasColumn('l2_memories', 'scope_ref_kind')) {
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_kind TEXT`);
     }
-    if (!hasColumn(this.db, 'l2_memories', 'scope_ref_id')) {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_id TEXT`);
+    if (!await this.adapter.hasColumn('l2_memories', 'scope_ref_id')) {
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_id TEXT`);
     }
-    if (!hasColumn(this.db, 'l2_memories', 'scope_ref_label')) {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_label TEXT`);
+    if (!await this.adapter.hasColumn('l2_memories', 'scope_ref_label')) {
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_label TEXT`);
     }
-    if (!hasColumn(this.db, 'l2_memories', 'scope_tags')) {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_tags TEXT NOT NULL DEFAULT '[]'`);
+    if (!await this.adapter.hasColumn('l2_memories', 'scope_tags')) {
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN scope_tags TEXT NOT NULL DEFAULT '[]'`);
     }
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_scope_ref ON l2_memories(scope_ref_kind, scope_ref_id)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_l2_scope_ref ON l2_memories(scope_ref_kind, scope_ref_id)`);
 
-    if (!hasColumn(this.db, 'l2_memories', 'formation_vad')) {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN formation_vad TEXT`);
+    if (!await this.adapter.hasColumn('l2_memories', 'formation_vad')) {
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN formation_vad TEXT`);
     }
 
     // Add soft-delete columns for reversible destructive operations
     try {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN deleted_at INTEGER`);
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN deleted_at INTEGER`);
     } catch { /* column already exists */ }
     try {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN deleted_by TEXT`);
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN deleted_by TEXT`);
     } catch { /* column already exists */ }
     try {
-      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN delete_reason TEXT`);
+      await this.adapter.exec(`ALTER TABLE l2_memories ADD COLUMN delete_reason TEXT`);
     } catch { /* column already exists */ }
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_deleted_at ON l2_memories(deleted_at)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_l2_deleted_at ON l2_memories(deleted_at)`);
 
     // Create delete-version snapshots table if missing (idempotent).
-    this.db.exec(`
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS l2_memory_delete_versions (
         delete_id TEXT PRIMARY KEY,
         memory_id TEXT NOT NULL,
@@ -615,10 +628,10 @@ export class MemoryStore {
         restored_by TEXT
       );
     `);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_memory ON l2_memory_delete_versions(memory_id)`);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_active ON l2_memory_delete_versions(restored_at, deleted_at)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_memory ON l2_memory_delete_versions(memory_id)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_active ON l2_memory_delete_versions(restored_at, deleted_at)`);
 
-    this.db.exec(`
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS l2_memory_abstraction_links (
         id TEXT PRIMARY KEY,
         source_memory_id TEXT NOT NULL,
@@ -629,10 +642,10 @@ export class MemoryStore {
         reason TEXT
       );
     `);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_abstraction_source ON l2_memory_abstraction_links(source_memory_id)`);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_l2_abstraction_source ON l2_memory_abstraction_links(source_memory_id)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_l2_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id)`);
 
-    this.db.exec(`
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS scratchpad_entries (
         id TEXT PRIMARY KEY,
         content TEXT NOT NULL,
@@ -640,10 +653,10 @@ export class MemoryStore {
         updated_at INTEGER NOT NULL
       );
     `);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_scratchpad_updated_at ON scratchpad_entries(updated_at DESC, created_at DESC)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_scratchpad_updated_at ON scratchpad_entries(updated_at DESC, created_at DESC)`);
 
     // Create memory_links table for linking related memories
-    this.db.exec(`
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS memory_links (
         id1 TEXT NOT NULL,
         id2 TEXT NOT NULL,
@@ -652,28 +665,21 @@ export class MemoryStore {
         PRIMARY KEY (id1, id2)
       );
     `);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_links_id1 ON memory_links(id1)`);
-    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_memory_links_id2 ON memory_links(id2)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_memory_links_id1 ON memory_links(id1)`);
+    await this.adapter.exec(`CREATE INDEX IF NOT EXISTS idx_memory_links_id2 ON memory_links(id2)`);
   }
 
   // ── L2 Memories ──
 
-  insertMemory(memory: PurrMemory, embedding: Float32Array): void {
-    const insertMem = this.db.prepare(`
-      INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence, formation_vad,
+  async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
+    await this.ensureInitialized();
+    await this.adapter.run(
+      `INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence, formation_vad,
         salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
         scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs, sensitivity,
         consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const insertVec = this.db.prepare(`
-      INSERT INTO l2_memory_embeddings (memory_id, embedding)
-      VALUES (?, ?)
-    `);
-
-    const transaction = this.db.transaction(() => {
-      insertMem.run(
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
         memory.id,
         memory.text,
         memory.type,
@@ -700,65 +706,81 @@ export class MemoryStore {
         memory.deletedAt ?? null,
         memory.deletedBy ?? null,
         memory.deleteReason ?? null,
-      );
-      insertVec.run(memory.id, embeddingToBuffer(embedding));
-    });
+      ],
+    );
 
-    transaction();
+    await this.adapter.vectorUpsert(
+      'l2_memories',
+      'memory_id',
+      memory.id,
+      'embedding',
+      embedding,
+    );
+
     this.journal?.onInsert(memory);
   }
 
-  runInTransaction<T>(handler: () => T): T {
-    return runSqliteTransaction(this.db, handler);
+  async runInTransaction<T>(handler: () => Promise<T>): Promise<T> {
+    await this.ensureInitialized();
+    return this.adapter.transaction(async (_tx) => {
+      return handler();
+    });
   }
 
-  searchByEmbedding(
+  async searchByEmbedding(
     embedding: Float32Array,
     threshold: number,
     limit: number,
     scopeQuery?: MemoryScopeQuery,
-  ): Array<PurrMemory & { similarity: number }> {
+  ): Promise<Array<PurrMemory & { similarity: number }>> {
+    await this.ensureInitialized();
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const scopeSql = buildScopeQuerySql(normalizedScopeQuery);
-    const stmt = this.db.prepare(`
-      SELECT
-        m.*,
-        v.distance
-      FROM l2_memory_embeddings v
-      JOIN l2_memories m ON m.id = v.memory_id
-      WHERE v.embedding MATCH ?
-        AND k = ?
-        AND m.superseded_by IS NULL
-        AND m.deleted_at IS NULL
-        ${scopeSql.clause}
-      ORDER BY v.distance ASC
-    `);
 
-    const rows = stmt.all(
-      embeddingToBuffer(embedding),
-      limit * 2,
-      ...scopeSql.params,
-    ) as Array<MemoryRow & {
-      distance: number;
-    }>;
+    const filterClauses: string[] = [
+      '$MAIN_TABLE.superseded_by IS NULL',
+      '$MAIN_TABLE.deleted_at IS NULL',
+    ];
+    if (scopeSql.clause) {
+      filterClauses.push(
+        scopeSql.clause
+          .replace(/^AND\s+/i, '')
+          .replace(/\bscope_ref_kind\b/g, '$MAIN_TABLE.scope_ref_kind')
+          .replace(/\bscope_ref_id\b/g, '$MAIN_TABLE.scope_ref_id')
+          .replace(/\bscope_tags\b/g, '$MAIN_TABLE.scope_tags'),
+      );
+    }
+    const filterParams: unknown[] = [...scopeSql.params];
 
-    return rows
-      .map(row => {
+    const results = await this.adapter.vectorSearch({
+      table: 'l2_memories',
+      column: 'embedding',
+      queryVector: embedding,
+      limit: limit * 2,
+      joinClause: 'JOIN l2_memories m ON m.id = v.memory_id',
+      filterClauses,
+      filterParams,
+      selectColumns: 'm.*',
+    });
+
+    return results
+      .map(({ row, distance }) => {
         // vec0 returns L2 distance; for L2-normalized unit vectors,
         // cosine similarity = 1 - L2_dist² / 2
-        const similarity = 1 - (row.distance * row.distance) / 2;
+        const similarity = 1 - (distance * distance) / 2;
         if (similarity < threshold) return null;
-        return { ...mapMemoryRow(row), similarity };
+        return { ...mapMemoryRow(row as MemoryRow), similarity };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null)
       .slice(0, limit);
   }
 
-  searchByText(
+  async searchByText(
     query: string,
     limit: number,
     scopeQuery?: MemoryScopeQuery,
-  ): Array<PurrMemory & { similarity: number }> {
+  ): Promise<Array<PurrMemory & { similarity: number }>> {
+    await this.ensureInitialized();
     const normalizedQuery = normalizeLexicalQuery(query);
     if (!normalizedQuery) return [];
     const tokens = tokenizeLexicalQuery(normalizedQuery);
@@ -780,18 +802,19 @@ export class MemoryStore {
       20,
       LEXICAL_SCAN_MAX_ROWS,
     );
-    const stmt = this.db.prepare(`
-      SELECT *
+
+    const rows = await this.adapter.query<MemoryRow>(
+      `SELECT *
       FROM l2_memories
       WHERE superseded_by IS NULL
         AND deleted_at IS NULL
         AND (${clauses.join(' OR ')})
         ${scopeSql.clause}
       ORDER BY extracted_at DESC, id DESC
-      LIMIT ?
-    `);
+      LIMIT ?`,
+      [...params, ...scopeSql.params, scanLimit],
+    );
 
-    const rows = stmt.all(...params, ...scopeSql.params, scanLimit) as MemoryRow[];
     return rows
       .map(mapMemoryRow)
       .map(memory => {
@@ -815,7 +838,8 @@ export class MemoryStore {
       .slice(0, normalizedLimit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'consentFlags' | 'tags' | 'scopeRef' | 'scopeTags' | 'provenanceRefs' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
+  async updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'consentFlags' | 'tags' | 'scopeRef' | 'scopeTags' | 'provenanceRefs' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): Promise<void> {
+    await this.ensureInitialized();
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -884,57 +908,64 @@ export class MemoryStore {
     if (setClauses.length === 0) return;
 
     values.push(id);
-    const stmt = this.db.prepare(
+    await this.adapter.run(
       `UPDATE l2_memories SET ${setClauses.join(', ')} WHERE id = ?`,
+      values,
     );
-    stmt.run(...values);
   }
 
-  getAllActiveMemories(limit: number = 10_000): PurrMemory[] {
+  async getAllActiveMemories(limit: number = 10_000): Promise<PurrMemory[]> {
+    await this.ensureInitialized();
     const safeLimit = Math.max(1, Math.min(100_000, Math.floor(limit)));
-    const stmt = this.db.prepare(`
-      SELECT * FROM l2_memories WHERE superseded_by IS NULL AND deleted_at IS NULL
-      LIMIT ?
-    `);
-    const rows = stmt.all(safeLimit) as MemoryRow[];
+    const rows = await this.adapter.query<MemoryRow>(
+      `SELECT * FROM l2_memories WHERE superseded_by IS NULL AND deleted_at IS NULL
+      LIMIT ?`,
+      [safeLimit],
+    );
     return rows.map(mapMemoryRow);
   }
 
-  listActiveMemories(
+  async listActiveMemories(
     options: {
       limit?: number;
       offset?: number;
     } = {},
-  ): PurrMemory[] {
+  ): Promise<PurrMemory[]> {
+    await this.ensureInitialized();
     const limit = this.normalizeListLimit(options.limit ?? 50, 50, 1, 500);
     const offset = this.normalizeListOffset(options.offset ?? 0);
-    const rows = this.db.prepare(`
-      SELECT *
+    const rows = await this.adapter.query<MemoryRow>(
+      `SELECT *
       FROM l2_memories
       WHERE superseded_by IS NULL AND deleted_at IS NULL
       ORDER BY extracted_at DESC, id DESC
       LIMIT ?
-      OFFSET ?
-    `).all(limit, offset) as MemoryRow[];
+      OFFSET ?`,
+      [limit, offset],
+    );
     return rows.map(mapMemoryRow);
   }
 
-  countActiveMemories(): number {
-    const row = this.db.prepare(`
+  async countActiveMemories(): Promise<number> {
+    await this.ensureInitialized();
+    const row = await this.adapter.queryOne<{ count: number }>(`
       SELECT COUNT(*) as count
       FROM l2_memories
       WHERE superseded_by IS NULL AND deleted_at IS NULL
-    `).get() as { count: number };
-    return row.count;
+    `);
+    return row?.count ?? 0;
   }
 
-  getById(id: string): PurrMemory | undefined {
-    const stmt = this.db.prepare('SELECT * FROM l2_memories WHERE id = ?');
-    const row = stmt.get(id) as MemoryRow | undefined;
+  async getById(id: string): Promise<PurrMemory | undefined> {
+    await this.ensureInitialized();
+    const row = await this.adapter.queryOne<MemoryRow>(
+      'SELECT * FROM l2_memories WHERE id = ?',
+      [id],
+    );
     return row ? mapMemoryRow(row) : undefined;
   }
 
-  softDeleteMemory(
+  async softDeleteMemory(
     id: string,
     options: {
       deletedBy?: string;
@@ -942,56 +973,56 @@ export class MemoryStore {
       deletedAt?: number;
       deleteId?: string;
     } = {},
-  ): MemoryDeleteVersion | null {
+  ): Promise<MemoryDeleteVersion | null> {
+    await this.ensureInitialized();
     const deleteId = options.deleteId ?? randomUUID();
     const deletedAt = options.deletedAt ?? Date.now();
     const deletedBy = options.deletedBy?.trim() || 'agent';
     const reason = options.reason?.trim();
 
-    const selectStmt = this.db.prepare(`
-      SELECT * FROM l2_memories
-      WHERE id = ? AND deleted_at IS NULL
-      LIMIT 1
-    `);
-    const insertVersion = this.db.prepare(`
-      INSERT INTO l2_memory_delete_versions (
-        delete_id,
-        memory_id,
-        snapshot_json,
-        deleted_at,
-        deleted_by,
-        delete_reason
-      )
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    const updateStmt = this.db.prepare(`
-      UPDATE l2_memories
-      SET deleted_at = ?, deleted_by = ?, delete_reason = ?
-      WHERE id = ? AND deleted_at IS NULL
-    `);
+    return this.adapter.transaction(async (tx) => {
+      const row = await tx.queryOne<MemoryRow>(`
+        SELECT * FROM l2_memories
+        WHERE id = ? AND deleted_at IS NULL
+        LIMIT 1
+      `, [id]);
 
-    const transaction = this.db.transaction(() => {
-      const row = selectStmt.get(id) as MemoryRow | undefined;
       if (!row) return null;
 
       const snapshot = mapMemoryRow(row);
-      insertVersion.run(
-        deleteId,
-        id,
-        JSON.stringify(snapshot),
-        deletedAt,
-        deletedBy,
-        reason ?? null,
+      await tx.run(
+        `INSERT INTO l2_memory_delete_versions (
+          delete_id,
+          memory_id,
+          snapshot_json,
+          deleted_at,
+          deleted_by,
+          delete_reason
+        )
+        VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          deleteId,
+          id,
+          JSON.stringify(snapshot),
+          deletedAt,
+          deletedBy,
+          reason ?? null,
+        ],
       );
-      const result = updateStmt.run(
-        deletedAt,
-        deletedBy,
-        reason ?? null,
-        id,
+      const result = await tx.run(
+        `UPDATE l2_memories
+        SET deleted_at = ?, deleted_by = ?, delete_reason = ?
+        WHERE id = ? AND deleted_at IS NULL`,
+        [
+          deletedAt,
+          deletedBy,
+          reason ?? null,
+          id,
+        ],
       );
       if (result.changes === 0) return null;
 
-      return {
+      const deleteVersion = {
         deleteId,
         memoryId: id,
         snapshot,
@@ -999,75 +1030,70 @@ export class MemoryStore {
         deletedBy,
         deleteReason: reason,
       } satisfies MemoryDeleteVersion;
-    });
 
-    const deleteVersion = transaction();
-    if (deleteVersion) {
       this.journal?.onSoftDelete(deleteVersion);
-    }
-    return deleteVersion;
+      return deleteVersion;
+    });
   }
 
-  undoSoftDelete(
+  async undoSoftDelete(
     deleteId: string,
     options: {
       restoredBy?: string;
       restoredAt?: number;
     } = {},
-  ): MemoryDeleteVersion | null {
+  ): Promise<MemoryDeleteVersion | null> {
+    await this.ensureInitialized();
     const restoredAt = options.restoredAt ?? Date.now();
     const restoredBy = options.restoredBy?.trim() || 'agent';
 
-    const selectStmt = this.db.prepare(`
-      SELECT * FROM l2_memory_delete_versions
-      WHERE delete_id = ? AND restored_at IS NULL
-      LIMIT 1
-    `);
-    const restoreMemoryStmt = this.db.prepare(`
-      UPDATE l2_memories
-      SET deleted_at = NULL, deleted_by = NULL, delete_reason = NULL
-      WHERE id = ?
-    `);
-    const restoreVersionStmt = this.db.prepare(`
-      UPDATE l2_memory_delete_versions
-      SET restored_at = ?, restored_by = ?
-      WHERE delete_id = ? AND restored_at IS NULL
-    `);
+    return this.adapter.transaction(async (tx) => {
+      const versionRow = await tx.queryOne<MemoryDeleteVersionRow>(`
+        SELECT * FROM l2_memory_delete_versions
+        WHERE delete_id = ? AND restored_at IS NULL
+        LIMIT 1
+      `, [deleteId]);
 
-    const transaction = this.db.transaction(() => {
-      const versionRow = selectStmt.get(deleteId) as MemoryDeleteVersionRow | undefined;
       if (!versionRow) return null;
 
-      restoreMemoryStmt.run(versionRow.memory_id);
-      const versionResult = restoreVersionStmt.run(restoredAt, restoredBy, deleteId);
+      await tx.run(
+        `UPDATE l2_memories
+        SET deleted_at = NULL, deleted_by = NULL, delete_reason = NULL
+        WHERE id = ?`,
+        [versionRow.memory_id],
+      );
+      const versionResult = await tx.run(
+        `UPDATE l2_memory_delete_versions
+        SET restored_at = ?, restored_by = ?
+        WHERE delete_id = ? AND restored_at IS NULL`,
+        [restoredAt, restoredBy, deleteId],
+      );
       if (versionResult.changes === 0) return null;
 
-      return {
+      const restoreVersion = {
         ...mapMemoryDeleteVersionRow(versionRow),
         restoredAt,
         restoredBy,
       } satisfies MemoryDeleteVersion;
-    });
 
-    const restoreVersion = transaction();
-    if (restoreVersion) {
       this.journal?.onRestore(restoreVersion);
-    }
-    return restoreVersion;
+      return restoreVersion;
+    });
   }
 
-  getDeleteVersion(deleteId: string): MemoryDeleteVersion | undefined {
-    const row = this.db.prepare(`
+  async getDeleteVersion(deleteId: string): Promise<MemoryDeleteVersion | undefined> {
+    await this.ensureInitialized();
+    const row = await this.adapter.queryOne<MemoryDeleteVersionRow>(`
       SELECT *
       FROM l2_memory_delete_versions
       WHERE delete_id = ?
       LIMIT 1
-    `).get(deleteId) as MemoryDeleteVersionRow | undefined;
+    `, [deleteId]);
     if (!row) return undefined;
     return mapMemoryDeleteVersionRow(row);
   }
 
-  recordAbstractionLink(
+  async recordAbstractionLink(
     input: {
       sourceMemoryId: string;
       abstractedMemoryId: string;
@@ -1077,7 +1103,8 @@ export class MemoryStore {
       reason?: string;
       linkId?: string;
     },
-  ): MemoryAbstractionLink {
+  ): Promise<MemoryAbstractionLink> {
+    await this.ensureInitialized();
     const sourceMemoryId = input.sourceMemoryId.trim();
     const abstractedMemoryId = input.abstractedMemoryId.trim();
     const externalRef = input.externalRef.trim();
@@ -1090,8 +1117,8 @@ export class MemoryStore {
     const createdBy = input.createdBy?.trim() || undefined;
     const reason = input.reason?.trim() || undefined;
 
-    this.db.prepare(`
-      INSERT INTO l2_memory_abstraction_links (
+    await this.adapter.run(
+      `INSERT INTO l2_memory_abstraction_links (
         id,
         source_memory_id,
         abstracted_memory_id,
@@ -1100,15 +1127,16 @@ export class MemoryStore {
         created_by,
         reason
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      sourceMemoryId,
-      abstractedMemoryId,
-      externalRef,
-      createdAt,
-      createdBy ?? null,
-      reason ?? null,
+      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        sourceMemoryId,
+        abstractedMemoryId,
+        externalRef,
+        createdAt,
+        createdBy ?? null,
+        reason ?? null,
+      ],
     );
 
     return {
@@ -1122,35 +1150,40 @@ export class MemoryStore {
     };
   }
 
-  getAbstractionLinksForSourceMemory(sourceMemoryId: string): MemoryAbstractionLink[] {
+  async getAbstractionLinksForSourceMemory(sourceMemoryId: string): Promise<MemoryAbstractionLink[]> {
+    await this.ensureInitialized();
     const normalized = sourceMemoryId.trim();
     if (!normalized) return [];
-    const rows = this.db.prepare(`
-      SELECT *
+    const rows = await this.adapter.query<MemoryAbstractionLinkRow>(
+      `SELECT *
       FROM l2_memory_abstraction_links
       WHERE source_memory_id = ?
-      ORDER BY created_at DESC
-    `).all(normalized) as MemoryAbstractionLinkRow[];
+      ORDER BY created_at DESC`,
+      [normalized],
+    );
     return rows.map(mapMemoryAbstractionLinkRow);
   }
 
-  getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): MemoryAbstractionLink[] {
+  async getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): Promise<MemoryAbstractionLink[]> {
+    await this.ensureInitialized();
     const normalized = abstractedMemoryId.trim();
     if (!normalized) return [];
-    const rows = this.db.prepare(`
-      SELECT *
+    const rows = await this.adapter.query<MemoryAbstractionLinkRow>(
+      `SELECT *
       FROM l2_memory_abstraction_links
       WHERE abstracted_memory_id = ?
-      ORDER BY created_at DESC
-    `).all(normalized) as MemoryAbstractionLinkRow[];
+      ORDER BY created_at DESC`,
+      [normalized],
+    );
     return rows.map(mapMemoryAbstractionLinkRow);
   }
 
-  getStats(): { total: number; byType: Record<string, number>; avgSalience: number } {
-    const rows = this.db.prepare(`
+  async getStats(): Promise<{ total: number; byType: Record<string, number>; avgSalience: number }> {
+    await this.ensureInitialized();
+    const rows = await this.adapter.query<{ type: string; count: number; avg_sal: number }>(`
       SELECT type, COUNT(*) as count, AVG(salience) as avg_sal
       FROM l2_memories WHERE superseded_by IS NULL AND deleted_at IS NULL GROUP BY type
-    `).all() as Array<{ type: string; count: number; avg_sal: number }>;
+    `);
 
     const byType: Record<string, number> = {};
     let total = 0;
@@ -1163,31 +1196,34 @@ export class MemoryStore {
     return { total, byType, avgSalience: total > 0 ? salSum / total : 0 };
   }
 
-  getMemoriesByChannel(channelId: string, limit: number): PurrMemory[] {
-    const stmt = this.db.prepare(`
-      SELECT * FROM l2_memories
+  async getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]> {
+    await this.ensureInitialized();
+    const rows = await this.adapter.query<MemoryRow>(
+      `SELECT * FROM l2_memories
       WHERE source_ref LIKE ? AND superseded_by IS NULL AND deleted_at IS NULL
       ORDER BY extracted_at DESC
-      LIMIT ?
-    `);
-    const rows = stmt.all(`${channelId}:%`, limit) as MemoryRow[];
+      LIMIT ?`,
+      [`${channelId}:%`, limit],
+    );
     return rows.map(mapMemoryRow);
   }
 
-  getMemoriesByContact(contactId: string, limit: number): PurrMemory[] {
-    const stmt = this.db.prepare(`
-      SELECT * FROM l2_memories
+  async getMemoriesByContact(contactId: string, limit: number): Promise<PurrMemory[]> {
+    await this.ensureInitialized();
+    const rows = await this.adapter.query<MemoryRow>(
+      `SELECT * FROM l2_memories
       WHERE contact_id = ? AND superseded_by IS NULL AND deleted_at IS NULL
       ORDER BY salience DESC, extracted_at DESC
-      LIMIT ?
-    `);
-    const rows = stmt.all(contactId, limit) as MemoryRow[];
+      LIMIT ?`,
+      [contactId, limit],
+    );
     return rows.map(mapMemoryRow);
   }
 
   // ── Memory Links ──
 
-  linkMemories(id1: string, id2: string, linkType: string = 'related'): MemoryLink | null {
+  async linkMemories(id1: string, id2: string, linkType: string = 'related'): Promise<MemoryLink | null> {
+    await this.ensureInitialized();
     const normalizedId1 = id1.trim();
     const normalizedId2 = id2.trim();
     const normalizedType = linkType.trim() || 'related';
@@ -1200,16 +1236,18 @@ export class MemoryStore {
       : [normalizedId2, normalizedId1];
 
     const now = Date.now();
-    const result = this.db.prepare(`
-      INSERT OR IGNORE INTO memory_links (id1, id2, link_type, created_at)
-      VALUES (?, ?, ?, ?)
-    `).run(first, second, normalizedType, now);
+    const result = await this.adapter.run(
+      `INSERT OR IGNORE INTO memory_links (id1, id2, link_type, created_at)
+      VALUES (?, ?, ?, ?)`,
+      [first, second, normalizedType, now],
+    );
 
     if (result.changes === 0) return null;
     return { id1: first, id2: second, linkType: normalizedType, createdAt: now };
   }
 
-  unlinkMemories(id1: string, id2: string): boolean {
+  async unlinkMemories(id1: string, id2: string): Promise<boolean> {
+    await this.ensureInitialized();
     const normalizedId1 = id1.trim();
     const normalizedId2 = id2.trim();
     if (!normalizedId1 || !normalizedId2) return false;
@@ -1219,82 +1257,84 @@ export class MemoryStore {
       ? [normalizedId1, normalizedId2]
       : [normalizedId2, normalizedId1];
 
-    const result = this.db.prepare(`
-      DELETE FROM memory_links WHERE id1 = ? AND id2 = ?
-    `).run(first, second);
+    const result = await this.adapter.run(
+      `DELETE FROM memory_links WHERE id1 = ? AND id2 = ?`,
+      [first, second],
+    );
     return result.changes > 0;
   }
 
-  getLinkedMemories(id: string): MemoryLink[] {
+  async getLinkedMemories(id: string): Promise<MemoryLink[]> {
+    await this.ensureInitialized();
     const normalizedId = id.trim();
     if (!normalizedId) return [];
 
-    const rows = this.db.prepare(`
-      SELECT id1, id2, link_type, created_at
+    const rows = await this.adapter.query<MemoryLinkRow>(
+      `SELECT id1, id2, link_type, created_at
       FROM memory_links
       WHERE id1 = ? OR id2 = ?
-      ORDER BY created_at DESC
-    `).all(normalizedId, normalizedId) as MemoryLinkRow[];
+      ORDER BY created_at DESC`,
+      [normalizedId, normalizedId],
+    );
 
     return rows.map(mapMemoryLinkRow);
   }
 
   // ── Bulk Operations ──
 
-  bulkDelete(ids: string[]): number {
+  async bulkDelete(ids: string[]): Promise<number> {
+    await this.ensureInitialized();
     if (!ids.length) return 0;
     const now = Date.now();
     const deletedBy = 'admin:bulk';
 
-    const selectStmt = this.db.prepare(`
-      SELECT * FROM l2_memories
-      WHERE id = ? AND deleted_at IS NULL
-      LIMIT 1
-    `);
-    const insertVersion = this.db.prepare(`
-      INSERT INTO l2_memory_delete_versions (
-        delete_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason
-      )
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    const updateStmt = this.db.prepare(`
-      UPDATE l2_memories
-      SET deleted_at = ?, deleted_by = ?, delete_reason = ?
-      WHERE id = ? AND deleted_at IS NULL
-    `);
-
-    let count = 0;
-    const transaction = this.db.transaction(() => {
+    return this.adapter.transaction(async (tx) => {
+      let count = 0;
       for (const id of ids) {
         const normalizedId = id.trim();
         if (!normalizedId) continue;
 
-        const row = selectStmt.get(normalizedId) as MemoryRow | undefined;
+        const row = await tx.queryOne<MemoryRow>(`
+          SELECT * FROM l2_memories
+          WHERE id = ? AND deleted_at IS NULL
+          LIMIT 1
+        `, [normalizedId]);
+
         if (!row) continue;
 
         const snapshot = mapMemoryRow(row);
         const deleteId = randomUUID();
-        insertVersion.run(
-          deleteId,
-          normalizedId,
-          JSON.stringify(snapshot),
-          now,
-          deletedBy,
-          'bulk delete',
+        await tx.run(
+          `INSERT INTO l2_memory_delete_versions (
+            delete_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason
+          )
+          VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            deleteId,
+            normalizedId,
+            JSON.stringify(snapshot),
+            now,
+            deletedBy,
+            'bulk delete',
+          ],
         );
-        const result = updateStmt.run(now, deletedBy, 'bulk delete', normalizedId);
+        const result = await tx.run(
+          `UPDATE l2_memories
+          SET deleted_at = ?, deleted_by = ?, delete_reason = ?
+          WHERE id = ? AND deleted_at IS NULL`,
+          [now, deletedBy, 'bulk delete', normalizedId],
+        );
         if (result.changes > 0) count++;
       }
+      return count;
     });
-
-    transaction();
-    return count;
   }
 
-  bulkUpdate(
+  async bulkUpdate(
     ids: string[],
     fields: Partial<Pick<PurrMemory, 'type' | 'sensitivity'>>,
-  ): number {
+  ): Promise<number> {
+    await this.ensureInitialized();
     if (!ids.length) return 0;
 
     const setClauses: string[] = [];
@@ -1311,27 +1351,25 @@ export class MemoryStore {
 
     if (setClauses.length === 0) return 0;
 
-    const stmt = this.db.prepare(
-      `UPDATE l2_memories SET ${setClauses.join(', ')} WHERE id = ? AND deleted_at IS NULL`,
-    );
-
-    let count = 0;
-    const transaction = this.db.transaction(() => {
+    return this.adapter.transaction(async (tx) => {
+      let count = 0;
       for (const id of ids) {
         const normalizedId = id.trim();
         if (!normalizedId) continue;
-        const result = stmt.run(...setValues, normalizedId);
+        const result = await tx.run(
+          `UPDATE l2_memories SET ${setClauses.join(', ')} WHERE id = ? AND deleted_at IS NULL`,
+          [...setValues, normalizedId],
+        );
         if (result.changes > 0) count++;
       }
+      return count;
     });
-
-    transaction();
-    return count;
   }
 
-  upsertContactProfile(profile: ContactProfileArtifact): void {
-    this.db.prepare(`
-      INSERT INTO contact_profiles (
+  async upsertContactProfile(profile: ContactProfileArtifact): Promise<void> {
+    await this.ensureInitialized();
+    await this.adapter.run(
+      `INSERT INTO contact_profiles (
         contact_id,
         summary_text,
         source_memory_ids,
@@ -1345,24 +1383,26 @@ export class MemoryStore {
         source_memory_ids = excluded.source_memory_ids,
         confidence_score = excluded.confidence_score,
         novelty_score = excluded.novelty_score,
-        updated_at = excluded.updated_at
-    `).run(
-      profile.contactId,
-      profile.summary,
-      JSON.stringify(profile.sourceMemoryIds),
-      profile.confidenceScore,
-      profile.noveltyScore,
-      profile.updatedAt,
+        updated_at = excluded.updated_at`,
+      [
+        profile.contactId,
+        profile.summary,
+        JSON.stringify(profile.sourceMemoryIds),
+        profile.confidenceScore,
+        profile.noveltyScore,
+        profile.updatedAt,
+      ],
     );
   }
 
-  getContactProfile(contactId: string): ContactProfileArtifact | undefined {
-    const row = this.db.prepare(`
+  async getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined> {
+    await this.ensureInitialized();
+    const row = await this.adapter.queryOne<ContactProfileRow>(`
       SELECT contact_id, summary_text, source_memory_ids, confidence_score, novelty_score, updated_at
       FROM contact_profiles
       WHERE contact_id = ?
       LIMIT 1
-    `).get(contactId) as ContactProfileRow | undefined;
+    `, [contactId]);
     if (!row) return undefined;
 
     let sourceMemoryIds: string[] = [];
@@ -1382,12 +1422,13 @@ export class MemoryStore {
     };
   }
 
-  listContactProfiles(): ContactProfileArtifact[] {
-    const rows = this.db.prepare(`
+  async listContactProfiles(): Promise<ContactProfileArtifact[]> {
+    await this.ensureInitialized();
+    const rows = await this.adapter.query<ContactProfileRow>(`
       SELECT contact_id, summary_text, source_memory_ids, confidence_score, novelty_score, updated_at
       FROM contact_profiles
       ORDER BY updated_at DESC
-    `).all() as ContactProfileRow[];
+    `);
 
     return rows.map(row => {
       let sourceMemoryIds: string[] = [];
@@ -1408,109 +1449,111 @@ export class MemoryStore {
     });
   }
 
-  addScratchpadEntry(
+  async addScratchpadEntry(
     content: string,
     options: {
       id?: string;
       now?: number;
     } = {},
-  ): ScratchpadAddResult {
+  ): Promise<ScratchpadAddResult> {
+    await this.ensureInitialized();
     const normalizedContent = this.normalizeScratchpadContent(content);
     const id = options.id?.trim() || randomUUID();
     const now = options.now ?? Date.now();
 
-    const countStmt = this.db.prepare(`SELECT COUNT(*) as count FROM scratchpad_entries`);
-    const oldestStmt = this.db.prepare(`
-      SELECT id
-      FROM scratchpad_entries
-      ORDER BY updated_at ASC, created_at ASC
-      LIMIT ?
-    `);
-    const deleteStmt = this.db.prepare(`DELETE FROM scratchpad_entries WHERE id = ?`);
-    const insertStmt = this.db.prepare(`
-      INSERT INTO scratchpad_entries (id, content, created_at, updated_at)
-      VALUES (?, ?, ?, ?)
-    `);
-
-    const evictedIds = this.db.transaction(() => {
-      const row = countStmt.get() as { count: number };
-      const overflow = Math.max(0, row.count - SCRATCHPAD_MAX_ENTRIES + 1);
+    return this.adapter.transaction(async (tx) => {
+      const countRow = await tx.queryOne<{ count: number }>(`SELECT COUNT(*) as count FROM scratchpad_entries`);
+      const rowCount = countRow?.count ?? 0;
+      const overflow = Math.max(0, rowCount - SCRATCHPAD_MAX_ENTRIES + 1);
       let evicted: string[] = [];
 
       if (overflow > 0) {
-        const rows = oldestStmt.all(overflow) as Array<{ id: string }>;
+        const rows = await tx.query<{ id: string }>(
+          `SELECT id FROM scratchpad_entries ORDER BY updated_at ASC, created_at ASC LIMIT ?`,
+          [overflow],
+        );
         evicted = rows.map(entry => entry.id);
         for (const evictedId of evicted) {
-          deleteStmt.run(evictedId);
+          await tx.run(`DELETE FROM scratchpad_entries WHERE id = ?`, [evictedId]);
         }
       }
 
-      insertStmt.run(id, normalizedContent, now, now);
-      return evicted;
-    })();
+      await tx.run(
+        `INSERT INTO scratchpad_entries (id, content, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+        [id, normalizedContent, now, now],
+      );
 
-    const entry = this.getScratchpadEntry(id);
-    if (!entry) {
-      throw new Error(`Failed to load scratchpad entry after insert: ${id}`);
-    }
-    this.syncScratchpadMirror();
+      const entry = await tx.queryOne<ScratchpadRow>(
+        `SELECT id, content, created_at, updated_at FROM scratchpad_entries WHERE id = ?`,
+        [id],
+      );
 
-    return { entry, evictedIds };
+      if (!entry) {
+        throw new Error(`Failed to load scratchpad entry after insert: ${id}`);
+      }
+
+      await this.syncScratchpadMirror();
+
+      return { entry: mapScratchpadRow(entry), evictedIds: evicted };
+    });
   }
 
-  replaceScratchpadEntry(
+  async replaceScratchpadEntry(
     id: string,
     content: string,
     options: {
       now?: number;
     } = {},
-  ): ScratchpadEntry | null {
+  ): Promise<ScratchpadEntry | null> {
+    await this.ensureInitialized();
     const normalizedId = id.trim();
     if (!normalizedId) return null;
     const normalizedContent = this.normalizeScratchpadContent(content);
     const now = options.now ?? Date.now();
 
-    const result = this.db.prepare(`
-      UPDATE scratchpad_entries
-      SET content = ?, updated_at = ?
-      WHERE id = ?
-    `).run(normalizedContent, now, normalizedId);
+    const result = await this.adapter.run(
+      `UPDATE scratchpad_entries SET content = ?, updated_at = ? WHERE id = ?`,
+      [normalizedContent, now, normalizedId],
+    );
 
     if (result.changes === 0) return null;
-    this.syncScratchpadMirror();
-    return this.getScratchpadEntry(normalizedId) ?? null;
+    await this.syncScratchpadMirror();
+    const entry = await this.getScratchpadEntry(normalizedId);
+    return entry ?? null;
   }
 
-  removeScratchpadEntry(id: string): boolean {
+  async removeScratchpadEntry(id: string): Promise<boolean> {
+    await this.ensureInitialized();
     const normalizedId = id.trim();
     if (!normalizedId) return false;
-    const result = this.db.prepare(`DELETE FROM scratchpad_entries WHERE id = ?`).run(normalizedId);
+    const result = await this.adapter.run(
+      `DELETE FROM scratchpad_entries WHERE id = ?`,
+      [normalizedId],
+    );
     if (result.changes > 0) {
-      this.syncScratchpadMirror();
+      await this.syncScratchpadMirror();
     }
     return result.changes > 0;
   }
 
-  getScratchpadEntry(id: string): ScratchpadEntry | undefined {
+  async getScratchpadEntry(id: string): Promise<ScratchpadEntry | undefined> {
+    await this.ensureInitialized();
     const normalizedId = id.trim();
     if (!normalizedId) return undefined;
-    const row = this.db.prepare(`
-      SELECT id, content, created_at, updated_at
-      FROM scratchpad_entries
-      WHERE id = ?
-      LIMIT 1
-    `).get(normalizedId) as ScratchpadRow | undefined;
+    const row = await this.adapter.queryOne<ScratchpadRow>(
+      `SELECT id, content, created_at, updated_at FROM scratchpad_entries WHERE id = ? LIMIT 1`,
+      [normalizedId],
+    );
     return row ? mapScratchpadRow(row) : undefined;
   }
 
-  listScratchpadEntries(limit: number = SCRATCHPAD_MAX_ENTRIES): ScratchpadEntry[] {
+  async listScratchpadEntries(limit: number = SCRATCHPAD_MAX_ENTRIES): Promise<ScratchpadEntry[]> {
+    await this.ensureInitialized();
     const normalizedLimit = this.normalizeScratchpadLimit(limit);
-    const rows = this.db.prepare(`
-      SELECT id, content, created_at, updated_at
-      FROM scratchpad_entries
-      ORDER BY updated_at DESC, created_at DESC
-      LIMIT ?
-    `).all(normalizedLimit) as ScratchpadRow[];
+    const rows = await this.adapter.query<ScratchpadRow>(
+      `SELECT id, content, created_at, updated_at FROM scratchpad_entries ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+      [normalizedLimit],
+    );
     return rows.map(mapScratchpadRow);
   }
 
@@ -1547,10 +1590,10 @@ export class MemoryStore {
     return Math.max(0, Math.floor(offset));
   }
 
-  private syncScratchpadMirror(): void {
+  private async syncScratchpadMirror(): Promise<void> {
     if (!this.scratchpadMirrorPath) return;
     try {
-      const entries = this.listScratchpadEntries(SCRATCHPAD_MAX_ENTRIES);
+      const entries = await this.listScratchpadEntries(SCRATCHPAD_MAX_ENTRIES);
       writeJsonAtomic(this.scratchpadMirrorPath, {
         updatedAt: new Date().toISOString(),
         count: entries.length,

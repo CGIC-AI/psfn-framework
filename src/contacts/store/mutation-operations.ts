@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import type {
   ContactChannel,
   ChannelPrivacyLevel,
@@ -12,50 +12,50 @@ import {
 } from './identity-utils.js';
 import { maybeHasContactLinkedTable } from './schema.js';
 
-export function setContactTrustLevel(
-  db: Database.Database,
+export async function setContactTrustLevel(
+  adapter: DatabaseAdapter,
   id: string,
   trustLevel: TrustLevel,
-): void {
-  db.prepare('UPDATE contacts SET trust_level = ? WHERE id = ?').run(trustLevel, id);
+): Promise<void> {
+  await adapter.run('UPDATE contacts SET trust_level = ? WHERE id = ?', [trustLevel, id]);
 }
 
-export function updateContactLastSeen(db: Database.Database, id: string): void {
+export async function updateContactLastSeen(adapter: DatabaseAdapter, id: string): Promise<void> {
   const now = new Date().toISOString();
-  db.prepare('UPDATE contacts SET last_seen = ? WHERE id = ?').run(now, id);
-  db.prepare('UPDATE contact_channel_ids SET last_seen = ? WHERE contact_id = ?').run(now, id);
-  db.prepare('UPDATE contact_channel_activity SET last_seen = ? WHERE contact_id = ?').run(now, id);
+  await adapter.run('UPDATE contacts SET last_seen = ? WHERE id = ?', [now, id]);
+  await adapter.run('UPDATE contact_channel_ids SET last_seen = ? WHERE contact_id = ?', [now, id]);
+  await adapter.run('UPDATE contact_channel_activity SET last_seen = ? WHERE contact_id = ?', [now, id]);
 }
 
-export function updateContactIdentityProfile(
-  db: Database.Database,
+export async function updateContactIdentityProfile(
+  adapter: DatabaseAdapter,
   contactId: string,
   fallbackDisplayName: string,
   fallbackNickname: string | undefined,
   displayName: string,
   nickname?: string,
-): boolean {
+): Promise<boolean> {
   const requestedNickname = normalizeNicknameValue(nickname);
   const normalizedNickname = requestedNickname === undefined
     ? (fallbackNickname ?? null)
     : requestedNickname;
 
-  const result = db.prepare(`
+  const result = await adapter.run(`
     UPDATE contacts
     SET display_name = ?, nickname = ?
     WHERE id = ?
-  `).run(displayName.trim() || fallbackDisplayName, normalizedNickname, contactId);
+  `, [displayName.trim() || fallbackDisplayName, normalizedNickname, contactId]);
 
   return result.changes > 0;
 }
 
-export function recordContactChannelActivity(
-  db: Database.Database,
+export async function recordContactChannelActivity(
+  adapter: DatabaseAdapter,
   contactId: string,
   channel: ContactChannel,
   channelId: string,
   privacyLevel?: ChannelPrivacyLevel,
-): void {
+): Promise<void> {
   const trimmedChannelId = channelId.trim();
   if (!trimmedChannelId) return;
 
@@ -63,7 +63,7 @@ export function recordContactChannelActivity(
   const now = new Date().toISOString();
   if (privacyLevel !== undefined) {
     const normalizedPrivacy = normalizePrivacyLevel(privacyLevel, normalizedChannel);
-    db.prepare(`
+    await adapter.run(`
       INSERT INTO contact_channel_activity (
         contact_id,
         channel,
@@ -77,11 +77,11 @@ export function recordContactChannelActivity(
       DO UPDATE SET
         privacy_level = excluded.privacy_level,
         last_seen = excluded.last_seen
-    `).run(contactId, normalizedChannel, trimmedChannelId, normalizedPrivacy, now, now);
+    `, [contactId, normalizedChannel, trimmedChannelId, normalizedPrivacy, now, now]);
     return;
   }
 
-  db.prepare(`
+  await adapter.run(`
     INSERT INTO contact_channel_activity (
       contact_id,
       channel,
@@ -93,73 +93,73 @@ export function recordContactChannelActivity(
     VALUES (?, ?, ?, NULL, ?, ?)
     ON CONFLICT(contact_id, channel, channel_id)
     DO UPDATE SET last_seen = excluded.last_seen
-  `).run(contactId, normalizedChannel, trimmedChannelId, now, now);
+  `, [contactId, normalizedChannel, trimmedChannelId, now, now]);
 }
 
-export function updateContactNotes(db: Database.Database, id: string, notes: string): void {
-  db.prepare('UPDATE contacts SET notes = ? WHERE id = ?').run(notes, id);
+export async function updateContactNotes(adapter: DatabaseAdapter, id: string, notes: string): Promise<void> {
+  await adapter.run('UPDATE contacts SET notes = ? WHERE id = ?', [notes, id]);
 }
 
-export function updateContactEmotionalBaseline(
-  db: Database.Database,
+export async function updateContactEmotionalBaseline(
+  adapter: DatabaseAdapter,
   id: string,
   baseline: Record<string, number>,
-): void {
-  db.prepare(`
+): Promise<void> {
+  await adapter.run(`
     UPDATE contacts
     SET emotional_baseline = ?, last_seen = ?
     WHERE id = ?
-  `).run(
+  `, [
     JSON.stringify(baseline),
     new Date().toISOString(),
     id,
-  );
+  ]);
 }
 
-export function updateContactRelationshipType(
-  db: Database.Database,
+export async function updateContactRelationshipType(
+  adapter: DatabaseAdapter,
   id: string,
   relationshipType: RelationshipType,
-): void {
-  db.prepare('UPDATE contacts SET relationship_type = ? WHERE id = ?').run(relationshipType, id);
+): Promise<void> {
+  await adapter.run('UPDATE contacts SET relationship_type = ? WHERE id = ?', [relationshipType, id]);
 }
 
-export function updateContactChannelPrivacy(
-  db: Database.Database,
+export async function updateContactChannelPrivacy(
+  adapter: DatabaseAdapter,
   contactId: string,
   channel: ContactChannel,
   channelUserId: string,
   privacyLevel: ChannelPrivacyLevel,
-): boolean {
+): Promise<boolean> {
   const identity = normalizeIdentity(channel, channelUserId);
-  const result = db.prepare(`
+  const result = await adapter.run(`
     UPDATE contact_channel_ids
     SET privacy_level = ?, last_seen = ?
     WHERE contact_id = ? AND channel = ? AND channel_user_id = ?
-  `).run(
+  `, [
     privacyLevel,
     new Date().toISOString(),
     contactId,
     identity.channel,
     identity.userId,
-  );
+  ]);
   return result.changes > 0;
 }
 
-export function updateConversationChannelPrivacy(
-  db: Database.Database,
+export async function updateConversationChannelPrivacy(
+  adapter: DatabaseAdapter,
   contactId: string,
   channel: ContactChannel,
   channelId: string,
   privacyLevel: ChannelPrivacyLevel,
-): boolean {
+): Promise<boolean> {
   const trimmedChannelId = channelId.trim();
   if (!trimmedChannelId) return false;
 
   const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
   const normalizedPrivacy = normalizePrivacyLevel(privacyLevel, normalizedChannel);
   const now = new Date().toISOString();
-  const result = db.prepare(`
+  const result = await adapter.run(`
     INSERT INTO contact_channel_activity (
       contact_id,
       channel,
@@ -173,62 +173,63 @@ export function updateConversationChannelPrivacy(
     DO UPDATE SET
       privacy_level = excluded.privacy_level,
       last_seen = excluded.last_seen
-  `).run(
+  `, [
     contactId,
     normalizedChannel,
     trimmedChannelId,
     normalizedPrivacy,
     now,
     now,
+  ]);
+  return result.changes > 0;
+}
+
+export async function deleteContact(adapter: DatabaseAdapter, id: string): Promise<boolean> {
+  return await adapter.transaction(async (tx) => {
+    // Orphan L2 memories (keep facts, unlink contact)
+    if (await maybeHasContactLinkedTable(tx, 'l2_memories', 'contact_id')) {
+      await tx.run('UPDATE l2_memories SET contact_id = NULL WHERE contact_id = ?', [id]);
+    }
+    // Remove contact profiles
+    if (await maybeHasContactLinkedTable(tx, 'contact_profiles', 'contact_id')) {
+      await tx.run('DELETE FROM contact_profiles WHERE contact_id = ?', [id]);
+    }
+    // Remove channel identities and activity (child tables)
+    await tx.run('DELETE FROM contact_channel_ids WHERE contact_id = ?', [id]);
+    await tx.run('DELETE FROM contact_channel_activity WHERE contact_id = ?', [id]);
+    // Remove the contact itself
+    const result = await tx.run('DELETE FROM contacts WHERE id = ?', [id]);
+    return result.changes > 0;
+  });
+}
+
+export async function unlinkChannelIdentity(
+  adapter: DatabaseAdapter,
+  contactId: string,
+  channel: string,
+  channelUserId: string,
+): Promise<boolean> {
+  const identity = normalizeIdentity(channel, channelUserId);
+  const result = await adapter.run(
+    'DELETE FROM contact_channel_ids WHERE contact_id = ? AND channel = ? AND channel_user_id = ?',
+    [contactId, identity.channel, identity.userId],
   );
   return result.changes > 0;
 }
 
-export function deleteContact(db: Database.Database, id: string): boolean {
-  const deleteTx = db.transaction((contactId: string): boolean => {
-    // Orphan L2 memories (keep facts, unlink contact)
-    if (maybeHasContactLinkedTable(db, 'l2_memories', 'contact_id')) {
-      db.prepare('UPDATE l2_memories SET contact_id = NULL WHERE contact_id = ?').run(contactId);
-    }
-    // Remove contact profiles
-    if (maybeHasContactLinkedTable(db, 'contact_profiles', 'contact_id')) {
-      db.prepare('DELETE FROM contact_profiles WHERE contact_id = ?').run(contactId);
-    }
-    // Remove channel identities and activity (child tables)
-    db.prepare('DELETE FROM contact_channel_ids WHERE contact_id = ?').run(contactId);
-    db.prepare('DELETE FROM contact_channel_activity WHERE contact_id = ?').run(contactId);
-    // Remove the contact itself
-    const result = db.prepare('DELETE FROM contacts WHERE id = ?').run(contactId);
-    return result.changes > 0;
-  });
-  return deleteTx(id);
-}
-
-export function unlinkChannelIdentity(
-  db: Database.Database,
-  contactId: string,
-  channel: string,
-  channelUserId: string,
-): boolean {
-  const identity = normalizeIdentity(channel, channelUserId);
-  const result = db.prepare(
-    'DELETE FROM contact_channel_ids WHERE contact_id = ? AND channel = ? AND channel_user_id = ?',
-  ).run(contactId, identity.channel, identity.userId);
-  return result.changes > 0;
-}
-
-export function deleteConversationChannel(
-  db: Database.Database,
+export async function deleteConversationChannel(
+  adapter: DatabaseAdapter,
   contactId: string,
   channel: string,
   channelId: string,
-): boolean {
+): Promise<boolean> {
   const normalizedChannel = channel.trim().toLowerCase() || 'unknown';
   const trimmedChannelId = channelId.trim();
   if (!trimmedChannelId) return false;
 
-  const result = db.prepare(
+  const result = await adapter.run(
     'DELETE FROM contact_channel_activity WHERE contact_id = ? AND channel = ? AND channel_id = ?',
-  ).run(contactId, normalizedChannel, trimmedChannelId);
+    [contactId, normalizedChannel, trimmedChannelId],
+  );
   return result.changes > 0;
 }

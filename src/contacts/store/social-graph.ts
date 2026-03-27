@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import { randomUUID } from 'node:crypto';
 import type {
   SocialGraphEntity,
@@ -167,8 +167,8 @@ function edgeVisible(
     && allowed.includes(targetSensitivity);
 }
 
-export function backfillContactGraphEntities(db: Database.Database): void {
-  db.exec(`
+export async function backfillContactGraphEntities(adapter: DatabaseAdapter): Promise<void> {
+  await adapter.exec(`
     INSERT INTO social_graph_entities (
       id,
       entity_kind,
@@ -201,36 +201,36 @@ export function backfillContactGraphEntities(db: Database.Database): void {
   `);
 }
 
-export function getSocialGraphEntityById(
-  db: Database.Database,
+export async function getSocialGraphEntityById(
+  adapter: DatabaseAdapter,
   entityId: string,
-): SocialGraphEntity | undefined {
-  const row = db.prepare(`
+): Promise<SocialGraphEntity | undefined> {
+  const row = await adapter.queryOne<SocialGraphEntityRow>(`
     SELECT *
     FROM social_graph_entities
     WHERE id = ?
     LIMIT 1
-  `).get(entityId) as SocialGraphEntityRow | undefined;
+  `, [entityId]);
   return row ? mapSocialGraphEntityRow(row) : undefined;
 }
 
-export function getSocialGraphEntityByContactId(
-  db: Database.Database,
+export async function getSocialGraphEntityByContactId(
+  adapter: DatabaseAdapter,
   contactId: string,
-): SocialGraphEntity | undefined {
-  const row = db.prepare(`
+): Promise<SocialGraphEntity | undefined> {
+  const row = await adapter.queryOne<SocialGraphEntityRow>(`
     SELECT *
     FROM social_graph_entities
     WHERE contact_id = ?
     LIMIT 1
-  `).get(contactId) as SocialGraphEntityRow | undefined;
+  `, [contactId]);
   return row ? mapSocialGraphEntityRow(row) : undefined;
 }
 
-export function upsertSocialGraphEntity(
-  db: Database.Database,
+export async function upsertSocialGraphEntity(
+  adapter: DatabaseAdapter,
   input: SocialGraphEntityUpsertInput,
-): SocialGraphEntity {
+): Promise<SocialGraphEntity> {
   const displayName = input.displayName.trim();
   if (!displayName) {
     throw new Error('social graph entity displayName must be non-empty');
@@ -246,14 +246,14 @@ export function upsertSocialGraphEntity(
   const confidence = clampUnit(input.confidence, normalizedContactId ? 1 : 0.7);
 
   const existing = normalizedContactId
-    ? getSocialGraphEntityByContactId(db, normalizedContactId)
-    : (input.id ? getSocialGraphEntityById(db, input.id) : undefined);
+    ? await getSocialGraphEntityByContactId(adapter, normalizedContactId)
+    : (input.id ? await getSocialGraphEntityById(adapter, input.id) : undefined);
 
   if (existing) {
     const nextSensitivity = chooseMoreRestrictiveSensitivity(existing.sensitivity, sensitivity);
     const nextProvenanceRefs = normalizeStringArray([...existing.provenanceRefs, ...provenanceRefs]);
     const nextConfidence = Math.max(existing.confidence, confidence);
-    db.prepare(`
+    await adapter.run(`
       UPDATE social_graph_entities
       SET entity_kind = ?,
           display_name = ?,
@@ -264,7 +264,7 @@ export function upsertSocialGraphEntity(
           source = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(
+    `, [
       entityKind,
       displayName,
       normalizedContactId ?? null,
@@ -274,12 +274,12 @@ export function upsertSocialGraphEntity(
       source,
       now,
       existing.id,
-    );
-    return getSocialGraphEntityById(db, existing.id)!;
+    ]);
+    return await getSocialGraphEntityById(adapter, existing.id)!;
   }
 
   const id = input.id?.trim() || fallbackId;
-  db.prepare(`
+  await adapter.run(`
     INSERT INTO social_graph_entities (
       id,
       entity_kind,
@@ -293,7 +293,7 @@ export function upsertSocialGraphEntity(
       updated_at
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     id,
     entityKind,
     displayName,
@@ -304,15 +304,15 @@ export function upsertSocialGraphEntity(
     source,
     now,
     now,
-  );
-  return getSocialGraphEntityById(db, id)!;
+  ]);
+  return await getSocialGraphEntityById(adapter, id)!;
 }
 
-export function ensureContactSocialGraphEntity(
-  db: Database.Database,
+export async function ensureContactSocialGraphEntity(
+  adapter: DatabaseAdapter,
   contact: Pick<ContactRow, 'id' | 'display_name' | 'first_seen' | 'last_seen'>,
-): SocialGraphEntity {
-  return upsertSocialGraphEntity(db, {
+): Promise<SocialGraphEntity> {
+  return upsertSocialGraphEntity(adapter, {
     id: `contact:${contact.id}`,
     displayName: contact.display_name,
     contactId: contact.id,
@@ -321,10 +321,10 @@ export function ensureContactSocialGraphEntity(
   });
 }
 
-export function listSocialGraphEntities(
-  db: Database.Database,
+export async function listSocialGraphEntities(
+  adapter: DatabaseAdapter,
   query: SocialGraphEntityQuery = {},
-): SocialGraphEntity[] {
+): Promise<SocialGraphEntity[]> {
   const limit = Number.isFinite(query.limit) ? Math.max(1, Math.min(Math.floor(query.limit!), 100)) : 100;
   const allowed = new Set(getAllowedSensitivities(
     normalizeViewerTrustLevel(query.viewerTrustLevel),
@@ -332,29 +332,29 @@ export function listSocialGraphEntities(
   ));
 
   const rows = query.contactId
-    ? db.prepare(`
+    ? await adapter.query<SocialGraphEntityRow>(`
       SELECT *
       FROM social_graph_entities
       WHERE contact_id = ?
       ORDER BY updated_at DESC
       LIMIT ?
-    `).all(query.contactId, limit) as SocialGraphEntityRow[]
-    : db.prepare(`
+    `, [query.contactId, limit])
+    : await adapter.query<SocialGraphEntityRow>(`
       SELECT *
       FROM social_graph_entities
       ORDER BY updated_at DESC
       LIMIT ?
-    `).all(limit) as SocialGraphEntityRow[];
+    `, [limit]);
 
   return rows
     .map(mapSocialGraphEntityRow)
     .filter(entity => allowed.has(entity.sensitivity));
 }
 
-export function upsertSocialRelationshipEdge(
-  db: Database.Database,
+export async function upsertSocialRelationshipEdge(
+  adapter: DatabaseAdapter,
   input: SocialRelationshipEdgeUpsertInput,
-): SocialRelationshipEdge {
+): Promise<SocialRelationshipEdge> {
   const sourceEntityId = input.sourceEntityId.trim();
   const targetEntityId = input.targetEntityId.trim();
   if (!sourceEntityId || !targetEntityId) {
@@ -372,14 +372,14 @@ export function upsertSocialRelationshipEdge(
   const evidenceMemoryIds = normalizeStringArray(input.evidenceMemoryIds);
   const confidence = clampUnit(input.confidence, 0.7);
 
-  const sourceExists = getSocialGraphEntityById(db, normalizedEndpoints.sourceEntityId);
-  const targetExists = getSocialGraphEntityById(db, normalizedEndpoints.targetEntityId);
+  const sourceExists = await getSocialGraphEntityById(adapter, normalizedEndpoints.sourceEntityId);
+  const targetExists = await getSocialGraphEntityById(adapter, normalizedEndpoints.targetEntityId);
   if (!sourceExists || !targetExists) {
     throw new Error('social relationship edge requires existing source and target entities');
   }
 
   const now = new Date().toISOString();
-  const existingRow = db.prepare(`
+  const existingRow = await adapter.queryOne<SocialRelationshipEdgeRow>(`
     SELECT *
     FROM social_relationship_edges
     WHERE source_entity_id = ?
@@ -387,16 +387,16 @@ export function upsertSocialRelationshipEdge(
       AND relationship_type = ?
       AND directional = ?
     LIMIT 1
-  `).get(
+  `, [
     normalizedEndpoints.sourceEntityId,
     normalizedEndpoints.targetEntityId,
     relationshipType,
     directional ? 1 : 0,
-  ) as SocialRelationshipEdgeRow | undefined;
+  ]);
 
   if (existingRow) {
     const existing = mapSocialRelationshipEdgeRow(existingRow);
-    db.prepare(`
+    await adapter.run(`
       UPDATE social_relationship_edges
       SET sensitivity = ?,
           provenance_refs = ?,
@@ -404,24 +404,25 @@ export function upsertSocialRelationshipEdge(
           confidence = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(
+    `, [
       chooseMoreRestrictiveSensitivity(existing.sensitivity, sensitivity),
       JSON.stringify(normalizeStringArray([...existing.provenanceRefs, ...provenanceRefs])),
       JSON.stringify(normalizeStringArray([...existing.evidenceMemoryIds, ...evidenceMemoryIds])),
       Math.max(existing.confidence, confidence),
       now,
       existing.id,
-    );
-    return listSocialRelationshipEdges(db, {
+    ]);
+    const edges = await listSocialRelationshipEdges(adapter, {
       entityId: normalizedEndpoints.sourceEntityId,
       relationshipType,
       viewerTrustLevel: 'primary',
       viewerChannelVisibility: 'private',
-    }).find(edge => edge.id === existing.id)!;
+    });
+    return edges.find(edge => edge.id === existing.id)!;
   }
 
   const id = `edge:${randomUUID()}`;
-  db.prepare(`
+  await adapter.run(`
     INSERT INTO social_relationship_edges (
       id,
       source_entity_id,
@@ -436,7 +437,7 @@ export function upsertSocialRelationshipEdge(
       updated_at
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     id,
     normalizedEndpoints.sourceEntityId,
     normalizedEndpoints.targetEntityId,
@@ -448,24 +449,26 @@ export function upsertSocialRelationshipEdge(
     confidence,
     now,
     now,
-  );
+  ]);
 
-  return listSocialRelationshipEdges(db, {
+  const edges = await listSocialRelationshipEdges(adapter, {
     entityId: normalizedEndpoints.sourceEntityId,
     relationshipType,
     viewerTrustLevel: 'primary',
     viewerChannelVisibility: 'private',
-  }).find(edge => edge.id === id)!;
+  });
+  return edges.find(edge => edge.id === id)!;
 }
 
-export function listSocialRelationshipEdges(
-  db: Database.Database,
+export async function listSocialRelationshipEdges(
+  adapter: DatabaseAdapter,
   query: SocialRelationshipEdgeQuery = {},
-): SocialRelationshipEdge[] {
+): Promise<SocialRelationshipEdge[]> {
   const limit = Number.isFinite(query.limit) ? Math.max(1, Math.min(Math.floor(query.limit!), 200)) : 200;
   let entityId = query.entityId?.trim() || undefined;
   if (!entityId && query.contactId) {
-    entityId = getSocialGraphEntityByContactId(db, query.contactId)?.id;
+    const entity = await getSocialGraphEntityByContactId(adapter, query.contactId);
+    entityId = entity?.id;
   }
   if (query.contactId && !entityId) return [];
 
@@ -484,7 +487,10 @@ export function listSocialRelationshipEdges(
     params.push(query.minConfidence);
   }
 
-  const rows = db.prepare(`
+  const rows = await adapter.query<Array<SocialRelationshipEdgeRow & {
+    source_sensitivity: string;
+    target_sensitivity: string;
+  }>>(`
     SELECT
       e.*,
       source.sensitivity AS source_sensitivity,
@@ -495,10 +501,7 @@ export function listSocialRelationshipEdges(
     ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY e.updated_at DESC, e.created_at DESC
     LIMIT ?
-  `).all(...params, limit) as Array<SocialRelationshipEdgeRow & {
-    source_sensitivity: string;
-    target_sensitivity: string;
-  }>;
+  `, [...params, limit]);
 
   return rows
     .filter(row => edgeVisible(
@@ -510,22 +513,22 @@ export function listSocialRelationshipEdges(
     .map(row => mapSocialRelationshipEdgeRow(row));
 }
 
-export function listRelatedContactIds(
-  db: Database.Database,
+export async function listRelatedContactIds(
+  adapter: DatabaseAdapter,
   contactId: string,
   query: SocialRelationshipEdgeQuery = {},
-): string[] {
-  const entity = getSocialGraphEntityByContactId(db, contactId);
+): Promise<string[]> {
+  const entity = await getSocialGraphEntityByContactId(adapter, contactId);
   if (!entity) return [];
 
-  const edges = listSocialRelationshipEdges(db, {
+  const edges = await listSocialRelationshipEdges(adapter, {
     ...query,
     entityId: entity.id,
   });
   const relatedContactIds = new Set<string>();
   for (const edge of edges) {
     const otherEntityId = edge.sourceEntityId === entity.id ? edge.targetEntityId : edge.sourceEntityId;
-    const otherEntity = getSocialGraphEntityById(db, otherEntityId);
+    const otherEntity = await getSocialGraphEntityById(adapter, otherEntityId);
     if (otherEntity?.contactId) {
       relatedContactIds.add(otherEntity.contactId);
     }
@@ -533,13 +536,13 @@ export function listRelatedContactIds(
   return [...relatedContactIds];
 }
 
-export function mergeSocialGraphForContacts(
-  db: Database.Database,
+export async function mergeSocialGraphForContacts(
+  adapter: DatabaseAdapter,
   sourceContactId: string,
   targetContactId: string,
-): void {
-  const sourceEntity = getSocialGraphEntityByContactId(db, sourceContactId);
-  const targetEntity = getSocialGraphEntityByContactId(db, targetContactId);
+): Promise<void> {
+  const sourceEntity = await getSocialGraphEntityByContactId(adapter, sourceContactId);
+  const targetEntity = await getSocialGraphEntityByContactId(adapter, targetContactId);
   if (!sourceEntity || !targetEntity || sourceEntity.id === targetEntity.id) {
     return;
   }
@@ -552,27 +555,27 @@ export function mergeSocialGraphForContacts(
   ]);
   const mergedConfidence = Math.max(targetEntity.confidence, sourceEntity.confidence);
 
-  db.prepare(`
+  await adapter.run(`
     UPDATE social_graph_entities
     SET sensitivity = ?,
         provenance_refs = ?,
         confidence = ?,
         updated_at = ?
     WHERE id = ?
-  `).run(
+  `, [
     mergedSensitivity,
     JSON.stringify(mergedProvenanceRefs),
     mergedConfidence,
     now,
     targetEntity.id,
-  );
+  ]);
 
-  const sourceEdges = db.prepare(`
+  const sourceEdges = await adapter.query<SocialRelationshipEdgeRow>(`
     SELECT *
     FROM social_relationship_edges
     WHERE source_entity_id = ? OR target_entity_id = ?
     ORDER BY created_at ASC, id ASC
-  `).all(sourceEntity.id, sourceEntity.id) as SocialRelationshipEdgeRow[];
+  `, [sourceEntity.id, sourceEntity.id]);
 
   for (const row of sourceEdges) {
     const existing = mapSocialRelationshipEdgeRow(row);
@@ -585,11 +588,11 @@ export function mergeSocialGraphForContacts(
     );
 
     if (normalizedEndpoints.sourceEntityId === normalizedEndpoints.targetEntityId) {
-      db.prepare('DELETE FROM social_relationship_edges WHERE id = ?').run(existing.id);
+      await adapter.run('DELETE FROM social_relationship_edges WHERE id = ?', [existing.id]);
       continue;
     }
 
-    const duplicateRow = db.prepare(`
+    const duplicateRow = await adapter.queryOne<SocialRelationshipEdgeRow>(`
       SELECT *
       FROM social_relationship_edges
       WHERE source_entity_id = ?
@@ -598,17 +601,17 @@ export function mergeSocialGraphForContacts(
         AND directional = ?
         AND id != ?
       LIMIT 1
-    `).get(
+    `, [
       normalizedEndpoints.sourceEntityId,
       normalizedEndpoints.targetEntityId,
       existing.relationshipType,
       existing.directional ? 1 : 0,
       existing.id,
-    ) as SocialRelationshipEdgeRow | undefined;
+    ]);
 
     if (duplicateRow) {
       const duplicate = mapSocialRelationshipEdgeRow(duplicateRow);
-      db.prepare(`
+      await adapter.run(`
         UPDATE social_relationship_edges
         SET sensitivity = ?,
             provenance_refs = ?,
@@ -616,33 +619,38 @@ export function mergeSocialGraphForContacts(
             confidence = ?,
             updated_at = ?
         WHERE id = ?
-      `).run(
+      `, [
         chooseMoreRestrictiveSensitivity(duplicate.sensitivity, existing.sensitivity),
         JSON.stringify(normalizeStringArray([...duplicate.provenanceRefs, ...existing.provenanceRefs])),
         JSON.stringify(normalizeStringArray([...duplicate.evidenceMemoryIds, ...existing.evidenceMemoryIds])),
         Math.max(duplicate.confidence, existing.confidence),
         existing.updatedAt > duplicate.updatedAt ? existing.updatedAt : duplicate.updatedAt,
         duplicate.id,
-      );
-      db.prepare('DELETE FROM social_relationship_edges WHERE id = ?').run(existing.id);
+      ]);
+      await adapter.run('DELETE FROM social_relationship_edges WHERE id = ?', [existing.id]);
       continue;
     }
 
-    db.prepare(`
+    await adapter.run(`
       UPDATE social_relationship_edges
       SET source_entity_id = ?,
           target_entity_id = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(
+    `, [
       normalizedEndpoints.sourceEntityId,
       normalizedEndpoints.targetEntityId,
       now,
       existing.id,
-    );
+    ]);
   }
 
-  const duplicates = db.prepare(`
+  const duplicates = await adapter.query<{
+    source_entity_id: string;
+    target_entity_id: string;
+    relationship_type: string;
+    directional: number;
+  }>(`
     SELECT
       source_entity_id,
       target_entity_id,
@@ -651,15 +659,10 @@ export function mergeSocialGraphForContacts(
     FROM social_relationship_edges
     GROUP BY source_entity_id, target_entity_id, relationship_type, directional
     HAVING COUNT(*) > 1
-  `).all() as Array<{
-    source_entity_id: string;
-    target_entity_id: string;
-    relationship_type: string;
-    directional: number;
-  }>;
+  `);
 
   for (const duplicate of duplicates) {
-    const rows = db.prepare(`
+    const rows = await adapter.query<SocialRelationshipEdgeRow>(`
       SELECT *
       FROM social_relationship_edges
       WHERE source_entity_id = ?
@@ -667,12 +670,12 @@ export function mergeSocialGraphForContacts(
         AND relationship_type = ?
         AND directional = ?
       ORDER BY created_at ASC, id ASC
-    `).all(
+    `, [
       duplicate.source_entity_id,
       duplicate.target_entity_id,
       duplicate.relationship_type,
       duplicate.directional,
-    ) as SocialRelationshipEdgeRow[];
+    ]);
 
     if (rows.length < 2) continue;
     const [primaryRow, ...rest] = rows;
@@ -690,7 +693,7 @@ export function mergeSocialGraphForContacts(
       };
     }
 
-    db.prepare(`
+    await adapter.run(`
       UPDATE social_relationship_edges
       SET sensitivity = ?,
           provenance_refs = ?,
@@ -698,19 +701,19 @@ export function mergeSocialGraphForContacts(
           confidence = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(
+    `, [
       mergedEdge.sensitivity,
       JSON.stringify(mergedEdge.provenanceRefs),
       JSON.stringify(mergedEdge.evidenceMemoryIds),
       mergedEdge.confidence,
       mergedEdge.updatedAt,
       primary.id,
-    );
+    ]);
 
     for (const row of rest) {
-      db.prepare('DELETE FROM social_relationship_edges WHERE id = ?').run(row.id);
+      await adapter.run('DELETE FROM social_relationship_edges WHERE id = ?', [row.id]);
     }
   }
 
-  db.prepare('DELETE FROM social_graph_entities WHERE id = ?').run(sourceEntity.id);
+  await adapter.run('DELETE FROM social_graph_entities WHERE id = ?', [sourceEntity.id]);
 }

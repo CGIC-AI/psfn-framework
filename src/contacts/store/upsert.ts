@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import type {
   Contact,
   ContactChannelIdentity,
@@ -77,41 +77,41 @@ export function findUpsertTarget(
   return undefined;
 }
 
-export function upsertIdentityLink(
-  db: Database.Database,
+export async function upsertIdentityLink(
+  adapter: DatabaseAdapter,
   contactId: string,
   identity: ContactChannelIdentity,
   firstSeen: string,
   lastSeen: string,
   options?: ContactIdentityLinkOptions,
-): ContactIdentityLinkResult {
+): Promise<ContactIdentityLinkResult> {
   const normalized = normalizeChannelLinkInput(identity, options);
-  const existing = db.prepare(`
+  const existing = await adapter.queryOne<{ contact_id: string }>(`
     SELECT contact_id
     FROM contact_channel_ids
     WHERE channel = ? AND channel_user_id = ?
-  `).get(normalized.channel, normalized.userId) as { contact_id: string } | undefined;
+  `, [normalized.channel, normalized.userId]);
 
   if (existing && existing.contact_id !== contactId) {
     return 'identity_conflict';
   }
 
   if (existing) {
-    db.prepare(`
+    await adapter.run(`
       UPDATE contact_channel_ids
       SET last_seen = ?, privacy_level = COALESCE(?, privacy_level)
       WHERE contact_id = ? AND channel = ? AND channel_user_id = ?
-    `).run(
+    `, [
       lastSeen,
       normalized.privacyLevel,
       contactId,
       normalized.channel,
       normalized.userId,
-    );
+    ]);
     return 'already_linked';
   }
 
-  db.prepare(`
+  await adapter.run(`
     INSERT INTO contact_channel_ids (
       contact_id,
       channel,
@@ -121,45 +121,45 @@ export function upsertIdentityLink(
       last_seen
     )
     VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
+  `, [
     contactId,
     normalized.channel,
     normalized.userId,
     normalized.privacyLevel,
     firstSeen,
     lastSeen,
-  );
+  ]);
 
   return 'linked';
 }
 
-export function ensureLegacyDiscordUserId(
-  db: Database.Database,
+export async function ensureLegacyDiscordUserId(
+  adapter: DatabaseAdapter,
   contactId: string,
   discordUserId: string,
-): void {
-  db.prepare(`
+): Promise<void> {
+  await adapter.run(`
     UPDATE contacts
     SET discord_user_id = COALESCE(discord_user_id, ?)
     WHERE id = ?
-  `).run(discordUserId, contactId);
+  `, [discordUserId, contactId]);
 }
 
 export interface ApplyIdentityLinksOptions {
   onIdentityConflict?: (identity: ContactChannelIdentity) => void;
 }
 
-export function applyIdentityLinks(
-  db: Database.Database,
+export async function applyIdentityLinks(
+  adapter: DatabaseAdapter,
   contactId: string,
   identities: ContactChannelLink[],
   firstSeen: string,
   lastSeen: string,
   options: ApplyIdentityLinksOptions = {},
-): void {
+): Promise<void> {
   for (const identity of identities) {
-    const result = upsertIdentityLink(
-      db,
+    const result = await upsertIdentityLink(
+      adapter,
       contactId,
       identity,
       firstSeen,
@@ -172,7 +172,7 @@ export function applyIdentityLinks(
     }
 
     if (identity.channel === LEGACY_DISCORD_CHANNEL) {
-      ensureLegacyDiscordUserId(db, contactId, identity.userId);
+      await ensureLegacyDiscordUserId(adapter, contactId, identity.userId);
     }
   }
 }

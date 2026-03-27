@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import type { RelationshipType } from '../types.js';
 import type { ContactRow } from './domain-types.js';
 import {
@@ -12,45 +12,41 @@ import { maybeHasContactLinkedTable } from './schema.js';
 import { mergeSocialGraphForContacts } from './social-graph.js';
 
 export interface MergeContext {
-  db: Database.Database;
+  adapter: DatabaseAdapter;
 }
 
-export function mergeContacts(
+export async function mergeContacts(
   context: MergeContext,
   sourceContactId: string,
   targetContactId: string,
-): boolean {
+): Promise<boolean> {
   if (sourceContactId === targetContactId) return true;
 
-  const mergeTx = context.db.transaction((sourceId: string, targetId: string): boolean => {
-    const sourceRow = context.db.prepare('SELECT * FROM contacts WHERE id = ?')
-      .get(sourceId) as ContactRow | undefined;
-    const targetRow = context.db.prepare('SELECT * FROM contacts WHERE id = ?')
-      .get(targetId) as ContactRow | undefined;
+  return await context.adapter.transaction(async (tx) => {
+    const sourceRow = await tx.queryOne<ContactRow>('SELECT * FROM contacts WHERE id = ?', [sourceContactId]);
+    const targetRow = await tx.queryOne<ContactRow>('SELECT * FROM contacts WHERE id = ?', [targetContactId]);
     if (!sourceRow || !targetRow) return false;
 
-    mergeChannelIdentityRows(context.db, sourceId, targetId);
-    mergeChannelActivityRows(context.db, sourceId, targetId);
-    mergeSocialGraphForContacts(context.db, sourceId, targetId);
+    await mergeChannelIdentityRows(tx, sourceContactId, targetContactId);
+    await mergeChannelActivityRows(tx, sourceContactId, targetContactId);
+    await mergeSocialGraphForContacts(tx, sourceContactId, targetContactId);
 
-    if (maybeHasContactLinkedTable(context.db, 'l2_memories', 'contact_id')) {
-      context.db.prepare('UPDATE l2_memories SET contact_id = ? WHERE contact_id = ?')
-        .run(targetId, sourceId);
+    if (await maybeHasContactLinkedTable(tx, 'l2_memories', 'contact_id')) {
+      await tx.run('UPDATE l2_memories SET contact_id = ? WHERE contact_id = ?', [targetContactId, sourceContactId]);
     }
 
-    if (maybeHasContactLinkedTable(context.db, 'contact_profiles', 'contact_id')) {
-      const targetProfileExists = context.db.prepare(`
+    if (await maybeHasContactLinkedTable(tx, 'contact_profiles', 'contact_id')) {
+      const targetProfileExists = await tx.queryOne<{ exists_flag: number }>(`
         SELECT 1 AS exists_flag
         FROM contact_profiles
         WHERE contact_id = ?
         LIMIT 1
-      `).get(targetId) as { exists_flag: number } | undefined;
+      `, [targetContactId]);
 
       if (targetProfileExists) {
-        context.db.prepare('DELETE FROM contact_profiles WHERE contact_id = ?').run(sourceId);
+        await tx.run('DELETE FROM contact_profiles WHERE contact_id = ?', [sourceContactId]);
       } else {
-        context.db.prepare('UPDATE contact_profiles SET contact_id = ? WHERE contact_id = ?')
-          .run(targetId, sourceId);
+        await tx.run('UPDATE contact_profiles SET contact_id = ? WHERE contact_id = ?', [targetContactId, sourceContactId]);
       }
     }
 
@@ -73,8 +69,8 @@ export function mergeContacts(
     const mergedLastSeen = latestTimestamp(sourceRow.last_seen, targetRow.last_seen);
     const mergedNotes = targetRow.notes ?? sourceRow.notes;
 
-    context.db.prepare('DELETE FROM contacts WHERE id = ?').run(sourceId);
-    context.db.prepare(`
+    await tx.run('DELETE FROM contacts WHERE id = ?', [sourceContactId]);
+    await tx.run(`
       UPDATE contacts
       SET discord_user_id = ?,
           display_name = ?,
@@ -86,7 +82,7 @@ export function mergeContacts(
           last_seen = ?,
           notes = ?
       WHERE id = ?
-    `).run(
+    `, [
       mergedDiscordUserId,
       mergedDisplayName,
       mergedNickname,
@@ -96,11 +92,9 @@ export function mergeContacts(
       mergedFirstSeen,
       mergedLastSeen,
       mergedNotes,
-      targetId,
-    );
+      targetContactId,
+    ]);
 
     return true;
   });
-
-  return mergeTx(sourceContactId, targetContactId);
 }

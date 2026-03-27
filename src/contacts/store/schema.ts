@@ -1,48 +1,37 @@
-import type Database from 'better-sqlite3';
-import { hasColumn } from '../../persistence/sqlite-utils.js';
+import type { DatabaseAdapter } from '../../persistence/db-adapter.js';
 import { LEGACY_DISCORD_CHANNEL, defaultPrivacyForChannel } from './identity-utils.js';
 
-function hasTable(db: Database.Database, tableName: string): boolean {
-  const row = db.prepare(`
-    SELECT name
-    FROM sqlite_master
-    WHERE type = 'table' AND name = ?
-    LIMIT 1
-  `).get(tableName) as { name: string } | undefined;
-  return row?.name === tableName;
-}
-
-function ensureChannelPrivacyColumn(db: Database.Database): void {
-  if (!hasColumn(db, 'contact_channel_ids', 'privacy_level')) {
-    db.exec("ALTER TABLE contact_channel_ids ADD COLUMN privacy_level TEXT NOT NULL DEFAULT 'semi_private'");
+async function ensureChannelPrivacyColumn(adapter: DatabaseAdapter): Promise<void> {
+  if (!await adapter.hasColumn('contact_channel_ids', 'privacy_level')) {
+    await adapter.exec("ALTER TABLE contact_channel_ids ADD COLUMN privacy_level TEXT NOT NULL DEFAULT 'semi_private'");
   }
 }
 
-function ensureConversationChannelPrivacyColumn(db: Database.Database): void {
-  if (!hasColumn(db, 'contact_channel_activity', 'privacy_level')) {
-    db.exec('ALTER TABLE contact_channel_activity ADD COLUMN privacy_level TEXT');
+async function ensureConversationChannelPrivacyColumn(adapter: DatabaseAdapter): Promise<void> {
+  if (!await adapter.hasColumn('contact_channel_activity', 'privacy_level')) {
+    await adapter.exec('ALTER TABLE contact_channel_activity ADD COLUMN privacy_level TEXT');
   }
 }
 
-function ensureNicknameColumn(db: Database.Database): void {
-  if (!hasColumn(db, 'contacts', 'nickname')) {
-    db.exec('ALTER TABLE contacts ADD COLUMN nickname TEXT');
+async function ensureNicknameColumn(adapter: DatabaseAdapter): Promise<void> {
+  if (!await adapter.hasColumn('contacts', 'nickname')) {
+    await adapter.exec('ALTER TABLE contacts ADD COLUMN nickname TEXT');
   }
 }
 
-function migrateLegacyDiscordIdentities(db: Database.Database): void {
-  db.prepare(`
+async function migrateLegacyDiscordIdentities(adapter: DatabaseAdapter): Promise<void> {
+  await adapter.run(`
     INSERT INTO contact_channel_ids (contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen)
     SELECT id, ?, discord_user_id, ?, first_seen, last_seen
     FROM contacts
     WHERE discord_user_id IS NOT NULL
       AND TRIM(discord_user_id) <> ''
     ON CONFLICT(channel, channel_user_id) DO NOTHING
-  `).run(LEGACY_DISCORD_CHANNEL, defaultPrivacyForChannel(LEGACY_DISCORD_CHANNEL));
+  `, [LEGACY_DISCORD_CHANNEL, defaultPrivacyForChannel(LEGACY_DISCORD_CHANNEL)]);
 }
 
-export function initializeContactStoreSchema(db: Database.Database): void {
-  db.exec(`
+export async function initializeContactStoreSchema(adapter: DatabaseAdapter): Promise<void> {
+  await adapter.exec(`
     CREATE TABLE IF NOT EXISTS contacts (
       id TEXT PRIMARY KEY,
       discord_user_id TEXT UNIQUE,
@@ -175,11 +164,11 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       ON social_relationship_edges(relationship_type, updated_at DESC);
   `);
 
-  ensureNicknameColumn(db);
-  ensureChannelPrivacyColumn(db);
-  ensureConversationChannelPrivacyColumn(db);
-  migrateLegacyDiscordIdentities(db);
-  db.exec(`
+  await ensureNicknameColumn(adapter);
+  await ensureChannelPrivacyColumn(adapter);
+  await ensureConversationChannelPrivacyColumn(adapter);
+  await migrateLegacyDiscordIdentities(adapter);
+  await adapter.exec(`
     INSERT INTO social_graph_entities (
       id,
       entity_kind,
@@ -212,6 +201,6 @@ export function initializeContactStoreSchema(db: Database.Database): void {
   `);
 }
 
-export function maybeHasContactLinkedTable(db: Database.Database, tableName: string, columnName: string): boolean {
-  return hasTable(db, tableName) && hasColumn(db, tableName, columnName);
+export async function maybeHasContactLinkedTable(adapter: DatabaseAdapter, tableName: string, columnName: string): Promise<boolean> {
+  return await adapter.hasTable(tableName) && await adapter.hasColumn(tableName, columnName);
 }

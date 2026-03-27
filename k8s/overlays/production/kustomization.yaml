@@ -1,0 +1,49 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: psfn
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: psfn-config
+    patch: |
+      - op: replace
+        path: /data/DB_PROVIDER
+        value: "postgres"
+      - op: add
+        path: /data/DB_MAX_CONNECTIONS
+        value: "20"
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: "warn"
+
+  - target:
+      kind: ConfigMap
+      name: lightllm-config
+    patch: |
+      - op: replace
+        path: /data/LIGHTLLM_MEM_FRACTION
+        value: "0.9"
+      - op: replace
+        path: /data/LIGHTLLM_MAX_CONCURRENT
+        value: "1000"
+
+  - target:
+      kind: PersistentVolumeClaim
+      name: lightllm-model-cache
+    patch: |
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 200Gi
+
+  - target:
+      kind: PersistentVolumeClaim
+      name: psfn-companion-data
+    patch: |
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 50Gi

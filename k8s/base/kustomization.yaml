@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: psfn
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - configmap.yaml
+  - secrets.yaml
+  - lightllm-config.yaml
+  - pvc.yaml
+  - postgres-statefulset.yaml
+  - lightllm-deployment.yaml
+  - psfn-deployment.yaml
+  - services.yaml
+  - networkpolicy.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false

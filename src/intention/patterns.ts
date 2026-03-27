@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import type { DatabaseAdapter } from '../persistence/db-adapter.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import type { MemoryWriter } from '../memory/writer.js';
 
@@ -95,7 +95,7 @@ export interface BehavioralPatternTrackerOptions {
 }
 
 export interface BehavioralPatternContextProvider {
-  getBehavioralNotes(contactId?: string, limit?: number): string;
+  getBehavioralNotes(contactId?: string, limit?: number): Promise<string>;
 }
 
 interface BehavioralPatternRow {
@@ -370,15 +370,15 @@ function toProceduralMemoryText(candidate: {
 }
 
 export class BehavioralPatternTracker implements BehavioralPatternContextProvider {
-  private readonly db: Database.Database;
+  private readonly adapter: DatabaseAdapter;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
   private promotionHook: BehavioralPatternPromotionHook | null;
   private readonly minimumSamplesForPromotion: number;
   private readonly minimumAverageOutcomeForPromotion: number;
 
-  constructor(db: Database.Database, options: BehavioralPatternTrackerOptions = {}) {
-    this.db = db;
+  constructor(adapter: DatabaseAdapter, options: BehavioralPatternTrackerOptions = {}) {
+    this.adapter = adapter;
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
     this.promotionHook = options.promotionHook ?? null;
@@ -386,14 +386,17 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
     this.minimumAverageOutcomeForPromotion = normalizePromotionMinimumOutcome(
       options.minimumAverageOutcomeForPromotion,
     );
-    this.initializeSchema();
+  }
+
+  async init(): Promise<void> {
+    await this.initializeSchema();
   }
 
   setPromotionHook(hook: BehavioralPatternPromotionHook | null): void {
     this.promotionHook = hook;
   }
 
-  recordResponseStrategy(input: BehavioralPatternRecordInput): BehavioralPatternSample {
+  async recordResponseStrategy(input: BehavioralPatternRecordInput): Promise<BehavioralPatternSample> {
     const contactId = normalizeRequiredText(input.contactId, 'contactId', MAX_CONTACT_ID_CHARS);
     const sourceMessageId = normalizeRequiredText(
       input.sourceMessageId,
@@ -416,32 +419,26 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
       : normalizedResponse;
     const id = normalizeRequiredText(this.idFactory(), 'id', 128);
 
-    this.db.prepare(`
-      INSERT INTO behavioral_pattern_events (
+    await this.adapter.run(
+      `INSERT INTO behavioral_pattern_events (
         id,
         contact_id,
         source_message_id,
         strategy,
         response_excerpt,
         created_at
-      ) VALUES (
-        @id,
-        @contact_id,
-        @source_message_id,
-        @strategy,
-        @response_excerpt,
-        @created_at
-      )
+      ) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(contact_id, source_message_id, strategy)
-      DO UPDATE SET response_excerpt = excluded.response_excerpt
-    `).run({
-      id,
-      contact_id: contactId,
-      source_message_id: sourceMessageId,
-      strategy,
-      response_excerpt: responseExcerpt,
-      created_at: createdAt,
-    });
+      DO UPDATE SET response_excerpt = excluded.response_excerpt`,
+      [
+        id,
+        contactId,
+        sourceMessageId,
+        strategy,
+        responseExcerpt,
+        createdAt,
+      ],
+    );
 
     return this.requireByUnique(contactId, sourceMessageId, strategy);
   }
@@ -464,7 +461,7 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
       MAX_MESSAGE_ID_CHARS,
     );
 
-    const target = this.resolveOutcomeTarget({
+    const target = await this.resolveOutcomeTarget({
       contactId,
       sourceMessageId: normalizedSourceMessageId,
       strategy: normalizedStrategy,
@@ -473,21 +470,22 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
       throw new Error('Behavioral pattern outcome target was not found');
     }
 
-    this.db.prepare(`
-      UPDATE behavioral_pattern_events
+    await this.adapter.run(
+      `UPDATE behavioral_pattern_events
       SET
-        outcome_score = @outcome_score,
-        outcome_observed_at = @outcome_observed_at,
-        outcome_source_message_id = @outcome_source_message_id
-      WHERE id = @id
-    `).run({
-      id: target.id,
-      outcome_score: outcomeScore,
-      outcome_observed_at: observedAt,
-      outcome_source_message_id: outcomeSourceMessageId ?? null,
-    });
+        outcome_score = ?,
+        outcome_observed_at = ?,
+        outcome_source_message_id = ?
+      WHERE id = ?`,
+      [
+        outcomeScore,
+        observedAt,
+        outcomeSourceMessageId ?? null,
+        target.id,
+      ],
+    );
 
-    const updated = this.requireById(target.id);
+    const updated = await this.requireById(target.id);
     await this.maybePromoteStrategy(updated.contactId, updated.strategy);
     return updated;
   }
@@ -503,8 +501,13 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
   ): Promise<BehavioralPatternSample | null> {
     const contactId = normalizeRequiredText(input.contactId, 'contactId', MAX_CONTACT_ID_CHARS);
     const strategy = input.strategy ? normalizeStrategy(input.strategy) : undefined;
-    const row = this.db.prepare(`
-      SELECT
+    const params: unknown[] = [contactId];
+    const whereClause = strategy ? 'AND strategy = ?' : '';
+    if (strategy) {
+      params.push(strategy);
+    }
+    const row = await this.adapter.queryOne<BehavioralPatternRow>(
+      `SELECT
         id,
         contact_id,
         source_message_id,
@@ -518,15 +521,13 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
         promoted_memory_id
       FROM behavioral_pattern_events
       WHERE
-        contact_id = @contact_id
+        contact_id = ?
         AND outcome_score IS NULL
-        ${strategy ? 'AND strategy = @strategy' : ''}
+        ${whereClause}
       ORDER BY created_at DESC, id DESC
-      LIMIT 1
-    `).get({
-      contact_id: contactId,
-      strategy,
-    }) as BehavioralPatternRow | undefined;
+      LIMIT 1`,
+      params,
+    );
 
     if (!row) {
       return null;
@@ -542,12 +543,12 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
     });
   }
 
-  listSamples(options: BehavioralPatternListOptions): BehavioralPatternSample[] {
+  async listSamples(options: BehavioralPatternListOptions): Promise<BehavioralPatternSample[]> {
     const contactId = normalizeRequiredText(options.contactId, 'contactId', MAX_CONTACT_ID_CHARS);
     const includePending = options.includePending === true;
     const limit = clampLimit(options.limit, DEFAULT_LIST_LIMIT);
-    const rows = this.db.prepare(`
-      SELECT
+    const rows = await this.adapter.query<BehavioralPatternRow>(
+      `SELECT
         id,
         contact_id,
         source_message_id,
@@ -561,30 +562,28 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
         promoted_memory_id
       FROM behavioral_pattern_events
       WHERE
-        contact_id = @contact_id
+        contact_id = ?
         ${includePending ? '' : 'AND outcome_score IS NOT NULL'}
       ORDER BY created_at DESC, id DESC
-      LIMIT @limit
-    `).all({
-      contact_id: contactId,
-      limit,
-    }) as BehavioralPatternRow[];
+      LIMIT ?`,
+      [contactId, limit],
+    );
 
     return rows.map(row => mapRow(row));
   }
 
-  listStrategySummaries(
+  async listStrategySummaries(
     contactId: string,
     options: BehavioralPatternSummaryOptions = {},
-  ): BehavioralStrategySummary[] {
+  ): Promise<BehavioralStrategySummary[]> {
     const normalizedContactId = normalizeRequiredText(contactId, 'contactId', MAX_CONTACT_ID_CHARS);
     const limit = clampSummaryLimit(options.limit);
     const minResolvedCount = options.minResolvedCount === undefined
       ? 1
       : Math.max(1, Math.floor(options.minResolvedCount));
 
-    const rows = this.db.prepare(`
-      SELECT
+    const rows = await this.adapter.query<BehavioralPatternSummaryRow>(
+      `SELECT
         strategy,
         COUNT(*) AS sample_count,
         SUM(CASE WHEN outcome_score IS NOT NULL THEN 1 ELSE 0 END) AS resolved_count,
@@ -594,26 +593,23 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
         SUM(CASE WHEN outcome_score < -0.1 THEN 1 ELSE 0 END) AS negative_count,
         MAX(outcome_observed_at) AS last_outcome_at
       FROM behavioral_pattern_events
-      WHERE contact_id = @contact_id
+      WHERE contact_id = ?
       GROUP BY strategy
-      HAVING resolved_count >= @min_resolved_count
+      HAVING resolved_count >= ?
       ORDER BY average_outcome DESC, resolved_count DESC, strategy ASC
-      LIMIT @limit
-    `).all({
-      contact_id: normalizedContactId,
-      min_resolved_count: minResolvedCount,
-      limit,
-    }) as BehavioralPatternSummaryRow[];
+      LIMIT ?`,
+      [normalizedContactId, minResolvedCount, limit],
+    );
 
     return rows.map(row => mapSummaryRow(row));
   }
 
-  getBehavioralNotes(contactId?: string, limit = DEFAULT_SUMMARY_LIMIT): string {
+  async getBehavioralNotes(contactId?: string, limit = DEFAULT_SUMMARY_LIMIT): Promise<string> {
     if (!contactId) {
       return '';
     }
     const normalizedContactId = normalizeRequiredText(contactId, 'contactId', MAX_CONTACT_ID_CHARS);
-    const summaries = this.listStrategySummaries(normalizedContactId, {
+    const summaries = await this.listStrategySummaries(normalizedContactId, {
       limit,
       minResolvedCount: 1,
     });
@@ -628,16 +624,21 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
     return lines.join('\n');
   }
 
-  private resolveOutcomeTarget(
+  private async resolveOutcomeTarget(
     input: {
       contactId: string;
       sourceMessageId?: string;
       strategy?: BehavioralResponseStrategy;
     },
-  ): BehavioralPatternSample | null {
+  ): Promise<BehavioralPatternSample | null> {
     if (input.sourceMessageId) {
-      const rows = this.db.prepare(`
-        SELECT
+      const params: unknown[] = [input.contactId, input.sourceMessageId];
+      const strategyClause = input.strategy ? 'AND strategy = ?' : '';
+      if (input.strategy) {
+        params.push(input.strategy);
+      }
+      const rows = await this.adapter.query<BehavioralPatternRow>(
+        `SELECT
           id,
           contact_id,
           source_message_id,
@@ -651,14 +652,11 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
           promoted_memory_id
         FROM behavioral_pattern_events
         WHERE
-          contact_id = @contact_id
-          AND source_message_id = @source_message_id
-          ${input.strategy ? 'AND strategy = @strategy' : ''}
-      `).all({
-        contact_id: input.contactId,
-        source_message_id: input.sourceMessageId,
-        strategy: input.strategy,
-      }) as BehavioralPatternRow[];
+          contact_id = ?
+          AND source_message_id = ?
+          ${strategyClause}`,
+        params,
+      );
 
       if (rows.length === 0) {
         return null;
@@ -669,8 +667,13 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
       return mapRow(rows[0]!);
     }
 
-    const row = this.db.prepare(`
-      SELECT
+    const params: unknown[] = [input.contactId];
+    const strategyClause = input.strategy ? 'AND strategy = ?' : '';
+    if (input.strategy) {
+      params.push(input.strategy);
+    }
+    const row = await this.adapter.queryOne<BehavioralPatternRow>(
+      `SELECT
         id,
         contact_id,
         source_message_id,
@@ -684,22 +687,20 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
         promoted_memory_id
       FROM behavioral_pattern_events
       WHERE
-        contact_id = @contact_id
+        contact_id = ?
         AND outcome_score IS NULL
-        ${input.strategy ? 'AND strategy = @strategy' : ''}
+        ${strategyClause}
       ORDER BY created_at DESC, id DESC
-      LIMIT 1
-    `).get({
-      contact_id: input.contactId,
-      strategy: input.strategy,
-    }) as BehavioralPatternRow | undefined;
+      LIMIT 1`,
+      params,
+    );
 
     return row ? mapRow(row) : null;
   }
 
-  private requireById(id: string): BehavioralPatternSample {
-    const row = this.db.prepare(`
-      SELECT
+  private async requireById(id: string): Promise<BehavioralPatternSample> {
+    const row = await this.adapter.queryOne<BehavioralPatternRow>(
+      `SELECT
         id,
         contact_id,
         source_message_id,
@@ -712,21 +713,22 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
         promoted_at,
         promoted_memory_id
       FROM behavioral_pattern_events
-      WHERE id = @id
-    `).get({ id }) as BehavioralPatternRow | undefined;
+      WHERE id = ?`,
+      [id],
+    );
     if (!row) {
       throw new Error(`Behavioral pattern event "${id}" is missing after write`);
     }
     return mapRow(row);
   }
 
-  private requireByUnique(
+  private async requireByUnique(
     contactId: string,
     sourceMessageId: string,
     strategy: BehavioralResponseStrategy,
-  ): BehavioralPatternSample {
-    const row = this.db.prepare(`
-      SELECT
+  ): Promise<BehavioralPatternSample> {
+    const row = await this.adapter.queryOne<BehavioralPatternRow>(
+      `SELECT
         id,
         contact_id,
         source_message_id,
@@ -740,14 +742,11 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
         promoted_memory_id
       FROM behavioral_pattern_events
       WHERE
-        contact_id = @contact_id
-        AND source_message_id = @source_message_id
-        AND strategy = @strategy
-    `).get({
-      contact_id: contactId,
-      source_message_id: sourceMessageId,
-      strategy,
-    }) as BehavioralPatternRow | undefined;
+        contact_id = ?
+        AND source_message_id = ?
+        AND strategy = ?`,
+      [contactId, sourceMessageId, strategy],
+    );
     if (!row) {
       throw new Error('Behavioral pattern event is missing after upsert');
     }
@@ -760,40 +759,39 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
   ): Promise<void> {
     if (!this.promotionHook) return;
 
-    const existingPromotion = this.db.prepare(`
-      SELECT promoted_memory_id
+    const existingPromotion = await this.adapter.queryOne<{ promoted_memory_id: string | null }>(
+      `SELECT promoted_memory_id
       FROM behavioral_pattern_events
       WHERE
-        contact_id = @contact_id
-        AND strategy = @strategy
+        contact_id = ?
+        AND strategy = ?
         AND promoted_at IS NOT NULL
       ORDER BY promoted_at ASC
-      LIMIT 1
-    `).get({
-      contact_id: contactId,
-      strategy,
-    }) as { promoted_memory_id: string | null } | undefined;
+      LIMIT 1`,
+      [contactId, strategy],
+    );
     if (existingPromotion) {
-      this.db.prepare(`
-        UPDATE behavioral_pattern_events
+      await this.adapter.run(
+        `UPDATE behavioral_pattern_events
         SET
-          promoted_at = @promoted_at,
-          promoted_memory_id = COALESCE(promoted_memory_id, @promoted_memory_id)
+          promoted_at = ?,
+          promoted_memory_id = COALESCE(promoted_memory_id, ?)
         WHERE
-          contact_id = @contact_id
-          AND strategy = @strategy
+          contact_id = ?
+          AND strategy = ?
           AND promoted_at IS NULL
-          AND outcome_score IS NOT NULL
-      `).run({
-        promoted_at: this.now().toISOString(),
-        promoted_memory_id: existingPromotion.promoted_memory_id,
-        contact_id: contactId,
-        strategy,
-      });
+          AND outcome_score IS NOT NULL`,
+        [
+          this.now().toISOString(),
+          existingPromotion.promoted_memory_id,
+          contactId,
+          strategy,
+        ],
+      );
       return;
     }
 
-    const summary = this.getStrategySummary(contactId, strategy);
+    const summary = await this.getStrategySummary(contactId, strategy);
     if (!summary) {
       return;
     }
@@ -826,30 +824,31 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
       'promotionMemoryId',
       MAX_PROMOTION_MEMORY_ID_CHARS,
     );
-    this.db.prepare(`
-      UPDATE behavioral_pattern_events
+    await this.adapter.run(
+      `UPDATE behavioral_pattern_events
       SET
-        promoted_at = @promoted_at,
-        promoted_memory_id = @promoted_memory_id
+        promoted_at = ?,
+        promoted_memory_id = ?
       WHERE
-        contact_id = @contact_id
-        AND strategy = @strategy
+        contact_id = ?
+        AND strategy = ?
         AND promoted_at IS NULL
-        AND outcome_score IS NOT NULL
-    `).run({
-      promoted_at: this.now().toISOString(),
-      promoted_memory_id: promotedMemoryId ?? null,
-      contact_id: contactId,
-      strategy,
-    });
+        AND outcome_score IS NOT NULL`,
+      [
+        this.now().toISOString(),
+        promotedMemoryId ?? null,
+        contactId,
+        strategy,
+      ],
+    );
   }
 
-  private getStrategySummary(
+  private async getStrategySummary(
     contactId: string,
     strategy: BehavioralResponseStrategy,
-  ): BehavioralStrategySummary | null {
-    const row = this.db.prepare(`
-      SELECT
+  ): Promise<BehavioralStrategySummary | null> {
+    const row = await this.adapter.queryOne<BehavioralPatternSummaryRow>(
+      `SELECT
         strategy,
         COUNT(*) AS sample_count,
         SUM(CASE WHEN outcome_score IS NOT NULL THEN 1 ELSE 0 END) AS resolved_count,
@@ -860,18 +859,16 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
         MAX(outcome_observed_at) AS last_outcome_at
       FROM behavioral_pattern_events
       WHERE
-        contact_id = @contact_id
-        AND strategy = @strategy
-      GROUP BY strategy
-    `).get({
-      contact_id: contactId,
-      strategy,
-    }) as BehavioralPatternSummaryRow | undefined;
+        contact_id = ?
+        AND strategy = ?
+      GROUP BY strategy`,
+      [contactId, strategy],
+    );
     return row ? mapSummaryRow(row) : null;
   }
 
-  private initializeSchema(): void {
-    this.db.exec(`
+  private async initializeSchema(): Promise<void> {
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS behavioral_pattern_events (
         id TEXT PRIMARY KEY,
         contact_id TEXT NOT NULL,
@@ -901,16 +898,15 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
       ON behavioral_pattern_events (contact_id, strategy, outcome_score, created_at DESC);
     `);
 
-    const columns = this.db.prepare('PRAGMA table_info(behavioral_pattern_events)')
-      .all() as Array<{ name: string }>;
+    const columns = await this.adapter.getColumns('behavioral_pattern_events');
     if (!columns.some(column => column.name === 'outcome_source_message_id')) {
-      this.db.exec('ALTER TABLE behavioral_pattern_events ADD COLUMN outcome_source_message_id TEXT');
+      await this.adapter.exec('ALTER TABLE behavioral_pattern_events ADD COLUMN outcome_source_message_id TEXT');
     }
     if (!columns.some(column => column.name === 'promoted_at')) {
-      this.db.exec('ALTER TABLE behavioral_pattern_events ADD COLUMN promoted_at TEXT');
+      await this.adapter.exec('ALTER TABLE behavioral_pattern_events ADD COLUMN promoted_at TEXT');
     }
     if (!columns.some(column => column.name === 'promoted_memory_id')) {
-      this.db.exec('ALTER TABLE behavioral_pattern_events ADD COLUMN promoted_memory_id TEXT');
+      await this.adapter.exec('ALTER TABLE behavioral_pattern_events ADD COLUMN promoted_memory_id TEXT');
     }
   }
 }

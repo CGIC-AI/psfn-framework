@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import type { DatabaseAdapter } from '../persistence/db-adapter.js';
 import { CHANNEL_TYPES, type ChannelType } from '../types.js';
 
 export const PENDING_FOLLOW_UP_PRIORITIES = ['low', 'medium', 'high'] as const;
@@ -56,7 +56,7 @@ export interface PendingFollowUpStoreOptions {
 }
 
 export interface PendingFollowUpContextProvider {
-  getPendingFollowUps(contactId?: string): PendingFollowUp[];
+  getPendingFollowUps(contactId?: string): Promise<PendingFollowUp[]>;
 }
 
 interface PendingFollowUpRow {
@@ -188,18 +188,21 @@ function mapRow(row: PendingFollowUpRow): PendingFollowUp {
 }
 
 export class PendingFollowUpStore implements PendingFollowUpContextProvider {
-  private readonly db: Database.Database;
+  private readonly adapter: DatabaseAdapter;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
 
-  constructor(db: Database.Database, options: PendingFollowUpStoreOptions = {}) {
-    this.db = db;
+  constructor(adapter: DatabaseAdapter, options: PendingFollowUpStoreOptions = {}) {
+    this.adapter = adapter;
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
-    this.initializeSchema();
   }
 
-  create(input: PendingFollowUpCreateInput): PendingFollowUp {
+  async init(): Promise<void> {
+    await this.initializeSchema();
+  }
+
+  async create(input: PendingFollowUpCreateInput): Promise<PendingFollowUp> {
     const id = normalizeRequiredText(this.idFactory(), 'id', MAX_ID_CHARS);
     const content = normalizeRequiredText(input.content, 'content', MAX_TEXT_CHARS);
     const priority = normalizePriority(input.priority);
@@ -215,8 +218,8 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
     const contactId = normalizeOptionalId(input.contactId);
     const sourceMessageId = normalizeOptionalId(input.sourceMessageId);
 
-    this.db.prepare(`
-      INSERT INTO intention_pending_follow_ups (
+    await this.adapter.run(
+      `INSERT INTO intention_pending_follow_ups (
         id,
         content,
         priority,
@@ -229,42 +232,30 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
         due_at,
         contact_id,
         source_message_id
-      ) VALUES (
-        @id,
-        @content,
-        @priority,
-        @timing,
-        @created_at,
-        @channel_id,
-        @channel_type,
-        @author_id,
-        @author_name,
-        @due_at,
-        @contact_id,
-        @source_message_id
-      )
-    `).run({
-      id,
-      content,
-      priority,
-      timing,
-      created_at: createdAt,
-      channel_id: channelId,
-      channel_type: channelType,
-      author_id: authorId,
-      author_name: authorName,
-      due_at: dueAt ?? null,
-      contact_id: contactId ?? null,
-      source_message_id: sourceMessageId ?? null,
-    });
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        content,
+        priority,
+        timing,
+        createdAt,
+        channelId,
+        channelType,
+        authorId,
+        authorName,
+        dueAt ?? null,
+        contactId ?? null,
+        sourceMessageId ?? null,
+      ],
+    );
 
     return this.requireById(id);
   }
 
-  getById(id: string): PendingFollowUp | null {
+  async getById(id: string): Promise<PendingFollowUp | null> {
     const normalizedId = normalizeRequiredText(id, 'id', MAX_ID_CHARS);
-    const row = this.db.prepare(`
-      SELECT
+    const row = await this.adapter.queryOne<PendingFollowUpRow>(
+      `SELECT
         id,
         content,
         priority,
@@ -280,32 +271,35 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
         activated_at,
         activation_reason
       FROM intention_pending_follow_ups
-      WHERE id = @id
-    `).get({ id: normalizedId }) as PendingFollowUpRow | undefined;
+      WHERE id = ?`,
+      [normalizedId],
+    );
     return row ? mapRow(row) : null;
   }
 
-  getPendingFollowUps(contactId?: string): PendingFollowUp[] {
+  async getPendingFollowUps(contactId?: string): Promise<PendingFollowUp[]> {
     return this.list({
       contactId,
       includeActivated: false,
     });
   }
 
-  list(options: PendingFollowUpListOptions = {}): PendingFollowUp[] {
+  async list(options: PendingFollowUpListOptions = {}): Promise<PendingFollowUp[]> {
     const normalizedContactId = normalizeOptionalId(options.contactId);
     const limit = clampListLimit(options.limit);
     const whereClauses: string[] = [];
+    const params: unknown[] = [];
     if (options.includeActivated !== true) {
       whereClauses.push('activated_at IS NULL');
     }
     if (normalizedContactId) {
-      whereClauses.push('(contact_id IS NULL OR contact_id = @contactId)');
+      whereClauses.push('(contact_id IS NULL OR contact_id = ?)');
+      params.push(normalizedContactId);
     }
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
-    const rows = this.db.prepare(`
-      SELECT
+    const rows = await this.adapter.query<PendingFollowUpRow>(
+      `SELECT
         id,
         content,
         priority,
@@ -325,16 +319,17 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
       ORDER BY
         created_at ASC,
         id ASC
-      LIMIT @limit
-    `).all({
-      contactId: normalizedContactId ?? null,
-      limit,
-    }) as PendingFollowUpRow[];
+      LIMIT ?`,
+      [...params, limit],
+    );
 
     return rows.map(mapRow);
   }
 
-  markActivated(id: string, options: PendingFollowUpActivateOptions = {}): PendingFollowUp | null {
+  async markActivated(
+    id: string,
+    options: PendingFollowUpActivateOptions = {},
+  ): Promise<PendingFollowUp | null> {
     const normalizedId = normalizeRequiredText(id, 'id', MAX_ID_CHARS);
     const activatedAt = options.activatedAt
       ? normalizeIsoTimestamp(options.activatedAt, 'activatedAt')
@@ -345,19 +340,16 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
       MAX_REASON_CHARS,
     );
 
-    const result = this.db.prepare(`
-      UPDATE intention_pending_follow_ups
+    const result = await this.adapter.run(
+      `UPDATE intention_pending_follow_ups
       SET
-        activated_at = @activated_at,
-        activation_reason = @activation_reason
+        activated_at = ?,
+        activation_reason = ?
       WHERE
-        id = @id
-        AND activated_at IS NULL
-    `).run({
-      id: normalizedId,
-      activated_at: activatedAt,
-      activation_reason: activationReason ?? null,
-    });
+        id = ?
+        AND activated_at IS NULL`,
+      [activatedAt, activationReason ?? null, normalizedId],
+    );
 
     if (result.changes === 0) {
       return null;
@@ -365,16 +357,16 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
     return this.requireById(normalizedId);
   }
 
-  private requireById(id: string): PendingFollowUp {
-    const record = this.getById(id);
+  private async requireById(id: string): Promise<PendingFollowUp> {
+    const record = await this.getById(id);
     if (!record) {
       throw new Error(`Failed to load pending follow-up "${id}" after write`);
     }
     return record;
   }
 
-  private initializeSchema(): void {
-    this.db.exec(`
+  private async initializeSchema(): Promise<void> {
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS intention_pending_follow_ups (
         id TEXT PRIMARY KEY,
         content TEXT NOT NULL,

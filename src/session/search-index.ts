@@ -1,7 +1,6 @@
-import type Database from 'better-sqlite3';
 import { classifyChannel } from '../trust/policy.js';
+import type { DatabaseAdapter } from '../persistence/db-adapter.js';
 import type { ChannelVisibility } from '../trust/types.js';
-import { initDatabase } from '../persistence/sqlite-utils.js';
 import type { SessionEntry } from './types.js';
 
 const DEFAULT_SEARCH_LIMIT = 10;
@@ -78,66 +77,18 @@ function buildSafeMatchQuery(query: string): string {
 }
 
 export class SessionSearchIndex {
-  private db: Database.Database;
-  private readonly upsertStmt: Database.Statement;
-  private readonly deleteChannelStmt: Database.Statement;
-  private readonly searchStmt: Database.Statement;
-  private readonly countChannelStmt: Database.Statement;
+  private readonly adapter: DatabaseAdapter;
 
-  constructor(databasePath: string) {
-    this.db = initDatabase(databasePath, { synchronous: 'NORMAL' });
-    this.createSchema();
-    this.upsertStmt = this.db.prepare(`
-      INSERT INTO session_messages_index (
-        channel_id,
-        message_id,
-        role,
-        author_id,
-        author_name,
-        content,
-        timestamp,
-        channel_visibility
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(channel_id, message_id) DO UPDATE SET
-        role = excluded.role,
-        author_id = excluded.author_id,
-        author_name = excluded.author_name,
-        content = excluded.content,
-        timestamp = excluded.timestamp,
-        channel_visibility = excluded.channel_visibility
-    `);
-    this.deleteChannelStmt = this.db.prepare(`
-      DELETE FROM session_messages_index
-      WHERE channel_id = ?
-    `);
-    this.searchStmt = this.db.prepare(`
-      SELECT
-        m.channel_id,
-        m.message_id,
-        m.role,
-        m.author_id,
-        m.author_name,
-        m.content,
-        m.timestamp,
-        m.channel_visibility,
-        bm25(session_fts) AS score,
-        snippet(session_fts, 0, '[', ']', ' ... ', 18) AS snippet
-      FROM session_fts
-      JOIN session_messages_index m ON m.rowid = session_fts.rowid
-      WHERE session_fts MATCH ?
-      ORDER BY score ASC, m.timestamp DESC
-      LIMIT ?
-    `);
-    this.countChannelStmt = this.db.prepare(`
-      SELECT COUNT(*) AS count
-      FROM session_messages_index
-      WHERE channel_id = ?
-    `);
+  constructor(adapter: DatabaseAdapter) {
+    this.adapter = adapter;
   }
 
-  private createSchema(): void {
-    this.db.exec(`
+  async init(): Promise<void> {
+    await this.createSchema();
+  }
+
+  private async createSchema(): Promise<void> {
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS session_messages_index (
         rowid INTEGER PRIMARY KEY AUTOINCREMENT,
         channel_id TEXT NOT NULL,
@@ -175,38 +126,96 @@ export class SessionSearchIndex {
     `);
   }
 
-  upsertSessionEntry(entry: SessionEntry, options: { channelId?: string } = {}): void {
+  async upsertSessionEntry(entry: SessionEntry, options: { channelId?: string } = {}): Promise<void> {
     const channelId = options.channelId ?? entry.channelId;
     const visibility = normalizeChannelVisibility(entry.channelVisibility, entry.channelId);
-    this.upsertStmt.run(
-      channelId,
-      entry.id,
-      entry.role,
-      entry.authorId ?? null,
-      entry.authorName ?? null,
-      entry.content,
-      normalizeTimestamp(entry.timestamp),
-      visibility,
+    await this.adapter.run(
+      `INSERT INTO session_messages_index (
+        channel_id,
+        message_id,
+        role,
+        author_id,
+        author_name,
+        content,
+        timestamp,
+        channel_visibility
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(channel_id, message_id) DO UPDATE SET
+        role = excluded.role,
+        author_id = excluded.author_id,
+        author_name = excluded.author_name,
+        content = excluded.content,
+        timestamp = excluded.timestamp,
+        channel_visibility = excluded.channel_visibility`,
+      [
+        channelId,
+        entry.id,
+        entry.role,
+        entry.authorId ?? null,
+        entry.authorName ?? null,
+        entry.content,
+        normalizeTimestamp(entry.timestamp),
+        visibility,
+      ],
     );
   }
 
-  replaceChannelEntries(channelId: string, entries: readonly SessionEntry[]): void {
-    const tx = this.db.transaction((targetChannelId: string, replacementEntries: readonly SessionEntry[]) => {
-      this.deleteChannelStmt.run(targetChannelId);
-      for (const entry of replacementEntries) {
-        this.upsertSessionEntry(entry, { channelId: targetChannelId });
+  async replaceChannelEntries(channelId: string, entries: readonly SessionEntry[]): Promise<void> {
+    await this.adapter.transaction(async (tx) => {
+      await tx.run(
+        `DELETE FROM session_messages_index
+        WHERE channel_id = ?`,
+        [channelId],
+      );
+      for (const entry of entries) {
+        const visibility = normalizeChannelVisibility(entry.channelVisibility, entry.channelId);
+        await tx.run(
+          `INSERT INTO session_messages_index (
+            channel_id,
+            message_id,
+            role,
+            author_id,
+            author_name,
+            content,
+            timestamp,
+            channel_visibility
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(channel_id, message_id) DO UPDATE SET
+            role = excluded.role,
+            author_id = excluded.author_id,
+            author_name = excluded.author_name,
+            content = excluded.content,
+            timestamp = excluded.timestamp,
+            channel_visibility = excluded.channel_visibility`,
+          [
+            channelId,
+            entry.id,
+            entry.role,
+            entry.authorId ?? null,
+            entry.authorName ?? null,
+            entry.content,
+            normalizeTimestamp(entry.timestamp),
+            visibility,
+          ],
+        );
       }
     });
-    tx(channelId, entries);
   }
 
-  countIndexedMessages(channelId: string): number {
-    const row = this.countChannelStmt.get(channelId) as { count?: number } | undefined;
+  async countIndexedMessages(channelId: string): Promise<number> {
+    const row = await this.adapter.queryOne<{ count: number }>(
+      `SELECT COUNT(*) AS count
+      FROM session_messages_index
+      WHERE channel_id = ?`,
+      [channelId],
+    );
     if (!row || !Number.isFinite(row.count)) return 0;
-    return Math.max(0, Math.floor(row.count ?? 0));
+    return Math.max(0, Math.floor(row.count));
   }
 
-  searchByKeywords(query: string, limit = DEFAULT_SEARCH_LIMIT): SessionSearchHit[] {
+  async searchByKeywords(query: string, limit = DEFAULT_SEARCH_LIMIT): Promise<SessionSearchHit[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) return [];
 
@@ -216,11 +225,47 @@ export class SessionSearchIndex {
 
     let rows: IndexedSearchRow[] = [];
     try {
-      rows = this.searchStmt.all(ftsQuery, boundedLimit) as IndexedSearchRow[];
+      rows = await this.adapter.query<IndexedSearchRow>(
+        `SELECT
+          m.channel_id,
+          m.message_id,
+          m.role,
+          m.author_id,
+          m.author_name,
+          m.content,
+          m.timestamp,
+          m.channel_visibility,
+          bm25(session_fts) AS score,
+          snippet(session_fts, 0, '[', ']', ' ... ', 18) AS snippet
+        FROM session_fts
+        JOIN session_messages_index m ON m.rowid = session_fts.rowid
+        WHERE session_fts MATCH ?
+        ORDER BY score ASC, m.timestamp DESC
+        LIMIT ?`,
+        [ftsQuery, boundedLimit],
+      );
     } catch {
       const fallback = `"${escapeMatchToken(normalizedQuery)}"`;
       try {
-        rows = this.searchStmt.all(fallback, boundedLimit) as IndexedSearchRow[];
+        rows = await this.adapter.query<IndexedSearchRow>(
+          `SELECT
+            m.channel_id,
+            m.message_id,
+            m.role,
+            m.author_id,
+            m.author_name,
+            m.content,
+            m.timestamp,
+            m.channel_visibility,
+            bm25(session_fts) AS score,
+            snippet(session_fts, 0, '[', ']', ' ... ', 18) AS snippet
+          FROM session_fts
+          JOIN session_messages_index m ON m.rowid = session_fts.rowid
+          WHERE session_fts MATCH ?
+          ORDER BY score ASC, m.timestamp DESC
+          LIMIT ?`,
+          [fallback, boundedLimit],
+        );
       } catch {
         return [];
       }

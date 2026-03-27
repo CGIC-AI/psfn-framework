@@ -1,7 +1,7 @@
 // ── Persistent audit log ──
 // Every gateway RPC call is logged to SQLite for review.
 
-import Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../persistence/db-adapter.js';
 import type { PolicyDecision } from './protocol.js';
 
 export interface AuditEntry {
@@ -39,63 +39,20 @@ const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
 const SIZE_PRUNE_BATCH = 100;
 
 export class AuditStore {
-  private readonly db: Database.Database;
-  private readonly insertStmt: Database.Statement;
-  private readonly updateDurationStmt: Database.Statement;
-  private readonly countStmt: Database.Statement;
-  private readonly pruneByAgeStmt: Database.Statement;
-  private readonly pruneByCountStmt: Database.Statement;
-  private readonly estimateSizeStmt: Database.Statement;
-  private readonly pruneOldestBatchStmt: Database.Statement;
+  private readonly adapter: DatabaseAdapter;
   private readonly rotation: AuditRotationConfig;
 
-  constructor(db: Database.Database, rotationConfig?: Partial<AuditRotationConfig>) {
-    this.db = db;
+  constructor(adapter: DatabaseAdapter, rotationConfig?: Partial<AuditRotationConfig>) {
+    this.adapter = adapter;
     this.rotation = resolveRotationConfig(rotationConfig);
-    this.createTable();
-    this.insertStmt = this.db.prepare(`
-      INSERT INTO gateway_audit (timestamp, method, decision, params_json, duration_ms, error)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
-    this.updateDurationStmt = this.db.prepare(`
-      UPDATE gateway_audit SET duration_ms = ?, error = ? WHERE id = ?
-    `);
-    this.countStmt = this.db.prepare(`
-      SELECT COUNT(*) as cnt FROM gateway_audit
-    `);
-    this.pruneByAgeStmt = this.db.prepare(`
-      DELETE FROM gateway_audit WHERE timestamp < ?
-    `);
-    this.pruneByCountStmt = this.db.prepare(`
-      DELETE FROM gateway_audit
-      WHERE id IN (
-        SELECT id FROM gateway_audit
-        ORDER BY timestamp DESC, id DESC
-        LIMIT -1 OFFSET ?
-      )
-    `);
-    this.estimateSizeStmt = this.db.prepare(`
-      SELECT COALESCE(SUM(
-        LENGTH(method) +
-        LENGTH(decision) +
-        COALESCE(LENGTH(params_json), 0) +
-        COALESCE(LENGTH(error), 0) +
-        24
-      ), 0) AS bytes
-      FROM gateway_audit
-    `);
-    this.pruneOldestBatchStmt = this.db.prepare(`
-      DELETE FROM gateway_audit
-      WHERE id IN (
-        SELECT id FROM gateway_audit
-        ORDER BY timestamp ASC, id ASC
-        LIMIT ?
-      )
-    `);
   }
 
-  private createTable(): void {
-    this.db.exec(`
+  async init(): Promise<void> {
+    await this.createTable();
+  }
+
+  private async createTable(): Promise<void> {
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS gateway_audit (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp INTEGER NOT NULL,
@@ -111,27 +68,34 @@ export class AuditStore {
     `);
   }
 
-  log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number {
+  async log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number> {
     const timestamp = Date.now();
     const paramsJson = params ? summarizeParams(params) : null;
-    const result = this.insertStmt.run(timestamp, method, decision, paramsJson, null, null);
-    this.enforceRotation(timestamp);
+    const result = await this.adapter.run(
+      `INSERT INTO gateway_audit (timestamp, method, decision, params_json, duration_ms, error)
+      VALUES (?, ?, ?, ?, ?, ?)`,
+      [timestamp, method, decision, paramsJson, null, null],
+    );
+    await this.enforceRotation(timestamp);
     return Number(result.lastInsertRowid);
   }
 
-  complete(id: number, durationMs: number, error?: string): void {
-    this.updateDurationStmt.run(durationMs, error ?? null, id);
+  async complete(id: number, durationMs: number, error?: string): Promise<void> {
+    await this.adapter.run(
+      `UPDATE gateway_audit SET duration_ms = ?, error = ? WHERE id = ?`,
+      [durationMs, error ?? null, id],
+    );
   }
 
-  recordSummary(entry: AuditSummaryEntry): number {
-    const id = this.log(entry.method, entry.decision, entry.params);
-    this.complete(id, normalizeDurationMs(entry.durationMs), entry.error);
+  async recordSummary(entry: AuditSummaryEntry): Promise<number> {
+    const id = await this.log(entry.method, entry.decision, entry.params);
+    await this.complete(id, normalizeDurationMs(entry.durationMs), entry.error);
     return id;
   }
 
   createSummaryHook(): AuditSummaryHook {
-    return (entry) => {
-      this.recordSummary(entry);
+    return async (entry) => {
+      await this.recordSummary(entry);
     };
   }
 
@@ -141,68 +105,98 @@ export class AuditStore {
     duration_ms AS durationMs,
     error`;
 
-  getRecent(limit: number = 50): AuditEntry[] {
-    const stmt = this.db.prepare(`
-      SELECT ${AuditStore.SELECT_COLS}
+  async getRecent(limit: number = 50): Promise<AuditEntry[]> {
+    return this.adapter.query<AuditEntry>(
+      `SELECT ${AuditStore.SELECT_COLS}
       FROM gateway_audit
       ORDER BY timestamp DESC, id DESC
-      LIMIT ?
-    `);
-    return stmt.all(limit) as AuditEntry[];
+      LIMIT ?`,
+      [limit],
+    );
   }
 
-  getByMethod(method: string, limit: number = 50): AuditEntry[] {
-    const stmt = this.db.prepare(`
-      SELECT ${AuditStore.SELECT_COLS}
+  async getByMethod(method: string, limit: number = 50): Promise<AuditEntry[]> {
+    return this.adapter.query<AuditEntry>(
+      `SELECT ${AuditStore.SELECT_COLS}
       FROM gateway_audit
       WHERE method = ?
       ORDER BY timestamp DESC, id DESC
-      LIMIT ?
-    `);
-    return stmt.all(method, limit) as AuditEntry[];
+      LIMIT ?`,
+      [method, limit],
+    );
   }
 
-  getApprovalEvents(limit: number = 50): AuditEntry[] {
-    const stmt = this.db.prepare(`
-      SELECT ${AuditStore.SELECT_COLS}
+  async getApprovalEvents(limit: number = 50): Promise<AuditEntry[]> {
+    return this.adapter.query<AuditEntry>(
+      `SELECT ${AuditStore.SELECT_COLS}
       FROM gateway_audit
       WHERE decision != 'ALLOW'
       ORDER BY timestamp DESC, id DESC
-      LIMIT ?
-    `);
-    return stmt.all(limit) as AuditEntry[];
+      LIMIT ?`,
+      [limit],
+    );
   }
 
-  count(): number {
-    const row = this.countStmt.get() as { cnt: number };
-    return row.cnt;
+  async count(): Promise<number> {
+    const row = await this.adapter.queryOne<{ cnt: number }>(
+      `SELECT COUNT(*) as cnt FROM gateway_audit`,
+    );
+    return row?.cnt ?? 0;
   }
 
-  private enforceRotation(nowMs: number): void {
-    this.pruneByAgeStmt.run(nowMs - this.rotation.maxAgeMs);
-    this.pruneByCountStmt.run(this.rotation.maxCount);
-    this.pruneBySize();
+  private async enforceRotation(nowMs: number): Promise<void> {
+    await this.adapter.run(
+      `DELETE FROM gateway_audit WHERE timestamp < ?`,
+      [nowMs - this.rotation.maxAgeMs],
+    );
+    await this.adapter.run(
+      `DELETE FROM gateway_audit
+      WHERE id IN (
+        SELECT id FROM gateway_audit
+        ORDER BY timestamp DESC, id DESC
+        LIMIT -1 OFFSET ?
+      )`,
+      [this.rotation.maxCount],
+    );
+    await this.pruneBySize();
   }
 
-  private pruneBySize(): void {
-    let currentSize = this.getApproximatePayloadSizeBytes();
+  private async pruneBySize(): Promise<void> {
+    let currentSize = await this.getApproximatePayloadSizeBytes();
     while (currentSize > this.rotation.maxSizeBytes) {
-      const removableRows = this.count() - 1;
+      const removableRows = await this.count() - 1;
       if (removableRows <= 0) {
         break;
       }
       const batchSize = Math.min(SIZE_PRUNE_BATCH, removableRows);
-      const result = this.pruneOldestBatchStmt.run(batchSize) as { changes: number };
+      const result = await this.adapter.run(
+        `DELETE FROM gateway_audit
+        WHERE id IN (
+          SELECT id FROM gateway_audit
+          ORDER BY timestamp ASC, id ASC
+          LIMIT ?
+        )`,
+        [batchSize],
+      );
       if (result.changes === 0) {
         break;
       }
-      currentSize = this.getApproximatePayloadSizeBytes();
+      currentSize = await this.getApproximatePayloadSizeBytes();
     }
   }
 
-  private getApproximatePayloadSizeBytes(): number {
-    const row = this.estimateSizeStmt.get() as { bytes: number };
-    return row.bytes;
+  private async getApproximatePayloadSizeBytes(): Promise<number> {
+    const row = await this.adapter.queryOne<{ bytes: number }>(
+      `SELECT COALESCE(SUM(
+        LENGTH(method) +
+        LENGTH(decision) +
+        COALESCE(LENGTH(params_json), 0) +
+        COALESCE(LENGTH(error), 0) +
+        24
+      ), 0) AS bytes
+      FROM gateway_audit`,
+    );
+    return row?.bytes ?? 0;
   }
 }
 

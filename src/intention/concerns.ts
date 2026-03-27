@@ -1,5 +1,5 @@
-import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
+import type { DatabaseAdapter } from '../persistence/db-adapter.js';
 import { formatActiveDateTimeLabel } from '../time/active-timezone.js';
 
 export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
@@ -63,7 +63,7 @@ export interface ActiveConcernStoreOptions {
 }
 
 export interface ActiveConcernContextProvider {
-  getActiveConcerns(contactId?: string): ActiveConcern[];
+  getActiveConcerns(contactId?: string): Promise<ActiveConcern[]>;
 }
 
 interface ActiveConcernRow {
@@ -363,20 +363,23 @@ export function formatActiveConcernsContextBlock(
 }
 
 export class ActiveConcernStore implements ActiveConcernContextProvider {
-  private readonly db: Database.Database;
+  private readonly adapter: DatabaseAdapter;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
   private readonly ttlMsByPriority: Record<ActiveConcernPriority, number>;
 
-  constructor(db: Database.Database, options: ActiveConcernStoreOptions = {}) {
-    this.db = db;
+  constructor(adapter: DatabaseAdapter, options: ActiveConcernStoreOptions = {}) {
+    this.adapter = adapter;
     this.now = options.now ?? (() => new Date());
     this.idFactory = options.idFactory ?? randomUUID;
     this.ttlMsByPriority = resolveConcernTtlByPriority(options.ttlMsByPriority);
-    this.initializeSchema();
   }
 
-  create(input: ActiveConcernCreateInput): ActiveConcern {
+  async init(): Promise<void> {
+    await this.initializeSchema();
+  }
+
+  async create(input: ActiveConcernCreateInput): Promise<ActiveConcern> {
     const text = normalizeRequiredText(input.text, 'text', MAX_CONCERN_TEXT_CHARS);
     const priority = normalizePriority(input.priority);
     const source = normalizeSource(input.source);
@@ -395,8 +398,8 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     const formationVAD = normalizeFormationVAD(input.formationVAD);
     const id = normalizeRequiredText(this.idFactory(), 'id', 128);
 
-    this.db.prepare(`
-      INSERT INTO active_concerns (
+    await this.adapter.run(
+      `INSERT INTO active_concerns (
         id,
         text,
         priority,
@@ -405,34 +408,26 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         expires_at,
         contact_id,
         formation_vad
-      ) VALUES (
-        @id,
-        @text,
-        @priority,
-        @source,
-        @created_at,
-        @expires_at,
-        @contact_id,
-        @formation_vad
-      )
-    `).run({
-      id,
-      text,
-      priority,
-      source,
-      created_at: createdAt,
-      expires_at: expiresAt,
-      contact_id: contactId ?? null,
-      formation_vad: serializeFormationVAD(formationVAD),
-    });
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        text,
+        priority,
+        source,
+        createdAt,
+        expiresAt,
+        contactId ?? null,
+        serializeFormationVAD(formationVAD),
+      ],
+    );
 
     return this.requireById(id);
   }
 
-  getById(id: string): ActiveConcern | null {
+  async getById(id: string): Promise<ActiveConcern | null> {
     const normalizedId = normalizeRequiredText(id, 'id', 128);
-    const row = this.db.prepare(`
-      SELECT
+    const row = await this.adapter.queryOne<ActiveConcernRow>(
+      `SELECT
         id,
         text,
         priority,
@@ -444,13 +439,14 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         contact_id,
         formation_vad
       FROM active_concerns
-      WHERE id = @id
-    `).get({ id: normalizedId }) as ActiveConcernRow | undefined;
+      WHERE id = ?`,
+      [normalizedId],
+    );
     if (!row) return null;
     return mapRow(row);
   }
 
-  getActiveConcerns(contactId?: string): ActiveConcern[] {
+  async getActiveConcerns(contactId?: string): Promise<ActiveConcern[]> {
     return this.list({
       contactId,
       includeResolved: false,
@@ -459,7 +455,7 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     });
   }
 
-  list(options: ActiveConcernListOptions = {}): ActiveConcern[] {
+  async list(options: ActiveConcernListOptions = {}): Promise<ActiveConcern[]> {
     const asOf = options.asOf
       ? normalizeIsoTimestamp(options.asOf, 'asOf')
       : this.now().toISOString();
@@ -469,22 +465,25 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     const limit = clampListLimit(options.limit);
 
     const whereClauses: string[] = [];
+    const params: unknown[] = [];
     if (!includeResolved) {
       whereClauses.push('resolved_at IS NULL');
     }
     if (!includeExpired) {
-      whereClauses.push('expires_at > @asOf');
+      whereClauses.push('expires_at > ?');
+      params.push(asOf);
     }
     if (normalizedContactId) {
-      whereClauses.push('(contact_id IS NULL OR contact_id = @contactId)');
+      whereClauses.push('(contact_id IS NULL OR contact_id = ?)');
+      params.push(normalizedContactId);
     }
 
     const whereSql = whereClauses.length > 0
       ? `WHERE ${whereClauses.join(' AND ')}`
       : '';
 
-    const rows = this.db.prepare(`
-      SELECT
+    const rows = await this.adapter.query<ActiveConcernRow>(
+      `SELECT
         id,
         text,
         priority,
@@ -506,20 +505,17 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         expires_at ASC,
         created_at ASC,
         id ASC
-      LIMIT @limit
-    `).all({
-      asOf,
-      contactId: normalizedContactId ?? null,
-      limit,
-    }) as ActiveConcernRow[];
+      LIMIT ?`,
+      [...params, limit],
+    );
 
     return rows.map(mapRow);
   }
 
-  listRecentlyResolvedConcerns(
+  async listRecentlyResolvedConcerns(
     contactId?: string,
     options: ActiveConcernRecentResolutionOptions = {},
-  ): ActiveConcern[] {
+  ): Promise<ActiveConcern[]> {
     const asOf = options.asOf
       ? normalizeIsoTimestamp(options.asOf, 'asOf')
       : this.now().toISOString();
@@ -530,14 +526,16 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
 
     const whereClauses = [
       'resolved_at IS NOT NULL',
-      'resolved_at >= @resolvedAfter',
+      'resolved_at >= ?',
     ];
+    const params: unknown[] = [resolvedAfter];
     if (normalizedContactId) {
-      whereClauses.push('(contact_id IS NULL OR contact_id = @contactId)');
+      whereClauses.push('(contact_id IS NULL OR contact_id = ?)');
+      params.push(normalizedContactId);
     }
 
-    const rows = this.db.prepare(`
-      SELECT
+    const rows = await this.adapter.query<ActiveConcernRow>(
+      `SELECT
         id,
         text,
         priority,
@@ -551,24 +549,21 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
       FROM active_concerns
       WHERE ${whereClauses.join(' AND ')}
       ORDER BY resolved_at DESC, created_at DESC, id DESC
-      LIMIT @limit
-    `).all({
-      resolvedAfter,
-      contactId: normalizedContactId ?? null,
-      limit,
-    }) as ActiveConcernRow[];
+      LIMIT ?`,
+      [...params, limit],
+    );
 
     return rows.map(mapRow);
   }
 
-  findRecentlyResolvedSimilarConcern(input: {
+  async findRecentlyResolvedSimilarConcern(input: {
     text: string;
     contactId?: string;
     withinMs?: number;
     asOf?: string;
-  }): ActiveConcern | null {
+  }): Promise<ActiveConcern | null> {
     const text = normalizeRequiredText(input.text, 'text', MAX_CONCERN_TEXT_CHARS);
-    const recentResolved = this.listRecentlyResolvedConcerns(input.contactId, {
+    const recentResolved = await this.listRecentlyResolvedConcerns(input.contactId, {
       withinMs: input.withinMs,
       asOf: input.asOf,
       limit: DEFAULT_RECENT_RESOLUTION_LIMIT,
@@ -588,26 +583,23 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     return bestMatch;
   }
 
-  resolveConcern(id: string, options: ActiveConcernResolveOptions = {}): ActiveConcern | null {
+  async resolveConcern(id: string, options: ActiveConcernResolveOptions = {}): Promise<ActiveConcern | null> {
     const normalizedId = normalizeRequiredText(id, 'id', 128);
     const outcome = normalizeOptionalText(options.outcome, MAX_CONCERN_RESOLUTION_CHARS);
     const resolvedAt = options.resolvedAt
       ? normalizeIsoTimestamp(options.resolvedAt, 'resolvedAt')
       : this.now().toISOString();
 
-    const result = this.db.prepare(`
-      UPDATE active_concerns
+    const result = await this.adapter.run(
+      `UPDATE active_concerns
       SET
-        resolved_at = @resolved_at,
-        resolution_outcome = @resolution_outcome
+        resolved_at = ?,
+        resolution_outcome = ?
       WHERE
-        id = @id
-        AND resolved_at IS NULL
-    `).run({
-      id: normalizedId,
-      resolved_at: resolvedAt,
-      resolution_outcome: outcome ?? null,
-    });
+        id = ?
+        AND resolved_at IS NULL`,
+      [resolvedAt, outcome ?? null, normalizedId],
+    );
 
     if (result.changes === 0) {
       return null;
@@ -615,16 +607,16 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     return this.requireById(normalizedId);
   }
 
-  private requireById(id: string): ActiveConcern {
-    const concern = this.getById(id);
+  private async requireById(id: string): Promise<ActiveConcern> {
+    const concern = await this.getById(id);
     if (!concern) {
       throw new Error(`Failed to load active concern "${id}" after write`);
     }
     return concern;
   }
 
-  private initializeSchema(): void {
-    this.db.exec(`
+  private async initializeSchema(): Promise<void> {
+    await this.adapter.exec(`
       CREATE TABLE IF NOT EXISTS active_concerns (
         id TEXT PRIMARY KEY,
         text TEXT NOT NULL,
@@ -647,11 +639,9 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
       ON active_concerns (contact_id, resolved_at, expires_at, created_at, id);
     `);
 
-    const columns = this.db.prepare('PRAGMA table_info(active_concerns)')
-      .all() as Array<{ name: string }>;
-    const hasResolutionOutcome = columns.some(column => column.name === 'resolution_outcome');
+    const hasResolutionOutcome = await this.adapter.hasColumn('active_concerns', 'resolution_outcome');
     if (!hasResolutionOutcome) {
-      this.db.exec('ALTER TABLE active_concerns ADD COLUMN resolution_outcome TEXT');
+      await this.adapter.exec('ALTER TABLE active_concerns ADD COLUMN resolution_outcome TEXT');
     }
   }
 }

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from './persistence/db-adapter.js';
 import type { SubstrateConfig, Lifecycle } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
@@ -46,6 +47,7 @@ import {
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
+import { createDatabaseAdapter, resolveDatabaseConfig } from './persistence/db-factory.js';
 import { parseOptionalPositiveIntEnv } from './utils/env.js';
 import {
   DiscordLifecycleNotifier,
@@ -244,6 +246,7 @@ export class SubstrateRuntime implements Lifecycle {
   private config: SubstrateConfig;
   private eventBus: EventBus;
   private db!: Database.Database;
+  private adapter!: DatabaseAdapter;
   private llmClient!: LLMClient;
   private sessionStore!: SessionStore;
   private sessionManager!: SessionManager;
@@ -463,6 +466,14 @@ export class SubstrateRuntime implements Lifecycle {
     runDatabaseIntegrityCheck(this.db);
     log.info('SQLite integrity check passed');
 
+    const dbConfig = resolveDatabaseConfig();
+    this.adapter = await createDatabaseAdapter({
+      ...dbConfig,
+      sqlitePath: dbConfig.sqlitePath ?? this.config.databasePath,
+    });
+    await this.adapter.initialize();
+    await this.adapter.migrate();
+
     // Load identity
     const {
       card,
@@ -535,11 +546,12 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     const notesDir = resolveNotesDir(companionDataDir);
-    this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims, {
+    this.memoryStore = new MemoryStore(this.adapter, embeddingProvider.dims, {
       notesDir,
       scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
       journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
     });
+    await this.memoryStore.init();
     const embeddingDimensionCheck = validateEmbeddingDimensions(
       this.db,
       embeddingProvider.dims,
@@ -643,9 +655,9 @@ export class SubstrateRuntime implements Lifecycle {
       ?? process.env.TELEGRAM_PRIMARY_USER_ID
       ?? ''
     ).trim();
-    const contactStore = wireContactRuntime(
+    const contactStore = await wireContactRuntime(
       this.agentLoop,
-      this.db,
+      this.adapter,
       primaryUserId,
       {
         exportDir: resolveContactsDir(companionDataDir),
@@ -660,7 +672,7 @@ export class SubstrateRuntime implements Lifecycle {
         : {}),
     },
   );
-    const intentionRuntime = wireIntentionRuntime(this.agentLoop, this.db);
+    const intentionRuntime = await wireIntentionRuntime(this.agentLoop, this.adapter);
     wireSelfModelRuntime(this.agentLoop);
     const intentionAppraisalHooks = createIntentionAppraisalHooks(
       intentionRuntime.concernStore,

@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../persistence/db-adapter.js';
 import type { ChannelType } from '../types.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
@@ -176,20 +176,18 @@ export function createIntentionAppraisalHooks(
   pendingFollowUpStore: PendingFollowUpStore,
 ): IntentionAppraisalHooks {
   return {
-    getActiveConcerns: ({ canonicalContactKey }) => (
-      concernStore
-        .getActiveConcerns(canonicalContactKey)
-        .map(concern => toActiveConcernSnapshot(concern))
-    ),
-    getRecentResolvedConcerns: ({ canonicalContactKey }) => (
-      concernStore
-        .listRecentlyResolvedConcerns(canonicalContactKey, {
-          withinMs: RECENT_RESOLVED_CONCERN_WINDOW_MS,
-          limit: RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT,
-        })
-        .map(concern => toRecentlyResolvedConcernSnapshot(concern))
-    ),
-    onIntentionConcernDecision: ({
+    getActiveConcerns: async ({ canonicalContactKey }) => {
+      const concerns = await concernStore.getActiveConcerns(canonicalContactKey);
+      return concerns.map(concern => toActiveConcernSnapshot(concern));
+    },
+    getRecentResolvedConcerns: async ({ canonicalContactKey }) => {
+      const concerns = await concernStore.listRecentlyResolvedConcerns(canonicalContactKey, {
+        withinMs: RECENT_RESOLVED_CONCERN_WINDOW_MS,
+        limit: RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT,
+      });
+      return concerns.map(concern => toRecentlyResolvedConcernSnapshot(concern));
+    },
+    onIntentionConcernDecision: async ({
       decision,
       canonicalContactKey,
     }) => {
@@ -200,14 +198,14 @@ export function createIntentionAppraisalHooks(
       const expiresAt = normalizeFutureIsoTimestamp(
         decision.concern?.dueAt ?? decision.dueAt,
       );
-      const recentMatch = concernStore.findRecentlyResolvedSimilarConcern({
+      const recentMatch = await concernStore.findRecentlyResolvedSimilarConcern({
         text,
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
       });
       if (recentMatch) {
         return;
       }
-      concernStore.create({
+      await concernStore.create({
         text,
         priority: decision.concern?.priority ?? decision.priority,
         source: 'appraisal',
@@ -308,13 +306,16 @@ export function createIntentionBehavioralPatternHooks(
   };
 }
 
-export function wireIntentionRuntime(
+export async function wireIntentionRuntime(
   target: IntentionRuntimeTarget,
-  db: Database.Database,
-): IntentionRuntimeWiring {
-  const concernStore = new ActiveConcernStore(db);
-  const pendingFollowUpStore = new PendingFollowUpStore(db);
-  const behavioralPatternTracker = new BehavioralPatternTracker(db);
+  adapter: DatabaseAdapter,
+): Promise<IntentionRuntimeWiring> {
+  const concernStore = new ActiveConcernStore(adapter);
+  await concernStore.init();
+  const pendingFollowUpStore = new PendingFollowUpStore(adapter);
+  await pendingFollowUpStore.init();
+  const behavioralPatternTracker = new BehavioralPatternTracker(adapter);
+  await behavioralPatternTracker.init();
   const behavioralHooks = createIntentionBehavioralPatternHooks(behavioralPatternTracker);
 
   if (typeof target.setActiveConcernProvider === 'function') {

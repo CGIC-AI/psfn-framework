@@ -79,5 +79,5 @@ export interface ScratchpadEntry {
 }
 
 export interface ScratchpadProvider {
-  listScratchpadEntries(limit?: number): ScratchpadEntry[];
+  listScratchpadEntries(limit?: number): Promise<ScratchpadEntry[]> | ScratchpadEntry[];
 }

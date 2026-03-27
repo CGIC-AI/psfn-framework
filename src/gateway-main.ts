@@ -664,7 +664,11 @@ async function main(): Promise<void> {
 
   const auditDbPath = process.env.AUDIT_DB_PATH ?? join(systemDataDir, 'gateway-audit.db');
   const auditDb = initDatabase(auditDbPath, { foreignKeys: false });
-  const auditStore = new AuditStore(auditDb);
+  const { SqliteAdapter } = await import('./persistence/sqlite-adapter.js');
+  const auditAdapter = new SqliteAdapter(auditDbPath, { foreignKeys: false });
+  await auditAdapter.initialize();
+  const auditStore = new AuditStore(auditAdapter);
+  await auditStore.init();
   log.info(`Audit log: ${auditDbPath}`);
 
   // ── Create gateway server ──

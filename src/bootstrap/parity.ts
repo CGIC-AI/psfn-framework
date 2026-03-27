@@ -182,8 +182,8 @@ interface HeartbeatRuntimeOptions {
   sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
   emotionState?: { getState(): EmotionStateSnapshot };
   contactStore?: {
-    getEmotionalSnapshot?(id: string): EmotionalSnapshot | undefined;
-    getById?(id: string): { trustLevel?: string } | undefined;
+    getEmotionalSnapshot?(id: string): Promise<EmotionalSnapshot | undefined> | EmotionalSnapshot | undefined;
+    getById?(id: string): Promise<{ trustLevel?: string } | undefined> | { trustLevel?: string } | undefined;
   };
   getActiveConcerns?: (input: {
     channelId: string;
@@ -1226,11 +1226,12 @@ export function wireHeartbeatRuntime(
           context.canonicalContactKey
           && runtimeOptions.contactStore?.getEmotionalSnapshot
         )
-          ? runtimeOptions.contactStore.getEmotionalSnapshot(context.canonicalContactKey) ?? null
+          ? await runtimeOptions.contactStore.getEmotionalSnapshot(context.canonicalContactKey) ?? null
           : null;
-        const isPrimaryContact = context.canonicalContactKey
-          ? runtimeOptions.contactStore?.getById?.(context.canonicalContactKey)?.trustLevel === 'primary'
-          : false;
+        const contactRecord = context.canonicalContactKey
+          ? await runtimeOptions.contactStore?.getById?.(context.canonicalContactKey)
+          : undefined;
+        const isPrimaryContact = contactRecord?.trustLevel === 'primary';
         const motivationAssessment = motivationBridge?.assess({
           sessionId: resolvedSessionId,
           currentEmotion,

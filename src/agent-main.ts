@@ -42,6 +42,7 @@ import {
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
+import { createDatabaseAdapter, resolveDatabaseConfig } from './persistence/db-factory.js';
 import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from './utils/env.js';
 import { MemoryWriter } from './memory/writer.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
@@ -384,6 +385,14 @@ async function main(): Promise<void> {
   runDatabaseIntegrityCheck(db);
   log.info('SQLite integrity check passed');
 
+  const dbConfig = resolveDatabaseConfig();
+  const adapter = await createDatabaseAdapter({
+    ...dbConfig,
+    sqlitePath: dbConfig.sqlitePath ?? config.databasePath,
+  });
+  await adapter.initialize();
+  await adapter.migrate();
+
   // ── Load identity (mounted read-only in container) ──
 
   const {
@@ -433,11 +442,12 @@ async function main(): Promise<void> {
     }
   }
 
-  const memoryStore = new MemoryStore(db, gateway.dims, {
+  const memoryStore = new MemoryStore(adapter, gateway.dims, {
     notesDir: resolveNotesDir(companionDataDir),
     scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
     journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
   });
+  await memoryStore.init();
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
   const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
     embeddingDimensionCheck,
@@ -539,9 +549,9 @@ async function main(): Promise<void> {
     ?? process.env.TELEGRAM_PRIMARY_USER_ID
     ?? ''
   ).trim();
-  const contactStore = wireContactRuntime(
+  const contactStore = await wireContactRuntime(
     agentLoop,
-    db,
+    adapter,
     primaryUserId,
     {
       exportDir: resolveContactsDir(companionDataDir),
@@ -556,7 +566,7 @@ async function main(): Promise<void> {
       : {}),
   },
 );
-  const intentionRuntime = wireIntentionRuntime(agentLoop, db);
+  const intentionRuntime = await wireIntentionRuntime(agentLoop, adapter);
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,
@@ -792,8 +802,8 @@ async function main(): Promise<void> {
         voiceWebSocketPath,
         voiceWebSocketRuntime,
         healthChecks: {
-        memory: () => {
-          const stats = memoryStore.getStats();
+        memory: async () => {
+          const stats = await memoryStore.getStats();
           return {
             status: 'healthy',
             meta: {

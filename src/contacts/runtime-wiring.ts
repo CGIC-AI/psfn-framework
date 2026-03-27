@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import type { DatabaseAdapter } from '../persistence/db-adapter.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import { ContactStore } from './store.js';
 import type { ChannelPrivacyLevel } from './types.js';
@@ -27,25 +28,26 @@ export interface ContactRuntimeOptions {
   exportDir?: string;
 }
 
-export function wireContactRuntime(
+export async function wireContactRuntime(
   target: ContactRuntimeTarget,
-  db: Database.Database,
+  adapter: DatabaseAdapter,
   primaryUserId?: string,
   options: ContactRuntimeOptions = {},
-): ContactStore {
-  const contactStore = new ContactStore(db, primaryUserId, {
+): Promise<ContactStore> {
+  const contactStore = new ContactStore(adapter, primaryUserId, {
     exportDir: options.exportDir,
   });
+  await contactStore.init();
   target.contactStore = contactStore;
 
   const trimmedPrimaryUserId = primaryUserId?.trim();
   if (trimmedPrimaryUserId && options.bootstrapPrimaryIdentityLinks?.length) {
-    const primaryContact = contactStore.resolveUserId(trimmedPrimaryUserId);
+    const primaryContact = await contactStore.resolveUserId(trimmedPrimaryUserId);
     for (const link of options.bootstrapPrimaryIdentityLinks) {
       const channel = link.channel.trim();
       const userId = link.userId.trim();
       if (!channel || !userId) continue;
-      contactStore.linkChannelIdentity(
+      await contactStore.linkChannelIdentity(
         primaryContact.id,
         channel,
         userId,
@@ -53,6 +55,28 @@ export function wireContactRuntime(
       );
     }
   }
+
+  target.registerTool(createContactSetTrustTool(contactStore), 'extended');
+  target.registerTool(createContactSetChannelPrivacyTool(contactStore), 'extended');
+  target.registerTool(createContactNoteTool(contactStore), 'extended');
+  target.registerTool(createContactLinkIdentityTool(contactStore), 'extended');
+  target.registerTool(createContactLookupTool(contactStore));
+  target.registerTool(createContactListTool(contactStore));
+
+  return contactStore;
+}
+
+/** @deprecated Use the async version with DatabaseAdapter */
+export function wireContactRuntimeSync(
+  target: ContactRuntimeTarget,
+  db: Database.Database,
+  primaryUserId?: string,
+  options: ContactRuntimeOptions = {},
+): ContactStore {
+  const contactStore = new ContactStore(db as unknown as DatabaseAdapter, primaryUserId, {
+    exportDir: options.exportDir,
+  });
+  target.contactStore = contactStore;
 
   target.registerTool(createContactSetTrustTool(contactStore), 'extended');
   target.registerTool(createContactSetChannelPrivacyTool(contactStore), 'extended');

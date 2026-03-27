@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tei
+  namespace: psfn
+  labels:
+    app.kubernetes.io/name: tei
+    app.kubernetes.io/part-of: psfn
+    app.kubernetes.io/component: embeddings
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tei
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tei
+        app.kubernetes.io/part-of: psfn
+        app.kubernetes.io/component: embeddings
+    spec:
+      terminationGracePeriodSeconds: 30
+
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: tei-model-cache
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+
+      containers:
+        - name: tei
+          image: ghcr.io/huggingface/text-embeddings-inference:1.6-cpu
+          args:
+            - --model-id=$(TEI_MODEL_ID)
+            - --port=8090
+            - --max-batch-tokens=$(TEI_MAX_BATCH_TOKENS)
+            - --max-client-batch-size=$(TEI_MAX_CLIENT_BATCH_SIZE)
+          env:
+            - name: TEI_MODEL_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: tei-config
+                  key: TEI_MODEL_ID
+            - name: TEI_MAX_BATCH_TOKENS
+              valueFrom:
+                configMapKeyRef:
+                  name: tei-config
+                  key: TEI_MAX_BATCH_TOKENS
+            - name: TEI_MAX_CLIENT_BATCH_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: tei-config
+                  key: TEI_MAX_CLIENT_BATCH_SIZE
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: psfn-secrets
+                  key: HF_TOKEN
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          volumeMounts:
+            - name: model-cache
+              mountPath: /data
+            - name: dshm
+              mountPath: /dev/shm
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 3

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: psfn
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn

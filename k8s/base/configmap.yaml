@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: psfn-config
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+data:
+  PSFN_RUNTIME_LAYOUT_MODE: "production"
+  PSFN_RUNTIME_MODE: "split"
+  GATEWAY_SOCKET: "/run/psfn/gateway.sock"
+
+  API_PORT: "3000"
+  API_HOST: "0.0.0.0"
+  ADMIN_PORT: "3001"
+  ADMIN_HOST: "0.0.0.0"
+  ALLOW_INSECURE_LOCAL_API: "false"
+
+  SYSTEM_DATA_DIR: "/app/system-data"
+  COMPANION_DATA_DIR: "/app/companion-data"
+  DATA_DIR: "/app/system-data"
+  DATABASE_PATH: "/app/companion-data/psfn.db"
+  WORKSPACE_PATH: "/app/workspace"
+  CHARACTER_CARD_PATH: "/app/identity/character.json"
+
+  EMBEDDING_DIMS: "1024"
+  LOG_LEVEL: "info"
+
+  DB_PROVIDER: "sqlite"
+  # DB_PROVIDER: "postgres"
+  # DATABASE_URL is in the secret when using postgres
+
+  LIGHTLLM_BASE_URL: "http://lightllm:8080/v1"
+  LIGHTLLM_MODEL: ""
+
+  API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS: "3900000"
+  CONTINUITY_WATCHDOG_TIMEOUT_MS: "5000"
+  CONTINUITY_WATCHDOG_MAX_FAILURES: "5"

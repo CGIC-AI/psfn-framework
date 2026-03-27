@@ -27,17 +27,6 @@ patches:
         value: 1Gi
 
   - target:
-      kind: Deployment
-      name: lightllm
-    patch: |
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/memory
-        value: 16Gi
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 24Gi
-
-  - target:
       kind: ConfigMap
       name: psfn-config
     patch: |
@@ -47,11 +36,3 @@ patches:
       - op: replace
         path: /data/LOG_LEVEL
         value: "debug"
-
-  - target:
-      kind: PersistentVolumeClaim
-      name: lightllm-model-cache
-    patch: |
-      - op: replace
-        path: /spec/resources/requests/storage
-        value: 50Gi

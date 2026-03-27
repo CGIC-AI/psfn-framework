@@ -1,16 +1,37 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: lightllm-config
+  name: litellm-config
   namespace: psfn
   labels:
     app.kubernetes.io/part-of: psfn
-    app.kubernetes.io/component: lightllm
+    app.kubernetes.io/component: litellm
 data:
-  LIGHTLLM_MODEL_ID: "meta-llama/Meta-Llama-3.1-8B-Instruct"
-  LIGHTLLM_MODEL_NAME: "Meta-Llama-3.1-8B-Instruct"
-  LIGHTLLM_TP: "1"
-  LIGHTLLM_MAX_REQ_TOTAL_LEN: "16384"
-  LIGHTLLM_MEM_FRACTION: "0.85"
-  LIGHTLLM_MAX_CONCURRENT: "500"
-  CUDA_VISIBLE_DEVICES: "0"
+  litellm_config.yaml: |
+    model_list:
+      - model_name: openrouter/*
+        litellm_params:
+          model: openrouter/*
+          api_key: os.environ/OPENROUTER_API_KEY
+
+    litellm_settings:
+      drop_params: true
+      request_timeout: 120
+      stream: true
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: litellm-secrets
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+    app.kubernetes.io/component: litellm
+type: Opaque
+stringData:
+  OPENROUTER_API_KEY: ""
+  LITELLM_MASTER_KEY: ""
+  # FAL_AI_API_KEY: ""

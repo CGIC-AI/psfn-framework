@@ -23,17 +23,35 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: lightllm
+  name: litellm
   namespace: psfn
   labels:
-    app.kubernetes.io/name: lightllm
+    app.kubernetes.io/name: litellm
     app.kubernetes.io/part-of: psfn
 spec:
   selector:
-    app.kubernetes.io/name: lightllm
+    app.kubernetes.io/name: litellm
   ports:
     - name: http
-      port: 8080
+      port: 4000
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tei
+  namespace: psfn
+  labels:
+    app.kubernetes.io/name: tei
+    app.kubernetes.io/part-of: psfn
+spec:
+  selector:
+    app.kubernetes.io/name: tei
+  ports:
+    - name: http
+      port: 8090
       targetPort: http
       protocol: TCP
   type: ClusterIP

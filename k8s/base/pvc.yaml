@@ -40,16 +40,16 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: lightllm-model-cache
+  name: tei-model-cache
   namespace: psfn
   labels:
     app.kubernetes.io/part-of: psfn
-    app.kubernetes.io/component: lightllm
+    app.kubernetes.io/component: tei
 spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
-      storage: 100Gi
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

@@ -9,9 +9,11 @@ resources:
   - configmap.yaml
   - secrets.yaml
   - lightllm-config.yaml
+  - tei-config.yaml
   - pvc.yaml
   - postgres-statefulset.yaml
   - lightllm-deployment.yaml
+  - tei-deployment.yaml
   - psfn-deployment.yaml
   - services.yaml
   - networkpolicy.yaml

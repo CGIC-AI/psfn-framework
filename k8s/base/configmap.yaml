@@ -23,15 +23,15 @@ data:
   WORKSPACE_PATH: "/app/workspace"
   CHARACTER_CARD_PATH: "/app/identity/character.json"
 
+  EMBEDDING_PROVIDER: "api"
+  EMBEDDING_API_URL: "http://tei:8090/v1/embeddings"
+  EMBEDDING_API_MODEL: "BAAI/bge-large-en-v1.5"
   EMBEDDING_DIMS: "1024"
   LOG_LEVEL: "info"
 
   DB_PROVIDER: "sqlite"
-  # DB_PROVIDER: "postgres"
-  # DATABASE_URL is in the secret when using postgres
 
-  LIGHTLLM_BASE_URL: "http://lightllm:8080/v1"
-  LIGHTLLM_MODEL: ""
+  LITELLM_BASE_URL: "http://litellm:4000/v1"
 
   API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS: "3900000"
   CONTINUITY_WATCHDOG_TIMEOUT_MS: "5000"

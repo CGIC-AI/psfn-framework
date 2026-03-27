@@ -1,7 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: psfn-agent-isolation
+  name: psfn-egress
   namespace: psfn
   labels:
     app.kubernetes.io/part-of: psfn
@@ -15,9 +15,16 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: lightllm
+              app.kubernetes.io/name: litellm
       ports:
-        - port: 8080
+        - port: 4000
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: tei
+      ports:
+        - port: 8090
           protocol: TCP
     - to:
         - podSelector:
@@ -32,6 +39,62 @@ spec:
         - port: 53
           protocol: UDP
         - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: litellm-policy
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: litellm
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: psfn
+      ports:
+        - port: 4000
+          protocol: TCP
+  egress:
+    - ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tei-isolation
+  namespace: psfn
+  labels:
+    app.kubernetes.io/part-of: psfn
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tei
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: psfn
+      ports:
+        - port: 8090
           protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
@@ -54,26 +117,4 @@ spec:
               app.kubernetes.io/name: psfn
       ports:
         - port: 5432
-          protocol: TCP
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: lightllm-isolation
-  namespace: psfn
-  labels:
-    app.kubernetes.io/part-of: psfn
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: lightllm
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: psfn
-      ports:
-        - port: 8080
           protocol: TCP

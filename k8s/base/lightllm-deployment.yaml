@@ -1,163 +1,70 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: lightllm
+  name: litellm
   namespace: psfn
   labels:
-    app.kubernetes.io/name: lightllm
+    app.kubernetes.io/name: litellm
     app.kubernetes.io/part-of: psfn
-    app.kubernetes.io/component: inference
+    app.kubernetes.io/component: llm-gateway
 spec:
   replicas: 1
-  strategy:
-    type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: lightllm
+      app.kubernetes.io/name: litellm
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: lightllm
+        app.kubernetes.io/name: litellm
         app.kubernetes.io/part-of: psfn
-        app.kubernetes.io/component: inference
+        app.kubernetes.io/component: llm-gateway
     spec:
-      terminationGracePeriodSeconds: 60
+      terminationGracePeriodSeconds: 15
 
       volumes:
-        - name: dshm
-          emptyDir:
-            medium: Memory
-            sizeLimit: 16Gi
-        - name: model-cache
-          persistentVolumeClaim:
-            claimName: lightllm-model-cache
-
-      nodeSelector:
-        accelerator: nvidia-gpu
-
-      tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: NoSchedule
-
-      initContainers:
-        - name: download-model
-          image: python:3.11-slim
-          command:
-            - sh
-            - -c
-            - |
-              pip install -q huggingface_hub &&
-              huggingface-cli download ${LIGHTLLM_MODEL_ID} \
-                --local-dir /data/models/${LIGHTLLM_MODEL_ID##*/} \
-                --local-dir-use-symlinks False
-          env:
-            - name: LIGHTLLM_MODEL_ID
-              valueFrom:
-                configMapKeyRef:
-                  name: lightllm-config
-                  key: LIGHTLLM_MODEL_ID
-            - name: HF_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: psfn-secrets
-                  key: HF_TOKEN
-                  optional: true
-          volumeMounts:
-            - name: model-cache
-              mountPath: /data/models
-          resources:
-            requests:
-              cpu: "1"
-              memory: 4Gi
-            limits:
-              cpu: "2"
-              memory: 8Gi
+        - name: config
+          configMap:
+            name: litellm-config
+            items:
+              - key: litellm_config.yaml
+                path: config.yaml
 
       containers:
-        - name: lightllm
-          image: ghcr.io/modeltc/lightllm:main
-          command: ["python", "-m", "lightllm.server.api_server"]
-          args:
-            - --model_dir=/data/models/$(LIGHTLLM_MODEL_NAME)
-            - --host=0.0.0.0
-            - --port=8080
-            - --tp=$(LIGHTLLM_TP)
-            - --max_req_total_len=$(LIGHTLLM_MAX_REQ_TOTAL_LEN)
-            - --mem_fraction=$(LIGHTLLM_MEM_FRACTION)
-            - --running_max_req_size=$(LIGHTLLM_MAX_CONCURRENT)
-            - --trust_remote_code
-            - --model_name=$(LIGHTLLM_MODEL_NAME)
-            - --health_monitor
-          env:
-            - name: LIGHTLLM_MODEL_NAME
-              valueFrom:
-                configMapKeyRef:
-                  name: lightllm-config
-                  key: LIGHTLLM_MODEL_NAME
-            - name: LIGHTLLM_TP
-              valueFrom:
-                configMapKeyRef:
-                  name: lightllm-config
-                  key: LIGHTLLM_TP
-            - name: LIGHTLLM_MAX_REQ_TOTAL_LEN
-              valueFrom:
-                configMapKeyRef:
-                  name: lightllm-config
-                  key: LIGHTLLM_MAX_REQ_TOTAL_LEN
-            - name: LIGHTLLM_MEM_FRACTION
-              valueFrom:
-                configMapKeyRef:
-                  name: lightllm-config
-                  key: LIGHTLLM_MEM_FRACTION
-            - name: LIGHTLLM_MAX_CONCURRENT
-              valueFrom:
-                configMapKeyRef:
-                  name: lightllm-config
-                  key: LIGHTLLM_MAX_CONCURRENT
-            - name: CUDA_VISIBLE_DEVICES
-              valueFrom:
-                configMapKeyRef:
-                  name: lightllm-config
-                  key: CUDA_VISIBLE_DEVICES
+        - name: litellm
+          image: ghcr.io/berriai/litellm:main-v1.72.6.dev1
+          args: ["--config", "/app/config.yaml", "--port", "4000"]
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: 4000
               protocol: TCP
+          envFrom:
+            - secretRef:
+                name: litellm-secrets
           volumeMounts:
-            - name: dshm
-              mountPath: /dev/shm
-            - name: model-cache
-              mountPath: /data/models
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
               readOnly: true
           resources:
             requests:
-              nvidia.com/gpu: "1"
-              cpu: "4"
-              memory: 24Gi
+              cpu: 250m
+              memory: 256Mi
             limits:
-              nvidia.com/gpu: "1"
-              cpu: "8"
-              memory: 32Gi
-          startupProbe:
-            httpGet:
-              path: /liveness
-              port: 8080
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            failureThreshold: 60
-            timeoutSeconds: 5
+              cpu: "1"
+              memory: 512Mi
           livenessProbe:
             httpGet:
-              path: /liveness
-              port: 8080
-            periodSeconds: 10
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 15
             failureThreshold: 3
             timeoutSeconds: 5
           readinessProbe:
             httpGet:
-              path: /health
-              port: 8080
-            periodSeconds: 15
-            failureThreshold: 5
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
             timeoutSeconds: 5

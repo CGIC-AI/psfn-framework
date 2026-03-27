@@ -166,11 +166,17 @@ describe('evaluateCorsPolicy', () => {
     expect(decision.headers?.['Access-Control-Allow-Origin']).toBe('https://console.example');
     expect(decision.headers?.['Access-Control-Allow-Credentials']).toBe('true');
     expect(decision.headers?.['Access-Control-Allow-Methods']).toContain('POST');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Title');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('HTTP-Referer');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Session-ID');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-User-ID');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-User-Name');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Channel-Privacy');
     expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-Channel-ID');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-PSFN-Channel-Type');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-PSFN-Channel-ID');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-PSFN-Author-ID');
+    expect(decision.headers?.['Access-Control-Allow-Headers']).toContain('X-PSFN-Author-Name');
   });
 
   it('allows wildcard LAN host preflight origins with exact scheme and port semantics', () => {

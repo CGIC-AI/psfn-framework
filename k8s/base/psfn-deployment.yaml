@@ -1,0 +1,133 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: psfn
+  namespace: psfn
+  labels:
+    app.kubernetes.io/name: psfn
+    app.kubernetes.io/part-of: psfn
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: psfn
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: psfn
+        app.kubernetes.io/part-of: psfn
+    spec:
+      serviceAccountName: psfn
+      terminationGracePeriodSeconds: 30
+
+      volumes:
+        - name: gateway-socket
+          emptyDir: {}
+        - name: companion-data
+          persistentVolumeClaim:
+            claimName: psfn-companion-data
+        - name: system-data
+          persistentVolumeClaim:
+            claimName: psfn-system-data
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: psfn-workspace
+        - name: identity
+          configMap:
+            name: psfn-identity
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+
+      containers:
+        - name: gateway
+          image: psfn-gateway:latest
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: psfn-config
+            - secretRef:
+                name: psfn-secrets
+          volumeMounts:
+            - name: gateway-socket
+              mountPath: /run/psfn
+            - name: system-data
+              mountPath: /app/system-data
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            exec:
+              command: ["test", "-S", "/run/psfn/gateway.sock"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+
+        - name: agent
+          image: psfn-agent:latest
+          ports:
+            - name: api
+              containerPort: 3000
+              protocol: TCP
+            - name: admin
+              containerPort: 3001
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: psfn-config
+            - secretRef:
+                name: psfn-secrets
+          env:
+            - name: CONTINUITY_WATCHDOG_ENDPOINT
+              value: "http://127.0.0.1:3000/health"
+            - name: CONTINUITY_WATCHDOG_RESTART_PID
+              value: "0"
+          volumeMounts:
+            - name: gateway-socket
+              mountPath: /run/psfn
+            - name: companion-data
+              mountPath: /app/companion-data
+            - name: system-data
+              mountPath: /app/system-data
+            - name: workspace
+              mountPath: /app/workspace
+            - name: identity
+              mountPath: /app/identity
+              readOnly: true
+            - name: tmp
+              mountPath: /app/tmp
+            - name: logs
+              mountPath: /app/logs
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 5
+            timeoutSeconds: 8
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 8

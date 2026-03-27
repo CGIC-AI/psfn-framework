@@ -229,6 +229,10 @@
     });
   }
 
+  function isReflectionEnabled(tpl: ReflectionTemplate): boolean {
+    return tpl.enabled !== false;
+  }
+
   // ── Protected tasks ──
   const PROTECTED_TASKS = new Set(['heartbeat', 'salience-decay', 'maintenance']);
   function isProtected(id: string): boolean {
@@ -493,6 +497,23 @@
       }
     } catch (e) {
       showFeedback('error', e instanceof Error ? e.message : 'Failed to toggle Discord setting');
+    } finally {
+      saving = null;
+    }
+  }
+
+  async function toggleReflectionEnabled(tpl: ReflectionTemplate) {
+    saving = `reflection-enabled:${tpl.id}`;
+    try {
+      const result = await updateReflectionTemplate(tpl.id, { enabled: !isReflectionEnabled(tpl) });
+      if (result.ok) {
+        showFeedback('ok', result.message);
+        await loadData();
+      } else {
+        showFeedback('error', result.message);
+      }
+    } catch (e) {
+      showFeedback('error', e instanceof Error ? e.message : 'Failed to toggle reflection');
     } finally {
       saving = null;
     }
@@ -942,18 +963,41 @@
                     <div class="flex items-center gap-2">
                       <span class="font-medium text-shadow-800">{tpl.name}</span>
                       <code class="text-xs text-shadow-500 font-mono">{tpl.id}</code>
+                      <span
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium
+                               {isReflectionEnabled(tpl)
+                                 ? 'bg-moss-100 text-moss-700'
+                                 : 'bg-wilt-100 text-wilt-700'}"
+                      >
+                        <span
+                          class="w-1.5 h-1.5 rounded-full
+                                 {isReflectionEnabled(tpl) ? 'bg-moss-500' : 'bg-wilt-500'}"
+                        ></span>
+                        {isReflectionEnabled(tpl) ? 'enabled' : 'disabled'}
+                      </span>
                       {#if tpl.mode === 'deliberation'}
                         <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-petal-100 text-petal-600">deliberation</span>
                       {/if}
                     </div>
                     <p class="text-xs text-shadow-600 mt-0.5 truncate">{tpl.prompt.slice(0, 80)}{tpl.prompt.length > 80 ? '...' : ''}</p>
                     <p class="text-[11px] text-shadow-500 mt-1">
-                      Schedule: {getReflectionScheduleLabel(tpl)}
+                      Status: {isReflectionEnabled(tpl) ? 'Enabled' : 'Disabled'} · Schedule: {getReflectionScheduleLabel(tpl)}
                     </p>
                   </div>
                 </div>
 
                 <div class="flex items-center gap-3 shrink-0">
+                  <button
+                    onclick={() => toggleReflectionEnabled(tpl)}
+                    disabled={saving === `reflection-enabled:${tpl.id}`}
+                    class="flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors font-medium disabled:opacity-50
+                           {isReflectionEnabled(tpl)
+                             ? 'border-gold-300 bg-gold-50 text-gold-700 hover:bg-gold-100'
+                             : 'border-moss-300 bg-moss-50 text-moss-700 hover:bg-moss-100'}"
+                    title={isReflectionEnabled(tpl) ? 'Disable reflection template' : 'Enable reflection template'}
+                  >
+                    {isReflectionEnabled(tpl) ? 'Disable' : 'Enable'}
+                  </button>
                   <!-- Send to Discord toggle -->
                   <button
                     onclick={() => toggleReflectionDiscord(tpl)}

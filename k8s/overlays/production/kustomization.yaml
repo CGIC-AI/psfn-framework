@@ -22,28 +22,30 @@ patches:
         value: "warn"
 
   - target:
-      kind: ConfigMap
-      name: lightllm-config
-    patch: |
-      - op: replace
-        path: /data/LIGHTLLM_MEM_FRACTION
-        value: "0.9"
-      - op: replace
-        path: /data/LIGHTLLM_MAX_CONCURRENT
-        value: "1000"
-
-  - target:
-      kind: PersistentVolumeClaim
-      name: lightllm-model-cache
-    patch: |
-      - op: replace
-        path: /spec/resources/requests/storage
-        value: 200Gi
-
-  - target:
       kind: PersistentVolumeClaim
       name: psfn-companion-data
     patch: |
       - op: replace
         path: /spec/resources/requests/storage
         value: 50Gi
+
+# ── External Postgres ──
+# To use an external database (RDS, Cloud SQL, Neon, etc.):
+# 1. Uncomment the patchesStrategicMerge and the StatefulSet delete patch below
+# 2. Set DATABASE_URL in psfn-secrets to your external connection string
+# 3. Set externalName in external-postgres.yaml to your DB hostname
+#
+# patchesStrategicMerge:
+#   - external-postgres.yaml
+#
+# To remove the in-cluster StatefulSet entirely, add:
+# patches:
+#   - target:
+#       kind: StatefulSet
+#       name: postgres
+#     patch: |
+#       $patch: delete
+#       apiVersion: apps/v1
+#       kind: StatefulSet
+#       metadata:
+#         name: postgres

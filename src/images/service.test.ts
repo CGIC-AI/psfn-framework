@@ -574,6 +574,7 @@ describe('ImageService', () => {
     const service = new ImageService(
       {
         comfyUiBaseUrl: 'https://comfy.example.test',
+        webFetchDnsResolver: vi.fn(async () => ({ address: '93.184.216.34', family: 4 })),
         imageWorkflows: {
           comfyUi: {
             edit: {
@@ -618,5 +619,181 @@ describe('ImageService', () => {
     expect(result.images[0]?.url).toBe(
       'https://comfy.example.test/view?filename=edited.png&subfolder=&type=output',
     );
+  });
+
+  it('blocks ComfyUI remote image downloads that resolve to private IPs before fetching', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error('fetch should not be called for a blocked private IP');
+    });
+
+    const service = new ImageService(
+      {
+        comfyUiBaseUrl: 'https://comfy.example.test',
+        imageWorkflows: {
+          comfyUi: {
+            edit: {
+              workflow: {
+                '1': {
+                  class_type: 'LoadImage',
+                  inputs: {
+                    image: '{{input_image_1}}',
+                  },
+                },
+              },
+            },
+          },
+        },
+        webFetchDnsResolver: vi.fn(async () => ({ address: '127.0.0.1', family: 4 })),
+      },
+      fetchMock as typeof fetch,
+    );
+
+    await expect(service.edit({
+      provider: 'comfyui',
+      prompt: 'turn the chair blue',
+      imageUrls: ['https://example.test/input.png'],
+    })).rejects.toThrow('DNS resolved example.test to private IP 127.0.0.1');
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks ComfyUI remote image redirects to private IPs', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://example.test/input.png') {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: 'https://127.0.0.1/blocked.png',
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        comfyUiBaseUrl: 'https://comfy.example.test',
+        imageWorkflows: {
+          comfyUi: {
+            edit: {
+              workflow: {
+                '1': {
+                  class_type: 'LoadImage',
+                  inputs: {
+                    image: '{{input_image_1}}',
+                  },
+                },
+              },
+            },
+          },
+        },
+        webFetchDnsResolver: vi.fn(async (hostname: string) => {
+          if (hostname === 'example.test') {
+            return { address: '93.184.216.34', family: 4 };
+          }
+          return { address: '127.0.0.1', family: 4 };
+        }),
+      },
+      fetchMock as typeof fetch,
+    );
+
+    await expect(service.edit({
+      provider: 'comfyui',
+      prompt: 'turn the chair blue',
+      imageUrls: ['https://example.test/input.png'],
+    })).rejects.toThrow('URL blocked: Private IP 127.0.0.1 blocked');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects oversized ComfyUI remote image downloads before buffering the body', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://example.test/input.png') {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: {
+            'content-type': 'image/png',
+            'content-length': '99999999',
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        comfyUiBaseUrl: 'https://comfy.example.test',
+        imageWorkflows: {
+          comfyUi: {
+            edit: {
+              workflow: {
+                '1': {
+                  class_type: 'LoadImage',
+                  inputs: {
+                    image: '{{input_image_1}}',
+                  },
+                },
+              },
+            },
+          },
+        },
+        webFetchDnsResolver: vi.fn(async () => ({ address: '93.184.216.34', family: 4 })),
+      },
+      fetchMock as typeof fetch,
+    );
+
+    await expect(service.edit({
+      provider: 'comfyui',
+      prompt: 'turn the chair blue',
+      imageUrls: ['https://example.test/input.png'],
+    })).rejects.toThrow('Remote image fetch exceeded 8388608 bytes (99999999 reported)');
+  });
+
+  it('rejects ComfyUI remote image downloads with non-image content types', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://example.test/input.png') {
+        return new Response('<html>not an image</html>', {
+          status: 200,
+          headers: {
+            'content-type': 'text/html',
+          },
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        comfyUiBaseUrl: 'https://comfy.example.test',
+        imageWorkflows: {
+          comfyUi: {
+            edit: {
+              workflow: {
+                '1': {
+                  class_type: 'LoadImage',
+                  inputs: {
+                    image: '{{input_image_1}}',
+                  },
+                },
+              },
+            },
+          },
+        },
+        webFetchDnsResolver: vi.fn(async () => ({ address: '93.184.216.34', family: 4 })),
+      },
+      fetchMock as typeof fetch,
+    );
+
+    await expect(service.edit({
+      provider: 'comfyui',
+      prompt: 'turn the chair blue',
+      imageUrls: ['https://example.test/input.png'],
+    })).rejects.toThrow('Remote image fetch returned non-image content type text/html');
   });
 });

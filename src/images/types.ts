@@ -1,4 +1,5 @@
 import { isRecord } from '../utils/types.js';
+import type { DnsResolver } from '../gateway/url-policy.js';
 
 export const FAL_CREATE_MODELS = [
   'fal-ai/nano-banana-2',
@@ -67,6 +68,10 @@ export interface ImageRuntimeConfig {
   falApiKey?: string;
   comfyUiBaseUrl?: string;
   imageWorkflows?: ImageWorkflowSettings;
+  webFetchAllowHttp?: boolean;
+  webFetchDomainAllowlist?: string[];
+  webFetchAllowInternalNetwork?: boolean;
+  webFetchDnsResolver?: DnsResolver;
 }
 
 export interface ImageResultAsset {

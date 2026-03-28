@@ -54,6 +54,8 @@ import { registerFilesystemTools } from './filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from './filesystem/gateway-ops.js';
 import { registerImageTools } from './images/runtime-wiring.js';
 import { GatewayImageOps } from './images/gateway-ops.js';
+import { registerWebTools } from './web/runtime-wiring.js';
+import { GatewayWebFetchOps } from './web/gateway-ops.js';
 import { DefaultImageVisionReviewer } from './images/vision-reviewer.js';
 import {
   DiscordLifecycleNotifier,
@@ -62,6 +64,7 @@ import {
 import type { MessageSender } from './lifecycle/notifications.js';
 import {
   RUNTIME_MODE,
+  resolveRuntimeCommandInvocation,
   resolveRuntimeModeContract,
   toRuntimeStatusMetadata,
 } from './lifecycle/runtime-mode.js';
@@ -505,6 +508,7 @@ async function main(): Promise<void> {
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
   });
+  registerWebTools(agentLoop, new GatewayWebFetchOps(gateway), { gatewayMode: true });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
@@ -1066,8 +1070,15 @@ async function main(): Promise<void> {
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRuntimeContract.restart.command,
-      runtimeMode: lifecycleRuntimeContract.mode,
+      runRestartCommand: async () => {
+        const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
+        if (!invocation) return;
+        await gateway.shellExec(invocation.command, invocation.args, {
+          cwd: process.cwd(),
+          timeoutMs: 30_000,
+          maxOutputChars: 10_000,
+        });
+      },
     },
   ));
   agentLoop.registerTool(createRebuildTool(
@@ -1076,8 +1087,22 @@ async function main(): Promise<void> {
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRuntimeContract.restart.command,
-      runtimeMode: lifecycleRuntimeContract.mode,
+      runBuildCommand: async () => {
+        await gateway.shellExec('npm', ['run', 'build'], {
+          cwd: process.cwd(),
+          timeoutMs: 120_000,
+          maxOutputChars: 40_000,
+        });
+      },
+      runRestartCommand: async () => {
+        const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
+        if (!invocation) return;
+        await gateway.shellExec(invocation.command, invocation.args, {
+          cwd: process.cwd(),
+          timeoutMs: 30_000,
+          maxOutputChars: 10_000,
+        });
+      },
     },
   ));
   agentLoop.registerTool(createNotifyOperatorTool(

@@ -2,6 +2,12 @@ import { EventStream, streamSimple, type AssistantMessage } from '@mariozechner/
 import type { AgentContext, AgentLoopConfig, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { executeToolCallsWithScheduler, type ToolCallSchedulerOptions } from './tool-call-scheduler.js';
 
+type AgentLoopErrorEvent = {
+  type: 'agent_error';
+  error: Error;
+  messages: AgentMessage[];
+};
+
 export function agentLoopWithScheduler(
   prompts: AgentMessage[],
   context: AgentContext,
@@ -13,17 +19,21 @@ export function agentLoopWithScheduler(
   const stream = createAgentStream();
   (async () => {
     const newMessages = [...prompts];
-    const currentContext = {
-      ...context,
-      messages: [...context.messages, ...prompts],
-    };
-    stream.push({ type: 'agent_start' });
-    stream.push({ type: 'turn_start' });
-    for (const prompt of prompts) {
-      stream.push({ type: 'message_start', message: prompt });
-      stream.push({ type: 'message_end', message: prompt });
+    try {
+      const currentContext = {
+        ...context,
+        messages: [...context.messages, ...prompts],
+      };
+      stream.push({ type: 'agent_start' });
+      stream.push({ type: 'turn_start' });
+      for (const prompt of prompts) {
+        stream.push({ type: 'message_start', message: prompt });
+        stream.push({ type: 'message_end', message: prompt });
+      }
+      await runLoop(currentContext, newMessages, config, signal, stream, streamFn, schedulerOptions);
+    } catch (error) {
+      terminateStreamWithError(stream, newMessages, error);
     }
-    await runLoop(currentContext, newMessages, config, signal, stream, streamFn, schedulerOptions);
   })();
   return stream;
 }
@@ -44,10 +54,14 @@ export function agentLoopContinueWithScheduler(
   const stream = createAgentStream();
   (async () => {
     const newMessages: AgentMessage[] = [];
-    const currentContext = { ...context };
-    stream.push({ type: 'agent_start' });
-    stream.push({ type: 'turn_start' });
-    await runLoop(currentContext, newMessages, config, signal, stream, streamFn, schedulerOptions);
+    try {
+      const currentContext = { ...context };
+      stream.push({ type: 'agent_start' });
+      stream.push({ type: 'turn_start' });
+      await runLoop(currentContext, newMessages, config, signal, stream, streamFn, schedulerOptions);
+    } catch (error) {
+      terminateStreamWithError(stream, newMessages, error);
+    }
   })();
   return stream;
 }
@@ -169,55 +183,77 @@ async function streamAssistantResponse(
 
   let partialMessage: AssistantMessage | null = null;
   let addedPartial = false;
-  for await (const event of response) {
-    switch (event.type) {
-      case 'start':
-        partialMessage = event.partial;
-        context.messages.push(partialMessage);
-        addedPartial = true;
-        stream.push({ type: 'message_start', message: { ...partialMessage } });
-        break;
-      case 'text_start':
-      case 'text_delta':
-      case 'text_end':
-      case 'thinking_start':
-      case 'thinking_delta':
-      case 'thinking_end':
-      case 'toolcall_start':
-      case 'toolcall_delta':
-      case 'toolcall_end':
-        if (partialMessage) {
+  try {
+    for await (const event of response) {
+      switch (event.type) {
+        case 'start':
           partialMessage = event.partial;
-          context.messages[context.messages.length - 1] = partialMessage;
-          stream.push({
-            type: 'message_update',
-            assistantMessageEvent: event,
-            message: { ...partialMessage },
+          context.messages.push(partialMessage);
+          addedPartial = true;
+          stream.push({ type: 'message_start', message: { ...partialMessage } });
+          break;
+        case 'text_start':
+        case 'text_delta':
+        case 'text_end':
+        case 'thinking_start':
+        case 'thinking_delta':
+        case 'thinking_end':
+        case 'toolcall_start':
+        case 'toolcall_delta':
+        case 'toolcall_end':
+          if (partialMessage) {
+            partialMessage = event.partial;
+            context.messages[context.messages.length - 1] = partialMessage;
+            stream.push({
+              type: 'message_update',
+              assistantMessageEvent: event,
+              message: { ...partialMessage },
+            });
+          }
+          break;
+        case 'done':
+        case 'error': {
+          const finalMessage = await resolveStreamResult(response, {
+            terminalEvent: event,
+            partialMessage,
           });
+          if (addedPartial) {
+            context.messages[context.messages.length - 1] = finalMessage;
+          } else {
+            context.messages.push(finalMessage);
+          }
+          if (!addedPartial) {
+            stream.push({ type: 'message_start', message: { ...finalMessage } });
+          }
+          stream.push({ type: 'message_end', message: finalMessage });
+          return finalMessage;
         }
-        break;
-      case 'done':
-      case 'error': {
-        const finalMessage = await resolveStreamResult(response, {
-          terminalEvent: event,
-          partialMessage,
-        });
-        if (addedPartial) {
-          context.messages[context.messages.length - 1] = finalMessage;
-        } else {
-          context.messages.push(finalMessage);
-        }
-        if (!addedPartial) {
-          stream.push({ type: 'message_start', message: { ...finalMessage } });
-        }
-        stream.push({ type: 'message_end', message: finalMessage });
-        return finalMessage;
+        default:
+          break;
       }
-      default:
-        break;
     }
+  } catch (error) {
+    if (addedPartial) {
+      context.messages.pop();
+    }
+    throw error;
   }
   return resolveStreamResult(response, { partialMessage });
+}
+
+function terminateStreamWithError(
+  stream: ReturnType<typeof createAgentStream>,
+  messages: AgentMessage[],
+  error: unknown,
+): void {
+  const err = error instanceof Error ? error : new Error(String(error));
+  stream.push({
+    type: 'agent_error',
+    error: err,
+    messages,
+  } satisfies AgentLoopErrorEvent);
+  stream.push({ type: 'agent_end', messages });
+  stream.end(messages);
 }
 
 type StreamResolutionContext = {

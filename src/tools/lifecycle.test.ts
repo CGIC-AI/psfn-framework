@@ -1,17 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRestartTool, createRebuildTool } from './lifecycle.js';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
-import { execSync, spawn } from 'node:child_process';
-import { EventEmitter } from 'node:events';
 import { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
-
-vi.mock('node:child_process', () => ({
-  execSync: vi.fn(),
-  spawn: vi.fn(),
-}));
-
-const mockedExecSync = vi.mocked(execSync);
-const mockedSpawn = vi.mocked(spawn);
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -21,16 +11,16 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
 describe('createRestartTool', () => {
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
+  let runRestartCommand: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    mockedExecSync.mockReset();
-    mockedSpawn.mockReset();
     mockNotifier = {
       notifyPreRestart: vi.fn(async () => {}),
       notifyReady: vi.fn(async () => {}),
       notifyShutdown: vi.fn(async () => {}),
     };
     mockStopFn = vi.fn(async () => {});
+    runRestartCommand = vi.fn(async () => {});
   });
 
   it('has correct tool metadata', () => {
@@ -115,10 +105,6 @@ describe('createRestartTool', () => {
   });
 
   it('launches configured restart command after shutdown', async () => {
-    const child = new EventEmitter() as EventEmitter & { unref: ReturnType<typeof vi.fn> };
-    child.unref = vi.fn();
-    mockedSpawn.mockReturnValue(child as any);
-
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
@@ -127,20 +113,13 @@ describe('createRestartTool', () => {
     }) as typeof setImmediate;
 
     const tool = createRestartTool(mockNotifier, mockStopFn, {
-      restartCommand: 'npm run split',
-      runtimeMode: 'split',
+      runRestartCommand,
     });
     await tool.execute('call-7', { reason: 'mode-aware restart' });
-    child.emit('spawn');
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(mockStopFn).toHaveBeenCalledOnce();
-    expect(mockedSpawn).toHaveBeenCalledWith('npm run split', {
-      shell: true,
-      detached: true,
-      stdio: 'ignore',
-    });
-    expect(child.unref).toHaveBeenCalledOnce();
+    expect(runRestartCommand).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledWith(0);
 
     globalThis.setImmediate = origSetImmediate;
@@ -151,6 +130,8 @@ describe('createRestartTool', () => {
 describe('createRebuildTool', () => {
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
+  let runRestartCommand: ReturnType<typeof vi.fn>;
+  let runBuildCommand: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     mockNotifier = {
@@ -159,6 +140,8 @@ describe('createRebuildTool', () => {
       notifyShutdown: vi.fn(async () => {}),
     };
     mockStopFn = vi.fn(async () => {});
+    runRestartCommand = vi.fn(async () => {});
+    runBuildCommand = vi.fn(async () => {});
   });
 
   it('has correct tool metadata', () => {
@@ -200,7 +183,7 @@ describe('createRebuildTool', () => {
   });
 
   it('notifies shutdown and aborts restart when build fails', async () => {
-    mockedExecSync.mockImplementation(() => {
+    runBuildCommand.mockImplementation(async () => {
       throw new Error('build blew up');
     });
 
@@ -211,12 +194,16 @@ describe('createRebuildTool', () => {
       return 0 as any;
     }) as typeof setImmediate;
 
-    const tool = createRebuildTool(mockNotifier, mockStopFn);
+    const tool = createRebuildTool(mockNotifier, mockStopFn, {
+      runBuildCommand,
+      runRestartCommand,
+    });
     await tool.execute('call-5', { reason: 'verify build' });
     await new Promise(r => setTimeout(r, 0));
 
     expect(mockNotifier.notifyShutdown).toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
 
     globalThis.setImmediate = origSetImmediate;

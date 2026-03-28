@@ -72,6 +72,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   settings_get: 'identity.read',
   spawn_shard: 'shard.spawn',
   think: 'repl.execute',
+  web_fetch: 'external.web',
   vault_write: 'identity.write.runtime',
   vault_read: 'identity.read',
   vault_search: 'identity.read',

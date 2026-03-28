@@ -3,6 +3,7 @@ import {
   RUNTIME_MODE,
   normalizeRestartCommand,
   normalizeRuntimeMode,
+  resolveRuntimeCommandInvocation,
   resolveRuntimeModeContract,
   toRuntimeStatusMetadata,
 } from './runtime-mode.js';
@@ -27,6 +28,26 @@ describe('normalizeRestartCommand', () => {
     expect(normalizeRestartCommand(' npm run split ')).toBe('npm run split');
     expect(normalizeRestartCommand('   ')).toBeUndefined();
     expect(normalizeRestartCommand(undefined)).toBeUndefined();
+  });
+});
+
+describe('resolveRuntimeCommandInvocation', () => {
+  it('splits command strings into command and args', () => {
+    expect(resolveRuntimeCommandInvocation('npm run split')).toEqual({
+      command: 'npm',
+      args: ['run', 'split'],
+    });
+  });
+
+  it('preserves quoted arguments', () => {
+    expect(resolveRuntimeCommandInvocation('npm run "split mode"')).toEqual({
+      command: 'npm',
+      args: ['run', 'split mode'],
+    });
+  });
+
+  it('rejects unmatched quotes', () => {
+    expect(() => resolveRuntimeCommandInvocation('npm run "split')).toThrow('unmatched quote');
   });
 });
 

@@ -327,7 +327,7 @@ src/
   capabilities/             # Runtime capability declarations
   values/                   # Values journal (agent-authored principles)
   modules/                  # Runtime module registry and loader
-  bootstrap/                # Composition root (parity wiring)
+  bootstrap/                # Composition root (shared wiring)
   channels/
     admin/                  # Admin server + JSON API
     api/                    # OpenAI-compatible REST API

@@ -3,39 +3,18 @@ import {
   applySettings,
   type EditableSettings,
   hasModelSettings,
-  loadSettings,
   MOOD_CONGRUENCE_WEIGHT_RANGE,
   normalizeEditableSettings,
   REMOVED_RUNTIME_SETTINGS_KEYS,
   splitSettingsByDomain,
   SETTINGS_VALIDATION,
-  saveSettings,
 } from '../../../settings.js';
-import {
-  loadModelsConfig,
-  saveModelsConfig,
-} from '../../../config/models-config.js';
+import { createSystemConfigRepository } from '../../../config/system-config-repository.js';
 import {
   applyProvidersRuntimeConfig,
   loadProvidersConfig,
   saveProvidersConfig,
 } from '../../../config/providers-config.js';
-import {
-  loadSkillsConfig,
-  saveSkillsConfig,
-} from '../../../config/skills-config.js';
-import {
-  loadSchedulerConfig,
-  saveSchedulerConfig,
-} from '../../../config/scheduler-config.js';
-import {
-  loadTrustPolicyConfig,
-  saveTrustPolicyConfig,
-} from '../../../config/trust-policy-config.js';
-import {
-  loadCapabilityTierConfig,
-  saveCapabilityTierConfig,
-} from '../../../config/capability-tier-config.js';
 import {
   loadBackupConfig,
   saveBackupConfig,
@@ -120,17 +99,22 @@ function refreshCapabilities(config: SubstrateConfig): void {
   }
 }
 
+function createRepository(config: SubstrateConfig) {
+  return createSystemConfigRepository({
+    dataDir: config.dataDir,
+    seedDir: process.env.CONFIG_DIR,
+    defaultContextWindow: config.defaultContextWindow,
+  });
+}
+
 export function applyAdminModelsConfigMutation(options: {
   config: SubstrateConfig;
   payload: unknown;
 }): SettingsMutationResult {
   const { config, payload } = options;
+  const repository = createRepository(config);
   try {
-    const saved = saveModelsConfig(
-      config.dataDir,
-      payload,
-      { defaultContextWindow: config.defaultContextWindow },
-    );
+    const saved = repository.saveModels(payload);
     applySettings(config, saved);
     refreshModels(config);
     return { ok: true };
@@ -147,8 +131,9 @@ export function applyAdminCapabilityTierMutation(options: {
   payload: unknown;
 }): SettingsMutationResult {
   const { config, payload } = options;
+  const repository = createRepository(config);
   try {
-    const saved = saveCapabilityTierConfig(config.dataDir, payload);
+    const saved = repository.saveCapabilityTier(payload);
     config.capabilityTier = saved.tier;
     refreshCapabilities(config);
     return { ok: true };
@@ -166,8 +151,9 @@ export function applyAdminSettingsMutation(options: {
   capabilityCustomTokens?: readonly CapabilityToken[];
 }): SettingsMutationResult {
   const { config, settings, capabilityCustomTokens } = options;
+  const repository = createRepository(config);
 
-  const currentRuntimeSettings = splitSettingsByDomain(loadSettings(config.dataDir)).runtime;
+  const currentRuntimeSettings = splitSettingsByDomain(repository.loadRuntimeSettings()).runtime;
   const domainSplit = splitSettingsByDomain(settings);
 
   const mergedRuntimeSettings = normalizeEditableSettings(
@@ -175,7 +161,7 @@ export function applyAdminSettingsMutation(options: {
     { defaultContextWindow: config.defaultContextWindow },
   );
 
-  saveSettings(config.dataDir, mergedRuntimeSettings);
+  repository.saveRuntimeSettings(mergedRuntimeSettings);
   applySettings(config, mergedRuntimeSettings);
 
   if (Object.hasOwn(domainSplit.runtime, 'openRouterModelsApiUrl')) {
@@ -201,10 +187,7 @@ export function applyAdminSettingsMutation(options: {
 
   if (hasModelSettings(domainSplit.models)) {
     try {
-      const currentModels = loadModelsConfig(config.dataDir, {
-        seedDir: process.env.CONFIG_DIR,
-        defaultContextWindow: config.defaultContextWindow,
-      });
+      const currentModels = repository.loadModels();
       const modelPatch: EditableSettings = { ...domainSplit.models };
       const hasPrimaryAliasPatch = modelPatch.primaryModel !== undefined
         || modelPatch.primaryProvider !== undefined
@@ -264,10 +247,8 @@ export function applyAdminSettingsMutation(options: {
 
   if (domainSplit.maintenanceIntervalMs !== undefined) {
     try {
-      const currentScheduler = loadSchedulerConfig(config.dataDir, {
-        seedDir: process.env.CONFIG_DIR,
-      });
-      const savedScheduler = saveSchedulerConfig(config.dataDir, {
+      const currentScheduler = repository.loadScheduler();
+      const savedScheduler = repository.saveScheduler({
         ...currentScheduler,
         salienceDecayIntervalMs: domainSplit.maintenanceIntervalMs,
       });
@@ -282,9 +263,7 @@ export function applyAdminSettingsMutation(options: {
 
   if (domainSplit.capabilityTier !== undefined) {
     try {
-      const currentCapabilities = loadCapabilityTierConfig(config.dataDir, {
-        seedDir: process.env.CONFIG_DIR,
-      });
+      const currentCapabilities = repository.loadCapabilityTier();
       const capabilityMutation = applyAdminCapabilityTierMutation({
         config,
         payload: {
@@ -334,13 +313,14 @@ export class AdminSettingsDataService implements AdminSettingsService {
   }
 
   private loadSettingsConfigEditors(): SettingsConfigEditors {
+    const repository = createRepository(this.deps.config);
     return {
-      models: loadModelsConfig(this.deps.config.dataDir),
+      models: repository.loadModels(),
       providers: loadProvidersConfig(this.deps.config.dataDir),
-      skills: loadSkillsConfig(this.deps.config.dataDir),
-      scheduler: loadSchedulerConfig(this.deps.config.dataDir),
-      trustPolicy: loadTrustPolicyConfig(this.deps.config.dataDir),
-      capabilities: loadCapabilityTierConfig(this.deps.config.dataDir),
+      skills: repository.loadSkills(),
+      scheduler: repository.loadScheduler(),
+      trustPolicy: repository.loadTrustPolicy(),
+      capabilities: repository.loadCapabilityTier(),
       backup: loadBackupConfig(this.deps.config.dataDir),
     };
   }
@@ -729,7 +709,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
   }
 
   async getSettingsData(): Promise<AdminSettingsData> {
-    const runtimeConfig = splitSettingsByDomain(loadSettings(this.deps.config.dataDir)).runtime;
+    const repository = createRepository(this.deps.config);
+    const runtimeConfig = splitSettingsByDomain(repository.loadRuntimeSettings()).runtime;
     runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     return {
       config: runtimeConfig,
@@ -767,7 +748,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
 
     try {
-      const current = loadSettings(this.deps.config.dataDir);
+      const repository = createRepository(this.deps.config);
+      const current = repository.loadRuntimeSettings();
       const validationErrors = this.validateSettingsPayload(parsed, current as Partial<SubstrateConfig>);
       if (validationErrors.length > 0) {
         return this.buildValidationResult(validationErrors);
@@ -797,25 +779,25 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * Returns null when the key is unknown.
    */
   getSubConfigJson(key: string): string | null {
+    const repository = createRepository(this.deps.config);
     try {
       switch (key) {
         case 'settings':
-          return JSON.stringify(loadSettings(this.companionDataDir), null, 2);
+          return JSON.stringify(repository.loadRuntimeSettings(), null, 2);
         case 'models':
-          return JSON.stringify(
-            loadModelsConfig(this.companionDataDir, { defaultContextWindow: this.deps.config.defaultContextWindow }),
-            null, 2,
-          );
+          return JSON.stringify(repository.loadModels(), null, 2);
         case 'providers':
           return JSON.stringify(loadProvidersConfig(this.companionDataDir).registry, null, 2);
         case 'skills':
-          return JSON.stringify(loadSkillsConfig(this.companionDataDir), null, 2);
+          return JSON.stringify(repository.loadSkills(), null, 2);
         case 'scheduler':
-          return JSON.stringify(loadSchedulerConfig(this.companionDataDir), null, 2);
+          return JSON.stringify(repository.loadScheduler(), null, 2);
         case 'trust-policy':
-          return JSON.stringify(loadTrustPolicyConfig(this.companionDataDir), null, 2);
+          return JSON.stringify(repository.loadTrustPolicy(), null, 2);
         case 'capabilities':
-          return JSON.stringify(loadCapabilityTierConfig(this.companionDataDir), null, 2);
+          return JSON.stringify(repository.loadCapabilityTier(), null, 2);
+        case 'channels':
+          return JSON.stringify(repository.loadChannels(), null, 2);
         case 'backup':
           return JSON.stringify(loadBackupConfig(this.companionDataDir), null, 2);
         default:
@@ -840,9 +822,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
 
     try {
+      const repository = createRepository(this.deps.config);
       switch (key) {
         case 'scheduler': {
-          const saved = saveSchedulerConfig(this.companionDataDir, parsed);
+          const saved = repository.saveScheduler(parsed);
           this.deps.config.maintenanceIntervalMs = saved.salienceDecayIntervalMs;
           return { ok: true, message: 'scheduler.json saved' };
         }
@@ -866,11 +849,11 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return { ok: true, message: 'providers.json saved' };
         }
         case 'skills': {
-          saveSkillsConfig(this.companionDataDir, parsed);
+          repository.saveSkills(parsed);
           return { ok: true, message: 'skills.json saved' };
         }
         case 'trust-policy': {
-          saveTrustPolicyConfig(this.companionDataDir, parsed);
+          repository.saveTrustPolicy(parsed);
           return { ok: true, message: 'trust-policy.json saved' };
         }
         default:

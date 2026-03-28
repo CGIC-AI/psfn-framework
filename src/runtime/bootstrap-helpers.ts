@@ -4,8 +4,6 @@ import type { SubstrateConfig } from '../types.js';
 import type { CapabilityTier } from '../types.js';
 import {
   applySettings,
-  loadSettings,
-  saveSettings,
   splitSettingsByDomain,
   type EditableSettings,
   type SettingsDomainSplit,
@@ -39,24 +37,16 @@ import {
   wrapStreamingSttConnectorWithEligibility,
   wrapStreamingTtsConnectorWithEligibility,
 } from './plugin-eligibility.js';
+import { createSystemConfigRepository } from '../config/system-config-repository.js';
 import { loadModelsConfigWithLegacyMigration, type ModelsLoadResult } from '../config/models-config.js';
 import {
   applyProvidersRuntimeConfig,
   loadProvidersConfigWithLegacyMigration,
   type ProvidersLoadResult,
 } from '../config/providers-config.js';
-import {
-  CAPABILITY_TIER_FILE_NAME,
-  loadCapabilityTierConfig,
-  saveCapabilityTierConfig,
-} from '../config/capability-tier-config.js';
-import {
-  SCHEDULER_FILE_NAME,
-  loadSchedulerConfig,
-  saveSchedulerConfig,
-  type SchedulerRuntimeConfig,
-} from '../config/scheduler-config.js';
-import { loadTrustPolicyConfig, type TrustPolicyConfig } from '../config/trust-policy-config.js';
+import { CAPABILITY_TIER_FILE_NAME } from '../config/capability-tier-config.js';
+import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../config/scheduler-config.js';
+import { type TrustPolicyConfig } from '../config/trust-policy-config.js';
 import { resolveRuntimeSchedulerConfig } from '../config/scheduler-runtime.js';
 import { setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
 import {
@@ -331,11 +321,16 @@ export function createEmbeddingDimensionMismatchFatalMessage(
 
 export function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
   const existingHooks = config.runtimeHooks ?? {};
+  const repository = createSystemConfigRepository({
+    dataDir: config.dataDir,
+    seedDir: process.env.CONFIG_DIR,
+    defaultContextWindow: config.defaultContextWindow,
+  });
   config.runtimeHooks = {
     ...existingHooks,
     persistPromotedExtendedTools: (toolNames) => {
-      const current = loadSettings(config.dataDir);
-      saveSettings(config.dataDir, {
+      const current = repository.loadRuntimeSettings();
+      repository.saveRuntimeSettings({
         ...current,
         promotedExtendedTools: [...toolNames],
       });
@@ -381,8 +376,13 @@ export function hydrateCanonicalStartupConfig(
   });
   const { systemDataDir, companionDataDir, runtimePathLayout } = pathSnapshot;
   assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config, env));
+  const repository = createSystemConfigRepository({
+    dataDir: systemDataDir,
+    seedDir: env.CONFIG_DIR,
+    defaultContextWindow: config.defaultContextWindow,
+  });
 
-  const savedSettings = loadSettings(systemDataDir);
+  const savedSettings = repository.loadRuntimeSettings();
   const settingsDomains = splitSettingsByDomain(savedSettings);
   applySettings(config, settingsDomains.runtime);
   assertSecuritySensitiveStartupConfig(config);
@@ -414,11 +414,9 @@ export function hydrateCanonicalStartupConfig(
     try {
       const schedulerPath = join(systemDataDir, SCHEDULER_FILE_NAME);
       const schedulerFileExisted = existsSync(schedulerPath);
-      const persistedScheduler = loadSchedulerConfig(systemDataDir, {
-        seedDir: env.CONFIG_DIR,
-      });
+      const persistedScheduler = repository.loadScheduler();
       if (!schedulerFileExisted) {
-        saveSchedulerConfig(systemDataDir, {
+        repository.saveScheduler({
           ...persistedScheduler,
           salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
         });
@@ -447,11 +445,9 @@ export function hydrateCanonicalStartupConfig(
     try {
       const capabilityPath = join(systemDataDir, CAPABILITY_TIER_FILE_NAME);
       const capabilityFileExisted = existsSync(capabilityPath);
-      const persistedCapabilities = loadCapabilityTierConfig(systemDataDir, {
-        seedDir: env.CONFIG_DIR,
-      });
+      const persistedCapabilities = repository.loadCapabilityTier();
       if (!capabilityFileExisted) {
-        saveCapabilityTierConfig(systemDataDir, {
+        repository.saveCapabilityTier({
           ...persistedCapabilities,
           tier: settingsDomains.capabilityTier,
         });
@@ -478,15 +474,13 @@ export function hydrateCanonicalStartupConfig(
 
   if (settingsDomains.legacyKeys.length > 0) {
     try {
-      saveSettings(systemDataDir, settingsDomains.runtime);
+      repository.saveRuntimeSettings(settingsDomains.runtime);
     } catch (error) {
       diagnostics.settingsRewriteError = String(error);
     }
   }
 
-  const trustPolicyConfig = loadTrustPolicyConfig(systemDataDir, {
-    seedDir: env.CONFIG_DIR,
-  });
+  const trustPolicyConfig = repository.loadTrustPolicy();
   setRuntimeTrustPolicy(trustPolicyConfig);
 
   const schedulerConfig = resolveRuntimeSchedulerConfig({

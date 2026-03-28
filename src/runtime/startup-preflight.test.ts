@@ -76,11 +76,11 @@ describe('resolveStartupLifecycleBundle', () => {
     expect(bundle.runtimeStatusMeta).toEqual(toRuntimeStatusMetadata(contract));
   });
 
-  it('rejects monolithic startup contracts through the shared preflight surface', () => {
+  it('rejects disabled startup contracts through the shared preflight surface', () => {
     expect(() => resolveStartupLifecycleBundle({
       entrypoint: RUNTIME_MODE.SINGLE,
       env: {},
-    })).toThrow('Monolithic runtime mode has been removed');
+    })).toThrow('Unsupported runtime entrypoint "single"');
   });
 });
 

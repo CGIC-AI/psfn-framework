@@ -121,7 +121,7 @@ These are project law. They are not suggestions.
 18. Companion-facing semantics must remain truthful.
 19. Internal system messages must never masquerade as partner speech.
 20. Broken state must not be made to look healthy.
-21. The monolith is dead; split runtime is the only supported operational shape.
+21. Split runtime is the only supported operational shape.
 22. Backends are adapters and mirrors, not identity.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
@@ -771,7 +771,7 @@ Platform law should define structure. Companion-specific language should remain 
 
 There is only split mode.
 
-The monolithic app is dead debt and should be retired, not described as a supported operational shape.
+The split runtime is the only supported operational shape and should remain the only supported operational model.
 
 ### 9.2 Gateway or It Does Not Ship
 

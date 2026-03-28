@@ -2,7 +2,7 @@
 // Common builders used across runtime, agent container, CLI, and test harnesses.
 //
 // Intentional wiring differences:
-// - src/runtime.ts contains historical monolithic wiring used by runtime parity/tests.
+// - src/runtime.ts contains parity wiring used by runtime tests and tooling.
 // - src/agent-main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
 // Keep core construction through these helpers so behavior stays aligned across both entrypoints.
 

@@ -22,8 +22,8 @@ This document is the compact contract for how the live runtime is supposed to be
 ## Runtime Contract
 
 - The canonical operational mode is split gateway + agent.
-- `src/index.ts` does not start a usable monolith; it exits fail-closed.
-- `src/runtime.ts` remains the single-process parity implementation for tests, tooling, and compatibility wiring.
+- `src/index.ts` is disabled and exits fail-closed.
+- `src/runtime.ts` remains the parity harness for tests, tooling, and shared wiring.
 - `npm run split` and `npm run yolo` are the intended launchers for day-to-day runtime use.
 
 ## Configuration Ownership

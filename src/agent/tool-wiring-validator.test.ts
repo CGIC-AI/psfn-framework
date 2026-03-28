@@ -195,13 +195,13 @@ describe('validateToolWiring', () => {
     ]);
   });
 
-  it('skips gateway method checks in single-process mode', () => {
+  it('skips gateway method checks in disabled parity mode', () => {
     const tools = [
       makeTool('repo_status', {
         requiredGatewayMethods: ['git.status'],
       }),
     ];
-    // In single mode, gateway methods are irrelevant
+    // In parity mode, gateway methods are irrelevant
     const report = validateToolWiring({
       mode: 'single',
       tools,
@@ -393,8 +393,8 @@ describe('validateAndLogToolWiring', () => {
 });
 
 describe('production tools validation', () => {
-  it('all git tools pass validation in single-process mode', () => {
-    // In single mode, git tools use GitOps directly — no gateway deps
+  it('all git tools pass validation in parity mode', () => {
+    // In parity mode, git tools use GitOps directly and do not depend on gateway transport
     const gitTools = [
       makeTool('repo_status'),
       makeTool('repo_diff'),

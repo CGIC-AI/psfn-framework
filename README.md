@@ -139,14 +139,12 @@ The shipped `config/settings.seed.json` currently defaults to the Ollama profile
 
 ### Running
 
-**Development (gateway + agent):**
+**Split runtime (gateway + agent):**
 ```bash
-npm run dev
+npm run split
 ```
 
 This starts gateway + agent together. The gateway holds secrets and proxies all external calls; the agent runs locally with scoped filesystem access.
-
-`npm run dev` and `npm run split` are equivalent.
 
 **YOLO mode (broader read scope):**
 ```bash
@@ -308,7 +306,7 @@ Tool surface split:
 src/
   gateway-main.ts           # Gateway entry point
   agent-main.ts             # Agent entry point
-  runtime.ts                # Core runtime orchestrator
+  runtime.ts                # Parity harness for shared wiring
 
   agent/                    # pi-agent-core wrapper, messages, event bridge
   gateway/                  # JSON-RPC server/client, policy, SSRF, sanitization

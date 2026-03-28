@@ -5,7 +5,6 @@ This is the operator-facing runtime guide for the current repo-owned deployment 
 ## Daily Runtime Commands
 
 ```bash
-npm run dev
 npm run split
 npm run yolo
 npm run gateway

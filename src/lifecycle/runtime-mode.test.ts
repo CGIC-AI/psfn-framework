@@ -9,8 +9,7 @@ import {
 } from './runtime-mode.js';
 
 describe('normalizeRuntimeMode', () => {
-  it('normalizes canonical and legacy aliases', () => {
-    expect(normalizeRuntimeMode('single')).toBe(RUNTIME_MODE.SINGLE);
+  it('normalizes supported aliases', () => {
     expect(normalizeRuntimeMode('SPLIT')).toBe(RUNTIME_MODE.SPLIT);
     expect(normalizeRuntimeMode('gateway')).toBe(RUNTIME_MODE.GATEWAY_AGENT);
     expect(normalizeRuntimeMode('gateway_agent')).toBe(RUNTIME_MODE.GATEWAY_AGENT);
@@ -18,6 +17,7 @@ describe('normalizeRuntimeMode', () => {
   });
 
   it('returns null for unknown values', () => {
+    expect(normalizeRuntimeMode('single')).toBeNull();
     expect(normalizeRuntimeMode('mystery')).toBeNull();
     expect(normalizeRuntimeMode(undefined)).toBeNull();
   });
@@ -52,10 +52,10 @@ describe('resolveRuntimeCommandInvocation', () => {
 });
 
 describe('resolveRuntimeModeContract', () => {
-  it('rejects monolithic runtime entrypoints', () => {
+  it('rejects disabled runtime entrypoints', () => {
     expect(() => resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SINGLE,
-    })).toThrow('Monolithic runtime mode has been removed');
+    })).toThrow('Unsupported runtime entrypoint "single"');
   });
 
   it('maps split entrypoint to canonical split mode with default split restart command', () => {

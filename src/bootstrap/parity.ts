@@ -1,5 +1,5 @@
 // ── Shared Runtime Wiring ──
-// Common primitives used by both single-process runtime and gateway agent mode.
+// Common primitives used by both split-runtime and gateway agent mode.
 
 import type {
   CapabilityTier,

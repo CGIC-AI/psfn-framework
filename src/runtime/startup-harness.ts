@@ -280,7 +280,7 @@ export async function initializeSubstrateRuntime(runtime: any): Promise<void> {
   });
   const sessionIntegrityProvider = sessionHmacBoundary.resolveIntegrityProvider();
   if (sessionIntegrityProvider) {
-    log.info('Session HMAC integrity enabled (single-process mode)');
+    log.info('Session HMAC integrity enabled');
   }
   const sessionComposition = composeSessionRuntime({
     config: runtimeAny.config,

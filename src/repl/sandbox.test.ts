@@ -69,9 +69,13 @@ function mockSequentialLLM(contents: string[]): LLMProvider {
   };
 }
 
-function nullDeps(llm?: LLMProvider) {
+function nullDeps(
+  llm?: LLMProvider,
+  executionPort?: { shellExec: (...args: unknown[]) => Promise<unknown> } | null,
+) {
   return {
     llmProvider: llm ?? mockLLM(),
+    executionPort: executionPort ?? null,
     embeddingService: null,
     memoryStore: null,
     sessionManager: null,
@@ -371,9 +375,8 @@ describe('REPLSandbox', () => {
     expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com', undefined, 'default');
   });
 
-  it('shell_exec helper calls gateway shellExec capability when allowed', async () => {
-    const llm = {
-      ...mockLLM(),
+  it('shell_exec helper calls the sandbox execution port when allowed', async () => {
+    const executionPort = {
       shellExec: vi.fn(async () => ({
         command: 'node',
         args: ['-v'],
@@ -385,8 +388,8 @@ describe('REPLSandbox', () => {
         truncated: false,
         durationMs: 12,
       })),
-    } as unknown as LLMProvider;
-    const sandbox = new REPLSandbox(nullDeps(llm));
+    };
+    const sandbox = new REPLSandbox(nullDeps(mockLLM(), executionPort));
 
     const result = await sandbox.execute(
       'const r = await shell_exec("node", ["-v"]); print(r.ok, r.stdout);',
@@ -395,7 +398,20 @@ describe('REPLSandbox', () => {
     );
 
     expect(result.output).toContain('true v22.0.0');
-    expect((llm as any).shellExec).toHaveBeenCalledWith('node', ['-v'], {});
+    expect(executionPort.shellExec).toHaveBeenCalledWith('node', ['-v'], {});
+  });
+
+  it('omits shell_exec helper when execution port is unavailable', async () => {
+    const sandbox = new REPLSandbox({
+      ...nullDeps(),
+      getCapabilityTier: () => 'autonomous',
+    });
+    const result = await sandbox.execute(
+      'print(typeof shell_exec);',
+      5000,
+      8192,
+    );
+    expect(result.output).toBe('undefined');
   });
 
   it('omits shell_exec helper for non-autonomous capability tiers', async () => {

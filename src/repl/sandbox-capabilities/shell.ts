@@ -1,4 +1,8 @@
-import type { GatewayREPLCapabilities, SandboxBudgetRef, ShellExecView } from './contracts.js';
+import type {
+  SandboxBudgetRef,
+  SandboxExecutionPort,
+  ShellExecView,
+} from './contracts.js';
 import {
   consumeToolCallBudget,
   toErrorMessage,
@@ -31,7 +35,7 @@ export interface ShellCapabilities {
 }
 
 interface CreateShellCapabilitiesOptions {
-  gatewayCaps: GatewayREPLCapabilities;
+  executionPort: SandboxExecutionPort | null;
   budgetRef?: SandboxBudgetRef;
 }
 
@@ -87,10 +91,10 @@ export function createShellCapabilities(
       };
     }
 
-    if (typeof options.gatewayCaps.shellExec !== 'function') {
+    if (!options.executionPort || typeof options.executionPort.shellExec !== 'function') {
       return {
         ok: false,
-        error: 'shell_exec unavailable: requires gateway shell.exec policy and audit path',
+        error: 'shell_exec unavailable: requires sandbox execution port and audit path',
         command: '',
         args: [],
         cwd: '',
@@ -176,7 +180,7 @@ export function createShellCapabilities(
     const maxOutputChars = normalizeBoundedInteger(execOptions?.maxOutputChars, MAX_OUTPUT_CHARS);
 
     try {
-      const result = await options.gatewayCaps.shellExec(
+      const result = await options.executionPort.shellExec(
         normalizedCommand,
         normalizedArgs.value,
         {

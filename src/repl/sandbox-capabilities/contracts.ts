@@ -42,6 +42,14 @@ export interface ShellExecView {
   durationMs: number;
 }
 
+export interface SandboxExecutionPort {
+  shellExec: (
+    command: string,
+    args?: string[],
+    options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number },
+  ) => Promise<ShellExecView>;
+}
+
 export type { ModuleRecord } from '../../modules/types.js';
 
 export type GatewayREPLCapabilities = {
@@ -57,11 +65,6 @@ export type GatewayREPLCapabilities = {
   fsRead?: (path: string) => Promise<string>;
   fsWrite?: (path: string, content: string) => Promise<void>;
   fsList?: (glob?: string, maxEntries?: number) => Promise<string[]>;
-  shellExec?: (
-    command: string,
-    args?: string[],
-    options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number },
-  ) => Promise<ShellExecView>;
 };
 
 export interface ScheduleView {
@@ -81,6 +84,7 @@ export interface ScheduleMutationResult {
 
 export interface SandboxDeps {
   llmProvider: LLMProvider;
+  executionPort?: SandboxExecutionPort | null;
   embeddingService: EmbeddingService | null;
   memoryStore: MemoryStore | null;
   sessionManager: SessionManager | null;

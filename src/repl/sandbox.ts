@@ -123,7 +123,7 @@ export class REPLSandbox {
     });
 
     const shell = createShellCapabilities({
-      gatewayCaps,
+      executionPort: this.deps.executionPort ?? null,
       budgetRef: this.budgetRef,
     });
 
@@ -131,6 +131,7 @@ export class REPLSandbox {
     const allowShellExec = capabilityTier === undefined
       || capabilityTier === 'autonomous'
       || capabilityTier === 'custom';
+    const hasShellExecPort = Boolean(this.deps.executionPort?.shellExec);
 
     const contextValues: Record<string, unknown> = {
       // Injected functions
@@ -171,7 +172,7 @@ export class REPLSandbox {
       web_fetch: web.web_fetch,
       crawler_fetch: web.crawler_fetch,
       web_research: web.web_research,
-      ...(allowShellExec ? { shell_exec: shell.shell_exec } : {}),
+      ...((allowShellExec && hasShellExecPort) ? { shell_exec: shell.shell_exec } : {}),
 
       // Text analysis helpers
       search: helpers.search,

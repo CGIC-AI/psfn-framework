@@ -601,13 +601,22 @@ export function resolveAuthorContext(input: {
     }
     const canonicalContactKey = contact.id;
     const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
+    const maybeChannelPrivacyResolver = input.contactStore as ContactStore & {
+      getConversationChannelPrivacy?: (
+        contactId: string,
+        channel: string,
+        channelId: string,
+      ) => ChannelVisibility | string | undefined;
+    };
     const channelPrivacyLevel = explicitChannelPrivacy
       ?? normalizeChannelVisibility(
-        input.contactStore.getConversationChannelPrivacy(
-          canonicalContactKey,
-          channel,
-          input.message.channelId,
-        ),
+        typeof maybeChannelPrivacyResolver.getConversationChannelPrivacy === 'function'
+          ? maybeChannelPrivacyResolver.getConversationChannelPrivacy(
+            canonicalContactKey,
+            channel,
+            input.message.channelId,
+          )
+          : undefined,
       );
 
     const maybeActivityRecorder = input.contactStore as ContactStore & {

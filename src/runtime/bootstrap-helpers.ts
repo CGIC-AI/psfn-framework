@@ -4,7 +4,6 @@ import type { SubstrateConfig } from '../types.js';
 import type { CapabilityTier } from '../types.js';
 import {
   applySettings,
-  splitSettingsByDomain,
   type EditableSettings,
   type SettingsDomainSplit,
 } from '../settings.js';
@@ -38,10 +37,9 @@ import {
   wrapStreamingTtsConnectorWithEligibility,
 } from './plugin-eligibility.js';
 import { createSystemConfigRepository } from '../config/system-config-repository.js';
-import { loadModelsConfigWithLegacyMigration, type ModelsLoadResult } from '../config/models-config.js';
+import { type ModelsLoadResult } from '../config/models-config.js';
 import {
   applyProvidersRuntimeConfig,
-  loadProvidersConfigWithLegacyMigration,
   type ProvidersLoadResult,
 } from '../config/providers-config.js';
 import { CAPABILITY_TIER_FILE_NAME } from '../config/capability-tier-config.js';
@@ -57,6 +55,14 @@ import {
   assertPersistenceCutoverReady,
   buildPersistenceCutoverOptionsFromConfig,
 } from '../persistence/cutover.js';
+import {
+  loadStartupCapabilityTierOwnerFile,
+  loadStartupModelsOwnerFile,
+  loadStartupProvidersOwnerFile,
+  loadStartupRuntimeSettingsOwnerFile,
+  loadStartupTrustPolicyOwnerFile,
+  loadStartupSchedulerOwnerFile,
+} from '../config/startup-owner-files.js';
 
 export type RuntimeVoiceSttProvider = StreamingSttProvider | 'disabled';
 export type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';
@@ -382,18 +388,24 @@ export function hydrateCanonicalStartupConfig(
     defaultContextWindow: config.defaultContextWindow,
   });
 
-  const savedSettings = repository.loadRuntimeSettings();
-  const settingsDomains = splitSettingsByDomain(savedSettings);
+  const startupRuntimeSettings = loadStartupRuntimeSettingsOwnerFile({
+    dataDir: systemDataDir,
+    seedDir: env.CONFIG_DIR,
+  });
+  const { settingsDomains } = startupRuntimeSettings;
   applySettings(config, settingsDomains.runtime);
   assertSecuritySensitiveStartupConfig(config);
   installPromotedToolsPersistenceHook(config);
 
-  const modelsLoadResult = loadModelsConfigWithLegacyMigration(systemDataDir, {
+  const modelsLoadResult = loadStartupModelsOwnerFile({
+    dataDir: systemDataDir,
+    seedDir: env.CONFIG_DIR,
     defaultContextWindow: config.defaultContextWindow,
     legacySettings: settingsDomains.models,
   });
   applySettings(config, modelsLoadResult.config);
-  const providersLoadResult = loadProvidersConfigWithLegacyMigration(systemDataDir, {
+  const providersLoadResult = loadStartupProvidersOwnerFile({
+    dataDir: systemDataDir,
     seedDir: env.CONFIG_DIR,
     legacyLiteLLMBaseUrl: env.LITELLM_BASE_URL,
     legacyOpenRouterModelsApiUrl: config.openRouterModelsApiUrl,
@@ -414,7 +426,7 @@ export function hydrateCanonicalStartupConfig(
     try {
       const schedulerPath = join(systemDataDir, SCHEDULER_FILE_NAME);
       const schedulerFileExisted = existsSync(schedulerPath);
-      const persistedScheduler = repository.loadScheduler();
+      const persistedScheduler = loadStartupSchedulerOwnerFile(systemDataDir, env.CONFIG_DIR);
       if (!schedulerFileExisted) {
         repository.saveScheduler({
           ...persistedScheduler,
@@ -445,7 +457,7 @@ export function hydrateCanonicalStartupConfig(
     try {
       const capabilityPath = join(systemDataDir, CAPABILITY_TIER_FILE_NAME);
       const capabilityFileExisted = existsSync(capabilityPath);
-      const persistedCapabilities = repository.loadCapabilityTier();
+      const persistedCapabilities = loadStartupCapabilityTierOwnerFile(systemDataDir, env.CONFIG_DIR);
       if (!capabilityFileExisted) {
         repository.saveCapabilityTier({
           ...persistedCapabilities,
@@ -480,7 +492,7 @@ export function hydrateCanonicalStartupConfig(
     }
   }
 
-  const trustPolicyConfig = repository.loadTrustPolicy();
+  const trustPolicyConfig = loadStartupTrustPolicyOwnerFile(systemDataDir, env.CONFIG_DIR);
   setRuntimeTrustPolicy(trustPolicyConfig);
 
   const schedulerConfig = resolveRuntimeSchedulerConfig({

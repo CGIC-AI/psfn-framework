@@ -368,7 +368,7 @@ export class ShardManager implements ShardExecutionPort {
         systemPrompt,
         runtimeConfig,
         {
-          runtimeMode: this.deps.runtimeMode ?? 'single',
+          runtimeMode: this.deps.runtimeMode,
         },
       );
 
@@ -391,7 +391,7 @@ export class ShardManager implements ShardExecutionPort {
       this.touchShardHeartbeat(shardId);
       // No memoryExtractor — shards don't run L1 extraction/archive jobs.
 
-      // Execute (single-turn by default)
+      // Execute with a bounded turn loop.
       let totalInput = 0;
       let totalOutput = 0;
       let lastModel = '';
@@ -433,8 +433,8 @@ export class ShardManager implements ShardExecutionPort {
         turns++;
         this.touchShardHeartbeat(shardId);
 
-        // For single-turn (default), we break after one turn
-        // For multi-turn, we continue only if the response suggests more work
+        // For a one-turn shard, we break after the first turn.
+        // Multi-turn shards continue only if the response suggests more work.
         if (turn === 0 && maxTurns === 1) break;
       }
 

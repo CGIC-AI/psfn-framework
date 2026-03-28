@@ -17,8 +17,8 @@ describe('normalizeRuntimeMode', () => {
   });
 
   it('returns null for unknown values', () => {
-    expect(Object.keys(RUNTIME_MODE)).not.toContain('SINGLE');
-    expect(normalizeRuntimeMode('single')).toBeNull();
+    expect(Object.keys(RUNTIME_MODE)).not.toContain('MONOLITHIC');
+    expect(normalizeRuntimeMode('monolithic')).toBeNull();
     expect(normalizeRuntimeMode('mystery')).toBeNull();
     expect(normalizeRuntimeMode(undefined)).toBeNull();
   });
@@ -55,7 +55,7 @@ describe('resolveRuntimeCommandInvocation', () => {
 describe('resolveRuntimeModeContract', () => {
   it('rejects disabled runtime entrypoints', () => {
     expect(() => resolveRuntimeModeContract({
-      entrypoint: 'single' as any,
+      entrypoint: 'monolithic' as any,
     })).toThrow('Unsupported runtime entrypoint');
   });
 

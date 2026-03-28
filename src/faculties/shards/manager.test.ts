@@ -196,6 +196,42 @@ describe('ShardManager', () => {
     }));
   });
 
+  it('keeps spawned shard agents on gateway runtime mode when no override is provided', async () => {
+    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockImplementationOnce(async function (this: SubstrateAgent) {
+      expect((this as any).runtimeMode).toBe('gateway');
+      return {
+        content: 'gateway runtime response',
+        channelId: 'shard:gateway-runtime',
+        attachments: [],
+        metadata: {
+          model: 'mock-model',
+          inputTokens: 1,
+          outputTokens: 1,
+          durationMs: 1,
+        },
+      } as any;
+    });
+
+    try {
+      const manager = new ShardManager({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config: TEST_CONFIG,
+        parentSystemPrompt: 'You are a helpful assistant.',
+      });
+
+      const result = await manager.spawn({ name: 'gateway-mode', task: 'Do something' });
+
+      expect(result.content).toBe('gateway runtime response');
+      expect(handleMessageSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      handleMessageSpy.mockRestore();
+    }
+  });
+
   it('uses isolated channelId for session entries', async () => {
     mockShardContent = 'isolated response';
     const manager = new ShardManager({

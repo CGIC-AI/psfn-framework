@@ -13,6 +13,8 @@ PSFN now boots through the split runtime. `src/app/startup/index.ts` is disabled
   - `ADMIN_TOKEN`
   - `DEEPGRAM_API_KEY`
   - `ELEVENLABS_API_KEY`
+- Required deployment identity wiring:
+  - `COMPANION_ID`
 
 ## Install
 
@@ -33,6 +35,7 @@ Keep `.env` limited to:
 - Host, port, and socket wiring
 - Runtime mode and persistence layout wiring
 - Explicit bootstrap overrides such as `CHARACTER_CARD_PATH`
+- Explicit deployment identity such as `COMPANION_ID`
 
 The runtime ignores mutable settings that are owned by JSON files. Do not use `.env` for embeddings, model roster, scheduler cadence, capability tier, channel policy, skills, or trust policy.
 
@@ -58,6 +61,7 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 
    ```dotenv
    OPENROUTER_API_KEY=...
+   COMPANION_ID=companion
    CHARACTER_CARD_PATH=./data/character.json
    DATA_DIR=./data
    DATABASE_PATH=./data/companion.db

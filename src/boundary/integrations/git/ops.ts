@@ -5,10 +5,7 @@
 import { execSync } from 'node:child_process';
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve, relative, normalize, dirname } from 'node:path';
-import {
-  DEFAULT_COMPANION_ID,
-  DEFAULT_COMPANION_NAME,
-} from '../../../core/identity/companion-naming.js';
+import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { REPO_ALLOWED_PATHS } from '../../../system/security/policy-constants.js';
 import { appendJsonLine } from '../../../persistence/jsonl.js';
@@ -29,6 +26,7 @@ export interface GitOpsConfig {
   auditLogPath: string;
   auditRotation: GitAuditRotationConfig;
   execTimeoutMs: number;
+  companionId?: string;
 }
 
 const DEFAULT_AUDIT_ROTATION: GitAuditRotationConfig = {
@@ -191,6 +189,10 @@ export class GitOps implements GitOperations {
 
   commit(message: string, intent: string, scope?: string): GitCommitResult {
     this.assertNotProtected();
+    const companionId = this.config.companionId?.trim();
+    if (!companionId) {
+      throw new Error('Git operations require config.companionId');
+    }
 
     const fullMessage = [
       message,
@@ -198,7 +200,7 @@ export class GitOps implements GitOperations {
       `[Intent] ${intent}`,
       scope ? `[Scope] ${scope}` : null,
       `[Agent] ${DEFAULT_COMPANION_NAME}`,
-      `[Signed-off-by] ${DEFAULT_COMPANION_ID}-agent`,
+      `[Signed-off-by] ${companionId}-agent`,
     ].filter(Boolean).join('\n');
 
     this.exec(`git commit -m ${this.shellEscape(fullMessage)}`);

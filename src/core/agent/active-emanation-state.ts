@@ -56,7 +56,7 @@ function hasPresenceMarkers(record: Record<string, unknown>): boolean {
     || typeof record.active === 'boolean';
 }
 
-function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateResolution {
+function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateResolution | undefined {
   const kind = readString(record, ['kind', 'presenceKind']);
   const isActive = readBoolean(record, ['isActive', 'active']);
   const isPrimary = readBoolean(record, ['isPrimary', 'primary']);
@@ -76,13 +76,13 @@ function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateRes
     if (isActive === true || isPrimary === true) {
       return conflictError();
     }
-    if (!satelliteId) return conflictError();
+    if (!satelliteId || !companionId) return conflictError();
     const presence: SatellitePresenceMetadata = {
       kind: 'satellite',
       satelliteId,
+      companionId,
       ...(siteId ? { siteId } : {}),
       ...(channelId ? { channelId } : {}),
-      ...(companionId ? { companionId } : {}),
       ...(label ? { label } : {}),
       ...(isPrimary !== undefined ? { isPrimary } : {}),
       ...(isActive !== undefined ? { isActive } : {}),
@@ -96,14 +96,14 @@ function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateRes
     if (isActive === true || isPrimary === false) {
       return conflictError();
     }
-    if (!embodimentId) return conflictError();
+    if (!embodimentId || !companionId) return conflictError();
     const presence: EmbodimentPresenceMetadata = {
       kind: 'embodiment',
       embodimentId,
+      companionId,
       ...(siteId ? { siteId } : {}),
       ...(satelliteRef ? { satelliteId: satelliteRef } : {}),
       ...(channelId ? { channelId } : {}),
-      ...(companionId ? { companionId } : {}),
       ...(label ? { label } : {}),
       isPrimary: true,
       ...(emanationRef ? { emanationId: emanationRef } : {}),
@@ -115,15 +115,15 @@ function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateRes
     if (isPrimary === true || isActive === false) {
       return conflictError();
     }
-    if (!emanationId) return conflictError();
+    if (!emanationId || !companionId) return conflictError();
     const presence: EmanationPresenceMetadata = {
       kind: 'emanation',
       emanationId,
+      companionId,
       ...(siteId ? { siteId } : {}),
       ...(satelliteRef ? { satelliteId: satelliteRef } : {}),
       ...(embodimentRef ? { embodimentId: embodimentRef } : {}),
       ...(channelId ? { channelId } : {}),
-      ...(companionId ? { companionId } : {}),
       ...(label ? { label } : {}),
       isActive: true,
     };
@@ -185,10 +185,10 @@ export function resolveCanonicalEmbodimentContext(
   return {
     kind: 'embodiment',
     embodimentId: presence.embodimentId,
+    companionId: presence.companionId,
     ...(presence.siteId ? { siteId: presence.siteId } : {}),
     ...(presence.satelliteId ? { satelliteId: presence.satelliteId } : {}),
     ...(presence.channelId ? { channelId: presence.channelId } : {}),
-    ...(presence.companionId ? { companionId: presence.companionId } : {}),
     ...(presence.label ? { label: presence.label } : {}),
     isPrimary: true,
   };

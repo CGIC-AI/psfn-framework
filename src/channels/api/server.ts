@@ -11,7 +11,6 @@ import type { ChannelType, MessageModelOverride, MessagePromptOverride, MessageR
 import type { ContactStore } from '../../core/contacts/store.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
-import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import { isChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
 import type {
@@ -77,6 +76,7 @@ import {
 } from './response-format.js';
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
+import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
@@ -167,6 +167,7 @@ export interface ApiServerConfig {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   sessionManager: SessionManager;
+  companionId?: string;
   contactStore?: ContactStore;
   apiKey?: string;
   adminToken?: string;
@@ -236,7 +237,7 @@ export class ApiServer implements ChannelAdapter {
     this.adminToken = clampHeaderValue(config.adminToken, 512);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
     this.corsAllowedOrigins = normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
-    this.modelName = config.modelName ?? DEFAULT_COMPANION_ID;
+    this.modelName = config.modelName ?? resolveCompanionIdFromConfig(config);
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
     this.schedulerHeartbeatStaleAfterMs = this.parseSchedulerHeartbeatStaleAfterMs(

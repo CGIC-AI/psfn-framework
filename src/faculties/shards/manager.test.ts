@@ -124,6 +124,8 @@ const TEST_CONFIG: SubstrateConfig = {
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
+  companionId: 'companion-test',
+  characterName: 'Companion',
   modelRoster: {
     chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
   },
@@ -173,16 +175,22 @@ describe('ShardManager', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
     expect(result.lineage).toEqual(expect.objectContaining({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'spawn',
+      coreCompanionId: 'companion-test',
+      shardCompanionId: `companion-test::${result.shardId}`,
       shardId: result.shardId,
       shardChannelId: `shard:${result.shardId}`,
+      companionProvenance: {
+        parentCompanionId: 'companion-test',
+        shardCompanionId: `companion-test::${result.shardId}`,
+      },
       sourceMessage: expect.objectContaining({
         id: result.shardId,
         channelId: `shard:${result.shardId}`,
         channelType: 'api',
-        authorId: 'system',
-        authorName: 'ShardManager',
+        authorId: 'companion-test',
+        authorName: 'Companion',
         isDirectMessage: false,
       }),
     }));
@@ -979,10 +987,16 @@ describe('ShardManager', () => {
     });
 
     expect(result.lineage).toEqual(expect.objectContaining({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'spawn',
+      coreCompanionId: 'companion-test',
+      shardCompanionId: expect.stringMatching(/^companion-test::shard-/),
       shardId: result.shardId,
       shardChannelId: `shard:${result.shardId}`,
+      companionProvenance: {
+        parentCompanionId: 'companion-test',
+        shardCompanionId: expect.stringMatching(/^companion-test::shard-/),
+      },
       sourceContext: {
         channelId: 'api:source-channel',
         requestId: 'req-lineage',
@@ -992,8 +1006,8 @@ describe('ShardManager', () => {
         id: result.shardId,
         channelId: `shard:${result.shardId}`,
         channelType: 'api',
-        authorId: 'system',
-        authorName: 'ShardManager',
+        authorId: 'companion-test',
+        authorName: 'Companion',
         isDirectMessage: false,
       }),
     }));
@@ -1211,6 +1225,7 @@ describe('ShardManager', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-kitchen',
+          companionId: 'companion-test',
         },
       },
     });
@@ -1228,10 +1243,16 @@ describe('ShardManager', () => {
       'wyoming:ha-main:voice-pe-kitchen',
     ]));
     expect(result.lineage).toEqual(expect.objectContaining({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'wyoming',
+      coreCompanionId: 'companion-test',
+      shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
       shardId: result.shardId,
       shardChannelId: 'api:wyoming:ha-main:voice-pe-kitchen',
+      companionProvenance: {
+        parentCompanionId: 'companion-test',
+        shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+      },
       sourceMessage: expect.objectContaining({
         id: 'wyoming-msg-conn-kitchen-7',
         channelId: 'api:wyoming:ha-main:voice-pe-kitchen',
@@ -1251,6 +1272,7 @@ describe('ShardManager', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-kitchen',
+          companionId: 'companion-test',
         },
       },
     }));
@@ -1379,6 +1401,7 @@ describe('ShardManager', () => {
           embodimentId: 'display',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-launch',
+          companionId: 'companion-test',
         },
       },
     });
@@ -1392,6 +1415,7 @@ describe('ShardManager', () => {
           requestId: 'wyoming-msg-conn-launch-1',
           turnId: 'wyoming-turn-conn-launch-session-launch-1',
           embodimentContext: {
+            companionId: 'companion-test',
             kind: 'embodiment',
             embodimentId: 'display',
             siteId: 'ha-main',
@@ -1401,10 +1425,19 @@ describe('ShardManager', () => {
         }),
       }),
       expect.objectContaining({
+        id: 'wyoming-msg-conn-launch-1',
+        channelId: 'api:wyoming:ha-main:voice-pe-launch',
+        channelType: 'api',
+        authorId: 'wyoming-user:owner',
+        authorName: 'Wyoming Voice User',
         content: 'launch the worker',
+        isDirectMessage: true,
       }),
       expect.objectContaining({
+        schemaVersion: 2,
         kind: 'wyoming',
+        coreCompanionId: 'companion-test',
+        shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
         sourceMessage: expect.objectContaining({
           id: 'wyoming-msg-conn-launch-1',
           channelId: 'api:wyoming:ha-main:voice-pe-launch',
@@ -1412,6 +1445,9 @@ describe('ShardManager', () => {
         wyomingRouting: expect.objectContaining({
           turnId: 'wyoming-turn-conn-launch-session-launch-1',
         }),
+      }),
+      expect.objectContaining({
+        companionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
       }),
     );
   });

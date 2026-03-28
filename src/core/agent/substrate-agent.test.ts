@@ -131,6 +131,8 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     discordToken: '',
     discordBotId: '',
     characterCardPath: '',
+    companionId: DEFAULT_COMPANION_ID,
+    characterName: TEST_COMPANION_NAME,
     dataDir: './data',
     databasePath: './data/test.db',
     sessionMessageLimit: 30,

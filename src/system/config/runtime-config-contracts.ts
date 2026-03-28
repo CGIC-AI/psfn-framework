@@ -56,6 +56,7 @@ export interface SubstrateConfig {
   discordToken?: string;
   discordBotId?: string;
   characterCardPath: string;
+  companionId?: string;
   systemDataDir?: string;
   companionDataDir?: string;
   dataDir: string;

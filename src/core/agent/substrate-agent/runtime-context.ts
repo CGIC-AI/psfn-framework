@@ -816,7 +816,7 @@ export function resolveAuthorContext(input: {
   message: SubstrateMessage;
   contactStore: ContactStore | null | undefined;
   logger: RuntimeContextLogger;
-  companionIdentityKey?: string;
+  companionIdentityKey: string;
   companionDisplayName?: string;
 }): ResolvedAuthorContext {
   if (input.message.channelId.startsWith('internal:')) {
@@ -829,7 +829,10 @@ export function resolveAuthorContext(input: {
       // of the turn is the companion. Keeping canonicalContactKey unset preserves
       // access to self-directed/high-intimacy memories while subjectIdentityKey
       // carries the continuity/prompt subject separately from executor identity.
-      const subjectIdentityKey = input.companionIdentityKey?.trim();
+      const subjectIdentityKey = input.companionIdentityKey.trim();
+      if (!subjectIdentityKey) {
+        throw new Error('Missing companion identity key for self-directed runtime turn');
+      }
       const resolvedUserName = input.companionDisplayName?.trim() || resolvePromptUserName(input.message);
       return {
         trustLevel: 'primary',

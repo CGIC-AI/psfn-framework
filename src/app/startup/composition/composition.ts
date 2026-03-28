@@ -44,6 +44,7 @@ import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilitie
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
+import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
@@ -112,6 +113,7 @@ export function createEmbeddingProviderFromConfig(config: SubstrateConfig): Embe
 }
 
 export interface IdentityComposition {
+  companionId: string;
   card: CharacterCardV2;
   systemPrompt: string;
 }
@@ -119,6 +121,7 @@ export interface IdentityComposition {
 export function composeIdentity(config: SubstrateConfig): IdentityComposition {
   const card = loadOrInitializeCharacterCard(config.characterCardPath);
   return {
+    companionId: resolveCompanionIdFromConfig(config),
     card,
     systemPrompt: composeSystemPrompt(card),
   };

@@ -9,16 +9,20 @@ import {
 } from './presence-metadata.js';
 import { resolveCanonicalEmbodimentContext } from './active-emanation-state.js';
 
+const TEST_COMPANION_ID = 'companion-test';
+
 describe('presence metadata contract', () => {
   it('builds canonical satellite, embodiment, and emanation metadata records', () => {
     expect(buildSatellitePresenceMetadata({
       siteId: 'ha-main',
       satelliteId: 'kitchen',
+      companionId: TEST_COMPANION_ID,
       isPrimary: true,
     })).toEqual({
       kind: 'satellite',
       siteId: 'ha-main',
       satelliteId: 'kitchen',
+      companionId: TEST_COMPANION_ID,
       isPrimary: true,
     });
 
@@ -26,11 +30,13 @@ describe('presence metadata contract', () => {
       siteId: 'ha-main',
       embodimentId: 'display',
       satelliteId: 'kitchen',
+      companionId: TEST_COMPANION_ID,
     })).toEqual({
       kind: 'embodiment',
       siteId: 'ha-main',
       embodimentId: 'display',
       satelliteId: 'kitchen',
+      companionId: TEST_COMPANION_ID,
     });
 
     expect(buildEmanationPresenceMetadata({
@@ -38,12 +44,14 @@ describe('presence metadata contract', () => {
       emanationId: 'voice-node',
       embodimentId: 'display',
       satelliteId: 'kitchen',
+      companionId: TEST_COMPANION_ID,
     })).toEqual({
       kind: 'emanation',
       siteId: 'ha-main',
       emanationId: 'voice-node',
       embodimentId: 'display',
       satelliteId: 'kitchen',
+      companionId: TEST_COMPANION_ID,
     });
   });
 
@@ -55,6 +63,7 @@ describe('presence metadata contract', () => {
         emanationId: 'voice-node',
         embodimentId: 'display',
         satelliteId: 'kitchen',
+        companionId: TEST_COMPANION_ID,
       },
     });
 
@@ -64,6 +73,7 @@ describe('presence metadata contract', () => {
       emanationId: 'voice-node',
       embodimentId: 'display',
       satelliteId: 'kitchen',
+      companionId: TEST_COMPANION_ID,
       isActive: true,
     });
     expect(resolvePresenceSubjectId(normalized)).toBe('voice-node');
@@ -74,6 +84,7 @@ describe('presence metadata contract', () => {
       presence: {
         kind: 'embodiment',
         embodimentId: 'display',
+        companionId: TEST_COMPANION_ID,
         isActive: true,
       },
     })).toEqual({
@@ -89,12 +100,14 @@ describe('presence metadata contract', () => {
       siteId: 'ha-main',
       satelliteId: 'kitchen',
       channelId: 'api:wyoming:ha-main:display',
+      companionId: TEST_COMPANION_ID,
     })).toEqual({
       kind: 'embodiment',
       embodimentId: 'display',
       siteId: 'ha-main',
       satelliteId: 'kitchen',
       channelId: 'api:wyoming:ha-main:display',
+      companionId: TEST_COMPANION_ID,
       isPrimary: true,
     });
   });

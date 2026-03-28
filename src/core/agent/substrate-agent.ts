@@ -33,7 +33,7 @@ import {
   type PromptComposer,
 } from '../identity/prompt-composer.js';
 import type { ComposeContext } from '../identity/prompt-types.js';
-import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
+import { resolveCompanionIdFromConfig } from '../identity/companion-runtime.js';
 import {
   createSubstrateStreamFn,
   type SubstrateStreamTransport,
@@ -1100,7 +1100,7 @@ export class SubstrateAgent {
       message,
       contactStore: this.contactStore,
       logger: log,
-      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionIdentityKey: resolveCompanionIdFromConfig(this.config),
       companionDisplayName: this.characterName,
     });
   }

@@ -8,8 +8,8 @@ import type {
 import { CHANNEL_PRIVACY_LEVELS } from '../../../core/contacts/types.js';
 import type { ModelCatalogEntry } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { DEFAULT_COMPANION_ID } from '../../../core/identity/companion-naming.js';
 import { isBootstrapStarterCard, loadCharacterCard } from '../../../core/identity/loader.js';
+import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type {
   AdminChatBootstrapResponse,
@@ -189,7 +189,7 @@ export class AdminChatBootstrapService {
       },
       defaultRoomId: DEFAULT_MODEL_ROOM_ID,
       companion: {
-        id: DEFAULT_COMPANION_ID,
+        id: resolveCompanionIdFromConfig(config),
         displayName: this.resolveAssistantName(),
         defaultSystemPromptMode: 'default',
       },

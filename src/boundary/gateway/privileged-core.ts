@@ -42,6 +42,7 @@ export function buildGatewayPrivilegedCore(
   const eventBus = new EventBus();
   const gitOps = new GitOps({
     repoRoot: input.bootstrap.gitRepoRoot,
+    companionId: input.config.companionId,
   });
   const capabilityRuntime = new CapabilityRuntime({
     dataDir: input.startupHydration.systemDataDir,

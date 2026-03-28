@@ -69,6 +69,24 @@ describe('ReflectionJournalStore', () => {
     expect(lines).toHaveLength(1);
   });
 
+  it('normalizes legacy whisper template ids to musing on append', () => {
+    const entry = store.append({
+      templateId: 'whisper',
+      templateName: 'Whisper',
+      prompt: 'Share a brief reflection.',
+      reflection: 'I felt grounded today.',
+      channelId: 'internal:reflection:whisper',
+      mode: 'agent',
+      createdAt: '2026-03-02T00:00:00.000Z',
+    });
+
+    expect(entry.templateId).toBe('musing');
+    expect(entry.templateName).toBe('Musing');
+    const raw = readFileSync(filePath, 'utf-8').trim();
+    const persisted = JSON.parse(raw) as { templateId: string };
+    expect(persisted.templateId).toBe('musing');
+  });
+
   it('persists internal-state narrative context when provided', () => {
     const sample = buildInternalStateSample();
     store.append({

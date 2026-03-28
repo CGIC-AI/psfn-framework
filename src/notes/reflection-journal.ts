@@ -16,6 +16,11 @@ function normalizeTemplateId(templateId: string): string {
   return /^whisper$/i.test(normalized) ? 'musing' : normalized;
 }
 
+function normalizeTemplateName(templateName: string): string {
+  const normalized = templateName.trim();
+  return /^whisper$/i.test(normalized) ? 'Musing' : normalized;
+}
+
 export interface ReflectionJournalEntryInput {
   templateId: string;
   templateName: string;
@@ -70,7 +75,7 @@ export class ReflectionJournalStore {
     const entry: ReflectionJournalEntry = {
       id: `reflection-${Date.now()}-${Math.floor(Math.random() * 1_000_000).toString().padStart(6, '0')}`,
       templateId: normalizeTemplateId(input.templateId),
-      templateName: input.templateName.trim(),
+      templateName: normalizeTemplateName(input.templateName),
       prompt: input.prompt.trim(),
       reflection: input.reflection.trim(),
       channelId: input.channelId.trim(),

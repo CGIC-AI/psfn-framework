@@ -1,34 +1,34 @@
 // ── Gateway Entry Point ──
 // Host-side process that holds secrets and proxies all external interactions.
-// Run: npm run gateway
+// Run: npx tsx src/app/gateway/main.ts
 
 import 'dotenv/config';
-import { ensureActiveTimezone } from './shared/time/active-timezone.js';
+import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { loadConfig } from './system/config/load-config.js';
-import { createComponentLogger } from './shared/logger.js';
-import type { EventBus } from './shared/event-bus.js';
-import { ensureRegistryFile } from './modules/registry.js';
-import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
-import type { SubstrateMessage } from './shared/contracts/runtime.js';
-import type { EligibilityDecision } from './system/capabilities/eligibility.js';
-import { resolveGatewayBootstrapInput } from './gateway/bootstrap-input.js';
-import type { StartupConfigHydrationDiagnostics } from './runtime/bootstrap-helpers.js';
-import { RUNTIME_MODE } from './system/lifecycle/runtime-mode.js';
-import { applyGatewayTlsConfig } from './gateway/tls.js';
-import { buildGatewayPrivilegedCore } from './gateway/privileged-core.js';
+import { loadConfig } from '../../system/config/load-config.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import { ensureRegistryFile } from '../../modules/registry.js';
+import { attachTerminalDebugObserver } from '../../debug/terminal-observer.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { EligibilityDecision } from '../../system/capabilities/eligibility.js';
+import { resolveGatewayBootstrapInput } from '../../gateway/bootstrap-input.js';
+import type { StartupConfigHydrationDiagnostics } from '../../runtime/bootstrap-helpers.js';
+import { RUNTIME_MODE } from '../../system/lifecycle/runtime-mode.js';
+import { applyGatewayTlsConfig } from '../../gateway/tls.js';
+import { buildGatewayPrivilegedCore } from '../../gateway/privileged-core.js';
 import {
   initGatewayChannelSurfaces,
   loadGatewayChannelSurfaces,
   startGatewayChannelSurfaces,
   stopGatewayChannelSurfaces,
   wireGatewayChannelMessages,
-} from './gateway/channel-surfaces.js';
-import { createGatewayVoiceSurfaces } from './gateway/voice-surfaces.js';
-import { resolveStartupPreflightBundle } from './runtime/startup-preflight.js';
-import { runShutdownSequence } from './runtime/shutdown-helpers.js';
-import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
+} from '../../gateway/channel-surfaces.js';
+import { createGatewayVoiceSurfaces } from '../../gateway/voice-surfaces.js';
+import { resolveStartupPreflightBundle } from '../../runtime/startup-preflight.js';
+import { runShutdownSequence } from '../../runtime/shutdown-helpers.js';
+import { createSignalShutdownHandler } from '../../runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Gateway');
 

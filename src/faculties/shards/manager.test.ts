@@ -11,7 +11,8 @@ import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance
 import { buildFocusMemoryScopeQuery } from '../../core/session/focus-knowledge.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
-import { createSpawnShardTool } from './tools.js';
+import { createBoundedSubagentLaunchTool } from './tools.js';
+import type { BoundedSubagentLaunchPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import type { LLMProvider, MemoryProvider } from '../../core/agent/contracts.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMResponse } from '../../shared/contracts/runtime.js';
@@ -223,7 +224,7 @@ describe('ShardManager', () => {
         parentSystemPrompt: 'You are a helpful assistant.',
       });
 
-      const result = await manager.spawn({ name: 'gateway-mode', task: 'Do something' });
+    const result = await manager.spawn({ name: 'gateway-mode', task: 'Do something' });
 
       expect(result.content).toBe('gateway runtime response');
       expect(handleMessageSpy).toHaveBeenCalledTimes(1);
@@ -785,7 +786,7 @@ describe('ShardManager', () => {
     const repoStatus = makeTestTool('repo_status');
     const repoDiff = makeTestTool('repo_diff');
     const repoCommit = makeTestTool('repo_commit');
-    const spawnShard = makeTestTool('spawn_shard');
+    const spawnSubagent = makeTestTool('spawn_subagent');
 
     const manager = new ShardManager({
       eventBus,
@@ -797,7 +798,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
         core: [memoryWrite.tool, contactLookup.tool],
-        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
+        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnSubagent.tool],
       }),
     });
 
@@ -806,7 +807,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining(['load_tools', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
-    expect(injected).not.toContain('spawn_shard');
+    expect(injected).not.toContain('spawn_subagent');
   });
 
   it('unlocks additional shard tools for apprentice tier', async () => {
@@ -917,7 +918,7 @@ describe('ShardManager', () => {
     const repoStatus = makeTestTool('repo_status');
     const repoDiff = makeTestTool('repo_diff');
     const repoCommit = makeTestTool('repo_commit');
-    const spawnShard = makeTestTool('spawn_shard');
+    const spawnSubagent = makeTestTool('spawn_subagent');
 
     const manager = new ShardManager({
       eventBus,
@@ -938,7 +939,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
         core: [memoryWrite.tool, contactLookup.tool],
-        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
+        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnSubagent.tool],
       }),
     });
 
@@ -955,7 +956,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining(['load_tools', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
-    expect(injected).not.toContain('spawn_shard');
+    expect(injected).not.toContain('spawn_subagent');
   });
 
   it('stamps shard source provenance on shard memory tools', async () => {
@@ -1514,7 +1515,7 @@ describe('ShardManager', () => {
   });
 });
 
-describe('createSpawnShardTool', () => {
+describe('createBoundedSubagentLaunchTool', () => {
   let dir: string;
   let sessionStore: SessionStore;
   let eventBus: EventBus;
@@ -1547,11 +1548,11 @@ describe('createSpawnShardTool', () => {
       parentSystemPrompt: 'test',
     });
 
-    const tool = createSpawnShardTool(manager);
+    const tool = createBoundedSubagentLaunchTool(manager);
 
-    expect(tool.name).toBe('spawn_shard');
+    expect(tool.name).toBe('spawn_subagent');
     expect(tool.description).toBeTruthy();
-    expect(tool.label).toBe('spawn_shard');
+    expect(tool.label).toBe('spawn_subagent');
     expect(tool.parameters).toBeDefined();
     expect(typeof tool.execute).toBe('function');
   });
@@ -1568,20 +1569,20 @@ describe('createSpawnShardTool', () => {
       parentSystemPrompt: 'test',
     });
 
-    const tool = createSpawnShardTool(manager);
+    const tool = createBoundedSubagentLaunchTool(manager);
     const result = await tool.execute('call-1', { name: 'test-tool', task: 'do something' });
 
     const text = result.content.map((c: any) => c.text).join('');
-    expect(text).toContain('Shard "test-tool" completed');
+    expect(text).toContain('Bounded subagent "test-tool" completed');
     expect(text).toContain('1 turn(s)');
     expect(text).toContain('0 tokens');  // pi-agent-core doesn't surface token counts
     expect(text).toContain('[State reason: completed]');
     expect(text).toContain('tool output');
   });
 
-  it('surfaces explicit lifecycle failure diagnostics from shard results', async () => {
-    const spawn = vi.fn(async () => ({
-      shardId: 'shard-failure',
+  it('surfaces explicit lifecycle failure diagnostics from bounded subagent results', async () => {
+    const launchBoundedSubagent = vi.fn(async () => ({
+      subagentId: 'subagent-failure',
       name: 'degraded-shard',
       content: 'partial output',
       model: 'mock-model',
@@ -1596,7 +1597,7 @@ describe('createSpawnShardTool', () => {
       capabilities: ['general'],
       requiredCapabilities: [],
     }));
-    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+    const tool = createBoundedSubagentLaunchTool({ launchBoundedSubagent } as unknown as BoundedSubagentLaunchPort);
 
     const result = await tool.execute('call-failure', {
       name: 'degraded-shard',
@@ -1608,9 +1609,9 @@ describe('createSpawnShardTool', () => {
     expect(text).toContain('[Failure reason: Heartbeat stale for 4200ms exceeded recovery window (4000ms).]');
   });
 
-  it('passes source request context into shard spawns', async () => {
-    const spawn = vi.fn(async () => ({
-      shardId: 'shard-test',
+  it('passes source request context into bounded subagent launches', async () => {
+    const launchBoundedSubagent = vi.fn(async () => ({
+      subagentId: 'subagent-test',
       name: 'ctx',
       content: 'ok',
       model: 'mock-model',
@@ -1624,7 +1625,7 @@ describe('createSpawnShardTool', () => {
       capabilities: ['general'],
       requiredCapabilities: [],
     }));
-    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+    const tool = createBoundedSubagentLaunchTool({ launchBoundedSubagent } as unknown as BoundedSubagentLaunchPort);
 
     await runWithRequestContext(
       {
@@ -1640,7 +1641,7 @@ describe('createSpawnShardTool', () => {
       },
     );
 
-    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({
+    expect(launchBoundedSubagent).toHaveBeenCalledWith(expect.objectContaining({
       name: 'ctx',
       task: 'Inspect source context',
       sourceContext: {
@@ -1666,11 +1667,11 @@ describe('createSpawnShardTool', () => {
       parentSystemPrompt: 'test',
     });
 
-    const tool = createSpawnShardTool(manager);
+    const tool = createBoundedSubagentLaunchTool(manager);
     const result = await tool.execute('call-2', { name: 'fail', task: 'test' });
 
     const text = result.content.map((c: any) => c.text).join('');
-    expect(text).toContain('Shard error');
+    expect(text).toContain('Bounded subagent error');
     expect(result.details?.isError).toBe(true);
   });
 });

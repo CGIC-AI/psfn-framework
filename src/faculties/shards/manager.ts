@@ -1,6 +1,6 @@
 // ── ShardManager ──
-// Spawns ephemeral SubstrateAgent instances for parallel task execution.
-// Shards share parent's heavy resources (LLM, DB, memory) but get isolated channelIds.
+// Manages bounded subagent launches plus shard routing/state for parallel task execution.
+// Bounded launches share parent's heavy resources (LLM, DB, memory) but get isolated channelIds.
 
 import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
@@ -37,6 +37,10 @@ import { buildShardReturnedArtifacts, type ShardReturnedArtifact } from './artif
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCanonicalEmbodimentContext } from '../../core/agent/active-emanation-state.js';
 import {
+  type BoundedSubagentLaunchPort,
+  type BoundedSubagentLaunchSummary,
+} from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
+import {
   resolveCompanionIdFromConfig,
   resolveCompanionNameFromConfig,
 } from '../../core/identity/companion-runtime.js';
@@ -54,7 +58,7 @@ const SHARD_TOOLSET_ALL = '*';
 const SHARD_SYNC_POLICY_VERSION = 1;
 const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
-const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'load_tools']);
+const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_subagent', 'load_tools']);
 const APPRENTICE_SHARD_TOOL_EXTRAS = [
   'contact_list',
   'memory_import_batch',
@@ -132,7 +136,7 @@ export interface ActiveShard {
   failureReason?: string;
 }
 
-export class ShardManager implements ShardExecutionPort {
+export class ShardManager implements ShardExecutionPort, BoundedSubagentLaunchPort {
   private deps: ShardManagerDeps;
   private auditTrail: ShardAuditTrail | null;
   private activeCount = 0;
@@ -194,6 +198,26 @@ export class ShardManager implements ShardExecutionPort {
       ...(shardConfig.sourceContext ? { sourceContext: shardConfig.sourceContext } : {}),
     });
     return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig);
+  }
+
+  async launchBoundedSubagent(shardConfig: ShardConfig): Promise<BoundedSubagentLaunchSummary> {
+    const result = await this.spawn(shardConfig);
+    return {
+      subagentId: result.shardId,
+      name: result.name,
+      content: result.content,
+      model: result.model,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      durationMs: result.durationMs,
+      turns: result.turns,
+      lifecycleState: result.lifecycleState,
+      health: result.health,
+      stateReason: result.stateReason,
+      ...(result.failureReason ? { failureReason: result.failureReason } : {}),
+      capabilities: [...result.capabilities],
+      requiredCapabilities: [...result.requiredCapabilities],
+    };
   }
 
   async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {

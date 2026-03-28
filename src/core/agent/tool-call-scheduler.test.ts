@@ -71,11 +71,11 @@ function makeConcurrencyMeta(
 }
 
 describe('tool-call-scheduler', () => {
-  it('runs sibling spawn_shard calls concurrently when bounded parallelism allows it', async () => {
+  it('runs sibling spawn_subagent calls concurrently when bounded parallelism allows it', async () => {
     const starts = new Map<string, number>();
     const ends = new Map<string, number>();
-    const spawnShard = makeTool(
-      'spawn_shard',
+    const spawnSubagent = makeTool(
+      'spawn_subagent',
       async (toolCallId) => {
         starts.set(toolCallId, Date.now());
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -85,14 +85,14 @@ describe('tool-call-scheduler', () => {
           details: {},
         };
       },
-      { concurrency: makeConcurrencyMeta('spawn_shard', { maxParallel: 3 }) },
+      { concurrency: makeConcurrencyMeta('spawn_subagent', { maxParallel: 3 }) },
     );
 
     const streamEvents: any[] = [];
     const telemetry = vi.fn();
     const result = await executeToolCallsWithScheduler(
-      [spawnShard],
-      makeAssistantMessage(['spawn_shard', 'spawn_shard', 'spawn_shard']),
+      [spawnSubagent],
+      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
       undefined,
       { stream: { push: (event) => { streamEvents.push(event); } } },
       { maxParallelToolCalls: 3, onTelemetry: telemetry },
@@ -158,11 +158,11 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('respects maxParallelToolCalls bound for spawn_shard batches', async () => {
+  it('respects maxParallelToolCalls bound for spawn_subagent batches', async () => {
     let active = 0;
     let peak = 0;
-    const spawnShard = makeTool(
-      'spawn_shard',
+    const spawnSubagent = makeTool(
+      'spawn_subagent',
       async () => {
         active += 1;
         peak = Math.max(peak, active);
@@ -173,12 +173,12 @@ describe('tool-call-scheduler', () => {
           details: {},
         };
       },
-      { concurrency: makeConcurrencyMeta('spawn_shard', { maxParallel: 5 }) },
+      { concurrency: makeConcurrencyMeta('spawn_subagent', { maxParallel: 5 }) },
     );
 
     await executeToolCallsWithScheduler(
-      [spawnShard],
-      makeAssistantMessage(['spawn_shard', 'spawn_shard', 'spawn_shard']),
+      [spawnSubagent],
+      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 2 },
@@ -215,12 +215,12 @@ describe('tool-call-scheduler', () => {
     expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
   });
 
-  it('fails closed to sequential when spawn_shard metadata carries exclusivity wiring', async () => {
+  it('fails closed to sequential when spawn_subagent metadata carries exclusivity wiring', async () => {
     const starts: number[] = [];
     const ends: number[] = [];
     const telemetry = vi.fn();
-    const spawnShard = makeTool(
-      'spawn_shard',
+    const spawnSubagent = makeTool(
+      'spawn_subagent',
       async () => {
         starts.push(Date.now());
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -228,7 +228,7 @@ describe('tool-call-scheduler', () => {
         return { content: [{ type: 'text', text: 'ok' }], details: {} };
       },
       {
-        concurrency: makeConcurrencyMeta('spawn_shard', {
+        concurrency: makeConcurrencyMeta('spawn_subagent', {
           maxParallel: 4,
           exclusivityKeyPolicy: 'static_key',
           exclusivityKey: 'unsafe:key',
@@ -237,8 +237,8 @@ describe('tool-call-scheduler', () => {
     );
 
     await executeToolCallsWithScheduler(
-      [spawnShard],
-      makeAssistantMessage(['spawn_shard', 'spawn_shard']),
+      [spawnSubagent],
+      makeAssistantMessage(['spawn_subagent', 'spawn_subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 4, onTelemetry: telemetry },
@@ -255,9 +255,9 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('fails closed when one sibling spawn_shard call errors in a parallel batch', async () => {
-    const spawnShard = makeTool(
-      'spawn_shard',
+  it('fails closed when one sibling spawn_subagent call errors in a parallel batch', async () => {
+    const spawnSubagent = makeTool(
+      'spawn_subagent',
       async (toolCallId) => {
         await new Promise((resolve) => setTimeout(resolve, 15));
         if (toolCallId === 'call-2') {
@@ -268,12 +268,12 @@ describe('tool-call-scheduler', () => {
           details: {},
         };
       },
-      { concurrency: makeConcurrencyMeta('spawn_shard', { maxParallel: 3 }) },
+      { concurrency: makeConcurrencyMeta('spawn_subagent', { maxParallel: 3 }) },
     );
 
     const result = await executeToolCallsWithScheduler(
-      [spawnShard],
-      makeAssistantMessage(['spawn_shard', 'spawn_shard', 'spawn_shard']),
+      [spawnSubagent],
+      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 3 },

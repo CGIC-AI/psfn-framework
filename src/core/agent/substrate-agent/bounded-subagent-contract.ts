@@ -1,11 +1,13 @@
 import type { EmbodimentPresenceMetadata } from '../presence-metadata.js';
 
-export const BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME = 'spawn_shard' as const;
+export const BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME = 'spawn_subagent' as const;
 export const DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL = 5;
 export const DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_TURNS = 1;
 export const MAX_BOUNDED_SUBAGENT_LAUNCH_TURNS = 8;
 
 export type BoundedSubagentLaunchToolName = typeof BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME;
+export type BoundedSubagentLaunchLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';
+export type BoundedSubagentLaunchHealthState = 'healthy' | 'stale' | 'failed';
 
 export interface BoundedSubagentSourceContext {
   channelId: string;
@@ -35,13 +37,23 @@ export interface BoundedSubagentLaunchRequest {
 }
 
 export interface BoundedSubagentLaunchResult {
-  shardId: string;
+  subagentId: string;
   content: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
   turns: number;
+}
+
+export interface BoundedSubagentLaunchSummary extends BoundedSubagentLaunchResult {
+  name: string;
+  lifecycleState: BoundedSubagentLaunchLifecycleState;
+  health: BoundedSubagentLaunchHealthState;
+  stateReason: string;
+  failureReason?: string;
+  capabilities: string[];
+  requiredCapabilities: string[];
 }
 
 export interface BoundedSubagentLaunchDiagnostics {
@@ -55,6 +67,10 @@ export interface BoundedSubagentLaunchEnvelope {
   request: BoundedSubagentLaunchRequest;
   result: BoundedSubagentLaunchResult;
   diagnostics: BoundedSubagentLaunchDiagnostics;
+}
+
+export interface BoundedSubagentLaunchPort {
+  launchBoundedSubagent(request: BoundedSubagentLaunchRequest): Promise<BoundedSubagentLaunchSummary>;
 }
 
 function normalizeText(value: unknown, fieldName: string): string {

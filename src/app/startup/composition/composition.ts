@@ -31,7 +31,7 @@ import {
   createShardExecutionPort,
   type ShardExecutionPort,
 } from '../../../faculties/shards/port.js';
-import { createSpawnShardTool } from '../../../faculties/shards/tools.js';
+import { createBoundedSubagentLaunchTool } from '../../../faculties/shards/tools.js';
 import { createThinkTool } from '../../../core/tools/think/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import {
@@ -280,7 +280,7 @@ export interface ToolRuntimeOptions {
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
-  const shardManager = createShardExecutionPort(new ShardManager({
+  const shardManager = new ShardManager({
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
     sessionStore: options.sessionStore,
@@ -295,8 +295,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     shardSessionMemorySyncAuditPath: options.companionDataDir
       ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
       : undefined,
-  }));
-  options.agentLoop.registerTool(createSpawnShardTool(shardManager));
+  });
+  const shardExecutionPort = createShardExecutionPort(shardManager);
+  options.agentLoop.registerTool(createBoundedSubagentLaunchTool(shardManager));
 
   options.agentLoop.registerTool(createThinkTool({
     llmProvider: options.llmProvider,
@@ -313,5 +314,5 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     config: options.replConfig ?? DEFAULT_REPL_CONFIG,
   }));
 
-  return shardManager;
+  return shardExecutionPort;
 }

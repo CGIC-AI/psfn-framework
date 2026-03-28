@@ -21,6 +21,7 @@ describe('bounded subagent contract', () => {
         embodimentContext: {
           kind: 'embodiment',
           embodimentId: '  display  ',
+          companionId: '  companion-test  ',
           siteId: '  ha-main  ',
           satelliteId: '  kitchen  ',
           channelId: '  api:wyoming:ha-main:display  ',
@@ -42,19 +43,20 @@ describe('bounded subagent contract', () => {
         embodimentContext: {
           kind: 'embodiment',
           embodimentId: 'display',
+          companionId: 'companion-test',
           siteId: 'ha-main',
           satelliteId: 'kitchen',
           channelId: 'api:wyoming:ha-main:display',
         },
       },
     });
-    expect(isBoundedSubagentLaunchToolName('spawn_shard')).toBe(true);
+    expect(isBoundedSubagentLaunchToolName('spawn_subagent')).toBe(true);
     expect(isBoundedSubagentLaunchToolName('load_tools')).toBe(false);
 
     expect(buildBoundedSubagentLaunchEnvelope(
       request,
       {
-        shardId: 'shard-1',
+        subagentId: 'subagent-1',
         content: 'ok',
         model: 'mock-model',
         inputTokens: 10,
@@ -67,10 +69,10 @@ describe('bounded subagent contract', () => {
       },
     )).toEqual({
       kind: 'bounded_subagent_launch',
-      toolName: 'spawn_shard',
+      toolName: 'spawn_subagent',
       request,
       result: {
-        shardId: 'shard-1',
+        subagentId: 'subagent-1',
         content: 'ok',
         model: 'mock-model',
         inputTokens: 10,
@@ -102,6 +104,7 @@ describe('bounded subagent contract', () => {
         embodimentContext: {
           kind: 'embodiment',
           embodimentId: '   ',
+          companionId: 'companion-test',
         } as any,
       },
     })).toThrow('non-empty sourceContext.embodimentContext.embodimentId');

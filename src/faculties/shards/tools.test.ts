@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ShardManager } from './manager.js';
-import { createSpawnShardTool } from './tools.js';
+import type { BoundedSubagentLaunchPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
+import { createBoundedSubagentLaunchTool } from './tools.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
-describe('createSpawnShardTool', () => {
+describe('createBoundedSubagentLaunchTool', () => {
   it('returns a bounded subagent launch envelope in details', async () => {
-    const spawn = vi.fn(async () => ({
-      shardId: 'shard-123',
+    const launchBoundedSubagent = vi.fn(async () => ({
+      subagentId: 'subagent-123',
       name: 'research',
       content: 'result text',
       model: 'mock-model',
@@ -20,7 +20,7 @@ describe('createSpawnShardTool', () => {
       capabilities: ['general'],
       requiredCapabilities: ['must-read'],
     }));
-    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+    const tool = createBoundedSubagentLaunchTool({ launchBoundedSubagent } as unknown as BoundedSubagentLaunchPort);
 
     await runWithRequestContext(
       {
@@ -30,6 +30,7 @@ describe('createSpawnShardTool', () => {
         embodimentContext: {
           kind: 'embodiment',
           embodimentId: 'display',
+          companionId: 'companion-test',
           siteId: 'ha-main',
           satelliteId: 'kitchen',
         },
@@ -44,7 +45,7 @@ describe('createSpawnShardTool', () => {
           requiredCapabilities: ['must-read', 'must-read'],
         });
 
-        expect(spawn).toHaveBeenCalledWith(expect.objectContaining({
+        expect(launchBoundedSubagent).toHaveBeenCalledWith(expect.objectContaining({
           name: 'research',
           task: 'explore',
           systemPrompt: 'prompt',
@@ -56,18 +57,19 @@ describe('createSpawnShardTool', () => {
             requestId: 'req-1',
             turnId: 'turn-1',
             embodimentContext: {
-              kind: 'embodiment',
-              embodimentId: 'display',
-              siteId: 'ha-main',
-              satelliteId: 'kitchen',
-            },
+                kind: 'embodiment',
+                embodimentId: 'display',
+                companionId: 'companion-test',
+                siteId: 'ha-main',
+                satelliteId: 'kitchen',
+              },
           },
         }));
 
         expect(result.details).toEqual({
           boundedSubagent: {
             kind: 'bounded_subagent_launch',
-            toolName: 'spawn_shard',
+            toolName: 'spawn_subagent',
             request: {
               name: 'research',
               task: 'explore',
@@ -82,13 +84,14 @@ describe('createSpawnShardTool', () => {
                 embodimentContext: {
                   kind: 'embodiment',
                   embodimentId: 'display',
+                  companionId: 'companion-test',
                   siteId: 'ha-main',
                   satelliteId: 'kitchen',
                 },
               },
             },
             result: {
-              shardId: 'shard-123',
+              subagentId: 'subagent-123',
               content: 'result text',
               model: 'mock-model',
               inputTokens: 12,

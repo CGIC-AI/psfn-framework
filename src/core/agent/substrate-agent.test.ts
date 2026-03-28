@@ -699,9 +699,9 @@ describe('SubstrateAgent.registerTool', () => {
     } as any, 'extended');
 
     agent.registerTool({
-      name: 'spawn_shard',
-      label: 'spawn_shard',
-      description: 'parallel shard fan-out',
+      name: 'spawn_subagent',
+      label: 'spawn_subagent',
+      description: 'parallel bounded subagent fan-out',
       parameters: { type: 'object' as const, properties: {} },
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
     } as any, 'extended');
@@ -724,7 +724,7 @@ describe('SubstrateAgent.registerTool', () => {
 
     const catalog = agent.getToolCatalog();
     const repoStatus = [...catalog.extended].find(tool => tool.name === 'repo_status') as any;
-    const spawnShard = [...catalog.extended].find(tool => tool.name === 'spawn_shard') as any;
+    const spawnSubagent = [...catalog.extended].find(tool => tool.name === 'spawn_subagent') as any;
     const memoryWrite = [...catalog.core].find(tool => tool.name === 'memory_write') as any;
     const scheduleTask = [...catalog.extended].find(tool => tool.name === 'schedule_task') as any;
 
@@ -738,8 +738,8 @@ describe('SubstrateAgent.registerTool', () => {
         background: true,
       },
     });
-    expect(spawnShard?.wiringMeta?.concurrency).toMatchObject({
-      class: 'spawn_shard',
+    expect(spawnSubagent?.wiringMeta?.concurrency).toMatchObject({
+      class: 'spawn_subagent',
       exclusivityKeyPolicy: 'none',
       maxParallel: 5,
       interruptibility: 'non_interruptible',
@@ -776,13 +776,13 @@ describe('SubstrateAgent.registerTool', () => {
     expect((agent as any).agent.__psfnToolSchedulerPatched).toBe(true);
   });
 
-  it('runs sibling spawn_shard tool calls with overlap in one parent-loop assistant turn', async () => {
+  it('runs sibling spawn_subagent tool calls with overlap in one parent-loop assistant turn', async () => {
     const starts = new Map<string, number>();
     const ends = new Map<string, number>();
-    const spawnShard = {
-      name: 'spawn_shard',
-      label: 'spawn_shard',
-      description: 'spawn shards',
+    const spawnSubagent = {
+      name: 'spawn_subagent',
+      label: 'spawn_subagent',
+      description: 'spawn subagents',
       parameters: { type: 'object', properties: {} },
       execute: vi.fn<any>(async (toolCallId: string) => {
         starts.set(toolCallId, Date.now());
@@ -795,7 +795,7 @@ describe('SubstrateAgent.registerTool', () => {
       }),
       wiringMeta: {
         concurrency: {
-          class: 'spawn_shard',
+          class: 'spawn_subagent',
           maxParallel: 3,
           exclusivityKeyPolicy: 'none',
           interruptibility: 'cooperative',
@@ -808,7 +808,7 @@ describe('SubstrateAgent.registerTool', () => {
     } as any;
 
     const streamFn = makeLoopStreamFn([
-      makeAssistantToolCallMessage(['spawn_shard', 'spawn_shard', 'spawn_shard']),
+      makeAssistantToolCallMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
       makeAssistantTextMessage('all shards complete'),
     ]);
     const events: any[] = [];
@@ -818,7 +818,7 @@ describe('SubstrateAgent.registerTool', () => {
       {
         systemPrompt: 'test system',
         messages: [],
-        tools: [spawnShard],
+        tools: [spawnSubagent],
       } as any,
       makeLoopConfig(),
       new AbortController().signal,
@@ -892,11 +892,11 @@ describe('SubstrateAgent.registerTool', () => {
     expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
   });
 
-  it('fails closed when spawn_shard rejects due to shard limit or health guard', async () => {
-    const spawnShard = {
-      name: 'spawn_shard',
-      label: 'spawn_shard',
-      description: 'spawn shards',
+  it('fails closed when spawn_subagent rejects due to shard limit or health guard', async () => {
+    const spawnSubagent = {
+      name: 'spawn_subagent',
+      label: 'spawn_subagent',
+      description: 'spawn subagents',
       parameters: { type: 'object', properties: {} },
       execute: vi.fn<any>(async (toolCallId: string) => {
         if (toolCallId === 'call-2') {
@@ -910,7 +910,7 @@ describe('SubstrateAgent.registerTool', () => {
       }),
       wiringMeta: {
         concurrency: {
-          class: 'spawn_shard',
+          class: 'spawn_subagent',
           maxParallel: 3,
           exclusivityKeyPolicy: 'none',
           interruptibility: 'cooperative',
@@ -928,12 +928,12 @@ describe('SubstrateAgent.registerTool', () => {
       {
         systemPrompt: 'test system',
         messages: [],
-        tools: [spawnShard],
+        tools: [spawnSubagent],
       } as any,
       makeLoopConfig(),
       new AbortController().signal,
       makeLoopStreamFn([
-        makeAssistantToolCallMessage(['spawn_shard', 'spawn_shard']),
+        makeAssistantToolCallMessage(['spawn_subagent', 'spawn_subagent']),
         makeAssistantTextMessage('done'),
       ]),
       { maxParallelToolCalls: 3 },

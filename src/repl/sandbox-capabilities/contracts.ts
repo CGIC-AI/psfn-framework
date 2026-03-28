@@ -42,7 +42,24 @@ export interface ShellExecView {
   durationMs: number;
 }
 
+export interface SandboxBrokerExecutionBoundary {
+  kind: 'sandbox_broker';
+  isolatedFromGatewaySecrets: true;
+  brokerId?: string;
+}
+
+export interface GatewayProcessExecutionBoundary {
+  kind: 'gateway_process';
+  isolatedFromGatewaySecrets: false;
+  reason: string;
+}
+
+export type SandboxExecutionBoundary =
+  | SandboxBrokerExecutionBoundary
+  | GatewayProcessExecutionBoundary;
+
 export interface SandboxExecutionPort {
+  readonly boundary: SandboxExecutionBoundary;
   shellExec: (
     command: string,
     args?: string[],

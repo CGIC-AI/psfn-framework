@@ -131,7 +131,11 @@ export class REPLSandbox {
     const allowShellExec = capabilityTier === undefined
       || capabilityTier === 'autonomous'
       || capabilityTier === 'custom';
-    const hasShellExecPort = Boolean(this.deps.executionPort?.shellExec);
+    const hasShellExecPort = Boolean(
+      this.deps.executionPort
+      && this.deps.executionPort.boundary.kind === 'sandbox_broker'
+      && typeof this.deps.executionPort.shellExec === 'function',
+    );
 
     const contextValues: Record<string, unknown> = {
       // Injected functions

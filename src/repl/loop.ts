@@ -19,7 +19,6 @@ import type { SandboxBudgetRef } from './sandbox.js';
 import { buildRLMSystemPrompt } from './prompt.js';
 import type { ThinkContextMetadata } from './prompt.js';
 import { parseResponse } from './parse.js';
-import type { SandboxExecutionPort, ShellExecView } from './sandbox-capabilities/contracts.js';
 import {
   buildStep,
   checkBudget,
@@ -615,23 +614,6 @@ export async function runRLMLoop(
     sandboxTokenUsage.outputTokens += response.outputTokens;
     return response;
   };
-  const executionPort: SandboxExecutionPort | null = typeof (llmProvider as {
-    shellExec?: (
-      command: string,
-      args?: string[],
-      options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number },
-    ) => Promise<ShellExecView>;
-  }).shellExec === 'function'
-    ? {
-      shellExec: (llmProvider as {
-        shellExec: (
-          command: string,
-          args?: string[],
-          options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number },
-        ) => Promise<ShellExecView>;
-      }).shellExec.bind(llmProvider),
-    }
-    : null;
 
   const steps: ThinkStep[] = [];
   const memoryCeilingBytes = resolveMemoryCeilingBytes(config, tier);
@@ -678,7 +660,7 @@ export async function runRLMLoop(
 
   const sandbox = new REPLSandbox({
     llmProvider: sandboxLLMProvider,
-    executionPort,
+    executionPort: deps.executionPort ?? null,
     embeddingService: deps.embeddingService,
     memoryStore: deps.memoryStore,
     sessionManager: deps.sessionManager,

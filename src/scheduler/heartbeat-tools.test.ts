@@ -314,7 +314,7 @@ describe('heartbeat_run_template', () => {
   it('runs a known template and returns output', async () => {
     const runTemplate = vi.fn(async () => ({
       templateId: 'whisper',
-      templateName: 'Whisper',
+      templateName: 'Musing',
       reflection: 'A quiet reflection',
     }));
 
@@ -324,6 +324,7 @@ describe('heartbeat_run_template', () => {
 
     expect(runTemplate).toHaveBeenCalledWith('whisper', { deferIfBusy: true });
     expect(text).toContain('Triggered reflection template');
+    expect(text).toContain('Musing');
     expect(text).toContain('A quiet reflection');
     expect(result.details.isError).toBeFalsy();
   });
@@ -362,7 +363,7 @@ describe('heartbeat_run_template', () => {
   it('reports queued status when template execution is deferred', async () => {
     const runTemplate = vi.fn(async () => ({
       templateId: 'whisper',
-      templateName: 'Whisper',
+      templateName: 'Musing',
       reflection: '',
       queued: true,
     }));
@@ -376,6 +377,7 @@ describe('heartbeat_run_template', () => {
 
     expect(runTemplate).toHaveBeenCalledWith('whisper', { deferIfBusy: true });
     expect(text).toContain('Queued reflection template');
+    expect(text).toContain('Musing');
     expect(result.details.isError).toBeFalsy();
   });
 });

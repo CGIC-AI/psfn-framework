@@ -22,7 +22,7 @@ export function createVaultWriteTool(ops: VaultOperations): AgentTool<any> {
       name: Type.String({ description: 'Note name (without .md extension) or path relative to vault root.' }),
       content: Type.String({ description: 'Markdown content to write.' }),
       folder: Type.Optional(
-        Type.String({ description: 'Folder path within the vault (e.g. "Journal/" or "Reflections/whisper/"). Only used with mode "create".' }),
+        Type.String({ description: 'Folder path within the vault (e.g. "Journal/" or "Reflections/musings/"). Only used with mode "create".' }),
       ),
       mode: Type.Optional(
         Type.Union([

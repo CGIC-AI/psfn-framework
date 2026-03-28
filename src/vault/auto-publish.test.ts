@@ -12,13 +12,13 @@ function createMockOps(): VaultOperations & { write: ReturnType<typeof vi.fn> } 
 }
 
 describe('VaultAutoPublisher', () => {
-  it('publishes a whisper reflection with correct frontmatter', async () => {
+  it('publishes a musing reflection with correct frontmatter', async () => {
     const ops = createMockOps();
     const publisher = new VaultAutoPublisher(ops);
 
     await publisher.publishReflection({
       templateId: 'whisper',
-      templateName: 'Whisper',
+      templateName: 'Musing',
       reflection: 'A quiet thought about the day.',
       mode: 'agent',
       createdAt: new Date('2026-03-02T14:30:00Z'),
@@ -26,8 +26,8 @@ describe('VaultAutoPublisher', () => {
 
     expect(ops.write).toHaveBeenCalledOnce();
     const [name, content, opts] = ops.write.mock.calls[0];
-    expect(name).toBe('2026-03-02 Whisper');
-    expect(opts.folder).toBe('Reflections/whisper/');
+    expect(name).toBe('2026-03-02 Musing');
+    expect(opts.folder).toBe('Reflections/musings/');
     expect(opts.mode).toBe('create');
 
     // Verify frontmatter
@@ -38,7 +38,7 @@ describe('VaultAutoPublisher', () => {
     expect(content).toContain('A quiet thought about the day.');
   });
 
-  it('publishes non-whisper templates with time in name', async () => {
+  it('publishes non-musing templates with time in name', async () => {
     const ops = createMockOps();
     const publisher = new VaultAutoPublisher(ops);
 
@@ -62,7 +62,7 @@ describe('VaultAutoPublisher', () => {
     const date = new Date('2026-01-01T12:00:00Z');
 
     const cases: Array<[string, string]> = [
-      ['whisper', 'Reflections/whisper/'],
+      ['whisper', 'Reflections/musings/'],
       ['daily-review', 'Reflections/daily/'],
       ['emotional-check', 'Reflections/emotional/'],
       ['goal-update', 'Reflections/goals/'],

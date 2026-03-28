@@ -50,7 +50,7 @@ describe('HeartbeatPolicyStore', () => {
     expect(reloaded.updatedBy).toBe('agent');
   });
 
-  it('whisper template sends to Discord', () => {
+  it('musing template sends to Discord', () => {
     const policy = store.load();
     const whisper = policy.templates.find(t => t.id === 'whisper');
     expect(whisper).toBeDefined();
@@ -68,7 +68,7 @@ describe('HeartbeatPolicyStore', () => {
     expect(dailyReview!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
   });
 
-  it('non-whisper templates do not send to Discord', () => {
+  it('non-musing templates do not send to Discord', () => {
     const policy = store.load();
     const nonWhispers = policy.templates.filter(t => t.id !== 'whisper');
     expect(nonWhispers.length).toBe(5);

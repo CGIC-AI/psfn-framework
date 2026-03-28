@@ -154,7 +154,6 @@ async function main(): Promise<void> {
   });
   const {
     eventBus,
-    capabilityRuntime,
     eligibilityGate,
     privilegedServices,
     auditDb,

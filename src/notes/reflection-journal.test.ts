@@ -55,7 +55,7 @@ describe('ReflectionJournalStore', () => {
   it('appends baseline reflection entries', () => {
     const entry = store.append({
       templateId: 'whisper',
-      templateName: 'Whisper',
+      templateName: 'Musing',
       prompt: 'Share a brief reflection.',
       reflection: 'I felt grounded today.',
       channelId: 'internal:reflection:whisper',
@@ -64,6 +64,7 @@ describe('ReflectionJournalStore', () => {
     });
 
     expect(entry.templateId).toBe('whisper');
+    expect(entry.templateName).toBe('Musing');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
     expect(lines).toHaveLength(1);
   });

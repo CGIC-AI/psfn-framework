@@ -42,8 +42,8 @@ const MAX_TEMPLATES = 20;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const LEGACY_WHISPER_TEMPLATE_NAME = 'Whisper';
 const LEGACY_WHISPER_TEMPLATE_PROMPT = 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.';
-const DISCORD_MUSING_TEMPLATE_NAME = 'Musing';
-const DISCORD_MUSING_TEMPLATE_PROMPT = 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little musing from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.';
+const MUSING_TEMPLATE_NAME = 'Musing';
+const MUSING_TEMPLATE_PROMPT = 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little musing from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.';
 
 // ── Validation ──
 
@@ -268,16 +268,16 @@ function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatP
   };
 }
 
-function normalizeWhisperPresentation(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+function normalizeMusingPresentation(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
   const templates = policy.templates.map(template => {
     if (template.id !== 'whisper') {
       return template;
     }
     const nextName = template.name === LEGACY_WHISPER_TEMPLATE_NAME
-      ? DISCORD_MUSING_TEMPLATE_NAME
+      ? MUSING_TEMPLATE_NAME
       : template.name;
     const nextPrompt = template.prompt === LEGACY_WHISPER_TEMPLATE_PROMPT
-      ? DISCORD_MUSING_TEMPLATE_PROMPT
+      ? MUSING_TEMPLATE_PROMPT
       : template.prompt;
     if (nextName === template.name && nextPrompt === template.prompt) {
       return template;
@@ -308,8 +308,8 @@ function getDefaults(): HeartbeatPolicy {
     templates: [
       {
         id: 'whisper',
-        name: DISCORD_MUSING_TEMPLATE_NAME,
-        prompt: DISCORD_MUSING_TEMPLATE_PROMPT,
+        name: MUSING_TEMPLATE_NAME,
+        prompt: MUSING_TEMPLATE_PROMPT,
         intervalMs: 60 * 60_000, // 1 hour
         cadence: { kind: 'hourly', minute: 0, timezone: 'local' },
         enabled: true,
@@ -392,7 +392,7 @@ export class HeartbeatPolicyStore {
         return defaults;
       }
       const cadenceNormalized = normalizeTemplateCadence(parsed);
-      const normalized = normalizeWhisperPresentation(cadenceNormalized.policy);
+      const normalized = normalizeMusingPresentation(cadenceNormalized.policy);
       for (const template of normalized.policy.templates) {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {

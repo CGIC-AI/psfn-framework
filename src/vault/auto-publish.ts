@@ -18,7 +18,7 @@ export interface ReflectionPublishInput {
 
 /** Maps template ID patterns to vault folder paths */
 const FOLDER_MAP: Array<[RegExp, string]> = [
-  [/^whisper$/i, 'Reflections/whisper/'],
+  [/^whisper$/i, 'Reflections/musings/'],
   [/^daily/i, 'Reflections/daily/'],
   [/^emotional/i, 'Reflections/emotional/'],
   [/^goal/i, 'Reflections/goals/'],
@@ -37,9 +37,9 @@ function resolveFolder(templateId: string): string {
 function formatNoteName(templateName: string, createdAt: Date): string {
   const date = createdAt.toISOString().slice(0, 10);
   const time = createdAt.toISOString().slice(11, 16).replace(':', 'h');
-  // Whisper gets date-only; others get date + time to avoid collisions
-  if (/whisper/i.test(templateName)) {
-    return `${date} Whisper`;
+  // Musing notes get date-only; others get date + time to avoid collisions
+  if (/whisper|musing/i.test(templateName)) {
+    return `${date} Musing`;
   }
   return `${date} ${time} ${templateName}`;
 }

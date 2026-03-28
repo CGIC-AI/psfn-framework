@@ -1,4 +1,4 @@
-import { EventStream, streamSimple, type AssistantMessage } from '@mariozechner/pi-ai';
+import { EventStream, type AssistantMessage } from '@mariozechner/pi-ai';
 import type { AgentContext, AgentLoopConfig, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { executeToolCallsWithScheduler, type ToolCallSchedulerOptions } from './tool-call-scheduler.js';
 
@@ -162,6 +162,9 @@ async function streamAssistantResponse(
   stream: ReturnType<typeof createAgentStream>,
   streamFn: StreamFn | undefined,
 ): Promise<AssistantMessage> {
+  if (!streamFn) {
+    throw new Error('Scheduled agent loop requires an explicit streamFn; direct provider fallback is disabled.');
+  }
   let messages = context.messages;
   if (config.transformContext) {
     messages = await config.transformContext(messages, signal);
@@ -173,11 +176,8 @@ async function streamAssistantResponse(
     tools: context.tools,
   };
 
-  const resolvedApiKey = (config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
-  const streamFunction = streamFn || streamSimple;
-  const response = await streamFunction(config.model, llmContext, {
+  const response = await streamFn(config.model, llmContext, {
     ...config,
-    apiKey: resolvedApiKey,
     signal,
   });
 

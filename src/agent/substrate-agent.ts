@@ -301,11 +301,17 @@ export class SubstrateAgent {
         });
       });
     };
+    const defaultStreamTransport = this.runtimeMode === 'single'
+      ? undefined
+      : {
+        stream: this.llmClient.stream.bind(this.llmClient),
+      };
 
     this.agent = new Agent({
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
-        onBudgetBlocked: emitBudgetBlocked,
+        ...(defaultStreamTransport ? { transport: defaultStreamTransport } : {}),
         ...(options?.streamRuntimeOptions ?? {}),
+        onBudgetBlocked: emitBudgetBlocked,
       }),
       convertToLlm,
     });

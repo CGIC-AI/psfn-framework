@@ -36,6 +36,7 @@ export interface WyomingHandleServiceOptions {
   eventBus?: EventBusLike;
   timeoutMs?: number;
   now?: () => number;
+  companionId: string;
 }
 
 interface HandleSessionState {
@@ -204,6 +205,10 @@ export function createWyomingHandleServiceAdapter(
   const now = options.now ?? (() => Date.now());
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
   const sessionStates = new Map<string, HandleSessionState>();
+  const companionId = options.companionId.trim();
+  if (!companionId) {
+    throw new Error('Wyoming handle service requires a companionId');
+  }
 
   return {
     id: 'handle',
@@ -264,6 +269,7 @@ export function createWyomingHandleServiceAdapter(
         ?? buildSatellitePresenceMetadata({
           siteId: readString(request.frame.data, ['site_id', 'siteId']),
           satelliteId: satelliteId ?? 'unknown',
+          companionId,
         });
       const userId = readString(request.frame.data, ['ha_user_id', 'haUserId', 'user_id', 'userId'])
         ?? satelliteId

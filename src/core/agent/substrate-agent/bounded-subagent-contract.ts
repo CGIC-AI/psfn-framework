@@ -123,7 +123,7 @@ function normalizeSourceContext(
       const siteId = normalizeOptionalText(embodimentContext.siteId);
       const satelliteId = normalizeOptionalText(embodimentContext.satelliteId);
       const channelId = normalizeOptionalText(embodimentContext.channelId);
-      const companionId = normalizeOptionalText(embodimentContext.companionId);
+      const companionId = normalizeText(embodimentContext.companionId, 'sourceContext.embodimentContext.companionId');
       const label = normalizeOptionalText(embodimentContext.label);
       return {
         kind: 'embodiment' as const,
@@ -131,7 +131,7 @@ function normalizeSourceContext(
         ...(siteId ? { siteId } : {}),
         ...(satelliteId ? { satelliteId } : {}),
         ...(channelId ? { channelId } : {}),
-        ...(companionId ? { companionId } : {}),
+        companionId,
         ...(label ? { label } : {}),
         ...(embodimentContext.isPrimary !== undefined ? { isPrimary: embodimentContext.isPrimary } : {}),
         ...(embodimentContext.isActive !== undefined ? { isActive: embodimentContext.isActive } : {}),

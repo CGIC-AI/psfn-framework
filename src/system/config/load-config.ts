@@ -10,6 +10,8 @@ import type {
   ImportProcessingRouteMode,
   ModelCatalogEntry,
   ModelRoleAssignments,
+  ResponseStyle,
+  ResponseStyleOverrides,
 } from '../../shared/contracts/runtime.js';
 import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './seed-defaults.js';
 import {
@@ -185,6 +187,7 @@ export function loadConfig(): SubstrateConfig {
   });
   const dataDir = runtimePathLayout.systemDataDir;
   const companionDataDir = runtimePathLayout.companionDataDir;
+  const companionId = parseRequiredStringEnv(process.env.COMPANION_ID, 'COMPANION_ID');
   const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${companionDataDir}/character.json`;
   const databaseBasename = sanitizeDatabaseBasename(process.env.DATABASE_BASENAME);
   const databasePath = process.env.DATABASE_PATH ?? `${companionDataDir}/${databaseBasename}.db`;
@@ -199,6 +202,7 @@ export function loadConfig(): SubstrateConfig {
     discordToken: discordToken ?? '',
     discordBotId: discordBotId ?? '',
     characterCardPath,
+    companionId,
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
     dataDir,
@@ -349,6 +353,14 @@ function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined
     return false;
   }
   return undefined;
+}
+
+function parseRequiredStringEnv(value: string | undefined, name: string): string {
+  const normalized = parseOptionalStringEnv(value);
+  if (normalized) {
+    return normalized;
+  }
+  throw new Error(`${name} is required`);
 }
 
 function assertMutuallyRequiredEnvPair(

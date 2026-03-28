@@ -21,11 +21,19 @@ export interface ShardResultLineageWyomingRouting {
   presence?: CompanionPresenceMetadata;
 }
 
+export interface ShardCompanionProvenance {
+  parentCompanionId: string;
+  shardCompanionId: string;
+}
+
 export interface ShardResultLineageEnvelope {
-  schemaVersion: 1;
+  schemaVersion: 2;
   kind: 'spawn' | 'wyoming';
+  coreCompanionId: string;
+  shardCompanionId: string;
   shardId: string;
   shardChannelId: string;
+  companionProvenance: ShardCompanionProvenance;
   sourceMessage: ShardResultLineageSourceMessage;
   sourceContext?: ShardSourceContext;
   wyomingRouting?: ShardResultLineageWyomingRouting;
@@ -37,6 +45,10 @@ function normalizeNonEmptyString(value: string, fieldName: string): string {
     throw new Error(`Shard lineage ${fieldName} cannot be empty`);
   }
   return normalized;
+}
+
+export function deriveShardCompanionId(coreCompanionId: string, shardId: string): string {
+  return `${normalizeNonEmptyString(coreCompanionId, 'core companion id')}::${normalizeNonEmptyString(shardId, 'shard id')}`;
 }
 
 function normalizeChannelType(value: SubstrateMessage['channelType']): ChannelType {
@@ -106,6 +118,7 @@ function normalizeWyomingRouting(routing: WyomingRoutingMetadata | undefined): S
 
 export function buildShardLineageEnvelope(input: {
   kind: ShardResultLineageEnvelope['kind'];
+  coreCompanionId: string;
   shardId: string;
   shardChannelId: string;
   sourceMessage: Pick<
@@ -117,12 +130,21 @@ export function buildShardLineageEnvelope(input: {
 }): ShardResultLineageEnvelope {
   const sourceContext = normalizeSourceContext(input.sourceContext);
   const wyomingRouting = normalizeWyomingRouting(input.wyomingRouting);
+  const coreCompanionId = normalizeNonEmptyString(input.coreCompanionId, 'core companion id');
+  const shardId = normalizeNonEmptyString(input.shardId, 'shard id');
+  const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: input.kind,
-    shardId: normalizeNonEmptyString(input.shardId, 'shard id'),
+    coreCompanionId,
+    shardCompanionId,
+    shardId,
     shardChannelId: normalizeNonEmptyString(input.shardChannelId, 'shard channel id'),
+    companionProvenance: {
+      parentCompanionId: coreCompanionId,
+      shardCompanionId,
+    },
     sourceMessage: normalizeSourceMessage(input.sourceMessage),
     ...(sourceContext ? { sourceContext } : {}),
     ...(wyomingRouting ? { wyomingRouting } : {}),

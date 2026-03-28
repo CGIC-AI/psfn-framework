@@ -32,10 +32,14 @@ import type {
   ShardResult,
   ShardSourceContext,
 } from './types.js';
-import { buildShardLineageEnvelope } from './result-lineage.js';
+import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
 import { buildShardReturnedArtifacts, type ShardReturnedArtifact } from './artifact-policy.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCanonicalEmbodimentContext } from '../../core/agent/active-emanation-state.js';
+import {
+  resolveCompanionIdFromConfig,
+  resolveCompanionNameFromConfig,
+} from '../../core/identity/companion-runtime.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
@@ -158,6 +162,12 @@ export class ShardManager implements ShardExecutionPort {
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
+    const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
+    const shardRuntimeConfig: SubstrateConfig = {
+      ...this.deps.config,
+      companionId: shardCompanionId,
+    };
     const contextPack = shardConfig.contextPack ?? await this.buildContextPack(
       shardId,
       channelId,
@@ -170,19 +180,20 @@ export class ShardManager implements ShardExecutionPort {
       id: shardId,
       channelId,
       channelType: 'api',
-      authorId: 'system',
-      authorName: 'ShardManager',
+      authorId: coreCompanionId,
+      authorName: resolveCompanionNameFromConfig(this.deps.config),
       content: shardConfig.task,
       timestamp: new Date(),
     };
     const lineage = buildShardLineageEnvelope({
       kind: 'spawn',
+      coreCompanionId,
       shardId,
       shardChannelId: channelId,
       sourceMessage: baseMessage,
       ...(shardConfig.sourceContext ? { sourceContext: shardConfig.sourceContext } : {}),
     });
-    return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage);
+    return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig);
   }
 
   async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {
@@ -194,6 +205,12 @@ export class ShardManager implements ShardExecutionPort {
 
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
+    const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
+    const shardRuntimeConfig: SubstrateConfig = {
+      ...this.deps.config,
+      companionId: shardCompanionId,
+    };
     const presenceSubjectId = resolvePresenceSubjectId(routing?.presence) ?? routing?.satelliteId?.trim();
     const routeCapabilities = this.resolveWyomingRouteCapabilities(routing, presenceSubjectId);
     const shardName = request.shardName?.trim()
@@ -225,6 +242,7 @@ export class ShardManager implements ShardExecutionPort {
     });
     const lineage = buildShardLineageEnvelope({
       kind: 'wyoming',
+      coreCompanionId,
       shardId,
       shardChannelId: request.message.channelId,
       sourceMessage: request.message,
@@ -238,6 +256,7 @@ export class ShardManager implements ShardExecutionPort {
         shardConfig,
         request.message,
         lineage,
+        shardRuntimeConfig,
       );
       this.auditTrail?.append('wyoming.shard.delegate.end', {
         shardId,
@@ -272,6 +291,7 @@ export class ShardManager implements ShardExecutionPort {
     shardConfig: ShardConfig,
     baseMessage: SubstrateMessage,
     lineage: ShardResult['lineage'],
+    runtimeConfig: SubstrateConfig,
   ): Promise<ShardResult> {
     this.refreshShardHealth();
     if (this.activeCount >= this.maxConcurrent) {
@@ -335,7 +355,7 @@ export class ShardManager implements ShardExecutionPort {
       // Each shard gets its own SessionManager wrapping the shared store
       const sessionManager = new SessionManager(
         this.deps.sessionStore,
-        this.deps.config,
+        runtimeConfig,
         this.deps.eventBus,
       );
 
@@ -346,7 +366,7 @@ export class ShardManager implements ShardExecutionPort {
         this.deps.llmProvider,
         sessionManager,
         systemPrompt,
-        this.deps.config,
+        runtimeConfig,
         {
           runtimeMode: this.deps.runtimeMode ?? 'single',
         },

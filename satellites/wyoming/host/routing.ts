@@ -15,6 +15,7 @@ export interface WyomingDelegationDecision {
 
 export function resolveWyomingRoutingMetadata(
   message: SubstrateMessage,
+  companionId: string,
 ): { routing?: WyomingRoutingMetadata; error?: string } | undefined {
   const routing = message.routing?.wyoming;
   if (routing) {
@@ -41,6 +42,7 @@ export function resolveWyomingRoutingMetadata(
         kind: 'satellite',
         siteId: routing.siteId,
         satelliteId: routing.satelliteId,
+        companionId,
       });
       if (fallbackResolution.error) {
         return { error: fallbackResolution.error };
@@ -51,6 +53,7 @@ export function resolveWyomingRoutingMetadata(
           presence: fallbackResolution.presence ?? buildSatellitePresenceMetadata({
             siteId: routing.siteId,
             satelliteId: routing.satelliteId,
+            companionId,
           }),
         },
       };
@@ -73,6 +76,7 @@ export function resolveWyomingRoutingMetadata(
     kind: 'satellite',
     siteId: parts[2],
     satelliteId: parts.slice(3).join(':'),
+    companionId,
   });
   if (presenceResolution.error) {
     return { error: presenceResolution.error };
@@ -85,6 +89,7 @@ export function resolveWyomingRoutingMetadata(
       presence: presenceResolution.presence ?? buildSatellitePresenceMetadata({
         siteId: parts[2],
         satelliteId: parts.slice(3).join(':'),
+        companionId,
       }),
     },
   };
@@ -93,8 +98,9 @@ export function resolveWyomingRoutingMetadata(
 export function evaluateWyomingDelegation(
   message: SubstrateMessage,
   config: SubstrateConfig,
+  companionId: string,
 ): WyomingDelegationDecision {
-  const routingResolution = resolveWyomingRoutingMetadata(message);
+  const routingResolution = resolveWyomingRoutingMetadata(message, companionId);
   if (!routingResolution) {
     return {
       isWyoming: false,

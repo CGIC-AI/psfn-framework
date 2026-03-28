@@ -4,6 +4,8 @@ import {
   resolveWyomingRoutingMetadata,
 } from './routing.js';
 
+const TEST_COMPANION_ID = 'companion-test';
+
 function makeMessage(overrides?: Record<string, unknown>) {
   return {
     id: 'msg-1',
@@ -28,6 +30,7 @@ describe('resolveWyomingRoutingMetadata', () => {
             kind: 'satellite',
             siteId: 'ha-main',
             satelliteId: 'kitchen',
+            companionId: TEST_COMPANION_ID,
           },
           shardDelegation: {
             eligible: true,
@@ -36,7 +39,7 @@ describe('resolveWyomingRoutingMetadata', () => {
       },
     });
 
-    expect(resolveWyomingRoutingMetadata(message)).toEqual({
+    expect(resolveWyomingRoutingMetadata(message, TEST_COMPANION_ID)).toEqual({
       routing: {
         siteId: 'ha-main',
         satelliteId: 'kitchen',
@@ -44,6 +47,7 @@ describe('resolveWyomingRoutingMetadata', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'kitchen',
+          companionId: TEST_COMPANION_ID,
         },
         shardDelegation: {
           eligible: true,
@@ -58,7 +62,7 @@ describe('resolveWyomingRoutingMetadata', () => {
       channelType: 'api',
     });
 
-    expect(resolveWyomingRoutingMetadata(message)).toEqual({
+    expect(resolveWyomingRoutingMetadata(message, TEST_COMPANION_ID)).toEqual({
       routing: {
         siteId: 'ha-main',
         satelliteId: 'voice-pe:office',
@@ -66,6 +70,7 @@ describe('resolveWyomingRoutingMetadata', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'voice-pe:office',
+          companionId: TEST_COMPANION_ID,
         },
       },
     });
@@ -77,7 +82,7 @@ describe('resolveWyomingRoutingMetadata', () => {
       channelType: 'api',
     });
 
-    expect(resolveWyomingRoutingMetadata(message)).toBeUndefined();
+    expect(resolveWyomingRoutingMetadata(message, TEST_COMPANION_ID)).toBeUndefined();
   });
 
   it('returns undefined for malformed wyoming channel IDs', () => {
@@ -86,7 +91,7 @@ describe('resolveWyomingRoutingMetadata', () => {
       channelType: 'api',
     });
 
-    expect(resolveWyomingRoutingMetadata(message)).toBeUndefined();
+    expect(resolveWyomingRoutingMetadata(message, TEST_COMPANION_ID)).toBeUndefined();
   });
 
   it('rejects conflicting active presence metadata', () => {
@@ -98,13 +103,14 @@ describe('resolveWyomingRoutingMetadata', () => {
           presence: {
             kind: 'emanation',
             emanationId: 'voice-node',
+            companionId: TEST_COMPANION_ID,
             isPrimary: true,
           },
         },
       },
     });
 
-    expect(resolveWyomingRoutingMetadata(message)).toEqual({
+    expect(resolveWyomingRoutingMetadata(message, TEST_COMPANION_ID)).toEqual({
       error: 'conflicting active emanation metadata',
     });
   });
@@ -113,7 +119,7 @@ describe('resolveWyomingRoutingMetadata', () => {
 describe('evaluateWyomingDelegation', () => {
   it('returns not_wyoming when routing metadata is unavailable', () => {
     const message = makeMessage();
-    const decision = evaluateWyomingDelegation(message, {} as any);
+    const decision = evaluateWyomingDelegation(message, {} as any, TEST_COMPANION_ID);
 
     expect(decision).toEqual({
       isWyoming: false,
@@ -130,7 +136,7 @@ describe('evaluateWyomingDelegation', () => {
 
     const decision = evaluateWyomingDelegation(message, {
       wyomingShardRouting: { enabled: false },
-    } as any);
+    } as any, TEST_COMPANION_ID);
 
     expect(decision.isWyoming).toBe(true);
     expect(decision.delegate).toBe(false);
@@ -141,6 +147,7 @@ describe('evaluateWyomingDelegation', () => {
       kind: 'satellite',
       siteId: 'ha-main',
       satelliteId: 'kitchen',
+      companionId: TEST_COMPANION_ID,
     });
   });
 
@@ -154,6 +161,7 @@ describe('evaluateWyomingDelegation', () => {
             kind: 'satellite',
             siteId: 'ha-main',
             satelliteId: 'office',
+            companionId: TEST_COMPANION_ID,
           },
           shardDelegation: {
             eligible: false,
@@ -165,7 +173,7 @@ describe('evaluateWyomingDelegation', () => {
 
     const decision = evaluateWyomingDelegation(message, {
       wyomingShardRouting: { enabled: true },
-    } as any);
+    } as any, TEST_COMPANION_ID);
 
     expect(decision).toEqual({
       isWyoming: true,
@@ -178,6 +186,7 @@ describe('evaluateWyomingDelegation', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'office',
+          companionId: TEST_COMPANION_ID,
         },
         shardDelegation: {
           eligible: false,
@@ -196,6 +205,7 @@ describe('evaluateWyomingDelegation', () => {
           presence: {
             kind: 'embodiment',
             embodimentId: 'display',
+            companionId: TEST_COMPANION_ID,
             isActive: true,
           },
         },
@@ -204,7 +214,7 @@ describe('evaluateWyomingDelegation', () => {
 
     expect(evaluateWyomingDelegation(message, {
       wyomingShardRouting: { enabled: true },
-    } as any)).toEqual({
+    } as any, TEST_COMPANION_ID)).toEqual({
       isWyoming: true,
       delegate: false,
       reason: 'conflicting active emanation metadata',
@@ -221,6 +231,7 @@ describe('evaluateWyomingDelegation', () => {
             kind: 'satellite',
             siteId: 'ha-main',
             satelliteId: 'den',
+            companionId: TEST_COMPANION_ID,
           },
           shardDelegation: {
             eligible: true,
@@ -231,7 +242,7 @@ describe('evaluateWyomingDelegation', () => {
 
     const decision = evaluateWyomingDelegation(message, {
       wyomingShardRouting: { enabled: true },
-    } as any);
+    } as any, TEST_COMPANION_ID);
 
     expect(decision).toEqual({
       isWyoming: true,
@@ -244,6 +255,7 @@ describe('evaluateWyomingDelegation', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'den',
+          companionId: TEST_COMPANION_ID,
         },
         shardDelegation: {
           eligible: true,

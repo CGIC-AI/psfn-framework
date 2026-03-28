@@ -8,7 +8,7 @@ export type PresenceKind = 'satellite' | 'embodiment' | 'emanation';
 export interface SatellitePresenceMetadata {
   kind: 'satellite';
   satelliteId: string;
-  companionId?: string;
+  companionId: string;
   siteId?: string;
   channelId?: string;
   label?: string;
@@ -21,7 +21,7 @@ export interface SatellitePresenceMetadata {
 export interface EmbodimentPresenceMetadata {
   kind: 'embodiment';
   embodimentId: string;
-  companionId?: string;
+  companionId: string;
   siteId?: string;
   channelId?: string;
   label?: string;
@@ -34,7 +34,7 @@ export interface EmbodimentPresenceMetadata {
 export interface EmanationPresenceMetadata {
   kind: 'emanation';
   emanationId: string;
-  companionId?: string;
+  companionId: string;
   siteId?: string;
   channelId?: string;
   label?: string;
@@ -51,9 +51,9 @@ export type CompanionPresenceMetadata =
 
 export function buildSatellitePresenceMetadata(input: {
   satelliteId: string;
+  companionId: string;
   siteId?: string;
   channelId?: string;
-  companionId?: string;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -63,9 +63,9 @@ export function buildSatellitePresenceMetadata(input: {
   return {
     kind: 'satellite',
     satelliteId: input.satelliteId,
+    companionId: input.companionId,
     ...(input.siteId ? { siteId: input.siteId } : {}),
     ...(input.channelId ? { channelId: input.channelId } : {}),
-    ...(input.companionId ? { companionId: input.companionId } : {}),
     ...(input.label ? { label: input.label } : {}),
     ...(input.isPrimary !== undefined ? { isPrimary: input.isPrimary } : {}),
     ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
@@ -76,10 +76,10 @@ export function buildSatellitePresenceMetadata(input: {
 
 export function buildEmbodimentPresenceMetadata(input: {
   embodimentId: string;
+  companionId: string;
   siteId?: string;
   satelliteId?: string;
   channelId?: string;
-  companionId?: string;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -88,10 +88,10 @@ export function buildEmbodimentPresenceMetadata(input: {
   return {
     kind: 'embodiment',
     embodimentId: input.embodimentId,
+    companionId: input.companionId,
     ...(input.siteId ? { siteId: input.siteId } : {}),
     ...(input.satelliteId ? { satelliteId: input.satelliteId } : {}),
     ...(input.channelId ? { channelId: input.channelId } : {}),
-    ...(input.companionId ? { companionId: input.companionId } : {}),
     ...(input.label ? { label: input.label } : {}),
     ...(input.isPrimary !== undefined ? { isPrimary: input.isPrimary } : {}),
     ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
@@ -101,11 +101,11 @@ export function buildEmbodimentPresenceMetadata(input: {
 
 export function buildEmanationPresenceMetadata(input: {
   emanationId: string;
+  companionId: string;
   siteId?: string;
   satelliteId?: string;
   embodimentId?: string;
   channelId?: string;
-  companionId?: string;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -113,11 +113,11 @@ export function buildEmanationPresenceMetadata(input: {
   return {
     kind: 'emanation',
     emanationId: input.emanationId,
+    companionId: input.companionId,
     ...(input.siteId ? { siteId: input.siteId } : {}),
     ...(input.satelliteId ? { satelliteId: input.satelliteId } : {}),
     ...(input.embodimentId ? { embodimentId: input.embodimentId } : {}),
     ...(input.channelId ? { channelId: input.channelId } : {}),
-    ...(input.companionId ? { companionId: input.companionId } : {}),
     ...(input.label ? { label: input.label } : {}),
     ...(input.isPrimary !== undefined ? { isPrimary: input.isPrimary } : {}),
     ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),

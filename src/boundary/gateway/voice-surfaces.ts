@@ -9,9 +9,12 @@ import { createWyomingTtsServiceAdapter } from '../../../satellites/wyoming/host
 import type { WyomingInfoData } from '../../../satellites/wyoming/protocol/index.js';
 import type { DiscordAdapter } from '../../channels/discord/adapter.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { GatewayServer } from './server.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  resolveCompanionIdFromConfig,
+  resolveCompanionNameFromConfig,
+} from '../../core/identity/companion-runtime.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -135,6 +138,7 @@ export async function createGatewayVoiceSurfaces(
         };
       },
       eventBus: input.eventBus,
+      companionId: resolveCompanionIdFromConfig(input.config),
     });
 
     const wyomingAdapters = [handleAdapter];
@@ -213,7 +217,7 @@ export async function createGatewayVoiceSurfaces(
 
     wyomingRuntime = new WyomingRuntime({
       info: {
-        name: DEFAULT_COMPANION_ID,
+        name: resolveCompanionNameFromConfig(input.config),
         version: '1.0.0',
         description: 'Companion Substrate Framework — Wyoming voice bridge',
         services: serviceRegistry.services,

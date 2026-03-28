@@ -252,6 +252,7 @@ export async function startOptionalApiServer(
       agentLoop: options.agentLoop,
       eventBus: options.eventBus,
       sessionManager: options.sessionManager,
+      companionId: options.config.companionId,
       contactStore: options.contactStore,
       apiKey: env.API_KEY || undefined,
       adminToken: env.ADMIN_TOKEN || undefined,

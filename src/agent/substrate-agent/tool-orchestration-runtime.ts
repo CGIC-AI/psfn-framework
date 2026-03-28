@@ -6,6 +6,10 @@ import {
 import type { CapabilityToken } from '../../capabilities/tokens.js';
 import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX, type CorrelationMetadata, type ObservabilityCallType, type SubstrateConfig, type SubstrateMessage } from '../../types.js';
 import { toErrorMessage } from '../../utils/errors.js';
+import {
+  DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL,
+  isBoundedSubagentLaunchToolName,
+} from './bounded-subagent-contract.js';
 import type {
   AdaptiveLoadedExtendedToolState,
   AdaptiveToolActivationSource,
@@ -71,7 +75,6 @@ const LOADED_TOOL_SOURCE_PRIORITY: Record<LoadedToolSource, number> = {
 };
 
 export const DEFAULT_PARALLEL_READ_MAX = 3;
-export const DEFAULT_SPAWN_SHARD_PARALLEL_MAX = 5;
 
 const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'repo_status',
@@ -94,7 +97,7 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;
 
 export function inferToolConcurrencyClass(toolName: string): ToolConcurrencyClass {
-  if (toolName === 'spawn_shard') return 'spawn_shard';
+  if (isBoundedSubagentLaunchToolName(toolName)) return 'spawn_shard';
   if (PARALLEL_READ_ONLY_TOOL_NAMES.has(toolName)) return 'read_only';
   return 'exclusive';
 }
@@ -165,8 +168,8 @@ export function withToolConcurrencyMetadata(
     concurrency.exclusivityKeyPolicy = 'none';
     delete concurrency.exclusivityKey;
     if (concurrency.maxParallel === undefined) {
-      concurrency.maxParallel = concurrency.class === 'spawn_shard'
-        ? DEFAULT_SPAWN_SHARD_PARALLEL_MAX
+      concurrency.maxParallel = isBoundedSubagentLaunchToolName(tool.name)
+        ? DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL
         : DEFAULT_PARALLEL_READ_MAX;
     }
   }

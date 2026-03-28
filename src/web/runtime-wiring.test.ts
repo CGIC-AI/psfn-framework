@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GatewayClient } from '../gateway/client.js';
+import type { GatewayClient } from '../boundary/gateway/client.js';
 import { GatewayWebFetchOps } from './gateway-ops.js';
 import { registerWebTools, type WebRuntimeTarget } from './runtime-wiring.js';
 

@@ -20,7 +20,7 @@ import {
   evaluateShardSessionMemorySyncPolicy,
   type ShardSessionMemorySyncDecision,
   type ShardSessionMemorySyncEnvelope,
-} from '../gateway/policy.js';
+} from '../boundary/gateway/policy.js';
 import { appendShardSessionMemorySyncAudit } from '../persistence/jsonl.js';
 import type { ShardExecutionPort } from './port.js';
 import type {

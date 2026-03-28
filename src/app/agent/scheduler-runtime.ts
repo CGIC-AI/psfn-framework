@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import type { BackupRuntimeConfig } from '../../backup/config.js';
 import { registerScheduledBackupTask } from '../../backup/service.js';
 import { wirePostTurnActionRuntime, type PostTurnActionRuntime } from '../../bootstrap/post-turn-actions.js';
-import type { GatewayClient } from '../../gateway/client.js';
+import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { SalienceDecay } from '../../memory/decay.js';
 import type { MemoryStore } from '../../memory/store.js';
 import { Scheduler } from '../../scheduler/scheduler.js';

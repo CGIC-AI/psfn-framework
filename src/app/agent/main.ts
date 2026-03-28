@@ -6,7 +6,7 @@ import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { GatewayClient } from '../../gateway/client.js';
+import { GatewayClient } from '../../boundary/gateway/client.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
 import { resolveBackupRuntimeConfig } from '../../backup/config.js';
 import {

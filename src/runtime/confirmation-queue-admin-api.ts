@@ -4,7 +4,7 @@ import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
   ConfirmationResolveResult,
-} from '../gateway/protocol.js';
+} from '../boundary/gateway/protocol.js';
 
 type LocalConfirmationQueue = Pick<ConfirmationQueue, 'listPending' | 'resolve'>;
 type LocalConfirmationQueueWithLookup = Pick<ConfirmationQueue, 'getPending' | 'listPending' | 'resolve'>;

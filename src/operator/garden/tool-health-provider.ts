@@ -1,5 +1,5 @@
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { RuntimeHealthResult } from '../../gateway/protocol.js';
+import type { RuntimeHealthResult } from '../../boundary/gateway/protocol.js';
 import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,

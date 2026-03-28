@@ -15,7 +15,7 @@ import {
 import { createGatewayNtfyNotifier, type NtfyNotifier } from '../../tools/ntfy.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { GatewayClient } from '../../gateway/client.js';
+import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';

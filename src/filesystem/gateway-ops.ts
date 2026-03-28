@@ -1,4 +1,4 @@
-import type { GatewayClient } from '../gateway/client.js';
+import type { GatewayClient } from '../boundary/gateway/client.js';
 import type { FilesystemReadOperations } from './ops.js';
 
 export class GatewayFilesystemOps implements FilesystemReadOperations {

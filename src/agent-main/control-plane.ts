@@ -10,7 +10,7 @@ import type { EventBus } from '../shared/event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { ModuleLoader } from '../modules/loader.js';
 import type { MemoryExtractor } from '../memory/extraction.js';
-import type { GatewayClient } from '../gateway/client.js';
+import type { GatewayClient } from '../boundary/gateway/client.js';
 import type { CapabilityRuntime } from '../system/capabilities/runtime.js';
 import type { LifecycleRestartSafeguard, ExternalCommunicationRateLimiter } from '../system/capabilities/safeguards.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';

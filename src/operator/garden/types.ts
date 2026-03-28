@@ -19,7 +19,7 @@ import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
   ConfirmationResolveResult,
-} from '../../gateway/protocol.js';
+} from '../../boundary/gateway/protocol.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 
 export interface ConfirmationQueueAdminApi {

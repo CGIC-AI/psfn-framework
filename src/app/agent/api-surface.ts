@@ -18,7 +18,7 @@ import {
 } from '../../channels/config.js';
 import type { ChannelAdapter } from '../../channels/types.js';
 import type { ContactStore } from '../../contacts/store.js';
-import type { GatewayClient } from '../../gateway/client.js';
+import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { MemoryStore } from '../../memory/store.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { EventBus } from '../../shared/event-bus.js';

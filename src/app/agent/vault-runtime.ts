@@ -1,5 +1,5 @@
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
-import type { GatewayClient } from '../../gateway/client.js';
+import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 

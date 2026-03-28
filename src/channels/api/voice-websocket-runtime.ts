@@ -38,7 +38,7 @@ import type {
   WebSocketVoiceSession,
 } from '../../voice/transports/websocket/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import type { WebRequestBinaryResult } from '../../gateway/protocol.js';
+import type { WebRequestBinaryResult } from '../../boundary/gateway/protocol.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,

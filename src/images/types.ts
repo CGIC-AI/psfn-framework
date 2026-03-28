@@ -1,6 +1,6 @@
 import { isRecord } from '../shared/utils/types.js';
 import type { CredentialVaultPort } from '../custody/credential-vault.js';
-import type { DnsResolver } from '../gateway/url-policy.js';
+import type { DnsResolver } from '../boundary/gateway/url-policy.js';
 
 export const FAL_CREATE_MODELS = [
   'fal-ai/nano-banana-2',

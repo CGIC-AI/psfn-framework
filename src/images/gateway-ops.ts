@@ -1,4 +1,4 @@
-import type { GatewayClient } from '../gateway/client.js';
+import type { GatewayClient } from '../boundary/gateway/client.js';
 import type { ImageOperations } from './ops.js';
 import type {
   ImageCreateParams,

@@ -1,4 +1,4 @@
-import { evaluateUrlPolicy, checkResolvedIP, resolveMaxRedirectHops, type UrlPolicyConfig } from '../gateway/url-policy.js';
+import { evaluateUrlPolicy, checkResolvedIP, resolveMaxRedirectHops, type UrlPolicyConfig } from '../boundary/gateway/url-policy.js';
 import { WEB_FETCH_TIMEOUT_MS, WEB_FETCH_USER_AGENT } from '../system/security/policy-constants.js';
 import type { ImageRuntimeConfig } from './types.js';
 

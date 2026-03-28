@@ -1,4 +1,4 @@
-import type { ShellExecPolicyConfig } from '../gateway/policy.js';
+import type { ShellExecPolicyConfig } from '../boundary/gateway/policy.js';
 import { executeShellCommandWithPolicy } from '../execution/shell-runner.js';
 import type { SandboxExecutionPort } from './sandbox-capabilities/contracts.js';
 

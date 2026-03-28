@@ -3,7 +3,7 @@ import type { SubstrateConfig } from '../system/config/runtime-config-contracts.
 import type { EventBus } from '../shared/event-bus.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryJournal } from '../memory/journal.js';
-import type { GatewayClient } from '../gateway/client.js';
+import type { GatewayClient } from '../boundary/gateway/client.js';
 import type { EmotionRuntimeWiring } from '../agent/substrate-agent.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import type { CoreMemoryStore } from '../core-memory/store.js';

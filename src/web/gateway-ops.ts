@@ -1,5 +1,5 @@
-import type { GatewayClient } from '../gateway/client.js';
-import type { WebFetchLane } from '../gateway/protocol.js';
+import type { GatewayClient } from '../boundary/gateway/client.js';
+import type { WebFetchLane } from '../boundary/gateway/protocol.js';
 import type { WebFetchOperations } from './ops.js';
 
 export class GatewayWebFetchOps implements WebFetchOperations {

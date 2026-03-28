@@ -56,6 +56,27 @@ describe('wireGitRuntime', () => {
     ]));
   });
 
+  it('can register parent-agent read-only git inspection tools only', () => {
+    const target = new FakeTarget();
+    const registerTool = vi.spyOn(target, 'registerTool');
+
+    wireGitRuntime(target, {
+      repoRoot: '/test',
+      allowedPaths: ['src/'],
+    }, {
+      access: 'read_only',
+    });
+
+    expect(target.tools.map(t => t.name).sort()).toEqual([
+      'repo_diff',
+      'repo_status',
+    ]);
+    expect(registerTool.mock.calls.map(([tool, category]) => [tool.name, category])).toEqual([
+      ['repo_status', 'core'],
+      ['repo_diff', 'core'],
+    ]);
+  });
+
   it('returns a GitOps instance', () => {
     const target = new FakeTarget();
     const gitOps = wireGitRuntime(target, { repoRoot: '/test' });
@@ -67,10 +88,11 @@ describe('wireGitRuntime', () => {
 });
 
 describe('entrypoint composition', () => {
-  it('agent-main.ts registers git tools via gateway-backed ops', async () => {
+  it('agent-main.ts registers parent git tools via gateway-backed read-only ops', async () => {
     const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
     const agentMainSource = fs.readFileSync(resolve('src/app/agent/main.ts'), 'utf-8');
     expect(agentMainSource).toContain('registerGitTools(');
     expect(agentMainSource).toContain('new GatewayGitOps(gateway)');
+    expect(agentMainSource).toContain("access: 'read_only'");
   });
 });

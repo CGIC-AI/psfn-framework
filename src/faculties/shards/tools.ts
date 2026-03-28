@@ -20,7 +20,8 @@ export function createSpawnShardTool(manager: ShardExecutionPort): AgentTool<any
     description:
       'Spawn a sub-agent shard for parallel task execution. ' +
       'Multiple spawn_shard calls in the same turn run concurrently. ' +
-      'Each shard is ephemeral — it runs a task and returns the result.',
+      'Each shard is ephemeral — it runs a task and returns the result. ' +
+      'For repository change work, the shard must return reviewable patch, artifact, or PR-style output rather than mutating the parent runtime in place.',
     label: BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
     parameters: Type.Object({
       name: Type.String({ description: 'Short label for this shard (e.g. "research", "analysis")' }),
@@ -109,6 +110,8 @@ export function createSpawnShardTool(manager: ShardExecutionPort): AgentTool<any
             }] satisfies TextContent[],
           details: {
             boundedSubagent,
+            mutationWorkflow: 'artifact_return_only',
+            returnedArtifacts: result.artifacts ?? [],
           },
         };
       } catch (error) {

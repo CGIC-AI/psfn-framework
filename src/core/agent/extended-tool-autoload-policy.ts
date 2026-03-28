@@ -55,10 +55,6 @@ export const DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS: ReadonlySet<string> = new S
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnIntent, readonly string[]>> = {
   dev: [
-    'repo_apply_patch',
-    'repo_commit',
-    'repo_create_branch',
-    'repo_open_pr',
     'issue_create',
     'issue_update',
     'issue_close',

@@ -59,6 +59,11 @@ export interface REPLConfig {
   executionTimeoutMs: number;
 }
 
+export interface REPLMutationPolicy {
+  allowRepoMutation?: boolean;
+  allowWorkspaceWrite?: boolean;
+}
+
 export interface NestedThinkOptions {
   maxIterations?: number;
   maxTokens?: number;
@@ -131,6 +136,7 @@ export interface REPLDeps {
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   requestMetadata?: Partial<LLMRequestMetadata>;
   config: REPLConfig;
+  mutationPolicy?: REPLMutationPolicy;
 }
 
 export interface ThinkEvidence {

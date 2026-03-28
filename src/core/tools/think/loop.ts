@@ -689,7 +689,7 @@ export async function runRLMLoop(
     nestedThinkAvailable: nestedThinkPolicy.allowed && depth < MAX_NESTED_THINK_DEPTH,
   };
 
-  const systemPrompt = buildRLMSystemPrompt(metadata);
+  const systemPrompt = buildRLMSystemPrompt(metadata, deps.mutationPolicy);
 
   const messages: ContextMessage[] = [
     { role: 'user', content: task },

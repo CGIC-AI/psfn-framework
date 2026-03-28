@@ -3625,87 +3625,32 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
 
-    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_create_branch'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_open_pr'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('issue_create'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('issue_update'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('issue_close'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('issue_sync'), 'extended');
 
     const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
 
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-order',
       channelType: 'terminal',
-      content: 'Please inspect repo diff and patch the bug',
+      content: 'Please open and update an issue for this bug',
     }));
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toContain('repo_apply_patch');
-    expect(toolNames).toContain('repo_commit');
-    expect(toolNames).toContain('repo_create_branch');
-    expect(toolNames).not.toContain('repo_open_pr');
+    expect(toolNames).toContain('issue_create');
+    expect(toolNames).toContain('issue_update');
+    expect(toolNames).toContain('issue_close');
+    expect(toolNames).not.toContain('issue_sync');
 
-    const patchIndex = toolNames.indexOf('repo_apply_patch');
-    const commitIndex = toolNames.indexOf('repo_commit');
-    const branchIndex = toolNames.indexOf('repo_create_branch');
-    expect(patchIndex).toBeGreaterThanOrEqual(0);
-    expect(commitIndex).toBeGreaterThan(patchIndex);
-    expect(branchIndex).toBeGreaterThan(commitIndex);
-  });
-
-  it('skips capability-denied autoload candidates and emits skip telemetry', async () => {
-    const config = makeConfig({ capabilityTier: 'nursery' });
-    const eventBus = new EventBus();
-    const agent = new SubstrateAgent(
-      eventBus,
-      makeMockLLMProvider(),
-      makeMockSessionManager(),
-      'Base prompt',
-      config,
-    );
-
-    agent.registerTool(makeExtendedProbeTool('repo_apply_patch'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('repo_commit'), 'extended');
-
-    const autoloadSummaries: any[] = [];
-    const autoloadSkips: any[] = [];
-    (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
-    (eventBus as any).on('agent.tools.autoload.skipped', (payload: any) => { autoloadSkips.push(payload); });
-
-    const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
-
-    await agent.handleMessage(makeMessage({
-      id: 'msg-autoload-denied',
-      channelType: 'terminal',
-      content: 'repo diff this branch and apply patch',
-    }));
-
-    const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).not.toContain('repo_apply_patch');
-    expect(toolNames).not.toContain('repo_commit');
-
-    const summary = autoloadSummaries.at(-1);
-    expect(summary?.intent).toBe('dev');
-    expect(summary?.skippedDenied).toEqual([
-      {
-        toolName: 'repo_apply_patch',
-        missingTokens: ['git.write'],
-      },
-      {
-        toolName: 'repo_commit',
-        missingTokens: ['git.write'],
-      },
-    ]);
-
-    expect(autoloadSkips).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          reason: 'capability_denied',
-          toolName: 'repo_apply_patch',
-        }),
-      ]),
-    );
+    const createIndex = toolNames.indexOf('issue_create');
+    const updateIndex = toolNames.indexOf('issue_update');
+    const closeIndex = toolNames.indexOf('issue_close');
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    expect(updateIndex).toBeGreaterThan(createIndex);
+    expect(closeIndex).toBeGreaterThan(updateIndex);
   });
 
   it('falls back cleanly when autoload candidates are unavailable', async () => {
@@ -3718,7 +3663,6 @@ describe('SubstrateAgent.handleMessage', () => {
       'Base prompt',
       config,
     );
-    agent.registerTool(makeExtendedProbeTool('prompt_layer_update'), 'extended');
 
     const autoloadSummaries: any[] = [];
     (eventBus as any).on('agent.tools.autoload', (payload: any) => { autoloadSummaries.push(payload); });
@@ -3728,22 +3672,14 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage({
       id: 'msg-autoload-fallback',
       channelType: 'terminal',
-      content: 'Please apply a repo patch for me',
+      content: 'Please open and update the issue for this bug',
     }));
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
     expect(toolNames).toEqual(['load_tools']);
 
-    const summary = autoloadSummaries.at(-1);
-    expect(summary?.intent).toBe('dev');
-    expect(summary?.activated).toEqual([]);
-    expect(summary?.unavailable).toEqual(expect.arrayContaining([
-      'repo_apply_patch',
-      'repo_commit',
-      'repo_create_branch',
-    ]));
-    expect(summary?.unavailable.length).toBeGreaterThanOrEqual(3);
+    expect(autoloadSummaries).toEqual([]);
   });
 
   it('excludes background-only tools from foreground autoload overlay selection', async () => {
@@ -3854,8 +3790,6 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(snapshot?.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'ghost_tool', source: 'promoted', reason: 'not_registered' }),
-      expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', reason: 'capability_denied' }),
-      expect.objectContaining({ toolName: 'repo_commit', source: 'autoload', reason: 'capability_denied' }),
     ]));
     expect(snapshot?.counts).toMatchObject({
       core: 1,
@@ -3869,8 +3803,6 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(adaptiveDecisions).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded', decision: 'activated' }),
       expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred', decision: 'activated' }),
-      expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
-      expect.objectContaining({ toolName: 'repo_commit', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'load_tools', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),

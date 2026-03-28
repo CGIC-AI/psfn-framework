@@ -32,6 +32,7 @@ describe('createSpawnShardTool', () => {
           embodimentId: 'display',
           siteId: 'ha-main',
           satelliteId: 'kitchen',
+          companionId: 'companion-test',
         },
       },
       async () => {
@@ -60,6 +61,7 @@ describe('createSpawnShardTool', () => {
               embodimentId: 'display',
               siteId: 'ha-main',
               satelliteId: 'kitchen',
+              companionId: 'companion-test',
             },
           },
         }));
@@ -84,6 +86,7 @@ describe('createSpawnShardTool', () => {
                   embodimentId: 'display',
                   siteId: 'ha-main',
                   satelliteId: 'kitchen',
+                  companionId: 'companion-test',
                 },
               },
             },
@@ -100,6 +103,8 @@ describe('createSpawnShardTool', () => {
               stateReason: 'completed',
             },
           },
+          mutationWorkflow: 'artifact_return_only',
+          returnedArtifacts: [],
         });
       },
     );

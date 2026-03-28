@@ -2,21 +2,13 @@
 // Runs inside a --network=none container. Connects to gateway via Unix socket.
 // Run: npx tsx src/app/agent/main.ts
 
-import { randomUUID } from 'node:crypto';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { loadConfig } from '../../system/config/load-config.js';
-import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { EmotionObserver } from '../../emotion/observer.js';
-import { EmotionState } from '../../emotion/state.js';
-import { getSharedAudioEmotionClassifier } from '../../emotion/audio-classifier.js';
-import { SalienceDecay } from '../../memory/decay.js';
-import { Scheduler } from '../../scheduler/scheduler.js';
 import { GatewayClient } from '../../gateway/client.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
 import { resolveBackupRuntimeConfig } from '../../backup/config.js';
-import { registerScheduledBackupTask } from '../../backup/service.js';
 import {
   createEmbeddingDimensionMismatchWarning,
   runDatabaseIntegrityCheck,
@@ -29,16 +21,12 @@ import { registerGitTools } from '../../git/runtime-wiring.js';
 import { GatewayGitOps } from '../../git/gateway-ops.js';
 import { registerBeadsTools } from '../../beads/runtime-wiring.js';
 import { GatewayBeadsOps } from '../../beads/gateway-ops.js';
-import { writeLastActiveSession } from '../../system/lifecycle/notifications.js';
 import {
   RUNTIME_MODE,
 } from '../../system/lifecycle/runtime-mode.js';
-import { inferSessionChannelType } from '../../session/session-id.js';
-import { createGatewayNtfyNotifier } from '../../tools/ntfy.js';
 import { attachTerminalDebugObserver } from '../../debug/terminal-observer.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../intention/patterns.js';
 import {
-  composeIdentity,
   wireShardAndThinkRuntime,
 } from '../../bootstrap/composition.js';
 import { buildShellExecPolicyConfig } from '../../execution/shell-policy-config.js';
@@ -48,13 +36,10 @@ import {
   wireHeartbeatRuntime,
 } from '../../bootstrap/parity.js';
 import { createSqliteCompanionStore } from '../../persistence/sqlite-companion-store.js';
-import { wirePostTurnActionRuntime } from '../../bootstrap/post-turn-actions.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import {
   createEligibilityGate,
 } from '../../system/capabilities/eligibility.js';
-import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
-import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import { ModuleLoader } from '../../modules/loader.js';
 import {
   ensureRegistryFile,
@@ -66,31 +51,29 @@ import {
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from '../../agent-main/gateway-message-handlers.js';
 import {
-  resolveCharacterCardHistoryPath,
-  resolveMemoryJournalPath,
-  resolvePostTurnActionQueuePath,
-  resolveSessionsDir,
-} from '../../persistence/layout.js';
-import {
   buildRuntimeChannelsConfigOverrides,
 } from '../../runtime/bootstrap-helpers.js';
 import { resolveStartupPreflightBundle } from '../../runtime/startup-preflight.js';
-import {
-  createStartupTextEmotionClassifier,
-  warmRuntimeMlServices,
-} from '../../runtime/ml-warmup.js';
 import { emitEligibilityDecisionTelemetry } from '../../runtime/eligibility-telemetry.js';
-import { createRuntimeSafeguardSurfaces } from '../../runtime/safeguard-surfaces.js';
 import { createSignalShutdownHandler } from '../../runtime/signal-shutdown.js';
-import { buildAgentCoreRuntime } from '../../agent-main/core-runtime.js';
 import { buildAgentControlPlane } from '../../agent-main/control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from '../../agent-main/control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../repl/sandbox-execution-broker.js';
+import {
+  bootstrapAgentCoreRuntime,
+} from './core-bootstrap.js';
 import {
   startOptionalApiServer,
   resolveAgentApiSurfaceBindings,
 } from './api-surface.js';
 import { startOptionalAdminServer } from './admin-surface.js';
+import {
+  buildAgentSchedulerRuntime,
+} from './scheduler-runtime.js';
+import {
+  createSessionActivityTracker,
+  writeStartupSessionMetadata,
+} from './session-activity.js';
 import {
   enforceNetworkIsolationOnStartup,
   logStartupHydrationDiagnostics,
@@ -104,7 +87,6 @@ const log = createComponentLogger('Agent');
 ensureActiveTimezone();
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
-const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -208,70 +190,26 @@ async function main(): Promise<void> {
   const {
     card,
     systemPrompt,
-  } = composeIdentity(config);
-  const cardVersionStore = new CharacterCardVersionStore(
-    config.characterCardPath,
-    resolveCharacterCardHistoryPath(pathSnapshot.companionDataDir),
-  );
-  const cardProposalQueue = new ConfirmationQueue({
-    idFactory: () => `card-${randomUUID()}`,
-  });
-  log.info(`Loaded character: ${card.data.name}`);
-  config.characterName = card.data.name;
-  const restartBehavior = config.sessionRestartBehavior ?? 'reuse_latest_session';
-
-  // ── Agent loop (uses gateway as LLM provider) ──
-
-  const textClassifier = createStartupTextEmotionClassifier({
-    model: config.textEmotionModel,
-    cacheDir: config.textEmotionCacheDir,
-    dtype: config.textEmotionDtype,
-  });
-  await warmRuntimeMlServices({
-    textClassifier,
-    embeddingService: gateway,
-    textEmotionModel: config.textEmotionModel!.trim(),
-    logger: log,
-  });
-  const emotionObserver = new EmotionObserver({
-    textClassifier,
-    audioClassifier: getSharedAudioEmotionClassifier(),
-  });
-  const emotionState = new EmotionState();
-  const operatorNotifier = createGatewayNtfyNotifier(gateway);
-  const {
-    safeguardAuditTrail,
-    identityCoolingOff,
-    lifecycleRestartSafeguard,
-    externalRateLimiter,
-  } = createRuntimeSafeguardSurfaces(pathSnapshot.companionDataDir, process.env);
-
-  const coreRuntime = await buildAgentCoreRuntime({
+    cardVersionStore,
+    cardProposalQueue,
+    coreRuntime,
+    emotionState,
+    operatorNotifier,
+    safeguardSurfaces,
+  } = await bootstrapAgentCoreRuntime({
     config,
     pathSnapshot,
     eventBus,
     gateway,
     db,
     memoryStore: companionMemoryStore,
-    card,
-    systemPrompt,
     capabilityRuntime,
-    cardVersionStore,
-    cardProposalQueue,
-    emotionRuntime: {
-      observer: emotionObserver,
-      state: emotionState,
-      requireWiring: true,
-    },
-    operatorNotifier,
-    identityCoolingOff,
-    primaryUserId: process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID,
-    primaryTelegramUserId: (
-      process.env.PRIMARY_TELEGRAM_USER_ID
-      ?? process.env.TELEGRAM_PRIMARY_USER_ID
-      ?? ''
-    ).trim() || undefined,
   });
+  const {
+    safeguardAuditTrail,
+    lifecycleRestartSafeguard,
+    externalRateLimiter,
+  } = safeguardSurfaces;
 
   const {
     agentLoop,
@@ -290,23 +228,11 @@ async function main(): Promise<void> {
   } = coreRuntime;
 
   sessionManager.characterName = card.data.name;
-  const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
-  if (startupSession) {
-    writeLastActiveSession(pathSnapshot.companionDataDir, startupSession);
-    if (restartBehavior === 'new_session') {
-      log.info('Initialized fresh startup session metadata', {
-        sessionId: startupSession.sessionId,
-        channelType: startupSession.channelType ?? 'unknown',
-        timestamp: startupSession.timestamp,
-      });
-    } else {
-      log.info('Restored latest session metadata', {
-        sessionId: startupSession.sessionId,
-        channelType: startupSession.channelType ?? 'unknown',
-        timestamp: startupSession.timestamp,
-      });
-    }
-  }
+  writeStartupSessionMetadata(
+    sessionManager,
+    pathSnapshot.companionDataDir,
+    config.sessionRestartBehavior ?? 'reuse_latest_session',
+  );
 
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
   const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
@@ -320,90 +246,19 @@ async function main(): Promise<void> {
     });
   }
 
-  const salienceDecay = new SalienceDecay(memoryStore);
-
-  // Scheduler — the companion's internal clock
-  const scheduler = new Scheduler(eventBus, {
-    tickIntervalMs: schedulerConfig.tickIntervalMs,
-    heartbeatIntervalMs: schedulerConfig.heartbeatIntervalMs,
-  }, {
-    eligibilityGate,
-  });
-  scheduler.register({
-    id: 'salience-decay',
-    name: 'Memory Salience Decay',
-    type: 'every',
-    intervalMs: config.maintenanceIntervalMs,
-    handler: () => salienceDecay.run(),
-    eligibility: { requiredTokens: ['memory.write'] },
-    state: 'idle',
-  });
-  scheduler.register({
-    id: COMPACTION_GUIDELINE_REVIEW_TASK_ID,
-    name: 'Compression Guideline Review',
-    type: 'every',
-    intervalMs: config.maintenanceIntervalMs,
-    handler: async () => {
-      const result = await sessionManager.runPeriodicCompressionGuidelineUpdate(gateway);
-      if (result.status === 'updated') {
-        log.info('Compression guideline updated from failure log review', {
-          version: result.version,
-          reviewedFailureCount: result.reviewedFailureCount,
-        });
-        return;
-      }
-      log.debug('Compression guideline review skipped', {
-        reason: result.reason,
-        reviewedFailureCount: result.reviewedFailureCount,
-      });
-    },
-    eligibility: { requiredTokens: ['memory.write'] },
-    state: 'idle',
-  });
-  registerScheduledBackupTask({
-    scheduler,
-    db,
-    databasePath: config.databasePath,
-    sessionsDir: resolveSessionsDir(pathSnapshot.companionDataDir),
-    memoriesJournalPath: resolveMemoryJournalPath(pathSnapshot.companionDataDir),
-    characterCardPath: config.characterCardPath,
-    characterCardHistoryPath: resolveCharacterCardHistoryPath(pathSnapshot.companionDataDir),
-    config: backupConfig,
-  });
-  log.info('Scheduled backups enabled', {
-    intervalMs: backupConfig.intervalMs,
-    maxRotatingBackups: backupConfig.maxRotatingBackups,
-    maxWeeklyBackups: backupConfig.maxWeeklyBackups,
-    maxMonthlyBackups: backupConfig.maxMonthlyBackups,
-    backupRootDir: backupConfig.rootDir,
-    mirrorDir: backupConfig.mirrorDir || '(none)',
-    verifyRestore: backupConfig.verifyRestore,
-  });
-  scheduler.registerHeartbeat(async () => {
-    const now = Date.now();
-    await eventBus.emit('schedule.heartbeat', { timestamp: now, taskCount: scheduler.taskCount });
-  });
-  const postTurnActions = wirePostTurnActionRuntime({
+  const { scheduler, postTurnActions } = buildAgentSchedulerRuntime({
     eventBus,
-    scheduler,
-    agentLoop,
     eligibilityGate,
-    persistencePath: resolvePostTurnActionQueuePath(pathSnapshot.companionDataDir),
+    config,
+    schedulerConfig,
+    sessionManager,
+    gateway,
+    memoryStore,
+    agentLoop,
+    db,
+    backupConfig,
+    pathSnapshot,
   });
-  eventBus.on('agent.turn.end', ({ message, response }) => {
-    const captured = sessionManager.recordCompressionFailureFromResponse(
-      message.channelId,
-      message.id,
-      response.content,
-    );
-    if (!captured) return;
-    log.info('Captured compression failure signal for guideline evolution', {
-      channelId: message.channelId,
-      sourceMessageId: message.id,
-    });
-  });
-  scheduler.start();
-  log.info(`Memory system enabled (${gateway.dims}d embeddings via gateway)`);
 
   const moduleLoader = new ModuleLoader({
     eventBus,
@@ -605,17 +460,10 @@ async function main(): Promise<void> {
     },
   );
 
-  const trackSessionActivity = (message: SubstrateMessage): void => {
-    const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
-    writeLastActiveSession(pathSnapshot.companionDataDir, {
-      sessionId,
-      channelId: message.channelId,
-      channelType: inferSessionChannelType(sessionId) ?? message.channelType,
-      timestamp: message.timestamp instanceof Date
-        ? message.timestamp.getTime()
-        : Date.now(),
-    });
-  };
+  const trackSessionActivity = createSessionActivityTracker(
+    sessionManager,
+    pathSnapshot.companionDataDir,
+  );
 
   // ── Register gateway inbound message handlers ──
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.

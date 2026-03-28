@@ -188,10 +188,6 @@ export function buildMetacognitivePersonaHint(flags: readonly MetacognitiveFlag[
   if (uncertainty) {
     guidance.push('Use tentative language and acknowledge uncertainty explicitly.');
   }
-  const avoidance = normalizedFlags.find(flag => flag.flag === 'avoidance' && flag.confidence >= 0.45);
-  if (avoidance) {
-    guidance.push('Address unresolved concerns directly before shifting topics.');
-  }
   const confabulationRisk = normalizedFlags.find(
     flag => flag.flag === 'confabulation_risk' && flag.confidence >= 0.45,
   );

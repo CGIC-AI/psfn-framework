@@ -10,6 +10,7 @@ import type { ImageVisionReviewer } from '../../images/types.js';
 import { runWithVisionToolRequestContext } from '../../images/request-context.js';
 import { runWithRequestContext } from '../../llm/request-context.js';
 import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
+import { countTokens } from '../../llm/tokens.js';
 import { createComponentLogger } from '../../logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -85,6 +86,10 @@ import {
   cloneObservedAdaptiveToolSnapshot,
   readActiveTurnToolSchemas,
 } from './turn-tool-context.js';
+import {
+  buildPromptSectionTelemetryList,
+  extractWrappedPromptSections,
+} from '../../prompt/sections.js';
 
 const log = createComponentLogger('SubstrateAgent');
 const VISION_TURN_TIMEOUT_MS = 10_000;
@@ -757,12 +762,50 @@ export async function handleMessageForTurn(
       assembledPrompt: fullPrompt,
       finalSystemPrompt: context.systemPrompt,
       messages: context.messages.map(contextMessage => ({ ...contextMessage })),
+      inputSections: buildPromptSectionTelemetryList([
+        {
+          id: 'rendered_static_prefix',
+          title: 'Rendered Static Prefix',
+          content: renderedStaticPrefix,
+        },
+        {
+          id: 'rendered_dynamic_suffix',
+          title: 'Rendered Dynamic Suffix',
+          content: renderedDynamicSuffix,
+        },
+        {
+          id: 'runtime_context',
+          title: 'Runtime Context',
+          content: runtimeContext,
+        },
+        {
+          id: 'memory_context',
+          title: 'Memory Context',
+          content: memoryContextBlock,
+        },
+        {
+          id: 'scratchpad_context',
+          title: 'Scratchpad Context',
+          content: scratchpadBlock,
+        },
+      ]),
+      runtimeContextSections: extractWrappedPromptSections(runtimeContext),
+      finalSystemSections: context.systemPromptSections ?? buildPromptSectionTelemetryList([
+        {
+          id: 'final_system_prompt',
+          title: 'Final System Prompt',
+          content: context.systemPrompt,
+        },
+      ]),
     };
     await emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: context.messages.length,
       systemPromptChars: context.systemPrompt.length,
+      systemPromptTokens: countTokens(context.systemPrompt),
+      assembledPromptChars: fullPrompt.length,
+      assembledPromptTokens: countTokens(fullPrompt),
       promptMode: promptOverride.mode,
     });
 

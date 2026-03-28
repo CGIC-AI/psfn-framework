@@ -399,10 +399,7 @@ export class ValuesJournalStore {
     }
 
     const lines = [
-      'Secondary companion-values layer derived from append-only values journal history.',
-      `history_depth: ${String(selected.length)}`,
-      `latest_version: ${String(selected[selected.length - 1]!.version)}`,
-      '',
+      'Recent companion-derived values and reflections from the append-only journal.',
       '[History]',
       ...selected.map(entry => toCompanionHistoryLine(entry)),
     ];

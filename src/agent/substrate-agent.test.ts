@@ -2156,6 +2156,8 @@ describe('SubstrateAgent.handleMessage', () => {
           purpose: 'chat',
         },
       }),
+      undefined,
+      undefined,
     );
   });
 
@@ -2191,6 +2193,7 @@ describe('SubstrateAgent.handleMessage', () => {
           purpose: 'chat',
         },
       }),
+      undefined,
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[2]).toContain('Relevant memories here');
@@ -2229,10 +2232,12 @@ describe('SubstrateAgent.handleMessage', () => {
         isDirectMessage: undefined,
         messageText: 'heartbeat check',
         modelSelection: {
-          purpose: 'chat',
+          purpose: 'memory',
         },
         taskKind: 'heartbeat',
       }),
+      undefined,
+      undefined,
     );
   });
 
@@ -2266,11 +2271,8 @@ describe('SubstrateAgent.handleMessage', () => {
     });
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain(
-      `Speaking with: ${TEST_COMPANION_NAME} `
-      + `(userId: ${DEFAULT_COMPANION_ID}, canonicalId: ${DEFAULT_COMPANION_ID}, trust: primary)`,
-    );
-    expect(prompt).not.toContain('userId: scheduler');
+    expect(prompt).toContain(`This is an internal ${channelId.includes('reflection') ? 'reflection' : 'heartbeat'} turn.`);
+    expect(prompt).not.toContain('scheduler');
   });
 
   it('triggers memory extraction after response', async () => {
@@ -3054,7 +3056,7 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
-  it('injects appearance context for scheduled internal heartbeat turns', async () => {
+  it('does not inject appearance context unless self-image tools are active', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
@@ -3077,7 +3079,7 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain('Appearance context: Cat ears and tail with human hands.');
+    expect(prompt).not.toContain('Appearance context: Cat ears and tail with human hands.');
   });
 
   it('prefers channel prompt adapter channelType from the runtime registry', async () => {
@@ -3178,8 +3180,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
+    expect(prompt).toContain('<response_style_guidance>');
     expect(prompt).toContain('[Response Style Guidance]');
-    expect(prompt).toContain('Response style preference: expressive');
     expect(prompt).toContain('Prefer expressive responses');
   });
 
@@ -3211,9 +3213,9 @@ describe('SubstrateAgent.handleMessage', () => {
     const voicePrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
     const telegramPrompt = (sessionManager.buildContext as any).mock.calls[2][1] as string;
 
-    expect(guildPrompt).toContain('Response style preference: concise');
-    expect(voicePrompt).toContain('Response style preference: concise');
-    expect(telegramPrompt).toContain('Response style preference: concise');
+    expect(guildPrompt).toContain('<response_style_guidance>');
+    expect(voicePrompt).toContain('<response_style_guidance>');
+    expect(telegramPrompt).toContain('<response_style_guidance>');
     expect(guildPrompt).toContain('Prefer concise responses');
   });
 
@@ -3235,7 +3237,7 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain('Response style preference: concise');
+    expect(prompt).toContain('<response_style_guidance>');
     expect(prompt).toContain('Prefer concise responses');
   });
 
@@ -3259,7 +3261,8 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain('Response style preference: concise');
+    expect(prompt).toContain('<response_style_guidance>');
+    expect(prompt).toContain('Prefer concise responses');
   });
 
   it('interpolates {{user}} and {{char}} variables per turn before context build', async () => {
@@ -4169,15 +4172,20 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
-    expect(prompt).toContain('[Active Concerns]');
+    expect(prompt).toContain('<open_threads>');
+    expect(prompt).toContain('[Open Threads]');
+    expect(prompt).toContain('soft threads to verify');
     expect(prompt).toContain('Check whether V ate today');
-    expect(prompt).toContain('contact=user-123');
     expect(prompt).toContain('high');
   });
 
-  it('injects behavioral notes into runtime context when provider is wired', async () => {
+  it('does not inject behavioral notes into runtime context when provider is wired', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
+    const getBehavioralNotes = vi.fn().mockReturnValue([
+      '[Behavioral Notes]',
+      '- empathy: avg +0.42 over 3 outcome sample(s), 100% positive',
+    ].join('\n'));
     const agent = new SubstrateAgent(
       new EventBus(),
       makeMockLLMProvider(),
@@ -4186,10 +4194,7 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
     agent.setBehavioralPatternProvider({
-      getBehavioralNotes: vi.fn().mockReturnValue([
-        '[Behavioral Notes]',
-        '- empathy: avg +0.42 over 3 outcome sample(s), 100% positive',
-      ].join('\n')),
+      getBehavioralNotes,
     });
 
     await agent.handleMessage(makeMessage({
@@ -4198,8 +4203,9 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
-    expect(prompt).toContain('[Behavioral Notes]');
-    expect(prompt).toContain('empathy: avg +0.42');
+    expect(getBehavioralNotes).toHaveBeenCalled();
+    expect(prompt).not.toContain('[Behavioral Notes]');
+    expect(prompt).not.toContain('empathy: avg +0.42');
   });
 
   it('injects bounded scratchpad notes into system context when scratchpad provider is wired', async () => {
@@ -4314,9 +4320,10 @@ describe('SubstrateAgent.handleMessage', () => {
       const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
       const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
       expect(firstPrompt).toContain('[Internal State]');
-      expect(firstPrompt).toContain('Top emotions: joy=');
-      expect(secondPrompt).toContain('Top emotions: anger=');
-      expect(secondPrompt).toContain('Metacognitive flags:');
+      expect(firstPrompt).toContain('joy and trust present');
+      expect(secondPrompt).toContain('Current affect:');
+      expect(secondPrompt).toContain('anger');
+      expect(secondPrompt).not.toContain('Metacognitive flags:');
 
       const firstAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[0][5] as { metadata?: string };
       const secondAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[1][5] as { metadata?: string };
@@ -4424,8 +4431,9 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
     expect(prompt).toContain('[Internal State]');
-    expect(prompt).toContain('Active concern refs: concern-1:high');
-    expect(prompt).toContain('Relationship: trust=trusted, contact=contact-123');
+    expect(prompt).toContain('Relationship baseline: trusted trust');
+    expect(prompt).toContain('[Open Threads]');
+    expect(prompt).toContain('Confirm release rollback owner');
   });
 
   it('derives metacognitive flags from internal state and injects compact notes on subsequent turns', async () => {
@@ -4504,9 +4512,9 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
     expect(secondPrompt).toContain('[Internal State]');
-    expect(secondPrompt).toContain('Metacognitive flags:');
-    expect(secondPrompt).toContain('uncertainty');
+    expect(secondPrompt).not.toContain('Metacognitive flags:');
     expect(secondPrompt).toContain('[Metacognitive Persona Guidance]');
+    expect(secondPrompt).toContain('Use tentative language and acknowledge uncertainty explicitly.');
   });
 
   it('runs post-turn emotion appraisal and injects appraisal chain on the next turn', async () => {

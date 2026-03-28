@@ -5,7 +5,7 @@ import type { MemoryWithheldSummary } from '../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../memory/store.js';
 import type { PurrMemory } from '../memory/types.js';
 import type { SessionEntry } from '../session/types.js';
-import type { ContextMessage, ToolSchema, TurnID } from '../types.js';
+import type { ContextMessage, PromptSectionTelemetry, ToolSchema, TurnID } from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
 
 export interface TurnPromptSnapshot {
@@ -48,6 +48,9 @@ export interface TurnPromptContextSnapshot {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: ContextMessage[];
+  inputSections?: PromptSectionTelemetry[];
+  runtimeContextSections?: PromptSectionTelemetry[];
+  finalSystemSections?: PromptSectionTelemetry[];
 }
 
 export interface TurnToolContextSnapshot {

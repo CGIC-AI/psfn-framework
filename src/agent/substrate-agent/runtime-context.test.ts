@@ -93,13 +93,11 @@ describe('runtime subject identity', () => {
       formatTopEmotions: () => '',
     });
 
-    expect(runtimeContext).toContain(
-      `Speaking with: Companion `
-      + `(userId: ${DEFAULT_COMPANION_ID}, canonicalId: ${DEFAULT_COMPANION_ID}, trust: primary)`,
-    );
+    expect(runtimeContext).toContain('<runtime_context>');
+    expect(runtimeContext).toContain('This is an internal reflection turn.');
     expect(runtimeContext).not.toContain('userId: scheduler');
     expect(runtimeContext).not.toContain('Channel: internal:reflection:whisper');
-    expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
+    expect(runtimeContext).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
   });
 
   it('uses routed channel privacy in prompt variables and runtime context', () => {
@@ -158,7 +156,8 @@ describe('runtime subject identity', () => {
       formatTopEmotions: () => '',
     });
 
-    expect(runtimeContext).toContain('Channel: api:admin-broadcast (type: api, visibility: broadcast)');
+    expect(runtimeContext).toContain('Speaking with: Admin User (regular trust).');
+    expect(runtimeContext).toContain('Channel: api (broadcast).');
   });
 
   it('exposes appearance context on ordinary turns when image tools are active', () => {
@@ -315,9 +314,9 @@ describe('runtime subject identity', () => {
       formatTopEmotions: () => '',
     });
 
-    expect(runtimeContext).toContain('Attention: trajectory=deepening, salient_entities=2, active_concerns=2, pending_follow_ups=1');
-    expect(runtimeContext).toContain('Active concern refs: concern-1:medium, concern-2:low');
-    expect(runtimeContext).toContain('Pending follow-up refs: follow-up-1:soon');
+    expect(runtimeContext).toContain('<internal_state>');
+    expect(runtimeContext).toContain('Attention: deepening, 2 open threads, 1 pending follow-up.');
+    expect(runtimeContext).toContain('Relationship baseline: primary trust');
   });
 
   it('uses persisted conversation-channel privacy and records it on activity', () => {

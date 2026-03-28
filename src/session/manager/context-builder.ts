@@ -42,6 +42,7 @@ import {
 import { runAutoCompaction } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
+import { buildPromptSectionTelemetryList } from '../../prompt/sections.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
@@ -362,10 +363,39 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   };
   log.debug('Built context manifest', manifest);
 
+  const systemPromptSections = buildPromptSectionTelemetryList([
+    {
+      id: 'pre_session_prompt',
+      title: 'Pre-Session Prompt',
+      content: params.systemPrompt,
+    },
+    {
+      id: 'core_memory',
+      title: 'Core Memory',
+      content: coreMemorySectionText,
+    },
+    {
+      id: 'retrieved_memory',
+      title: 'Retrieved Memory',
+      content: memorySectionText,
+    },
+    {
+      id: 'previous_conversation_summary',
+      title: 'Previous Conversation Summary',
+      content: compactionSummarySectionText,
+    },
+    {
+      id: 'focus_knowledge',
+      title: 'Focus Knowledge',
+      content: focusKnowledgeSectionText,
+    },
+  ]);
+
   return {
     systemPrompt: fullSystem,
     messages,
     manifest,
+    systemPromptSections,
   };
 }
 

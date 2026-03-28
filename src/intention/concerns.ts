@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { formatActiveDateTimeLabel } from '../time/active-timezone.js';
+import { wrapPromptSectionXml } from '../prompt/sections.js';
 
 export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
 export type ActiveConcernPriority = typeof ACTIVE_CONCERN_PRIORITIES[number];
@@ -83,8 +84,8 @@ const MAX_CONCERN_TEXT_CHARS = 500;
 const MAX_CONCERN_RESOLUTION_CHARS = 400;
 const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
-const DEFAULT_RUNTIME_CONTEXT_LIMIT = 6;
-const MAX_RUNTIME_CONTEXT_TEXT_CHARS = 180;
+const DEFAULT_RUNTIME_CONTEXT_LIMIT = 3;
+const MAX_RUNTIME_CONTEXT_TEXT_CHARS = 140;
 const DEFAULT_RECENT_RESOLUTION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_RECENT_RESOLUTION_LIMIT = 8;
 const CONCERN_DUPLICATE_SIMILARITY_THRESHOLD = 0.72;
@@ -243,6 +244,31 @@ function scoreConcernTextSimilarity(left: string, right: string): number {
   return (2 * intersection) / (leftTokens.length + rightTokens.length);
 }
 
+function softenConcernText(value: string): string {
+  const normalized = compactWhitespace(value)
+    .replace(/^user['’]s\s+/i, '')
+    .replace(/^purrsephone['’]s\s+/i, '')
+    .replace(/\bactive concern\b/gi, 'open thread')
+    .replace(/\bconcern\b/gi, 'thread');
+  if (normalized.length <= MAX_RUNTIME_CONTEXT_TEXT_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_RUNTIME_CONTEXT_TEXT_CHARS - 3)}...`;
+}
+
+function dedupeConcernsForRuntime(concerns: readonly ActiveConcern[]): ActiveConcern[] {
+  const selected: ActiveConcern[] = [];
+  for (const concern of concerns) {
+    const isDuplicate = selected.some(existing => (
+      scoreConcernTextSimilarity(existing.text, concern.text) >= CONCERN_DUPLICATE_SIMILARITY_THRESHOLD
+    ));
+    if (!isDuplicate) {
+      selected.push(concern);
+    }
+  }
+  return selected;
+}
+
 function serializeFormationVAD(value: ActiveConcernVAD | undefined): string | null {
   if (!value) return null;
   return JSON.stringify(value);
@@ -335,31 +361,30 @@ export function formatActiveConcernsContextBlock(
 ): string {
   if (concerns.length === 0) return '';
   const normalizedLimit = clampListLimit(limit);
-  const selected = concerns.slice(0, normalizedLimit);
+  const deduped = dedupeConcernsForRuntime(concerns);
+  const selected = deduped.slice(0, normalizedLimit);
   const lines = [
-    '[Active Concerns]',
+    '[Open Threads]',
+    'Treat these as soft threads to verify, not alarms that must dominate the turn.',
   ];
 
   for (const concern of selected) {
-    const text = concern.text.length > MAX_RUNTIME_CONTEXT_TEXT_CHARS
-      ? `${concern.text.slice(0, MAX_RUNTIME_CONTEXT_TEXT_CHARS - 3)}...`
-      : concern.text;
-    const contactDescriptor = concern.contactId ? `contact=${concern.contactId}` : 'contact=global';
     const expiresAtMs = Date.parse(concern.expiresAt);
     const expiresAtLabel = Number.isFinite(expiresAtMs)
       ? formatActiveDateTimeLabel(new Date(expiresAtMs))
       : concern.expiresAt;
-    lines.push(
-      `- (${concern.priority}, ${concern.source}, ${contactDescriptor}, expires=${expiresAtLabel}) ${text}`,
-    );
+    lines.push(`- ${softenConcernText(concern.text)} [${concern.priority}; revisit before ${expiresAtLabel}]`);
   }
 
-  const omitted = concerns.length - selected.length;
+  const omitted = deduped.length - selected.length;
   if (omitted > 0) {
-    lines.push(`- (${omitted} additional concerns omitted for context budget)`);
+    lines.push(`- ${String(omitted)} additional lower-salience thread${omitted === 1 ? '' : 's'} omitted.`);
   }
 
-  return lines.join('\n');
+  return wrapPromptSectionXml({
+    id: 'open_threads',
+    content: lines.join('\n'),
+  });
 }
 
 export class ActiveConcernStore implements ActiveConcernContextProvider {

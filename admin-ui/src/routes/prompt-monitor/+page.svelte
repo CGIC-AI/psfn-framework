@@ -9,6 +9,7 @@
   import {
     connectGardenEventBus,
     disconnectGardenEventBus,
+    getGardenEvents,
     isGardenEventBusConnected,
     subscribeGardenEvents,
   } from '$lib/events/garden-event-bus.svelte';
@@ -39,6 +40,13 @@
   const selectedLogicalChannelId = $derived(selectedChannel?.channelId ?? null);
   const selectedTurn = $derived(turns.find(turn => turn.turnId === selectedTurnId) ?? turns[0] ?? null);
   const selectedTurnMetrics = $derived(selectedTurn ? resolvePromptMonitorMetrics(selectedTurn) : null);
+  const selectedChannelEvents = $derived.by(() => {
+    if (!selectedLogicalChannelId) return [];
+    return getGardenEvents()
+      .filter(event => event.correlation.channelId === selectedLogicalChannelId)
+      .slice(-30)
+      .reverse();
+  });
   const summary = $derived(resolvePromptMonitorSummary(turns));
 
   function toTimestamp(value: number | string | undefined): number | null {
@@ -129,6 +137,11 @@
     if (value < 1_000) return `${Math.round(value)}ms`;
     if (value < 60_000) return `${(value / 1_000).toFixed(2)}s`;
     return `${(value / 60_000).toFixed(2)}m`;
+  }
+
+  function formatTokenCount(value: number | null | undefined): string {
+    if (value == null) return '—';
+    return value.toLocaleString();
   }
 
   function formatTimestamp(value: number | null): string {
@@ -470,6 +483,14 @@
                       <p class="mt-1 text-shadow-900">{metrics?.systemPromptChars ?? '—'}</p>
                     </div>
                     <div>
+                      <p class="text-shadow-600">System Prompt Tokens</p>
+                      <p class="mt-1 text-shadow-900">{formatTokenCount(metrics?.systemPromptTokens)}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">Assembled Prompt Tokens</p>
+                      <p class="mt-1 text-shadow-900">{formatTokenCount(metrics?.assembledPromptTokens)}</p>
+                    </div>
+                    <div>
                       <p class="text-shadow-600">Context Messages</p>
                       <p class="mt-1 text-shadow-900">{metrics?.contextMessages ?? '—'}</p>
                     </div>
@@ -540,6 +561,47 @@
                 </div>
 
                 <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <div class="rounded-xl border border-bark-200 bg-white p-4">
+                    <h3 class="font-medium text-shadow-900">Prompt Section Sizes</h3>
+                    <div class="mt-3 space-y-3">
+                      <div>
+                        <p class="text-sm font-medium text-shadow-800">Final System Prompt Sections</p>
+                        {#if selectedTurn.snapshot?.promptContext?.finalSystemSections?.length}
+                          <div class="mt-2 space-y-2">
+                            {#each selectedTurn.snapshot.promptContext.finalSystemSections as section}
+                              <div class="rounded-lg border border-bark-200 px-3 py-2 text-sm">
+                                <div class="flex items-center justify-between gap-3">
+                                  <span class="font-medium text-shadow-900">{section.title}</span>
+                                  <span class="text-shadow-600">{formatTokenCount(section.tokenCount)} tok · {section.charCount} ch</span>
+                                </div>
+                              </div>
+                            {/each}
+                          </div>
+                        {:else}
+                          <p class="mt-2 text-sm text-shadow-600">No final system section telemetry recorded.</p>
+                        {/if}
+                      </div>
+
+                      <div>
+                        <p class="text-sm font-medium text-shadow-800">Runtime Context Sections</p>
+                        {#if selectedTurn.snapshot?.promptContext?.runtimeContextSections?.length}
+                          <div class="mt-2 space-y-2">
+                            {#each selectedTurn.snapshot.promptContext.runtimeContextSections as section}
+                              <div class="rounded-lg border border-bark-200 px-3 py-2 text-sm">
+                                <div class="flex items-center justify-between gap-3">
+                                  <span class="font-medium text-shadow-900">{section.title}</span>
+                                  <span class="text-shadow-600">{formatTokenCount(section.tokenCount)} tok · {section.charCount} ch</span>
+                                </div>
+                              </div>
+                            {/each}
+                          </div>
+                        {:else}
+                          <p class="mt-2 text-sm text-shadow-600">No runtime section telemetry recorded.</p>
+                        {/if}
+                      </div>
+                    </div>
+                  </div>
+
                   <div class="rounded-xl border border-bark-200 bg-white p-4">
                     <h3 class="font-medium text-shadow-900">Assembled Prompt</h3>
                     <div class="mt-3 space-y-3">
@@ -705,6 +767,36 @@
                       </div>
                     {/each}
                   </div>
+                </div>
+
+                <div class="rounded-xl border border-bark-200 bg-white p-4">
+                  <div class="flex items-center justify-between gap-3">
+                    <h3 class="font-medium text-shadow-900">Live Channel Bus</h3>
+                    <span class="text-sm text-shadow-600">{selectedChannelEvents.length} visible event{selectedChannelEvents.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {#if selectedChannelEvents.length === 0}
+                    <p class="mt-3 text-sm text-shadow-600">No live bus events for this channel are buffered right now.</p>
+                  {:else}
+                    <div class="mt-3 space-y-3 max-h-[28rem] overflow-y-auto">
+                      {#each selectedChannelEvents as event}
+                        <div class="rounded-lg border border-bark-200 p-3 text-sm">
+                          <div class="flex items-center justify-between gap-3">
+                            <span class="font-medium text-shadow-900">{event.type}</span>
+                            <span class="text-shadow-600">{formatTimestamp(event.timestamp)}</span>
+                          </div>
+                          <p class="mt-1 text-shadow-600">
+                            turn {truncateValue(event.correlation.turnId, 18)} · purpose {truncateValue(event.correlation.purpose, 24)}
+                          </p>
+                          <PromptMonitorTextBlock
+                            title="Event Payload"
+                            value={formatJson(event.data)}
+                            emptyText="No payload"
+                            maxHeightClass="max-h-48"
+                          />
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
                 </div>
               </div>
             {/if}

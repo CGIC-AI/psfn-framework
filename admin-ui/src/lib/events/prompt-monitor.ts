@@ -33,6 +33,9 @@ export interface PromptMonitorMetrics {
   promptMode: string | null;
   contextMessages: number | null;
   systemPromptChars: number | null;
+  systemPromptTokens: number | null;
+  assembledPromptChars: number | null;
+  assembledPromptTokens: number | null;
   memoryChars: number | null;
   totalElapsedMs: number | null;
   promptVersionPointer: string | null;
@@ -66,6 +69,21 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(message => ({ ...message })),
+          ...(snapshot.promptContext.inputSections
+            ? {
+              inputSections: snapshot.promptContext.inputSections.map(section => ({ ...section })),
+            }
+            : {}),
+          ...(snapshot.promptContext.runtimeContextSections
+            ? {
+              runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(section => ({ ...section })),
+            }
+            : {}),
+          ...(snapshot.promptContext.finalSystemSections
+            ? {
+              finalSystemSections: snapshot.promptContext.finalSystemSections.map(section => ({ ...section })),
+            }
+            : {}),
         },
       }
       : {}),
@@ -295,6 +313,9 @@ export function resolvePromptMonitorMetrics(turn: PromptMonitorTurn): PromptMoni
       ?? readString(turn.record?.versionPointers.promptMode),
     contextMessages: readNumber(contextStage?.data.contextMessages),
     systemPromptChars: readNumber(contextStage?.data.systemPromptChars),
+    systemPromptTokens: readNumber(contextStage?.data.systemPromptTokens),
+    assembledPromptChars: readNumber(contextStage?.data.assembledPromptChars),
+    assembledPromptTokens: readNumber(contextStage?.data.assembledPromptTokens),
     memoryChars: readNumber(memoryStage?.data.memoryChars),
     totalElapsedMs: endStage ? endStage.elapsedMs : null,
     promptVersionPointer: readString(turn.snapshot?.prompt?.versionPointer)

@@ -71,6 +71,7 @@ import {
   memoryMatchesScopeQuery,
   normalizeMemoryScopeQuery,
 } from './types.js';
+import { wrapPromptSectionXml } from '../prompt/sections.js';
 const log = createComponentLogger('Retrieval');
 
 /**
@@ -1834,7 +1835,10 @@ function renderPromptBlock(
 ): string {
   const sections: string[] = [];
   if (profile && profile.summary.trim().length > 0) {
-    sections.push(`Core profile for this person:\n${profile.summary.trim()}`);
+    sections.push(wrapPromptSectionXml({
+      id: 'core_profile',
+      content: `Core profile for this person:\n${profile.summary.trim()}`,
+    }));
   }
   if ((options?.socialContext?.relatedContactsById.size ?? 0) > 0) {
     sections.push(renderSocialContext(options.socialContext!));
@@ -1866,9 +1870,12 @@ function renderSocialContext(context: RetrievalSocialContext): string {
         ? contact.relationshipLabels.join(', ')
         : 'known relation';
       return `- ${contact.displayName} is a separate person connected to ${context.canonicalDisplayName} as ${relation}.`;
-    });
+  });
   lines.push(`- Keep memories about related people attributed to the named person instead of merging them into ${context.canonicalDisplayName}.`);
-  return `Relationship context for this person:\n${lines.join('\n')}`;
+  return wrapPromptSectionXml({
+    id: 'relationship_context',
+    content: `Relationship context for this person:\n${lines.join('\n')}`,
+  });
 }
 
 function renderEmotionalSnapshot(snapshot: EmotionalSnapshot): string {
@@ -1884,12 +1891,15 @@ function renderEmotionalSnapshot(snapshot: EmotionalSnapshot): string {
       ? 'active-session'
       : 'historical';
 
-  return [
+  return wrapPromptSectionXml({
+    id: 'emotional_continuity_snapshot',
+    content: [
     'Emotional continuity snapshot:',
     `- Baseline tone: ${describeValence(snapshot.baselineValence)} (${snapshot.baselineValence.toFixed(2)})`,
     `- Current mood drift: ${describeValence(snapshot.moodValence)} (${snapshot.moodValence.toFixed(2)}), drift ${moodDrift}`,
     `- Learned signals: ${snapshot.moodSamples}, freshness: ${freshness}`,
-  ].join('\n');
+    ].join('\n'),
+  });
 }
 
 function describeValence(valence: number): string {
@@ -1909,7 +1919,10 @@ function renderEmotionalContinuityMemories(memories: PurrMemory[]): string {
         : '';
     return `- [emotional] ${memory.text}${marker}`;
   });
-  return `Cross-session emotional continuity:\n${lines.join('\n')}`;
+  return wrapPromptSectionXml({
+    id: 'cross_session_emotional_continuity',
+    content: `Cross-session emotional continuity:\n${lines.join('\n')}`,
+  });
 }
 
 function renderWithheldSummary(summary: MemoryWithheldSummary): string {
@@ -1917,12 +1930,15 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
     .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
     .join(', ');
   const plural = summary.totalCount === 1 ? 'memory was' : 'memories were';
-  return [
-    'Memory access note:',
-    `- ${summary.totalCount} candidate ${plural} withheld from this turn's memory context.`,
-    ...(detailLine ? [`- Reasons: ${detailLine}.`] : []),
-    '- Do not infer or disclose withheld details. Ask for consent or clarification if needed.',
-  ].join('\n');
+  return wrapPromptSectionXml({
+    id: 'memory_context_note',
+    content: [
+      'Memory context note:',
+      `- ${summary.totalCount} candidate ${plural} kept out of this turn's memory context.`,
+      ...(detailLine ? [`- Reasons: ${detailLine}.`] : []),
+      '- Do not infer or disclose missing details. Ask for consent or clarification if needed.',
+    ].join('\n'),
+  });
 }
 
 function formatMemoriesForPrompt(
@@ -1949,7 +1965,7 @@ function formatMemoriesForPrompt(
       ));
     } else {
       sections.push(renderMemorySection(
-        'What you remember about this person:',
+        'Relevant memories for this person:',
         nonBoundaryMemories,
       ));
     }
@@ -1982,7 +1998,7 @@ function renderSociallyScopedMemorySections(
 
   const sections: string[] = [];
   if (canonical.length > 0) {
-    sections.push(renderMemorySection('What you remember about this person:', canonical));
+    sections.push(renderMemorySection('Relevant memories for this person:', canonical));
   }
   if (related.length > 0) {
     sections.push(renderAttributedMemorySection(
@@ -2011,7 +2027,14 @@ function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
     return `- [${m.type}] ${m.text}${valence}`;
   });
 
-  return `${heading}\n${lines.join('\n')}`;
+  return wrapPromptSectionXml({
+    id: heading === 'Active safety boundaries from prior refusals:'
+      ? 'active_safety_boundaries'
+      : heading === 'Relevant memories for this person:'
+        ? 'relevant_memories'
+        : 'memory_section',
+    content: `${heading}\n${lines.join('\n')}`,
+  });
 }
 
 function renderAttributedMemorySection(
@@ -2030,7 +2053,12 @@ function renderAttributedMemorySection(
       : '';
     return `- [${memory.type}] ${subjectPrefix}${memory.text}${valence}`;
   });
-  return `${heading}\n${lines.join('\n')}`;
+  return wrapPromptSectionXml({
+    id: heading.includes('social context')
+      ? 'social_context_memories'
+      : 'separate_people_memories',
+    content: `${heading}\n${lines.join('\n')}`,
+  });
 }
 
 function formatContactDescriptorSuffix(descriptor: RetrievalContactContext): string {

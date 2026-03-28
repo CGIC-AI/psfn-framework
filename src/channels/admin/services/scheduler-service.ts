@@ -21,6 +21,8 @@ import { createComponentLogger } from '../../../logger.js';
 const log = createComponentLogger('AdminSchedulerService');
 const REFLECTION_TASK_PREFIX = 'reflection:';
 const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
+const LEGACY_WHISPER_TEMPLATE_ID = 'whisper';
+const CANONICAL_MUSING_TEMPLATE_ID = 'musing';
 
 export type AdminTaskCadence = RecurringCadence;
 
@@ -50,7 +52,12 @@ function reflectionTemplateIdFromTaskId(taskId: string): string | null {
     return null;
   }
   const templateId = taskId.slice(REFLECTION_TASK_PREFIX.length).trim();
-  return templateId.length > 0 ? templateId : null;
+  if (templateId.length === 0) {
+    return null;
+  }
+  return new RegExp(`^${LEGACY_WHISPER_TEMPLATE_ID}$`, 'i').test(templateId)
+    ? CANONICAL_MUSING_TEMPLATE_ID
+    : templateId;
 }
 
 function validateCadence(input: unknown): CadenceValidationResult {
@@ -445,9 +452,12 @@ export class AdminSchedulerService {
     updates: Partial<ReflectionTemplate>,
   ): SchedulerMutationResult & { errors?: ValidationError[] } {
     const policy = this.policyStore.load();
-    const idx = policy.templates.findIndex(t => t.id === id);
+    const templateId = new RegExp(`^${LEGACY_WHISPER_TEMPLATE_ID}$`, 'i').test(id.trim())
+      ? CANONICAL_MUSING_TEMPLATE_ID
+      : id.trim();
+    const idx = policy.templates.findIndex(t => t.id === templateId);
     if (idx === -1) {
-      return { ok: false, message: `Reflection template "${id}" not found` };
+      return { ok: false, message: `Reflection template "${templateId}" not found` };
     }
 
     const validationErrors = validateTemplate(updates, false);
@@ -490,7 +500,7 @@ export class AdminSchedulerService {
       });
     }
 
-    log.info(`Reflection template "${id}" updated via admin`);
-    return { ok: true, message: `Reflection "${id}" updated` };
+    log.info(`Reflection template "${templateId}" updated via admin`);
+    return { ok: true, message: `Reflection "${templateId}" updated` };
   }
 }

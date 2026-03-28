@@ -32,6 +32,11 @@ function normalizeTemplateId(templateId: string): string {
   return /^whisper$/i.test(normalized) ? 'musing' : normalized;
 }
 
+function normalizeTemplateName(templateName: string): string {
+  const normalized = templateName.trim();
+  return /^whisper$/i.test(normalized) ? 'Musing' : normalized;
+}
+
 function resolveFolder(templateId: string): string {
   const normalizedTemplateId = normalizeTemplateId(templateId);
   for (const [pattern, folder] of FOLDER_MAP) {
@@ -44,10 +49,10 @@ function formatNoteName(templateName: string, createdAt: Date): string {
   const date = createdAt.toISOString().slice(0, 10);
   const time = createdAt.toISOString().slice(11, 16).replace(':', 'h');
   // Musing notes get date-only; others get date + time to avoid collisions
-  if (/musing/i.test(templateName)) {
+  if (/musing/i.test(normalizeTemplateName(templateName))) {
     return `${date} Musing`;
   }
-  return `${date} ${time} ${templateName}`;
+  return `${date} ${time} ${normalizeTemplateName(templateName)}`;
 }
 
 function buildFrontmatter(input: ReflectionPublishInput): string {

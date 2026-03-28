@@ -38,6 +38,24 @@ describe('VaultAutoPublisher', () => {
     expect(content).toContain('A quiet thought about the day.');
   });
 
+  it('normalizes legacy whisper template ids to musing when publishing', async () => {
+    const ops = createMockOps();
+    const publisher = new VaultAutoPublisher(ops);
+
+    await publisher.publishReflection({
+      templateId: 'whisper',
+      templateName: 'Whisper',
+      reflection: 'A quiet thought about the day.',
+      mode: 'agent',
+      createdAt: new Date('2026-03-02T14:30:00Z'),
+    });
+
+    const [name, content, opts] = ops.write.mock.calls[0];
+    expect(name).toBe('2026-03-02 Musing');
+    expect(opts.folder).toBe('Reflections/musings/');
+    expect(content).toContain('template: musing');
+  });
+
   it('publishes non-musing templates with time in name', async () => {
     const ops = createMockOps();
     const publisher = new VaultAutoPublisher(ops);

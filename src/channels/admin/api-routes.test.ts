@@ -1077,9 +1077,9 @@ describe('AdminServer JSON API routes', () => {
         cadence?: { kind: string; hour?: number; minute?: number; timezone?: string };
       }>;
     };
-    const whisper = getPayload.reflections.find(reflection => reflection.id === 'whisper');
-    expect(whisper).toMatchObject({
-      id: 'whisper',
+    const musing = getPayload.reflections.find(reflection => reflection.id === 'musing');
+    expect(musing).toMatchObject({
+      id: 'musing',
       enabled: false,
       intervalMs: 86_400_000,
       cadence: {

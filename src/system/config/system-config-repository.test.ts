@@ -75,6 +75,38 @@ describe('createSystemConfigRepository', () => {
     repo.saveTrustPolicy(trustPolicy);
     expect(repo.loadTrustPolicy()).toEqual(trustPolicy);
     expect(readJson(join(dataDir, 'trust-policy.json'))).toEqual(trustPolicy);
+
+    const channels = {
+      discord: {
+        heartbeatChannelId: 'heartbeat-123',
+      },
+      psfnAmica: {
+        enabled: false,
+      },
+      telegram: {
+        enabled: false,
+        tokenRef: {
+          kind: 'env',
+          envName: 'TELEGRAM_BOT_TOKEN',
+        },
+        allowedUsers: [],
+        mode: 'polling',
+        pollIntervalMs: 1_000,
+        webhook: {
+          url: 'https://example.test/telegram/webhook',
+          secretRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_WEBHOOK_SECRET',
+          },
+          host: '0.0.0.0',
+          port: 8_080,
+          path: '/telegram/webhook',
+        },
+      },
+    };
+    repo.saveChannelsOwnerFile(channels);
+    expect(repo.loadChannelsOwnerFile()).toEqual(channels);
+    expect(readJson(join(dataDir, 'channels.json'))).toEqual(channels);
   });
 
   it('loads channels.json through the repository surface', () => {

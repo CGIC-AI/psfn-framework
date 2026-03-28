@@ -2,7 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { buildExternalChannelProfiles, loadRuntimeChannelsConfig } from './config.js';
+import {
+  buildExternalChannelProfiles,
+  loadRuntimeChannelsConfig,
+  loadChannelsOwnerFile,
+  saveChannelsOwnerFile,
+} from './config.js';
 
 describe('loadRuntimeChannelsConfig', () => {
   it('returns defaults when data/channels.json is missing', () => {
@@ -101,6 +106,43 @@ describe('loadRuntimeChannelsConfig', () => {
         port: 9091,
         path: '/hooks/telegram',
       });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('round-trips raw channels owner-file saves without materializing secrets', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-save-'));
+    try {
+      const payload = {
+        discord: {
+          heartbeatChannelId: 'heartbeat-123',
+        },
+        telegram: {
+          enabled: false,
+          tokenRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_BOT_TOKEN',
+          },
+          allowedUsers: [],
+          mode: 'polling',
+          pollIntervalMs: 1_000,
+          webhook: {
+            url: 'https://example.test/telegram/webhook',
+            secretRef: {
+              kind: 'env',
+              envName: 'TELEGRAM_WEBHOOK_SECRET',
+            },
+            host: '0.0.0.0',
+            port: 8_080,
+            path: '/telegram/webhook',
+          },
+        },
+      };
+
+      expect(saveChannelsOwnerFile(dataDir, payload)).toEqual(payload);
+      expect(loadChannelsOwnerFile(dataDir)).toEqual(payload);
+      expect(buildExternalChannelProfiles(loadRuntimeChannelsConfig(dataDir, {}))).toEqual({});
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

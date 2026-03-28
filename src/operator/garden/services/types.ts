@@ -371,6 +371,7 @@ export interface AdminIdentityService {
 export interface SettingsConfigEditors {
   models: ModelsRuntimeConfig;
   providers: ProvidersRuntimeConfig;
+  channels: Record<string, unknown>;
   skills: SkillsRuntimeConfig;
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;

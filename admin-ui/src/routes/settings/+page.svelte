@@ -109,6 +109,7 @@
     settings: '',
     models: '',
     providers: '',
+    channels: '',
     skills: '',
     scheduler: '',
     'trust-policy': '',
@@ -256,6 +257,7 @@
   // ── Raw editor states ──
   let modelsJson = $state('');
   let providersJson = $state('');
+  let channelsJson = $state('');
   let skillsJson = $state('');
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
@@ -924,6 +926,7 @@
     switch (key) {
       case 'models': return modelsJson;
       case 'providers': return providersJson;
+      case 'channels': return channelsJson;
       case 'skills': return skillsJson;
       case 'scheduler': return schedulerJson;
       case 'trust-policy': return trustPolicyJson;
@@ -937,6 +940,7 @@
     switch (key) {
       case 'models': modelsJson = val; break;
       case 'providers': providersJson = val; break;
+      case 'channels': channelsJson = val; break;
       case 'skills': skillsJson = val; break;
       case 'scheduler': schedulerJson = val; break;
       case 'trust-policy': trustPolicyJson = val; break;
@@ -950,6 +954,7 @@
       settings: settingsJson,
       models: modelsJson,
       providers: providersJson,
+      channels: channelsJson,
       skills: skillsJson,
       scheduler: schedulerJson,
       'trust-policy': trustPolicyJson,
@@ -1323,8 +1328,9 @@
     setProviderRegistryState(normalizeProvidersRuntimeConfig(nextSettingsData.editors.providers).registry);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
-    const [provConf, skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
+    const [provConf, chanConf, skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
       getSubConfig('providers').catch(() => '{}'),
+      getSubConfig('channels').catch(() => '{}'),
       getSubConfig('skills').catch(() => '{}'),
       getSubConfig('scheduler').catch(() => '{}'),
       getSubConfig('trust-policy').catch(() => '{}'),
@@ -1332,6 +1338,7 @@
       getSubConfig('backup').catch(() => '{}'),
     ]);
     providersJson = tryPrettyPrint(provConf);
+    channelsJson = tryPrettyPrint(chanConf);
     skillsJson = tryPrettyPrint(skConf);
     schedulerJson = tryPrettyPrint(schConf);
     trustPolicyJson = tryPrettyPrint(tpConf);

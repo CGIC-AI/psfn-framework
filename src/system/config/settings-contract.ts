@@ -1,4 +1,5 @@
 import { CAPABILITY_TIER_VALUES } from '../capabilities/tiers.js';
+import { CHANNELS_FILE_NAME } from '../../channels/backplane/config.js';
 import {
   RUNTIME_SETTINGS_KEYS,
   SETTINGS_FILE_NAME,
@@ -31,7 +32,8 @@ export type SettingsSubsystemId =
   | 'capabilities'
   | 'skills'
   | 'trustPolicy'
-  | 'backup';
+  | 'backup'
+  | 'channels';
 
 export type SettingsFieldType =
   | 'string'
@@ -104,6 +106,11 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
   backup: {
     id: 'backup',
     ownerFile: BACKUP_FILE_NAME,
+    mode: 'raw_only',
+  },
+  channels: {
+    id: 'channels',
+    ownerFile: CHANNELS_FILE_NAME,
     mode: 'raw_only',
   },
 };

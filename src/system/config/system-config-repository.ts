@@ -1,6 +1,10 @@
 import type { ProcessEnv } from 'node:process';
 import type { RuntimeChannelsConfigOverrides, RuntimeChannelsConfig } from '../../channels/backplane/config.js';
-import { loadChannelsOwnerFile, loadRuntimeChannelsConfig } from '../../channels/backplane/config.js';
+import {
+  loadChannelsOwnerFile,
+  loadRuntimeChannelsConfig,
+  saveChannelsOwnerFile,
+} from '../../channels/backplane/config.js';
 import type { CapabilityTierConfig } from './capability-tier-config.js';
 import {
   loadCapabilityTierConfig,
@@ -58,6 +62,7 @@ export interface SystemConfigRepository {
   saveCapabilityTier(nextConfig: unknown): CapabilityTierConfig;
   loadChannels(env?: ProcessEnv, overrides?: RuntimeChannelsConfigOverrides): RuntimeChannelsConfig;
   loadChannelsOwnerFile(): Record<string, unknown>;
+  saveChannelsOwnerFile(nextConfig: unknown): Record<string, unknown>;
   loadBackup(): BackupJsonConfig;
   saveBackup(nextConfig: unknown): BackupJsonConfig;
   loadSkills(): SkillsRuntimeConfig;
@@ -92,6 +97,7 @@ export function createSystemConfigRepository(
       overrides,
     ),
     loadChannelsOwnerFile: () => loadChannelsOwnerFile(options.dataDir),
+    saveChannelsOwnerFile: (nextConfig) => saveChannelsOwnerFile(options.dataDir, nextConfig),
     loadBackup: () => loadBackupConfig(options.dataDir, loadOptions),
     saveBackup: (nextConfig) => saveBackupConfig(options.dataDir, nextConfig),
     loadSkills: () => loadSkillsConfig(options.dataDir, loadOptions),

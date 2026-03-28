@@ -309,6 +309,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     return {
       models: repository.loadModels(),
       providers: repository.loadProviders(),
+      channels: repository.loadChannelsOwnerFile(),
       skills: repository.loadSkills(),
       scheduler: repository.loadScheduler(),
       trustPolicy: repository.loadTrustPolicy(),
@@ -835,6 +836,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
           applyProvidersRuntimeConfig(this.deps.config, saved);
           refreshModels(this.deps.config);
           return { ok: true, message: 'providers.json saved' };
+        }
+        case 'channels': {
+          repository.saveChannelsOwnerFile(parsed);
+          return { ok: true, message: 'channels.json saved' };
         }
         case 'skills': {
           repository.saveSkills(parsed);

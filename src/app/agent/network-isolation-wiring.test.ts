@@ -10,23 +10,24 @@ function readSource(fileName: string): string {
 }
 
 describe('agent startup network isolation enforcement', () => {
-  const source = readSource('main.ts');
+  const mainSource = readSource('main.ts');
+  const helperSource = readSource('startup-guards.ts');
 
   it('probes outbound network access on startup', () => {
-    expect(source).toContain("const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace'");
-    expect(source).toContain('fetch(NETWORK_ISOLATION_PROBE_URL');
-    expect(source).toContain("method: 'HEAD'");
-    expect(source).toContain('await enforceNetworkIsolationOnStartup();');
+    expect(helperSource).toContain("const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace'");
+    expect(helperSource).toContain('fetch(NETWORK_ISOLATION_PROBE_URL');
+    expect(helperSource).toContain("method: 'HEAD'");
+    expect(mainSource).toContain('await enforceNetworkIsolationOnStartup();');
   });
 
   it('fails closed when outbound access is reachable', () => {
-    expect(source).toContain("log.error(`CRITICAL:");
-    expect(source).toContain('throw error;');
-    expect(source).not.toContain('if (requireIsolation) {');
+    expect(helperSource).toContain("log.error(`CRITICAL:");
+    expect(helperSource).toContain('throw error;');
+    expect(helperSource).not.toContain('if (requireIsolation) {');
   });
 
   it('supports only the explicit temporary override', () => {
-    expect(source).toContain('ALLOW_AGENT_OUTBOUND_NETWORK=true set; startup network-isolation guard is bypassed by explicit operator override.');
-    expect(source).toContain('allowOutboundNetwork');
+    expect(helperSource).toContain('ALLOW_AGENT_OUTBOUND_NETWORK=true set; startup network-isolation guard is bypassed by explicit operator override.');
+    expect(helperSource).toContain('allowOutboundNetwork');
   });
 });

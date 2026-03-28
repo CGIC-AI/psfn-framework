@@ -5074,7 +5074,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(sessionManager.recordSystemMessage).not.toHaveBeenCalled();
     expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
       role: 'custom',
-      type: 'whisper',
+      type: 'internalWhisper',
       messageClass: MESSAGE_CLASSES.internalWhisper,
       speakerName: 'Whisper',
       content: 'Keep the answer concrete and grounded.',

@@ -37,9 +37,9 @@ export interface SystemNoteMessage {
   timestamp: number;
 }
 
-export interface WhisperMessage {
+export interface InternalWhisperMessage {
   role: 'custom';
-  type: 'whisper';
+  type: 'internalWhisper';
   messageClass: typeof MESSAGE_CLASSES.internalWhisper;
   content: string;
   speakerName?: string;
@@ -84,7 +84,7 @@ declare module '@mariozechner/pi-agent-core' {
   interface CustomAgentMessages {
     compaction: CompactionMessage;
     systemNote: SystemNoteMessage;
-    whisper: WhisperMessage;
+    internalWhisper: InternalWhisperMessage;
     continuity: ContinuityMessage;
     mirror: MirrorMessage;
   }
@@ -106,8 +106,8 @@ export function isSystemNoteMessage(m: AgentMessage): m is SystemNoteMessage {
   return hasCustomRole(m) && m.type === 'systemNote';
 }
 
-export function isWhisperMessage(m: AgentMessage): m is WhisperMessage {
-  return hasCustomRole(m) && m.type === 'whisper';
+export function isInternalWhisperMessage(m: AgentMessage): m is InternalWhisperMessage {
+  return hasCustomRole(m) && m.type === 'internalWhisper';
 }
 
 export function isContinuityMessage(m: AgentMessage): m is ContinuityMessage {
@@ -131,7 +131,7 @@ export function isCustomMessage(m: AgentMessage): boolean {
  * Custom messages are converted:
  * - compaction → user message with summary prefix
  * - systemNote → user message with [System note] prefix
- * - whisper → assistant-side internal note
+ * - internalWhisper → assistant-side internal note
  * - mirror → compact user-side mirror note
  * - continuity → filtered out (injected into system prompt instead)
  */
@@ -153,7 +153,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         timestamp: msg.timestamp,
         messageClass: MESSAGE_CLASSES.systemNote,
       } satisfies ClassifiedUserMessage);
-    } else if (isWhisperMessage(msg)) {
+    } else if (isInternalWhisperMessage(msg)) {
       result.push({
         role: 'assistant',
         content: [{ type: 'text', text: `[Internal note to self] ${msg.content}` }],

@@ -7,13 +7,13 @@ import {
   compactionToMessage,
   isCompactionMessage,
   isSystemNoteMessage,
-  isWhisperMessage,
+  isInternalWhisperMessage,
   isContinuityMessage,
   isMirrorMessage,
   isCustomMessage,
   type CompactionMessage,
   type SystemNoteMessage,
-  type WhisperMessage,
+  type InternalWhisperMessage,
   type ContinuityMessage,
   type MirrorMessage,
 } from './messages.js';
@@ -59,10 +59,10 @@ function makeSystemNote(content: string): SystemNoteMessage {
   };
 }
 
-function makeWhisper(content: string, speakerName = 'Whisper'): WhisperMessage {
+function makeWhisper(content: string, speakerName = 'Whisper'): InternalWhisperMessage {
   return {
     role: 'custom',
-    type: 'whisper',
+    type: 'internalWhisper',
     messageClass: MESSAGE_CLASSES.internalWhisper,
     content,
     speakerName,
@@ -105,9 +105,9 @@ describe('type guards', () => {
     expect(isSystemNoteMessage(makeUser('test'))).toBe(false);
   });
 
-  it('isWhisperMessage', () => {
-    expect(isWhisperMessage(makeWhisper('test'))).toBe(true);
-    expect(isWhisperMessage(makeUser('test'))).toBe(false);
+  it('isInternalWhisperMessage', () => {
+    expect(isInternalWhisperMessage(makeWhisper('test'))).toBe(true);
+    expect(isInternalWhisperMessage(makeUser('test'))).toBe(false);
   });
 
   it('isContinuityMessage', () => {
@@ -162,7 +162,7 @@ describe('convertToLlm', () => {
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.systemNote);
   });
 
-  it('converts whisper to an assistant-side internal note', () => {
+  it('converts internal whispers to an assistant-side internal note', () => {
     const result = convertToLlm([makeWhisper('Stay gentle and concrete.')]);
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe('assistant');

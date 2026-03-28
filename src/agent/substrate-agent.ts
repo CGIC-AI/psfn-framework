@@ -47,7 +47,7 @@ import {
   type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
-import { convertToLlm, type WhisperMessage } from './messages.js';
+import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
@@ -613,12 +613,12 @@ export class SubstrateAgent {
     if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
       this.agent.followUp({
         role: 'custom',
-        type: 'whisper',
+        type: 'internalWhisper',
         messageClass: MESSAGE_CLASSES.internalWhisper,
         content: message.content,
         speakerName: message.authorName.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
         timestamp: Date.now(),
-      } satisfies WhisperMessage);
+      } satisfies InternalWhisperMessage);
       log.debug('Queued follow-up', {
         channelId: message.channelId,
         internalKind: 'whisper',

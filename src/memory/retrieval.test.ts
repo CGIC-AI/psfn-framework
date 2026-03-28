@@ -12,7 +12,7 @@ import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import { ContactStore } from '../contacts/store.js';
+import { ContactStore } from '../core/contacts/store.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
 

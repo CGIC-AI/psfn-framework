@@ -9,8 +9,8 @@ import type {
   ImageGenerationResult,
   ImageProviderPreference,
 } from '../../images/types.js';
-import type { JournalEntry } from '../../session/types.js';
-import type { JournalIntegrityVerificationResult } from '../../session/journal-utils.js';
+import type { JournalEntry } from '../../core/session/types.js';
+import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
 
 // ── Request parameter types (agent → gateway) ──

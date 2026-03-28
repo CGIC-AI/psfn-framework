@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { AdaptiveToolSnapshotTelemetry } from '../../core/agent/adaptive-tools-telemetry.js';
-import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
+import type { AdaptiveToolSnapshotTelemetry } from '../agent/adaptive-tools-telemetry.js';
+import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { MemoryWithheldSummary } from '../../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../../memory/store.js';
 import type { PurrMemory } from '../../memory/types.js';
-import type { SessionEntry } from '../../session/types.js';
+import type { SessionEntry } from '../session/types.js';
 import type { ContextMessage, PromptSectionTelemetry, ToolSchema, TurnID } from '../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../trust/types.js';
 

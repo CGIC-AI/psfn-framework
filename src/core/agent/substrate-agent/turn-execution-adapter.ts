@@ -2,7 +2,7 @@ import type { Agent } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
-import type { SessionManager } from '../../../session/manager.js';
+import type { SessionManager } from '../../session/manager.js';
 import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';

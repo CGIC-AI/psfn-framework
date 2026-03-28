@@ -12,7 +12,7 @@ import type {
   ChannelAdapterFactoryEntry,
   MessageHandler,
 } from '../../../channels/types.js';
-import type { SessionStore } from '../../../session/store.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
   config: SubstrateConfig;

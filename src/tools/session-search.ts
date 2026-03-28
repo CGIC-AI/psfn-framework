@@ -3,8 +3,8 @@ import { createInterface } from 'node:readline';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { LLMProvider } from '../core/agent/contracts.js';
-import type { SessionManager } from '../session/manager.js';
-import type { SessionEntry, JournalEntry } from '../session/types.js';
+import type { SessionManager } from '../core/session/manager.js';
+import type { SessionEntry, JournalEntry } from '../core/session/types.js';
 import { getRequestContext } from '../llm/request-context.js';
 import type { ChannelVisibility, TrustLevel } from '../trust/types.js';
 import {
@@ -13,7 +13,7 @@ import {
   runSessionSearch,
   truncateSessionSearchSnippet,
   type SessionSearchViewerContext,
-} from '../session/search-runtime.js';
+} from '../core/session/search-runtime.js';
 import { textResult, textResultWithError } from './results.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 

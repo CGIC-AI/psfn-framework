@@ -3,8 +3,8 @@ import type { LLMProvider } from '../core/agent/contracts.js';
 import type { PostTurnActionRuntime } from '../app/startup/composition/post-turn-actions.js';
 import type { EventBus } from '../shared/event-bus.js';
 import { createComponentLogger } from '../shared/logger.js';
-import type { ContextManifest } from '../session/context-manifest.js';
-import type { SessionStore } from '../session/store.js';
+import type { ContextManifest } from '../core/session/context-manifest.js';
+import type { SessionStore } from '../persistence/sessions/store.js';
 import type { PostTurnActionCandidate } from '../shared/contracts/runtime.js';
 import { isRecord } from '../shared/utils/types.js';
 import {

@@ -1,9 +1,9 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { countMessageTokens } from '../../llm/tokens.js';
-import type { SessionManager } from '../../session/manager.js';
-import type { SessionStore } from '../../session/store.js';
-import type { SessionEntry } from '../../session/types.js';
+import type { SessionManager } from '../../core/session/manager.js';
+import type { SessionStore } from '../../persistence/sessions/store.js';
+import type { SessionEntry } from '../../core/session/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type {

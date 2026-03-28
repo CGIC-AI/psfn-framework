@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Contact } from '../../../contacts/types.js';
-import type { SessionStore } from '../../../session/store.js';
+import type { Contact } from '../../../core/contacts/types.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { buildRelatedConversationChannelMap } from './contact-session-linker.js';
 
 function createSessionStoreStub(options: {

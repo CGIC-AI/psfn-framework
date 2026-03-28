@@ -10,8 +10,8 @@ import type {
   ToolResultMessage,
 } from '@mariozechner/pi-ai';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import type { SessionEntry, CompactionSummary } from '../../session/types.js';
-import { parseToolObservationMetadata } from '../../session/tool-observation.js';
+import type { SessionEntry, CompactionSummary } from '../session/types.js';
+import { parseToolObservationMetadata } from '../session/tool-observation.js';
 import {
   MESSAGE_CLASSES,
   tagMessageClass,

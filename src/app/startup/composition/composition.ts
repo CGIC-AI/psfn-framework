@@ -7,9 +7,9 @@
 
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../../shared/event-bus.js';
-import { SessionStore, type SessionIntegrityProvider } from '../../../session/store.js';
-import { SessionManager } from '../../../session/manager.js';
-import { UserContinuityStore } from '../../../session/continuity.js';
+import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
+import { SessionManager } from '../../../core/session/manager.js';
+import { UserContinuityStore } from '../../../core/session/continuity.js';
 import { InternalRoleEnvelopeLedgerStore } from '../../../core/internal-role-envelopes/store.js';
 import { wireInternalRoleEnvelopeRuntime } from '../../../core/internal-role-envelopes/runtime-wiring.js';
 import {
@@ -25,7 +25,7 @@ import {
 import { MemoryRetriever } from '../../../memory/retrieval.js';
 import { MemoryExtractor } from '../../../memory/extraction.js';
 import type { MemoryStore } from '../../../memory/store.js';
-import type { ContactStore } from '../../../contacts/store.js';
+import type { ContactStore } from '../../../core/contacts/store.js';
 import { ShardManager } from '../../../shards/manager.js';
 import {
   createShardExecutionPort,

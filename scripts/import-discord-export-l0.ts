@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import {
   describeDiscordExportSource,
   importDiscordExportToL0,
-} from '../src/session/importers/discord-export.js';
+} from '../src/persistence/importers/discord-export.js';
 
 interface CliArgs {
   sourcePath?: string;

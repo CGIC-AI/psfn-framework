@@ -3,7 +3,7 @@ import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import type { LLMProvider, EmbeddingService } from '../core/agent/contracts.js';
 import type { MemoryStore } from '../memory/store.js';
-import type { SessionManager } from '../session/manager.js';
+import type { SessionManager } from '../core/session/manager.js';
 import type { LLMResponse } from '../shared/contracts/runtime.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';

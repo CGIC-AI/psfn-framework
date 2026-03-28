@@ -7,8 +7,8 @@ import {
   readLastActiveSession,
   writeLastActiveSession,
 } from '../system/lifecycle/notifications.js';
-import { SessionStore } from '../session/store.js';
-import { SessionManager } from '../session/manager.js';
+import { SessionStore } from '../persistence/sessions/store.js';
+import { SessionManager } from '../core/session/manager.js';
 import {
   createSessionListTool,
   createSessionNewTool,

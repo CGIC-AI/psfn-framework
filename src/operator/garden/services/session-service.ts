@@ -1,15 +1,15 @@
-import type { ContactStore } from '../../../contacts/store.js';
+import type { ContactStore } from '../../../core/contacts/store.js';
 import type { EventBus } from '../../../shared/event-bus.js';
-import { parseContinuityEntryProvenance } from '../../../session/continuity.js';
-import type { SessionManager } from '../../../session/manager.js';
-import type { SessionStore } from '../../../session/store.js';
-import type { CompactionSummary } from '../../../session/types.js';
+import { parseContinuityEntryProvenance } from '../../../core/session/continuity.js';
+import type { SessionManager } from '../../../core/session/manager.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
+import type { CompactionSummary } from '../../../core/session/types.js';
 import {
   buildCompactionSourceBlock,
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
-} from '../../../session/compaction-audit.js';
-import { resolveSessionEntryRoleEnvelopePreview } from '../../../session/turn-provenance.js';
+} from '../../../core/session/compaction-audit.js';
+import { resolveSessionEntryRoleEnvelopePreview } from '../../../core/session/turn-provenance.js';
 import {
   classifyChannel,
   visibilitiesShareContinuity,

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
+import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot, VADVector } from '../emotion/state.js';
 import {
   ACTIVE_CONCERN_PRIORITIES,

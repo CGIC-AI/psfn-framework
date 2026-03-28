@@ -12,15 +12,15 @@ import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { SessionManager } from '../../session/manager.js';
-import { formatAttributedSystemContent } from '../../session/entry-attribution.js';
+import type { SessionManager } from '../session/manager.js';
+import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { ContactStore } from '../../contacts/store.js';
+import type { ContactStore } from '../contacts/store.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../../trust/types.js';

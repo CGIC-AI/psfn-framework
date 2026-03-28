@@ -11,7 +11,7 @@ import {
 } from './server.js';
 import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
-import type { SessionHmacKeyring } from '../../session/journal-utils.js';
+import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({

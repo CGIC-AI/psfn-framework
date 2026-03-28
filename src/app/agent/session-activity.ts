@@ -1,7 +1,7 @@
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { inferSessionChannelType } from '../../session/session-id.js';
-import type { SessionManager } from '../../session/manager.js';
+import { inferSessionChannelType } from '../../core/session/session-id.js';
+import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionRestartBehavior } from '../../system/config/runtime-config-contracts.js';
 import { writeLastActiveSession } from '../../system/lifecycle/notifications.js';
 

@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import {
   describeVoxtaImportSource,
   importVoxtaCharacterChats,
-} from '../src/session/importers/voxta.js';
+} from '../src/persistence/importers/voxta.js';
 
 interface CliArgs {
   dbPath?: string;

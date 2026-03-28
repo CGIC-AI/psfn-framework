@@ -1,10 +1,10 @@
-import type { SessionHmacKeyring } from '../../session/journal-utils.js';
+import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import {
   createSessionHmacBoundaryService,
   GATEWAY_SESSION_HMAC_ACTIVE_VERSION_ENV,
   GATEWAY_SESSION_HMAC_KEYS_ENV,
   GATEWAY_SESSION_HMAC_KEY_ENV,
-} from '../../session/hmac-boundary.js';
+} from '../../persistence/journals/hmac-boundary.js';
 
 export function resolveGatewaySessionHmacKeyring(
   env: NodeJS.ProcessEnv = process.env,

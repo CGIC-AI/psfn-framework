@@ -9,7 +9,7 @@ import { Scheduler } from '../../scheduler/scheduler.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
-import type { SessionManager } from '../../session/manager.js';
+import type { SessionManager } from '../../core/session/manager.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';

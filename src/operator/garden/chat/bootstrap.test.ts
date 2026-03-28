@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Contact } from '../../../contacts/types.js';
-import type { ContactStore } from '../../../contacts/store.js';
+import type { Contact } from '../../../core/contacts/types.js';
+import type { ContactStore } from '../../../core/contacts/store.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { AdminChatBootstrapService } from './bootstrap.js';
 

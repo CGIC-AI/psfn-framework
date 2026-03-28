@@ -1,4 +1,4 @@
-import type { ChannelPrivacyLevel } from '../../../contacts/types.js';
+import type { ChannelPrivacyLevel } from '../../../core/contacts/types.js';
 
 export interface AdminChatLinkedChannelOption {
   targetKind: 'identity' | 'conversation';

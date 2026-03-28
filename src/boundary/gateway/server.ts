@@ -21,7 +21,7 @@ import {
 import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../images/types.js';
 import type { AuditStore } from './audit.js';
-import type { SessionHmacKeyring } from '../../session/journal-utils.js';
+import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';

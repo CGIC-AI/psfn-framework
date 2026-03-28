@@ -1,7 +1,7 @@
 import type vm from 'node:vm';
 import type { LLMProvider, EmbeddingService, LLMRequestMetadata } from '../../../core/agent/contracts.js';
 import type { MemoryStore } from '../../../memory/store.js';
-import type { SessionManager } from '../../../session/manager.js';
+import type { SessionManager } from '../../../core/session/manager.js';
 import type { Scheduler } from '../../../scheduler/scheduler.js';
 import type { TaskState, TaskType } from '../../../scheduler/types.js';
 import type { EventBus } from '../../../shared/event-bus.js';

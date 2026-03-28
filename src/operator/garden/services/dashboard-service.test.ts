@@ -3,7 +3,7 @@ import { EventBus } from '../../../shared/event-bus.js';
 import { AdminDashboardDataService } from './dashboard-service.js';
 import type { MemoryStore } from '../../../memory/store.js';
 import type { Scheduler } from '../../../scheduler/scheduler.js';
-import type { SessionStore } from '../../../session/store.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { ShardExecutionPort } from '../../../shards/port.js';
 
 describe('AdminDashboardDataService', () => {

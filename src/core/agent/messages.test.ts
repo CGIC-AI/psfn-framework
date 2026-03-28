@@ -18,7 +18,7 @@ import {
   type MirrorMessage,
 } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
-import type { SessionEntry, CompactionSummary } from '../../session/types.js';
+import type { SessionEntry, CompactionSummary } from '../session/types.js';
 
 const NOW = Date.now();
 

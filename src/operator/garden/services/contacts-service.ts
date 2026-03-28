@@ -1,10 +1,10 @@
-import type { ContactStore } from '../../../contacts/store.js';
+import type { ContactStore } from '../../../core/contacts/store.js';
 import type { MemoryStore } from '../../../memory/store.js';
 import {
   CHANNEL_PRIVACY_LEVELS,
   CONTACT_MUTATION_AUDIT_FIELDS,
   VALID_RELATIONSHIP_TYPES,
-} from '../../../contacts/types.js';
+} from '../../../core/contacts/types.js';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -15,7 +15,7 @@ import type {
   RelationshipType,
   SocialGraphEntity,
   SocialRelationshipEdge,
-} from '../../../contacts/types.js';
+} from '../../../core/contacts/types.js';
 import type { TrustLevel } from '../../../trust/types.js';
 import { TRUST_LEVELS } from '../../../trust/types.js';
 import type { ContactProfileArtifact } from '../../../memory/store.js';
@@ -30,7 +30,7 @@ import type {
   AdminContactsService,
   ContactUpdateResult,
 } from './types.js';
-import type { SessionStore } from '../../../session/store.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
 
 interface ChannelPrivacyUpdate {
   channel: string;

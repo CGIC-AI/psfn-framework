@@ -1,11 +1,11 @@
-import type { ContactStore } from '../../../contacts/store.js';
+import type { ContactStore } from '../../../core/contacts/store.js';
 import type { TrustLevel } from '../../../trust/types.js';
 import type {
   ChannelPrivacyLevel,
   Contact,
   RelationshipType,
-} from '../../../contacts/types.js';
-import { CHANNEL_PRIVACY_LEVELS } from '../../../contacts/types.js';
+} from '../../../core/contacts/types.js';
+import { CHANNEL_PRIVACY_LEVELS } from '../../../core/contacts/types.js';
 import type { ModelCatalogEntry } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { DEFAULT_COMPANION_ID } from '../../../core/identity/companion-naming.js';

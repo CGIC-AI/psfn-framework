@@ -15,7 +15,7 @@ import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../llm/client.js';
-import { SessionStore } from '../../session/store.js';
+import { SessionStore } from '../../persistence/sessions/store.js';
 import { MemoryStore } from '../../memory/store.js';
 import { DEFAULT_REPL_CONFIG } from '../../repl/types.js';
 import { runRLMLoop } from '../../repl/loop.js';

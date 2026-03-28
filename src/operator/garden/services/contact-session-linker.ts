@@ -1,11 +1,11 @@
-import type { ContactStore } from '../../../contacts/store.js';
-import type { SessionStore } from '../../../session/store.js';
+import type { ContactStore } from '../../../core/contacts/store.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type {
   ChannelPrivacyLevel,
   Contact,
   ContactChannelLink,
-} from '../../../contacts/types.js';
-import { defaultPrivacyForChannel } from '../../../contacts/store/identity-utils.js';
+} from '../../../core/contacts/types.js';
+import { defaultPrivacyForChannel } from '../../../core/contacts/store/identity-utils.js';
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 

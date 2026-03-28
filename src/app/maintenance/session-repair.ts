@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { join, resolve } from 'node:path';
-import { runSessionRepairScan } from '../../session/repair.js';
+import { runSessionRepairScan } from '../../persistence/repair/repair.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 

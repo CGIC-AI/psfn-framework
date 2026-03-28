@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProvider } from '../agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, LLMResponse } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';

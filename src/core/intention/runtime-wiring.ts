@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
-import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
-import type { IntentionPostTurnHook } from '../../core/agent/substrate-agent.js';
+import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import {
   ActiveConcernStore,

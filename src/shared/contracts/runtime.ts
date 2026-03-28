@@ -1,4 +1,4 @@
-import type { ContextManifest } from '../../session/context-manifest.js';
+import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
 import type { ChannelVisibility, TrustLevel } from '../../trust/types.js';

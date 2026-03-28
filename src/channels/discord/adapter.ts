@@ -29,7 +29,7 @@ import type {
 } from '../types.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { SessionStore } from '../../session/store.js';
+import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { DiscordVoiceRuntime } from './voice.js';

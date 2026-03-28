@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
-import type { ContextManifest } from '../../../session/context-manifest.js';
+import type { ContextManifest } from '../../session/context-manifest.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 export interface PostTurnInferenceContext {

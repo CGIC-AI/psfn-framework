@@ -4,7 +4,7 @@ import {
   type SessionHmacVerifyParams,
   type SessionHmacVerifyResult,
 } from '../protocol.js';
-import { signJournalEntry, verifyJournalEntryIntegrity } from '../../../session/journal-utils.js';
+import { signJournalEntry, verifyJournalEntryIntegrity } from '../../../persistence/journals/journal-utils.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
 

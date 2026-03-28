@@ -28,7 +28,7 @@ import {
   type PromotedExtendedToolsManager,
 } from '../../../system/settings-tools.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
-import type { SessionManager } from '../../../session/manager.js';
+import type { SessionManager } from '../../../core/session/manager.js';
 import type { CoreMemoryStore } from '../../../core-memory/store.js';
 import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../../../tools/session.js';
 import { createSessionGrepTool, createSessionSearchTool } from '../../../tools/session-search.js';
@@ -111,7 +111,7 @@ import {
   SLEEPTIME_MEMORY_ACTION_KIND,
 } from '../../../memory/sleeptime-agent.js';
 import type { EmotionStateSnapshot } from '../../../core/emotion/state.js';
-import type { EmotionalSnapshot } from '../../../contacts/store/emotional-baseline.js';
+import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,

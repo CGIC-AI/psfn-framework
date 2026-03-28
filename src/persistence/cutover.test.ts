@@ -20,7 +20,7 @@ import {
   resolveReflectionNotesDir,
   resolveValuesJournalPath,
 } from './layout.js';
-import { buildMessageJournalEntry } from '../session/journal/entries.js';
+import { buildMessageJournalEntry } from './journals/journal/entries.js';
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(join(path, '..'), { recursive: true });

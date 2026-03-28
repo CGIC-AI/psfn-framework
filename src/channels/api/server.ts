@@ -8,11 +8,11 @@ import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ChannelType, MessageModelOverride, MessagePromptOverride, MessageRoutingMetadata, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { ContactStore } from '../../contacts/store.js';
+import type { ContactStore } from '../../core/contacts/store.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
-import type { SessionManager } from '../../session/manager.js';
+import type { SessionManager } from '../../core/session/manager.js';
 import { isChannelVisibility, type ChannelVisibility } from '../../trust/types.js';
 import type {
   ChannelAdapter,

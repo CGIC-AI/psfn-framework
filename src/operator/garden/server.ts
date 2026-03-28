@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
-import type { ContactStore } from '../../contacts/store.js';
+import type { ContactStore } from '../../core/contacts/store.js';
 import type { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';

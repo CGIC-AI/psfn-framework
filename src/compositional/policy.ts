@@ -1,5 +1,5 @@
 import { isCapabilityTier } from '../system/capabilities/tiers.js';
-import { inferSessionChannelType } from '../session/session-id.js';
+import { inferSessionChannelType } from '../core/session/session-id.js';
 import { isRecord } from '../shared/utils/types.js';
 import { CHANNEL_TYPES, COMPOSITIONAL_PURPOSES, type ChannelType, type CompositionalPurpose } from '../shared/contracts/runtime.js';
 import { createDefaultCompositionalPolicyConfig, type CapabilityTier, type CompositionalPolicyConfig } from '../system/config/runtime-config-contracts.js';

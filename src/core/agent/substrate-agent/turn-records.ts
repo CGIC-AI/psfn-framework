@@ -1,6 +1,6 @@
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
-import type { SessionManager } from '../../../session/manager.js';
+import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../../trust/types.js';
 import type { ChannelMeta } from '../../../trust/policy.js';

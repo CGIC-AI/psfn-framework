@@ -8,7 +8,7 @@ import {
 import {
   VALID_RELATIONSHIP_TYPES,
   type RelationshipType,
-} from '../../contacts/types.js';
+} from '../../core/contacts/types.js';
 import type { AdminChatDebugDetailValue } from './types.js';
 
 const RELATIONSHIP_TYPE_HINTS: ReadonlyArray<{ type: RelationshipType; hints: readonly string[] }> = [

@@ -7,7 +7,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import { resolveLastActiveSessionPath } from '../../persistence/layout.js';
-import { inferSessionChannelType, isInternalSessionId } from '../../session/session-id.js';
+import { inferSessionChannelType, isInternalSessionId } from '../../core/session/session-id.js';
 
 const log = createComponentLogger('Lifecycle');
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;

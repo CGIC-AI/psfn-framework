@@ -28,7 +28,7 @@ import {
 } from '../../app/startup/support/bootstrap-helpers.js';
 import type { PolicyConfig } from './policy.js';
 import type { GatewayNtfyConfig } from './ntfy-notifier.js';
-import type { SessionHmacKeyring } from '../../session/journal-utils.js';
+import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,

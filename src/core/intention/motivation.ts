@@ -1,4 +1,4 @@
-import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
+import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 
 export type MotivationSignalKind =

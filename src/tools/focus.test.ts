@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { LLMProvider } from '../core/agent/contracts.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import { SessionStore } from '../session/store.js';
-import { SessionManager } from '../session/manager.js';
+import { SessionStore } from '../persistence/sessions/store.js';
+import { SessionManager } from '../core/session/manager.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import { createCompleteFocusTool, createStartFocusTool } from './focus.js';
 

@@ -4,11 +4,11 @@ import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
 import type { ActiveConcern, ActiveConcernContextProvider } from '../../intention/concerns.js';
 import type { PendingFollowUp, PendingFollowUpContextProvider } from '../../intention/pending-follow-ups.js';
-import type { ContactStore } from '../../../contacts/store.js';
-import type { EmotionalSnapshot } from '../../../contacts/store/emotional-baseline.js';
-import type { Contact } from '../../../contacts/types.js';
-import type { SessionManager } from '../../../session/manager.js';
-import { isIntentionAppraisalArtifact } from '../../../session/entry-attribution.js';
+import type { ContactStore } from '../../contacts/store.js';
+import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
+import type { Contact } from '../../contacts/types.js';
+import type { SessionManager } from '../../session/manager.js';
+import { isIntentionAppraisalArtifact } from '../../session/entry-attribution.js';
 import { MetacognitiveMonitor, type MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
   INTERNAL_STATE_NEUTRAL_EMOTION,

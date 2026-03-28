@@ -4,7 +4,7 @@ import { __test as tokenTestUtils } from '../llm/tokens.js';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SessionStore } from '../session/store.js';
+import { SessionStore } from '../persistence/sessions/store.js';
 import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
 import { createTurnId, isTurnId } from '../core/turns/id.js';
 

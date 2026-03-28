@@ -1,4 +1,4 @@
-import type { SessionEntry } from '../../session/types.js';
+import type { SessionEntry } from '../../core/session/types.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type { ChannelVisibility } from '../../trust/types.js';
 import type { ExtractedFact } from '../types.js';

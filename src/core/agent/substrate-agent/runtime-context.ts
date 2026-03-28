@@ -4,8 +4,8 @@ import type { CapabilityTier } from '../../../system/config/runtime-config-contr
 import type { ChannelVisibility, TrustLevel } from '../../../trust/types.js';
 import { normalizeChannelVisibility } from '../../../trust/types.js';
 import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } from '../../../trust/policy.js';
-import type { ContactStore } from '../../../contacts/store.js';
-import type { Contact } from '../../../contacts/types.js';
+import type { ContactStore } from '../../contacts/store.js';
+import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
@@ -23,7 +23,7 @@ import type { AdaptiveLoadedExtendedToolState } from '../adaptive-tools-telemetr
 import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import { resolvePreferredContactName } from '../../../contacts/preferred-name.js';
+import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
 import {
   formatActiveDateTimeIso,
   formatActiveDateTimeLabel,

@@ -1,11 +1,11 @@
 import type { EmbeddingService, LLMProvider } from '../core/agent/contracts.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { PromptRegistryStore } from '../core/identity/prompt-registry.js';
-import type { ContactStore } from '../contacts/store.js';
-import { resolvePreferredContactName } from '../contacts/preferred-name.js';
-import type { SessionManager } from '../session/manager.js';
-import type { SessionStore } from '../session/store.js';
-import type { SessionEntry } from '../session/types.js';
+import type { ContactStore } from '../core/contacts/store.js';
+import { resolvePreferredContactName } from '../core/contacts/preferred-name.js';
+import type { SessionManager } from '../core/session/manager.js';
+import type { SessionStore } from '../persistence/sessions/store.js';
+import type { SessionEntry } from '../core/session/types.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../shared/contracts/runtime.js';
 import { createComponentLogger } from '../shared/logger.js';

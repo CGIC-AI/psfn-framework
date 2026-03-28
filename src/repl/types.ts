@@ -2,7 +2,7 @@
 
 import type { LLMProvider, EmbeddingService, LLMRequestMetadata } from '../core/agent/contracts.js';
 import type { MemoryStore } from '../memory/store.js';
-import type { SessionManager } from '../session/manager.js';
+import type { SessionManager } from '../core/session/manager.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { CapabilityTier, CompositionalPolicyConfig } from '../system/config/runtime-config-contracts.js';

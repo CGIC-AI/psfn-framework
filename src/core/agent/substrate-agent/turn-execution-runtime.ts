@@ -14,8 +14,8 @@ import { contextMessagesToPiMessages } from '../../../llm/message-conversion.js'
 import { countTokens } from '../../../llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../../persistence/layout.js';
-import type { SessionManager } from '../../../session/manager.js';
-import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
+import type { SessionManager } from '../../session/manager.js';
+import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';
 import {
   cloneMetacognitiveFlags,
   type MetacognitiveFlag,
@@ -34,7 +34,7 @@ import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, Messag
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
-import type { ContextManifest } from '../../../session/context-manifest.js';
+import type { ContextManifest } from '../../session/context-manifest.js';
 import { createTurnId } from '../../turns/id.js';
 import type {
   TurnObservabilityRecord,

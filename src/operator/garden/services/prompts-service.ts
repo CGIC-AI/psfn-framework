@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { SessionManager } from '../../../session/manager.js';
-import type { SessionStore } from '../../../session/store.js';
+import type { SessionManager } from '../../../core/session/manager.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import {
   PROMPT_LAYER_ROLES,

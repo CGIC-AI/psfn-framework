@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import { join, resolve } from 'node:path';
 import { loadConfig } from '../../system/config/load-config.js';
-import { createSessionHmacBoundaryService } from '../../session/hmac-boundary.js';
-import { runSessionIntegrityRepair } from '../../session/integrity-repair.js';
+import { createSessionHmacBoundaryService } from '../../persistence/journals/hmac-boundary.js';
+import { runSessionIntegrityRepair } from '../../persistence/repair/integrity-repair.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface CliOptions {

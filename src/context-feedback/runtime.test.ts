@@ -3,7 +3,7 @@ import type { PostTurnActionInferer } from '../core/agent/substrate-agent.js';
 import { wirePostTurnActionRuntime } from '../app/startup/composition/post-turn-actions.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
-import type { ContextManifest } from '../session/context-manifest.js';
+import type { ContextManifest } from '../core/session/context-manifest.js';
 import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../shared/contracts/runtime.js';
 import { CONTEXT_FEEDBACK_ACTION_KIND, wireContextFeedbackRuntime } from './runtime.js';
 

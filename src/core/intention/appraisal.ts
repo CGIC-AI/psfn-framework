@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { LLMProvider } from '../../core/agent/contracts.js';
-import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
+import type { LLMProvider } from '../agent/contracts.js';
+import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
 import {
@@ -11,7 +11,7 @@ import {
   formatAttributedSystemContent,
   isIntentionAppraisalArtifact,
   normalizeSessionEntryAttribution,
-} from '../../session/entry-attribution.js';
+} from '../session/entry-attribution.js';
 import { renderPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 import type { ChannelType, CompletionPurpose, ContextMessage, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
 

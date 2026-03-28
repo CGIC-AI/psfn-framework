@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ContextManifest } from '../session/context-manifest.js';
+import type { ContextManifest } from '../core/session/context-manifest.js';
 import { ContextEvaluator, parseContextEvaluationResponse } from './evaluator.js';
 
 function makeManifest(): ContextManifest {

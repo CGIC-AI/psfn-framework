@@ -17,7 +17,7 @@ import {
   type RuntimeChannelsConfig,
 } from '../../channels/config.js';
 import type { ChannelAdapter } from '../../channels/types.js';
-import type { ContactStore } from '../../contacts/store.js';
+import type { ContactStore } from '../../core/contacts/store.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { MemoryStore } from '../../memory/store.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
@@ -25,7 +25,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from '../../shared/utils/env.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
-import type { SessionManager } from '../../session/manager.js';
+import type { SessionManager } from '../../core/session/manager.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
 import {

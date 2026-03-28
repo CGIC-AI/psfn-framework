@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { ContactStore } from '../../contacts/store.js';
+import { ContactStore } from '../../core/contacts/store.js';
 import { MemoryExtractor } from '../extraction.js';
 import { DEFAULT_EMBEDDING_CONFIG } from '../embedding.js';
 import { MemoryStore } from '../store.js';

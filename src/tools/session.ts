@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { SessionManager } from '../session/manager.js';
+import type { SessionManager } from '../core/session/manager.js';
 import {
   readLastActiveSession,
   writeLastActiveSession,
 } from '../system/lifecycle/notifications.js';
-import { inferSessionChannelType } from '../session/session-id.js';
+import { inferSessionChannelType } from '../core/session/session-id.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { textResult, textResultWithError } from './results.js';
 import { toErrorMessage } from '../shared/utils/errors.js';

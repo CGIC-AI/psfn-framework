@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import type { PostTurnActionInferer } from '../../core/agent/substrate-agent.js';
+import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { EventBus } from '../../shared/event-bus.js';

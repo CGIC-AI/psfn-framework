@@ -13,9 +13,9 @@ import { SubstrateAgent } from '../core/agent/substrate-agent.js';
 import type { RuntimeMode } from '../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../system/capabilities/tiers.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
-import type { SessionStore } from '../session/store.js';
-import { SessionManager } from '../session/manager.js';
-import type { SessionEntry } from '../session/types.js';
+import type { SessionStore } from '../persistence/sessions/store.js';
+import { SessionManager } from '../core/session/manager.js';
+import type { SessionEntry } from '../core/session/types.js';
 import {
   evaluateShardSessionMemorySyncPolicy,
   type ShardSessionMemorySyncDecision,

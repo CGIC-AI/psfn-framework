@@ -13,7 +13,7 @@ import type {
   PolicyDecision,
   RuntimeHealthResult,
 } from '../protocol.js';
-import type { SessionHmacKeyring } from '../../../session/journal-utils.js';
+import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { PolicyConfig } from '../policy.js';
 

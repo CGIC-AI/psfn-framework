@@ -1,8 +1,8 @@
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { MemoryStore } from '../../../memory/store.js';
 import type { Scheduler } from '../../../scheduler/scheduler.js';
-import type { SessionManager } from '../../../session/manager.js';
-import type { SessionStore } from '../../../session/store.js';
+import type { SessionManager } from '../../../core/session/manager.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { ShardExecutionPort } from '../../../shards/port.js';
 import type { DashboardCostWindow, DashboardSessionContextPressure, ThinkTraceView } from '../types.js';
 import type { AdminDashboardData, AdminDashboardService } from './types.js';

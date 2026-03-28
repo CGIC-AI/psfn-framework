@@ -12,9 +12,9 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { registerReverseGatewayMethods } from './reverse-methods.js';
 const log = createComponentLogger('GatewayClient');
-import type { JournalIntegrityVerificationResult } from '../../session/journal-utils.js';
-import type { SessionIntegrityProvider } from '../../session/store.js';
-import type { JournalEntry } from '../../session/types.js';
+import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
+import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
+import type { JournalEntry } from '../../core/session/types.js';
 import type {
   LLMChatResult,
   LLMCompleteResult,

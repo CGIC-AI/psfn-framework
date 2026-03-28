@@ -34,9 +34,9 @@ import {
 } from '../broadcast/safety.js';
 import { computeBoundarySimilarityBoost, isBoundaryMemory } from './boundary-log.js';
 import { createComponentLogger } from '../shared/logger.js';
-import type { ContactStore } from '../contacts/store.js';
-import type { Contact, SocialRelationshipEdge } from '../contacts/types.js';
-import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+import type { ContactStore } from '../core/contacts/store.js';
+import type { Contact, SocialRelationshipEdge } from '../core/contacts/types.js';
+import type { EmotionalSnapshot } from '../core/contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../core/turns/snapshot.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';

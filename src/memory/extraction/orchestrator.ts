@@ -1,8 +1,8 @@
 import { createComponentLogger } from '../../shared/logger.js';
 import type { LLMProvider } from '../../core/agent/contracts.js';
-import type { SessionManager } from '../../session/manager.js';
-import type { SessionEntry } from '../../session/types.js';
-import { resolveLatestTurnContext } from '../../session/turn-provenance.js';
+import type { SessionManager } from '../../core/session/manager.js';
+import type { SessionEntry } from '../../core/session/types.js';
+import { resolveLatestTurnContext } from '../../core/session/turn-provenance.js';
 import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import {

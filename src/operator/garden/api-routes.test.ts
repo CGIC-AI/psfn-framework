@@ -10,11 +10,11 @@ import WebSocket from 'ws';
 import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
 import { MemoryStore } from '../../memory/store.js';
-import { SessionStore } from '../../session/store.js';
-import { SessionManager } from '../../session/manager.js';
+import { SessionStore } from '../../persistence/sessions/store.js';
+import { SessionManager } from '../../core/session/manager.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
-import { ContactStore } from '../../contacts/store.js';
+import { ContactStore } from '../../core/contacts/store.js';
 import { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,

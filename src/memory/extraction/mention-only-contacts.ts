@@ -1,7 +1,7 @@
-import type { ContactStore } from '../../contacts/store.js';
-import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
-import { looksLikeOpaqueIdentifier } from '../../contacts/store/identity-utils.js';
-import type { Contact, RelationshipType } from '../../contacts/types.js';
+import type { ContactStore } from '../../core/contacts/store.js';
+import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
+import { looksLikeOpaqueIdentifier } from '../../core/contacts/store/identity-utils.js';
+import type { Contact, RelationshipType } from '../../core/contacts/types.js';
 import type { MemoryStore } from '../store.js';
 import type { ExtractedFact, PurrMemory } from '../types.js';
 

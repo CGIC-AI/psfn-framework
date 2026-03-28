@@ -1,3 +1,5 @@
+import type { EmbodimentPresenceMetadata } from '../presence-metadata.js';
+
 export const BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME = 'spawn_shard' as const;
 export const DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL = 5;
 export const DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_TURNS = 1;
@@ -9,6 +11,7 @@ export interface BoundedSubagentSourceContext {
   channelId: string;
   requestId?: string;
   turnId?: string;
+  embodimentContext?: EmbodimentPresenceMetadata;
 }
 
 export interface BoundedSubagentLaunchRequestInput {
@@ -114,10 +117,32 @@ function normalizeSourceContext(
   const channelId = normalizeText(sourceContext.channelId, 'sourceContext.channelId');
   const requestId = normalizeOptionalText(sourceContext.requestId);
   const turnId = normalizeOptionalText(sourceContext.turnId);
+  const embodimentContext = sourceContext.embodimentContext;
+  const normalizedEmbodimentContext = embodimentContext
+    ? (() => {
+      const siteId = normalizeOptionalText(embodimentContext.siteId);
+      const satelliteId = normalizeOptionalText(embodimentContext.satelliteId);
+      const channelId = normalizeOptionalText(embodimentContext.channelId);
+      const companionId = normalizeOptionalText(embodimentContext.companionId);
+      const label = normalizeOptionalText(embodimentContext.label);
+      return {
+        kind: 'embodiment' as const,
+        embodimentId: normalizeText(embodimentContext.embodimentId, 'sourceContext.embodimentContext.embodimentId'),
+        ...(siteId ? { siteId } : {}),
+        ...(satelliteId ? { satelliteId } : {}),
+        ...(channelId ? { channelId } : {}),
+        ...(companionId ? { companionId } : {}),
+        ...(label ? { label } : {}),
+        ...(embodimentContext.isPrimary !== undefined ? { isPrimary: embodimentContext.isPrimary } : {}),
+        ...(embodimentContext.isActive !== undefined ? { isActive: embodimentContext.isActive } : {}),
+      } satisfies EmbodimentPresenceMetadata;
+    })()
+    : undefined;
   return {
     channelId,
     ...(requestId ? { requestId } : {}),
     ...(turnId ? { turnId } : {}),
+    ...(normalizedEmbodimentContext ? { embodimentContext: normalizedEmbodimentContext } : {}),
   };
 }
 

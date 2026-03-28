@@ -164,3 +164,32 @@ export function resolveActiveEmanationState(value: unknown): ActiveEmanationStat
 
   return {};
 }
+
+export function resolveCanonicalEmbodimentContext(
+  value: unknown,
+): EmbodimentPresenceMetadata | undefined {
+  const resolution = resolveActiveEmanationState(value);
+  if (resolution.error || !resolution.presence) {
+    return undefined;
+  }
+
+  const presence = resolution.presence;
+  if (presence.kind === 'embodiment') {
+    return presence;
+  }
+
+  if (presence.kind !== 'emanation' || !presence.embodimentId) {
+    return undefined;
+  }
+
+  return {
+    kind: 'embodiment',
+    embodimentId: presence.embodimentId,
+    ...(presence.siteId ? { siteId: presence.siteId } : {}),
+    ...(presence.satelliteId ? { satelliteId: presence.satelliteId } : {}),
+    ...(presence.channelId ? { channelId: presence.channelId } : {}),
+    ...(presence.companionId ? { companionId: presence.companionId } : {}),
+    ...(presence.label ? { label: presence.label } : {}),
+    isPrimary: true,
+  };
+}

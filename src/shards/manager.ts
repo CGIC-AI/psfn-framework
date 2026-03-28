@@ -39,6 +39,7 @@ import type {
 } from './types.js';
 import { buildShardLineageEnvelope } from './result-lineage.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { resolveCanonicalEmbodimentContext } from '../agent/active-emanation-state.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
@@ -201,12 +202,19 @@ export class ShardManager implements ShardExecutionPort {
     const routeCapabilities = this.resolveWyomingRouteCapabilities(routing, presenceSubjectId);
     const shardName = request.shardName?.trim()
       || this.resolveWyomingShardName(routing, presenceSubjectId);
+    const embodimentContext = resolveCanonicalEmbodimentContext(routing?.presence);
     const shardConfig: ShardConfig = {
       name: shardName,
       task: request.message.content,
       maxTurns: 1,
       capabilities: routeCapabilities,
       requiredCapabilities: routeCapabilities,
+      sourceContext: {
+        channelId: request.message.channelId,
+        requestId: request.message.id,
+        ...(routing?.turnId ? { turnId: routing.turnId } : {}),
+        ...(embodimentContext ? { embodimentContext } : {}),
+      },
     };
     this.auditTrail?.append('wyoming.shard.delegate.start', {
       shardId,
@@ -834,10 +842,12 @@ export class ShardManager implements ShardExecutionPort {
 
     const requestId = sourceContext.requestId?.trim();
     const turnId = sourceContext.turnId?.trim();
+    const embodimentContext = sourceContext.embodimentContext;
     return {
       channelId,
       ...(requestId ? { requestId } : {}),
       ...(turnId ? { turnId } : {}),
+      ...(embodimentContext ? { embodimentContext } : {}),
     };
   }
 
@@ -968,6 +978,9 @@ export class ShardManager implements ShardExecutionPort {
       `Source channel: ${contextPack.source.channelId}`,
       ...(contextPack.source.requestId ? [`Source requestId: ${contextPack.source.requestId}`] : []),
       ...(contextPack.source.turnId ? [`Source turnId: ${contextPack.source.turnId}`] : []),
+      ...(contextPack.source.embodimentContext
+        ? [`Source embodiment: ${contextPack.source.embodimentContext.embodimentId}`]
+        : []),
       `Task scope: ${this.truncateContextText(contextPack.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}`,
       ...(sourceConversation
         ? [

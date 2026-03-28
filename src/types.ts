@@ -10,7 +10,10 @@ import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import type { ChannelVisibility, TrustLevel } from './trust/types.js';
 import type { ImageWorkflowSettings } from './images/types.js';
-import type { CompanionPresenceMetadata } from './agent/presence-metadata.js';
+import type {
+  CompanionPresenceMetadata,
+  EmbodimentPresenceMetadata,
+} from './agent/presence-metadata.js';
 import type {
   CredentialReference,
   CredentialVaultPort,
@@ -174,6 +177,7 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   viewerTrustLevel?: TrustLevel;
   viewerChannelVisibility?: ChannelVisibility;
   viewerIsDirectMessage?: boolean;
+  embodimentContext?: EmbodimentPresenceMetadata;
 }
 
 export interface MessageRoutingMetadata {

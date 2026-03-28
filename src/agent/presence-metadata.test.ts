@@ -7,6 +7,7 @@ import {
   resolvePresenceMetadataResult,
   resolvePresenceSubjectId,
 } from './presence-metadata.js';
+import { resolveCanonicalEmbodimentContext } from './active-emanation-state.js';
 
 describe('presence metadata contract', () => {
   it('builds canonical satellite, embodiment, and emanation metadata records', () => {
@@ -77,6 +78,24 @@ describe('presence metadata contract', () => {
       },
     })).toEqual({
       error: 'conflicting active emanation metadata',
+    });
+  });
+
+  it('derives canonical embodiment context from active emanation state', () => {
+    expect(resolveCanonicalEmbodimentContext({
+      kind: 'emanation',
+      emanationId: 'voice-node',
+      embodimentId: 'display',
+      siteId: 'ha-main',
+      satelliteId: 'kitchen',
+      channelId: 'api:wyoming:ha-main:display',
+    })).toEqual({
+      kind: 'embodiment',
+      embodimentId: 'display',
+      siteId: 'ha-main',
+      satelliteId: 'kitchen',
+      channelId: 'api:wyoming:ha-main:display',
+      isPrimary: true,
     });
   });
 });

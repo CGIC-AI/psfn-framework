@@ -1,3 +1,4 @@
+import type { EmbodimentPresenceMetadata } from '../agent/presence-metadata.js';
 import type { SessionEntry } from '../session/types.js';
 import type { ShardResultLineageEnvelope } from './result-lineage.js';
 
@@ -11,6 +12,7 @@ export interface ShardSourceContext {
   channelId: string;
   requestId?: string;
   turnId?: string;
+  embodimentContext?: EmbodimentPresenceMetadata;
 }
 
 export interface ShardContextPackEntry {

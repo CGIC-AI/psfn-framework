@@ -549,6 +549,12 @@ describe('ShardManager', () => {
         channelId: sourceChannelId,
         requestId: 'req-parent-1',
         turnId: sourceTurnId,
+        embodimentContext: {
+          kind: 'embodiment',
+          embodimentId: 'display',
+          siteId: 'ha-main',
+          satelliteId: 'kitchen',
+        },
       },
     });
 
@@ -570,6 +576,7 @@ describe('ShardManager', () => {
     const [setPromptText] = setPromptCall;
     expect(setPromptText).toContain('[Shard context pack]');
     expect(setPromptText).toContain(`Source channel: ${sourceChannelId}`);
+    expect(setPromptText).toContain('Source embodiment: display');
     expect(setPromptText).toContain('PrimaryUser: Please check the deployment blockers.');
     expect(setPromptText).toContain('Remember the staging database migration is still pending.');
 
@@ -1230,6 +1237,82 @@ describe('ShardManager', () => {
         status: 'completed',
         connectionId: 'conn-office',
         sessionId: 'session-office',
+      }),
+    );
+  });
+
+  it('seeds canonical embodiment context into Wyoming shard launches', async () => {
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+    const executeShard = vi.spyOn(manager as any, 'executeShard').mockResolvedValue({
+      shardId: 'wyoming-shard-test',
+      name: 'wyoming-launch',
+      content: 'ok',
+      model: 'mock-model',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: 1,
+      turns: 1,
+      lifecycleState: 'ready',
+      health: 'healthy',
+      stateReason: 'completed',
+      capabilities: ['wyoming'],
+      requiredCapabilities: ['wyoming'],
+    });
+
+    await manager.delegateWyomingSession({
+      message: {
+        id: 'wyoming-msg-conn-launch-1',
+        channelId: 'api:wyoming:ha-main:voice-pe-launch',
+        channelType: 'api',
+        authorId: 'wyoming-user:owner',
+        authorName: 'Wyoming Voice User',
+        content: 'launch the worker',
+        isDirectMessage: true,
+        timestamp: new Date('2026-02-26T12:00:00.000Z'),
+      },
+      routing: {
+        connectionId: 'conn-launch',
+        sessionId: 'session-launch',
+        turnId: 'wyoming-turn-conn-launch-session-launch-1',
+        siteId: 'ha-main',
+        satelliteId: 'voice-pe-launch',
+        presence: {
+          kind: 'emanation',
+          emanationId: 'voice-node',
+          embodimentId: 'display',
+          siteId: 'ha-main',
+          satelliteId: 'voice-pe-launch',
+        },
+      },
+    });
+
+    expect(executeShard).toHaveBeenCalledWith(
+      expect.any(String),
+      'api:wyoming:ha-main:voice-pe-launch',
+      expect.objectContaining({
+        sourceContext: expect.objectContaining({
+          channelId: 'api:wyoming:ha-main:voice-pe-launch',
+          requestId: 'wyoming-msg-conn-launch-1',
+          turnId: 'wyoming-turn-conn-launch-session-launch-1',
+          embodimentContext: {
+            kind: 'embodiment',
+            embodimentId: 'display',
+            siteId: 'ha-main',
+            satelliteId: 'voice-pe-launch',
+            isPrimary: true,
+          },
+        }),
+      }),
+      expect.objectContaining({
+        content: 'launch the worker',
       }),
     );
   });

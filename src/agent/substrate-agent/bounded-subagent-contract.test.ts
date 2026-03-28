@@ -18,6 +18,13 @@ describe('bounded subagent contract', () => {
         channelId: '  api:source  ',
         requestId: '  req-1  ',
         turnId: '  turn-1  ',
+        embodimentContext: {
+          kind: 'embodiment',
+          embodimentId: '  display  ',
+          siteId: '  ha-main  ',
+          satelliteId: '  kitchen  ',
+          channelId: '  api:wyoming:ha-main:display  ',
+        },
       },
     });
 
@@ -32,6 +39,13 @@ describe('bounded subagent contract', () => {
         channelId: 'api:source',
         requestId: 'req-1',
         turnId: 'turn-1',
+        embodimentContext: {
+          kind: 'embodiment',
+          embodimentId: 'display',
+          siteId: 'ha-main',
+          satelliteId: 'kitchen',
+          channelId: 'api:wyoming:ha-main:display',
+        },
       },
     });
     expect(isBoundedSubagentLaunchToolName('spawn_shard')).toBe(true);
@@ -80,5 +94,16 @@ describe('bounded subagent contract', () => {
       task: 'task',
       maxTurns: 0,
     })).toThrow('maxTurns must be an integer between 1 and 8');
+    expect(() => normalizeBoundedSubagentLaunchRequest({
+      name: 'name',
+      task: 'task',
+      sourceContext: {
+        channelId: 'api:source',
+        embodimentContext: {
+          kind: 'embodiment',
+          embodimentId: '   ',
+        } as any,
+      },
+    })).toThrow('non-empty sourceContext.embodimentContext.embodimentId');
   });
 });

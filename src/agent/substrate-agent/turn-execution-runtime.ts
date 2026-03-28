@@ -27,6 +27,7 @@ import type { SkillsRuntime } from '../../skills/runtime.js';
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
 import { classifyChannel, type ChannelMeta } from '../../trust/policy.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
+import { resolveCanonicalEmbodimentContext } from '../../agent/active-emanation-state.js';
 import type {
   AgentResponse,
   CorrelationMetadata,
@@ -432,10 +433,14 @@ export async function handleMessageForTurn(
   };
   const channelVisibility = classifyChannel(message.channelId, channelMeta);
   const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
+  const embodimentContext = resolveCanonicalEmbodimentContext(
+    message.routing?.wyoming?.presence ?? message.routing?.presence,
+  );
   const viewerRequestContext = {
     viewerTrustLevel: authorContext.trustLevel,
     viewerChannelVisibility: channelVisibility,
     ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
+    ...(embodimentContext ? { embodimentContext } : {}),
   };
   const baseVisionToolRequestContext = {
     userMessageText: message.content,

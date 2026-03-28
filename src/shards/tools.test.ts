@@ -27,6 +27,12 @@ describe('createSpawnShardTool', () => {
         channelId: 'api:launch-context',
         requestId: 'req-1',
         turnId: 'turn-1',
+        embodimentContext: {
+          kind: 'embodiment',
+          embodimentId: 'display',
+          siteId: 'ha-main',
+          satelliteId: 'kitchen',
+        },
       },
       async () => {
         const result = await tool.execute('call-1', {
@@ -49,6 +55,12 @@ describe('createSpawnShardTool', () => {
             channelId: 'api:launch-context',
             requestId: 'req-1',
             turnId: 'turn-1',
+            embodimentContext: {
+              kind: 'embodiment',
+              embodimentId: 'display',
+              siteId: 'ha-main',
+              satelliteId: 'kitchen',
+            },
           },
         }));
 
@@ -67,6 +79,12 @@ describe('createSpawnShardTool', () => {
                 channelId: 'api:launch-context',
                 requestId: 'req-1',
                 turnId: 'turn-1',
+                embodimentContext: {
+                  kind: 'embodiment',
+                  embodimentId: 'display',
+                  siteId: 'ha-main',
+                  satelliteId: 'kitchen',
+                },
               },
             },
             result: {

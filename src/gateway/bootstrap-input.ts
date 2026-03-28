@@ -1,7 +1,11 @@
 import { resolve } from 'node:path';
 import type { SubstrateConfig, WyomingShardRoutingConfig } from '../types.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from '../config/legacy-env.js';
-import { loadRuntimeChannelsConfig, type RuntimeChannelsConfig } from '../channels/config.js';
+import {
+  loadRuntimeChannelsConfig,
+  type RuntimeChannelsConfig,
+  type RuntimeChannelsConfigOverrides,
+} from '../channels/config.js';
 import {
   resolveAllowedReadPathsFromEnv,
   resolveFullCodebaseReadRootFromEnv,
@@ -302,6 +306,29 @@ function buildGatewayPolicyConfig(
   };
 }
 
+export function buildGatewayChannelsConfigOverrides(
+  runtimeSettings: StartupConfigHydrationResult['settingsDomains']['runtime'] | undefined,
+): RuntimeChannelsConfigOverrides {
+  const settings = runtimeSettings ?? {};
+  const hasTelegramEnabled = Object.hasOwn(settings, 'telegramEnabled');
+  const hasTelegramAuthorizedUsers = Object.hasOwn(settings, 'telegramAuthorizedUsers');
+
+  if (!hasTelegramEnabled && !hasTelegramAuthorizedUsers) {
+    return {};
+  }
+
+  return {
+    telegram: {
+      ...(hasTelegramEnabled ? { enabled: settings.telegramEnabled } : {}),
+      ...(hasTelegramAuthorizedUsers
+        ? {
+            allowedUsers: settings.telegramAuthorizedUsers ?? [],
+          }
+        : {}),
+    },
+  };
+}
+
 export function resolveGatewayBootstrapInput(
   options: GatewayBootstrapOptions,
 ): GatewayBootstrapInput {
@@ -347,14 +374,7 @@ export function resolveGatewayBootstrapInput(
   const channelsConfig = loadRuntimeChannelsConfig(
     systemDataDir,
     env,
-    {
-      telegram: settingsDomains.runtime.telegramEnabled || settingsDomains.runtime.telegramAuthorizedUsers
-        ? {
-          enabled: settingsDomains.runtime.telegramEnabled ?? false,
-          allowedUsers: settingsDomains.runtime.telegramAuthorizedUsers ?? [],
-        }
-        : undefined,
-    },
+    buildGatewayChannelsConfigOverrides(settingsDomains.runtime),
   );
 
   const ntfyConfigured = Boolean(ntfyBaseUrl && ntfyTopic);

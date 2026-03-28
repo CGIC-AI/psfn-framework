@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { StartupConfigHydrationResult } from '../runtime/bootstrap-helpers.js';
 import type { SubstrateConfig } from '../types.js';
-import { resolveGatewayBootstrapInput } from './bootstrap-input.js';
+import {
+  buildGatewayChannelsConfigOverrides,
+  resolveGatewayBootstrapInput,
+} from './bootstrap-input.js';
 
 function createStartupHydration(): StartupConfigHydrationResult {
   return {
@@ -119,5 +122,17 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(bootstrap.shutdownForceExitTimeoutMs).toBe(12000);
     expect(bootstrap.diagnostics.ntfyConfigIncomplete).toBe(false);
     expect(bootstrap.diagnostics.workspacePathProvided).toBe(true);
+  });
+
+  it('preserves telegram override presence when telegramEnabled is explicitly false', () => {
+    expect(
+      buildGatewayChannelsConfigOverrides({
+        telegramEnabled: false,
+      } as StartupConfigHydrationResult['settingsDomains']['runtime']),
+    ).toEqual({
+      telegram: {
+        enabled: false,
+      },
+    });
   });
 });

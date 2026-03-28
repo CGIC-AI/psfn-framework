@@ -6,7 +6,7 @@
 import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { sanitizeChannelId } from './store.js';
-import type { SessionEntry } from './types.js';
+import type { SessionEntry, SessionEntryRole } from './types.js';
 import {
   classifyChannel,
   visibilitiesShareContinuity,
@@ -30,6 +30,15 @@ interface UserCache {
   filePath: string;
 }
 
+export interface ContinuityEntryProvenance {
+  kind: 'continuity';
+  continuityUserId: string;
+  sourceChannelId: string;
+  sourceVisibility: ChannelVisibility;
+  sourceRole: SessionEntryRole;
+  recordedAt: number;
+}
+
 export interface ActiveContinuityChannel {
   channelId: string;
   channelVisibility: ChannelVisibility;
@@ -40,6 +49,94 @@ export interface ActiveChannelQuery {
   excludeChannelId?: string;
   withinMs?: number;
   nowMs?: number;
+}
+
+function parseMetadataObject(metadata?: string): Record<string, unknown> | null {
+  if (!metadata) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(metadata);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export function parseContinuityEntryProvenance(metadata?: string): ContinuityEntryProvenance | null {
+  const parsed = parseMetadataObject(metadata);
+  if (!parsed) return null;
+
+  const continuity = parsed.continuity;
+  if (!continuity || typeof continuity !== 'object' || Array.isArray(continuity)) {
+    return null;
+  }
+
+  const provenance = continuity as Record<string, unknown>;
+  const kind = provenance.kind;
+  const continuityUserId = provenance.continuityUserId;
+  const sourceChannelId = provenance.sourceChannelId;
+  const sourceVisibility = provenance.sourceVisibility;
+  const sourceRole = provenance.sourceRole;
+  const recordedAt = provenance.recordedAt;
+
+  if (
+    kind !== 'continuity'
+    || typeof continuityUserId !== 'string'
+    || typeof sourceChannelId !== 'string'
+    || (
+      sourceVisibility !== 'private'
+      && sourceVisibility !== 'semi_private'
+      && sourceVisibility !== 'public'
+      && sourceVisibility !== 'broadcast'
+    )
+    || sourceRole !== 'user'
+    && sourceRole !== 'assistant'
+    && sourceRole !== 'system'
+    || typeof recordedAt !== 'number'
+    || !Number.isFinite(recordedAt)
+  ) {
+    return null;
+  }
+
+  return {
+    kind,
+    continuityUserId,
+    sourceChannelId,
+    sourceVisibility,
+    sourceRole,
+    recordedAt,
+  };
+}
+
+function buildContinuityEntryMetadata(params: {
+  continuityUserId: string;
+  sourceChannelId: string;
+  sourceVisibility: ChannelVisibility;
+  sourceRole: SessionEntryRole;
+  recordedAt: number;
+  existingMetadata?: string;
+}): string {
+  const continuity: ContinuityEntryProvenance = {
+    kind: 'continuity',
+    continuityUserId: params.continuityUserId,
+    sourceChannelId: params.sourceChannelId,
+    sourceVisibility: params.sourceVisibility,
+    sourceRole: params.sourceRole,
+    recordedAt: params.recordedAt,
+  };
+
+  const parsed = parseMetadataObject(params.existingMetadata);
+  if (!parsed) {
+    return JSON.stringify({ continuity });
+  }
+
+  return JSON.stringify({
+    ...parsed,
+    continuity,
+  });
 }
 
 export class UserContinuityStore {
@@ -88,7 +185,18 @@ export class UserContinuityStore {
     const cache = this.ensureUser(userId);
     const id = cache.nextId;
 
-    const full: SessionEntry = { ...entry, id };
+    const full: SessionEntry = {
+      ...entry,
+      id,
+      metadata: buildContinuityEntryMetadata({
+        continuityUserId: userId,
+        sourceChannelId: entry.originChannelId ?? entry.channelId,
+        sourceVisibility: entry.channelVisibility ?? classifyChannel(entry.originChannelId ?? entry.channelId),
+        sourceRole: entry.role,
+        recordedAt: entry.timestamp,
+        existingMetadata: entry.metadata,
+      }),
+    };
     if (!full.channelVisibility) {
       full.channelVisibility = classifyChannel(entry.channelId);
     }

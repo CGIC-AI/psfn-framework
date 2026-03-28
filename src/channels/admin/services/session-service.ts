@@ -1,5 +1,6 @@
 import type { ContactStore } from '../../../contacts/store.js';
 import type { EventBus } from '../../../event-bus.js';
+import { parseContinuityEntryProvenance } from '../../../session/continuity.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
 import type { CompactionSummary } from '../../../session/types.js';
@@ -9,7 +10,13 @@ import {
   parseCompactionSourceHashTag,
 } from '../../../session/compaction-audit.js';
 import { resolveSessionEntryRoleEnvelopePreview } from '../../../session/turn-provenance.js';
+import {
+  classifyChannel,
+  visibilitiesShareContinuity,
+} from '../../../trust/policy.js';
+import type { ChannelVisibility } from '../../../trust/types.js';
 import type {
+  AdminContinuityProvenanceView,
   AdminSessionListData,
   AdminSessionMessagesData,
   AdminSessionService,
@@ -145,13 +152,27 @@ export class AdminSessionDataService implements AdminSessionService {
     const channelId = messages.length > 0
       ? messages[0]!.channelId
       : (sessionActivity?.channelId ?? sessionId);
+    const currentVisibility: ChannelVisibility = messages[0]?.channelVisibility
+      ? (messages[0]!.channelVisibility as ChannelVisibility)
+      : classifyChannel(channelId);
     const roleEnvelopePreviews = messages.flatMap((entry) => {
       const preview = resolveSessionEntryRoleEnvelopePreview(entry);
       return preview ? [{ sessionEntryId: entry.id, preview }] : [];
     });
     const turns = this.deps.sessionStore
       .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
-      .map(record => this.turnObservability.buildTurnData(record));
+      .map((record) => {
+        const turnData = this.turnObservability.buildTurnData(record);
+        return {
+          ...turnData,
+          continuityProvenance: buildContinuityProvenanceViews(
+            record.turnId,
+            record.channelId,
+            currentVisibility,
+            turnData.snapshot?.sessionContext?.continuityEntries ?? [],
+          ),
+        };
+      });
     const compactionAuditViews = this.deps.sessionStore
       .getCompactionSummaries(sessionId)
       .slice()
@@ -166,4 +187,38 @@ export class AdminSessionDataService implements AdminSessionService {
       turns,
     };
   }
+}
+
+function buildContinuityProvenanceViews(
+  turnId: string,
+  currentChannelId: string,
+  currentVisibility: ChannelVisibility,
+  continuityEntries: readonly { id: number; metadata?: string }[],
+): AdminContinuityProvenanceView[] {
+  const provenance: AdminContinuityProvenanceView[] = [];
+
+  for (const entry of continuityEntries) {
+    const continuity = parseContinuityEntryProvenance(entry.metadata);
+    if (!continuity) continue;
+
+    const carriedAcrossChannels = continuity.sourceChannelId !== currentChannelId;
+    const sourceVisibility = continuity.sourceVisibility;
+    const visibilityCompatible = visibilitiesShareContinuity(
+      sourceVisibility,
+      currentVisibility,
+    );
+
+    provenance.push({
+      sessionEntryId: entry.id,
+      turnId,
+      continuityUserId: continuity.continuityUserId,
+      sourceChannelId: continuity.sourceChannelId,
+      sourceVisibility,
+      currentChannelId,
+      currentVisibility,
+      carriedAcrossChannels: carriedAcrossChannels && visibilityCompatible,
+    });
+  }
+
+  return provenance;
 }

@@ -8,6 +8,7 @@ import {
   sanitizeTurnStageTelemetry,
 } from '../../../turns/observability.js';
 import type {
+  AdminContinuityProvenanceView,
   AdminSessionTurnData,
   AdminTurnRetrievalTelemetry,
   AdminTurnSnapshotData,
@@ -97,6 +98,7 @@ export class AdminSessionTurnObservabilityStore {
     return {
       record,
       roleEnvelopeRefs: buildRecordedRoleEnvelopeRefs(record),
+      continuityProvenance: [] as AdminContinuityProvenanceView[],
       stages: observed?.stages.length
         ? observed.stages.map(cloneTurnStageTelemetryRecord)
         : recordedStages,

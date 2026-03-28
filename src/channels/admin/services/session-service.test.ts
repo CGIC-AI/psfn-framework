@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../../event-bus.js';
+import { UserContinuityStore } from '../../../session/continuity.js';
 import { SessionManager } from '../../../session/manager.js';
 import { SessionStore } from '../../../session/store.js';
 import { createTurnId } from '../../../turns/id.js';
@@ -333,6 +334,102 @@ describe('AdminSessionDataService', () => {
         compactionPromptText: 'Compaction prompt snapshot',
       },
     });
+  });
+
+  it('surfaces continuity provenance for cross-channel inspection', () => {
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity'));
+    continuityStore.append('canonical-contact-1', {
+      channelId: 'discord:dm',
+      role: 'assistant',
+      content: 'Cross-channel continuity note',
+      authorId: 'scheduler',
+      authorName: 'Scheduler',
+      timestamp: 1_700_000_200_000,
+      originChannelId: 'discord:dm',
+      channelVisibility: 'private',
+    });
+
+    store.append({
+      channelId: 'api:session-1',
+      role: 'user',
+      content: 'Current channel message',
+      authorId: 'canonical-contact-1',
+      authorName: 'User',
+      timestamp: 1_700_000_200_010,
+      channelVisibility: 'private',
+    });
+
+    const continuityEntry = continuityStore.getRecent('canonical-contact-1', 10, undefined, 'api:session-1')[0];
+    expect(continuityEntry).toBeDefined();
+
+    const turnId = createTurnId();
+    store.appendTurnRecord({
+      schemaVersion: 1,
+      turnId,
+      requestId: 'req-continuity-1',
+      channelId: 'api:session-1',
+      channelType: 'api',
+      startedAt: 1_700_000_200_000,
+      completedAt: 1_700_000_200_050,
+      status: 'completed',
+      userMessage: {
+        role: 'user',
+        content: 'Current channel message',
+        timestamp: 1_700_000_200_010,
+        authorId: 'canonical-contact-1',
+        authorName: 'User',
+      },
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: {
+        model: 'test-model',
+      },
+      provenanceRefs: [`turn:${turnId}`],
+      observability: {
+        stages: [],
+        retrievals: [],
+        snapshot: {
+          turnId,
+          requestId: 'req-continuity-1',
+          channelId: 'api:session-1',
+          capturedAt: 1_700_000_200_020,
+          trustLevel: 'regular',
+          sessionContext: {
+            channelId: 'api:session-1',
+            recentEntries: [],
+            compactionSummaryTexts: [],
+            focusKnowledgeTexts: [],
+            continuityEntries: [continuityEntry],
+            versionPointer: 'session-v1',
+          },
+        },
+      },
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const continuityEntryId = continuityEntry!.id;
+    expect(continuityEntryId).toBeDefined();
+    const result = service.getSessionMessages('api:session-1');
+    expect(result.turns).toHaveLength(1);
+    expect(result.turns[0]?.continuityProvenance).toEqual([
+      expect.objectContaining({
+        turnId,
+        sessionEntryId: continuityEntryId,
+        continuityUserId: 'canonical-contact-1',
+        sourceChannelId: 'discord:dm',
+        sourceVisibility: 'private',
+        currentChannelId: 'api:session-1',
+        currentVisibility: 'private',
+        carriedAcrossChannels: true,
+      }),
+    ]);
   });
 
   it('surfaces role-envelope previews and promoted refs without exposing raw bodies', () => {

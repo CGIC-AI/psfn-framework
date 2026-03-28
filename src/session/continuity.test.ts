@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { UserContinuityStore } from './continuity.js';
+import { UserContinuityStore, parseContinuityEntryProvenance } from './continuity.js';
 import { SessionStore } from './store.js';
 import { SessionManager } from './manager.js';
 import type { SubstrateConfig } from '../types.js';
@@ -76,6 +76,30 @@ describe('UserContinuityStore', () => {
     expect(entries[0].originChannelId).toBe('ch1');
     expect(entries[1].content).toBe('Hello from channel 2');
     expect(entries[1].originChannelId).toBe('ch2');
+  });
+
+  it('persists continuity provenance metadata on stored entries', () => {
+    store.append('user1', {
+      channelId: 'api:source',
+      role: 'user',
+      content: 'Provenance test',
+      authorId: 'user1',
+      authorName: 'Alice',
+      timestamp: 1000,
+      originChannelId: 'api:source',
+      channelVisibility: 'private',
+    });
+
+    const entry = store.getRecent('user1', 10)[0];
+    expect(entry).toBeDefined();
+    expect(parseContinuityEntryProvenance(entry!.metadata)).toEqual({
+      kind: 'continuity',
+      continuityUserId: 'user1',
+      sourceChannelId: 'api:source',
+      sourceVisibility: 'private',
+      sourceRole: 'user',
+      recordedAt: 1000,
+    });
   });
 
   it('excludes entries from a specific channel', () => {

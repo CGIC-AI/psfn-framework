@@ -23,7 +23,7 @@ import type {
   SocialGraphEntitySource,
   SocialRelationshipKind,
 } from '../../../contacts/types.js';
-import type { SensitivityLevel, TrustLevel } from '../../../trust/types.js';
+import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../trust/types.js';
 import type {
   CapabilityTierConfig,
 } from '../../../config/capability-tier-config.js';
@@ -285,9 +285,21 @@ export interface AdminSessionRoleEnvelopePreview {
   preview: SessionRoleEnvelopePreview;
 }
 
+export interface AdminContinuityProvenanceView {
+  sessionEntryId: number;
+  turnId: string;
+  continuityUserId: string;
+  sourceChannelId: string;
+  sourceVisibility: ChannelVisibility;
+  currentChannelId: string;
+  currentVisibility: ChannelVisibility;
+  carriedAcrossChannels: boolean;
+}
+
 export interface AdminSessionTurnData {
   record: TurnRecord;
   roleEnvelopeRefs: string[];
+  continuityProvenance: AdminContinuityProvenanceView[];
   stages: AdminTurnStageTelemetry[];
   retrievals: AdminTurnRetrievalTelemetry[];
   snapshot: AdminTurnSnapshotData | null;

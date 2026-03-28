@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChannelAdapter } from '../channels/types.js';
+import type { ChannelAdapter } from '../../../channels/types.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,
   type EligibilityDecision,
-} from '../system/capabilities/eligibility.js';
+} from '../../../system/capabilities/eligibility.js';
 import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,

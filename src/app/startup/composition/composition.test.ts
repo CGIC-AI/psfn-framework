@@ -3,21 +3,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { EventBus } from '../shared/event-bus.js';
-import { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
-import { ModuleLoader } from '../modules/loader.js';
-import { DEFAULT_REPL_CONFIG } from '../repl/types.js';
+import { EventBus } from '../../../shared/event-bus.js';
+import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import { ModuleLoader } from '../../../modules/loader.js';
+import { DEFAULT_REPL_CONFIG } from '../../../repl/types.js';
 import {
   DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
   extractGatewayMethods,
   validateAndLogToolWiring,
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
-} from '../agent/tool-wiring-validator.js';
-import type { LLMProvider } from '../agent/contracts.js';
-import type { LLMResponse } from '../shared/contracts/runtime.js';
-import type { ModuleRegistryMutation } from '../modules/types.js';
-import type { SandboxExecutionPort } from '../repl/sandbox-capabilities/contracts.js';
+} from '../../../agent/tool-wiring-validator.js';
+import type { LLMProvider } from '../../../agent/contracts.js';
+import type { LLMResponse } from '../../../shared/contracts/runtime.js';
+import type { ModuleRegistryMutation } from '../../../modules/types.js';
+import type { SandboxExecutionPort } from '../../../repl/sandbox-capabilities/contracts.js';
 import { wireShardAndThinkRuntime } from './composition.js';
 
 type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous';

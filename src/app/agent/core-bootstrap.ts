@@ -3,15 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { EmotionObserver } from '../../emotion/observer.js';
 import { EmotionState } from '../../emotion/state.js';
 import { getSharedAudioEmotionClassifier } from '../../emotion/audio-classifier.js';
-import { composeIdentity } from '../../bootstrap/composition.js';
+import { composeIdentity } from '../startup/composition/composition.js';
 import { buildAgentCoreRuntime, type AgentCoreRuntime } from '../../agent-main/core-runtime.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import { resolveCharacterCardHistoryPath, type RuntimePathSnapshot } from '../../persistence/layout.js';
-import { createStartupTextEmotionClassifier, warmRuntimeMlServices } from '../../runtime/ml-warmup.js';
+import { createStartupTextEmotionClassifier, warmRuntimeMlServices } from '../startup/support/ml-warmup.js';
 import {
   createRuntimeSafeguardSurfaces,
   type RuntimeSafeguardSurfaces,
-} from '../../runtime/safeguard-surfaces.js';
+} from '../startup/support/safeguard-surfaces.js';
 import { createGatewayNtfyNotifier, type NtfyNotifier } from '../../tools/ntfy.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';

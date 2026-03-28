@@ -28,13 +28,13 @@ import { attachTerminalDebugObserver } from '../../debug/terminal-observer.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../intention/patterns.js';
 import {
   wireShardAndThinkRuntime,
-} from '../../bootstrap/composition.js';
+} from '../startup/composition/composition.js';
 import { buildShellExecPolicyConfig } from '../../execution/shell-policy-config.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
   wireHeartbeatRuntime,
-} from '../../bootstrap/parity.js';
+} from '../startup/composition/parity.js';
 import { createSqliteCompanionStore } from '../../persistence/sqlite-companion-store.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import {
@@ -52,10 +52,10 @@ import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../agent/tool-wiring-
 import { registerGatewayMessageHandlers } from '../../agent-main/gateway-message-handlers.js';
 import {
   buildRuntimeChannelsConfigOverrides,
-} from '../../runtime/bootstrap-helpers.js';
-import { resolveStartupPreflightBundle } from '../../runtime/startup-preflight.js';
-import { emitEligibilityDecisionTelemetry } from '../../runtime/eligibility-telemetry.js';
-import { createSignalShutdownHandler } from '../../runtime/signal-shutdown.js';
+} from '../startup/support/bootstrap-helpers.js';
+import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
+import { emitEligibilityDecisionTelemetry } from '../startup/support/eligibility-telemetry.js';
+import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from '../../agent-main/control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from '../../agent-main/control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../repl/sandbox-execution-broker.js';

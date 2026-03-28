@@ -47,7 +47,7 @@ import {
   type RuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProviderOrder,
-} from '../../runtime/bootstrap-helpers.js';
+} from '../../app/startup/support/bootstrap-helpers.js';
 import type { StreamingSttConnector, SttStreamSession } from '../../voice/connectors/stt/index.js';
 
 const log = createComponentLogger('DiscordVoice');

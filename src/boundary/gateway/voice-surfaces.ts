@@ -16,7 +16,7 @@ import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
-} from '../../runtime/bootstrap-helpers.js';
+} from '../../app/startup/support/bootstrap-helpers.js';
 
 export interface GatewayVoiceModuleContext {
   gateway: GatewayServer;

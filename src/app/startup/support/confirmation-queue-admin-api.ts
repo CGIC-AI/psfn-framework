@@ -1,10 +1,10 @@
-import type { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
-import type { ConfirmationQueueAdminApi } from '../operator/garden/types.js';
+import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import type { ConfirmationQueueAdminApi } from '../../../operator/garden/types.js';
 import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
   ConfirmationResolveResult,
-} from '../boundary/gateway/protocol.js';
+} from '../../../boundary/gateway/protocol.js';
 
 type LocalConfirmationQueue = Pick<ConfirmationQueue, 'listPending' | 'resolve'>;
 type LocalConfirmationQueueWithLookup = Pick<ConfirmationQueue, 'getPending' | 'listPending' | 'resolve'>;

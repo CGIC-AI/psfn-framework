@@ -28,7 +28,7 @@ import {
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
-} from '../../bootstrap/composition.js';
+} from '../startup/composition/composition.js';
 
 // ── Test utilities ──
 

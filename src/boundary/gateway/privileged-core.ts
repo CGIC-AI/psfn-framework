@@ -13,7 +13,7 @@ import { AuditStore } from './audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
 import { GatewayServer } from './server.js';
-import type { StartupConfigHydrationResult } from '../../runtime/bootstrap-helpers.js';
+import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;

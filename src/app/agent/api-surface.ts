@@ -3,7 +3,7 @@ import {
   createApiServerChannelAdapterFactoryEntry,
   createOpenHomeChannelAdapterFactoryEntry,
   requireChannelAdapter,
-} from '../../bootstrap/channel-runtime.js';
+} from '../startup/composition/channel-runtime.js';
 import {
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
@@ -31,8 +31,8 @@ import type { RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.
 import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
-} from '../../runtime/channel-lifecycle.js';
-import { isExplicitTrue, parseCommaSeparatedEnv } from '../../runtime/env-parsing.js';
+} from '../startup/support/channel-lifecycle.js';
+import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 
 const log = createComponentLogger('Agent');
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;

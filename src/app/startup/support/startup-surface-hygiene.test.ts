@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const repoRootUrl = new URL('../../', import.meta.url);
+const repoRootUrl = new URL('../../../../', import.meta.url);
 
 function readRepoFile(relativePath: string): string {
   return readFileSync(new URL(relativePath, repoRootUrl), 'utf-8');
@@ -16,7 +16,7 @@ describe('startup surface hygiene', () => {
     const readme = readRepoFile('README.md');
     const specifications = readRepoFile('docs/specifications.md');
     const architecture = readRepoFile('docs/architecture.md');
-    const indexEntrypoint = readRepoFile('src/index.ts');
+    const indexEntrypoint = readRepoFile('src/app/startup/index.ts');
     const removedRuntimeFile = ['runtime', '.ts'].join('');
     const removedStartupHarnessFile = ['startup-harness', '.ts'].join('');
     const removedRuntimeReference = ['`src/', removedRuntimeFile, '`'].join('');
@@ -49,8 +49,8 @@ describe('startup surface hygiene', () => {
 
     expect(readme).toContain('npm run split');
     expect(specifications).toContain('split gateway + agent');
-    expect(specifications).toContain('`src/index.ts` is disabled');
-    expect(architecture).toContain('`src/index.ts` is disabled');
+    expect(specifications).toContain('`src/app/startup/index.ts` is disabled');
+    expect(architecture).toContain('`src/app/startup/index.ts` is disabled');
     expect(indexEntrypoint).toContain('This entrypoint is disabled.');
   });
 });

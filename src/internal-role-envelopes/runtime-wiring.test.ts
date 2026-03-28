@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { composeSessionRuntime } from '../bootstrap/composition.js';
+import { composeSessionRuntime } from '../app/startup/composition/composition.js';
 import {
   resolveInternalRoleEnvelopeLedgerPath,
   resolveInternalRoleEnvelopesDir,

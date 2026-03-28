@@ -21,7 +21,7 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../llm/client.js';
-import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from '../../bootstrap/composition.js';
+import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from '../startup/composition/composition.js';
 import { ElevenLabsTtsClient } from '../../voice/elevenlabs.js';
 import { DeepgramSttClient } from '../../voice/deepgram.js';
 import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';

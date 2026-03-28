@@ -3,8 +3,8 @@ import {
   createPromptGenerationFailureAlertHandler,
   formatPromptGenerationFailureAlert,
 } from './operator-alerts.js';
-import type { StreamTerminalFailureEvent } from '../agent/stream-adapter.js';
-import type { NtfyNotifier } from '../tools/ntfy.js';
+import type { StreamTerminalFailureEvent } from '../../../agent/stream-adapter.js';
+import type { NtfyNotifier } from '../../../tools/ntfy.js';
 
 function makeEvent(): StreamTerminalFailureEvent {
   return {

@@ -1,16 +1,16 @@
 import type {
   ChannelAdapter,
   ChannelAdapterFactoryEntry,
-} from '../../channels/types.js';
-import type { OutboundContext } from '../../channels/types.js';
+} from '../../../../channels/types.js';
+import type { OutboundContext } from '../../../../channels/types.js';
 import {
   registerStreamingSttProvider,
   type StreamingSttConnector,
-} from '../../voice/connectors/stt/index.js';
+} from '../../../../voice/connectors/stt/index.js';
 import {
   registerStreamingTtsProvider,
   type StreamingTtsConnector,
-} from '../../voice/connectors/tts/index.js';
+} from '../../../../voice/connectors/tts/index.js';
 
 export interface ExternalPluginFixtureState {
   channelMessages: Array<{ channelId: string; text: string }>;

@@ -3,7 +3,7 @@ import {
   RUNTIME_MODE,
   resolveRuntimeModeContract,
   toRuntimeStatusMetadata,
-} from '../system/lifecycle/runtime-mode.js';
+} from '../../../system/lifecycle/runtime-mode.js';
 
 describe('startup entrypoint wiring', () => {
   it('treats split startup contracts as command-restarted processes', () => {

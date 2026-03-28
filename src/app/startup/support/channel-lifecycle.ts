@@ -1,11 +1,11 @@
 import type {
   ChannelAdapter,
   ChannelAdapterFactoryEntry,
-} from '../channels/types.js';
+} from '../../../channels/types.js';
 import {
   EligibilityDeniedError,
   type EligibilityGate,
-} from '../system/capabilities/eligibility.js';
+} from '../../../system/capabilities/eligibility.js';
 import {
   requirePluginActivationEligibility,
   wrapChannelAdapterWithEligibility,

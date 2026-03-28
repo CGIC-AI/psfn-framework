@@ -122,4 +122,4 @@ Start here when behavior matters:
 - `src/memory/writer.ts`
 - `src/memory/extraction.ts`
 - `src/memory/retrieval.ts`
-- `src/bootstrap/composition.ts`
+- `src/app/startup/composition/composition.ts`

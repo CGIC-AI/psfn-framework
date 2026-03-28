@@ -1,18 +1,18 @@
-import type { EventBus } from '../shared/event-bus.js';
-import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import type { SubstrateAgent } from '../agent/substrate-agent.js';
-import type { EligibilityGate } from '../system/capabilities/eligibility.js';
-import { ApiServer, type ApiServerConfig } from '../channels/api/server.js';
-import { DiscordAdapter } from '../channels/discord/adapter.js';
-import { OpenHomeAdapter } from '../channels/openhome/adapter.js';
-import type { TelegramChannelConfig } from '../channels/config.js';
-import { TelegramAdapter } from '../channels/telegram/adapter.js';
+import type { EventBus } from '../../../shared/event-bus.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { SubstrateAgent } from '../../../agent/substrate-agent.js';
+import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
+import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
+import { DiscordAdapter } from '../../../channels/discord/adapter.js';
+import { OpenHomeAdapter } from '../../../channels/openhome/adapter.js';
+import type { TelegramChannelConfig } from '../../../channels/config.js';
+import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
 import type {
   ChannelAdapter,
   ChannelAdapterFactoryEntry,
   MessageHandler,
-} from '../channels/types.js';
-import type { SessionStore } from '../session/store.js';
+} from '../../../channels/types.js';
+import type { SessionStore } from '../../../session/store.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
   config: SubstrateConfig;

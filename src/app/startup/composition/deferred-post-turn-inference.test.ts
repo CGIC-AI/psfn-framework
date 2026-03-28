@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../agent/deferred-tool-handoff.js';
+import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../../../agent/deferred-tool-handoff.js';
 import {
   inferComposedDeferredPostTurnActions,
   inferDeferredPostTurnActions,

@@ -1,7 +1,7 @@
 import { createComponentLogger } from '../../shared/logger.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
-import type { StartupConfigHydrationDiagnostics } from '../../runtime/bootstrap-helpers.js';
-import { isExplicitTrue } from '../../runtime/env-parsing.js';
+import type { StartupConfigHydrationDiagnostics } from '../startup/support/bootstrap-helpers.js';
+import { isExplicitTrue } from '../startup/support/env-parsing.js';
 
 const log = createComponentLogger('Agent');
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';

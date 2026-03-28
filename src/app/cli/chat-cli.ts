@@ -14,7 +14,7 @@ import { MemoryStore } from '../../memory/store.js';
 import { SalienceDecay } from '../../memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../repl/types.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
-import { hydrateCanonicalStartupConfig } from '../../runtime/bootstrap-helpers.js';
+import { hydrateCanonicalStartupConfig } from '../startup/support/bootstrap-helpers.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -22,7 +22,7 @@ import {
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
-} from '../../bootstrap/composition.js';
+} from '../startup/composition/composition.js';
 
 const CHANNEL_ID = 'cli:chat';
 

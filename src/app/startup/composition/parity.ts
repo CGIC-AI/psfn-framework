@@ -1,24 +1,24 @@
 // ── Shared Runtime Wiring ──
 // Common primitives used by both split-runtime and gateway agent mode.
 
-import type { CapabilityTier, CompositionalPolicyConfig, SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import type { PostTurnActionCandidate, SubstrateMessage } from '../shared/contracts/runtime.js';
-import type { EventBus } from '../shared/event-bus.js';
-import type { Scheduler } from '../scheduler/scheduler.js';
-import { createComponentLogger } from '../shared/logger.js';
-import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
+import type { CapabilityTier, CompositionalPolicyConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { EventBus } from '../../../shared/event-bus.js';
+import type { Scheduler } from '../../../scheduler/scheduler.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import type { ToolRegistrarTarget } from '../../../agent/tool-registrar.js';
 import {
   createDefaultExtendedToolAutoloadPolicy,
   type ExtendedToolAutoloadPolicy,
-} from '../agent/extended-tool-autoload-policy.js';
+} from '../../../agent/extended-tool-autoload-policy.js';
 import type {
   ExtendedToolActivationOptions,
   ExtendedToolActivationResult,
   PostTurnActionInferer,
-} from '../agent/substrate-agent.js';
-import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
-import type { MessageSender } from '../system/lifecycle/notifications.js';
-import type { LLMProvider } from '../agent/contracts.js';
+} from '../../../agent/substrate-agent.js';
+import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../repl/types.js';
+import type { MessageSender } from '../../../system/lifecycle/notifications.js';
+import type { LLMProvider } from '../../../agent/contracts.js';
 import {
   createPromotedToolsAddTool,
   createPromotedToolsListTool,
@@ -26,27 +26,27 @@ import {
   createPromotedToolsSwapTool,
   createSettingsGetTool,
   type PromotedExtendedToolsManager,
-} from '../system/settings-tools.js';
-import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../filesystem/runtime-wiring.js';
-import type { SessionManager } from '../session/manager.js';
-import type { CoreMemoryStore } from '../core-memory/store.js';
-import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
-import { createSessionGrepTool, createSessionSearchTool } from '../tools/session-search.js';
-import { resolveSessionsDir } from '../persistence/layout.js';
-import { createCompleteFocusTool, createStartFocusTool } from '../tools/focus.js';
-import { PromptLayerStore } from '../identity/prompt-store.js';
-import { PromptComposer } from '../identity/prompt-composer.js';
-import { PromptRegistryStore } from '../identity/prompt-registry.js';
-import { ensureRuntimePromptLayers } from '../identity/runtime-prompt-layers.js';
-import { wrapPromptSectionXml } from '../prompt/sections.js';
-import { runDeliberation } from '../llm/deliberation.js';
-import type { DeliberationResult } from '../llm/deliberation.js';
+} from '../../../system/settings-tools.js';
+import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../filesystem/runtime-wiring.js';
+import type { SessionManager } from '../../../session/manager.js';
+import type { CoreMemoryStore } from '../../../core-memory/store.js';
+import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../../../tools/session.js';
+import { createSessionGrepTool, createSessionSearchTool } from '../../../tools/session-search.js';
+import { resolveSessionsDir } from '../../../persistence/layout.js';
+import { createCompleteFocusTool, createStartFocusTool } from '../../../tools/focus.js';
+import { PromptLayerStore } from '../../../identity/prompt-store.js';
+import { PromptComposer } from '../../../identity/prompt-composer.js';
+import { PromptRegistryStore } from '../../../identity/prompt-registry.js';
+import { ensureRuntimePromptLayers } from '../../../identity/runtime-prompt-layers.js';
+import { wrapPromptSectionXml } from '../../../prompt/sections.js';
+import { runDeliberation } from '../../../llm/deliberation.js';
+import type { DeliberationResult } from '../../../llm/deliberation.js';
 import {
   createPersonaUpdateTool,
   type PersonaUpdateToolOptions,
   type CharacterCardVersionStore,
-} from '../identity/card-versioning.js';
-import { buildCharacterPromptTemplateVariables } from '../identity/loader.js';
+} from '../../../identity/card-versioning.js';
+import { buildCharacterPromptTemplateVariables } from '../../../identity/loader.js';
 import {
   createPromptLayerListTool,
   createPromptLayerGetTool,
@@ -56,31 +56,31 @@ import {
   createPromptLayerRollbackTool,
   createPromptLayerToggleTool,
   type PromptLayerUpdateToolOptions,
-} from '../identity/prompt-tools.js';
-import { NorthStarStore } from '../north-star/store.js';
+} from '../../../identity/prompt-tools.js';
+import { NorthStarStore } from '../../../north-star/store.js';
 import {
   createNorthStarCreateTool,
   createNorthStarDeleteTool,
   createNorthStarListTool,
   createNorthStarReorderTool,
   createNorthStarUpdateTool,
-} from '../north-star/tools.js';
-import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
+} from '../../../north-star/tools.js';
+import { HeartbeatPolicyStore } from '../../../scheduler/heartbeat-policy.js';
 import {
   createHeartbeatGetPolicyTool,
   createHeartbeatRunTemplateTool,
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
-} from '../scheduler/heartbeat-tools.js';
-import type { ReflectionTemplate } from '../scheduler/heartbeat-policy.js';
-import type { MemoryWriter } from '../memory/writer.js';
-import { ValuesJournalStore } from '../values/store.js';
-import type { ValuesDeliberationMetadata } from '../values/store.js';
+} from '../../../scheduler/heartbeat-tools.js';
+import type { ReflectionTemplate } from '../../../scheduler/heartbeat-policy.js';
+import type { MemoryWriter } from '../../../memory/writer.js';
+import { ValuesJournalStore } from '../../../values/store.js';
+import type { ValuesDeliberationMetadata } from '../../../values/store.js';
 import {
   createValuesAddTool,
   createValuesListTool,
   createValuesUpdateTool,
-} from '../values/tools.js';
+} from '../../../values/tools.js';
 import {
   resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,
@@ -91,27 +91,27 @@ import {
   resolvePromptRegistryPath,
   resolveReflectionJournalPath,
   resolveValuesJournalPath,
-} from '../persistence/layout.js';
-import { ReflectionJournalStore } from '../notes/reflection-journal.js';
+} from '../../../persistence/layout.js';
+import { ReflectionJournalStore } from '../../../notes/reflection-journal.js';
 import type { PostTurnActionRuntime } from './post-turn-actions.js';
-import { isBusyTurnError } from '../system/lifecycle/turn-contention.js';
+import { isBusyTurnError } from '../../../system/lifecycle/turn-contention.js';
 import {
   buildDeferredToolHandoffMessage,
   DEFERRED_TOOL_HANDOFF_ACTION_KIND,
   normalizeDeferredToolHandoffPayload,
   type DeferredToolHandoffPayload,
-} from '../agent/deferred-tool-handoff.js';
+} from '../../../agent/deferred-tool-handoff.js';
 import {
   inferComposedDeferredPostTurnActions,
   inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages,
 } from './deferred-post-turn-inference.js';
-import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
+import { evaluateCompositionalPolicyForChannelId } from '../../../compositional/policy.js';
 import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
-} from '../memory/sleeptime-agent.js';
-import type { EmotionStateSnapshot } from '../emotion/state.js';
-import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+} from '../../../memory/sleeptime-agent.js';
+import type { EmotionStateSnapshot } from '../../../emotion/state.js';
+import type { EmotionalSnapshot } from '../../../contacts/store/emotional-baseline.js';
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
@@ -122,14 +122,14 @@ import {
   toInferredPostTurnActions,
   type ActiveConcernSnapshot,
   type IntentionActionDecision,
-} from '../intention/appraisal.js';
-import { MotivationBridge } from '../intention/motivation.js';
+} from '../../../intention/appraisal.js';
+import { MotivationBridge } from '../../../intention/motivation.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
   serializeInternalState,
   type InternalState,
-} from '../self-model/state.js';
+} from '../../../self-model/state.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';

@@ -22,7 +22,7 @@ import {
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
-} from '../../bootstrap/composition.js';
+} from '../startup/composition/composition.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 
 const CHANNEL = 'walkthrough:orientation';

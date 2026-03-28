@@ -14,7 +14,7 @@ import { attachTerminalDebugObserver } from '../../debug/terminal-observer.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EligibilityDecision } from '../../system/capabilities/eligibility.js';
 import { resolveGatewayBootstrapInput } from '../../boundary/gateway/bootstrap-input.js';
-import type { StartupConfigHydrationDiagnostics } from '../../runtime/bootstrap-helpers.js';
+import type { StartupConfigHydrationDiagnostics } from '../startup/support/bootstrap-helpers.js';
 import { RUNTIME_MODE } from '../../system/lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { buildGatewayPrivilegedCore } from '../../boundary/gateway/privileged-core.js';
@@ -26,9 +26,9 @@ import {
   wireGatewayChannelMessages,
 } from '../../boundary/gateway/channel-surfaces.js';
 import { createGatewayVoiceSurfaces } from '../../boundary/gateway/voice-surfaces.js';
-import { resolveStartupPreflightBundle } from '../../runtime/startup-preflight.js';
-import { runShutdownSequence } from '../../runtime/shutdown-helpers.js';
-import { createSignalShutdownHandler } from '../../runtime/signal-shutdown.js';
+import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
+import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
+import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 
 const log = createComponentLogger('Gateway');
 

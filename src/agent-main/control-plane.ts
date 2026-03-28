@@ -4,7 +4,7 @@ import type { MessageSender } from '../system/lifecycle/notifications.js';
 import { resolveRuntimeCommandInvocation } from '../system/lifecycle/runtime-mode.js';
 import { createRestartTool, createRebuildTool } from '../tools/lifecycle.js';
 import { createNotifyOperatorTool, type NtfyNotifier } from '../tools/ntfy.js';
-import { runShutdownSequence } from '../runtime/shutdown-helpers.js';
+import { runShutdownSequence } from '../app/startup/support/shutdown-helpers.js';
 import { parsePositiveIntEnv } from '../shared/utils/env.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';

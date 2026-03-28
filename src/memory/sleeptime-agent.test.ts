@@ -6,7 +6,7 @@ import type { LLMProvider } from '../agent/contracts.js';
 import type { InferredPostTurnAction, SubstrateMessage, AgentResponse } from '../shared/contracts/runtime.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
-import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
+import { wirePostTurnActionRuntime } from '../app/startup/composition/post-turn-actions.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
 import {
   SleeptimeMemoryAgent,

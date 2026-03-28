@@ -16,8 +16,8 @@ import type { CapabilityRuntime } from '../system/capabilities/runtime.js';
 import type { RuntimePathSnapshot } from '../persistence/layout.js';
 import type { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
 import type { IntentionRuntimeWiring, IntentionAppraisalHooks, IntentionBehavioralPatternHooks } from '../intention/runtime-wiring.js';
-import { composeSessionRuntime, composeSubstrateAgent, wireCoreMemoryRuntime, wireMemoryRuntime, wireSelfModelRuntime } from '../bootstrap/composition.js';
-import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../bootstrap/parity.js';
+import { composeSessionRuntime, composeSubstrateAgent, wireCoreMemoryRuntime, wireMemoryRuntime, wireSelfModelRuntime } from '../app/startup/composition/composition.js';
+import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../app/startup/composition/parity.js';
 import { wireContactRuntime } from '../contacts/runtime-wiring.js';
 import { wireSkillsRuntime } from '../skills/runtime-wiring.js';
 import { registerFilesystemTools } from '../filesystem/runtime-wiring.js';
@@ -33,7 +33,7 @@ import { composeSystemPromptTemplate } from '../identity/loader.js';
 import type { PromptLayerStore } from '../identity/prompt-store.js';
 import type { CharacterCardVersionStore } from '../identity/card-versioning.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
-import { createPromptGenerationFailureAlertHandler } from '../runtime/operator-alerts.js';
+import { createPromptGenerationFailureAlertHandler } from '../app/startup/support/operator-alerts.js';
 import type { NtfyNotifier } from '../tools/ntfy.js';
 import {
   resolveContactsDir,

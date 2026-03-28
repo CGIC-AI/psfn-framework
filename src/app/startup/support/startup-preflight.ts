@@ -1,12 +1,12 @@
-import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import { getIgnoredJsonBackedConfigEnvKeys } from '../system/config/legacy-env.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from '../../../system/config/legacy-env.js';
 import {
   resolveRuntimeModeContract,
   toRuntimeStatusMetadata,
   type RuntimeEntrypoint,
   type RuntimeModeContract,
   type RuntimeStatusMetadata,
-} from '../system/lifecycle/runtime-mode.js';
+} from '../../../system/lifecycle/runtime-mode.js';
 import {
   hydrateCanonicalStartupConfig,
   type StartupConfigHydrationOptions,

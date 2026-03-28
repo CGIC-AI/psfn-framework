@@ -25,7 +25,7 @@ import { parseWyomingShardRoutingConfigEnv } from '../../system/config/load-conf
 import {
   buildRuntimeChannelsConfigOverrides,
   type StartupConfigHydrationResult,
-} from '../../runtime/bootstrap-helpers.js';
+} from '../../app/startup/support/bootstrap-helpers.js';
 import type { PolicyConfig } from './policy.js';
 import type { GatewayNtfyConfig } from './ntfy-notifier.js';
 import type { SessionHmacKeyring } from '../../session/journal-utils.js';

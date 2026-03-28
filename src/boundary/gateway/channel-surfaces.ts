@@ -14,12 +14,12 @@ import {
   createTelegramChannelAdapterFactoryEntry,
   getOptionalChannelAdapter,
   requireChannelAdapter,
-} from '../../bootstrap/channel-runtime.js';
+} from '../../app/startup/composition/channel-runtime.js';
 import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
   type RuntimeChannelLifecycleLogger,
-} from '../../runtime/channel-lifecycle.js';
+} from '../../app/startup/support/channel-lifecycle.js';
 
 export interface GatewayChannelSurfaces {
   discord: DiscordAdapter;

@@ -12,10 +12,10 @@ This is the current runtime shape. For the component graph, start with [`docs/ar
 
 Shared runtime construction is concentrated in:
 
-- `src/bootstrap/composition.ts`
-- `src/bootstrap/parity.ts`
-- `src/bootstrap/post-turn-actions.ts`
-- `src/bootstrap/channel-runtime.ts`
+- `src/app/startup/composition/composition.ts`
+- `src/app/startup/composition/parity.ts`
+- `src/app/startup/composition/post-turn-actions.ts`
+- `src/app/startup/composition/channel-runtime.ts`
 
 Those helpers keep the split runtime and shared wiring aligned on core wiring:
 
@@ -79,7 +79,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 
 ### Channels and voice
 
-- Channel adapters are manifest-driven and loaded through `src/runtime/channel-lifecycle.ts`.
+- Channel adapters are manifest-driven and loaded through `src/app/startup/support/channel-lifecycle.ts`.
 - Current runtime surfaces include Discord, Telegram, the OpenAI-compatible API, Garden admin, Wyoming, and PSFN/OpenHome-related adapter entries.
 - Voice connectors are plugin-style STT/TTS adapters resolved from runtime settings and capability eligibility.
 

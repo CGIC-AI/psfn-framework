@@ -8,8 +8,8 @@ This document is the compact contract for how the live runtime is supposed to be
    - `src/app/startup/index.ts`
    - `src/app/gateway/main.ts`
    - `src/app/agent/main.ts`
-   - `src/bootstrap/composition.ts`
-   - `src/bootstrap/parity.ts`
+   - `src/app/startup/composition/composition.ts`
+   - `src/app/startup/composition/parity.ts`
 2. Config and persistence contracts
    - `src/types.ts`
    - `src/settings.ts`

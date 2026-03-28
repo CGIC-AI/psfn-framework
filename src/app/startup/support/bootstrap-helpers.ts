@@ -1,18 +1,18 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import {
   applySettings,
   type EditableSettings,
   type SettingsDomainSplit,
-} from '../system/settings.js';
-import type { EligibilityGate } from '../system/capabilities/eligibility.js';
+} from '../../../system/settings.js';
+import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
 import {
   createEmbeddingDimensionMismatchWarning,
   type EmbeddingDimensionValidationResult,
-} from '../backup/startup-checks.js';
-import type { RuntimeChannelsConfigOverrides } from '../channels/config.js';
+} from '../../../backup/startup-checks.js';
+import type { RuntimeChannelsConfigOverrides } from '../../../channels/config.js';
 import {
   createStreamingSttConnector,
   getStreamingSttProviderMetadata,
@@ -21,7 +21,7 @@ import {
   resolveStreamingSttRuntimeConfig,
   type StreamingSttConnector,
   type StreamingSttProvider,
-} from '../voice/connectors/stt/index.js';
+} from '../../../voice/connectors/stt/index.js';
 import {
   createStreamingTtsConnector,
   getStreamingTtsProviderMetadata,
@@ -30,32 +30,32 @@ import {
   resolveStreamingTtsRuntimeConfig,
   type StreamingTtsConnector,
   type StreamingTtsProvider,
-} from '../voice/connectors/tts/index.js';
+} from '../../../voice/connectors/tts/index.js';
 import {
   requirePluginActivationEligibility,
   wrapStreamingSttConnectorWithEligibility,
   wrapStreamingTtsConnectorWithEligibility,
 } from './plugin-eligibility.js';
-import { createEnvCredentialVault } from '../custody/credential-vault.js';
-import { createSystemConfigRepository } from '../system/config/system-config-repository.js';
-import { type ModelsLoadResult } from '../system/config/models-config.js';
+import { createEnvCredentialVault } from '../../../custody/credential-vault.js';
+import { createSystemConfigRepository } from '../../../system/config/system-config-repository.js';
+import { type ModelsLoadResult } from '../../../system/config/models-config.js';
 import {
   applyProvidersRuntimeConfig,
   type ProvidersLoadResult,
-} from '../system/config/providers-config.js';
-import { CAPABILITY_TIER_FILE_NAME } from '../system/config/capability-tier-config.js';
-import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../system/config/scheduler-config.js';
-import { type TrustPolicyConfig } from '../system/config/trust-policy-config.js';
-import { resolveRuntimeSchedulerConfig } from '../system/config/scheduler-runtime.js';
-import { setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
+} from '../../../system/config/providers-config.js';
+import { CAPABILITY_TIER_FILE_NAME } from '../../../system/config/capability-tier-config.js';
+import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
+import { type TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
+import { resolveRuntimeSchedulerConfig } from '../../../system/config/scheduler-runtime.js';
+import { setRuntimeTrustPolicy } from '../../../trust/runtime-policy.js';
 import {
   resolveRuntimePathSnapshotFromConfig,
   type RuntimePathSnapshot,
-} from '../persistence/layout.js';
+} from '../../../persistence/layout.js';
 import {
   assertPersistenceCutoverReady,
   buildPersistenceCutoverOptionsFromConfig,
-} from '../persistence/cutover.js';
+} from '../../../persistence/cutover.js';
 import {
   loadStartupCapabilityTierOwnerFile,
   loadStartupModelsOwnerFile,
@@ -63,7 +63,7 @@ import {
   loadStartupRuntimeSettingsOwnerFile,
   loadStartupTrustPolicyOwnerFile,
   loadStartupSchedulerOwnerFile,
-} from '../system/config/startup-owner-files.js';
+} from '../../../system/config/startup-owner-files.js';
 
 export type RuntimeVoiceSttProvider = StreamingSttProvider | 'disabled';
 export type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';

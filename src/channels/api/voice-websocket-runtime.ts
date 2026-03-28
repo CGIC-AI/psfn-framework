@@ -19,7 +19,7 @@ import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
-} from '../../runtime/bootstrap-helpers.js';
+} from '../../app/startup/support/bootstrap-helpers.js';
 import type { SttStreamConfig, SttStreamSession, SttTranscriptChunk, StreamingSttConnector } from '../../voice/connectors/stt/types.js';
 import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
 import {

@@ -10,8 +10,8 @@ import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
-import { createGatewayConfirmationQueueAdminApi } from '../../runtime/confirmation-queue-admin-api.js';
-import { isExplicitTrue } from '../../runtime/env-parsing.js';
+import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
+import { isExplicitTrue } from '../startup/support/env-parsing.js';
 
 export interface StartOptionalAdminServerOptions {
   adminHost?: string;

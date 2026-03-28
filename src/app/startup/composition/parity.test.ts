@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { EventBus } from '../shared/event-bus.js';
-import { Scheduler } from '../scheduler/scheduler.js';
-import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
-import type { LLMProvider } from '../agent/contracts.js';
-import { readLastActiveSession } from '../system/lifecycle/notifications.js';
-import { createDefaultExtendedToolAutoloadPolicy } from '../agent/extended-tool-autoload-policy.js';
-import { buildInternalStateSnapshotRef, InternalStateComputer } from '../self-model/state.js';
+import { EventBus } from '../../../shared/event-bus.js';
+import { Scheduler } from '../../../scheduler/scheduler.js';
+import { HeartbeatPolicyStore } from '../../../scheduler/heartbeat-policy.js';
+import type { LLMProvider } from '../../../agent/contracts.js';
+import { readLastActiveSession } from '../../../system/lifecycle/notifications.js';
+import { createDefaultExtendedToolAutoloadPolicy } from '../../../agent/extended-tool-autoload-policy.js';
+import { buildInternalStateSnapshotRef, InternalStateComputer } from '../../../self-model/state.js';
 import {
   wireFilesystemToolsRuntime,
   wireExtendedToolAutoloadPolicy,
@@ -18,7 +18,7 @@ import {
   wireSettingsRuntime,
 } from './parity.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
-import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../agent/deferred-tool-handoff.js';
+import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../../../agent/deferred-tool-handoff.js';
 
 function createInternalStateNarrativeFixture() {
   const internalState = new InternalStateComputer().computeState({

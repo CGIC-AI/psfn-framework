@@ -5,52 +5,52 @@
 // - src/agent-main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
 // Keep core construction through these helpers so behavior stays aligned across split entrypoints.
 
-import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import type { EventBus } from '../shared/event-bus.js';
-import { SessionStore, type SessionIntegrityProvider } from '../session/store.js';
-import { SessionManager } from '../session/manager.js';
-import { UserContinuityStore } from '../session/continuity.js';
-import { InternalRoleEnvelopeLedgerStore } from '../internal-role-envelopes/store.js';
-import { wireInternalRoleEnvelopeRuntime } from '../internal-role-envelopes/runtime-wiring.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { EventBus } from '../../../shared/event-bus.js';
+import { SessionStore, type SessionIntegrityProvider } from '../../../session/store.js';
+import { SessionManager } from '../../../session/manager.js';
+import { UserContinuityStore } from '../../../session/continuity.js';
+import { InternalRoleEnvelopeLedgerStore } from '../../../internal-role-envelopes/store.js';
+import { wireInternalRoleEnvelopeRuntime } from '../../../internal-role-envelopes/runtime-wiring.js';
 import {
   createEmbeddingProviderFromConfig as createEmbeddingProviderFromMemoryConfig,
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
   type EmbeddingRuntimeProvider,
-} from '../memory/embedding.js';
+} from '../../../memory/embedding.js';
 import {
   SubstrateAgent,
   type EmotionRuntimeWiring,
   type SubstrateAgentOptions,
-} from '../agent/substrate-agent.js';
-import { MemoryRetriever } from '../memory/retrieval.js';
-import { MemoryExtractor } from '../memory/extraction.js';
-import type { MemoryStore } from '../memory/store.js';
-import type { ContactStore } from '../contacts/store.js';
-import { ShardManager } from '../shards/manager.js';
+} from '../../../agent/substrate-agent.js';
+import { MemoryRetriever } from '../../../memory/retrieval.js';
+import { MemoryExtractor } from '../../../memory/extraction.js';
+import type { MemoryStore } from '../../../memory/store.js';
+import type { ContactStore } from '../../../contacts/store.js';
+import { ShardManager } from '../../../shards/manager.js';
 import {
   createShardExecutionPort,
   type ShardExecutionPort,
-} from '../shards/port.js';
-import { createSpawnShardTool } from '../shards/tools.js';
-import { createThinkTool } from '../repl/tools.js';
-import { CoreMemoryStore } from '../core-memory/store.js';
+} from '../../../shards/port.js';
+import { createSpawnShardTool } from '../../../shards/tools.js';
+import { createThinkTool } from '../../../repl/tools.js';
+import { CoreMemoryStore } from '../../../core-memory/store.js';
 import {
   createCoreMemoryAppendTool,
   createCoreMemoryReplaceTool,
   createMemoryRethinkTool,
-} from '../core-memory/tools.js';
-import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
-import type { SandboxExecutionPort } from '../repl/sandbox-capabilities/contracts.js';
-import type { Scheduler } from '../scheduler/scheduler.js';
-import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
-import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../identity/loader.js';
-import type { CharacterCardV2 } from '../identity/types.js';
-import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
-import type { PromptRegistryStore } from '../identity/prompt-registry.js';
-import type { ShardAuditTrail } from '../shards/manager.js';
-import type { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
-import type { ModuleRegistryMutation } from '../modules/types.js';
-import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
+} from '../../../core-memory/tools.js';
+import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../repl/types.js';
+import type { SandboxExecutionPort } from '../../../repl/sandbox-capabilities/contracts.js';
+import type { Scheduler } from '../../../scheduler/scheduler.js';
+import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
+import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../../../identity/loader.js';
+import type { CharacterCardV2 } from '../../../identity/types.js';
+import type { LLMProvider, EmbeddingService } from '../../../agent/contracts.js';
+import type { PromptRegistryStore } from '../../../identity/prompt-registry.js';
+import type { ShardAuditTrail } from '../../../shards/manager.js';
+import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import type { ModuleRegistryMutation } from '../../../modules/types.js';
+import type { RuntimeMode } from '../../../agent/tool-wiring-validator.js';
 import {
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
@@ -59,7 +59,7 @@ import {
   resolveContinuityDir,
   resolveShardSessionMemorySyncAuditPath,
   resolveSessionsDir,
-} from '../persistence/layout.js';
+} from '../../../persistence/layout.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;

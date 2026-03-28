@@ -1,5 +1,5 @@
-import type { EventBus } from '../shared/event-bus.js';
-import type { EligibilityDecision } from '../system/capabilities/eligibility.js';
+import type { EventBus } from '../../../shared/event-bus.js';
+import type { EligibilityDecision } from '../../../system/capabilities/eligibility.js';
 
 export interface EligibilityTelemetryLogger {
   warn: (message: string, meta?: Record<string, unknown>) => void;

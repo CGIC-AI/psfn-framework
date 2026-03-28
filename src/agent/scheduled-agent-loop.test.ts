@@ -139,4 +139,36 @@ describe('scheduled-agent-loop stream result contract', () => {
       partialMessage: null,
     })).rejects.toThrow('Stream response missing result payload');
   });
+
+  it('surfaces terminal stream failure without emitting a synthetic assistant message', async () => {
+    const streamFn = vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() {
+        throw new Error('terminal model failure');
+      },
+    }) as any);
+    const events: any[] = [];
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
+      {
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [],
+      } as any,
+      makeLoopConfig() as any,
+      new AbortController().signal,
+      streamFn as any,
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === 'message_end' && event.message?.role === 'assistant')).toBe(false);
+    expect(events.find((event) => event.type === 'agent_error')?.error?.message).toBe('terminal model failure');
+    const agentEnd = events.find((event) => event.type === 'agent_end');
+    expect(agentEnd?.messages).toHaveLength(1);
+    expect(agentEnd?.messages?.[0]?.role).toBe('user');
+  });
 });

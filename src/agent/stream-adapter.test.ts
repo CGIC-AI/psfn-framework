@@ -232,7 +232,7 @@ describe('createSubstrateStreamFn', () => {
       };
     })() as any);
 
-    const events = await runWithRequestContext(
+    await expect(runWithRequestContext(
       {
         turnId: 'turn-stream-budget-1',
         requestId: 'req-stream-budget-1',
@@ -261,11 +261,7 @@ describe('createSubstrateStreamFn', () => {
         );
         return await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
-    );
-
-    expect(events).toHaveLength(1);
-    expect((events[0] as { type: string }).type).toBe('error');
-    expect((events[0] as { error: { errorMessage: string } }).error.errorMessage).toContain('Model budget blocked');
+    )).rejects.toThrow('Model budget blocked');
     expect(blockedEvents).toHaveLength(1);
     expect(blockedEvents[0]).toMatchObject({
       reason: 'daily_budget_exceeded',
@@ -492,13 +488,7 @@ describe('createSubstrateStreamFn', () => {
       messages: [{ role: 'user', content: 'hello' }],
     } as any, {});
 
-    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
-
-    expect(events).toHaveLength(1);
-    expect((events[0] as { type: string }).type).toBe('error');
-    expect((events[0] as { error: { content: Array<{ text: string }>; errorMessage: string } }).error.content)
-      .toHaveLength(0);
-    expect((events[0] as { error: { errorMessage: string } }).error.errorMessage).toContain('fatal failure');
+    await expect(collectStreamEvents(stream as AsyncIterable<unknown>)).rejects.toThrow('fatal failure');
     expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(2);
     expect(onTerminalFailure).toHaveBeenCalledTimes(1);
     expect(onTerminalFailure.mock.calls[0]?.[0]).toMatchObject({
@@ -663,13 +653,20 @@ describe('createSubstrateStreamFn', () => {
       messages: [{ role: 'user', content: 'hello' }],
     } as any, {});
 
-    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+    const events: unknown[] = [];
+    let terminalError: Error | null = null;
+    try {
+      for await (const event of stream as AsyncIterable<unknown>) {
+        events.push(event);
+      }
+    } catch (error) {
+      terminalError = error instanceof Error ? error : new Error(String(error));
+    }
 
-    expect(events).toHaveLength(4);
+    expect(terminalError?.message).toContain('stream broke after partial output');
+    expect(events).toHaveLength(3);
     expect((events[0] as { type: string }).type).toBe('start');
     expect((events[2] as { type: string }).type).toBe('text_delta');
-    expect((events[3] as { type: string }).type).toBe('error');
-    expect((events[3] as { error: { errorMessage: string } }).error.errorMessage).toContain('stream broke after partial output');
     expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(1);
   });
 });

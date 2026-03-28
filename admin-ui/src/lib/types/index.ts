@@ -876,6 +876,24 @@ export interface ConstitutionMutableLayer extends PromptLayer {
   readOnlyReason?: string;
 }
 
+export interface FoundationSection {
+  id: string;
+  title: string;
+  content: string;
+  enabled: boolean;
+  defaultEnabled: boolean;
+}
+
+export interface FoundationSnapshotData {
+  layerId: string;
+  layerName: string;
+  sections: FoundationSection[];
+  preview: {
+    text: string;
+    hash: string;
+  };
+}
+
 export interface ConstitutionSnapshotData {
   immutableBlocks: ConstitutionImmutableBlock[];
   companionLayer: ConstitutionCompanionLayer | null;
@@ -892,6 +910,12 @@ export interface ConstitutionUpdateResult {
   ok: boolean;
   message: string;
   snapshot?: ConstitutionSnapshotData;
+}
+
+export interface FoundationUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: FoundationSnapshotData;
 }
 
 export type NorthStarScope = 'shared' | 'companion';

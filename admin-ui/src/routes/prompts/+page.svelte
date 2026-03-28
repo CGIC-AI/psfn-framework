@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import {
     listPrompts,
+    getFoundationSnapshot,
+    saveFoundationSections,
     getConstitutionSnapshot,
     saveConstitutionMutableLayers,
     getNorthStarSnapshot,
@@ -21,6 +23,8 @@
     PromptHistoryEntry,
     PromptDiffResult,
     PromptUpdateResult,
+    FoundationSection,
+    FoundationSnapshotData,
     ConstitutionSnapshotData,
     ConstitutionCompanionLayer,
     ConstitutionImmutableBlock,
@@ -55,6 +59,17 @@
     post_history_instructions: 4,
     scenario: 4,
     mes_example: 7,
+    first_mes: 4,
+  };
+
+  const FOUNDATION_SECTION_ROWS: Record<string, number> = {
+    identity: 2,
+    description: 4,
+    personality: 4,
+    scenario: 4,
+    system_prompt: 6,
+    post_history_instructions: 4,
+    mes_example: 6,
     first_mes: 4,
   };
 
@@ -110,6 +125,14 @@
   let staticPrompts = $state<PromptRegistryEntry[]>([]);
   let loading = $state(true);
   let error = $state('');
+  let foundationLoading = $state(true);
+  let foundationSaving = $state(false);
+  let foundationError = $state('');
+  let foundationSaveMessage = $state('');
+  let showFoundationSection = $state(true);
+  let foundationLayerName = $state('Character Foundation');
+  let foundationSections = $state<FoundationSection[]>([]);
+  let foundationServerPreview = $state('');
   let constitutionLoading = $state(true);
   let constitutionSaving = $state(false);
   let constitutionError = $state('');
@@ -178,9 +201,11 @@
 
   // ── Derived ──
   let sortedLayers = $derived(
-    [...layers].sort((a, b) => {
+    [...layers]
+      .filter(layer => !isCanonicalFoundationLayer(layer) && !isConstitutionOwnedLayer(layer))
+      .sort((a, b) => {
       return a.priority - b.priority;
-    })
+      })
   );
 
   let editCharCount = $derived(
@@ -188,6 +213,23 @@
       ? Object.values(editSections).reduce((sum, s) => sum + s.length, 0)
       : editRawContent.length
   );
+
+  function buildFoundationPreview(sections: Array<Pick<FoundationSection, 'id' | 'content' | 'enabled'>>): string {
+    return sections
+      .filter(section => section.enabled)
+      .map((section) => {
+        const content = section.content.trim();
+        if (!content) return '';
+        return `<${section.id}>\n${content}\n</${section.id}>`;
+      })
+      .filter(section => section.length > 0)
+      .join('\n\n');
+  }
+
+  let foundationPreviewText = $derived.by(() => {
+    const preview = buildFoundationPreview(foundationSections);
+    return preview || foundationServerPreview;
+  });
 
   let constitutionPreviewText = $derived.by(() => {
     const sections: string[] = [];
@@ -237,7 +279,7 @@
 
   // Build interleaved list of layers + markers
   interface FixedStackEntry {
-    id: 'constitution' | 'north-star';
+    id: 'constitution' | 'north-star' | 'foundation';
     label: string;
     description: string;
     sectionId: string;
@@ -260,7 +302,7 @@
       fixed: {
         id: 'constitution',
         label: 'CONSTITUTION',
-        description: 'Immutable human-care constitution and companion-derived values. Fixed at the top of the stack.',
+        description: 'Immutable human-care law plus operator policy layers. Fixed at the top of the stack.',
         sectionId: 'constitution-builder',
         tokenCount: estimateTokens(constitutionPreviewText),
         preview: constitutionPreviewText,
@@ -278,6 +320,19 @@
         tokenCount: estimateTokens(northStarPreviewText),
         preview: northStarPreviewText || 'No enabled North Star goals.',
         status: `${northStarItems.filter(item => item.enabled).length}/${northStarLimit} active`,
+      },
+    });
+
+    entries.push({
+      kind: 'fixed',
+      fixed: {
+        id: 'foundation',
+        label: 'CHARACTER FOUNDATION',
+        description: 'Pinned macro-backed companion identity scaffold. Sections can be toggled, edited, and reordered.',
+        sectionId: 'foundation-builder',
+        tokenCount: estimateTokens(foundationPreviewText),
+        preview: foundationPreviewText || 'No enabled foundation sections.',
+        status: `${foundationSections.filter(section => section.enabled).length}/${foundationSections.length || 0} active`,
       },
     });
 
@@ -363,6 +418,23 @@
     return { label: role, cls: map[role] ?? 'bg-bark-400 text-white' };
   }
 
+  function isCanonicalFoundationLayer(layer: PromptLayer): boolean {
+    return layer.type === 'base'
+      && layer.name === 'Character Foundation'
+      && layer.identifier === 'main';
+  }
+
+  function isConstitutionOwnedLayer(layer: PromptLayer): boolean {
+    return layer.type === 'operator';
+  }
+
+  function applyFoundationSnapshot(snapshot: FoundationSnapshotData) {
+    foundationLayerName = snapshot.layerName;
+    foundationSections = (snapshot.sections ?? []).map(section => ({ ...section }));
+    foundationServerPreview = snapshot.preview?.text ?? '';
+    foundationSaveMessage = '';
+  }
+
   function applyConstitutionSnapshot(snapshot: ConstitutionSnapshotData) {
     constitutionImmutableBlocks = snapshot.immutableBlocks ?? [];
     constitutionCompanionLayer = snapshot.companionLayer ?? null;
@@ -383,6 +455,18 @@
     northStarLimit = snapshot.limit ?? 3;
     northStarServerPreview = snapshot.preview?.text ?? '';
     northStarSaveMessage = '';
+  }
+
+  async function refreshFoundation() {
+    try {
+      const snapshot = await getFoundationSnapshot();
+      applyFoundationSnapshot(snapshot);
+      foundationError = '';
+    } catch (e) {
+      foundationError = e instanceof Error ? e.message : 'Failed to load Character Foundation';
+    } finally {
+      foundationLoading = false;
+    }
   }
 
   async function refreshConstitution() {
@@ -406,6 +490,59 @@
       northStarError = e instanceof Error ? e.message : 'Failed to load North Star goals';
     } finally {
       northStarLoading = false;
+    }
+  }
+
+  function updateFoundationSectionContent(sectionId: string, content: string) {
+    foundationSections = foundationSections.map(section => (
+      section.id === sectionId ? { ...section, content } : section
+    ));
+  }
+
+  function updateFoundationSectionEnabled(sectionId: string, enabled: boolean) {
+    foundationSections = foundationSections.map(section => (
+      section.id === sectionId ? { ...section, enabled } : section
+    ));
+  }
+
+  function moveFoundationSection(index: number, direction: 'up' | 'down') {
+    const target = direction === 'up' ? index - 1 : index + 1;
+    if (target < 0 || target >= foundationSections.length) return;
+    const next = [...foundationSections];
+    const [section] = next.splice(index, 1);
+    if (!section) return;
+    next.splice(target, 0, section);
+    foundationSections = next;
+  }
+
+  async function saveFoundation() {
+    foundationSaving = true;
+    foundationError = '';
+    foundationSaveMessage = '';
+    try {
+      const result = await saveFoundationSections({
+        sections: foundationSections.map(section => ({
+          id: section.id,
+          content: section.content,
+          enabled: section.enabled,
+        })),
+      });
+      if (!result.ok) {
+        foundationError = result.message || 'Failed to save Character Foundation';
+        return;
+      }
+      if (result.snapshot) {
+        applyFoundationSnapshot(result.snapshot);
+      } else {
+        await refreshFoundation();
+      }
+      await refreshList();
+      foundationSaveMessage = result.message || 'Saved Character Foundation';
+      showToast('Character Foundation updated');
+    } catch (e) {
+      foundationError = e instanceof Error ? e.message : 'Failed to save Character Foundation';
+    } finally {
+      foundationSaving = false;
     }
   }
 
@@ -619,8 +756,9 @@
 
   // ── Lifecycle ──
   onMount(async () => {
-    const [promptsResult, constitutionResult, northStarResult] = await Promise.allSettled([
+    const [promptsResult, foundationResult, constitutionResult, northStarResult] = await Promise.allSettled([
       listPrompts(),
+      getFoundationSnapshot(),
       getConstitutionSnapshot(),
       getNorthStarSnapshot(),
     ]);
@@ -631,6 +769,16 @@
     } else {
       const reason = promptsResult.reason;
       error = reason instanceof Error ? reason.message : 'Failed to load prompts';
+    }
+
+    if (foundationResult.status === 'fulfilled') {
+      applyFoundationSnapshot(foundationResult.value);
+      foundationError = '';
+    } else {
+      const reason = foundationResult.reason;
+      foundationError = reason instanceof Error
+        ? reason.message
+        : 'Failed to load Character Foundation';
     }
 
     if (constitutionResult.status === 'fulfilled') {
@@ -653,6 +801,7 @@
         : 'Failed to load North Star goals';
     }
     loading = false;
+    foundationLoading = false;
     constitutionLoading = false;
     northStarLoading = false;
   });
@@ -661,7 +810,7 @@
     const data = await listPrompts();
     layers = data?.layers ?? [];
     staticPrompts = data?.staticPrompts ?? [];
-    await Promise.all([refreshConstitution(), refreshNorthStar()]);
+    await Promise.all([refreshFoundation(), refreshConstitution(), refreshNorthStar()]);
   }
 
   function isPromptLayerNotFoundError(errorValue: unknown): boolean {
@@ -787,7 +936,11 @@
     const [movedLayerId] = nextOrder.splice(sourceIdx, 1);
     if (!movedLayerId) return null;
     nextOrder.splice(targetIdx, 0, movedLayerId);
-    return nextOrder;
+    const fixedLayerIds = [...layers]
+      .filter(layer => isCanonicalFoundationLayer(layer) || isConstitutionOwnedLayer(layer))
+      .sort((a, b) => a.priority - b.priority)
+      .map(layer => layer.id);
+    return [...fixedLayerIds, ...nextOrder];
   }
 
   async function reorderLayers(layerIds: string[]) {
@@ -963,6 +1116,120 @@
       {/each}
     </div>
   {:else}
+    <!-- ─── Character Foundation ─── -->
+    <div id="foundation-builder" class="card-garden overflow-hidden">
+      <button
+        onclick={() => showFoundationSection = !showFoundationSection}
+        class="w-full px-5 py-3.5 flex items-center justify-between text-left hover:bg-bark-100 transition-colors"
+      >
+        <div>
+          <h2 class="text-base font-serif font-semibold text-shadow-800">Character Foundation</h2>
+          <p class="text-sm text-shadow-600 mt-0.5">Pinned character-card prompt soil. Toggle sections on or off, move them, and keep the content macro-backed.</p>
+        </div>
+        <svg class="w-4 h-4 text-shadow-600 transition-transform shrink-0 ml-4 {showFoundationSection ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {#if showFoundationSection}
+        <div class="border-t border-bark-300 p-5 space-y-4">
+          {#if foundationLoading}
+            <div class="space-y-2">
+              {#each Array(3) as _}
+                <div class="h-16 rounded-lg bg-bark-200 animate-pulse"></div>
+              {/each}
+            </div>
+          {:else}
+            {#if foundationError}
+              <div class="px-3 py-2 rounded-lg border border-wilt-400 bg-wilt-50 text-sm text-wilt-700">
+                {foundationError}
+              </div>
+            {/if}
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div class="space-y-3">
+                <div class="flex items-center justify-between">
+                  <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">{foundationLayerName}</h3>
+                  <span class="text-sm text-shadow-600">{foundationSections.filter(section => section.enabled).length}/{foundationSections.length} active</span>
+                </div>
+
+                <div class="space-y-2">
+                  {#each foundationSections as section, idx (section.id)}
+                    <div class="rounded-lg border border-bark-300 bg-white p-3 space-y-2">
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm font-medium text-shadow-800 truncate">{section.title}</span>
+                        {#if !section.defaultEnabled}
+                          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-200 text-shadow-700">Optional</span>
+                        {/if}
+                        <span class="ml-auto text-sm text-shadow-600">#{idx + 1}</span>
+                      </div>
+                      <div class="flex items-center gap-2">
+                        <button
+                          onclick={() => moveFoundationSection(idx, 'up')}
+                          disabled={idx === 0}
+                          class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
+                        >
+                          Up
+                        </button>
+                        <button
+                          onclick={() => moveFoundationSection(idx, 'down')}
+                          disabled={idx === foundationSections.length - 1}
+                          class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
+                        >
+                          Down
+                        </button>
+                        <label class="ml-auto inline-flex items-center gap-1.5 text-sm text-shadow-700">
+                          <input
+                            type="checkbox"
+                            checked={section.enabled}
+                            onchange={(e) => updateFoundationSectionEnabled(section.id, (e.target as HTMLInputElement).checked)}
+                          />
+                          enabled
+                        </label>
+                      </div>
+                      <textarea
+                        rows={FOUNDATION_SECTION_ROWS[section.id] ?? 4}
+                        value={section.content}
+                        oninput={(e) => updateFoundationSectionContent(section.id, (e.target as HTMLTextAreaElement).value)}
+                        class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                      ></textarea>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+
+              <div class="space-y-3">
+                <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
+                  <div class="flex items-center justify-between mb-2">
+                    <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Preview Output</h3>
+                    <span class="text-sm text-shadow-600">~{formatTokenCount(estimateTokens(foundationPreviewText))} tokens</span>
+                  </div>
+                  <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-white/60 p-3 rounded border border-bark-200 max-h-96 overflow-y-auto leading-relaxed">{foundationPreviewText || 'No enabled foundation sections.'}</pre>
+                </div>
+
+                <div class="rounded-lg border border-bark-300 bg-bark-100 p-3 text-sm text-shadow-700 leading-relaxed">
+                  Keep this layer macro-backed so identity data flows from the character card without duplicating static prose into the prompt. Disable sections to omit them from the prompt; pinned sections stay in the builder even when omitted.
+                </div>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-3">
+              <button
+                onclick={saveFoundation}
+                disabled={foundationSaving}
+                class="px-4 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+              >
+                {foundationSaving ? 'Saving...' : 'Save Character Foundation'}
+              </button>
+              {#if foundationSaveMessage}
+                <span class="text-sm text-moss-700">{foundationSaveMessage}</span>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
     <!-- ─── Constitution Builder ─── -->
     <div id="constitution-builder" class="card-garden overflow-hidden">
       <button
@@ -971,7 +1238,7 @@
       >
         <div>
           <h2 class="text-base font-serif font-semibold text-shadow-800">Constitution Builder</h2>
-          <p class="text-sm text-shadow-600 mt-0.5">Immutable amendments are locked. Mutable layers can be reordered and edited.</p>
+          <p class="text-sm text-shadow-600 mt-0.5">Immutable amendments are locked. Operator policy layers live here; Character Foundation does not.</p>
         </div>
         <svg class="w-4 h-4 text-shadow-600 transition-transform shrink-0 ml-4 {showConstitutionSection ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 9l-7 7-7-7" />
@@ -1018,55 +1285,55 @@
               </div>
 
               <div class="space-y-3">
-                <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Mutable Layers</h3>
+                <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Operator Policy Layers</h3>
                 <div class="space-y-2">
-                  {#each constitutionMutableLayers as layer, idx (layer.id)}
-                    {@const layerLocked = !layer.editable}
-                    <div class="rounded-lg border border-bark-300 bg-white p-3 space-y-2">
-                      <div class="flex items-center gap-2">
-                        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider {layerBadge(layer.type).bg} {layerBadge(layer.type).text}">
-                          {layerBadge(layer.type).label}
-                        </span>
-                        <span class="text-sm font-medium text-shadow-800 truncate">{layer.name}</span>
-                        <span class="ml-auto text-sm text-shadow-600">#{idx + 1}</span>
-                      </div>
-                      <div class="flex items-center gap-2">
-                        <button
-                          onclick={() => moveConstitutionLayer(idx, 'up')}
-                          disabled={idx === 0}
-                          class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
-                        >
-                          Up
-                        </button>
-                        <button
-                          onclick={() => moveConstitutionLayer(idx, 'down')}
-                          disabled={idx === constitutionMutableLayers.length - 1}
-                          class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
-                        >
-                          Down
-                        </button>
-                        <label class="ml-auto inline-flex items-center gap-1.5 text-sm text-shadow-700">
-                          <input
-                            type="checkbox"
-                            checked={layer.enabled}
-                            disabled={layerLocked}
-                            onchange={(e) => updateConstitutionLayerEnabled(layer.id, (e.target as HTMLInputElement).checked)}
-                          />
-                          enabled
-                        </label>
-                      </div>
-                      <textarea
-                        rows={4}
-                        value={layer.content}
-                        disabled={layerLocked}
-                        oninput={(e) => updateConstitutionLayerContent(layer.id, (e.target as HTMLTextAreaElement).value)}
-                        class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 disabled:opacity-60 disabled:cursor-not-allowed"
-                      ></textarea>
-                      {#if layerLocked && layer.readOnlyReason}
-                        <p class="text-sm text-shadow-600">{layer.readOnlyReason}</p>
-                      {/if}
+                  {#if constitutionMutableLayers.length === 0}
+                    <div class="rounded-lg border border-dashed border-bark-300 bg-bark-50 p-4 text-sm text-shadow-600">
+                      No operator policy layers yet.
                     </div>
-                  {/each}
+                  {:else}
+                    {#each constitutionMutableLayers as layer, idx (layer.id)}
+                      <div class="rounded-lg border border-bark-300 bg-white p-3 space-y-2">
+                        <div class="flex items-center gap-2">
+                          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider {layerBadge(layer.type).bg} {layerBadge(layer.type).text}">
+                            {layerBadge(layer.type).label}
+                          </span>
+                          <span class="text-sm font-medium text-shadow-800 truncate">{layer.name}</span>
+                          <span class="ml-auto text-sm text-shadow-600">#{idx + 1}</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <button
+                            onclick={() => moveConstitutionLayer(idx, 'up')}
+                            disabled={idx === 0}
+                            class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
+                          >
+                            Up
+                          </button>
+                          <button
+                            onclick={() => moveConstitutionLayer(idx, 'down')}
+                            disabled={idx === constitutionMutableLayers.length - 1}
+                            class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
+                          >
+                            Down
+                          </button>
+                          <label class="ml-auto inline-flex items-center gap-1.5 text-sm text-shadow-700">
+                            <input
+                              type="checkbox"
+                              checked={layer.enabled}
+                              onchange={(e) => updateConstitutionLayerEnabled(layer.id, (e.target as HTMLInputElement).checked)}
+                            />
+                            enabled
+                          </label>
+                        </div>
+                        <textarea
+                          rows={4}
+                          value={layer.content}
+                          oninput={(e) => updateConstitutionLayerContent(layer.id, (e.target as HTMLTextAreaElement).value)}
+                          class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                        ></textarea>
+                      </div>
+                    {/each}
+                  {/if}
                 </div>
               </div>
             </div>
@@ -1082,10 +1349,10 @@
             <div class="flex items-center gap-3">
               <button
                 onclick={saveConstitution}
-                disabled={constitutionSaving}
+                disabled={constitutionSaving || constitutionMutableLayers.length === 0}
                 class="px-4 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
               >
-                {constitutionSaving ? 'Saving...' : 'Save Constitution Layers'}
+                {constitutionSaving ? 'Saving...' : 'Save Constitution Policy'}
               </button>
               {#if constitutionSaveMessage}
                 <span class="text-sm text-moss-700">{constitutionSaveMessage}</span>
@@ -1254,7 +1521,7 @@
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-3">
           <h2 class="text-base font-serif font-semibold text-shadow-800">Composition Stack</h2>
-          <span class="text-sm text-shadow-600">Drag prompt layers to reorder. Constitution and North Star stay fixed.</span>
+          <span class="text-sm text-shadow-600">Drag prompt layers to reorder. Constitution, North Star, and Character Foundation stay pinned.</span>
         </div>
         <button
           onclick={() => { showNewLayerForm = !showNewLayerForm; if (!showNewLayerForm) resetNewLayerForm(); }}
@@ -1369,7 +1636,7 @@
                   onclick={() => scrollToSection(fixed.sectionId)}
                   class="shrink-0 px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 text-sm hover:bg-bark-100 transition-colors"
                 >
-                  Open Editor
+                  Open Section
                 </button>
               </div>
             </div>

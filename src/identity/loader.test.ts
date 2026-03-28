@@ -103,13 +103,19 @@ describe('composeSystemPrompt', () => {
 describe('composeSystemPromptTemplate', () => {
   it('returns a macro-backed template', () => {
     const template = composeSystemPromptTemplate();
+    expect(template).toContain('<identity>');
     expect(template).toContain('You are {{char}}.');
+    expect(template).toContain('<description>');
     expect(template).toContain('{{description}}');
+    expect(template).toContain('<personality>');
     expect(template).toContain('{{personality}}');
+    expect(template).toContain('<scenario>');
     expect(template).toContain('{{scenario}}');
+    expect(template).toContain('<system_prompt>');
     expect(template).toContain('{{system_prompt}}');
-    expect(template).toContain('{{mes_example}}');
+    expect(template).toContain('<post_history_instructions>');
     expect(template).toContain('{{post_history_instructions}}');
+    expect(template).not.toContain('{{mes_example}}');
   });
 });
 

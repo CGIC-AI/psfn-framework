@@ -4,21 +4,7 @@ import { buildCharacterMacroMap } from './character-macro-map.js';
 import { normalizeCompanionName } from './companion-naming.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
 import { wrapPromptSectionXml } from '../prompt/sections.js';
-const SYSTEM_PROMPT_TEMPLATE = [
-  'You are {{char}}.',
-  '',
-  '{{description}}',
-  '',
-  '{{personality}}',
-  '',
-  '{{scenario}}',
-  '',
-  '{{system_prompt}}',
-  '',
-  '{{mes_example}}',
-  '',
-  '{{post_history_instructions}}',
-].join('\n');
+import { composeDefaultFoundationTemplate } from './foundation-sections.js';
 
 export function loadCharacterCard(path: string): CharacterCardV2 {
   if (!existsSync(path)) {
@@ -46,7 +32,7 @@ export function isBootstrapStarterCard(card: CharacterCardV2): boolean {
 }
 
 export function composeSystemPromptTemplate(): string {
-  return SYSTEM_PROMPT_TEMPLATE;
+  return composeDefaultFoundationTemplate();
 }
 
 export function buildCharacterPromptTemplateVariables(card: CharacterCardV2): Record<string, string> {

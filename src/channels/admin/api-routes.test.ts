@@ -16,7 +16,12 @@ import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
 import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
-import { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import {
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  EXTRACTION_PROMPT_KEY,
+  PROFILE_SYNTHESIS_PROMPT_KEY,
+  PromptRegistryStore,
+} from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import { loadSettings } from '../../settings.js';
 import { saveCapabilityTierConfig } from '../../config/capability-tier-config.js';
@@ -465,6 +470,35 @@ describe('AdminServer JSON API routes', () => {
       join(tempDir, 'prompt-history.jsonl'),
     );
     promptStore.seedFromCharacterCard('Base prompt');
+    writeFileSync(join(tempDir, 'prompt-registry.json'), `${JSON.stringify([
+      {
+        key: EXTRACTION_PROMPT_KEY,
+        text: 'Extract facts.\n{existing_facts}\n{recent_messages}\n<response><fact></fact></response>',
+        description: 'test extraction prompt',
+        consumers: ['test'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'test',
+      },
+      {
+        key: COMPACTION_SUMMARY_PROMPT_KEY,
+        text: 'Summarize this conversation excerpt concisely.',
+        description: 'test compaction prompt',
+        consumers: ['test'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'test',
+      },
+      {
+        key: PROFILE_SYNTHESIS_PROMPT_KEY,
+        text: 'Synthesize contact profile.\n{contact_id}\n{existing_profile}\n{memory_facts}\n<profile><summary></summary></profile>',
+        description: 'test profile prompt',
+        consumers: ['test'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'test',
+      },
+    ], null, 2)}\n`, 'utf-8');
     promptRegistry = new PromptRegistryStore(
       join(tempDir, 'prompt-registry.json'),
       join(tempDir, 'prompt-registry-history.jsonl'),
@@ -2340,7 +2374,7 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(foundationPatchRes.status).toBe(400);
     expect(JSON.parse(foundationPatchRes.body)).toEqual({
-      error: 'Character Foundation is derived from the character card and must be edited through Identity.',
+      error: 'Character Foundation is managed through Prompt Soil → Character Foundation, not generic prompt-layer edits.',
     });
 
     const editableLayer = promptStore.create({
@@ -2442,16 +2476,16 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('supports constitution snapshot and mutable-layer round-trip with immutable fail-closed edits', async () => {
-    const runtimeA = promptStore.create({
-      type: 'runtime',
-      name: 'Constitution Runtime A',
-      content: 'constitution-runtime-a',
+    const operatorA = promptStore.create({
+      type: 'operator',
+      name: 'Constitution Operator A',
+      content: 'constitution-operator-a',
       updatedBy: 'admin',
     });
-    const runtimeB = promptStore.create({
-      type: 'runtime',
-      name: 'Constitution Runtime B',
-      content: 'constitution-runtime-b',
+    const operatorB = promptStore.create({
+      type: 'operator',
+      name: 'Constitution Operator B',
+      content: 'constitution-operator-b',
       updatedBy: 'admin',
     });
 
@@ -2472,6 +2506,7 @@ describe('AdminServer JSON API routes', () => {
     expect(snapshotPayload.immutableBlocks).toHaveLength(3);
     expect(snapshotPayload.immutableBlocks.every(block => block.editable === false)).toBe(true);
     expect(snapshotPayload.preview.text).toContain('[Immutable Human-Safety Amendments]');
+    expect(snapshotPayload.preview.text).not.toContain('You are {{char}}.');
 
     const mutableLayers = snapshotPayload.mutableLayers.map(layer => ({
       id: layer.id,
@@ -2481,15 +2516,15 @@ describe('AdminServer JSON API routes', () => {
       role: layer.role ?? null,
       promptOrder: layer.promptOrder ?? null,
     }));
-    const aIndex = mutableLayers.findIndex(layer => layer.id === runtimeA.id);
-    const bIndex = mutableLayers.findIndex(layer => layer.id === runtimeB.id);
+    const aIndex = mutableLayers.findIndex(layer => layer.id === operatorA.id);
+    const bIndex = mutableLayers.findIndex(layer => layer.id === operatorB.id);
     expect(aIndex).toBeGreaterThanOrEqual(0);
     expect(bIndex).toBeGreaterThanOrEqual(0);
     if (aIndex >= 0 && bIndex >= 0) {
       const [moved] = mutableLayers.splice(bIndex, 1);
       mutableLayers.splice(aIndex, 0, moved);
-      const runtimeBPayload = mutableLayers.find(layer => layer.id === runtimeB.id);
-      if (runtimeBPayload) runtimeBPayload.content = 'constitution-runtime-b-updated';
+      const operatorBPayload = mutableLayers.find(layer => layer.id === operatorB.id);
+      if (operatorBPayload) operatorBPayload.content = 'constitution-operator-b-updated';
     }
 
     const saveRes = await request(
@@ -2505,11 +2540,11 @@ describe('AdminServer JSON API routes', () => {
       snapshot?: { preview: { text: string } };
     };
     expect(savePayload.ok).toBe(true);
-    expect(promptStore.getById(runtimeB.id)?.content).toBe('constitution-runtime-b-updated');
-    expect(savePayload.snapshot?.preview.text).toContain('constitution-runtime-b-updated');
-    for (const [index, layer] of mutableLayers.entries()) {
-      expect(promptStore.getById(layer.id)?.priority).toBe(index);
-    }
+    expect(promptStore.getById(operatorB.id)?.content).toBe('constitution-operator-b-updated');
+    expect(savePayload.snapshot?.preview.text).toContain('constitution-operator-b-updated');
+    expect(promptStore.getById(operatorB.id)?.priority).toBeLessThan(
+      promptStore.getById(operatorA.id)?.priority ?? Number.MAX_SAFE_INTEGER,
+    );
 
     const immutableAttemptPayload = mutableLayers.map((layer, index) => (
       index === 0
@@ -2527,6 +2562,38 @@ describe('AdminServer JSON API routes', () => {
     expect(JSON.parse(immutableAttemptRes.body)).toEqual({
       error: 'Immutable constitution layers are read-only and cannot be edited',
     });
+  });
+
+  it('supports Character Foundation snapshot save through Prompt Soil', async () => {
+    const snapshotRes = await request(port, 'GET', '/api/admin/prompts/foundation', undefined, authHeaders);
+    expect(snapshotRes.status).toBe(200);
+    const snapshotPayload = JSON.parse(snapshotRes.body) as {
+      layerId: string;
+      sections: Array<{ id: string; content: string; enabled: boolean }>;
+      preview: { text: string };
+    };
+    expect(snapshotPayload.sections.some(section => section.id === 'identity' && section.enabled)).toBe(true);
+    expect(snapshotPayload.sections.some(section => section.id === 'mes_example' && !section.enabled)).toBe(true);
+
+    const saveRes = await request(
+      port,
+      'PUT',
+      '/api/admin/prompts/foundation',
+      JSON.stringify({
+        sections: snapshotPayload.sections.map(section => (
+          section.id === 'description'
+            ? { ...section, enabled: false }
+            : section.id === 'identity'
+              ? { ...section, content: 'You are {{char}}, shaped by prompt soil.' }
+              : section
+        )),
+      }),
+      authHeaders,
+    );
+    expect(saveRes.status).toBe(200);
+    const foundationLayer = promptStore.getById(snapshotPayload.layerId);
+    expect(foundationLayer?.content).toContain('shaped by prompt soil');
+    expect(foundationLayer?.content).not.toContain('<description>');
   });
 
   it('supports North Star snapshot save and enforces the three-item cap', async () => {

@@ -1,6 +1,7 @@
 import { composeSystemPromptTemplate } from './loader.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
 import { isCanonicalCharacterFoundationLayer } from './canonical-foundation.js';
+import { isMacroBackedFoundationContent } from './foundation-sections.js';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { CharacterCardV2 } from './types.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
@@ -89,6 +90,12 @@ export function syncCharacterFoundationPromptFromCard(
     };
   }
   if (foundation.content === nextPrompt) {
+    return { ok: true, updated: false };
+  }
+
+  const isSystemManagedFoundation = foundation.updatedBy === 'system'
+    || foundation.updatedBy.startsWith('system:');
+  if (!isSystemManagedFoundation || isMacroBackedFoundationContent(foundation.content)) {
     return { ok: true, updated: false };
   }
 

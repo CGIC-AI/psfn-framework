@@ -2,6 +2,8 @@ import { apiGet, apiPatch, apiPost, apiPut } from '$lib/api/client';
 import type {
   ConstitutionUpdateResult,
   ConstitutionSnapshotData,
+  FoundationSnapshotData,
+  FoundationUpdateResult,
   NorthStarSnapshotData,
   NorthStarUpdateResult,
   AdminPromptListData,
@@ -28,6 +30,20 @@ export function listPrompts(): Promise<AdminPromptListData> {
 
 export function getConstitutionSnapshot(): Promise<ConstitutionSnapshotData> {
   return apiGet<ConstitutionSnapshotData>('/api/admin/prompts/constitution');
+}
+
+export function getFoundationSnapshot(): Promise<FoundationSnapshotData> {
+  return apiGet<FoundationSnapshotData>('/api/admin/prompts/foundation');
+}
+
+export function saveFoundationSections(body: {
+  sections: Array<{
+    id: string;
+    content: string;
+    enabled: boolean;
+  }>;
+}): Promise<FoundationUpdateResult> {
+  return apiPut<FoundationUpdateResult>('/api/admin/prompts/foundation', body);
 }
 
 export function saveConstitutionMutableLayers(body: {

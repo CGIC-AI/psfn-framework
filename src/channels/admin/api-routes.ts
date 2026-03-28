@@ -1356,6 +1356,37 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'GET',
+      match: exactPath('/api/admin/prompts/foundation'),
+      handle: (_req, res) => {
+        const snapshot = promptsService.getFoundationSnapshot();
+        if (!snapshot) {
+          sendJson(res, 400, { error: 'Character Foundation is not configured' });
+          return;
+        }
+        sendJson(res, 200, snapshot);
+      },
+    },
+    {
+      method: 'PUT',
+      match: exactPath('/api/admin/prompts/foundation'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const result = promptsService.saveFoundationSections(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'GET',
       match: exactPath('/api/admin/prompts/constitution'),
       handle: (_req, res) => {
         const snapshot = promptsService.getConstitutionSnapshot();

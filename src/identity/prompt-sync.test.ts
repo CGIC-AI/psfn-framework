@@ -92,6 +92,32 @@ describe('syncCharacterFoundationPromptFromCard', () => {
     expect(promptStore.getLayerHistory(foundation.id)).toHaveLength(0);
   });
 
+  it('does not clobber admin-managed macro-backed foundation layouts', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard(composeSystemPromptTemplate());
+    const foundation = promptStore.getByType('base')[0];
+    promptStore.update(
+      foundation.id,
+      '<identity>\nYou are {{char}}, custom laid out.\n</identity>',
+      'admin',
+      undefined,
+      'custom layout',
+    );
+
+    const result = syncCharacterFoundationPromptFromCard(
+      promptStore,
+      TEST_CARD,
+      'admin:sync-test',
+    );
+
+    expect(result).toEqual({ ok: true, updated: false });
+    expect(promptStore.getByType('base')[0]?.content).toContain('custom laid out');
+  });
+
   it('fails closed when card-sourced macros introduce unsupported unresolved tokens', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(

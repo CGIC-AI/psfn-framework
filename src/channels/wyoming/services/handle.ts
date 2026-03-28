@@ -1,5 +1,10 @@
 import type { AgentResponse, SubstrateMessage } from '../../../types.js';
 import {
+  buildSatellitePresenceMetadata,
+  normalizePresenceMetadata,
+  resolvePresenceSubjectId,
+} from '../../../agent/presence-metadata.js';
+import {
   isRecord,
   type WyomingFrame,
   type WyomingJsonObject,
@@ -110,8 +115,10 @@ function resolveChannelId(
   connectionId: string,
   data: WyomingJsonObject | undefined,
 ): string {
-  const siteId = readString(data, ['site_id', 'siteId']);
-  const satelliteId = readString(data, ['satellite_id', 'satelliteId']);
+  const presence = normalizePresenceMetadata(data);
+  const siteId = readString(data, ['site_id', 'siteId']) ?? presence?.siteId;
+  const satelliteId = readString(data, ['satellite_id', 'satelliteId'])
+    ?? resolvePresenceSubjectId(presence);
 
   if (!siteId || !satelliteId) {
     return `api:wyoming:unknown:${connectionId}`;
@@ -222,6 +229,7 @@ export function createWyomingHandleServiceAdapter(
       const connectionId = request.transportSession.connectionId;
       const key = toSessionKey(connectionId, sessionId);
       const requestedContextId = resolveContextId(request.frame.data);
+      const routingPresence = normalizePresenceMetadata(request.frame.data);
       const state = sessionStates.get(key) ?? {
         contextId: requestedContextId ?? `wyoming-ctx-${connectionId}-${sessionId}`,
         sequence: 0,
@@ -233,7 +241,13 @@ export function createWyomingHandleServiceAdapter(
       sessionStates.set(key, state);
 
       const channelId = resolveChannelId(connectionId, request.frame.data);
-      const satelliteId = readString(request.frame.data, ['satellite_id', 'satelliteId']);
+      const satelliteId = readString(request.frame.data, ['satellite_id', 'satelliteId'])
+        ?? resolvePresenceSubjectId(routingPresence);
+      const wyomingPresence = routingPresence
+        ?? buildSatellitePresenceMetadata({
+          siteId: readString(request.frame.data, ['site_id', 'siteId']),
+          satelliteId: satelliteId ?? 'unknown',
+        });
       const userId = readString(request.frame.data, ['ha_user_id', 'haUserId', 'user_id', 'userId'])
         ?? satelliteId
         ?? 'unknown';
@@ -251,6 +265,14 @@ export function createWyomingHandleServiceAdapter(
         content: text,
         isDirectMessage: true,
         timestamp: new Date(timestampMs),
+        routing: {
+          source: 'wyoming',
+          wyoming: {
+            ...(wyomingPresence.siteId ? { siteId: wyomingPresence.siteId } : {}),
+            satelliteId: resolvePresenceSubjectId(wyomingPresence),
+            presence: wyomingPresence,
+          },
+        },
       };
 
       const emit = options.eventBus?.emit.bind(options.eventBus);

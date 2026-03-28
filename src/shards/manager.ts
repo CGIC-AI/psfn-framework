@@ -11,6 +11,7 @@ import type {
   SubstrateMessage,
   WyomingRoutingMetadata,
 } from '../types.js';
+import { resolvePresenceSubjectId } from '../agent/presence-metadata.js';
 import type { EventBus } from '../event-bus.js';
 import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent/contracts.js';
 import { SubstrateAgent } from '../agent/substrate-agent.js';
@@ -187,9 +188,10 @@ export class ShardManager {
 
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
-    const routeCapabilities = this.resolveWyomingRouteCapabilities(routing);
+    const presenceSubjectId = resolvePresenceSubjectId(routing?.presence) ?? routing?.satelliteId?.trim();
+    const routeCapabilities = this.resolveWyomingRouteCapabilities(routing, presenceSubjectId);
     const shardName = request.shardName?.trim()
-      || this.resolveWyomingShardName(routing);
+      || this.resolveWyomingShardName(routing, presenceSubjectId);
     const shardConfig: ShardConfig = {
       name: shardName,
       task: request.message.content,
@@ -206,6 +208,7 @@ export class ShardManager {
       turnId: routing?.turnId,
       siteId: routing?.siteId,
       satelliteId: routing?.satelliteId,
+      presence: routing?.presence,
     });
 
     try {
@@ -1051,19 +1054,25 @@ export class ShardManager {
     };
   }
 
-  private resolveWyomingShardName(routing: WyomingRoutingMetadata | undefined): string {
+  private resolveWyomingShardName(
+    routing: WyomingRoutingMetadata | undefined,
+    presenceSubjectId: string | undefined,
+  ): string {
     const siteId = routing?.siteId?.trim() || 'unknown-site';
-    const satelliteId = routing?.satelliteId?.trim() || 'unknown-satellite';
-    return `wyoming:${siteId}:${satelliteId}`;
+    const subjectId = presenceSubjectId || routing?.satelliteId?.trim() || 'unknown-satellite';
+    return `wyoming:${siteId}:${subjectId}`;
   }
 
-  private resolveWyomingRouteCapabilities(routing: WyomingRoutingMetadata | undefined): string[] {
+  private resolveWyomingRouteCapabilities(
+    routing: WyomingRoutingMetadata | undefined,
+    presenceSubjectId: string | undefined,
+  ): string[] {
     const siteId = routing?.siteId?.trim() || 'unknown-site';
-    const satelliteId = routing?.satelliteId?.trim() || 'unknown-satellite';
+    const subjectId = presenceSubjectId || routing?.satelliteId?.trim() || 'unknown-satellite';
     return normalizeCapabilityTokens([
       'wyoming',
       `wyoming:${siteId}`,
-      `wyoming:${siteId}:${satelliteId}`,
+      `wyoming:${siteId}:${subjectId}`,
     ]);
   }
 

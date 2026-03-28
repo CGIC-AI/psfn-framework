@@ -10,6 +10,7 @@ import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import type { ChannelVisibility, TrustLevel } from './trust/types.js';
 import type { ImageWorkflowSettings } from './images/types.js';
+import type { CompanionPresenceMetadata } from './agent/presence-metadata.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
 import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './config/seed-defaults.js';
 import { parseOptionalStringEnv } from './utils/env.js';
@@ -79,6 +80,7 @@ export interface WyomingRoutingMetadata {
   turnId?: string;
   siteId?: string;
   satelliteId?: string;
+  presence?: CompanionPresenceMetadata;
   shardDelegation?: WyomingShardDelegationHint;
 }
 
@@ -174,6 +176,7 @@ export interface MessageRoutingMetadata {
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;
+  presence?: CompanionPresenceMetadata;
   /** Trusted canonical contact ID hint. When set by an authenticated channel adapter,
    *  the agent will attempt to resolve this contact directly before falling back to
    *  channel identity resolution. Allows Garden admin chat to route to the correct

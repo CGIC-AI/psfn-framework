@@ -24,6 +24,11 @@ describe('resolveWyomingRoutingMetadata', () => {
         wyoming: {
           siteId: 'ha-main',
           satelliteId: 'kitchen',
+          presence: {
+            kind: 'satellite',
+            siteId: 'ha-main',
+            satelliteId: 'kitchen',
+          },
           shardDelegation: {
             eligible: true,
           },
@@ -34,6 +39,11 @@ describe('resolveWyomingRoutingMetadata', () => {
     expect(resolveWyomingRoutingMetadata(message)).toEqual({
       siteId: 'ha-main',
       satelliteId: 'kitchen',
+      presence: {
+        kind: 'satellite',
+        siteId: 'ha-main',
+        satelliteId: 'kitchen',
+      },
       shardDelegation: {
         eligible: true,
       },
@@ -49,6 +59,11 @@ describe('resolveWyomingRoutingMetadata', () => {
     expect(resolveWyomingRoutingMetadata(message)).toEqual({
       siteId: 'ha-main',
       satelliteId: 'voice-pe:office',
+      presence: {
+        kind: 'satellite',
+        siteId: 'ha-main',
+        satelliteId: 'voice-pe:office',
+      },
     });
   });
 
@@ -98,6 +113,11 @@ describe('evaluateWyomingDelegation', () => {
     expect(decision.reason).toBe('agent_policy_disabled');
     expect(decision.routing?.siteId).toBe('ha-main');
     expect(decision.routing?.satelliteId).toBe('kitchen');
+    expect(decision.routing?.presence).toEqual({
+      kind: 'satellite',
+      siteId: 'ha-main',
+      satelliteId: 'kitchen',
+    });
   });
 
   it('declines delegation when gateway marks routing ineligible', () => {
@@ -106,6 +126,11 @@ describe('evaluateWyomingDelegation', () => {
         wyoming: {
           siteId: 'ha-main',
           satelliteId: 'office',
+          presence: {
+            kind: 'satellite',
+            siteId: 'ha-main',
+            satelliteId: 'office',
+          },
           shardDelegation: {
             eligible: false,
             reason: 'too_busy',
@@ -125,6 +150,11 @@ describe('evaluateWyomingDelegation', () => {
       routing: {
         siteId: 'ha-main',
         satelliteId: 'office',
+        presence: {
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'office',
+        },
         shardDelegation: {
           eligible: false,
           reason: 'too_busy',
@@ -139,6 +169,11 @@ describe('evaluateWyomingDelegation', () => {
         wyoming: {
           siteId: 'ha-main',
           satelliteId: 'den',
+          presence: {
+            kind: 'satellite',
+            siteId: 'ha-main',
+            satelliteId: 'den',
+          },
           shardDelegation: {
             eligible: true,
           },
@@ -157,6 +192,11 @@ describe('evaluateWyomingDelegation', () => {
       routing: {
         siteId: 'ha-main',
         satelliteId: 'den',
+        presence: {
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'den',
+        },
         shardDelegation: {
           eligible: true,
         },

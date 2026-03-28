@@ -1054,6 +1054,11 @@ describe('ShardManager', () => {
         turnId: 'wyoming-turn-conn-kitchen-session-kitchen-1',
         siteId: 'ha-main',
         satelliteId: 'voice-pe-kitchen',
+        presence: {
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'voice-pe-kitchen',
+        },
       },
     });
 
@@ -1114,6 +1119,11 @@ describe('ShardManager', () => {
         turnId: 'wyoming-turn-conn-office-session-office-1',
         siteId: 'ha-main',
         satelliteId: 'voice-pe-office',
+        presence: {
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'voice-pe-office',
+        },
       },
     });
 
@@ -1123,6 +1133,11 @@ describe('ShardManager', () => {
         connectionId: 'conn-office',
         sessionId: 'session-office',
         turnId: 'wyoming-turn-conn-office-session-office-1',
+        presence: {
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'voice-pe-office',
+        },
       }),
     );
     expect(auditTrail.append).toHaveBeenCalledWith(

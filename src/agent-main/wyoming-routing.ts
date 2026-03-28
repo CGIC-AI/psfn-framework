@@ -3,6 +3,10 @@ import type {
   SubstrateMessage,
   WyomingRoutingMetadata,
 } from '../types.js';
+import {
+  buildSatellitePresenceMetadata,
+  normalizePresenceMetadata,
+} from '../agent/presence-metadata.js';
 
 export interface WyomingDelegationDecision {
   isWyoming: boolean;
@@ -16,6 +20,21 @@ export function resolveWyomingRoutingMetadata(
 ): WyomingRoutingMetadata | undefined {
   const routing = message.routing?.wyoming;
   if (routing) {
+    const presence = normalizePresenceMetadata(routing.presence);
+    if (presence) {
+      return { ...routing, presence };
+    }
+
+    if (routing.siteId && routing.satelliteId) {
+      return {
+        ...routing,
+        presence: buildSatellitePresenceMetadata({
+          siteId: routing.siteId,
+          satelliteId: routing.satelliteId,
+        }),
+      };
+    }
+
     return routing;
   }
   if (message.channelType !== 'api' || !message.channelId.startsWith('api:wyoming:')) {
@@ -30,6 +49,10 @@ export function resolveWyomingRoutingMetadata(
   return {
     siteId: parts[2],
     satelliteId: parts.slice(3).join(':'),
+    presence: buildSatellitePresenceMetadata({
+      siteId: parts[2],
+      satelliteId: parts.slice(3).join(':'),
+    }),
   };
 }
 

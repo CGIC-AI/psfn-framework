@@ -53,6 +53,20 @@ describe('Wyoming handle service adapter', () => {
       isDirectMessage: true,
       content: 'hello there',
     }));
+    expect(handleMessage.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+      routing: {
+        source: 'wyoming',
+        wyoming: expect.objectContaining({
+          siteId: 'home',
+          satelliteId: 'sat-1',
+          presence: {
+            kind: 'satellite',
+            siteId: 'home',
+            satelliteId: 'sat-1',
+          },
+        }),
+      },
+    }));
     expect(first.type).toBe('handled');
     const contextId = first.data?.context_id as string;
     expect(contextId).toBeTruthy();

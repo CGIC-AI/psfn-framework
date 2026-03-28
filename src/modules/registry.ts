@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { isAbsolute, dirname, resolve } from 'node:path';
 import { resolveRequiredModuleRegistryPath } from '../security/policy-constants.js';
 import { isRecord } from '../utils/types.js';
@@ -80,5 +80,7 @@ export async function writeModuleRegistry(
   records: ModuleRecord[],
 ): Promise<void> {
   await mkdir(dirname(registryPath), { recursive: true });
-  await writeFile(registryPath, JSON.stringify(records, null, 2), 'utf-8');
+  const tempPath = `${registryPath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tempPath, JSON.stringify(records, null, 2), 'utf-8');
+  await rename(tempPath, registryPath);
 }

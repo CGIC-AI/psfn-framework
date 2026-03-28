@@ -13,12 +13,15 @@ afterEach(() => {
   }
 });
 
-function registryHarness(initial = '[]') {
+function registryHarness(initial = '[]', writeDelayMs = 0) {
   let stored = initial;
   return {
     caps: {
       fsRead: vi.fn(async () => stored),
       fsWrite: vi.fn(async (_path: string, content: string) => {
+        if (writeDelayMs > 0) {
+          await new Promise(resolve => setTimeout(resolve, writeDelayMs));
+        }
         stored = content;
       }),
     },
@@ -94,5 +97,25 @@ describe('createModuleCapabilities', () => {
     expect(harness.caps.fsWrite).toHaveBeenCalledTimes(1);
     expect(harness.getRecords()).toHaveLength(1);
     expect(onModuleRegistryMutation).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes concurrent module installs so writes do not clobber each other', async () => {
+    process.env.MODULE_REGISTRY_PATH = 'companion/modules/repl-registry.json';
+    const harness = registryHarness('[]', 25);
+    const modules = createModuleCapabilities({
+      gatewayCaps: harness.caps,
+      pushEvidence: vi.fn(),
+      getCapabilityTier: () => 'autonomous',
+    });
+
+    await Promise.all([
+      modules.module_install('alpha', 'export default {};', true),
+      modules.module_install('beta', 'export default {};', true),
+    ]);
+
+    const records = harness.getRecords();
+    expect(records).toHaveLength(2);
+    expect(records.map(record => record.name).sort()).toEqual(['alpha', 'beta']);
+    expect(harness.caps.fsWrite).toHaveBeenCalledTimes(2);
   });
 });

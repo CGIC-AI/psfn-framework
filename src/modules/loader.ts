@@ -37,13 +37,6 @@ export interface ModuleLoadSummary {
   failed: number;
 }
 
-function toModuleDefinition(value: unknown): SubstrateModule {
-  if (!value || typeof value !== 'object') {
-    throw new Error('module must export an object');
-  }
-  return value as SubstrateModule;
-}
-
 function toActivationSource(action: ModuleRegistryMutation['action']): ActivationSource {
   switch (action) {
     case 'install':
@@ -62,6 +55,7 @@ export class ModuleLoader {
   private readonly registerTool: ToolRegistrar;
   private readonly registryPath: string;
   private readonly activeModules = new Map<string, ActiveModule>();
+  private registryMutationChain: Promise<void> = Promise.resolve();
 
   constructor(options: ModuleLoaderOptions) {
     this.eventBus = options.eventBus;
@@ -74,75 +68,79 @@ export class ModuleLoader {
   }
 
   async loadEnabledModules(): Promise<ModuleLoadSummary> {
-    ensureRegistryFile(this.registryPath);
-    const records = await readModuleRegistry(this.registryPath);
-    let mutated = false;
-    let attempted = 0;
-    let loaded = 0;
-    let failed = 0;
+    return await this.runRegistryMutation(async () => {
+      ensureRegistryFile(this.registryPath);
+      const records = await readModuleRegistry(this.registryPath);
+      let mutated = false;
+      let attempted = 0;
+      let loaded = 0;
+      let failed = 0;
 
-    for (const record of records) {
-      if (!record.enabled) continue;
-      attempted += 1;
-      try {
-        await this.activateRecord(record, 'startup');
-        if (record.lastError) {
-          delete record.lastError;
+      for (const record of records) {
+        if (!record.enabled) continue;
+        attempted += 1;
+        try {
+          await this.activateRecord(record, 'startup');
+          if (record.lastError) {
+            delete record.lastError;
+            mutated = true;
+          }
+          loaded += 1;
+        } catch (error) {
+          const message = toErrorMessage(error);
+          record.lastError = message;
           mutated = true;
+          failed += 1;
+
+          await this.eventBus.emit('module.error', {
+            id: record.id,
+            name: record.name,
+            stage: 'activate',
+            error: message,
+          });
+
+          log.warn('Failed to activate installed module', {
+            moduleId: record.id,
+            moduleName: record.name,
+            error: message,
+          });
         }
-        loaded += 1;
-      } catch (error) {
-        const message = toErrorMessage(error);
-        record.lastError = message;
-        mutated = true;
-        failed += 1;
-
-        await this.eventBus.emit('module.error', {
-          id: record.id,
-          name: record.name,
-          stage: 'activate',
-          error: message,
-        });
-
-        log.warn('Failed to activate installed module', {
-          moduleId: record.id,
-          moduleName: record.name,
-          error: message,
-        });
       }
-    }
 
-    if (mutated) {
-      await writeModuleRegistry(this.registryPath, records);
-    }
+      if (mutated) {
+        await writeModuleRegistry(this.registryPath, records);
+      }
 
-    return {
-      attempted,
-      loaded,
-      failed,
-    };
+      return {
+        attempted,
+        loaded,
+        failed,
+      };
+    });
   }
 
   async applyRegistryMutation(mutation: ModuleRegistryMutation): Promise<void> {
-    if (mutation.next.enabled) {
+    await this.runRegistryMutation(async () => {
+      if (mutation.next.enabled) {
+        if (this.activeModules.has(mutation.next.id)) {
+          await this.deactivateById(mutation.next.id, 'reload');
+        }
+
+        try {
+          await this.activateRecord(mutation.next, toActivationSource(mutation.action));
+          await this.clearRegistryError(mutation.next.id);
+        } catch (error) {
+          const message = toErrorMessage(error);
+          await this.persistRegistryError(mutation.next.id, message);
+          throw new Error(`module ${mutation.next.name} activation failed: ${message}`);
+        }
+        return;
+      }
+
       if (this.activeModules.has(mutation.next.id)) {
-        await this.deactivateById(mutation.next.id, 'reload');
+        await this.deactivateById(mutation.next.id, 'disable');
       }
-
-      try {
-        await this.activateRecord(mutation.next, toActivationSource(mutation.action));
-        await this.clearRegistryError(mutation.next.id);
-      } catch (error) {
-        const message = toErrorMessage(error);
-        await this.persistRegistryError(mutation.next.id, message);
-        throw new Error(`module ${mutation.next.name} activation failed: ${message}`);
-      }
-      return;
-    }
-
-    if (this.activeModules.has(mutation.next.id)) {
-      await this.deactivateById(mutation.next.id, 'disable');
-    }
+    });
   }
 
   async shutdown(): Promise<void> {
@@ -191,19 +189,8 @@ export class ModuleLoader {
   }
 
   private async loadModuleDefinition(record: ModuleRecord): Promise<SubstrateModule> {
-    const moduleSource = `${record.source}\n//# sourceURL=psfn-module:${record.name}@${record.version}-${record.updatedAt}`;
-    const encoded = Buffer.from(moduleSource, 'utf-8').toString('base64');
-    const imported = await import(`data:text/javascript;base64,${encoded}`);
-    const candidate = (imported.default ?? imported) as unknown;
-    const moduleDefinition = toModuleDefinition(candidate);
-
-    if (moduleDefinition.name && moduleDefinition.name.trim().toLowerCase() !== record.name) {
-      throw new Error(
-        `module export name "${moduleDefinition.name}" does not match registry name "${record.name}"`,
-      );
-    }
-
-    return moduleDefinition;
+    void record;
+    throw new Error('registry-backed module source execution is disabled');
   }
 
   private async deactivateById(id: string, reason: DeactivationReason): Promise<void> {
@@ -273,5 +260,14 @@ export class ModuleLoader {
     if (!target || !target.lastError) return;
     delete target.lastError;
     await writeModuleRegistry(this.registryPath, records);
+  }
+
+  private async runRegistryMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.registryMutationChain.then(operation, operation);
+    this.registryMutationChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 }

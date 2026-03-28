@@ -23,7 +23,6 @@ When checking behavior, prefer this order:
 
 1. Runtime entrypoints and composition
    - `src/index.ts`
-   - `src/runtime.ts`
    - `src/gateway-main.ts`
    - `src/agent-main.ts`
    - `src/bootstrap/composition.ts`
@@ -62,7 +61,6 @@ Entry point roles:
 - `src/index.ts`: disabled fail-closed entrypoint with dotenv
 - `src/gateway-main.ts`: host-side gateway holding secrets and external egress
 - `src/agent-main.ts`: isolated agent process, no dotenv import, gateway-backed providers
-- `src/runtime.ts`: parity harness for shared wiring
 
 ## Configuration And Persistence Model
 
@@ -212,7 +210,6 @@ Main wiring locations:
 
 - `src/bootstrap/composition.ts`
 - `src/bootstrap/parity.ts`
-- `src/runtime.ts`
 - `src/agent-main.ts`
 
 ## Validation Commands

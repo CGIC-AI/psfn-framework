@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const repoRootUrl = new URL('../../', import.meta.url);
@@ -8,7 +8,7 @@ function readRepoFile(relativePath: string): string {
 }
 
 describe('startup surface hygiene', () => {
-  it('keeps canonical startup surfaces split-only and free of monolith drift', () => {
+  it('keeps canonical startup surfaces split-only and free of obsolete startup drift', () => {
     const packageJson = JSON.parse(readRepoFile('package.json')) as {
       scripts?: Record<string, string>;
     };
@@ -17,6 +17,13 @@ describe('startup surface hygiene', () => {
     const specifications = readRepoFile('docs/specifications.md');
     const architecture = readRepoFile('docs/architecture.md');
     const indexEntrypoint = readRepoFile('src/index.ts');
+    const removedRuntimeFile = ['runtime', '.ts'].join('');
+    const removedStartupHarnessFile = ['startup-harness', '.ts'].join('');
+    const removedRuntimeReference = ['`src/', removedRuntimeFile, '`'].join('');
+    const removedStartupHarnessReference = ['`src/runtime/', removedStartupHarnessFile, '`'].join('');
+
+    expect(existsSync(new URL(['src', removedRuntimeFile].join('/'), repoRootUrl))).toBe(false);
+    expect(existsSync(new URL(['src', 'runtime', removedStartupHarnessFile].join('/'), repoRootUrl))).toBe(false);
 
     for (const source of [
       readme,
@@ -25,10 +32,8 @@ describe('startup surface hygiene', () => {
       indexEntrypoint,
       JSON.stringify(scripts),
     ]) {
-      const lowered = source.toLowerCase();
-      expect(lowered).not.toContain('monolithic runtime');
-      expect(lowered).not.toContain('single-process runtime');
-      expect(lowered).not.toContain('direct single-process');
+      expect(source).not.toContain(removedRuntimeReference);
+      expect(source).not.toContain(removedStartupHarnessReference);
     }
 
     expect(scripts.dev).toBe('./scripts/start-gateway-agent.sh');

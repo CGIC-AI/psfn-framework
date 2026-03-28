@@ -67,12 +67,6 @@ describe('wireGitRuntime', () => {
 });
 
 describe('entrypoint composition', () => {
-  it('runtime.ts uses wireGitRuntime', async () => {
-    const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
-    const runtimeSource = fs.readFileSync(resolve('src/runtime.ts'), 'utf-8');
-    expect(runtimeSource).toContain('wireGitRuntime(');
-  });
-
   it('agent-main.ts registers git tools via gateway-backed ops', async () => {
     const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
     const agentMainSource = fs.readFileSync(resolve('src/agent-main.ts'), 'utf-8');

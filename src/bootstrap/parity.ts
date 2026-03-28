@@ -271,7 +271,7 @@ export function wireExtendedToolAutoloadPolicy(
 
 /**
  * Wire prompt stack storage, composition, and tools.
- * Shared across runtime.ts and agent-main.ts to keep behavior in sync.
+ * Shared across the split runtime entrypoints to keep behavior in sync.
  */
 export function wirePromptRuntime(
   target: PromptRuntimeTarget,
@@ -337,7 +337,7 @@ export function wireStaticPromptRegistry(dataDir: string): PromptRegistryStore {
 
 /**
  * Build REPL config with runtime settings overrides.
- * Shared across runtime.ts and agent-main.ts to keep think tool budgets aligned.
+ * Shared across the split runtime entrypoints to keep think tool budgets aligned.
  */
 export function buildReplConfig(config: SubstrateConfig): REPLConfig {
   const replConfig: REPLConfig = {
@@ -352,7 +352,7 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
 
 /**
  * Wire runtime settings introspection tool (read-only).
- * Shared across runtime.ts and agent-main.ts.
+ * Shared across the split runtime entrypoints.
  */
 export function wireSettingsRuntime(
   target: ToolRegistrarTarget,

@@ -221,7 +221,7 @@ describe('Wyoming production wiring', () => {
   });
 
   it('does NOT start Wyoming when config is disabled', () => {
-    // Simulate the config gate pattern used in runtime.ts and gateway-main.ts
+    // Simulate the config gate pattern used in gateway-main.ts and split runtime wiring.
     const wyomingEnabled = false as boolean;
     let tcpServer: WyomingTcpServer | undefined;
     let wyomingRuntime: WyomingRuntime | undefined;

@@ -1,5 +1,6 @@
 import type { ContactStore } from '../../../core/contacts/store.js';
 import type { EventBus } from '../../../shared/event-bus.js';
+import { sessionEntryToMessage } from '../../../core/agent/messages.js';
 import { parseContinuityEntryProvenance } from '../../../core/session/continuity.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
@@ -17,6 +18,7 @@ import {
 import type { ChannelVisibility } from '../../../system/trust/types.js';
 import type {
   AdminContinuityProvenanceView,
+  AdminSessionMessageOntologyView,
   AdminSessionListData,
   AdminSessionMessagesData,
   AdminSessionService,
@@ -25,6 +27,56 @@ import { getLinkedContactForSession } from './contact-session-linker.js';
 import { AdminSessionTurnObservabilityStore } from './session-turn-observability.js';
 
 const DEFAULT_ADMIN_TURN_LIMIT = 50;
+
+function buildMessageOntologyView(entry: AdminSessionMessagesData['messages'][number]): AdminSessionMessageOntologyView {
+  const classified = sessionEntryToMessage(entry);
+
+  if (classified.role === 'toolResult') {
+    return {
+      sessionEntryId: entry.id,
+      transportRole: entry.role,
+      promptRole: 'toolResult',
+      semanticType: 'toolResult',
+      messageClass: null,
+      promptVisibility: 'prompt_visible',
+      displayLabel: 'Tool result',
+    };
+  }
+
+  if (classified.role === 'custom') {
+    if (classified.type === 'mirror') {
+      return {
+        sessionEntryId: entry.id,
+        transportRole: entry.role,
+        promptRole: 'custom',
+        semanticType: 'mirror',
+        messageClass: classified.messageClass,
+        promptVisibility: 'operator_only',
+        displayLabel: 'Mirror note',
+      };
+    }
+
+    return {
+      sessionEntryId: entry.id,
+      transportRole: entry.role,
+      promptRole: 'custom',
+      semanticType: 'systemNote',
+      messageClass: classified.messageClass,
+      promptVisibility: 'operator_only',
+      displayLabel: 'System note',
+    };
+  }
+
+  return {
+    sessionEntryId: entry.id,
+    transportRole: entry.role,
+    promptRole: classified.role,
+    semanticType: 'outwardSpeech',
+    messageClass: classified.messageClass,
+    promptVisibility: 'prompt_visible',
+    displayLabel: 'Outward speech',
+  };
+}
 
 export class AdminSessionDataService implements AdminSessionService {
   private readonly turnObservability: AdminSessionTurnObservabilityStore;
@@ -148,6 +200,7 @@ export class AdminSessionDataService implements AdminSessionService {
 
   getSessionMessages(sessionId: string): AdminSessionMessagesData {
     const messages = this.deps.sessionStore.getRecent(sessionId, 100);
+    const messageOntologyViews = messages.map(buildMessageOntologyView);
     const sessionActivity = this.deps.sessionStore.getSessionActivity(sessionId);
     const channelId = messages.length > 0
       ? messages[0]!.channelId
@@ -182,6 +235,7 @@ export class AdminSessionDataService implements AdminSessionService {
       sessionId,
       channelId,
       messages,
+      messageOntologyViews,
       roleEnvelopePreviews,
       compactionAuditViews,
       turns,

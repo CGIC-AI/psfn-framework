@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os';
 import { EventBus } from '../../../shared/event-bus.js';
 import { UserContinuityStore } from '../../../core/session/continuity.js';
 import { SessionManager } from '../../../core/session/manager.js';
+import {
+  buildToolObservationMetadata,
+  normalizeToolObservation,
+} from '../../../core/session/tool-observation.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
 import { createTurnId } from '../../../core/turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -537,6 +541,108 @@ describe('AdminSessionDataService', () => {
     expect(result.turns[0]?.roleEnvelopeRefs).toEqual(['turn_record_summary:env_admin_preview_1']);
     expect(result.turns[0]?.record.roleEnvelopeRefs).toEqual(['turn_record_summary:env_admin_preview_1']);
     expect(JSON.stringify(result)).not.toContain(hiddenBody);
+  });
+
+  it('returns explicit message ontology views for operator inspection', () => {
+    const channelId = 'api:ontology-session';
+    const systemNoteId = store.append({
+      channelId,
+      role: 'system',
+      content: 'Injected policy note',
+      timestamp: 1_700_000_300_000,
+    });
+    const mirrorId = store.append({
+      channelId,
+      role: 'system',
+      content: 'Cross-channel carryover',
+      originChannelId: 'discord:dm',
+      metadata: JSON.stringify({
+        type: 'mirror',
+        sourceChannelId: 'discord:dm',
+        sourceRole: 'assistant',
+        sourceAuthorName: 'Remote companion',
+      }),
+      timestamp: 1_700_000_300_010,
+    });
+    const toolObservation = normalizeToolObservation({
+      toolName: 'contact_lookup',
+      content: 'Matched one contact',
+    });
+    const toolId = store.append({
+      channelId,
+      role: 'tool',
+      content: toolObservation.content,
+      metadata: buildToolObservationMetadata(undefined, toolObservation.metadata),
+      timestamp: 1_700_000_300_020,
+    });
+    const userId = store.append({
+      channelId,
+      role: 'user',
+      content: 'hello there',
+      timestamp: 1_700_000_300_030,
+    });
+    const assistantId = store.append({
+      channelId,
+      role: 'assistant',
+      content: 'general kenobi',
+      timestamp: 1_700_000_300_040,
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const result = service.getSessionMessages(channelId);
+
+    expect(result.messageOntologyViews).toEqual([
+      {
+        sessionEntryId: systemNoteId,
+        transportRole: 'system',
+        promptRole: 'custom',
+        semanticType: 'systemNote',
+        messageClass: 'systemNote',
+        promptVisibility: 'operator_only',
+        displayLabel: 'System note',
+      },
+      {
+        sessionEntryId: mirrorId,
+        transportRole: 'system',
+        promptRole: 'custom',
+        semanticType: 'mirror',
+        messageClass: 'mirror',
+        promptVisibility: 'operator_only',
+        displayLabel: 'Mirror note',
+      },
+      {
+        sessionEntryId: toolId,
+        transportRole: 'tool',
+        promptRole: 'toolResult',
+        semanticType: 'toolResult',
+        messageClass: null,
+        promptVisibility: 'prompt_visible',
+        displayLabel: 'Tool result',
+      },
+      {
+        sessionEntryId: userId,
+        transportRole: 'user',
+        promptRole: 'user',
+        semanticType: 'outwardSpeech',
+        messageClass: 'outwardSpeech',
+        promptVisibility: 'prompt_visible',
+        displayLabel: 'Outward speech',
+      },
+      {
+        sessionEntryId: assistantId,
+        transportRole: 'assistant',
+        promptRole: 'assistant',
+        semanticType: 'outwardSpeech',
+        messageClass: 'outwardSpeech',
+        promptVisibility: 'prompt_visible',
+        displayLabel: 'Outward speech',
+      },
+    ]);
   });
 
   it('lists and reads distinct sessions for the same logical channel', () => {

@@ -14,7 +14,12 @@ import {
   type UrlPolicyConfig,
   type UrlPolicyLane,
 } from '../url-policy.js';
-import { GatewayErrors, type WebFetchBinaryParams, type WebFetchParams } from '../protocol.js';
+import {
+  GatewayErrors,
+  type WebFetchBinaryParams,
+  type WebFetchParams,
+  type WebRequestBinaryParams,
+} from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { createComponentLogger } from '../../logger.js';
 import {
@@ -43,7 +48,7 @@ interface WebPolicyTestHooks {
   webFetchDnsResolver?: DnsResolver;
 }
 
-type WebFetchMethodName = 'web.fetch' | 'web.fetch_binary';
+type WebFetchMethodName = 'web.fetch' | 'web.fetch_binary' | 'web.request_binary';
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -173,13 +178,30 @@ function normalizeRequestHeaders(raw: unknown): Record<string, string> {
   return normalized;
 }
 
+function normalizeRequestMethod(value: unknown): string {
+  if (typeof value !== 'string') return 'GET';
+  const trimmed = value.trim();
+  if (!trimmed) return 'GET';
+  if (!/^[A-Z0-9!#$%&'*+.^_`|~-]+$/i.test(trimmed)) {
+    throw new JSONRPCErrorException('Invalid HTTP method', GatewayErrors.POLICY_DENIED);
+  }
+  return trimmed.toUpperCase();
+}
+
 async function requestText(
   url: string,
-  options: { tlsCaBundle?: string; connectAddress?: string; headers?: Record<string, string> },
+  options: {
+    tlsCaBundle?: string;
+    connectAddress?: string;
+    headers?: Record<string, string>;
+    method?: string;
+    body?: Buffer;
+  },
 ): Promise<ResponseLike> {
   const parsed = new URL(url);
   const isHttps = parsed.protocol === 'https:';
   const requestImpl = isHttps ? httpsRequest : httpRequest;
+  const method = normalizeRequestMethod(options.method);
   const originalHostname = parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']')
     ? parsed.hostname.slice(1, -1)
     : parsed.hostname;
@@ -203,7 +225,7 @@ async function requestText(
         family: options.connectAddress ? isIP(options.connectAddress) : undefined,
         port: parsed.port ? Number.parseInt(parsed.port, 10) : undefined,
         path: `${parsed.pathname}${parsed.search}`,
-        method: 'GET',
+        method,
         headers,
         ...(isHttps && options.tlsCaBundle ? {
           ca: [...rootCertificates, options.tlsCaBundle],
@@ -254,6 +276,10 @@ async function requestText(
       },
     );
 
+    if (options.body && options.body.byteLength > 0) {
+      req.write(options.body);
+    }
+
     const timeout = setTimeout(() => {
       const timeoutError = new Error(`Request timed out after ${WEB_FETCH_TIMEOUT_MS}ms`);
       (timeoutError as { code?: string }).code = 'ETIMEDOUT';
@@ -277,6 +303,8 @@ async function fetchWithPolicyChecks(
   urlPolicyConfig: UrlPolicyConfig,
   tlsCaBundle: string | undefined,
   requestHeaders: Record<string, string>,
+  requestMethod?: string,
+  requestBody?: Buffer,
   dnsResolver?: DnsResolver,
 ): Promise<ResponseLike> {
   const urlCheck = evaluateUrlPolicy(url, urlPolicyConfig, lane);
@@ -316,6 +344,8 @@ async function fetchWithPolicyChecks(
       tlsCaBundle,
       connectAddress,
       headers: requestHeaders,
+      method: requestMethod,
+      body: requestBody,
     });
   } catch (err) {
     throw new JSONRPCErrorException(
@@ -366,6 +396,8 @@ async function fetchWithValidatedRedirectChain(
   urlPolicyConfig: UrlPolicyConfig,
   tlsCaBundle: string | undefined,
   requestHeaders: Record<string, string>,
+  requestMethod: string | undefined,
+  requestBody: Buffer | undefined,
   runtime: GatewayMethodRuntime,
   dnsResolver?: DnsResolver,
 ): Promise<RedirectChainFetchResult> {
@@ -384,6 +416,8 @@ async function fetchWithValidatedRedirectChain(
         urlPolicyConfig,
         tlsCaBundle,
         requestHeaders,
+        requestMethod,
+        requestBody,
         dnsResolver,
       );
       if (!isRedirectStatus(response.status)) {
@@ -483,6 +517,8 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         urlPolicyConfig,
         tlsCaBundle,
         {},
+        undefined,
+        undefined,
         runtime,
         dnsResolver,
       );
@@ -530,6 +566,8 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         urlPolicyConfig,
         tlsCaBundle,
         requestHeaders,
+        undefined,
+        undefined,
         runtime,
         dnsResolver,
       );
@@ -575,6 +613,81 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     }),
     approvalAction: 'fetch',
     approvalScope: (p: WebFetchBinaryParams) => `${toLane(p.lane)}:${p.url}`,
+  },
+  {
+    name: 'web.request_binary',
+    handler: async (params: WebRequestBinaryParams, runtime) => {
+      const lane = toLane(params.lane);
+      const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
+      const maxBytes = normalizeBinaryMaxBytes(params.maxBytes);
+      const dnsResolver = resolveDnsResolver(runtime);
+      const requestHeaders = normalizeRequestHeaders(params.headers);
+      const requestMethod = normalizeRequestMethod(params.method);
+      const requestBody = params.bodyBase64
+        ? Buffer.from(params.bodyBase64, 'base64')
+        : undefined;
+
+      let tlsCaBundle: string | undefined;
+      try {
+        tlsCaBundle = loadTlsBundle(resolveTlsCertPaths(runtime));
+      } catch (err) {
+        throw new JSONRPCErrorException(
+          `Fetch TLS setup failed: ${formatFetchFailureDetails(err)}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      const { response } = await fetchWithValidatedRedirectChain(
+        'web.request_binary',
+        params.url,
+        lane,
+        urlPolicyConfig,
+        tlsCaBundle,
+        requestHeaders,
+        requestMethod,
+        requestBody,
+        runtime,
+        dnsResolver,
+      );
+
+      const reportedLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
+      if (Number.isFinite(reportedLength) && reportedLength > maxBytes) {
+        throw new JSONRPCErrorException(
+          `Fetch binary payload too large: ${reportedLength} bytes exceeds ${maxBytes}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (bytes.length > maxBytes) {
+        throw new JSONRPCErrorException(
+          `Fetch binary payload too large: ${bytes.length} bytes exceeds ${maxBytes}`,
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
+
+      const mimeType = (response.headers.get('content-type') ?? 'application/octet-stream')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+
+      return {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+        dataBase64: bytes.toString('base64'),
+        mimeType: mimeType || 'application/octet-stream',
+        sizeBytes: bytes.length,
+      };
+    },
+    summary: (p: WebRequestBinaryParams) => ({
+      url: p.url,
+      lane: toLane(p.lane),
+      method: normalizeRequestMethod(p.method),
+      maxBytes: normalizeBinaryMaxBytes(p.maxBytes),
+    }),
+    approvalAction: 'fetch',
+    approvalScope: (p: WebRequestBinaryParams) => `${toLane(p.lane)}:${normalizeRequestMethod(p.method)}:${p.url}`,
   },
 ];
 

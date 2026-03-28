@@ -54,6 +54,7 @@ import {
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import {
   RUNTIME_MODE,
+  resolveRuntimeCommandInvocation,
   resolveRuntimeModeContract,
   toRuntimeStatusMetadata,
 } from './lifecycle/runtime-mode.js';
@@ -908,8 +909,24 @@ export class SubstrateRuntime implements Lifecycle {
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
-        restartCommand: lifecycleRuntimeContract.restart.command,
-        runtimeMode: lifecycleRuntimeContract.mode,
+        runRestartCommand: async () => {
+          const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
+          if (!invocation) return;
+          const { spawn } = await import('node:child_process');
+          await new Promise<void>((resolve, reject) => {
+            const child = spawn(invocation.command, invocation.args, {
+              cwd: process.cwd(),
+              shell: false,
+              detached: true,
+              stdio: 'ignore',
+            });
+            child.once('error', reject);
+            child.once('spawn', () => {
+              child.unref();
+              resolve();
+            });
+          });
+        },
       },
     ));
     this.agentLoop.registerTool(createRebuildTool(
@@ -921,8 +938,39 @@ export class SubstrateRuntime implements Lifecycle {
       {
         restartSafeguard: lifecycleRestartSafeguard,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
-        restartCommand: lifecycleRuntimeContract.restart.command,
-        runtimeMode: lifecycleRuntimeContract.mode,
+        runBuildCommand: async () => {
+          const { execFile } = await import('node:child_process');
+          await new Promise<void>((resolve, reject) => {
+            execFile('npm', ['run', 'build'], {
+              cwd: process.cwd(),
+              timeout: 120_000,
+            }, (error) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve();
+            });
+          });
+        },
+        runRestartCommand: async () => {
+          const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
+          if (!invocation) return;
+          const { spawn } = await import('node:child_process');
+          await new Promise<void>((resolve, reject) => {
+            const child = spawn(invocation.command, invocation.args, {
+              cwd: process.cwd(),
+              shell: false,
+              detached: true,
+              stdio: 'ignore',
+            });
+            child.once('error', reject);
+            child.once('spawn', () => {
+              child.unref();
+              resolve();
+            });
+          });
+        },
       },
     ));
     this.agentLoop.registerTool(createNotifyOperatorTool(

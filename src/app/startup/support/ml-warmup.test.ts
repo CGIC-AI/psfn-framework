@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { TextEmotionClassifier } from '../../../emotion/text-classifier.js';
+import { TextEmotionClassifier } from '../../../core/emotion/text-classifier.js';
 import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,

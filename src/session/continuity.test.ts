@@ -6,7 +6,7 @@ import { UserContinuityStore, parseContinuityEntryProvenance } from './continuit
 import { SessionStore } from './store.js';
 import { SessionManager } from './manager.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
+import { DEFAULT_COMPANION_ID } from '../core/identity/companion-naming.js';
 import * as journalUtils from './journal-utils.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {

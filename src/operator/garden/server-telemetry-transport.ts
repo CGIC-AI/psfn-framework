@@ -6,7 +6,7 @@ import {
   sanitizeTurnRetrievalTelemetry,
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
-} from '../../turns/observability.js';
+} from '../../core/turns/observability.js';
 import { resolveTelemetryCorrelation } from './telemetry-correlation.js';
 import { parseRequestUrl } from './request-url.js';
 

@@ -4,7 +4,7 @@
 import {
   DEFAULT_COMPANION_SKILLS_DIRECTORY,
   LEGACY_COMPANION_SKILLS_DIRECTORY,
-} from '../../identity/companion-naming.js';
+} from '../../core/identity/companion-naming.js';
 
 export const REPO_ALLOWED_PATHS = [
   'src/',

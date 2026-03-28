@@ -8,9 +8,9 @@ import type {
 import { CHANNEL_PRIVACY_LEVELS } from '../../../contacts/types.js';
 import type { ModelCatalogEntry } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { DEFAULT_COMPANION_ID } from '../../../identity/companion-naming.js';
-import { isBootstrapStarterCard, loadCharacterCard } from '../../../identity/loader.js';
-import type { CharacterCardV2 } from '../../../identity/types.js';
+import { DEFAULT_COMPANION_ID } from '../../../core/identity/companion-naming.js';
+import { isBootstrapStarterCard, loadCharacterCard } from '../../../core/identity/loader.js';
+import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type {
   AdminChatBootstrapResponse,
   AdminChatBootstrapUpdateInput,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AdminAuditTimelineStore, ADMIN_AUDIT_ACTION_TYPES } from './audit-timeline.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { DEFAULT_COMPANION_NAME } from '../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_NAME } from '../../core/identity/companion-naming.js';
 import type { AdminAuditActor } from './types.js';
 import { registerAuditTimelineSources, type AuditTimelineAppender } from './services/audit-event-collector.js';
 

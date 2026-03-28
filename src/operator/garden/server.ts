@@ -5,10 +5,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Duplex } from 'node:stream';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import type { ContactStore } from '../../contacts/store.js';
-import type { PromptLayerStore } from '../../identity/prompt-store.js';
-import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { PromptLayerStore } from '../../core/identity/prompt-store.js';
+import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
+import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { readBodyWithLimit, sendText } from '../../channels/http/primitives.js';

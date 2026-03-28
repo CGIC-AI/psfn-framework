@@ -2,7 +2,7 @@ import type { EmbeddingService } from '../../../agent/contracts.js';
 import {
   TextEmotionClassifier,
   type TextEmotionClassifierConfig,
-} from '../../../emotion/text-classifier.js';
+} from '../../../core/emotion/text-classifier.js';
 import { warmupEmbeddingService } from '../../../memory/embedding.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
-import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import { getVisionToolRequestContext } from '../../images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { InternalState } from '../../self-model/state.js';
+import type { InternalState } from '../../core/self-model/state.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';

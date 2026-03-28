@@ -1,7 +1,7 @@
 import type { Agent } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { ComposeContext } from '../../identity/prompt-types.js';
+import type { ComposeContext } from '../../core/identity/prompt-types.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -17,8 +17,8 @@ import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import type { ChannelMeta } from '../../trust/policy.js';
-import type { InternalState } from '../../self-model/state.js';
-import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
+import type { InternalState } from '../../core/self-model/state.js';
+import type { MetacognitiveFlag } from '../../core/self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
 
@@ -31,7 +31,7 @@ interface TurnExecutionAdapterCallbacks {
   resolveAuthorContext: (message: SubstrateMessage) => ResolvedAuthorContext;
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
-  captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../turns/snapshot.js').TurnPromptSnapshot;
+  captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../core/turns/snapshot.js').TurnPromptSnapshot;
   buildScratchpadContextBlock: () => string;
   normalizeTurnPromptOverride: (message: SubstrateMessage) => MessagePromptOverride;
   resolveResponseStyle: (
@@ -61,7 +61,7 @@ interface TurnExecutionAdapterCallbacks {
     templateVariables: Record<string, string>,
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
-    emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    emotionAppraisalChain: readonly import('../../core/emotion/appraisal.js').EmotionAppraisalEntry[],
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -81,7 +81,7 @@ interface TurnExecutionAdapterCallbacks {
     templateVariables: Record<string, string>,
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
-    emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    emotionAppraisalChain: readonly import('../../core/emotion/appraisal.js').EmotionAppraisalEntry[],
   ) => string;
   buildPromptPrefixCacheKey: (
     message: SubstrateMessage,

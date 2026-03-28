@@ -1,26 +1,26 @@
 import { createHash } from 'node:crypto';
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
-import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import {
   PROMPT_LAYER_ROLES,
   type CompanionValuesLayerSnapshot,
   type LayerType,
   type PromptLayerRole,
-} from '../../../identity/prompt-types.js';
+} from '../../../core/identity/prompt-types.js';
 import {
   IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
   buildImmutableHumanSafetySection,
-} from '../../../identity/prompt-composer.js';
+} from '../../../core/identity/prompt-composer.js';
 import type {
   PromptLayerMetadataUpdate,
   PromptLayerStore,
   PromptLayerUpdatePatch,
-} from '../../../identity/prompt-store.js';
-import type { PromptRegistryStore } from '../../../identity/prompt-registry.js';
+} from '../../../core/identity/prompt-store.js';
+import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
 import {
   isCanonicalCharacterFoundationLayer,
-} from '../../../identity/canonical-foundation.js';
+} from '../../../core/identity/canonical-foundation.js';
 import {
   MAX_NORTH_STAR_ITEMS,
   NORTH_STAR_SCOPES,
@@ -37,7 +37,7 @@ import {
   composeFoundationSectionTemplate,
   decomposeFoundationLayerContent,
   type FoundationSectionId,
-} from '../../../identity/foundation-sections.js';
+} from '../../../core/identity/foundation-sections.js';
 import type {
   AdminConstitutionCompanionLayer,
   AdminConstitutionImmutableBlock,

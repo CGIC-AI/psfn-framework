@@ -10,10 +10,10 @@ import {
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
-import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
-import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
-import { cloneSessionEntry } from '../../turns/snapshot.js';
+import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
+import { wrapCompactionSummaryAsUntrustedContext } from '../../core/identity/prompt-composer.js';
+import type { TurnSessionContextSnapshot } from '../../core/turns/snapshot.js';
+import { cloneSessionEntry } from '../../core/turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
 import { resolveSessionEntryTurnContext } from '../turn-provenance.js';
 import {

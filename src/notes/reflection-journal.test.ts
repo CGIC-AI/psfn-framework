@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ReflectionJournalStore } from './reflection-journal.js';
-import { buildInternalStateSnapshotRef, cloneInternalState, InternalStateComputer } from '../self-model/state.js';
+import { buildInternalStateSnapshotRef, cloneInternalState, InternalStateComputer } from '../core/self-model/state.js';
 
 function buildInternalStateSample() {
   const state = new InternalStateComputer().computeState({

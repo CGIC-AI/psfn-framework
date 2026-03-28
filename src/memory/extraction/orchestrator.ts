@@ -3,13 +3,13 @@ import type { LLMProvider } from '../../agent/contracts.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
 import { resolveLatestTurnContext } from '../../session/turn-provenance.js';
-import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import {
   EXTRACTION_PROMPT_KEY,
   getDefaultPromptText,
-} from '../../identity/prompt-registry.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+} from '../../core/identity/prompt-registry.js';
+import { injectPromptRuntimeTokens } from '../../core/identity/prompt-runtime.js';
 import { classifyChannel } from '../../trust/policy.js';
 import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
 import type { MemoryStore } from '../store.js';

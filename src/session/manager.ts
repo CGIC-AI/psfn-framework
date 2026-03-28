@@ -22,11 +22,11 @@ import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   getDefaultPromptText,
   type PromptRegistryStore,
-} from '../identity/prompt-registry.js';
+} from '../core/identity/prompt-registry.js';
 import {
   markCompactionSummaryAsUntrustedRecord,
   wrapCompactionSummaryAsUntrustedContext,
-} from '../identity/prompt-composer.js';
+} from '../core/identity/prompt-composer.js';
 import {
   resolveAdaptiveContextBudgetProfile,
   resolveSessionHistoryBudget,
@@ -60,11 +60,11 @@ import type {
   PreCompactionExtractionHandler,
 } from './manager/contracts.js';
 import { runAutoCompaction } from './manager/compaction-service.js';
-import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
+import type { TurnSessionContextSnapshot } from '../core/turns/snapshot.js';
 import {
   buildSnapshotVersionPointer,
   cloneSessionEntry,
-} from '../turns/snapshot.js';
+} from '../core/turns/snapshot.js';
 import {
   countIntentionAppraisalArtifacts,
   getMergedContinuity,

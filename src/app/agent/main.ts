@@ -25,7 +25,7 @@ import {
   RUNTIME_MODE,
 } from '../../system/lifecycle/runtime-mode.js';
 import { attachTerminalDebugObserver } from '../../debug/terminal-observer.js';
-import { createBehavioralPatternMemoryPromotionHook } from '../../intention/patterns.js';
+import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';

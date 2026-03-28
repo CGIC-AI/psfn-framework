@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createComponentLogger } from '../shared/logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
-import { cloneInternalState, type InternalState } from '../self-model/state.js';
+import { cloneInternalState, type InternalState } from '../core/self-model/state.js';
 import type { ValuesMetacognitiveFlag } from './narrative-context-types.js';
 import {
   normalizeNarrativeMetacognitiveFlags,

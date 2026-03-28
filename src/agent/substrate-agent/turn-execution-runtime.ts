@@ -2,10 +2,10 @@ import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../broadcast/safety.js';
 import type { EventBus, EventMap } from '../../shared/event-bus.js';
-import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
-import type { ComposeContext } from '../../identity/prompt-types.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
-import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
+import { enforceUntrustedCompactionGuard } from '../../core/identity/prompt-composer.js';
+import type { ComposeContext } from '../../core/identity/prompt-types.js';
+import { injectPromptRuntimeTokens } from '../../core/identity/prompt-runtime.js';
+import { composeDefaultRuntimePromptTemplate } from '../../core/identity/runtime-prompt-layers.js';
 import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
 import { runWithVisionToolRequestContext } from '../../images/request-context.js';
@@ -19,12 +19,12 @@ import type { ContextManifestMemorySeed } from '../../session/context-manifest.j
 import {
   cloneMetacognitiveFlags,
   type MetacognitiveFlag,
-} from '../../self-model/metacognition.js';
+} from '../../core/self-model/metacognition.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
   type InternalState,
-} from '../../self-model/state.js';
+} from '../../core/self-model/state.js';
 import type { SkillsRuntime } from '../../skills/runtime.js';
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
 import { classifyChannel, type ChannelMeta } from '../../trust/policy.js';
@@ -35,18 +35,18 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
-import { createTurnId } from '../../turns/id.js';
+import { createTurnId } from '../../core/turns/id.js';
 import type {
   TurnObservabilityRecord,
   TurnRetrievalTelemetryRecord,
   TurnStageTelemetryRecord,
-} from '../../turns/observability.js';
+} from '../../core/turns/observability.js';
 import {
   sanitizeTurnRetrievalTelemetry,
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
-} from '../../turns/observability.js';
-import type { TurnPromptSnapshot, TurnSnapshot } from '../../turns/snapshot.js';
+} from '../../core/turns/observability.js';
+import type { TurnPromptSnapshot, TurnSnapshot } from '../../core/turns/snapshot.js';
 import {
   parseDeferredToolHandoffActionId,
 } from '../deferred-tool-handoff.js';
@@ -94,7 +94,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
     trustLevel?: TrustLevel,
     channelMeta?: ChannelMeta,
     canonicalContactId?: string,
-    turnSnapshot?: import('../../turns/snapshot.js').TurnMemorySnapshot,
+    turnSnapshot?: import('../../core/turns/snapshot.js').TurnMemorySnapshot,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     scopeQuery?: MemoryScopeQuery,
   ) => Promise<string>;
@@ -195,7 +195,7 @@ export interface TurnExecutionRuntime {
     templateVariables: Record<string, string>,
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
-    emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    emotionAppraisalChain: readonly import('../../core/emotion/appraisal.js').EmotionAppraisalEntry[],
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -215,7 +215,7 @@ export interface TurnExecutionRuntime {
     templateVariables: Record<string, string>,
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
-    emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    emotionAppraisalChain: readonly import('../../core/emotion/appraisal.js').EmotionAppraisalEntry[],
   ) => string;
   buildPromptPrefixCacheKey: (
     message: SubstrateMessage,
@@ -277,7 +277,7 @@ export interface TurnExecutionRuntime {
     responseText: string,
     trustLevel: TrustLevel,
     continuityUserId?: string,
-    emotionSnapshot?: import('../../emotion/state.js').EmotionStateSnapshot | null,
+    emotionSnapshot?: import('../../core/emotion/state.js').EmotionStateSnapshot | null,
   ) => number | null;
   buildTurnToolSummary: (turnMessages: AgentMessage[]) => TurnToolSummary;
   inferPostTurnActions: (context: {

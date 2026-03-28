@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { PromptComposer } from '../../identity/prompt-composer.js';
-import type { ComposeContext, ComposeSplitResult } from '../../identity/prompt-types.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
-import type { TurnPromptSnapshot } from '../../turns/snapshot.js';
-import { buildSnapshotVersionPointer } from '../../turns/snapshot.js';
+import type { PromptComposer } from '../../core/identity/prompt-composer.js';
+import type { ComposeContext, ComposeSplitResult } from '../../core/identity/prompt-types.js';
+import { injectPromptRuntimeTokens } from '../../core/identity/prompt-runtime.js';
+import type { TurnPromptSnapshot } from '../../core/turns/snapshot.js';
+import { buildSnapshotVersionPointer } from '../../core/turns/snapshot.js';
 
 export interface PromptSections {
   staticPrefix: string;

@@ -67,7 +67,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 
 ### Identity and prompts
 
-- Character card loading and prompt composition live under `src/identity/`.
+- Character card loading and prompt composition live under `src/core/identity/`.
 - Prompt layers, prompt registry entries, north-star state, and core memory are persisted in companion-owned files.
 - Admin surfaces mutate prompt/runtime state through the JSON owner-file contract rather than through `.env`.
 

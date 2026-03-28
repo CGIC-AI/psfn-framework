@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EmbeddingService } from '../../../agent/contracts.js';
 import type { ContactStore } from '../../../contacts/store.js';
-import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import { isInternalMemoryArtifact } from '../../../memory/internal-artifacts.js';
 import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
 import {

@@ -34,10 +34,10 @@ import { createSessionListTool, createSessionNewTool, createSessionResumeTool } 
 import { createSessionGrepTool, createSessionSearchTool } from '../../../tools/session-search.js';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
 import { createCompleteFocusTool, createStartFocusTool } from '../../../tools/focus.js';
-import { PromptLayerStore } from '../../../identity/prompt-store.js';
-import { PromptComposer } from '../../../identity/prompt-composer.js';
-import { PromptRegistryStore } from '../../../identity/prompt-registry.js';
-import { ensureRuntimePromptLayers } from '../../../identity/runtime-prompt-layers.js';
+import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
+import { PromptComposer } from '../../../core/identity/prompt-composer.js';
+import { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
+import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt-layers.js';
 import { wrapPromptSectionXml } from '../../../prompt/sections.js';
 import { runDeliberation } from '../../../llm/deliberation.js';
 import type { DeliberationResult } from '../../../llm/deliberation.js';
@@ -45,8 +45,8 @@ import {
   createPersonaUpdateTool,
   type PersonaUpdateToolOptions,
   type CharacterCardVersionStore,
-} from '../../../identity/card-versioning.js';
-import { buildCharacterPromptTemplateVariables } from '../../../identity/loader.js';
+} from '../../../core/identity/card-versioning.js';
+import { buildCharacterPromptTemplateVariables } from '../../../core/identity/loader.js';
 import {
   createPromptLayerListTool,
   createPromptLayerGetTool,
@@ -56,7 +56,7 @@ import {
   createPromptLayerRollbackTool,
   createPromptLayerToggleTool,
   type PromptLayerUpdateToolOptions,
-} from '../../../identity/prompt-tools.js';
+} from '../../../core/identity/prompt-tools.js';
 import { NorthStarStore } from '../../../north-star/store.js';
 import {
   createNorthStarCreateTool,
@@ -110,7 +110,7 @@ import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
 } from '../../../memory/sleeptime-agent.js';
-import type { EmotionStateSnapshot } from '../../../emotion/state.js';
+import type { EmotionStateSnapshot } from '../../../core/emotion/state.js';
 import type { EmotionalSnapshot } from '../../../contacts/store/emotional-baseline.js';
 import {
   IntentionAppraisal,
@@ -122,14 +122,14 @@ import {
   toInferredPostTurnActions,
   type ActiveConcernSnapshot,
   type IntentionActionDecision,
-} from '../../../intention/appraisal.js';
-import { MotivationBridge } from '../../../intention/motivation.js';
+} from '../../../core/intention/appraisal.js';
+import { MotivationBridge } from '../../../core/intention/motivation.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
   serializeInternalState,
   type InternalState,
-} from '../../../self-model/state.js';
+} from '../../../core/self-model/state.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';

@@ -7,7 +7,7 @@ import {
 } from '../src/memory/embedding.js';
 import {
   TextEmotionClassifier,
-} from '../src/emotion/text-classifier.js';
+} from '../src/core/emotion/text-classifier.js';
 import { loadRuntimeSettingsSeedDefaults } from '../src/system/config/seed-defaults.js';
 
 interface PrefetchCliOptions {

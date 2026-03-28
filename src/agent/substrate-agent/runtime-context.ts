@@ -7,18 +7,18 @@ import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } fro
 import type { ContactStore } from '../../contacts/store.js';
 import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
-import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
-import type { EmotionStateSnapshot } from '../../emotion/state.js';
-import type { ActiveConcernContextProvider } from '../../intention/concerns.js';
-import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
-import type { BehavioralPatternContextProvider } from '../../intention/patterns.js';
-import { buildEmotionalAffectSection } from '../../emotion/persona-adaptation.js';
-import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
+import type { EmotionAppraisalEntry } from '../../core/emotion/appraisal.js';
+import type { EmotionStateSnapshot } from '../../core/emotion/state.js';
+import type { ActiveConcernContextProvider } from '../../core/intention/concerns.js';
+import { formatActiveConcernsContextBlock } from '../../core/intention/concerns.js';
+import type { BehavioralPatternContextProvider } from '../../core/intention/patterns.js';
+import { buildEmotionalAffectSection } from '../../core/emotion/persona-adaptation.js';
+import type { MetacognitiveFlag } from '../../core/self-model/metacognition.js';
 import {
   buildMetacognitivePersonaHint,
   formatMetacognitiveNotesContextBlock,
-} from '../../self-model/metacognition.js';
-import type { InternalState } from '../../self-model/state.js';
+} from '../../core/self-model/metacognition.js';
+import type { InternalState } from '../../core/self-model/state.js';
 import type { AdaptiveLoadedExtendedToolState } from '../adaptive-tools-telemetry.js';
 import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';

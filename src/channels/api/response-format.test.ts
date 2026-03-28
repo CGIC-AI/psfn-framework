@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import {
   buildApiErrorEnvelope,
   buildChatCompletionResponse,

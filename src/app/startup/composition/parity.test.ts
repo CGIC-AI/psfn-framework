@@ -8,7 +8,7 @@ import { HeartbeatPolicyStore } from '../../../scheduler/heartbeat-policy.js';
 import type { LLMProvider } from '../../../agent/contracts.js';
 import { readLastActiveSession } from '../../../system/lifecycle/notifications.js';
 import { createDefaultExtendedToolAutoloadPolicy } from '../../../agent/extended-tool-autoload-policy.js';
-import { buildInternalStateSnapshotRef, InternalStateComputer } from '../../../self-model/state.js';
+import { buildInternalStateSnapshotRef, InternalStateComputer } from '../../../core/self-model/state.js';
 import {
   wireFilesystemToolsRuntime,
   wireExtendedToolAutoloadPolicy,

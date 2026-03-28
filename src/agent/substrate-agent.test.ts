@@ -10,10 +10,10 @@ import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ChannelPromptDock } from '../channels/types.js';
 import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
-import { isTurnId } from '../turns/id.js';
-import { EmotionState } from '../emotion/state.js';
-import { parseSessionEmotionState } from '../emotion/session-metadata.js';
-import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
+import { isTurnId } from '../core/turns/id.js';
+import { EmotionState } from '../core/emotion/state.js';
+import { parseSessionEmotionState } from '../core/emotion/session-metadata.js';
+import { DEFAULT_COMPANION_ID } from '../core/identity/companion-naming.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 
 const TEST_COMPANION_NAME = 'Companion';

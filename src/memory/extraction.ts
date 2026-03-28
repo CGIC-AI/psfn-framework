@@ -1,6 +1,6 @@
 import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
 import type { EventBus } from '../shared/event-bus.js';
-import type { PromptRegistryStore } from '../identity/prompt-registry.js';
+import type { PromptRegistryStore } from '../core/identity/prompt-registry.js';
 import type { ContactStore } from '../contacts/store.js';
 import { resolvePreferredContactName } from '../contacts/preferred-name.js';
 import type { SessionManager } from '../session/manager.js';

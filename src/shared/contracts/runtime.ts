@@ -2,14 +2,14 @@ import type { ContextManifest } from '../../session/context-manifest.js';
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../agent/presence-metadata.js';
 import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
 import type { ChannelVisibility, TrustLevel } from '../../trust/types.js';
-import type { TurnID } from '../../turns/types.js';
+import type { TurnID } from '../../core/turns/types.js';
 import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 
 // ── Channel-agnostic message types ──
 
 export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'psfn-amica'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];
-export type { TurnID } from '../../turns/types.js';
+export type { TurnID } from '../../core/turns/types.js';
 export type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 
 export interface TurnRecordMessage {
@@ -55,7 +55,7 @@ export interface TurnRecord {
   concernDeltaRefs: string[];
   contactDeltaRefs: string[];
   roleEnvelopeRefs?: string[];
-  observability?: import('../../turns/observability.js').TurnObservabilityRecord;
+  observability?: import('../../core/turns/observability.js').TurnObservabilityRecord;
   versionPointers: TurnRecordVersionPointers;
   provenanceRefs: string[];
 }
@@ -230,9 +230,9 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
-  internalState?: import('../../self-model/state.js').InternalState;
+  internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;
-  metacognitiveFlags?: import('../../self-model/metacognition.js').MetacognitiveFlag[];
+  metacognitiveFlags?: import('../../core/self-model/metacognition.js').MetacognitiveFlag[];
   diagnostics?: {
     fallback?: {
       code: 'vision_empty_response';

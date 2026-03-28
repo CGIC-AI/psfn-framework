@@ -3,15 +3,15 @@ import { join } from 'node:path';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../shared/contracts/runtime.js';
 import { sanitizeChannelId } from './store-primitives.js';
-import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
+import { backfillLegacyTurnId, parseTurnId } from '../core/turns/id.js';
 import type {
   TurnObservabilityCallType,
   TurnObservabilityRecord,
   TurnRetrievalTelemetryRecord,
   TurnSnapshotRecord,
   TurnStageTelemetryRecord,
-} from '../turns/observability.js';
-import { cloneUnknownValue } from '../turns/observability.js';
+} from '../core/turns/observability.js';
+import { cloneUnknownValue } from '../core/turns/observability.js';
 
 const TURN_RECORDS_DIR = '_turn_records';
 const TURN_RECORD_SCHEMA_VERSION = 1;

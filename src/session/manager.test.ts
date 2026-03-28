@@ -9,11 +9,11 @@ import { SessionManager } from './manager.js';
 import { EventBus } from '../shared/event-bus.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
+import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../core/identity/prompt-registry.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
-import { createTurnId } from '../turns/id.js';
+import { createTurnId } from '../core/turns/id.js';
 import {
   buildCompactionSourceBlock,
   computeCompactionSourceSha256,

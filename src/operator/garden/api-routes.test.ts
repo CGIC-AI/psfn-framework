@@ -15,14 +15,14 @@ import { SessionManager } from '../../session/manager.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
 import { ContactStore } from '../../contacts/store.js';
-import { PromptLayerStore } from '../../identity/prompt-store.js';
+import { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   EXTRACTION_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
   PromptRegistryStore,
-} from '../../identity/prompt-registry.js';
-import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+} from '../../core/identity/prompt-registry.js';
+import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';
@@ -30,10 +30,10 @@ import { saveSchedulerConfig } from '../../system/config/scheduler-config.js';
 import { saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { CharacterCardV2 } from '../../identity/types.js';
+import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
 import type { ScheduledTask } from '../../scheduler/types.js';
-import { createTurnId } from '../../turns/id.js';
+import { createTurnId } from '../../core/turns/id.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
 

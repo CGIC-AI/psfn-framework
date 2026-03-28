@@ -11,7 +11,7 @@ import type { ChannelType, MessageModelOverride, MessagePromptOverride, MessageR
 import type { ContactStore } from '../../contacts/store.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
-import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { SessionManager } from '../../session/manager.js';
 import { isChannelVisibility, type ChannelVisibility } from '../../trust/types.js';
 import type {

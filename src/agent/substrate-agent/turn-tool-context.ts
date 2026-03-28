@@ -1,6 +1,6 @@
 import type { AdaptiveToolSnapshotTelemetry } from '../adaptive-tools-telemetry.js';
 import type { ToolSchema, TurnID } from '../../shared/contracts/runtime.js';
-import { cloneAdaptiveToolSnapshotTelemetry, cloneToolSchema } from '../../turns/snapshot.js';
+import { cloneAdaptiveToolSnapshotTelemetry, cloneToolSchema } from '../../core/turns/snapshot.js';
 
 interface ToolSchemaCandidate {
   name?: unknown;

@@ -15,7 +15,7 @@ import { createSpawnShardTool } from './tools.js';
 import type { LLMProvider, MemoryProvider } from '../agent/contracts.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { LLMResponse } from '../shared/contracts/runtime.js';
-import { createTurnId } from '../turns/id.js';
+import { createTurnId } from '../core/turns/id.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.

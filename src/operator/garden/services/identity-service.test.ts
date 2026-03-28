@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { CharacterCardVersionStore } from '../../../identity/card-versioning.js';
-import { PromptLayerStore } from '../../../identity/prompt-store.js';
-import { loadCharacterCard } from '../../../identity/loader.js';
+import { CharacterCardVersionStore } from '../../../core/identity/card-versioning.js';
+import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
+import { loadCharacterCard } from '../../../core/identity/loader.js';
 import { AdminIdentityDataService } from './identity-service.js';
 
 let tempDir: string | null = null;

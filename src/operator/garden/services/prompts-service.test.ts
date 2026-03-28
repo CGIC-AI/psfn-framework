@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PromptLayerStore } from '../../../identity/prompt-store.js';
-import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../identity/prompt-composer.js';
-import { composeDefaultFoundationTemplate } from '../../../identity/foundation-sections.js';
+import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
+import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../core/identity/prompt-composer.js';
+import { composeDefaultFoundationTemplate } from '../../../core/identity/foundation-sections.js';
 import { NorthStarStore } from '../../../north-star/store.js';
 import { AdminPromptsDataService } from './prompts-service.js';
 

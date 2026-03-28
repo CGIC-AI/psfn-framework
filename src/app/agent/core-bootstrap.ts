@@ -1,11 +1,11 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import { EmotionObserver } from '../../emotion/observer.js';
-import { EmotionState } from '../../emotion/state.js';
-import { getSharedAudioEmotionClassifier } from '../../emotion/audio-classifier.js';
+import { EmotionObserver } from '../../core/emotion/observer.js';
+import { EmotionState } from '../../core/emotion/state.js';
+import { getSharedAudioEmotionClassifier } from '../../core/emotion/audio-classifier.js';
 import { composeIdentity } from '../startup/composition/composition.js';
 import { buildAgentCoreRuntime, type AgentCoreRuntime } from '../../agent-main/core-runtime.js';
-import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { resolveCharacterCardHistoryPath, type RuntimePathSnapshot } from '../../persistence/layout.js';
 import { createStartupTextEmotionClassifier, warmRuntimeMlServices } from '../startup/support/ml-warmup.js';
 import {
@@ -16,7 +16,7 @@ import { createGatewayNtfyNotifier, type NtfyNotifier } from '../../tools/ntfy.j
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
-import type { CharacterCardV2 } from '../../identity/types.js';
+import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';

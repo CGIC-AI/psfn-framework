@@ -1,13 +1,13 @@
-import type { CharacterCardVersionStore } from '../../../identity/card-versioning.js';
-import type { CharacterCardV2 } from '../../../identity/types.js';
+import type { CharacterCardVersionStore } from '../../../core/identity/card-versioning.js';
+import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { extractCardPatchFromRecord } from '../../../identity/card-versioning.js';
+import { extractCardPatchFromRecord } from '../../../core/identity/card-versioning.js';
 import {
   normalizeImportedCard,
-} from '../../../identity/importer.js';
-import { buildCharacterMacroMap } from '../../../identity/character-macro-map.js';
-import type { PromptLayerStore } from '../../../identity/prompt-store.js';
-import { syncCharacterFoundationPromptFromCard } from '../../../identity/prompt-sync.js';
+} from '../../../core/identity/importer.js';
+import { buildCharacterMacroMap } from '../../../core/identity/character-macro-map.js';
+import type { PromptLayerStore } from '../../../core/identity/prompt-store.js';
+import { syncCharacterFoundationPromptFromCard } from '../../../core/identity/prompt-sync.js';
 import type { CCv3Data } from '@character-foundry/character-foundry/loader';
 import type {
   AdminIdentityData,

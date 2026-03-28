@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline';
 import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { resolveCompanionNameFromCard } from '../../identity/companion-runtime.js';
+import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';
 import { LLMClient } from '../../llm/client.js';
 import { MemoryStore } from '../../memory/store.js';
 import { SalienceDecay } from '../../memory/decay.js';

@@ -6,7 +6,7 @@ import {
   type DeferredToolHandoffIntent,
   type DeferredToolHandoffPayload,
 } from '../../../agent/deferred-tool-handoff.js';
-import { createSignalWisePostTurnAppraiser } from '../../../intention/post-turn-appraisal.js';
+import { createSignalWisePostTurnAppraiser } from '../../../core/intention/post-turn-appraisal.js';
 
 const HEARTBEAT_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
 const LOAD_TOOLS_TOOL_NAME = 'load_tools';

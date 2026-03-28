@@ -11,7 +11,7 @@ import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ApiServerHealthChecks } from './types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,

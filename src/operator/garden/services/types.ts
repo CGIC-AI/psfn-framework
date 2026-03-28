@@ -1,14 +1,14 @@
 import type {
   CharacterCardHistoryEntry,
   CharacterCardSnapshot,
-} from '../../../identity/card-versioning.js';
-import type { PromptLayerMetadataUpdate } from '../../../identity/prompt-store.js';
+} from '../../../core/identity/card-versioning.js';
+import type { PromptLayerMetadataUpdate } from '../../../core/identity/prompt-store.js';
 import type {
   PromptRegistryEntry,
   PromptRegistryHistoryEntry,
-} from '../../../identity/prompt-registry.js';
-import type { PromptHistoryEntry, PromptLayer } from '../../../identity/prompt-types.js';
-import type { CharacterCardV2 } from '../../../identity/types.js';
+} from '../../../core/identity/prompt-registry.js';
+import type { PromptHistoryEntry, PromptLayer } from '../../../core/identity/prompt-types.js';
+import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { EditableSettings } from '../../../system/settings.js';
 import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
@@ -63,7 +63,7 @@ import type {
   TurnSessionContextSnapshotRecord,
   TurnSnapshotRecord,
   TurnStageTelemetryRecord,
-} from '../../../turns/observability.js';
+} from '../../../core/turns/observability.js';
 import type { SessionRoleEnvelopePreview } from '../../../internal-role-envelopes/projections.js';
 import type {
   AdminMemoryManagedScopeKind,

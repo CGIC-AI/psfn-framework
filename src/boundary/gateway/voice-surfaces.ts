@@ -9,7 +9,7 @@ import { createWyomingTtsServiceAdapter } from '../../channels/wyoming/services/
 import type { WyomingInfoData } from '../../channels/wyoming/protocol.js';
 import type { DiscordAdapter } from '../../channels/discord/adapter.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { GatewayServer } from './server.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {

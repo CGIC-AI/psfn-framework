@@ -4,9 +4,9 @@ import type { EventBus, EventMap } from '../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../shared/contracts/runtime.js';
-import type { TurnObservabilityRecord } from '../../turns/observability.js';
-import type { TurnSnapshot } from '../../turns/snapshot.js';
-import type { EmotionStateSnapshot } from '../../emotion/state.js';
+import type { TurnObservabilityRecord } from '../../core/turns/observability.js';
+import type { TurnSnapshot } from '../../core/turns/snapshot.js';
+import type { EmotionStateSnapshot } from '../../core/emotion/state.js';
 import type {
   AdaptiveToolDecisionTelemetry,
 } from '../adaptive-tools-telemetry.js';

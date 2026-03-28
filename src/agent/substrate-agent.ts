@@ -17,7 +17,7 @@ import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
-} from '../intention/appraisal.js';
+} from '../core/intention/appraisal.js';
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../shared/contracts/runtime.js';
 import type { CapabilityTier, SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { ContactStore } from '../contacts/store.js';
@@ -31,9 +31,9 @@ import {
 import type { ChannelPromptDock } from '../channels/types.js';
 import {
   type PromptComposer,
-} from '../identity/prompt-composer.js';
-import type { ComposeContext } from '../identity/prompt-types.js';
-import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
+} from '../core/identity/prompt-composer.js';
+import type { ComposeContext } from '../core/identity/prompt-types.js';
+import { DEFAULT_COMPANION_ID } from '../core/identity/companion-naming.js';
 import {
   createSubstrateStreamFn,
   type SubstrateStreamRuntimeOptions,
@@ -65,22 +65,22 @@ import type {
   AdaptiveToolRuntimeState,
 } from './adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from './tool-catalog.js';
-import { createTurnId } from '../turns/id.js';
-import type { TurnPromptSnapshot } from '../turns/snapshot.js';
-import { EmotionState } from '../emotion/state.js';
-import type { EmotionObserver } from '../emotion/observer.js';
-import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
-import type { ActiveConcernContextProvider } from '../intention/concerns.js';
-import type { PendingFollowUpContextProvider } from '../intention/pending-follow-ups.js';
-import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
+import { createTurnId } from '../core/turns/id.js';
+import type { TurnPromptSnapshot } from '../core/turns/snapshot.js';
+import { EmotionState } from '../core/emotion/state.js';
+import type { EmotionObserver } from '../core/emotion/observer.js';
+import { EmotionAppraisal, type EmotionAppraisalEntry } from '../core/emotion/appraisal.js';
+import type { ActiveConcernContextProvider } from '../core/intention/concerns.js';
+import type { PendingFollowUpContextProvider } from '../core/intention/pending-follow-ups.js';
+import type { BehavioralPatternContextProvider } from '../core/intention/patterns.js';
 import {
   cloneMetacognitiveFlags,
   type MetacognitiveFlag,
-} from '../self-model/metacognition.js';
+} from '../core/self-model/metacognition.js';
 import {
   cloneInternalState,
   type InternalState,
-} from '../self-model/state.js';
+} from '../core/self-model/state.js';
 import {
   buildPromptPrefixCacheKey as buildPromptPrefixCacheKeyForTurn,
   buildStaticPromptSettingsHash as buildStaticPromptSettingsHashForTurn,

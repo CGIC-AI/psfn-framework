@@ -5,7 +5,7 @@ import {
   normalizeSessionRoleEnvelopePreview,
 } from '../internal-role-envelopes/projections.js';
 import type { SessionEntry } from './types.js';
-import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
+import { backfillLegacyTurnId, parseTurnId } from '../core/turns/id.js';
 
 interface SessionTurnEnvelope {
   schemaVersion: 1;

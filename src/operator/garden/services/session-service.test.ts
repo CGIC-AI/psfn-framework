@@ -6,7 +6,7 @@ import { EventBus } from '../../../shared/event-bus.js';
 import { UserContinuityStore } from '../../../session/continuity.js';
 import { SessionManager } from '../../../session/manager.js';
 import { SessionStore } from '../../../session/store.js';
-import { createTurnId } from '../../../turns/id.js';
+import { createTurnId } from '../../../core/turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { AdminSessionDataService } from './session-service.js';
 

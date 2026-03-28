@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { backfillLegacyTurnId } from '../../turns/id.js';
+import { backfillLegacyTurnId } from '../../core/turns/id.js';
 import {
   journalToCompactionSummary,
   journalToSessionEntry,

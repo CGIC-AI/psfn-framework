@@ -1,11 +1,11 @@
 import type { LLMProvider } from '../../agent/contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import {
   PROFILE_SYNTHESIS_PROMPT_KEY,
   getDefaultPromptText,
-} from '../../identity/prompt-registry.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+} from '../../core/identity/prompt-registry.js';
+import { injectPromptRuntimeTokens } from '../../core/identity/prompt-runtime.js';
 import type { MemoryStore } from '../store.js';
 import { computeProfileNovelty } from './signals.js';
 import type {

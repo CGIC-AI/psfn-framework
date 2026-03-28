@@ -1,5 +1,5 @@
 import type { SubstrateMessage, AgentResponse, ModelBudgetBlockedEvent, TurnUsage, InferredPostTurnAction, CorrelationMetadata } from './contracts/runtime.js';
-import type { TurnSnapshot } from '../turns/snapshot.js';
+import type { TurnSnapshot } from '../core/turns/snapshot.js';
 import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,

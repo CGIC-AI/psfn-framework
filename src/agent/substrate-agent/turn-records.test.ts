@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildTurnRecord } from './turn-records.js';
-import { createTurnId } from '../../turns/id.js';
+import { createTurnId } from '../../core/turns/id.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 
 function makeMessage(overrides?: Partial<SubstrateMessage>): SubstrateMessage {

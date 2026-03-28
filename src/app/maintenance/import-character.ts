@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { loadConfig } from '../../system/config/load-config.js';
-import { importCharacterCardToPath } from '../../identity/importer.js';
+import { importCharacterCardToPath } from '../../core/identity/importer.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 function usage(): void {

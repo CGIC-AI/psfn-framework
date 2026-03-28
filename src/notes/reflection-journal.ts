@@ -1,6 +1,6 @@
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { createComponentLogger } from '../shared/logger.js';
-import { cloneInternalState, type InternalState } from '../self-model/state.js';
+import { cloneInternalState, type InternalState } from '../core/self-model/state.js';
 import type { ValuesMetacognitiveFlag } from '../values/narrative-context-types.js';
 import {
   normalizeNarrativeMetacognitiveFlags,

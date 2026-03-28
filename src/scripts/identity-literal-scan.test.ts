@@ -30,14 +30,14 @@ describe('identity-literal scan', () => {
     const result = scanIdentityLiteralEntries(
       [
         {
-          path: 'src/identity/loader.ts',
+          path: 'src/core/identity/loader.ts',
           text: "const LEGACY_BOOTSTRAP_NAME = 'PSFN';\n",
         },
       ],
       {
         allowlist: [
           {
-            path: 'src/identity/loader.ts',
+            path: 'src/core/identity/loader.ts',
             contains: "LEGACY_BOOTSTRAP_NAME = 'PSFN'",
             reason: 'legacy migration constant',
           },
@@ -54,14 +54,14 @@ describe('identity-literal scan', () => {
     const result = scanIdentityLiteralEntries(
       [
         {
-          path: 'src/identity/loader.ts',
+          path: 'src/core/identity/loader.ts',
           text: "const LEGACY_BOOTSTRAP_NAME = 'PSFN';\n",
         },
       ],
       {
         allowlist: [
           {
-            path: 'src/identity/loader.ts',
+            path: 'src/core/identity/loader.ts',
             contains: 'different text',
             reason: 'mismatch',
           },
@@ -77,14 +77,14 @@ describe('identity-literal scan', () => {
     const result = scanIdentityLiteralEntries(
       [
         {
-          path: 'src/identity/loader.ts',
+          path: 'src/core/identity/loader.ts',
           text: "const LEGACY = 'PSFN psfn';\n",
         },
       ],
       {
         allowlist: [
           {
-            path: 'src/identity/loader.ts',
+            path: 'src/core/identity/loader.ts',
             contains: "LEGACY = 'PSFN psfn'",
             reason: 'allow proper-name only',
             pattern: 'identity-proper-name',

@@ -6,7 +6,7 @@ import {
   sanitizeTurnRetrievalTelemetry,
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
-} from '../../../turns/observability.js';
+} from '../../../core/turns/observability.js';
 import type {
   AdminContinuityProvenanceView,
   AdminSessionTurnData,

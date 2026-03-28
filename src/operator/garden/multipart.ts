@@ -4,7 +4,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendText } from '../../channels/http/primitives.js';
-import { parseImportedCharacterCard } from '../../identity/importer.js';
+import { parseImportedCharacterCard } from '../../core/identity/importer.js';
 
 const MAX_UPLOAD_SIZE = 2 * 1024 * 1024; // 2MB
 const CRLF = Buffer.from('\r\n');

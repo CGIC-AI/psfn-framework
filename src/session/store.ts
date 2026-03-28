@@ -57,7 +57,7 @@ import {
 import { appendTurnRecord, readRecentTurnRecords } from './turn-records.js';
 import { SessionJournalRuntime } from './store/journal-runtime.js';
 import { resolveSessionEntryTurnContext } from './turn-provenance.js';
-import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
+import { backfillLegacyTurnId, parseTurnId } from '../core/turns/id.js';
 import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
 const log = createComponentLogger('SessionStore');
 export {

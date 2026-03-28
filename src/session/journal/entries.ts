@@ -1,6 +1,6 @@
 import type { CompactionSummary, JournalEntry, SessionEntry } from '../types.js';
 import type { JournalMarkerEntry, JournalTurnTombstoneEntry } from './types.js';
-import { parseTurnId } from '../../turns/id.js';
+import { parseTurnId } from '../../core/turns/id.js';
 
 export function journalToSessionEntry(entry: JournalEntry): SessionEntry | null {
   if (entry.type !== 'message') {

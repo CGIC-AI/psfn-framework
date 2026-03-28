@@ -4,9 +4,9 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ChannelVisibility } from '../../trust/types.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../../identity/prompt-registry.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
-import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../../core/identity/prompt-registry.js';
+import { injectPromptRuntimeTokens } from '../../core/identity/prompt-runtime.js';
+import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   buildCompactionSourceBlock,

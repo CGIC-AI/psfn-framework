@@ -17,7 +17,7 @@ import type { SkillsRuntimeConfig } from '../system/config/skills-config.js';
 import {
   DEFAULT_COMPANION_SKILLS_DIRECTORY,
   LEGACY_COMPANION_SKILLS_DIRECTORY,
-} from '../identity/companion-naming.js';
+} from '../core/identity/companion-naming.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 import { isRecord } from '../shared/utils/types.js';
 import type {

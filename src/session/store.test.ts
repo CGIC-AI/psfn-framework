@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
 import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity } from './journal-utils.js';
-import { createTurnId, isTurnId } from '../turns/id.js';
+import { createTurnId, isTurnId } from '../core/turns/id.js';
 
 describe('SessionStore', () => {
   let dir: string;

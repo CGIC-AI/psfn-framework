@@ -1,5 +1,5 @@
 import type { EventBus } from '../../../shared/event-bus.js';
-import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
+import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,

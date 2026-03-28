@@ -1,4 +1,4 @@
-import type { CharacterCardV2 } from '../../identity/types.js';
+import type { CharacterCardV2 } from '../../core/identity/types.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_SENSITIVITY_LEVELS,

@@ -34,7 +34,6 @@ import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-r
 import { AdminServer } from './channels/admin/server.js';
 import { createLocalAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import {
   resolveConfiguredLiteLLMApiKeyEnv,
   resolveConfiguredLiteLLMBaseUrl,
@@ -54,8 +53,6 @@ import {
 import type { LifecycleNotifier } from './lifecycle/notifications.js';
 import {
   RUNTIME_MODE,
-  resolveRuntimeModeContract,
-  toRuntimeStatusMetadata,
 } from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -133,7 +130,6 @@ import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   createEmbeddingDimensionMismatchFatalMessage,
-  hydrateCanonicalStartupConfig,
   resolveRuntimeVoiceSttProvider,
   resolveRuntimeVoiceTtsProvider,
   type StartupConfigHydrationDiagnostics,
@@ -143,6 +139,7 @@ import {
   parseCommaSeparatedEnv,
   parseExtractionDrainTimeoutMs,
 } from './runtime/env-parsing.js';
+import { resolveStartupPreflightBundle } from './runtime/startup-preflight.js';
 import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,
@@ -407,15 +404,14 @@ export class SubstrateRuntime implements Lifecycle {
 
   async init(): Promise<void> {
     log.info('Initializing...');
-    const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
-    if (ignoredMutableEnvKeys.length > 0) {
-      log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
-        keys: ignoredMutableEnvKeys,
-      });
-    }
-
-    const startupHydration = hydrateCanonicalStartupConfig(this.config, {
+    const {
+      lifecycleRuntimeContract,
+      runtimeStatusMeta,
+      startupHydration,
+    } = resolveStartupPreflightBundle(this.config, {
+      entrypoint: RUNTIME_MODE.SINGLE,
       env: process.env,
+      logger: log,
     });
     const {
       pathSnapshot,
@@ -425,12 +421,6 @@ export class SubstrateRuntime implements Lifecycle {
     } = startupHydration;
     logStartupHydrationDiagnostics(startupHydration.diagnostics);
 
-    const lifecycleRuntimeContract = resolveRuntimeModeContract({
-      entrypoint: RUNTIME_MODE.SINGLE,
-      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
-      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
-    });
-    const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
     log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);
     log.info('Loaded trust policy configuration', {
       exactOverrideCount: Object.keys(

@@ -37,13 +37,14 @@ import { resolveGatewayBootstrapInput } from './gateway/bootstrap-input.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
-  hydrateCanonicalStartupConfig,
   resolveRuntimeVoiceProviderGate,
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
+import { RUNTIME_MODE } from './lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import { startDiscordWithRetry } from './gateway/discord-startup.js';
 import { createGatewayPrivilegedServiceRegistry } from './gateway/privileged-services.js';
+import { resolveStartupPreflightBundle } from './runtime/startup-preflight.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
   createOpenHomeChannelAdapterFactoryEntry,
@@ -242,8 +243,12 @@ async function runShutdownStep(
 async function main(): Promise<void> {
   const env = process.env;
   const config = loadConfig();
-  const startupHydration = hydrateCanonicalStartupConfig(config, {
+  const {
+    startupHydration,
+  } = resolveStartupPreflightBundle(config, {
+    entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
     env,
+    logger: log,
   });
   logStartupHydrationDiagnostics(startupHydration.diagnostics);
   const bootstrap = resolveGatewayBootstrapInput({
@@ -251,11 +256,6 @@ async function main(): Promise<void> {
     env,
     startupHydration,
   });
-  if (bootstrap.diagnostics.ignoredMutableEnvKeys.length > 0) {
-    log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
-      keys: bootstrap.diagnostics.ignoredMutableEnvKeys,
-    });
-  }
   log.info('Loaded trust policy configuration', {
     exactOverrideCount: Object.keys(
       startupHydration.trustPolicyConfig.channelClassification.visibilityOverrides.exact,

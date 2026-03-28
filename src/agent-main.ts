@@ -29,7 +29,6 @@ import {
 import { AdminServer } from './channels/admin/server.js';
 import { createGatewayAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
 import { ModelDiscovery } from './llm/discovery.js';
-import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
 import {
   resolveConfiguredLiteLLMApiKeyEnv,
   resolveConfiguredLiteLLMBaseUrl,
@@ -62,8 +61,6 @@ import {
 import type { MessageSender } from './lifecycle/notifications.js';
 import {
   RUNTIME_MODE,
-  resolveRuntimeModeContract,
-  toRuntimeStatusMetadata,
 } from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
@@ -141,10 +138,10 @@ import {
 } from './persistence/layout.js';
 import {
   buildRuntimeChannelsConfigOverrides,
-  hydrateCanonicalStartupConfig,
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from './runtime/env-parsing.js';
+import { resolveStartupPreflightBundle } from './runtime/startup-preflight.js';
 import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,
@@ -281,14 +278,14 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
-  if (ignoredMutableEnvKeys.length > 0) {
-    log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
-      keys: ignoredMutableEnvKeys,
-    });
-  }
-  const startupHydration = hydrateCanonicalStartupConfig(config, {
+  const {
+    lifecycleRuntimeContract,
+    runtimeStatusMeta,
+    startupHydration,
+  } = resolveStartupPreflightBundle(config, {
+    entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
     env: process.env,
+    logger: log,
   });
   const {
     pathSnapshot,
@@ -323,12 +320,6 @@ async function main(): Promise<void> {
     () => capabilityRuntime,
     (decision) => emitEligibilityDecisionTelemetry(eventBus, decision, log),
   );
-  const lifecycleRuntimeContract = resolveRuntimeModeContract({
-    entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
-    runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
-    restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
-  });
-  const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
   if (!process.env.WORKSPACE_PATH) {
     log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {

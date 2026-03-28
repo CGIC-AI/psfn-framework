@@ -1,15 +1,15 @@
 import 'dotenv/config';
 import { createComponentLogger } from './logger.js';
-import { RUNTIME_MODE, resolveRuntimeModeContract } from './lifecycle/runtime-mode.js';
+import { RUNTIME_MODE } from './lifecycle/runtime-mode.js';
+import { resolveStartupLifecycleBundle } from './runtime/startup-preflight.js';
 
 const log = createComponentLogger('Main');
 
 function main(): never {
   try {
-    resolveRuntimeModeContract({
+    resolveStartupLifecycleBundle({
       entrypoint: RUNTIME_MODE.SINGLE,
-      runtimeModeEnv: process.env.PSFN_RUNTIME_MODE,
-      restartCommandEnv: process.env.LIFECYCLE_RESTART_COMMAND,
+      env: process.env,
     });
   } catch (error) {
     log.error(error instanceof Error ? error.message : String(error));

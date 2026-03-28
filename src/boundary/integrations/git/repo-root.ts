@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import { toErrorMessage } from '../shared/utils/errors.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 export interface ResolveGitRepoRootOptions {
   codebaseRoot: string;

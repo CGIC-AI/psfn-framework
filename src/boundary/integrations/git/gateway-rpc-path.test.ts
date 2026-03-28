@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GatewayServer, type GatewayServerOptions } from '../boundary/gateway/server.js';
-import { GatewayClient } from '../boundary/gateway/client.js';
+import { GatewayServer, type GatewayServerOptions } from '../../gateway/server.js';
+import { GatewayClient } from '../../gateway/client.js';
 import { GatewayGitOps } from './gateway-ops.js';
 import { GitOps } from './ops.js';
 

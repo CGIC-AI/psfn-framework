@@ -17,10 +17,10 @@ import {
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../memory/writer.js';
 import { registerMemoryTools } from '../../memory/runtime-wiring.js';
-import { registerGitTools } from '../../git/runtime-wiring.js';
-import { GatewayGitOps } from '../../git/gateway-ops.js';
-import { registerBeadsTools } from '../../beads/runtime-wiring.js';
-import { GatewayBeadsOps } from '../../beads/gateway-ops.js';
+import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
+import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
+import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
+import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
 import {
   RUNTIME_MODE,
 } from '../../system/lifecycle/runtime-mode.js';

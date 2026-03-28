@@ -6,8 +6,8 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { GitOperations } from './ops.js';
-import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../shared/utils/errors.js';
+import { textResult, textResultWithError } from '../../../tools/results.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const MAX_DIFF_CHARS = 8000;
 

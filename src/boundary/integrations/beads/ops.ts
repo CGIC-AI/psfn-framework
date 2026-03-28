@@ -6,7 +6,7 @@ import type {
   BeadsShowParams,
   BeadsSyncParams,
   BeadsUpdateParams,
-} from '../boundary/gateway/protocol.js';
+} from '../../gateway/protocol.js';
 
 export interface BeadsOperations {
   ready(params?: BeadsReadyParams): Promise<BeadsActionResult>;

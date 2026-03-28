@@ -2,8 +2,8 @@
 // Instantiates GitOps and registers all 6 git tools on a target (SubstrateAgent).
 
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type { ToolRegistrar } from '../agent/tool-registrar.js';
-import type { WirableTool, ToolWiringMeta } from '../agent/tool-wiring-validator.js';
+import type { ToolRegistrar } from '../../../agent/tool-registrar.js';
+import type { WirableTool, ToolWiringMeta } from '../../../agent/tool-wiring-validator.js';
 import { GitOps, type GitOpsConfig, type GitOperations } from './ops.js';
 import {
   createRepoStatusTool,

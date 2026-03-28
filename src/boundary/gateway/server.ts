@@ -18,7 +18,7 @@ import {
   type RuntimeHealthResult,
   type VoiceHandleMessageResult,
 } from './protocol.js';
-import type { GitOperations } from '../../git/ops.js';
+import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../images/types.js';
 import type { AuditStore } from './audit.js';
 import type { SessionHmacKeyring } from '../../session/journal-utils.js';

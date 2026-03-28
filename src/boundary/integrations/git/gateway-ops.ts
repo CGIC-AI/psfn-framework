@@ -2,7 +2,7 @@
 // Agent-side adapter that routes all git self-modification operations
 // through the host gateway RPC surface.
 
-import type { GatewayClient } from '../boundary/gateway/client.js';
+import type { GatewayClient } from '../../gateway/client.js';
 import type {
   GitOperations,
   GitStatusResult,

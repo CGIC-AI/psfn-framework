@@ -69,7 +69,7 @@ describe('wireGitRuntime', () => {
 describe('entrypoint composition', () => {
   it('agent-main.ts registers git tools via gateway-backed ops', async () => {
     const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
-    const agentMainSource = fs.readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const agentMainSource = fs.readFileSync(resolve('src/app/agent/main.ts'), 'utf-8');
     expect(agentMainSource).toContain('registerGitTools(');
     expect(agentMainSource).toContain('new GatewayGitOps(gateway)');
   });

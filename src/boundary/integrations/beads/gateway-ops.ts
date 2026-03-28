@@ -1,4 +1,4 @@
-import type { GatewayClient } from '../boundary/gateway/client.js';
+import type { GatewayClient } from '../../gateway/client.js';
 import type {
   BeadsActionResult,
   BeadsCloseParams,
@@ -7,7 +7,7 @@ import type {
   BeadsShowParams,
   BeadsSyncParams,
   BeadsUpdateParams,
-} from '../boundary/gateway/protocol.js';
+} from '../../gateway/protocol.js';
 import type { BeadsOperations } from './ops.js';
 
 export class GatewayBeadsOps implements BeadsOperations {

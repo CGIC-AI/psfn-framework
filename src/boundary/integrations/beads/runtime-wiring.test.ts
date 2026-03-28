@@ -76,7 +76,7 @@ describe('registerBeadsTools', () => {
 
 describe('entrypoint composition', () => {
   it('agent-main.ts registers beads tools via gateway-backed ops', () => {
-    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    const source = readFileSync(resolve('src/app/agent/main.ts'), 'utf-8');
     expect(source).toContain('registerBeadsTools(');
     expect(source).toContain('new GatewayBeadsOps(gateway)');
   });

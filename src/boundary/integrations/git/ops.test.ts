@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GitOps, type GitOpsConfig } from './ops.js';
-import { REPO_ALLOWED_PATHS } from '../system/security/policy-constants.js';
+import { REPO_ALLOWED_PATHS } from '../../../system/security/policy-constants.js';
 
 // Mock child_process and fs
 vi.mock('node:child_process', () => ({

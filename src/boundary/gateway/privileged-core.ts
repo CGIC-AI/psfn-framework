@@ -6,7 +6,7 @@ import {
 } from '../../system/capabilities/eligibility.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { GitOps } from '../../git/ops.js';
+import { GitOps } from '../integrations/git/ops.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { AuditStore } from './audit.js';

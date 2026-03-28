@@ -312,6 +312,10 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     onModuleRegistryMutation: options.onModuleRegistryMutation,
     executionPort: options.executionPort ?? null,
     config: options.replConfig ?? DEFAULT_REPL_CONFIG,
+    mutationPolicy: {
+      allowRepoMutation: false,
+      allowWorkspaceWrite: false,
+    },
   }));
 
   return shardExecutionPort;

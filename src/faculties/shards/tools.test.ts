@@ -57,12 +57,12 @@ describe('createBoundedSubagentLaunchTool', () => {
             requestId: 'req-1',
             turnId: 'turn-1',
             embodimentContext: {
-                kind: 'embodiment',
-                embodimentId: 'display',
-                companionId: 'companion-test',
-                siteId: 'ha-main',
-                satelliteId: 'kitchen',
-              },
+              kind: 'embodiment',
+              embodimentId: 'display',
+              siteId: 'ha-main',
+              satelliteId: 'kitchen',
+              companionId: 'companion-test',
+            },
           },
         }));
 
@@ -103,6 +103,8 @@ describe('createBoundedSubagentLaunchTool', () => {
               stateReason: 'completed',
             },
           },
+          mutationWorkflow: 'artifact_return_only',
+          returnedArtifacts: [],
         });
       },
     );

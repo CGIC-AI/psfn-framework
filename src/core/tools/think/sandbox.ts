@@ -131,6 +131,8 @@ export class REPLSandbox {
     const allowShellExec = capabilityTier === undefined
       || capabilityTier === 'autonomous'
       || capabilityTier === 'custom';
+    const allowRepoMutation = this.deps.mutationPolicy?.allowRepoMutation === true;
+    const allowWorkspaceWrite = this.deps.mutationPolicy?.allowWorkspaceWrite === true;
     const hasShellExecPort = Boolean(
       this.deps.executionPort
       && this.deps.executionPort.boundary.kind === 'sandbox_broker'
@@ -168,14 +170,22 @@ export class REPLSandbox {
       module_health: modules.module_health,
       repo_status: repo.repo_status,
       repo_diff: repo.repo_diff,
-      repo_apply_patch: repo.repo_apply_patch,
-      repo_commit: repo.repo_commit,
       read_file: toolchain.read_file,
-      write_file: toolchain.write_file,
       list_files: toolchain.list_files,
       web_fetch: web.web_fetch,
       crawler_fetch: web.crawler_fetch,
       web_research: web.web_research,
+      ...(allowRepoMutation
+        ? {
+          repo_apply_patch: repo.repo_apply_patch,
+          repo_commit: repo.repo_commit,
+        }
+        : {}),
+      ...(allowWorkspaceWrite
+        ? {
+          write_file: toolchain.write_file,
+        }
+        : {}),
       ...((allowShellExec && hasShellExecPort) ? { shell_exec: shell.shell_exec } : {}),
 
       // Text analysis helpers

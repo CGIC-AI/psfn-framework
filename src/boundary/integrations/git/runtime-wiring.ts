@@ -1,5 +1,5 @@
 // ── Git Runtime Wiring ──
-// Instantiates GitOps and registers all 6 git tools on a target (SubstrateAgent).
+// Instantiates GitOps and registers the requested git tool surface on a target (SubstrateAgent).
 
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
@@ -37,6 +37,8 @@ function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTo
 export interface RegisterGitToolsOptions {
   /** When true, attaches gateway RPC method requirements as wiring metadata */
   gatewayMode?: boolean;
+  /** Restrict registration to read-only inspection tools for parent-agent runtime use. */
+  access?: 'full' | 'read_only';
 }
 
 export function registerGitTools(
@@ -44,14 +46,19 @@ export function registerGitTools(
   gitOps: GitOperations,
   options?: RegisterGitToolsOptions,
 ): void {
-  const tools: AgentTool<any>[] = [
-    createRepoStatusTool(gitOps),
-    createRepoDiffTool(gitOps),
-    createRepoApplyPatchTool(gitOps),
-    createRepoCommitTool(gitOps),
-    createRepoCreateBranchTool(gitOps),
-    createRepoOpenPRTool(gitOps),
-  ];
+  const tools: AgentTool<any>[] = options?.access === 'read_only'
+    ? [
+      createRepoStatusTool(gitOps),
+      createRepoDiffTool(gitOps),
+    ]
+    : [
+      createRepoStatusTool(gitOps),
+      createRepoDiffTool(gitOps),
+      createRepoApplyPatchTool(gitOps),
+      createRepoCommitTool(gitOps),
+      createRepoCreateBranchTool(gitOps),
+      createRepoOpenPRTool(gitOps),
+    ];
 
   for (const tool of tools) {
     if (options?.gatewayMode) {
@@ -68,8 +75,9 @@ export function registerGitTools(
 export function wireGitRuntime(
   target: GitRuntimeTarget,
   config?: Partial<GitOpsConfig>,
+  options?: RegisterGitToolsOptions,
 ): GitOps {
   const gitOps = new GitOps(config);
-  registerGitTools(target, gitOps);
+  registerGitTools(target, gitOps, options);
   return gitOps;
 }

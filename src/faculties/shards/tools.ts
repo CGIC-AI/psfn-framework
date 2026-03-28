@@ -19,8 +19,9 @@ export function createBoundedSubagentLaunchTool(manager: BoundedSubagentLaunchPo
     name: BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
     description:
       'Launch a bounded subagent for parallel task execution. ' +
-      'Multiple bounded subagent launches in the same turn run concurrently. ' +
-      'Each launch is ephemeral — it runs a task and returns the result.',
+      'Multiple spawn_subagent calls in the same turn run concurrently. ' +
+      'Each launch is ephemeral — it runs a task and returns the result. ' +
+      'For repository change work, the bounded subagent must return reviewable patch, artifact, or PR-style output rather than mutating the parent runtime in place.',
     label: BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
     parameters: Type.Object({
       name: Type.String({ description: 'Short label for this bounded subagent (e.g. "research", "analysis")' }),
@@ -109,6 +110,8 @@ export function createBoundedSubagentLaunchTool(manager: BoundedSubagentLaunchPo
             }] satisfies TextContent[],
           details: {
             boundedSubagent,
+            mutationWorkflow: 'artifact_return_only',
+            returnedArtifacts: result.returnedArtifacts ?? [],
           },
         };
       } catch (error) {

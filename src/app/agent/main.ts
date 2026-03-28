@@ -309,9 +309,12 @@ async function main(): Promise<void> {
   });
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
-  // Git tools — self-modification via gateway-hosted git ops
-  registerGitTools(agentLoop, new GatewayGitOps(gateway), { gatewayMode: true });
-  log.info('Git self-modification tools enabled');
+  // Git tools — parent turns stay read-only; mutation must return through shard outputs.
+  registerGitTools(agentLoop, new GatewayGitOps(gateway), {
+    gatewayMode: true,
+    access: 'read_only',
+  });
+  log.info('Git repository inspection tools enabled for parent agent');
 
   // Beads issue-management tools — policy-scoped gateway RPC access (no shell passthrough)
   registerBeadsTools(agentLoop, new GatewayBeadsOps(gateway), { gatewayMode: true });

@@ -8,6 +8,7 @@ import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
+import type { REPLMutationPolicy } from './types.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -73,6 +74,7 @@ function mockSequentialLLM(contents: string[]): LLMProvider {
 function nullDeps(
   llm?: LLMProvider,
   executionPort?: SandboxExecutionPort | null,
+  mutationPolicy?: REPLMutationPolicy,
 ) {
   return {
     llmProvider: llm ?? mockLLM(),
@@ -82,6 +84,7 @@ function nullDeps(
     sessionManager: null,
     scheduler: null,
     eventBus: null,
+    mutationPolicy,
   };
 }
 
@@ -189,7 +192,9 @@ describe('REPLSandbox', () => {
   it('llm_query_strict retries until regex matches', async () => {
     const llm = mockSequentialLLM(['invalid', 'ID-42']);
     const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 5 };
-    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const sandbox = new REPLSandbox(nullDeps(llm, null, {
+      allowWorkspaceWrite: true,
+    }), budgetRef);
     const result = await sandbox.execute(
       'const answer = await llm_query_strict("Give me an ID", "^ID-\\\\d+$", 3); print(answer);',
       5000, 8192,
@@ -208,7 +213,9 @@ describe('REPLSandbox', () => {
   it('llm_query_strict returns last attempt when retries are exhausted', async () => {
     const llm = mockSequentialLLM(['bad-1', 'bad-2', 'bad-3']);
     const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 5 };
-    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const sandbox = new REPLSandbox(nullDeps(llm, null, {
+      allowWorkspaceWrite: true,
+    }), budgetRef);
     const result = await sandbox.execute(
       'const answer = await llm_query_strict("Give me ok", "^ok$", 3); print(answer);',
       5000, 8192,
@@ -222,7 +229,9 @@ describe('REPLSandbox', () => {
   it('llm_query_strict handles invalid regex without crashing', async () => {
     const llm = mockSequentialLLM(['first-response', 'second-response']);
     const budgetRef: SandboxBudgetRef = { subQueries: 0, maxSubQueries: 5 };
-    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const sandbox = new REPLSandbox(nullDeps(llm, null, {
+      allowWorkspaceWrite: true,
+    }), budgetRef);
     const result = await sandbox.execute(
       'const answer = await llm_query_strict("test", "[a-", 5); print(answer);',
       5000, 8192,
@@ -281,7 +290,9 @@ describe('REPLSandbox', () => {
         filesChanged: 1,
       })),
     } as unknown as LLMProvider;
-    const sandbox = new REPLSandbox(nullDeps(llm));
+    const sandbox = new REPLSandbox(nullDeps(llm, null, {
+      allowRepoMutation: true,
+    }));
 
     const result = await sandbox.execute(
       [
@@ -305,7 +316,9 @@ describe('REPLSandbox', () => {
       ...mockLLM(),
       gitApplyPatch: vi.fn(async () => {}),
     } as unknown as LLMProvider;
-    const sandbox = new REPLSandbox(nullDeps(llm));
+    const sandbox = new REPLSandbox(nullDeps(llm, null, {
+      allowRepoMutation: true,
+    }));
 
     const result = await sandbox.execute(
       'const r = await repo_apply_patch("../secrets.txt", "oops"); print(r.ok, r.error);',
@@ -352,7 +365,9 @@ describe('REPLSandbox', () => {
       fsList: vi.fn(async () => ['src/a.ts', 'src/b.ts']),
       webFetch: vi.fn(async (url: string) => `fetched:${url}`),
     } as unknown as LLMProvider;
-    const sandbox = new REPLSandbox(nullDeps(llm));
+    const sandbox = new REPLSandbox(nullDeps(llm, null, {
+      allowWorkspaceWrite: true,
+    }));
 
     const result = await sandbox.execute(
       [
@@ -374,6 +389,21 @@ describe('REPLSandbox', () => {
     expect((llm as any).fsWrite).toHaveBeenCalledWith('/app/workspace/out.txt', 'hello');
     expect((llm as any).fsList).toHaveBeenCalledWith('src/**/*.ts', 10);
     expect((llm as any).webFetch).toHaveBeenCalledWith('https://example.com', undefined, 'default');
+  });
+
+  it('omits repo and workspace mutation helpers under the default read-only parent policy', async () => {
+    const sandbox = new REPLSandbox(nullDeps(mockLLM()));
+    const result = await sandbox.execute(
+      [
+        'print(typeof repo_apply_patch);',
+        'print(typeof repo_commit);',
+        'print(typeof write_file);',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+
+    expect(result.output).toBe(['undefined', 'undefined', 'undefined'].join('\n'));
   });
 
   it('shell_exec helper calls the sandbox execution port when allowed', async () => {
@@ -493,7 +523,9 @@ describe('REPLSandbox', () => {
       toolCalls: 0,
       maxToolCalls: 2,
     };
-    const sandbox = new REPLSandbox(nullDeps(llm), budgetRef);
+    const sandbox = new REPLSandbox(nullDeps(llm, null, {
+      allowWorkspaceWrite: true,
+    }), budgetRef);
     const result = await sandbox.execute(
       [
         'const a = await read_file("a.txt");',

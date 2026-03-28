@@ -59,9 +59,9 @@ describe('extended-tool-autoload-policy', () => {
     const devCandidates = policy.getCandidatesForIntent('dev');
     expect(devCandidates).toEqual(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.dev);
     expect(devCandidates.slice(0, policy.maxPreloadCount)).toHaveLength(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
-    expect(devCandidates[0]).toBe('repo_apply_patch');
-    expect(devCandidates[1]).toBe('repo_commit');
-    expect(devCandidates[2]).toBe('repo_create_branch');
+    expect(devCandidates[0]).toBe('issue_create');
+    expect(devCandidates[1]).toBe('issue_update');
+    expect(devCandidates[2]).toBe('issue_close');
   });
 
   it('supports disabling preloads by setting max count to zero', () => {
@@ -86,15 +86,15 @@ describe('extended-tool-autoload-policy', () => {
 
   it('selects bounded overlay tools deterministically from registered candidates', () => {
     const selection = selectBoundedOverlayCandidates(
-      ['repo_apply_patch', 'repo_commit', 'repo_create_branch', 'repo_open_pr'],
-      ['repo_apply_patch', 'repo_commit', 'repo_create_branch', 'repo_open_pr'],
+      ['issue_create', 'issue_update', 'issue_close', 'issue_sync'],
+      ['issue_create', 'issue_update', 'issue_close', 'issue_sync'],
       3,
     );
     expect(selection.maxCount).toBe(3);
-    expect(selection.selected).toEqual(['repo_apply_patch', 'repo_commit', 'repo_create_branch']);
+    expect(selection.selected).toEqual(['issue_create', 'issue_update', 'issue_close']);
     expect(selection.skipped).toEqual([
       {
-        toolName: 'repo_open_pr',
+        toolName: 'issue_sync',
         reason: 'budget_exhausted',
       },
     ]);

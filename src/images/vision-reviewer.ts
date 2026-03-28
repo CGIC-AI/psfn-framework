@@ -12,7 +12,6 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../config/providers-config.js';
 import { resolveProviderApiKey } from '../custody/credential-vault.js';
-import { createComponentLogger } from '../logger.js';
 import type { SubstrateConfig } from '../types.js';
 import { extractTextContent } from '../llm/conversion.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -23,7 +22,6 @@ import type {
   ImageVisionReviewer,
 } from './types.js';
 
-const log = createComponentLogger('ImageVisionReviewer');
 const VISION_IMAGE_MAX_COUNT = 4;
 const VISION_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -43,7 +41,6 @@ type BinaryFetcher = (
 export interface ImageVisionReviewerOptions {
   binaryFetcher?: BinaryFetcher;
   llmProvider?: LLMProvider;
-  fetchImpl?: typeof fetch;
   completeImpl?: (
     model: Model<any>,
     context: PiContext,
@@ -82,18 +79,6 @@ function resolveApiKey(model: Model<any>, config: SubstrateConfig): string | und
   return resolveProviderApiKey(config.primaryProvider, config);
 }
 
-function isDirectFetchFallbackAllowed(url: URL, comfyUiBaseUrl: string | undefined): boolean {
-  const baseUrl = comfyUiBaseUrl?.trim();
-  if (!baseUrl) return false;
-
-  try {
-    const comfyUrl = new URL(baseUrl);
-    return comfyUrl.hostname.trim().toLowerCase() === url.hostname.trim().toLowerCase();
-  } catch {
-    return false;
-  }
-}
-
 function validateFetchedImage(payload: {
   dataBase64: string;
   mimeType: string;
@@ -117,48 +102,13 @@ function validateFetchedImage(payload: {
   };
 }
 
-async function fetchImageContentDirect(
-  fetchImpl: typeof fetch,
-  url: string,
-): Promise<ImageContent> {
-  const response = await fetchImpl(url, {
-    headers: {
-      Accept: 'image/*',
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`direct image fetch failed with ${String(response.status)}`);
-  }
-
-  const mimeType = response.headers.get('content-type')
-    ?.split(';')[0]
-    .trim()
-    .toLowerCase() ?? '';
-  if (!mimeType.startsWith('image/')) {
-    throw new Error(`direct image fetch returned unsupported content type "${mimeType || 'unknown'}"`);
-  }
-
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (bytes.length === 0 || bytes.length > VISION_IMAGE_MAX_BYTES) {
-    throw new Error(`direct image fetch returned invalid image size ${String(bytes.length)}`);
-  }
-
-  return {
-    type: 'image',
-    data: bytes.toString('base64'),
-    mimeType,
-  };
-}
-
 export class DefaultImageVisionReviewer implements ImageVisionReviewer {
-  private readonly fetchImpl: typeof fetch;
   private readonly completeImpl: ImageVisionReviewerOptions['completeImpl'];
 
   constructor(
     private readonly config: SubstrateConfig,
     private readonly options: ImageVisionReviewerOptions = {},
   ) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
     this.completeImpl = options.completeImpl ?? completeSimple;
   }
 
@@ -241,25 +191,18 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
     }
 
     const binaryFetcher = this.options.binaryFetcher;
-    if (binaryFetcher) {
-      try {
-        return validateFetchedImage(await binaryFetcher(url, {
-          lane: 'default',
-          maxBytes: VISION_IMAGE_MAX_BYTES,
-        }));
-      } catch (error) {
-        if (!isDirectFetchFallbackAllowed(parsedUrl, this.config.comfyUiBaseUrl)) {
-          throw new Error(`vision fetch failed for ${url}: ${toErrorMessage(error)}`);
-        }
-
-        log.debug('Falling back to direct fetch for image vision review', {
-          url,
-          error: toErrorMessage(error),
-        });
-      }
+    if (!binaryFetcher) {
+      throw new Error(`vision review requires gateway binary fetch for ${url}`);
     }
 
-    return await fetchImageContentDirect(this.fetchImpl, url);
+    try {
+      return validateFetchedImage(await binaryFetcher(url, {
+        lane: 'default',
+        maxBytes: VISION_IMAGE_MAX_BYTES,
+      }));
+    } catch (error) {
+      throw new Error(`vision fetch failed for ${url}: ${toErrorMessage(error)}`);
+    }
   }
 }
 

@@ -17,7 +17,6 @@ describe('DefaultImageVisionReviewer', () => {
       mimeType: 'image/png',
       sizeBytes: 3,
     }));
-    const fetchImpl = vi.fn();
     const completeImpl = vi.fn(async (_model, context) => {
       expect(context.messages).toHaveLength(1);
       const message = context.messages[0] as {
@@ -41,7 +40,6 @@ describe('DefaultImageVisionReviewer', () => {
       } as any,
       {
         binaryFetcher,
-        fetchImpl: fetchImpl as typeof fetch,
         completeImpl,
       },
     );
@@ -55,23 +53,14 @@ describe('DefaultImageVisionReviewer', () => {
       'https://images.example.test/review.png',
       { lane: 'default', maxBytes: 8 * 1024 * 1024 },
     );
-    expect(fetchImpl).not.toHaveBeenCalled();
     expect(result.summary).toContain('matches the expected look');
     expect(result.model).toBe('vision-model');
   });
 
-  it('falls back to direct fetch for configured ComfyUI hosts when gateway fetch fails', async () => {
+  it('fails closed when gateway fetch fails even for configured ComfyUI hosts', async () => {
     const binaryFetcher = vi.fn(async () => {
       throw new Error('gateway denied');
     });
-    const fetchImpl = vi.fn(async () => (
-      new Response(Buffer.from('png-bytes'), {
-        status: 200,
-        headers: {
-          'content-type': 'image/png',
-        },
-      })
-    )) as typeof fetch;
     const completeImpl = vi.fn(async () => ({
       model: 'vision-model',
       content: [{ type: 'text', text: 'The Comfy output still looks like the companion.' }],
@@ -84,27 +73,18 @@ describe('DefaultImageVisionReviewer', () => {
       } as any,
       {
         binaryFetcher,
-        fetchImpl,
         completeImpl,
       },
     );
 
-    const result = await reviewer.analyze({
+    await expect(reviewer.analyze({
       imageUrls: ['https://comfy.local.example.test/view?filename=review.png'],
       prompt: 'a new selfie',
       mode: 'create',
-    });
+    })).rejects.toThrow('vision fetch failed for https://comfy.local.example.test/view?filename=review.png: gateway denied');
 
     expect(binaryFetcher).toHaveBeenCalledTimes(1);
-    expect(fetchImpl).toHaveBeenCalledWith(
-      'https://comfy.local.example.test/view?filename=review.png',
-      expect.objectContaining({
-        headers: {
-          Accept: 'image/*',
-        },
-      }),
-    );
-    expect(result.summary).toContain('Comfy output still looks like the companion');
+    expect(completeImpl).not.toHaveBeenCalled();
   });
 
   it('uses injected llmProvider transport instead of local completion transport', async () => {

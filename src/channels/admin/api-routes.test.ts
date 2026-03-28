@@ -2446,6 +2446,10 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(createPromptB.status).toBe(201);
+    const runtimeLayerAId = promptStore.getAll().find(layer => layer.name === 'Runtime Layer A')?.id;
+    const runtimeLayerBId = promptStore.getAll().find(layer => layer.name === 'Runtime Layer B')?.id;
+    expect(runtimeLayerAId).toBeTruthy();
+    expect(runtimeLayerBId).toBeTruthy();
 
     const promptsBeforeReorderRes = await request(port, 'GET', '/api/admin/prompts', undefined, authHeaders);
     expect(promptsBeforeReorderRes.status).toBe(200);
@@ -2463,9 +2467,13 @@ describe('AdminServer JSON API routes', () => {
     );
     expect(reorderRes.status).toBe(200);
 
-    for (const [index, reorderedLayerId] of reorderedLayerIds.entries()) {
-      expect(promptStore.getById(reorderedLayerId)?.priority).toBe(index);
-    }
+    const runtimeLayersAfterReorder = promptStore.getAll()
+      .filter(layer => layer.type === 'runtime')
+      .sort((left, right) => left.priority - right.priority)
+      .map(layer => ({ id: layer.id, promptOrder: layer.promptOrder }));
+    const runtimeOrderIds = runtimeLayersAfterReorder.map(layer => layer.id);
+    expect(runtimeOrderIds.indexOf(runtimeLayerBId!)).toBeLessThan(runtimeOrderIds.indexOf(runtimeLayerAId!));
+    expect(promptStore.getById(runtimeLayerBId!)?.promptOrder).toBeLessThan(promptStore.getById(runtimeLayerAId!)?.promptOrder ?? Number.MAX_SAFE_INTEGER);
     expect(promptStore.getById(layerId)?.content).toContain('Updated API prompt content');
 
     const missingPrompt = await request(port, 'GET', '/api/admin/prompts/missing-layer', undefined, authHeaders);

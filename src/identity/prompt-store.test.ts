@@ -248,10 +248,10 @@ describe('PromptLayerStore', () => {
   });
 
   describe('reorderByLayerIds()', () => {
-    it('reorders priorities in one pass without mutating content', () => {
-      const a = store.create({ type: 'runtime', name: 'A', content: 'alpha', priority: 10 });
-      const b = store.create({ type: 'runtime', name: 'B', content: 'bravo', priority: 20 });
-      const c = store.create({ type: 'runtime', name: 'C', content: 'charlie', priority: 30 });
+    it('reorders priorities and promptOrder in one pass without mutating content', () => {
+      const a = store.create({ type: 'runtime', name: 'A', content: 'alpha', priority: 10, promptOrder: 10, identifier: 'runtime.a' });
+      const b = store.create({ type: 'runtime', name: 'B', content: 'bravo', priority: 20, promptOrder: 20, identifier: 'runtime.b' });
+      const c = store.create({ type: 'runtime', name: 'C', content: 'charlie', priority: 30, promptOrder: 30, identifier: 'runtime.c' });
 
       const touched = store.reorderByLayerIds([c.id, a.id, b.id], 'admin');
 
@@ -259,9 +259,27 @@ describe('PromptLayerStore', () => {
       expect(store.getById(c.id)?.priority).toBe(0);
       expect(store.getById(a.id)?.priority).toBe(1);
       expect(store.getById(b.id)?.priority).toBe(2);
+      expect(store.getById(c.id)?.promptOrder).toBe(0);
+      expect(store.getById(a.id)?.promptOrder).toBe(1);
+      expect(store.getById(b.id)?.promptOrder).toBe(2);
       expect(store.getById(a.id)?.content).toBe('alpha');
       expect(store.getById(b.id)?.content).toBe('bravo');
       expect(store.getById(c.id)?.content).toBe('charlie');
+    });
+
+    it('keeps architectural type ordering while applying the requested order within each type', () => {
+      const base = store.create({ type: 'base', name: 'Base', content: 'base', priority: 0, promptOrder: 0, identifier: 'main' });
+      const runtimeA = store.create({ type: 'runtime', name: 'Runtime A', content: 'runtime-a', priority: 10, promptOrder: 10, identifier: 'runtime.a' });
+      const runtimeB = store.create({ type: 'runtime', name: 'Runtime B', content: 'runtime-b', priority: 20, promptOrder: 20, identifier: 'runtime.b' });
+
+      store.reorderByLayerIds([runtimeB.id, base.id, runtimeA.id], 'admin');
+
+      expect(store.getById(base.id)?.priority).toBe(0);
+      expect(store.getById(runtimeB.id)?.priority).toBe(1);
+      expect(store.getById(runtimeA.id)?.priority).toBe(2);
+      expect(store.getById(base.id)?.promptOrder).toBe(0);
+      expect(store.getById(runtimeB.id)?.promptOrder).toBe(1);
+      expect(store.getById(runtimeA.id)?.promptOrder).toBe(2);
     });
 
     it('requires the full layer-id set exactly once', () => {

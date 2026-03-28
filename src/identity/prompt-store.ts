@@ -13,6 +13,7 @@ import {
   readSync,
 } from 'node:fs';
 import {
+  LAYER_TYPE_ORDER,
   PROMPT_LAYER_ROLES,
   type PromptLayer,
   type LayerType,
@@ -489,11 +490,13 @@ export class PromptLayerStore {
 
     const layerById = new Map(this.layers.map(layer => [layer.id, layer]));
     const targetOrder: PromptLayer[] = [];
+    const requestedIndexById = new Map<string, number>();
     for (const layerId of layerIds) {
       const layer = layerById.get(layerId);
       if (!layer) {
         throw new Error(`Prompt layer not found: ${layerId}`);
       }
+      requestedIndexById.set(layerId, targetOrder.length);
       targetOrder.push(layer);
     }
 
@@ -501,13 +504,20 @@ export class PromptLayerStore {
       throw new Error('layerIds must include every prompt layer exactly once');
     }
 
+    const normalizedOrder = [...targetOrder].sort((left, right) => {
+      const typeOrder = LAYER_TYPE_ORDER[left.type] - LAYER_TYPE_ORDER[right.type];
+      if (typeOrder !== 0) return typeOrder;
+      return (requestedIndexById.get(left.id) ?? 0) - (requestedIndexById.get(right.id) ?? 0);
+    });
+
     const normalizedReason = normalizeReason(reason);
     const timestamp = new Date().toISOString();
     const touched: PromptLayer[] = [];
 
-    for (let nextPriority = 0; nextPriority < targetOrder.length; nextPriority++) {
-      const layer = targetOrder[nextPriority];
-      if (layer.priority === nextPriority) continue;
+    for (let nextPriority = 0; nextPriority < normalizedOrder.length; nextPriority++) {
+      const layer = normalizedOrder[nextPriority];
+      const nextPromptOrder = nextPriority;
+      if (layer.priority === nextPriority && layer.promptOrder === nextPromptOrder) continue;
 
       this.appendHistory({
         layerId: layer.id,
@@ -523,6 +533,7 @@ export class PromptLayerStore {
       });
 
       layer.priority = nextPriority;
+      layer.promptOrder = nextPromptOrder;
       layer.version += 1;
       layer.updatedAt = timestamp;
       layer.updatedBy = updatedBy;

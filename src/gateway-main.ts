@@ -3,19 +3,19 @@
 // Run: npm run gateway
 
 import 'dotenv/config';
-import { ensureActiveTimezone } from './time/active-timezone.js';
+import { ensureActiveTimezone } from './shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
-import type { EventBus } from './event-bus.js';
+import type { EventBus } from './shared/event-bus.js';
 import { ensureRegistryFile } from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import type { SubstrateMessage } from './types.js';
-import type { EligibilityDecision } from './capabilities/eligibility.js';
+import type { EligibilityDecision } from './system/capabilities/eligibility.js';
 import { resolveGatewayBootstrapInput } from './gateway/bootstrap-input.js';
 import type { StartupConfigHydrationDiagnostics } from './runtime/bootstrap-helpers.js';
-import { RUNTIME_MODE } from './lifecycle/runtime-mode.js';
+import { RUNTIME_MODE } from './system/lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import { buildGatewayPrivilegedCore } from './gateway/privileged-core.js';
 import {

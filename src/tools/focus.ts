@@ -4,7 +4,7 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import type { LLMProvider } from '../agent/contracts.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { textResultWithError } from './results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 interface FocusSessionManager {
   getActiveContextSession(): string | null;

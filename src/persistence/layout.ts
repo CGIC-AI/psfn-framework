@@ -3,7 +3,7 @@ import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { readJournalFirstEntry } from '../session/journal-utils.js';
 import { sanitizeChannelId } from '../session/store-primitives.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 
 const log = createComponentLogger('PersistenceLayout');
 

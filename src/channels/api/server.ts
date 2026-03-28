@@ -17,7 +17,7 @@ import type {
 } from '../../types.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
-import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
+import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import type { SessionManager } from '../../session/manager.js';
 import { isChannelVisibility, type ChannelVisibility } from '../../trust/types.js';
@@ -49,7 +49,7 @@ import {
   type VoiceWebSocketRuntime,
   type VoiceWebSocketRuntimeHooks,
 } from './voice-websocket.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   readJsonBodyWithLimit,
   sendEmpty,
@@ -60,7 +60,7 @@ import {
   FifoChannelLock,
   emitTurnContentionTelemetry,
   isBusyTurnError,
-} from '../../lifecycle/turn-contention.js';
+} from '../../system/lifecycle/turn-contention.js';
 import {
   clampHttpHeader as clampHeaderValue,
   corsAllowlistIsEmpty,

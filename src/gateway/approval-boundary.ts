@@ -4,12 +4,12 @@ import type { ChannelOutboundDock } from '../channels/types.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
-} from '../capabilities/confirmation-queue.js';
+} from '../system/capabilities/confirmation-queue.js';
 import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
-} from '../capabilities/confirmation-queue.js';
-import { toErrorMessage } from '../utils/errors.js';
+} from '../system/capabilities/confirmation-queue.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import { evaluatePolicy, type PolicyConfig } from './policy.js';
 import { GatewayErrors, type PolicyDecision } from './protocol.js';
 import {

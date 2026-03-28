@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { createComponentLogger } from '../logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 
 const log = createComponentLogger('PromptRegistry');
 

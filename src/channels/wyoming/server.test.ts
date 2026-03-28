@@ -1,6 +1,6 @@
 import * as net from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { WyomingFrameCodec } from './codec.js';
 import { WyomingTcpServer } from './server.js';
 import { WyomingServerError, type WyomingServerCloseReason, type WyomingTransportSession } from './protocol.js';

@@ -2,10 +2,10 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import {
   evaluateToolCapabilityEligibility,
   type CapabilityAccess,
-} from '../../capabilities/gate.js';
-import type { CapabilityToken } from '../../capabilities/tokens.js';
+} from '../../system/capabilities/gate.js';
+import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX, type CorrelationMetadata, type ObservabilityCallType, type SubstrateConfig, type SubstrateMessage } from '../../types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL,
   isBoundedSubagentLaunchToolName,

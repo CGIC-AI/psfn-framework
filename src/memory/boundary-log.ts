@@ -1,5 +1,5 @@
 import type { SessionEntry } from '../session/types.js';
-import { BOUNDARY_LOG_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../security/refusal-patterns.js';
+import { BOUNDARY_LOG_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../system/security/refusal-patterns.js';
 import type { ExtractedFact, PurrMemory } from './types.js';
 
 const BOUNDARY_HINT_PATTERNS = [

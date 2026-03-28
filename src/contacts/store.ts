@@ -33,7 +33,7 @@ import {
   type TrustDriftBehaviorSignals,
 } from '../trust/policy.js';
 import { createComponentLogger } from '../logger.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 import { appendMutationAuditEntry, listMutationAuditEntries } from './store/audit.js';
 import {
   computeUpdatedEmotionalBaseline,

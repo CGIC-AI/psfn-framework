@@ -1,7 +1,7 @@
 import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../broadcast/safety.js';
-import type { EventBus, EventMap } from '../../event-bus.js';
+import type { EventBus, EventMap } from '../../shared/event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
@@ -29,7 +29,7 @@ import type { SkillsRuntime } from '../../skills/runtime.js';
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
 import { classifyChannel, type ChannelMeta } from '../../trust/policy.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
-import { resolveCanonicalEmbodimentContext } from '../../agent/active-emanation-state.js';
+import { resolveCanonicalEmbodimentContext } from '../active-emanation-state.js';
 import type {
   AgentResponse,
   CorrelationMetadata,
@@ -44,7 +44,7 @@ import type {
   TurnRecord,
   TurnUsage,
 } from '../../types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { ContextBudgetTurnCharacteristics } from '../../context-budget.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
 import { createTurnId } from '../../turns/id.js';

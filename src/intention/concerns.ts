@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import { formatActiveDateTimeLabel } from '../time/active-timezone.js';
+import { formatActiveDateTimeLabel } from '../shared/time/active-timezone.js';
 import { wrapPromptSectionXml } from '../prompt/sections.js';
 
 export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;

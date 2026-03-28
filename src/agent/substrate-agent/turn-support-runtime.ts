@@ -1,6 +1,6 @@
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import { createComponentLogger } from '../../logger.js';
-import type { EventBus, EventMap } from '../../event-bus.js';
+import type { EventBus, EventMap } from '../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
 import type {
@@ -20,7 +20,7 @@ import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type {
   AdaptiveToolDecisionTelemetry,
 } from '../adaptive-tools-telemetry.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   pinDeferredContinuationSessionContext as pinDeferredContinuationSessionContextForTurn,
   resolveSessionChannelId as resolveSessionChannelIdForTurn,

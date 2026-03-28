@@ -17,7 +17,7 @@ import {
 } from '../../self-model/state.js';
 import type { SubstrateMessage, TurnID } from '../../types.js';
 import type { TrustLevel } from '../../trust/types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { LLMProvider } from '../contracts.js';
 
 const TOP_EMOTION_COUNT = 3;

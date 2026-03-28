@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../types.js';
-import { EventBus } from '../event-bus.js';
-import { createEligibilityGate } from '../capabilities/eligibility.js';
+import { EventBus } from '../shared/event-bus.js';
+import { createEligibilityGate } from '../system/capabilities/eligibility.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 

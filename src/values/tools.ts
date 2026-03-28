@@ -2,7 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ValuesJournalStore } from './store.js';
 import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const DEFAULT_LIST_LIMIT = 20;
 const MAX_LIST_LIMIT = 200;

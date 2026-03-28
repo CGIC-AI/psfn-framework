@@ -6,7 +6,7 @@ import type {
   GitHubProjectSyncResult,
 } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 12_000;
 const MAX_COMMAND_OUTPUT_CHARS = 250_000;

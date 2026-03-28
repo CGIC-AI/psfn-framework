@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { CapabilityTier } from '../types.js';
-import type { CapabilityToken } from '../capabilities/tokens.js';
-import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
-import { resolveTierCapabilityTokens } from '../capabilities/tiers.js';
-import { IdentityCoolingOffManager } from '../capabilities/safeguards.js';
+import type { CapabilityToken } from '../system/capabilities/tokens.js';
+import { gateToolWithCapabilities, type CapabilityAccess } from '../system/capabilities/gate.js';
+import { resolveTierCapabilityTokens } from '../system/capabilities/tiers.js';
+import { IdentityCoolingOffManager } from '../system/capabilities/safeguards.js';
 import { PromptLayerStore } from './prompt-store.js';
 import { CARD_BACKED_FOUNDATION_PROMPT_MESSAGE } from './canonical-foundation.js';
 import {

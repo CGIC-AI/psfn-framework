@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { EventBus } from '../event-bus.js';
+import { EventBus } from '../shared/event-bus.js';
 import { ModuleLoader } from './loader.js';
 import type { ModuleRecord } from './types.js';
 

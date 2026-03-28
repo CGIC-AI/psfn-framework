@@ -8,7 +8,7 @@
 
 import { setTimeout as delay } from 'node:timers/promises';
 import { WyomingRuntime } from './channels/wyoming/runtime.js';
-import { toErrorMessage } from './utils/errors.js';
+import { toErrorMessage } from './shared/utils/errors.js';
 import {
   WYOMING_EVENT_DESCRIBE,
   WYOMING_EVENT_INFO,

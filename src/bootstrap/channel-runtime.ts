@@ -1,7 +1,7 @@
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { SubstrateConfig } from '../types.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
-import type { EligibilityGate } from '../capabilities/eligibility.js';
+import type { EligibilityGate } from '../system/capabilities/eligibility.js';
 import { ApiServer, type ApiServerConfig } from '../channels/api/server.js';
 import { DiscordAdapter } from '../channels/discord/adapter.js';
 import { OpenHomeAdapter } from '../channels/openhome/adapter.js';

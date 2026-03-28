@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import {
   CORE_MEMORY_LABELS,
   isCoreMemoryLabel,

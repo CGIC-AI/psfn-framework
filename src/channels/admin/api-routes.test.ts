@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import WebSocket from 'ws';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
 import { MemoryStore } from '../../memory/store.js';
 import { SessionStore } from '../../session/store.js';
@@ -23,12 +23,12 @@ import {
   PromptRegistryStore,
 } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
-import { loadSettings } from '../../settings.js';
-import { saveCapabilityTierConfig } from '../../config/capability-tier-config.js';
-import { loadModelsConfig, saveModelsConfig } from '../../config/models-config.js';
-import { saveSchedulerConfig } from '../../config/scheduler-config.js';
-import { saveSkillsConfig } from '../../config/skills-config.js';
-import { saveTrustPolicyConfig } from '../../config/trust-policy-config.js';
+import { loadSettings } from '../../system/settings.js';
+import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
+import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';
+import { saveSchedulerConfig } from '../../system/config/scheduler-config.js';
+import { saveSkillsConfig } from '../../system/config/skills-config.js';
+import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';

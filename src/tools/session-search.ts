@@ -15,7 +15,7 @@ import {
   type SessionSearchViewerContext,
 } from '../session/search-runtime.js';
 import { textResult, textResultWithError } from './results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const DEFAULT_SESSION_GREP_LIMIT = 10;
 const MAX_SESSION_GREP_LIMIT = 50;

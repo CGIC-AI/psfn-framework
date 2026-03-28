@@ -3,11 +3,11 @@ import { countMessageTokens, countTokens } from '../../llm/tokens.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { ChannelVisibility } from '../../trust/types.js';
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../../identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   buildCompactionSourceBlock,
   buildCompactionSourceHashTag,

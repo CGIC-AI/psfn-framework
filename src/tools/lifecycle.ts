@@ -4,10 +4,10 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { LifecycleNotifier } from '../lifecycle/notifications.js';
+import type { LifecycleNotifier } from '../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../logger.js';
 import type { CapabilityTier } from '../types.js';
-import type { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
+import type { LifecycleRestartSafeguard } from '../system/capabilities/safeguards.js';
 import { textResultWithError } from './results.js';
 
 const log = createComponentLogger('LifecycleTools');

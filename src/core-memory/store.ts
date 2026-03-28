@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 
 export const CORE_MEMORY_LABELS = ['persona', 'human', 'goals'] as const;
 export type CoreMemoryLabel = (typeof CORE_MEMORY_LABELS)[number];

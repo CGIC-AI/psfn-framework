@@ -5,7 +5,7 @@ import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
 import type { CurrentTurnVisionReviewContext } from '../../images/request-context.js';
 import { inferImageMimeTypeFromAttachmentCandidate } from '../substrate-agent-helpers.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface VisionAttachmentFetchCapabilities {
   webFetchBinary?: (

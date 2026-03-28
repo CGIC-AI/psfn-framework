@@ -1,7 +1,7 @@
 import { createComponentLogger } from '../logger.js';
 import type { StreamTerminalFailureEvent } from '../agent/stream-adapter.js';
 import type { NtfyNotifier } from '../tools/ntfy.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const log = createComponentLogger('OperatorAlerts');
 

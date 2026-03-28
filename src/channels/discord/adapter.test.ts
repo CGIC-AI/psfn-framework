@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../session/store.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
 

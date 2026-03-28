@@ -1,5 +1,5 @@
 import type { ContactStore } from '../../../contacts/store.js';
-import type { EventBus } from '../../../event-bus.js';
+import type { EventBus } from '../../../shared/event-bus.js';
 import { parseContinuityEntryProvenance } from '../../../session/continuity.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';

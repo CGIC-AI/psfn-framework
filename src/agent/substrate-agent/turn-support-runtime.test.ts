@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { SessionManager } from '../../session/manager.js';
 import { SessionStore } from '../../session/store.js';
 import { createTurnId } from '../../turns/id.js';

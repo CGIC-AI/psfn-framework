@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { isAbsolute, dirname, resolve } from 'node:path';
-import { resolveRequiredModuleRegistryPath } from '../security/policy-constants.js';
-import { isRecord } from '../utils/types.js';
+import { resolveRequiredModuleRegistryPath } from '../system/security/policy-constants.js';
+import { isRecord } from '../shared/utils/types.js';
 import type { ModuleRecord } from './types.js';
 
 function toErrorCode(error: unknown): string | undefined {

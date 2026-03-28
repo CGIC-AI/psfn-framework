@@ -19,7 +19,7 @@ import { LAYER_TYPE_ORDER } from './prompt-types.js';
 import type { PromptLayerStore } from './prompt-store.js';
 import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../logger.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 import { wrapPromptSectionXml } from '../prompt/sections.js';
 
 // Keep only identity/foundation + operator policy in the frozen prompt prefix.

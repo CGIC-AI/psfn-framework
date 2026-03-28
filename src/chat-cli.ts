@@ -7,7 +7,7 @@ import 'dotenv/config';
 import { createInterface } from 'node:readline';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
-import { EventBus } from './event-bus.js';
+import { EventBus } from './shared/event-bus.js';
 import { resolveCompanionNameFromCard } from './identity/companion-runtime.js';
 import { LLMClient } from './llm/client.js';
 import { MemoryStore } from './memory/store.js';

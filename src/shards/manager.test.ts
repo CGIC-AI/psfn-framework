@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Agent } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
-import { EventBus } from '../event-bus.js';
+import { EventBus } from '../shared/event-bus.js';
 import { SessionStore } from '../session/store.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import { buildSessionMetadataWithTurn } from '../session/turn-provenance.js';

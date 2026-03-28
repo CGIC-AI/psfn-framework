@@ -4,7 +4,7 @@ import {
   type TextEmotionClassifierConfig,
 } from '../emotion/text-classifier.js';
 import { warmupEmbeddingService } from '../memory/embedding.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const DEFAULT_WARMUP_TEXT = '__psfn_startup_ml_warmup__';
 

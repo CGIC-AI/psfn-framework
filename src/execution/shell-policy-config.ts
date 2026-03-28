@@ -1,5 +1,5 @@
 import type { ShellExecPolicyConfig } from '../gateway/policy.js';
-import { parseEnvList, parsePositiveIntEnv } from '../utils/env.js';
+import { parseEnvList, parsePositiveIntEnv } from '../shared/utils/env.js';
 
 const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;

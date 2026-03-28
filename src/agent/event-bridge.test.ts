@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
-import { EventBus } from '../event-bus.js';
+import { EventBus } from '../shared/event-bus.js';
 import { createEventBridge } from './event-bridge.js';
 
 // Capture the subscriber callback by intercepting Agent.prototype.subscribe

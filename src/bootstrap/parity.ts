@@ -8,7 +8,7 @@ import type {
   SubstrateConfig,
   SubstrateMessage,
 } from '../types.js';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
 import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
@@ -22,7 +22,7 @@ import type {
   PostTurnActionInferer,
 } from '../agent/substrate-agent.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
-import type { MessageSender } from '../lifecycle/notifications.js';
+import type { MessageSender } from '../system/lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import {
   createPromotedToolsAddTool,
@@ -31,7 +31,7 @@ import {
   createPromotedToolsSwapTool,
   createSettingsGetTool,
   type PromotedExtendedToolsManager,
-} from '../settings-tools.js';
+} from '../system/settings-tools.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../filesystem/runtime-wiring.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../core-memory/store.js';
@@ -99,7 +99,7 @@ import {
 } from '../persistence/layout.js';
 import { ReflectionJournalStore } from '../notes/reflection-journal.js';
 import type { PostTurnActionRuntime } from './post-turn-actions.js';
-import { isBusyTurnError } from '../lifecycle/turn-contention.js';
+import { isBusyTurnError } from '../system/lifecycle/turn-contention.js';
 import {
   buildDeferredToolHandoffMessage,
   DEFERRED_TOOL_HANDOFF_ACTION_KIND,

@@ -2,7 +2,7 @@ import type {
   EligibilityGate,
   EligibilityOperation,
   EligibilityRequirements,
-} from '../capabilities/eligibility.js';
+} from '../system/capabilities/eligibility.js';
 import type { ChannelAdapter } from '../channels/types.js';
 import type { StreamingSttConnector } from '../voice/connectors/stt/index.js';
 import type { StreamingTtsConnector } from '../voice/connectors/tts/index.js';

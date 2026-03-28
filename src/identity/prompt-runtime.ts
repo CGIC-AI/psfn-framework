@@ -3,7 +3,7 @@ import {
   formatActiveDateTimeIso,
   formatActiveTime,
   resolveActiveTimezone,
-} from '../time/active-timezone.js';
+} from '../shared/time/active-timezone.js';
 
 export interface PromptRuntimeContext {
   now?: Date;

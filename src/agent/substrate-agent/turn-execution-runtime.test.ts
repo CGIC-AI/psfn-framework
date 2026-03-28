@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { getVisionToolRequestContext } from '../../images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';

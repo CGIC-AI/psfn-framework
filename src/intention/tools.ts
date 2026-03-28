@@ -6,7 +6,7 @@ import {
   type ActiveConcernPriority,
 } from './concerns.js';
 import { textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 interface ListConcernsParams {
   contactId?: string;

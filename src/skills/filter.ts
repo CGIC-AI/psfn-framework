@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { accessSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
-import type { SkillsRuntimeConfig } from '../config/skills-config.js';
+import type { SkillsRuntimeConfig } from '../system/config/skills-config.js';
 import type {
   SkillEligibilityResult,
   SkillEntry,

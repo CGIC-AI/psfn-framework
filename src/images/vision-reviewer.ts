@@ -10,11 +10,11 @@ import { resolveModel } from '../agent/stream-adapter.js';
 import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
-} from '../config/providers-config.js';
+} from '../system/config/providers-config.js';
 import { resolveProviderApiKey } from '../custody/credential-vault.js';
 import type { SubstrateConfig } from '../types.js';
 import { extractTextContent } from '../llm/conversion.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import type {
   ImageMode,
   ImageVisionReview,

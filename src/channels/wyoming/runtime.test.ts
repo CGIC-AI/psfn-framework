@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { WyomingRuntime } from './runtime.js';
 import type { WyomingFrame, WyomingTransportSession } from './protocol.js';
 import {

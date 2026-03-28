@@ -10,7 +10,7 @@ import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { SubstrateConfig } from '../types.js';
 import { ContactStore } from '../contacts/store.js';
 import { runWithRequestContext } from '../llm/request-context.js';

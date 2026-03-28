@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SkillsRuntimeConfig } from '../config/skills-config.js';
+import type { SkillsRuntimeConfig } from '../system/config/skills-config.js';
 import { evaluateSkillEligibility, filterEligibleSkills } from './filter.js';
 import type { SkillEntry } from './types.js';
 

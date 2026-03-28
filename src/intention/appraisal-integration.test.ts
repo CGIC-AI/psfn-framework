@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import { wireHeartbeatRuntime } from '../bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
-import { EventBus } from '../event-bus.js';
+import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import type { AgentResponse, SubstrateMessage } from '../types.js';

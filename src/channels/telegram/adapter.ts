@@ -13,16 +13,16 @@ import type {
   OutboundContext,
 } from '../types.js';
 import type { SubstrateMessage } from '../../types.js';
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { TelegramChannelConfig } from '../config.js';
 import { createComponentLogger } from '../../logger.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   DeferredLatestByChannel,
   emitTurnContentionTelemetry,
   type TurnContentionPolicy,
-} from '../../lifecycle/turn-contention.js';
+} from '../../system/lifecycle/turn-contention.js';
 
 const log = createComponentLogger('Telegram');
 

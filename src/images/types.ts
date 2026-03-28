@@ -1,4 +1,4 @@
-import { isRecord } from '../utils/types.js';
+import { isRecord } from '../shared/utils/types.js';
 import type { CredentialVaultPort } from '../custody/credential-vault.js';
 import type { DnsResolver } from '../gateway/url-policy.js';
 

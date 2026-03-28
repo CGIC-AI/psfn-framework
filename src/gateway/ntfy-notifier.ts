@@ -1,8 +1,8 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
-import type { ConfirmationQueueEntry } from '../capabilities/confirmation-queue.js';
+import type { ConfirmationQueueEntry } from '../system/capabilities/confirmation-queue.js';
 import type { ChannelOutboundDock } from '../channels/types.js';
 import { createComponentLogger } from '../logger.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import {
   GatewayErrors,
   type NotifyNtfyParams,

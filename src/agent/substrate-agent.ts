@@ -11,7 +11,7 @@
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import type { UserMessage } from '@mariozechner/pi-ai';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
@@ -57,11 +57,11 @@ import type { ToolCategory } from './tool-registrar.js';
 import {
   gateToolWithCapabilities,
   type CapabilityAccess,
-} from '../capabilities/gate.js';
-import { CapabilityRuntime } from '../capabilities/runtime.js';
-import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../capabilities/tiers.js';
-import type { CapabilityToken } from '../capabilities/tokens.js';
-import { toErrorMessage } from '../utils/errors.js';
+} from '../system/capabilities/gate.js';
+import { CapabilityRuntime } from '../system/capabilities/runtime.js';
+import { normalizeCapabilityTier, resolveTierCapabilityTokens } from '../system/capabilities/tiers.js';
+import type { CapabilityToken } from '../system/capabilities/tokens.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import {
   type GatewayToolMetadataCoverage,
   type RuntimeMode,

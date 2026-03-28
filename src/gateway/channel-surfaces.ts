@@ -1,9 +1,9 @@
-import type { EligibilityGate } from '../capabilities/eligibility.js';
+import type { EligibilityGate } from '../system/capabilities/eligibility.js';
 import type { DiscordAdapter } from '../channels/discord/adapter.js';
 import type { TelegramAdapter } from '../channels/telegram/adapter.js';
 import type { ChannelAdapter } from '../channels/types.js';
 import { startDiscordWithRetry } from './discord-startup.js';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
 import type { SubstrateConfig, SubstrateMessage } from '../types.js';

@@ -27,9 +27,9 @@ import type {
   OutboundContext,
 } from '../types.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import type { SessionStore } from '../../session/store.js';
-import type { EligibilityGate } from '../../capabilities/eligibility.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import { createComponentLogger } from '../../logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
 import {
@@ -37,8 +37,8 @@ import {
   emitTurnContentionTelemetry,
   type TurnContentionPhase,
   type TurnContentionPolicy,
-} from '../../lifecycle/turn-contention.js';
-import { toErrorMessage } from '../../utils/errors.js';
+} from '../../system/lifecycle/turn-contention.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 const log = createComponentLogger('Discord');
 

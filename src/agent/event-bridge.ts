@@ -4,7 +4,7 @@
 
 import type { Agent, AgentEvent } from '@mariozechner/pi-agent-core';
 import type { ToolCall } from '@mariozechner/pi-ai';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { CorrelationMetadata, ObservabilityCallType } from '../types.js';
 import { createComponentLogger } from '../logger.js';
 

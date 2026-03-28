@@ -6,8 +6,8 @@ import {
   applySettings,
   type EditableSettings,
   type SettingsDomainSplit,
-} from '../settings.js';
-import type { EligibilityGate } from '../capabilities/eligibility.js';
+} from '../system/settings.js';
+import type { EligibilityGate } from '../system/capabilities/eligibility.js';
 import {
   createEmbeddingDimensionMismatchWarning,
   type EmbeddingDimensionValidationResult,
@@ -37,16 +37,16 @@ import {
   wrapStreamingTtsConnectorWithEligibility,
 } from './plugin-eligibility.js';
 import { createEnvCredentialVault } from '../custody/credential-vault.js';
-import { createSystemConfigRepository } from '../config/system-config-repository.js';
-import { type ModelsLoadResult } from '../config/models-config.js';
+import { createSystemConfigRepository } from '../system/config/system-config-repository.js';
+import { type ModelsLoadResult } from '../system/config/models-config.js';
 import {
   applyProvidersRuntimeConfig,
   type ProvidersLoadResult,
-} from '../config/providers-config.js';
-import { CAPABILITY_TIER_FILE_NAME } from '../config/capability-tier-config.js';
-import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../config/scheduler-config.js';
-import { type TrustPolicyConfig } from '../config/trust-policy-config.js';
-import { resolveRuntimeSchedulerConfig } from '../config/scheduler-runtime.js';
+} from '../system/config/providers-config.js';
+import { CAPABILITY_TIER_FILE_NAME } from '../system/config/capability-tier-config.js';
+import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../system/config/scheduler-config.js';
+import { type TrustPolicyConfig } from '../system/config/trust-policy-config.js';
+import { resolveRuntimeSchedulerConfig } from '../system/config/scheduler-runtime.js';
 import { setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
 import {
   resolveRuntimePathSnapshotFromConfig,
@@ -63,7 +63,7 @@ import {
   loadStartupRuntimeSettingsOwnerFile,
   loadStartupTrustPolicyOwnerFile,
   loadStartupSchedulerOwnerFile,
-} from '../config/startup-owner-files.js';
+} from '../system/config/startup-owner-files.js';
 
 export type RuntimeVoiceSttProvider = StreamingSttProvider | 'disabled';
 export type RuntimeVoiceTtsProvider = StreamingTtsProvider | 'disabled';

@@ -10,14 +10,14 @@ import {
   CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
   isCanonicalCharacterFoundationLayer,
 } from './canonical-foundation.js';
-import type { CapabilityToken } from '../capabilities/tokens.js';
-import { withCapabilityRequirement } from '../capabilities/requirements.js';
+import type { CapabilityToken } from '../system/capabilities/tokens.js';
+import { withCapabilityRequirement } from '../system/capabilities/requirements.js';
 import {
   IdentityCoolingOffManager,
-} from '../capabilities/safeguards.js';
+} from '../system/capabilities/safeguards.js';
 import type { CapabilityTier } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const DEFAULT_DIFF_LINE_LIMIT = 160;
 const MAX_DIFF_LINE_LIMIT = 1_000;

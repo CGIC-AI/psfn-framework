@@ -1,14 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { InferredPostTurnAction } from '../types.js';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../logger.js';
-import { writeJsonAtomic } from '../utils/fs.js';
-import { isRecord } from '../utils/types.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
+import { isRecord } from '../shared/utils/types.js';
 import type {
   EligibilityDecision,
   EligibilityGate,
-} from '../capabilities/eligibility.js';
+} from '../system/capabilities/eligibility.js';
 
 const log = createComponentLogger('PostTurnActions');
 

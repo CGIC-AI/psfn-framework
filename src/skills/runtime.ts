@@ -4,7 +4,7 @@ import {
   loadSkillsConfig,
   saveSkillsConfig,
   type SkillsRuntimeConfig,
-} from '../config/skills-config.js';
+} from '../system/config/skills-config.js';
 import { filterEligibleSkills } from './filter.js';
 import { formatSkillsForPrompt } from './format.js';
 import {

@@ -6,11 +6,11 @@ import type { SessionManager } from '../session/manager.js';
 import {
   readLastActiveSession,
   writeLastActiveSession,
-} from '../lifecycle/notifications.js';
+} from '../system/lifecycle/notifications.js';
 import { inferSessionChannelType } from '../session/session-id.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { textResult, textResultWithError } from './results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const DEFAULT_SESSION_PREFIX = 'api:session';
 const DEFAULT_SESSION_LIST_LIMIT = 20;

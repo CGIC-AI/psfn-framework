@@ -13,7 +13,7 @@ import {
   envCredential,
 } from '../custody/credential-vault.js';
 import { FallbackRunner } from './fallback.js';
-import { createEligibilityGate, EligibilityDeniedError } from '../capabilities/eligibility.js';
+import { createEligibilityGate, EligibilityDeniedError } from '../system/capabilities/eligibility.js';
 
 const mocks = vi.hoisted(() => ({
   getModel: vi.fn(),

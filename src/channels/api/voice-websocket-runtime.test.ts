@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
-import { createEligibilityGate } from '../../capabilities/eligibility.js';
-import type { EventBus } from '../../event-bus.js';
+import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
 import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';

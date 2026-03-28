@@ -21,13 +21,13 @@ import type { InternalState } from '../../self-model/state.js';
 import type { AdaptiveLoadedExtendedToolState } from '../adaptive-tools-telemetry.js';
 import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
 import {
   formatActiveDateTimeIso,
   formatActiveDateTimeLabel,
   resolveActiveTimezone,
-} from '../../time/active-timezone.js';
+} from '../../shared/time/active-timezone.js';
 import {
   isSingleWrappedPromptSection,
   unwrapSingleWrappedPromptSection,

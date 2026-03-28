@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import { parseBooleanEnv, parsePathListEnv } from '../utils/env.js';
+import { parseBooleanEnv, parsePathListEnv } from '../shared/utils/env.js';
 
 export interface GatewayPolicyEnv {
   [key: string]: string | undefined;

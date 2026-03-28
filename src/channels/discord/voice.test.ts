@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../types.js';
 
 const connectorMocks = vi.hoisted(() => {

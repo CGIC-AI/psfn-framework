@@ -15,7 +15,7 @@ import type {
 import { GatewayErrors } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   syncAllBeadsToGitHubProject,
   syncMutatedBeadToGitHubProject,

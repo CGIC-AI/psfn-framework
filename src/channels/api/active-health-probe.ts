@@ -1,5 +1,5 @@
 import type { ApiHealthSubsystemStatus } from './types.js';
-import { parsePositiveIntEnv } from '../../utils/env.js';
+import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 
 const DEFAULT_ACTIVE_PROBES_ENABLED = true;
 const DEFAULT_ACTIVE_PROBE_TIMEOUT_MS = 2_000;

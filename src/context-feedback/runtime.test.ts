@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
-import { EventBus } from '../event-bus.js';
+import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import type { ContextManifest } from '../session/context-manifest.js';
 import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../types.js';

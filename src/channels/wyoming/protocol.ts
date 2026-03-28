@@ -126,7 +126,7 @@ export class WyomingServerError extends Error {
   }
 }
 
-export { isRecord } from '../../utils/types.js';
+export { isRecord } from '../../shared/utils/types.js';
 
 export function normalizeSessionId(frame: WyomingFrame): string | undefined {
   const data = frame.data;

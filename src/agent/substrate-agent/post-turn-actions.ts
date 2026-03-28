@@ -8,7 +8,7 @@ import type {
   TurnID,
 } from '../../types.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 export interface PostTurnInferenceContext {
   message: SubstrateMessage;

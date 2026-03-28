@@ -1,6 +1,6 @@
-import { isCapabilityTier } from '../capabilities/tiers.js';
+import { isCapabilityTier } from '../system/capabilities/tiers.js';
 import { inferSessionChannelType } from '../session/session-id.js';
-import { isRecord } from '../utils/types.js';
+import { isRecord } from '../shared/utils/types.js';
 import {
   CHANNEL_TYPES,
   COMPOSITIONAL_PURPOSES,

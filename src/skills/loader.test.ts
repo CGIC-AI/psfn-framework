@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { SkillsRuntimeConfig } from '../config/skills-config.js';
+import type { SkillsRuntimeConfig } from '../system/config/skills-config.js';
 import {
   applySkillPrecedence,
   loadSkillEntries,

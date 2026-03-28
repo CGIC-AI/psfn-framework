@@ -3,9 +3,9 @@ import {
   createEligibilityGate,
   type EligibilityDecision,
   type EligibilityGate,
-} from '../capabilities/eligibility.js';
-import { CapabilityRuntime } from '../capabilities/runtime.js';
-import { EventBus } from '../event-bus.js';
+} from '../system/capabilities/eligibility.js';
+import { CapabilityRuntime } from '../system/capabilities/runtime.js';
+import { EventBus } from '../shared/event-bus.js';
 import { GitOps } from '../git/ops.js';
 import { initDatabase } from '../persistence/sqlite-utils.js';
 import type { SubstrateConfig } from '../types.js';

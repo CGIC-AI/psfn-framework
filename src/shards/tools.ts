@@ -12,7 +12,7 @@ import {
 } from '../agent/substrate-agent/bounded-subagent-contract.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 export function createSpawnShardTool(manager: ShardExecutionPort): AgentTool<any> {
   return {

@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createComponentLogger } from '../../logger.js';
-import { toErrorMessage } from '../../utils/errors.js';
-import { writeJsonAtomic } from '../../utils/fs.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
   journalToMarkerEntry,
   readJournalFirstEntry,

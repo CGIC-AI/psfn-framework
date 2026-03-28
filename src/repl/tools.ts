@@ -7,7 +7,7 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import type { REPLDeps } from './types.js';
 import { runRLMLoop } from './loop.js';
 import { textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import { getRequestContext } from '../llm/request-context.js';
 
 export function createThinkTool(deps: REPLDeps): AgentTool<any> {

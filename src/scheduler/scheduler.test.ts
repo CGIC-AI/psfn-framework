@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { EventBus } from '../event-bus.js';
-import { createEligibilityGate } from '../capabilities/eligibility.js';
+import { EventBus } from '../shared/event-bus.js';
+import { createEligibilityGate } from '../system/capabilities/eligibility.js';
 import { Scheduler } from './scheduler.js';
 import type { ScheduledTask } from './types.js';
 

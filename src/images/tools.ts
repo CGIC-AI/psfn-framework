@@ -4,7 +4,7 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
 import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import {
   FAL_CREATE_MODELS,
   FAL_EDIT_MODELS,

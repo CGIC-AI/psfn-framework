@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool, type NtfyNotifier } from './ntfy.js';
-import { ExternalCommunicationRateLimiter } from '../capabilities/safeguards.js';
+import { ExternalCommunicationRateLimiter } from '../system/capabilities/safeguards.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {

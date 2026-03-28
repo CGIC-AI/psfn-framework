@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { EventBus } from '../event-bus.js';
-import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
+import { EventBus } from '../shared/event-bus.js';
+import { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
 import { ModuleLoader } from '../modules/loader.js';
 import { DEFAULT_REPL_CONFIG } from '../repl/types.js';
 import {

@@ -1,4 +1,4 @@
-import type { EventBus } from '../../../event-bus.js';
+import type { EventBus } from '../../../shared/event-bus.js';
 import type { MemoryStore } from '../../../memory/store.js';
 import type { Scheduler } from '../../../scheduler/scheduler.js';
 import type { SessionManager } from '../../../session/manager.js';

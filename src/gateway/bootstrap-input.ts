@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import type { SubstrateConfig, WyomingShardRoutingConfig } from '../types.js';
-import { getIgnoredJsonBackedConfigEnvKeys } from '../config/legacy-env.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from '../system/config/legacy-env.js';
 import {
   loadRuntimeChannelsConfig,
   type RuntimeChannelsConfig,
@@ -14,7 +14,7 @@ import {
 import { resolveWorkspaceRoot } from './filesystem-paths.js';
 import { resolveGitRepoRoot } from '../git/repo-root.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../modules/registry.js';
-import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../utils/env.js';
+import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../shared/utils/env.js';
 import { buildShellExecPolicyConfig } from '../execution/shell-policy-config.js';
 import {
   buildProviderCredentialEnv,

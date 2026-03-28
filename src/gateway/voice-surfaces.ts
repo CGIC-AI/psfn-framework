@@ -1,5 +1,5 @@
-import type { EligibilityGate } from '../capabilities/eligibility.js';
-import { EligibilityDeniedError } from '../capabilities/eligibility.js';
+import type { EligibilityGate } from '../system/capabilities/eligibility.js';
+import { EligibilityDeniedError } from '../system/capabilities/eligibility.js';
 import { WyomingTcpServer } from '../channels/wyoming/server.js';
 import { WyomingRuntime } from '../channels/wyoming/runtime.js';
 import { createWyomingServiceRegistry } from '../channels/wyoming/services/index.js';
@@ -8,7 +8,7 @@ import { createWyomingAsrServiceAdapter } from '../channels/wyoming/services/asr
 import { createWyomingTtsServiceAdapter } from '../channels/wyoming/services/tts.js';
 import type { WyomingInfoData } from '../channels/wyoming/protocol.js';
 import type { DiscordAdapter } from '../channels/discord/adapter.js';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import type { GatewayServer } from './server.js';
 import type { SubstrateConfig } from '../types.js';

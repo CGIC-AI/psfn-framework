@@ -1,5 +1,5 @@
-import { resolveRequiredModuleRegistryPath } from '../../security/policy-constants.js';
-import type { ConfirmationQueue } from '../../capabilities/confirmation-queue.js';
+import { resolveRequiredModuleRegistryPath } from '../../system/security/policy-constants.js';
+import type { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import type { CapabilityTier } from '../../types.js';
 import { isModuleRecord } from '../../modules/registry.js';
 import type { ModuleRegistryMutation } from '../../modules/types.js';

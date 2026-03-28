@@ -13,9 +13,9 @@ import {
 import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
-} from '../config/providers-config.js';
-import { loadRuntimeSettingsSeedDefaults } from '../config/seed-defaults.js';
-import { toErrorMessage } from '../utils/errors.js';
+} from '../system/config/providers-config.js';
+import { loadRuntimeSettingsSeedDefaults } from '../system/config/seed-defaults.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
 

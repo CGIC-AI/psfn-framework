@@ -10,9 +10,9 @@ import {
   DEFAULT_COMPANION_NAME,
 } from '../identity/companion-naming.js';
 import { createComponentLogger } from '../logger.js';
-import { REPO_ALLOWED_PATHS } from '../security/policy-constants.js';
+import { REPO_ALLOWED_PATHS } from '../system/security/policy-constants.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const log = createComponentLogger('GitOps');
 

@@ -4,8 +4,8 @@ import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import {
   EligibilityDeniedError,
   type EligibilityGate,
-} from '../../capabilities/eligibility.js';
-import type { EventBus } from '../../event-bus.js';
+} from '../../system/capabilities/eligibility.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
 import { createWavFromPcm16le } from '../../voice/audio.js';
@@ -36,7 +36,7 @@ import type {
   WebSocketVoiceServerOptions,
   WebSocketVoiceSession,
 } from '../../voice/transports/websocket/types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { WebRequestBinaryResult } from '../../gateway/protocol.js';
 import type {
   VoiceWebSocketRuntime,

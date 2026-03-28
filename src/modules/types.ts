@@ -1,4 +1,4 @@
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 
 export interface ModuleRecord {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
+import { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
 import {
   createGatewayConfirmationQueueAdminApi,
   createLocalConfirmationQueueAdminApi,

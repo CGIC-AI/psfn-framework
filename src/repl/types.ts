@@ -4,9 +4,9 @@ import type { LLMProvider, EmbeddingService, LLMRequestMetadata } from '../agent
 import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type { CapabilityTier, CompositionalPolicyConfig } from '../types.js';
-import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
+import type { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
 import type { SandboxExecutionPort } from './sandbox-capabilities/contracts.js';
 

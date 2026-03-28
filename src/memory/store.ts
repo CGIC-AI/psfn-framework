@@ -6,7 +6,7 @@ import {
   hasColumn,
   runInTransaction as runSqliteTransaction,
 } from '../persistence/sqlite-utils.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 import { createComponentLogger } from '../logger.js';
 import type { MemoryJournal } from './journal.js';
 import {

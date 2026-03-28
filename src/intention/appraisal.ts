@@ -6,7 +6,7 @@ import { cloneInternalState, type InternalState } from '../self-model/state.js';
 import {
   formatActiveDateTimeLabel,
   resolveActiveTimezone,
-} from '../time/active-timezone.js';
+} from '../shared/time/active-timezone.js';
 import {
   formatAttributedSystemContent,
   isIntentionAppraisalArtifact,

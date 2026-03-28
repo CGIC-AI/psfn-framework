@@ -12,7 +12,7 @@ import { createEmbeddingProviderFromEnv } from './memory/embedding.js';
 import { migrateMemoryEmbeddings } from './memory/migration.js';
 import type { ReembedMigrationProgress } from './memory/migration.js';
 import { loadConfig } from './types.js';
-import { toErrorMessage } from './utils/errors.js';
+import { toErrorMessage } from './shared/utils/errors.js';
 
 interface CliOptions {
   batchSize?: number;

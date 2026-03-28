@@ -3,7 +3,7 @@ import {
   createIdentityCoolingOffManagerFromEnv,
   createLifecycleRestartSafeguardFromEnv,
   createSafeguardAuditTrail,
-} from '../capabilities/safeguards.js';
+} from '../system/capabilities/safeguards.js';
 
 export interface RuntimeSafeguardSurfaces {
   safeguardAuditTrail: ReturnType<typeof createSafeguardAuditTrail>;

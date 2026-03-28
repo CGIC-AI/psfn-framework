@@ -5,11 +5,11 @@ import { VaultOps, type VaultOperations } from '../vault/ops.js';
 import {
   createProviderRuntimeServices,
   type ProviderRuntimeServices,
-} from '../config/provider-runtime-factory.js';
+} from '../system/config/provider-runtime-factory.js';
 import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
-} from '../config/providers-config.js';
+} from '../system/config/providers-config.js';
 import type { PolicyConfig } from './policy.js';
 
 export interface GatewayPrivilegedServiceRegistry extends ProviderRuntimeServices {

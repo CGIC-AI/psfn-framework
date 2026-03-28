@@ -5,7 +5,7 @@ import type {
   SubstrateMessage,
 } from '../types.js';
 import type { ShardExecutionPort } from '../shards/port.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import { evaluateWyomingDelegation } from './wyoming-routing.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;

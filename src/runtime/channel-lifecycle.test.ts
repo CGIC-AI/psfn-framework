@@ -4,7 +4,7 @@ import {
   createEligibilityGate,
   EligibilityDeniedError,
   type EligibilityDecision,
-} from '../capabilities/eligibility.js';
+} from '../system/capabilities/eligibility.js';
 import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,

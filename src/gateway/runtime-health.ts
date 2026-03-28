@@ -6,7 +6,7 @@ import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,
 } from '../tool-health/types.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 type GatewayTrackedMethod =
   | 'notify.ntfy'

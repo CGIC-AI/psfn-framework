@@ -18,8 +18,8 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
-import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
-import { EventBus } from './event-bus.js';
+import { hydrateJsonBackedRuntimeConfig } from './system/config/runtime-config.js';
+import { EventBus } from './shared/event-bus.js';
 import { LLMClient } from './llm/client.js';
 import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from './bootstrap/composition.js';
 import { ElevenLabsTtsClient } from './voice/elevenlabs.js';
@@ -33,7 +33,7 @@ import {
   type WebSocketVoiceConnection,
 } from './voice/transports/websocket/types.js';
 import { INSECURE_LOCAL_API_PRINCIPAL } from './channels/http/auth.js';
-import { toErrorMessage } from './utils/errors.js';
+import { toErrorMessage } from './shared/utils/errors.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,

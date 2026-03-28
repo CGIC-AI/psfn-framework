@@ -25,7 +25,7 @@ import { createComponentLogger } from '../../logger.js';
 import {
   WEB_FETCH_TIMEOUT_MS,
   WEB_FETCH_USER_AGENT,
-} from '../../security/policy-constants.js';
+} from '../../system/security/policy-constants.js';
 import { registerGatedDescriptors } from './register.js';
 
 const log = createComponentLogger('GatewayWeb');

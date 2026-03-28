@@ -83,7 +83,7 @@ import type {
   ImageGenerationRpcResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const DEFAULT_VOICE_STREAM_QUEUE_SIZE = 32;
 const DEFAULT_VOICE_STREAM_OVERFLOW_POLICY: QueueOverflowPolicy = 'error';

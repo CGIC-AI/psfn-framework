@@ -6,7 +6,7 @@ import type { SubstrateConfig } from '../types.js';
 import {
   readLastActiveSession,
   writeLastActiveSession,
-} from '../lifecycle/notifications.js';
+} from '../system/lifecycle/notifications.js';
 import { SessionStore } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
 import {

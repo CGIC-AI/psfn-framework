@@ -3,20 +3,20 @@
 // Run: npm run agent
 
 import { randomUUID } from 'node:crypto';
-import { ensureActiveTimezone } from './time/active-timezone.js';
+import { ensureActiveTimezone } from './shared/time/active-timezone.js';
 import { loadConfig } from './types.js';
 import type {
   SubstrateMessage,
 } from './types.js';
 import { createComponentLogger } from './logger.js';
-import { EventBus } from './event-bus.js';
+import { EventBus } from './shared/event-bus.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
 import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
-import { DEFAULT_GATEWAY_SOCKET_PATH } from './security/policy-constants.js';
+import { DEFAULT_GATEWAY_SOCKET_PATH } from './system/security/policy-constants.js';
 import type { ApiServer } from './channels/api/server.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
 import {
@@ -34,17 +34,17 @@ import {
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
-import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from './utils/env.js';
+import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from './shared/utils/env.js';
 import { MemoryWriter } from './memory/writer.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
 import { registerBeadsTools } from './beads/runtime-wiring.js';
 import { GatewayBeadsOps } from './beads/gateway-ops.js';
-import { writeLastActiveSession } from './lifecycle/notifications.js';
+import { writeLastActiveSession } from './system/lifecycle/notifications.js';
 import {
   RUNTIME_MODE,
-} from './lifecycle/runtime-mode.js';
+} from './system/lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
 import { createGatewayNtfyNotifier } from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
@@ -61,11 +61,11 @@ import {
 } from './bootstrap/parity.js';
 import { createSqliteCompanionStore } from './persistence/sqlite-companion-store.js';
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
-import { CapabilityRuntime } from './capabilities/runtime.js';
+import { CapabilityRuntime } from './system/capabilities/runtime.js';
 import {
   createEligibilityGate,
-} from './capabilities/eligibility.js';
-import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
+} from './system/capabilities/eligibility.js';
+import { ConfirmationQueue } from './system/capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
 import {

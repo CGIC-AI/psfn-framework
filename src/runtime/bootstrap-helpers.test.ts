@@ -2,18 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { CapabilityToken } from '../capabilities/tokens.js';
+import type { CapabilityToken } from '../system/capabilities/tokens.js';
 import { createEnvCredentialVault } from '../custody/credential-vault.js';
 import type { CanonicalModelRegistry, SubstrateConfig } from '../types.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,
-} from '../capabilities/eligibility.js';
-import { loadSettings, saveSettings } from '../settings.js';
-import { saveModelsConfig } from '../config/models-config.js';
-import { loadCapabilityTierConfig } from '../config/capability-tier-config.js';
-import { loadProvidersConfig } from '../config/providers-config.js';
-import { loadSchedulerConfig, saveSchedulerConfig } from '../config/scheduler-config.js';
+} from '../system/capabilities/eligibility.js';
+import { loadSettings, saveSettings } from '../system/settings.js';
+import { saveModelsConfig } from '../system/config/models-config.js';
+import { loadCapabilityTierConfig } from '../system/config/capability-tier-config.js';
+import { loadProvidersConfig } from '../system/config/providers-config.js';
+import { loadSchedulerConfig, saveSchedulerConfig } from '../system/config/scheduler-config.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,

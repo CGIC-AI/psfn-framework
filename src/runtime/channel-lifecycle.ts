@@ -5,7 +5,7 @@ import type {
 import {
   EligibilityDeniedError,
   type EligibilityGate,
-} from '../capabilities/eligibility.js';
+} from '../system/capabilities/eligibility.js';
 import {
   requirePluginActivationEligibility,
   wrapChannelAdapterWithEligibility,

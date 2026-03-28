@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { WyomingTcpServer } from './server.js';
 import { WyomingRuntime } from './runtime.js';
 import { createWyomingServiceRegistry } from './services/index.js';

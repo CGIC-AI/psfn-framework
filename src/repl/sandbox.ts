@@ -11,7 +11,7 @@ import type {
   SandboxBudgetRef,
   SandboxDeps,
 } from './sandbox-capabilities/contracts.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import {
   createLLMCapabilities,
   createMemoryCapabilities,

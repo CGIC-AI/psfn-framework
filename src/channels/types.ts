@@ -1,5 +1,5 @@
 import type { AgentResponse, Attachment, Lifecycle, SubstrateMessage } from '../types.js';
-import type { EligibilityRequirements } from '../capabilities/eligibility.js';
+import type { EligibilityRequirements } from '../system/capabilities/eligibility.js';
 
 export type MessageHandler = (message: SubstrateMessage) => Promise<AgentResponse>;
 export type ChannelChatType = 'direct' | 'channel' | 'thread';

@@ -5,7 +5,7 @@ import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { SessionManager } from '../session/manager.js';
 import type { LLMResponse } from '../types.js';
-import { EventBus } from '../event-bus.js';
+import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import type { SandboxExecutionPort } from './sandbox-capabilities/contracts.js';
 

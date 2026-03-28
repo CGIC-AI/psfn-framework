@@ -2,7 +2,7 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
 import { textResult, textResultWithError } from '../tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 interface SkillListParams {
   includeSkipped?: boolean;

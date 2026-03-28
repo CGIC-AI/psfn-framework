@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EventBus } from '../../../event-bus.js';
+import { EventBus } from '../../../shared/event-bus.js';
 import { AdminDashboardDataService } from './dashboard-service.js';
 import type { MemoryStore } from '../../../memory/store.js';
 import type { Scheduler } from '../../../scheduler/scheduler.js';

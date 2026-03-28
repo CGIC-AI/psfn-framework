@@ -35,7 +35,7 @@ import {
   EligibilityDeniedError,
   type EligibilityDecision,
   type EligibilityGate,
-} from '../capabilities/eligibility.js';
+} from '../system/capabilities/eligibility.js';
 import {
   type ResolvedCorrelationMetadata,
   inferCallType as inferCorrelationCallType,
@@ -51,7 +51,7 @@ import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
-} from '../config/providers-config.js';
+} from '../system/config/providers-config.js';
 import type { LLMProvider } from '../agent/contracts.js';
 
 const log = createComponentLogger('LLMClient');

@@ -13,13 +13,13 @@ import {
   resolve,
   sep,
 } from 'node:path';
-import type { SkillsRuntimeConfig } from '../config/skills-config.js';
+import type { SkillsRuntimeConfig } from '../system/config/skills-config.js';
 import {
   DEFAULT_COMPANION_SKILLS_DIRECTORY,
   LEGACY_COMPANION_SKILLS_DIRECTORY,
 } from '../identity/companion-naming.js';
-import { toErrorMessage } from '../utils/errors.js';
-import { isRecord } from '../utils/types.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
+import { isRecord } from '../shared/utils/types.js';
 import type {
   SkillDirectorySpec,
   SkillEntry,

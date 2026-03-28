@@ -1,5 +1,5 @@
-import type { ConfirmationQueueEntry } from '../capabilities/confirmation-queue.js';
-import { toErrorMessage } from '../utils/errors.js';
+import type { ConfirmationQueueEntry } from '../system/capabilities/confirmation-queue.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import type { PolicyDecision } from './protocol.js';
 
 interface QueuedActionAuditHooks {

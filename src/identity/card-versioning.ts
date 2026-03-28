@@ -7,16 +7,16 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
-import { withCapabilityRequirement } from '../capabilities/requirements.js';
+import { withCapabilityRequirement } from '../system/capabilities/requirements.js';
 import type {
   ConfirmationQueue,
   ConfirmationQueueEntry,
-} from '../capabilities/confirmation-queue.js';
+} from '../system/capabilities/confirmation-queue.js';
 import type { CharacterCardV2, CharacterData } from './types.js';
 import { assertValidCharacterCard, loadCharacterCard } from './loader.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
-import { writeJsonAtomic } from '../utils/fs.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const MUTABLE_CARD_FIELDS = [
   'name',

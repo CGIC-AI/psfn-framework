@@ -8,7 +8,7 @@ import {
   type NorthStarStore,
 } from './store.js';
 import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 function errorMessage(error: unknown): string {
   return toErrorMessage(error);

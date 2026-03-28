@@ -9,7 +9,7 @@ import type {
 } from '../../../identity/prompt-registry.js';
 import type { PromptHistoryEntry, PromptLayer } from '../../../identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
-import type { EditableSettings } from '../../../settings.js';
+import type { EditableSettings } from '../../../system/settings.js';
 import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
 import type { SessionEntry } from '../../../session/types.js';
@@ -26,14 +26,14 @@ import type {
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../trust/types.js';
 import type {
   CapabilityTierConfig,
-} from '../../../config/capability-tier-config.js';
-import type { SettingsContractData } from '../../../config/settings-contract.js';
-import type { BackupJsonConfig } from '../../../config/backup-config.js';
-import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
-import type { ProvidersRuntimeConfig } from '../../../config/providers-config.js';
-import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
-import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
-import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
+} from '../../../system/config/capability-tier-config.js';
+import type { SettingsContractData } from '../../../system/config/settings-contract.js';
+import type { BackupJsonConfig } from '../../../system/config/backup-config.js';
+import type { ModelsRuntimeConfig } from '../../../system/config/models-config.js';
+import type { ProvidersRuntimeConfig } from '../../../system/config/providers-config.js';
+import type { SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
+import type { SkillsRuntimeConfig } from '../../../system/config/skills-config.js';
+import type { TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
 import type { NorthStarItem, NorthStarScope } from '../../../north-star/store.js';
 import type {
   ChannelInfo,

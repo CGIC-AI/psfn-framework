@@ -1,4 +1,4 @@
-import type { EligibilityRequirements } from '../capabilities/eligibility.js';
+import type { EligibilityRequirements } from '../system/capabilities/eligibility.js';
 
 // ── Scheduler Types ──
 

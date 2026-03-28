@@ -1,6 +1,6 @@
 import type { Agent } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { SessionManager } from '../../session/manager.js';
 import type {

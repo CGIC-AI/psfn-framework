@@ -1,4 +1,4 @@
-import { isAllowedRepoRelativePath } from '../../security/policy-constants.js';
+import { isAllowedRepoRelativePath } from '../../system/security/policy-constants.js';
 import type { ThinkEvidence } from '../types.js';
 import type { GatewayREPLCapabilities, GitCommitView, GitDiffView, GitStatusView } from './contracts.js';
 import { addEvidence, normalizeRepoPath, toErrorMessage } from './common.js';

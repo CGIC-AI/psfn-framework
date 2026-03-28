@@ -6,7 +6,7 @@ import {
   initialIdentityConfirmationState,
   requestIdentityImportConfirmation,
   requestIdentityRollbackConfirmation,
-} from '../../admin-ui/src/lib/components/identity-confirmation-flow.ts';
+} from '../../admin-ui/src/lib/components/identity-confirmation-flow.js';
 
 describe('identity confirmation flow', () => {
   it('creates import confirmation with trimmed path and import context text', () => {

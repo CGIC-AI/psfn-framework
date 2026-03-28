@@ -4,7 +4,7 @@
 
 import { execSync } from 'node:child_process';
 import { createComponentLogger } from '../logger.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const OBSIDIAN_SERVICES = [
   'obsidian-xvfb',

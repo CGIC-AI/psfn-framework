@@ -7,7 +7,7 @@ import {
   buildPersistenceCutoverPlan,
   executePersistenceCutover,
 } from './persistence/cutover.js';
-import { toErrorMessage } from './utils/errors.js';
+import { toErrorMessage } from './shared/utils/errors.js';
 
 interface CliOptions {
   apply: boolean;

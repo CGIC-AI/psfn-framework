@@ -8,7 +8,7 @@ import {
 import {
   TextEmotionClassifier,
 } from '../src/emotion/text-classifier.js';
-import { loadRuntimeSettingsSeedDefaults } from '../src/config/seed-defaults.js';
+import { loadRuntimeSettingsSeedDefaults } from '../src/system/config/seed-defaults.js';
 
 interface PrefetchCliOptions {
   dryRun: boolean;

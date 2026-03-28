@@ -3,14 +3,14 @@ import http from 'node:http';
 import net from 'node:net';
 import WebSocket from 'ws';
 import Database from 'better-sqlite3';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { ContactStore } from '../../contacts/store.js';
 import { ApiServer } from './server.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../types.js';
 import type { ApiServerHealthChecks } from './types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import {
   deriveApiKeyPrincipalId,

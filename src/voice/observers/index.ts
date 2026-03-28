@@ -1,4 +1,4 @@
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import { attachVoiceLatencyObserver } from './latency.js';
 import { attachVoiceTurnsObserver } from './turns.js';
 import { attachVoiceErrorsObserver } from './errors.js';

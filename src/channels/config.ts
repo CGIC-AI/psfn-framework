@@ -1,16 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../logger.js';
-import { getIgnoredTelegramChannelEnvKeys } from '../config/legacy-env.js';
+import { getIgnoredTelegramChannelEnvKeys } from '../system/config/legacy-env.js';
 import {
   envCredential,
   resolveOptionalCredentialReference,
   type CredentialReference,
   type CredentialVaultPort,
 } from '../custody/credential-vault.js';
-import { toErrorMessage } from '../utils/errors.js';
-import { parseBooleanEnv } from '../utils/env.js';
-import { isRecord } from '../utils/types.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
+import { parseBooleanEnv } from '../shared/utils/env.js';
+import { isRecord } from '../shared/utils/types.js';
 import {
   normalizeChannelVisibility,
   type ChannelVisibility,

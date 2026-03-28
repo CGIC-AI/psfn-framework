@@ -5,14 +5,14 @@ import type { WirableTool } from '../agent/tool-wiring-validator.js';
 import type {
   ExternalCommunicationChannel,
   ExternalCommunicationRateLimiter,
-} from '../capabilities/safeguards.js';
+} from '../system/capabilities/safeguards.js';
 import {
   resolveOptionalEnvCredential,
   type CredentialVaultPort,
 } from '../custody/credential-vault.js';
 import { textResult, textResultWithError } from './results.js';
-import { parsePositiveIntEnv } from '../utils/env.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { parsePositiveIntEnv } from '../shared/utils/env.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import { getRequestContext } from '../llm/request-context.js';
 
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;

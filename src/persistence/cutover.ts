@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { SubstrateConfig } from '../types.js';
 import { createComponentLogger } from '../logger.js';
-import { writeJsonAtomic } from '../config/load-or-seed.js';
+import { writeJsonAtomic } from '../system/config/load-or-seed.js';
 import {
   DEFAULT_LEGACY_SHARED_DATA_DIR,
   migrateLegacyPersistenceLayout,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { attachVoiceTurnsObserver, type VoiceTurnMetrics } from './turns.js';
 
 describe('attachVoiceTurnsObserver', () => {

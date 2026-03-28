@@ -1,8 +1,8 @@
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
-import type { CapabilityAccess } from '../../capabilities/gate.js';
-import type { CapabilityToken } from '../../capabilities/tokens.js';
-import { resolveToolRequiredCapabilities } from '../../capabilities/requirements.js';
+import type { CapabilityAccess } from '../../system/capabilities/gate.js';
+import type { CapabilityToken } from '../../system/capabilities/tokens.js';
+import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
 import type {
   CorrelationMetadata,
   SubstrateMessage,

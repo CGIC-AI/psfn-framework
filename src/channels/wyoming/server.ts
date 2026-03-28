@@ -1,5 +1,5 @@
 import * as net from 'node:net';
-import type { EventBus, EventMap } from '../../event-bus.js';
+import type { EventBus, EventMap } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import { WyomingFrameCodec, type WyomingFrameCodecOptions } from './codec.js';
 import {

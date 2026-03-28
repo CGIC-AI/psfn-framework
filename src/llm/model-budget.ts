@@ -9,7 +9,7 @@ import type {
   ModelUsageLedgerRecord,
   SubstrateConfig,
 } from '../types.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
 
 export const MODEL_USAGE_LEDGER_FILE_NAME = 'model-usage.json';

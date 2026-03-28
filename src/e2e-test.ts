@@ -13,14 +13,14 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { loadConfig } from './types.js';
 import type { SubstrateMessage } from './types.js';
-import { EventBus } from './event-bus.js';
+import { EventBus } from './shared/event-bus.js';
 import { LLMClient } from './llm/client.js';
 import { SessionStore } from './session/store.js';
 import { MemoryStore } from './memory/store.js';
 import { DEFAULT_REPL_CONFIG } from './repl/types.js';
 import { runRLMLoop } from './repl/loop.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
-import { hydrateJsonBackedRuntimeConfig } from './config/runtime-config.js';
+import { hydrateJsonBackedRuntimeConfig } from './system/config/runtime-config.js';
 import {
   composeIdentity,
   composeSessionRuntime,

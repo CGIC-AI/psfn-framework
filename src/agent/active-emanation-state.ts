@@ -4,7 +4,7 @@ import type {
   EmanationPresenceMetadata,
   SatellitePresenceMetadata,
 } from './presence-metadata.js';
-import { isRecord } from '../utils/types.js';
+import { isRecord } from '../shared/utils/types.js';
 
 export interface ActiveEmanationStateResolution {
   presence?: CompanionPresenceMetadata;

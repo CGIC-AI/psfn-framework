@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createRestartTool, createRebuildTool } from './lifecycle.js';
-import type { LifecycleNotifier } from '../lifecycle/notifications.js';
-import { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
+import type { LifecycleNotifier } from '../system/lifecycle/notifications.js';
+import { LifecycleRestartSafeguard } from '../system/capabilities/safeguards.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {

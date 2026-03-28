@@ -8,7 +8,7 @@ import {
   resolveSessionHistoryBudget,
   type ContextBudgetTurnCharacteristics,
 } from '../../context-budget.js';
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';

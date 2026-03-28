@@ -2,7 +2,7 @@
 // The companion's internal clock. A base tick checks registered tasks for due status.
 // Heartbeat is a special 'every' task — her self-check rhythm.
 
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import type {
   DailyRecurringCadence,
   HourlyRecurringCadence,
@@ -17,7 +17,7 @@ import type {
   EligibilityDecision,
   EligibilityGate,
   EligibilityRequirements,
-} from '../capabilities/eligibility.js';
+} from '../system/capabilities/eligibility.js';
 
 const log = createComponentLogger('Scheduler');
 

@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import type { JournalEntry } from '../types.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../turns/id.js';
 import type {
   JournalFileMetadata,

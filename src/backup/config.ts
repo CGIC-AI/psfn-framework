@@ -1,5 +1,5 @@
 import { resolveBackupsDir } from '../persistence/layout.js';
-import { loadBackupConfig } from '../config/backup-config.js';
+import { loadBackupConfig } from '../system/config/backup-config.js';
 
 export const DEFAULT_BACKUP_INTERVAL_HOURS = 12;
 export const DEFAULT_BACKUP_ROTATING_COUNT = 9;

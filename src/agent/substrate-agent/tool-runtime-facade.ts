@@ -1,6 +1,6 @@
 import type { Agent, AgentTool } from '@mariozechner/pi-agent-core';
-import { tagToolWithReversibility } from '../../capabilities/safeguards.js';
-import type { CapabilityAccess } from '../../capabilities/gate.js';
+import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
+import type { CapabilityAccess } from '../../system/capabilities/gate.js';
 import type {
   CorrelationMetadata,
   ObservabilityCallType,

@@ -5,7 +5,7 @@ import type {
   SubstrateConfig,
   SubstrateMessage,
 } from '../../types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   resolveExplicitModel,
   resolveModel,

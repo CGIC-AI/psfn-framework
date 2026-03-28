@@ -11,11 +11,11 @@ import type {
   ReflectionDeliberationConfig,
 } from './heartbeat-policy.js';
 import type { Scheduler } from './scheduler.js';
-import type { MessageSender } from '../lifecycle/notifications.js';
+import type { MessageSender } from '../system/lifecycle/notifications.js';
 import type { PostTurnActionCandidate, SubstrateMessage } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
-import { isBusyTurnError } from '../lifecycle/turn-contention.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
+import { isBusyTurnError } from '../system/lifecycle/turn-contention.js';
 
 // ── Helpers ──
 

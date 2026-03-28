@@ -47,7 +47,7 @@ import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
-} from '../config/providers-config.js';
+} from '../system/config/providers-config.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);

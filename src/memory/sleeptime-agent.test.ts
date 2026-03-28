@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { describe, it, expect, vi } from 'vitest';
 import type { LLMProvider } from '../agent/contracts.js';
 import type { InferredPostTurnAction, SubstrateMessage, AgentResponse } from '../types.js';
-import { EventBus } from '../event-bus.js';
+import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
 import { CoreMemoryStore } from '../core-memory/store.js';

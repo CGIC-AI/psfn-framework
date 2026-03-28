@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import { EventBus } from '../../event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
 import { MemoryStore } from '../../memory/store.js';
 import { SessionStore } from '../../session/store.js';

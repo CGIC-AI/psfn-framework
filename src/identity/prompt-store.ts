@@ -32,7 +32,7 @@ import {
 } from './canonical-foundation.js';
 import { createComponentLogger } from '../logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 
 const log = createComponentLogger('PromptStore');
 const HISTORY_SCAN_CHUNK_BYTES = 32 * 1024;

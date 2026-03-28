@@ -12,10 +12,10 @@ import {
 import prism from 'prism-media';
 import { Events, type Client, type VoiceBasedChannel, type VoiceState } from 'discord.js';
 import { Readable } from 'node:stream';
-import type { EventBus } from '../../event-bus.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
-import type { EligibilityGate } from '../../capabilities/eligibility.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import {
   type StreamingTtsConnector,
   type StreamingTtsProvider,
@@ -38,7 +38,7 @@ import {
   type VoiceSecurityLimits,
 } from '../../voice/policy/security.js';
 import type { MessageHandler } from '../types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,

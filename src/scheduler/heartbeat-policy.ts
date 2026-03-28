@@ -5,7 +5,7 @@
 
 import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../logger.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../shared/utils/fs.js';
 import type { RecurringCadence } from './types.js';
 
 const log = createComponentLogger('HeartbeatPolicy');

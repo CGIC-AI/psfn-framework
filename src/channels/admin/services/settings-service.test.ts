@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadBackupConfig } from '../../../config/backup-config.js';
-import { loadCapabilityTierConfig } from '../../../config/capability-tier-config.js';
-import { loadModelsConfig } from '../../../config/models-config.js';
-import { loadProvidersConfig } from '../../../config/providers-config.js';
-import { loadSchedulerConfig } from '../../../config/scheduler-config.js';
-import { loadSettings } from '../../../settings.js';
+import { loadBackupConfig } from '../../../system/config/backup-config.js';
+import { loadCapabilityTierConfig } from '../../../system/config/capability-tier-config.js';
+import { loadModelsConfig } from '../../../system/config/models-config.js';
+import { loadProvidersConfig } from '../../../system/config/providers-config.js';
+import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
+import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../types.js';
 import { AdminSettingsDataService } from './settings-service.js';
 

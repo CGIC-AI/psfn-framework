@@ -3,13 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SubstrateConfig } from '../types.js';
-import { saveSettings } from '../settings.js';
-import { saveSchedulerConfig } from '../config/scheduler-config.js';
+import { saveSettings } from '../system/settings.js';
+import { saveSchedulerConfig } from '../system/config/scheduler-config.js';
 import {
   RUNTIME_MODE,
   resolveRuntimeModeContract,
   toRuntimeStatusMetadata,
-} from '../lifecycle/runtime-mode.js';
+} from '../system/lifecycle/runtime-mode.js';
 import {
   resolveStartupLifecycleBundle,
   resolveStartupPreflightBundle,

@@ -1,4 +1,4 @@
-import type { EventBus, EventName } from '../../event-bus.js';
+import type { EventBus, EventName } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { TaskState } from '../../scheduler/types.js';
 import type { ContextGetter, ScheduleMutationResult, ScheduleView } from './contracts.js';

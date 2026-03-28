@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { loadConfig } from './types.js';
 import { createSessionHmacBoundaryService } from './session/hmac-boundary.js';
 import { runAttributionRepair } from './session/attribution-repair.js';
-import { toErrorMessage } from './utils/errors.js';
+import { toErrorMessage } from './shared/utils/errors.js';
 
 interface CliOptions {
   dataDir?: string;

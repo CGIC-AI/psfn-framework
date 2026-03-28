@@ -6,7 +6,7 @@
 // Keep core construction through these helpers so behavior stays aligned across split entrypoints.
 
 import type { SubstrateConfig } from '../types.js';
-import type { EventBus } from '../event-bus.js';
+import type { EventBus } from '../shared/event-bus.js';
 import { SessionStore, type SessionIntegrityProvider } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
 import { UserContinuityStore } from '../session/continuity.js';
@@ -48,7 +48,7 @@ import type { CharacterCardV2 } from '../identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import type { ShardAuditTrail } from '../shards/manager.js';
-import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
+import type { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
 import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
 import {

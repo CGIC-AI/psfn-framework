@@ -8,11 +8,11 @@ import {
   REMOVED_RUNTIME_SETTINGS_KEYS,
   splitSettingsByDomain,
   SETTINGS_VALIDATION,
-} from '../../../settings.js';
-import { createSystemConfigRepository } from '../../../config/system-config-repository.js';
+} from '../../../system/settings.js';
+import { createSystemConfigRepository } from '../../../system/config/system-config-repository.js';
 import {
   applyProvidersRuntimeConfig,
-} from '../../../config/providers-config.js';
+} from '../../../system/config/providers-config.js';
 import {
   buildSettingsContractData,
   IMPORT_PROCESSING_ROUTE_MODE_VALUES,
@@ -20,15 +20,15 @@ import {
   SETTINGS_BOOLEAN_FIELDS,
   SETTINGS_OWNER_FILE_BY_FIELD,
   SETTINGS_STRING_ARRAY_FIELDS,
-} from '../../../config/settings-contract.js';
+} from '../../../system/config/settings-contract.js';
 import {
   validateCompositionalPolicyConfig,
 } from '../../../compositional/policy.js';
 import { normalizeImageWorkflowSettings } from '../../../images/types.js';
-import { isCapabilityToken, type CapabilityToken } from '../../../capabilities/tokens.js';
+import { isCapabilityToken, type CapabilityToken } from '../../../system/capabilities/tokens.js';
 import { MEMORY_CONFIG } from '../../../memory/types.js';
 import { createComponentLogger } from '../../../logger.js';
-import { toErrorMessage } from '../../../utils/errors.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
   getStreamingSttProviderMetadata,
   isStreamingSttProvider,

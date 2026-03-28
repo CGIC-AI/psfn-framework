@@ -4,7 +4,7 @@ import { countTokens } from '../llm/tokens.js';
 import { SESSION_HISTORY_MIN_MESSAGES } from '../context-budget.js';
 import type { ChannelVisibility, TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
-import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../security/refusal-patterns.js';
+import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../system/security/refusal-patterns.js';
 import type { SessionEntry } from './types.js';
 
 /** Default number of cross-channel continuity messages to include in context. */

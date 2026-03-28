@@ -1,4 +1,4 @@
-import { isRecord } from '../utils/types.js';
+import { isRecord } from '../shared/utils/types.js';
 import type { ShardResultLineageEnvelope } from './result-lineage.js';
 
 export type ShardArtifactMergePolicy = 'review_required';

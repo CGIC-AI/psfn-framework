@@ -1,12 +1,12 @@
 import type { SubstrateConfig } from '../types.js';
-import { getIgnoredJsonBackedConfigEnvKeys } from '../config/legacy-env.js';
+import { getIgnoredJsonBackedConfigEnvKeys } from '../system/config/legacy-env.js';
 import {
   resolveRuntimeModeContract,
   toRuntimeStatusMetadata,
   type RuntimeEntrypoint,
   type RuntimeModeContract,
   type RuntimeStatusMetadata,
-} from '../lifecycle/runtime-mode.js';
+} from '../system/lifecycle/runtime-mode.js';
 import {
   hydrateCanonicalStartupConfig,
   type StartupConfigHydrationOptions,

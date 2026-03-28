@@ -1,5 +1,5 @@
 import { evaluateUrlPolicy, checkResolvedIP, resolveMaxRedirectHops, type UrlPolicyConfig } from '../gateway/url-policy.js';
-import { WEB_FETCH_TIMEOUT_MS, WEB_FETCH_USER_AGENT } from '../security/policy-constants.js';
+import { WEB_FETCH_TIMEOUT_MS, WEB_FETCH_USER_AGENT } from '../system/security/policy-constants.js';
 import type { ImageRuntimeConfig } from './types.js';
 
 const DEFAULT_REMOTE_IMAGE_MAX_BYTES = 8 * 1024 * 1024;

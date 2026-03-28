@@ -17,7 +17,7 @@ import {
   VALID_MEMORY_REDACTION_OPERATIONS,
 } from './types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;

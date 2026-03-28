@@ -11,7 +11,7 @@ import {
   buildTurnTombstoneJournalEntry,
 } from './journal-utils.js';
 import { SessionSearchIndex, type SessionSearchHit } from './search-index.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../shared/utils/errors.js';
 import {
   CHANNEL_INDEX_FILENAME,
   IMPORT_MANIFEST_FILENAME,

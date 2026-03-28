@@ -39,7 +39,7 @@ import type { ValuesJournalEntry } from '../../values/store.js';
 import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
 import { applyAdminModelsConfigMutation } from './services/settings-service.js';
-import { loadModelsConfig } from '../../config/models-config.js';
+import { loadModelsConfig } from '../../system/config/models-config.js';
 
 export type AdminTaskCadence = RecurringCadence;
 

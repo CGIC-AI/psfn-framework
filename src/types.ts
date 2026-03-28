@@ -2,7 +2,7 @@ import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
 } from './context-budget.js';
-import type { CapabilityTier } from './capabilities/tier-types.js';
+import type { CapabilityTier } from './system/capabilities/tier-types.js';
 import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 import type { ContextManifest } from './session/context-manifest.js';
 import type { TurnID } from './turns/types.js';
@@ -23,8 +23,8 @@ import {
   resolveOptionalEnvCredential,
 } from './custody/credential-vault.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
-import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './config/seed-defaults.js';
-import { parseOptionalStringEnv } from './utils/env.js';
+import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './system/config/seed-defaults.js';
+import { parseOptionalStringEnv } from './shared/utils/env.js';
 
 // ── Channel-agnostic message types ──
 
@@ -558,7 +558,7 @@ export interface RuntimeConfigHooks {
 
 // ── Configuration ──
 
-export type { CapabilityTier } from './capabilities/tier-types.js';
+export type { CapabilityTier } from './system/capabilities/tier-types.js';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
 export const PROMOTED_EXTENDED_TOOL_SLOTS_MAX = 4;

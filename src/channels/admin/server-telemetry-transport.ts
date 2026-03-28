@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
-import type { EventBus, EventMap, EventName } from '../../event-bus.js';
+import type { EventBus, EventMap, EventName } from '../../shared/event-bus.js';
 import {
   sanitizeTurnRetrievalTelemetry,
   sanitizeTurnSnapshot,

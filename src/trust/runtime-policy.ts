@@ -1,4 +1,4 @@
-import type { TrustPolicyConfig } from '../config/trust-policy-config.js';
+import type { TrustPolicyConfig } from '../system/config/trust-policy-config.js';
 
 const DEFAULT_POLICY: TrustPolicyConfig = {
   trustCeiling: {

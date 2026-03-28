@@ -60,6 +60,10 @@ export interface ResolvedAuthorContext {
 
 const SELF_IMAGE_TOOL_NAMES = ['image_create', 'image_edit', 'image_analyze'] as const;
 
+function isInternalJournalChannel(channelId: string): boolean {
+  return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
+}
+
 function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMessage' | 'routing'>): ChannelMeta | undefined {
   const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
@@ -188,7 +192,6 @@ export function buildRuntimeContext(input: {
   const lines = [
     '[Runtime Context]',
     `Current time: ${formatActiveDateTimeLabel(now)}`,
-    `Channel: ${input.message.channelId} (type: ${input.channelType ?? 'unknown'}, visibility: ${visibility})`,
     `Speaking with: ${input.resolvedUserName} (userId: ${subjectIdentityKey}, canonicalId: ${canonicalIdentityKey}, trust: ${input.trustLevel})`,
     `Model: ${input.modelId}`,
     `Response style preference: ${responseStyle}`,
@@ -201,6 +204,13 @@ export function buildRuntimeContext(input: {
     + ')'
     + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
   ];
+  if (!isInternalJournalChannel(input.message.channelId)) {
+    lines.splice(
+      2,
+      0,
+      `Channel: ${input.message.channelId} (type: ${input.channelType ?? 'unknown'}, visibility: ${visibility})`,
+    );
+  }
 
   const isScheduledTask = input.taskKind === 'heartbeat'
     || input.taskKind === 'reflection'

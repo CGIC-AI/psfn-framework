@@ -128,11 +128,13 @@ describe('convertToLlm', () => {
     expect((result[0] as UserMessage).content).toBe('[System note] Agent restarted');
   });
 
-  it('converts whisper to a note-to-self message with Whisper label', () => {
+  it('converts whisper to an assistant-side internal note', () => {
     const result = convertToLlm([makeWhisper('Stay gentle and concrete.')]);
     expect(result).toHaveLength(1);
-    expect(result[0].role).toBe('user');
-    expect((result[0] as UserMessage).content).toBe('[Whisper note to self] Stay gentle and concrete.');
+    expect(result[0].role).toBe('assistant');
+    expect((result[0] as AssistantMessage).content).toEqual([
+      { type: 'text', text: '[Internal note to self] Stay gentle and concrete.' },
+    ]);
   });
 
   it('filters out continuity messages', () => {

@@ -118,7 +118,7 @@ export function isCustomMessage(m: AgentMessage): boolean {
  * Custom messages are converted:
  * - compaction → user message with summary prefix
  * - systemNote → user message with [System note] prefix
- * - whisper → user message with a note-to-self prefix
+ * - whisper → assistant-side internal note
  * - mirror → compact user-side mirror note
  * - continuity → filtered out (injected into system prompt instead)
  */
@@ -139,12 +139,23 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         timestamp: msg.timestamp,
       } satisfies UserMessage);
     } else if (isWhisperMessage(msg)) {
-      const label = msg.speakerName?.trim() || 'Whisper';
       result.push({
-        role: 'user',
-        content: `[${label} note to self] ${msg.content}`,
+        role: 'assistant',
+        content: [{ type: 'text', text: `[Internal note to self] ${msg.content}` }],
+        api: '',
+        provider: '',
+        model: '',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'stop',
         timestamp: msg.timestamp,
-      } satisfies UserMessage);
+      } satisfies PiAssistantMessage);
     } else if (isContinuityMessage(msg)) {
       // Continuity messages are injected into system prompt, not as individual messages.
       // Skip in LLM conversion.

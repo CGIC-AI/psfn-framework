@@ -648,7 +648,7 @@ describe('SessionManager with continuity', () => {
     expect(ctx.systemPrompt).not.toContain('[from api:private-main]');
   });
 
-  it('keeps reflection channels out of session storage but preserves companion continuity', async () => {
+  it('keeps internal journals out of prompt-facing cross-channel continuity', async () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
     mgr.characterName = 'Companion';
@@ -680,9 +680,9 @@ describe('SessionManager with continuity', () => {
       DEFAULT_COMPANION_ID,
     );
 
-    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
-    expect(ctx.systemPrompt).toContain('Earlier heartbeat summary');
-    expect(ctx.systemPrompt).toContain('Earlier reflection summary');
+    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
+    expect(ctx.systemPrompt).not.toContain('Earlier reflection summary');
   });
 
   it('buildContext works without continuity store (backward compat)', async () => {

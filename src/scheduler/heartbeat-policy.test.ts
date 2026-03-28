@@ -54,6 +54,7 @@ describe('HeartbeatPolicyStore', () => {
     const policy = store.load();
     const whisper = policy.templates.find(t => t.id === 'whisper');
     expect(whisper).toBeDefined();
+    expect(whisper!.name).toBe('Musing');
     expect(whisper!.sendToDiscord).toBe(true);
     expect(whisper!.intervalMs).toBe(3_600_000); // 1 hour
     expect(whisper!.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
@@ -195,6 +196,40 @@ describe('HeartbeatPolicyStore', () => {
     const persistedDailyReview = persisted.templates.find(t => t.id === 'daily-review');
     expect(persistedWhisper?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
     expect(persistedDailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
+  });
+
+  it('normalizes legacy whisper display text to musing on load', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        templates: [
+          {
+            id: 'whisper',
+            name: 'Whisper',
+            prompt: 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.',
+            intervalMs: 3_600_000,
+            cadence: { kind: 'hourly', minute: 0, timezone: 'local' },
+            enabled: true,
+            sendToDiscord: true,
+          },
+        ],
+        version: 7,
+        updatedAt: '2026-03-01T00:00:00.000Z',
+        updatedBy: 'admin',
+      }),
+      'utf-8',
+    );
+
+    const loaded = store.load();
+    const whisper = loaded.templates.find(t => t.id === 'whisper');
+    expect(whisper?.name).toBe('Musing');
+    expect(whisper?.prompt).toContain('little musing from your inner world');
+
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
+    const persistedWhisper = persisted.templates.find(t => t.id === 'whisper');
+    expect(persistedWhisper?.name).toBe('Musing');
+    expect(persistedWhisper?.prompt).toContain('little musing from your inner world');
   });
 });
 

@@ -98,6 +98,7 @@ describe('runtime subject identity', () => {
       + `(userId: ${DEFAULT_COMPANION_ID}, canonicalId: ${DEFAULT_COMPANION_ID}, trust: primary)`,
     );
     expect(runtimeContext).not.toContain('userId: scheduler');
+    expect(runtimeContext).not.toContain('Channel: internal:reflection:whisper');
     expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
   });
 

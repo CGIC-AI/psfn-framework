@@ -44,6 +44,11 @@ import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 
 const log = createComponentLogger('ContextBuilder');
+const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
+
+function isInternalJournalChannel(channelId: string): boolean {
+  return channelId === 'internal:heartbeat' || channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
+}
 
 interface BuildSessionContextParams {
   channelId: string;
@@ -208,7 +213,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   }
 
   // Cross-channel continuity: include recent activity from other channels
-  const crossChannel = params.turnSnapshot
+  const rawCrossChannel = params.turnSnapshot
     ? params.turnSnapshot.continuityEntries.map(cloneSessionEntry)
     : params.continuityStore && params.userId
       ? getMergedContinuity({
@@ -220,6 +225,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         channelMeta: params.channelMeta,
       })
       : [];
+  const crossChannel = rawCrossChannel.filter(entry => !isInternalJournalChannel(entry.originChannelId ?? entry.channelId));
 
   let continuitySectionText = '';
   if (crossChannel.length > 0) {

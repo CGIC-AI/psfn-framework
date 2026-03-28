@@ -36,7 +36,9 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
-    gated: (_method, handler) => handler,
+    approvalBoundary: {
+      gate: (_options) => async (params) => _options.handler(params),
+    } as any,
   };
   registerShellMethods(runtime);
   const method = methods.get('shell.exec');

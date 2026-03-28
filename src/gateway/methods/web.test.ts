@@ -43,7 +43,9 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
     nextStreamRequestId: () => 'stream-1',
     recordAuditEvent,
     audited: (_method, handler) => handler,
-    gated: (_method, handler) => handler,
+    approvalBoundary: {
+      gate: (_options) => async (params) => _options.handler(params),
+    } as any,
   };
 
   registerWebMethods(runtime);

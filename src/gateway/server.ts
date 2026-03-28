@@ -6,7 +6,6 @@ import {
   JSONRPCServer,
   JSONRPCClient,
   JSONRPCServerAndClient,
-  JSONRPCErrorException,
 } from 'json-rpc-2.0';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { ChannelOutboundDock } from '../channels/types.js';
@@ -18,7 +17,6 @@ import {
 import type { NdjsonConnection } from './transport.js';
 import { createSocketServer } from './transport.js';
 import {
-  GatewayErrors,
   type PolicyDecision,
   type RuntimeHealthResult,
   type VoiceHandleMessageResult,
@@ -28,26 +26,21 @@ import type { ImageRuntimeConfig } from '../images/types.js';
 import type { AuditStore } from './audit.js';
 import type { SessionHmacKeyring } from '../session/journal-utils.js';
 import { createComponentLogger } from '../logger.js';
-import {
-  ConfirmationQueue,
-  DEFAULT_CONFIRMATION_EXPIRY_MS,
-} from '../capabilities/confirmation-queue.js';
-import { isCapabilityTier } from '../capabilities/tiers.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
 import type { GatewayMethodRuntime } from './methods/types.js';
-import { evaluatePolicy, type PolicyConfig } from './policy.js';
+import type { PolicyConfig } from './policy.js';
 import {
   DEFAULT_AGENT_TIMEOUT_MS,
   requestAgentVoiceStream,
   type VoiceStreamRequestOptions,
 } from './voice-stream-request.js';
+import { GatewayNtfyNotifier, type GatewayNtfyConfig } from './ntfy-notifier.js';
 import {
-  GatewayNtfyNotifier,
-  notifyOperatorForPendingAction,
-  type GatewayNtfyConfig,
-} from './ntfy-notifier.js';
-import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
+  createGatewayApprovalBoundaryService,
+  type ApprovalBoundaryService,
+  type GatewayConfirmationConfig,
+} from './approval-boundary.js';
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 
 const log = createComponentLogger('Gateway');
@@ -80,12 +73,6 @@ Readonly<Record<GatewayConnectionState, readonly GatewayConnectionState[]>> = {
   offline: [],
 };
 
-export interface GatewayConfirmationConfig {
-  expiryMs: number;
-  operatorDiscordChannelId?: string;
-  ntfyTopic?: string;
-}
-
 export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } from './session-hmac-env.js';
 
 // ── Gateway Server Class ──
@@ -114,30 +101,29 @@ export class GatewayServer {
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
-  private readonly confirmationQueue: ConfirmationQueue;
-  private readonly confirmationConfig: GatewayConfirmationConfig;
   private readonly capabilityTierProvider: () => CapabilityTier;
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
+  private readonly approvalBoundary: ApprovalBoundaryService;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
     this.sessionHmacKeyring = options.sessionHmacKeyring;
-    this.confirmationConfig = {
-      expiryMs: this.normalizePositiveInt(
-        options.confirmation?.expiryMs,
-        DEFAULT_CONFIRMATION_EXPIRY_MS,
-      ),
-      operatorDiscordChannelId: options.confirmation?.operatorDiscordChannelId?.trim() || undefined,
-      ntfyTopic: options.confirmation?.ntfyTopic?.trim() || undefined,
-    };
-    this.confirmationQueue = new ConfirmationQueue({
-      defaultExpiryMs: this.confirmationConfig.expiryMs,
-    });
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
+    this.approvalBoundary = createGatewayApprovalBoundaryService({
+      policyConfig: options.policyConfig,
+      ntfyNotifier: this.ntfyNotifier,
+      discordAdapter: options.discordAdapter,
+      capabilityTierProvider: this.capabilityTierProvider,
+      confirmation: options.confirmation,
+      audit: this.audit.bind(this),
+      auditComplete: this.auditComplete.bind(this),
+      recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),
+      recordMethodFailure: (method, error) => this.runtimeHealthTracker.recordMethodFailure(method, error),
+    });
     this.runtimeHealthTracker = new GatewayRuntimeHealthTracker({
       ntfyConfigured: Boolean(options.ntfy),
       vaultEnabled: Boolean(options.policyConfig.vault?.enabled),
@@ -174,86 +160,6 @@ export class GatewayServer {
     };
   }
 
-  // Wrap a gated handler — evaluates policy, logs decision, handles approval flow
-  private gated<P, R>(
-    method: string,
-    handler: (params: P) => Promise<R>,
-    paramsSummary: (params: P) => Record<string, unknown>,
-    approvalAction: string,
-    approvalScope: (params: P) => string,
-    approvalReason?: (params: P) => string,
-  ): (params: P) => Promise<R> {
-    return async (params: P) => {
-      const decision = evaluatePolicy(
-        { method, params: params as unknown as Record<string, unknown> },
-        this.options.policyConfig,
-      );
-      const summary = paramsSummary(params);
-      const auditId = this.audit(method, decision, summary);
-      const startTime = Date.now();
-
-      try {
-        if (decision === 'DENY') {
-          throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
-        }
-        if (decision === 'NEEDS_APPROVAL' && this.currentCapabilityTier() !== 'autonomous') {
-          const paramsRecord = params as unknown as Record<string, unknown>;
-          const queueEntry = this.confirmationQueue.enqueue(
-            {
-              method,
-              action: approvalAction,
-              scope: approvalScope(params),
-              params: paramsRecord,
-              companionReason: resolveCompanionReason(
-                paramsRecord,
-                approvalReason?.(params) ?? 'Outside workspace',
-              ),
-              expiresInMs: this.confirmationConfig.expiryMs,
-            },
-            async (approvedParams, entry) => executeQueuedAction({
-              method,
-              handler,
-              paramsSummary,
-              params: approvedParams as P,
-              entry,
-              audit: this.audit.bind(this),
-              auditComplete: this.auditComplete.bind(this),
-            }),
-          );
-          await notifyOperatorForPendingAction({
-            entry: queueEntry,
-            discordAdapter: this.options.discordAdapter,
-            operatorDiscordChannelId: this.confirmationConfig.operatorDiscordChannelId,
-            ntfyTopic: this.confirmationConfig.ntfyTopic,
-            ntfyNotifier: this.ntfyNotifier,
-          });
-          throw new JSONRPCErrorException(
-            `Your action is pending operator approval (id: ${queueEntry.id}).`,
-            GatewayErrors.NEEDS_APPROVAL,
-          );
-        }
-        const result = await handler(params);
-        this.runtimeHealthTracker.recordMethodSuccess(method);
-        this.auditComplete(auditId, startTime);
-        return result;
-      } catch (err) {
-        this.runtimeHealthTracker.recordMethodFailure(method, err);
-        const msg = toErrorMessage(err);
-        this.auditComplete(auditId, startTime, msg);
-        throw err;
-      }
-    };
-  }
-
-  private currentCapabilityTier(): CapabilityTier {
-    try {
-      const tier = this.capabilityTierProvider();
-      return isCapabilityTier(tier) ? tier : 'nursery';
-    } catch {
-      return 'nursery';
-    }
-  }
-
   private registerMethods(target: JSONRPCServerAndClient): void {
     const runtime: GatewayMethodRuntime = {
       target,
@@ -265,9 +171,10 @@ export class GatewayServer {
       policyConfig: this.options.policyConfig,
       workspacePath: this.options.policyConfig.workspacePath,
       sessionHmacKeyring: this.sessionHmacKeyring,
+      approvalBoundary: this.approvalBoundary,
       notifyAll: (method, params) => this.notifyAll(method, params),
-      listPendingConfirmations: () => this.confirmationQueue.listPending(),
-      resolveConfirmation: (params) => this.confirmationQueue.resolve(params),
+      listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
+      resolveConfirmation: (params) => this.approvalBoundary.resolveConfirmation(params),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       getRuntimeHealth: () => this.getRuntimeHealth(),
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
@@ -277,15 +184,6 @@ export class GatewayServer {
         }
       },
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
-      gated: (method, handler, paramsSummary, approvalAction, approvalScope, approvalReason) =>
-        this.gated(
-          method,
-          handler,
-          paramsSummary,
-          approvalAction,
-          approvalScope,
-          approvalReason,
-        ),
     };
 
     registerGatewayMethods(runtime);
@@ -587,15 +485,6 @@ export class GatewayServer {
 
   private getRuntimeHealth(): RuntimeHealthResult {
     return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary());
-  }
-
-  private normalizePositiveInt(value: number | undefined, fallback: number): number {
-    if (!Number.isFinite(value) || value === undefined) {
-      return fallback;
-    }
-
-    const normalized = Math.floor(value);
-    return normalized > 0 ? normalized : fallback;
   }
 
   async stop(): Promise<void> {

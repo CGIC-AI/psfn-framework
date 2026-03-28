@@ -58,16 +58,18 @@ function createHarness(policyConfig: PolicyConfig): {
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
-    gated: (method, handler) => async (params) => {
-      const decision = evaluatePolicy(
-        { method, params: params as Record<string, unknown> },
-        policyConfig,
-      );
-      if (decision === 'DENY') {
-        throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
-      }
-      return handler(params);
-    },
+    approvalBoundary: {
+      gate: ({ method, handler }) => async (params) => {
+        const decision = evaluatePolicy(
+          { method, params: params as Record<string, unknown> },
+          policyConfig,
+        );
+        if (decision === 'DENY') {
+          throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
+        }
+        return handler(params);
+      },
+    } as any,
   };
 
   registerVaultMethods(runtime);

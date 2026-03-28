@@ -101,16 +101,18 @@ function createHarness(policyConfig: PolicyConfig): {
     nextStreamRequestId: () => 'stream-1',
     recordAuditEvent,
     audited: (_method, handler) => handler,
-    gated: (method, handler) => async (params) => {
-      const decision = evaluatePolicy(
-        { method, params: params as Record<string, unknown> },
-        policyConfig,
-      );
-      if (decision === 'DENY') {
-        throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
-      }
-      return handler(params);
-    },
+    approvalBoundary: {
+      gate: ({ method, handler }) => async (params) => {
+        const decision = evaluatePolicy(
+          { method, params: params as Record<string, unknown> },
+          policyConfig,
+        );
+        if (decision === 'DENY') {
+          throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
+        }
+        return handler(params);
+      },
+    } as any,
   };
 
   registerBeadsMethods(runtime);

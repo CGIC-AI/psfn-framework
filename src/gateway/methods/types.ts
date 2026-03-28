@@ -13,6 +13,7 @@ import type {
   RuntimeHealthResult,
 } from '../protocol.js';
 import type { SessionHmacKeyring } from '../../session/journal-utils.js';
+import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { PolicyConfig } from '../policy.js';
 
 export interface GatewayMethodRuntime {
@@ -25,6 +26,7 @@ export interface GatewayMethodRuntime {
   policyConfig: PolicyConfig;
   workspacePath: string;
   sessionHmacKeyring: SessionHmacKeyring;
+  approvalBoundary: ApprovalBoundaryService;
   notifyAll(method: string, params: unknown): void;
   listPendingConfirmations(): ConfirmationQueueEntry[];
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
@@ -42,14 +44,6 @@ export interface GatewayMethodRuntime {
     method: string,
     handler: (params: P) => Promise<R>,
     paramsSummary?: (params: P) => Record<string, unknown>,
-  ): (params: P) => Promise<R>;
-  gated<P, R>(
-    method: string,
-    handler: (params: P) => Promise<R>,
-    paramsSummary: (params: P) => Record<string, unknown>,
-    approvalAction: string,
-    approvalScope: (params: P) => string,
-    approvalReason?: (params: P) => string,
   ): (params: P) => Promise<R>;
 }
 

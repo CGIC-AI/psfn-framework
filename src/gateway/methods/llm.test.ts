@@ -50,7 +50,9 @@ function createHarness() {
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'gw-1',
     audited: (_method, handler) => handler,
-    gated: (_method, handler) => handler,
+    approvalBoundary: {
+      gate: (_options) => async (params) => _options.handler(params),
+    } as any,
   };
 
   registerLLMMethods(runtime);

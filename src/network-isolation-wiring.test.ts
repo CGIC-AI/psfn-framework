@@ -19,16 +19,14 @@ describe('agent startup network isolation enforcement', () => {
     expect(source).toContain('await enforceNetworkIsolationOnStartup();');
   });
 
-  it('logs a CRITICAL warning when outbound access is reachable', () => {
-    const reachableBlock = /if \(!probeResult\.reachable\) \{[\s\S]*?\n  \}/m.exec(source)?.[0] ?? source;
-    expect(reachableBlock).toContain('return;');
+  it('fails closed when outbound access is reachable', () => {
     expect(source).toContain("log.error(`CRITICAL:");
-    expect(source).toContain('requireNetworkIsolation: requireIsolation');
+    expect(source).toContain('throw error;');
+    expect(source).not.toContain('if (requireIsolation) {');
   });
 
-  it('supports optional hard fail via REQUIRE_NETWORK_ISOLATION', () => {
-    expect(source).toContain('process.env.REQUIRE_NETWORK_ISOLATION');
-    expect(source).toContain('if (requireIsolation) {');
-    expect(source).toContain('throw error;');
+  it('supports only the explicit temporary override', () => {
+    expect(source).toContain('ALLOW_AGENT_OUTBOUND_NETWORK=true set; startup network-isolation guard is bypassed by explicit operator override.');
+    expect(source).toContain('allowOutboundNetwork');
   });
 });

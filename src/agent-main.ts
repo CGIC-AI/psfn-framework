@@ -190,13 +190,6 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
     return;
   }
 
-  const requireIsolation = isExplicitTrue(process.env.REQUIRE_NETWORK_ISOLATION);
-  if (process.env.REQUIRE_NETWORK_ISOLATION && !requireIsolation) {
-    log.warn(
-      'REQUIRE_NETWORK_ISOLATION=false is ignored; network-isolation now fails closed by default. ' +
-      'Set ALLOW_AGENT_OUTBOUND_NETWORK=true only for explicit temporary override.',
-    );
-  }
   const timeoutMs = parsePositiveIntEnv(
     process.env.NETWORK_ISOLATION_PROBE_TIMEOUT_MS,
     NETWORK_ISOLATION_PROBE_TIMEOUT_MS,
@@ -220,13 +213,9 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
     `(probe=${NETWORK_ISOLATION_PROBE_URL}, status=${probeResult.status}).`,
   );
   log.error(`CRITICAL: ${error.message}`, {
-    requireNetworkIsolation: requireIsolation,
-    requireNetworkIsolationEnv: process.env.REQUIRE_NETWORK_ISOLATION,
+    allowOutboundNetwork,
   });
-  if (requireIsolation) {
-    throw error;
-  }
-  return;
+  throw error;
 }
 
 async function main(): Promise<void> {

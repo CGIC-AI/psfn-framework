@@ -7,6 +7,7 @@ import type { SessionManager } from '../session/manager.js';
 import type { LLMResponse } from '../types.js';
 import { EventBus } from '../event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
+import type { SandboxExecutionPort } from './sandbox-capabilities/contracts.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -71,7 +72,7 @@ function mockSequentialLLM(contents: string[]): LLMProvider {
 
 function nullDeps(
   llm?: LLMProvider,
-  executionPort?: { shellExec: (...args: unknown[]) => Promise<unknown> } | null,
+  executionPort?: SandboxExecutionPort | null,
 ) {
   return {
     llmProvider: llm ?? mockLLM(),
@@ -377,6 +378,10 @@ describe('REPLSandbox', () => {
 
   it('shell_exec helper calls the sandbox execution port when allowed', async () => {
     const executionPort = {
+      boundary: {
+        kind: 'sandbox_broker',
+        isolatedFromGatewaySecrets: true,
+      },
       shellExec: vi.fn(async () => ({
         command: 'node',
         args: ['-v'],
@@ -403,6 +408,10 @@ describe('REPLSandbox', () => {
 
   it('fails closed when the execution port returns an invalid shell result shape', async () => {
     const executionPort = {
+      boundary: {
+        kind: 'sandbox_broker',
+        isolatedFromGatewaySecrets: true,
+      },
       shellExec: vi.fn(async () => ({ exitCode: 0 })),
     };
     const sandbox = new REPLSandbox(nullDeps(mockLLM(), executionPort));
@@ -415,6 +424,33 @@ describe('REPLSandbox', () => {
 
     expect(result.output).toContain('false shell_exec returned invalid result shape');
     expect(executionPort.shellExec).toHaveBeenCalledWith('node', ['-v'], {});
+  });
+
+  it('omits shell_exec helper when execution boundary is still the gateway process', async () => {
+    const sandbox = new REPLSandbox(nullDeps(mockLLM(), {
+      boundary: {
+        kind: 'gateway_process',
+        isolatedFromGatewaySecrets: false,
+        reason: 'legacy gateway shell.exec path',
+      },
+      shellExec: vi.fn(async () => ({
+        command: 'node',
+        args: ['-v'],
+        cwd: '/app/workspace',
+        exitCode: 0,
+        stdout: 'v22.0.0',
+        stderr: '',
+        timedOut: false,
+        truncated: false,
+        durationMs: 12,
+      })),
+    }));
+    const result = await sandbox.execute(
+      'print(typeof shell_exec);',
+      5000,
+      8192,
+    );
+    expect(result.output).toBe('undefined');
   });
 
   it('omits shell_exec helper when execution port is unavailable', async () => {

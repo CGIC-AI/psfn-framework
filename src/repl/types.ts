@@ -8,6 +8,7 @@ import type { EventBus } from '../event-bus.js';
 import type { CapabilityTier, CompositionalPolicyConfig } from '../types.js';
 import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
+import type { SandboxExecutionPort } from './sandbox-capabilities/contracts.js';
 
 export interface ThinkBudget {
   maxIterations: number;      // default 15
@@ -118,6 +119,7 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
 
 export interface REPLDeps {
   llmProvider: LLMProvider;
+  executionPort?: SandboxExecutionPort | null;
   embeddingService: EmbeddingService | null;
   memoryStore: MemoryStore | null;
   sessionManager: SessionManager | null;

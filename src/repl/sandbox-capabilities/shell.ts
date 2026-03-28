@@ -82,6 +82,13 @@ function isShellExecView(value: unknown): value is ShellExecView {
     && Number.isFinite(view.durationMs);
 }
 
+function hasSandboxBrokerBoundary(executionPort: SandboxExecutionPort | null): executionPort is SandboxExecutionPort {
+  return Boolean(
+    executionPort
+    && executionPort.boundary.kind === 'sandbox_broker'
+  );
+}
+
 export function createShellCapabilities(
   options: CreateShellCapabilitiesOptions,
 ): ShellCapabilities {
@@ -106,10 +113,11 @@ export function createShellCapabilities(
       };
     }
 
-    if (!options.executionPort || typeof options.executionPort.shellExec !== 'function') {
+    if (!hasSandboxBrokerBoundary(options.executionPort)
+      || typeof options.executionPort.shellExec !== 'function') {
       return {
         ok: false,
-        error: 'shell_exec unavailable: requires sandbox execution port and audit path',
+        error: 'shell_exec unavailable: requires sandbox broker boundary and audit path',
         command: '',
         args: [],
         cwd: '',

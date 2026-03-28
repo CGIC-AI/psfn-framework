@@ -84,6 +84,30 @@ describe('runRLMLoop', () => {
     expect(calls[0][1]).toBe('reasoning');
   });
 
+  it('does not derive shell_exec from the llm provider without an explicit sandbox boundary', async () => {
+    const llm = {
+      ...sequentialLLM(['```repl\nFINAL(typeof shell_exec);\n```']),
+      shellExec: vi.fn(async () => ({
+        command: 'node',
+        args: ['-v'],
+        cwd: process.cwd(),
+        exitCode: 0,
+        stdout: 'v22.0.0',
+        stderr: '',
+        timedOut: false,
+        truncated: false,
+        durationMs: 5,
+      })),
+    } as LLMProvider & {
+      shellExec: ReturnType<typeof vi.fn>;
+    };
+
+    const result = await runRLMLoop('Boundary route test', makeDeps(llm));
+
+    expect(result.answer).toBe('undefined');
+    expect(llm.shellExec).not.toHaveBeenCalled();
+  });
+
   it('propagates structured origin metadata into think iteration calls', async () => {
     const llm = sequentialLLM(['FINAL("done")']);
     await runRLMLoop(

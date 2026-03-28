@@ -17,15 +17,16 @@ import {
   type ContinuityMessage,
   type MirrorMessage,
 } from './messages.js';
+import { MESSAGE_CLASSES } from './message-classes.js';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 
 const NOW = Date.now();
 
-function makeUser(content: string): UserMessage {
-  return { role: 'user', content, timestamp: NOW };
+function makeUser(content: string): UserMessage & { messageClass: typeof MESSAGE_CLASSES.outwardSpeech } {
+  return { role: 'user', content, timestamp: NOW, messageClass: MESSAGE_CLASSES.outwardSpeech };
 }
 
-function makeAssistant(text: string): AssistantMessage {
+function makeAssistant(text: string): AssistantMessage & { messageClass: typeof MESSAGE_CLASSES.outwardSpeech } {
   return {
     role: 'assistant',
     content: [{ type: 'text', text }],
@@ -33,23 +34,51 @@ function makeAssistant(text: string): AssistantMessage {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     stopReason: 'stop',
     timestamp: NOW,
+    messageClass: MESSAGE_CLASSES.outwardSpeech,
   };
 }
 
 function makeCompaction(summary: string): CompactionMessage {
-  return { role: 'custom', type: 'compaction', summary, coveredUpTo: 5, timestamp: NOW };
+  return {
+    role: 'custom',
+    type: 'compaction',
+    messageClass: MESSAGE_CLASSES.compaction,
+    summary,
+    coveredUpTo: 5,
+    timestamp: NOW,
+  };
 }
 
 function makeSystemNote(content: string): SystemNoteMessage {
-  return { role: 'custom', type: 'systemNote', content, timestamp: NOW };
+  return {
+    role: 'custom',
+    type: 'systemNote',
+    messageClass: MESSAGE_CLASSES.systemNote,
+    content,
+    timestamp: NOW,
+  };
 }
 
 function makeWhisper(content: string, speakerName = 'Whisper'): WhisperMessage {
-  return { role: 'custom', type: 'whisper', content, speakerName, timestamp: NOW };
+  return {
+    role: 'custom',
+    type: 'whisper',
+    messageClass: MESSAGE_CLASSES.internalWhisper,
+    content,
+    speakerName,
+    timestamp: NOW,
+  };
 }
 
 function makeContinuity(content: string): ContinuityMessage {
-  return { role: 'custom', type: 'continuity', content, originChannelId: 'ch1', timestamp: NOW };
+  return {
+    role: 'custom',
+    type: 'continuity',
+    messageClass: MESSAGE_CLASSES.continuity,
+    content,
+    originChannelId: 'ch1',
+    timestamp: NOW,
+  };
 }
 
 function makeMirror(content: string): MirrorMessage {
@@ -59,6 +88,7 @@ function makeMirror(content: string): MirrorMessage {
     content,
     originChannelId: 'api:other',
     sourceRole: 'assistant',
+    messageClass: MESSAGE_CLASSES.mirror,
     timestamp: NOW,
   };
 }
@@ -108,6 +138,8 @@ describe('convertToLlm', () => {
     expect(result).toHaveLength(2);
     expect(result[0].role).toBe('user');
     expect(result[1].role).toBe('assistant');
+    expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.outwardSpeech);
+    expect((result[1] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.outwardSpeech);
   });
 
   it('converts compaction to user message with summary prefix', () => {
@@ -118,6 +150,7 @@ describe('convertToLlm', () => {
     expect((result[0] as UserMessage).content).toBe(
       '[Previous conversation summary]\nUsers discussed cats',
     );
+    expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.compaction);
   });
 
   it('converts system note to user message with prefix', () => {
@@ -126,6 +159,7 @@ describe('convertToLlm', () => {
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe('user');
     expect((result[0] as UserMessage).content).toBe('[System note] Agent restarted');
+    expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.systemNote);
   });
 
   it('converts whisper to an assistant-side internal note', () => {
@@ -135,6 +169,7 @@ describe('convertToLlm', () => {
     expect((result[0] as AssistantMessage).content).toEqual([
       { type: 'text', text: '[Internal note to self] Stay gentle and concrete.' },
     ]);
+    expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.internalWhisper);
   });
 
   it('filters out continuity messages', () => {
@@ -164,6 +199,10 @@ describe('convertToLlm', () => {
     expect((result[2] as UserMessage).content).toContain('[System note]');
     expect((result[3] as UserMessage).content).toContain('[Mirror note from api:other]');
     expect(result[4].role).toBe('assistant');
+    expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.compaction);
+    expect((result[1] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.outwardSpeech);
+    expect((result[2] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.systemNote);
+    expect((result[3] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.mirror);
   });
 
   it('renders mirror entries as compact system notes', () => {
@@ -175,6 +214,7 @@ describe('convertToLlm', () => {
     expect(text).toContain('[Mirror note from api:other]');
     expect(text.length).toBeLessThan(long.length);
     expect(text.endsWith('...')).toBe(true);
+    expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.mirror);
   });
 
   it('uses the neutral role label for assistant mirrors without a source author name', () => {
@@ -198,6 +238,7 @@ describe('sessionEntryToMessage', () => {
     expect(msg.role).toBe('user');
     expect((msg as UserMessage).content).toBe('hello');
     expect((msg as UserMessage).timestamp).toBe(NOW);
+    expect((msg as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.outwardSpeech);
   });
 
   it('converts assistant entry to AssistantMessage', () => {
@@ -210,6 +251,7 @@ describe('sessionEntryToMessage', () => {
     const am = msg as AssistantMessage;
     expect(am.content).toEqual([{ type: 'text', text: 'hi there' }]);
     expect(am.timestamp).toBe(NOW);
+    expect((msg as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.outwardSpeech);
   });
 
   it('converts system entry to SystemNoteMessage', () => {
@@ -220,6 +262,7 @@ describe('sessionEntryToMessage', () => {
     const msg = sessionEntryToMessage(entry);
     expect(isSystemNoteMessage(msg)).toBe(true);
     expect((msg as SystemNoteMessage).content).toBe('self-check complete');
+    expect((msg as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.systemNote);
   });
 
   it('converts mirrored system entry to MirrorMessage', () => {
@@ -241,6 +284,7 @@ describe('sessionEntryToMessage', () => {
     const mirror = msg as MirrorMessage;
     expect(mirror.originChannelId).toBe('api:origin');
     expect(mirror.sourceRole).toBe('assistant');
+    expect(mirror.messageClass).toBe(MESSAGE_CLASSES.mirror);
   });
 
   it('converts tool entry to ToolResultMessage', () => {
@@ -280,5 +324,6 @@ describe('compactionToMessage', () => {
     expect(msg.summary).toBe('Talked about cats');
     expect(msg.coveredUpTo).toBe(10);
     expect(msg.timestamp).toBe(NOW);
+    expect(msg.messageClass).toBe(MESSAGE_CLASSES.compaction);
   });
 });

@@ -12,12 +12,18 @@ import type {
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 import { parseToolObservationMetadata } from '../session/tool-observation.js';
+import {
+  MESSAGE_CLASSES,
+  tagMessageClass,
+  type MessageClassMetadata,
+} from './message-classes.js';
 
 // ── Custom message types ──
 
 export interface CompactionMessage {
   role: 'custom';
   type: 'compaction';
+  messageClass: typeof MESSAGE_CLASSES.compaction;
   summary: string;
   coveredUpTo: number;
   timestamp: number;
@@ -26,6 +32,7 @@ export interface CompactionMessage {
 export interface SystemNoteMessage {
   role: 'custom';
   type: 'systemNote';
+  messageClass: typeof MESSAGE_CLASSES.systemNote;
   content: string;
   timestamp: number;
 }
@@ -33,6 +40,7 @@ export interface SystemNoteMessage {
 export interface WhisperMessage {
   role: 'custom';
   type: 'whisper';
+  messageClass: typeof MESSAGE_CLASSES.internalWhisper;
   content: string;
   speakerName?: string;
   timestamp: number;
@@ -41,6 +49,7 @@ export interface WhisperMessage {
 export interface ContinuityMessage {
   role: 'custom';
   type: 'continuity';
+  messageClass: typeof MESSAGE_CLASSES.continuity;
   content: string;
   originChannelId: string;
   timestamp: number;
@@ -49,12 +58,16 @@ export interface ContinuityMessage {
 export interface MirrorMessage {
   role: 'custom';
   type: 'mirror';
+  messageClass: typeof MESSAGE_CLASSES.mirror;
   content: string;
   originChannelId: string;
   sourceRole: 'user' | 'assistant';
   sourceAuthorName?: string;
   timestamp: number;
 }
+
+type ClassifiedUserMessage = UserMessage & MessageClassMetadata;
+type ClassifiedAssistantMessage = PiAssistantMessage & MessageClassMetadata;
 
 interface MirrorSessionMetadata {
   type: 'mirror';
@@ -131,13 +144,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         role: 'user',
         content: `[Previous conversation summary]\n${msg.summary}`,
         timestamp: msg.timestamp,
-      } satisfies UserMessage);
+        messageClass: MESSAGE_CLASSES.compaction,
+      } satisfies ClassifiedUserMessage);
     } else if (isSystemNoteMessage(msg)) {
       result.push({
         role: 'user',
         content: `[System note] ${msg.content}`,
         timestamp: msg.timestamp,
-      } satisfies UserMessage);
+        messageClass: MESSAGE_CLASSES.systemNote,
+      } satisfies ClassifiedUserMessage);
     } else if (isWhisperMessage(msg)) {
       result.push({
         role: 'assistant',
@@ -155,7 +170,8 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         },
         stopReason: 'stop',
         timestamp: msg.timestamp,
-      } satisfies PiAssistantMessage);
+        messageClass: MESSAGE_CLASSES.internalWhisper,
+      } satisfies ClassifiedAssistantMessage);
     } else if (isContinuityMessage(msg)) {
       // Continuity messages are injected into system prompt, not as individual messages.
       // Skip in LLM conversion.
@@ -166,10 +182,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         role: 'user',
         content: `[Mirror note from ${msg.originChannelId}] ${speaker}: ${compactMirrorText(msg.content)}`,
         timestamp: msg.timestamp,
-      } satisfies UserMessage);
+        messageClass: MESSAGE_CLASSES.mirror,
+      } satisfies ClassifiedUserMessage);
     } else {
-      // Standard pi-ai Message — pass through
-      result.push(msg as Message);
+      // Standard pi-ai Message — pass through, tagging outward speech explicitly.
+      if (msg.role === 'user' || msg.role === 'assistant') {
+        result.push(tagMessageClass(msg, MESSAGE_CLASSES.outwardSpeech) as Message);
+      } else {
+        result.push(msg as Message);
+      }
     }
   }
 
@@ -191,6 +212,7 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
       return {
         role: 'custom',
         type: 'mirror',
+        messageClass: MESSAGE_CLASSES.mirror,
         content: entry.content,
         originChannelId: mirrorMetadata.sourceChannelId ?? entry.originChannelId ?? entry.channelId,
         sourceRole: mirrorMetadata.sourceRole ?? 'assistant',
@@ -202,6 +224,7 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
     return {
       role: 'custom',
       type: 'systemNote',
+      messageClass: MESSAGE_CLASSES.systemNote,
       content: entry.content,
       timestamp: ts,
     } satisfies SystemNoteMessage;
@@ -212,7 +235,8 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
       role: 'user',
       content: entry.content,
       timestamp: ts,
-    } satisfies UserMessage;
+      messageClass: MESSAGE_CLASSES.outwardSpeech,
+    } satisfies ClassifiedUserMessage;
   }
 
   if (entry.role === 'tool') {
@@ -240,7 +264,8 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     stopReason: 'stop',
     timestamp: ts,
-  } satisfies PiAssistantMessage;
+    messageClass: MESSAGE_CLASSES.outwardSpeech,
+  } satisfies ClassifiedAssistantMessage;
 }
 
 /**
@@ -250,6 +275,7 @@ export function compactionToMessage(summary: CompactionSummary): CompactionMessa
   return {
     role: 'custom',
     type: 'compaction',
+    messageClass: MESSAGE_CLASSES.compaction,
     summary: summary.summary,
     coveredUpTo: summary.coveredUpTo,
     timestamp: summary.createdAt,

@@ -21,6 +21,7 @@ import { isTurnId } from '../turns/id.js';
 import { EmotionState } from '../emotion/state.js';
 import { parseSessionEmotionState } from '../emotion/session-metadata.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
+import { MESSAGE_CLASSES } from './message-classes.js';
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -5074,6 +5075,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
       role: 'custom',
       type: 'whisper',
+      messageClass: MESSAGE_CLASSES.internalWhisper,
       speakerName: 'Whisper',
       content: 'Keep the answer concrete and grounded.',
     }));

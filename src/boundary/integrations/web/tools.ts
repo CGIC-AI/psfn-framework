@@ -1,9 +1,9 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { WebFetchLane } from '../boundary/gateway/protocol.js';
+import type { WebFetchLane } from '../../gateway/protocol.js';
 import type { WebFetchOperations } from './ops.js';
-import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../shared/utils/errors.js';
+import { textResult, textResultWithError } from '../../../tools/results.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const WEB_FETCH_LANES = ['default', 'local_crawler', 'discovery'] as const;
 

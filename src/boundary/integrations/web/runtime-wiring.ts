@@ -1,6 +1,6 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type { ToolRegistrar } from '../agent/tool-registrar.js';
-import type { ToolWiringMeta, WirableTool } from '../agent/tool-wiring-validator.js';
+import type { ToolRegistrar } from '../../../agent/tool-registrar.js';
+import type { ToolWiringMeta, WirableTool } from '../../../agent/tool-wiring-validator.js';
 import { createWebFetchTool } from './tools.js';
 import type { WebFetchOperations } from './ops.js';
 

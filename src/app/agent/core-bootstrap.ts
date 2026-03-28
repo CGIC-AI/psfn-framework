@@ -116,7 +116,7 @@ export async function bootstrapAgentCoreRuntime(
     },
     operatorNotifier,
     identityCoolingOff,
-    primaryUserId: process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID,
+    primaryUserId: config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID,
     primaryTelegramUserId: (
       process.env.PRIMARY_TELEGRAM_USER_ID
       ?? process.env.TELEGRAM_PRIMARY_USER_ID

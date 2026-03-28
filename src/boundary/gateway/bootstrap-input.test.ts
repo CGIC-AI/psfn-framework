@@ -63,6 +63,10 @@ function createConfig(): SubstrateConfig {
     capabilityTier: 'nursery',
     obsidianAutoPublish: false,
     obsidianTimeoutMs: 1000,
+    wyomingShardRouting: {
+      enabled: true,
+      siteAllowlist: ['site-a'],
+    },
   } as SubstrateConfig;
 }
 
@@ -92,6 +96,8 @@ describe('resolveGatewayBootstrapInput', () => {
         HF_ACCESS_TOKEN: 'hf-access-token',
         HUGGINGFACE_HUB_TOKEN: 'hf-hub-token',
         TRANSFORMERS_HF_TOKEN: 'transformers-token',
+        WYOMING_SHARD_DELEGATION_ENABLED: 'false',
+        WYOMING_SHARD_DELEGATION_SITE_ALLOWLIST: 'env-site',
       },
       startupHydration: createStartupHydration(),
     });
@@ -106,7 +112,10 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(bootstrap.fullCodebaseReadRoot).toBeUndefined();
     expect(bootstrap.channelsConfig.telegram.enabled).toBe(false);
     expect(bootstrap.server.sessionHmacKeyring.activeVersion).toBe('v1');
-    expect(bootstrap.server.wyomingShardRouting).toMatchObject({ enabled: false });
+    expect(bootstrap.server.wyomingShardRouting).toMatchObject({
+      enabled: true,
+      siteAllowlist: ['site-a'],
+    });
     expect(bootstrap.server.ntfy).toMatchObject({
       baseUrl: 'https://ntfy.local',
       defaultTopic: 'alerts',

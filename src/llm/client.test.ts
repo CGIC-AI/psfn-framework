@@ -1154,4 +1154,55 @@ describe('LLMClient model budget gates and usage metering', () => {
       outputTokens: 4,
     });
   });
+
+  it('routes streaming through injected transport without calling direct provider transport', async () => {
+    const config = makeConfig();
+    const callbacks = {
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    };
+    const transport = {
+      stream: vi.fn(async () => ({
+        content: 'gateway-stream-result',
+        model: 'z-ai/glm-5',
+        inputTokens: 11,
+        outputTokens: 6,
+        stopReason: 'stop',
+        toolCalls: [],
+      })),
+      complete: vi.fn(),
+    };
+    const client = new LLMClient(config, { transport: transport as any });
+
+    const response = await client.stream(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Stream this reply' }],
+      },
+      callbacks,
+    );
+
+    expect(mocks.streamSimple).not.toHaveBeenCalled();
+    expect(transport.stream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelHint: expect.objectContaining({
+          model: 'z-ai/glm-5',
+          provider: 'openrouter',
+          maxTokens: 4096,
+        }),
+      }),
+      callbacks,
+    );
+    expect(callbacks.onDone).toHaveBeenCalledWith(expect.objectContaining({
+      content: 'gateway-stream-result',
+      model: 'z-ai/glm-5',
+    }));
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    expect(response).toMatchObject({
+      content: 'gateway-stream-result',
+      model: 'z-ai/glm-5',
+      inputTokens: 11,
+      outputTokens: 6,
+    });
+  });
 });

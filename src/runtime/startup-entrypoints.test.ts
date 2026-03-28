@@ -5,7 +5,7 @@ import {
   toRuntimeStatusMetadata,
 } from '../lifecycle/runtime-mode.js';
 
-describe('startup entrypoint parity wiring', () => {
+describe('startup entrypoint wiring', () => {
   it('treats split startup contracts as command-restarted processes', () => {
     const contract = resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SPLIT,

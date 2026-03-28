@@ -306,7 +306,6 @@ Tool surface split:
 src/
   gateway-main.ts           # Gateway entry point
   agent-main.ts             # Agent entry point
-  runtime.ts                # Parity harness for shared wiring
 
   agent/                    # pi-agent-core wrapper, messages, event bridge
   gateway/                  # JSON-RPC server/client, policy, SSRF, sanitization

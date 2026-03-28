@@ -78,7 +78,7 @@ describe('resolveStartupLifecycleBundle', () => {
 
   it('rejects disabled startup contracts through the shared preflight surface', () => {
     expect(() => resolveStartupLifecycleBundle({
-      entrypoint: RUNTIME_MODE.SINGLE,
+      entrypoint: 'single' as any,
       env: {},
     })).toThrow('Unsupported runtime entrypoint "single"');
   });

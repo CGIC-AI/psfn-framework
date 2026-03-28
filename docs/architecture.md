@@ -7,7 +7,6 @@ This is the current runtime shape. For the component graph, start with [`docs/ar
 - `src/index.ts` is disabled and exits fail-closed.
 - `src/gateway-main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, and gateway-backed tool execution.
 - `src/agent-main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop.
-- `src/runtime.ts` still exists as shared wiring used for tests and tooling. It is no longer the primary operational entrypoint.
 
 ## Composition Layer
 

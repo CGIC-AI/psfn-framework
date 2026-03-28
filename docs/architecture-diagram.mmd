@@ -30,9 +30,6 @@ graph TB
   AGM --> GWC
   AGM --> COMP
   AGM --> PARITY
-  RT --> COMP
-  RT --> PARITY
-  RT --> EB
   COMP --> SMAN
   COMP --> SA
   COMP --> MRET
@@ -48,7 +45,6 @@ graph TB
   %% RUNTIME CORE
   %% ═══════════════════════════════════════════════
   subgraph Core["Runtime Core"]
-    RT["SubstrateRuntime<br/><i>Single-process lifecycle: init / start / stop</i>"]
     EB["EventBus<br/><i>Typed events: turns, tools, streams,<br/>heartbeat, model budget, capabilities</i>"]
     LIFECYCLE["Lifecycle<br/><i>RuntimeMode contract, LifecycleNotifier,<br/>turn contention, pre-restart / ready / shutdown</i>"]
   end

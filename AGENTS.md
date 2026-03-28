@@ -45,7 +45,6 @@ Prefer these files when checking behavior:
 
 1. Runtime entrypoints and wiring
    - `src/index.ts`
-   - `src/runtime.ts`
    - `src/gateway-main.ts`
    - `src/agent-main.ts`
 2. Config and ownership contracts

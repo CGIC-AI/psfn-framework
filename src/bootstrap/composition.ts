@@ -2,9 +2,8 @@
 // Common builders used across runtime, agent container, CLI, and test harnesses.
 //
 // Intentional wiring differences:
-// - src/runtime.ts contains shared wiring used by runtime tests and tooling.
 // - src/agent-main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
-// Keep core construction through these helpers so behavior stays aligned across both entrypoints.
+// Keep core construction through these helpers so behavior stays aligned across split entrypoints.
 
 import type { SubstrateConfig } from '../types.js';
 import type { EventBus } from '../event-bus.js';

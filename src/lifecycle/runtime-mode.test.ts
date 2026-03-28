@@ -17,6 +17,7 @@ describe('normalizeRuntimeMode', () => {
   });
 
   it('returns null for unknown values', () => {
+    expect(Object.keys(RUNTIME_MODE)).not.toContain('SINGLE');
     expect(normalizeRuntimeMode('single')).toBeNull();
     expect(normalizeRuntimeMode('mystery')).toBeNull();
     expect(normalizeRuntimeMode(undefined)).toBeNull();
@@ -54,8 +55,8 @@ describe('resolveRuntimeCommandInvocation', () => {
 describe('resolveRuntimeModeContract', () => {
   it('rejects disabled runtime entrypoints', () => {
     expect(() => resolveRuntimeModeContract({
-      entrypoint: RUNTIME_MODE.SINGLE,
-    })).toThrow('Unsupported runtime entrypoint "single"');
+      entrypoint: 'single' as any,
+    })).toThrow('Unsupported runtime entrypoint');
   });
 
   it('maps split entrypoint to canonical split mode with default split restart command', () => {

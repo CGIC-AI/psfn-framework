@@ -49,7 +49,7 @@ describe('startup entrypoint wiring', () => {
 
   it('rejects disabled startup contracts', () => {
     expect(() => resolveRuntimeModeContract({
-      entrypoint: RUNTIME_MODE.SINGLE,
-    })).toThrow('Unsupported runtime entrypoint "single"');
+      entrypoint: 'single' as any,
+    })).toThrow('Unsupported runtime entrypoint');
   });
 });

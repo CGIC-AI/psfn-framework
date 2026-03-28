@@ -2,7 +2,6 @@
 // Canonicalizes runtime modes across entrypoints and resolves restart strategy.
 
 export const RUNTIME_MODE = Object.freeze({
-  SINGLE: 'single',
   SPLIT: 'split',
   GATEWAY_AGENT: 'gateway-agent',
 } as const);
@@ -45,13 +44,11 @@ const RUNTIME_MODE_ALIASES: Readonly<Record<string, RuntimeMode>> = Object.freez
 });
 
 const ENTRYPOINT_ALLOWED_MODES: Readonly<Record<RuntimeEntrypoint, readonly RuntimeMode[]>> = Object.freeze({
-  [RUNTIME_MODE.SINGLE]: Object.freeze([RUNTIME_MODE.SINGLE]),
   [RUNTIME_MODE.SPLIT]: Object.freeze([RUNTIME_MODE.SPLIT]),
   [RUNTIME_MODE.GATEWAY_AGENT]: Object.freeze([RUNTIME_MODE.GATEWAY_AGENT, RUNTIME_MODE.SPLIT]),
 });
 
 const DEFAULT_RESTART_COMMAND_BY_MODE: Readonly<Record<RuntimeMode, string | undefined>> = Object.freeze({
-  [RUNTIME_MODE.SINGLE]: undefined,
   [RUNTIME_MODE.SPLIT]: 'npm run split',
   [RUNTIME_MODE.GATEWAY_AGENT]: undefined,
 });
@@ -129,11 +126,12 @@ function resolveRuntimeModeForEntrypoint(
   entrypoint: RuntimeEntrypoint,
   runtimeModeEnv: string | undefined,
 ): RuntimeMode {
-  if (entrypoint === RUNTIME_MODE.SINGLE) {
+  if (!Object.prototype.hasOwnProperty.call(ENTRYPOINT_ALLOWED_MODES, entrypoint)) {
     throw new Error(
-      'Unsupported runtime entrypoint "single". Use the split runtime or the gateway and agent entrypoints.',
+      `Unsupported runtime entrypoint "${entrypoint}". Use the split runtime or the gateway and agent entrypoints.`,
     );
   }
+  const allowedModes = ENTRYPOINT_ALLOWED_MODES[entrypoint];
 
   const normalizedRequestedMode = normalizeToken(runtimeModeEnv);
   const requestedMode = normalizeRuntimeMode(runtimeModeEnv);
@@ -144,7 +142,6 @@ function resolveRuntimeModeForEntrypoint(
   }
   if (!requestedMode) return entrypoint;
 
-  const allowedModes = ENTRYPOINT_ALLOWED_MODES[entrypoint];
   if (!allowedModes.includes(requestedMode)) {
     throw new Error(
       `Runtime mode "${requestedMode}" is not allowed for entrypoint "${entrypoint}".`,

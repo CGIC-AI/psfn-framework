@@ -17,7 +17,10 @@ import { resolveModuleRegistryPathFromWorkspace } from '../modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../utils/env.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
 import { parseWyomingShardRoutingConfigEnv } from '../types.js';
-import type { StartupConfigHydrationResult } from '../runtime/bootstrap-helpers.js';
+import {
+  buildRuntimeChannelsConfigOverrides,
+  type StartupConfigHydrationResult,
+} from '../runtime/bootstrap-helpers.js';
 import type { PolicyConfig } from './policy.js';
 import type { GatewayNtfyConfig } from './ntfy-notifier.js';
 import type { SessionHmacKeyring } from '../session/journal-utils.js';
@@ -307,26 +310,10 @@ function buildGatewayPolicyConfig(
 }
 
 export function buildGatewayChannelsConfigOverrides(
+  config: SubstrateConfig,
   runtimeSettings: StartupConfigHydrationResult['settingsDomains']['runtime'] | undefined,
 ): RuntimeChannelsConfigOverrides {
-  const settings = runtimeSettings ?? {};
-  const hasTelegramEnabled = Object.hasOwn(settings, 'telegramEnabled');
-  const hasTelegramAuthorizedUsers = Object.hasOwn(settings, 'telegramAuthorizedUsers');
-
-  if (!hasTelegramEnabled && !hasTelegramAuthorizedUsers) {
-    return {};
-  }
-
-  return {
-    telegram: {
-      ...(hasTelegramEnabled ? { enabled: settings.telegramEnabled } : {}),
-      ...(hasTelegramAuthorizedUsers
-        ? {
-            allowedUsers: settings.telegramAuthorizedUsers ?? [],
-          }
-        : {}),
-    },
-  };
+  return buildRuntimeChannelsConfigOverrides(config, runtimeSettings ?? {});
 }
 
 export function resolveGatewayBootstrapInput(
@@ -374,7 +361,7 @@ export function resolveGatewayBootstrapInput(
   const channelsConfig = loadRuntimeChannelsConfig(
     systemDataDir,
     env,
-    buildGatewayChannelsConfigOverrides(settingsDomains.runtime),
+    buildGatewayChannelsConfigOverrides(config, settingsDomains.runtime),
   );
 
   const ntfyConfigured = Boolean(ntfyBaseUrl && ntfyTopic);

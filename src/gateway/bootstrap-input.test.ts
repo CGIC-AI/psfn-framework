@@ -127,11 +127,18 @@ describe('resolveGatewayBootstrapInput', () => {
   it('preserves telegram override presence when telegramEnabled is explicitly false', () => {
     expect(
       buildGatewayChannelsConfigOverrides({
+        ...createConfig(),
         telegramEnabled: false,
+        telegramAuthorizedUsers: ['primary-user'],
+      } as SubstrateConfig,
+      {
+        telegramEnabled: false,
+        telegramAuthorizedUsers: ['primary-user'],
       } as StartupConfigHydrationResult['settingsDomains']['runtime']),
     ).toEqual({
       telegram: {
         enabled: false,
+        allowedUsers: ['primary-user'],
       },
     });
   });

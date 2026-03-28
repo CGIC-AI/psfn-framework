@@ -13,6 +13,7 @@ describe('agent core runtime builder', () => {
   it('agent-main delegates core wiring to the extracted builder', () => {
     const agentMainSource = readSource('../agent-main.ts');
     expect(agentMainSource).toContain('buildAgentCoreRuntime(');
+    expect(agentMainSource).toContain('createSqliteCompanionStore(');
     expect(agentMainSource).not.toContain('wirePromptRuntime(');
     expect(agentMainSource).not.toContain('wireMemoryRuntime(');
   });

@@ -46,6 +46,7 @@ export interface AgentCoreRuntimeOptions {
   eventBus: EventBus;
   gateway: GatewayClient;
   db: Database.Database;
+  memoryStore?: MemoryStore;
   card: CharacterCardV2;
   systemPrompt: string;
   capabilityRuntime: CapabilityRuntime;
@@ -105,7 +106,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
 
-  const memoryStore = new MemoryStore(db, gateway.dims, {
+  const memoryStore = options.memoryStore ?? new MemoryStore(db, gateway.dims, {
     notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
     scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
     journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),

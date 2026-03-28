@@ -38,7 +38,6 @@ import {
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
 } from './backup/startup-checks.js';
-import { initDatabase } from './persistence/sqlite-utils.js';
 import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from './utils/env.js';
 import { MemoryWriter } from './memory/writer.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
@@ -63,6 +62,7 @@ import {
   buildReplConfig,
   wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
+import { createSqliteCompanionStore } from './persistence/sqlite-companion-store.js';
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
@@ -320,9 +320,12 @@ async function main(): Promise<void> {
     }
   });
 
-  // ── Local SQLite database (sessions + memory) ──
-
-  const db = initDatabase(config.databasePath);
+  const companionStore = createSqliteCompanionStore({
+    databasePath: config.databasePath,
+    companionDataDir: pathSnapshot.companionDataDir,
+    embeddingDims,
+  });
+  const { db, memoryStore: companionMemoryStore } = companionStore;
   runDatabaseIntegrityCheck(db);
   log.info('SQLite integrity check passed');
 
@@ -375,6 +378,7 @@ async function main(): Promise<void> {
     eventBus,
     gateway,
     db,
+    memoryStore: companionMemoryStore,
     card,
     systemPrompt,
     capabilityRuntime,

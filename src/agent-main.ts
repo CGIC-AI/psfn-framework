@@ -54,6 +54,8 @@ import { registerFilesystemTools } from './filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from './filesystem/gateway-ops.js';
 import { registerImageTools } from './images/runtime-wiring.js';
 import { GatewayImageOps } from './images/gateway-ops.js';
+import { registerWebTools } from './web/runtime-wiring.js';
+import { GatewayWebFetchOps } from './web/gateway-ops.js';
 import { DefaultImageVisionReviewer } from './images/vision-reviewer.js';
 import {
   DiscordLifecycleNotifier,
@@ -505,6 +507,7 @@ async function main(): Promise<void> {
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
   });
+  registerWebTools(agentLoop, new GatewayWebFetchOps(gateway), { gatewayMode: true });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),

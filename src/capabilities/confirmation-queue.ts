@@ -25,6 +25,17 @@ export interface ConfirmationQueueEntry {
   expiresAt: number;
 }
 
+export interface ConfirmationQueueHistoryEntry extends Partial<ConfirmationQueueEntry> {
+  id: string;
+  status: ConfirmationResolutionStatus;
+  resolvedAt: number;
+  executed: boolean;
+  message: string;
+  decision?: ConfirmationDecision;
+  appliedParams?: Record<string, unknown>;
+  error?: string;
+}
+
 export interface ConfirmationQueueRequest {
   method: string;
   action: string;
@@ -82,6 +93,7 @@ export class ConfirmationQueue {
   private readonly now: () => number;
   private readonly idFactory: () => string;
   private readonly pending = new Map<string, PendingEntry>();
+  private readonly history: ConfirmationQueueHistoryEntry[] = [];
 
   constructor(options: ConfirmationQueueOptions = {}) {
     this.defaultExpiryMs = normalizePositiveInt(
@@ -120,6 +132,17 @@ export class ConfirmationQueue {
       .sort((a, b) => a.requestedAt - b.requestedAt);
   }
 
+  listHistory(): ConfirmationQueueHistoryEntry[] {
+    this.expirePending();
+    return [...this.history]
+      .map((entry) => this.snapshotHistory(entry))
+      .sort((a, b) => {
+        const delta = b.resolvedAt - a.resolvedAt;
+        if (delta !== 0) return delta;
+        return a.id.localeCompare(b.id);
+      });
+  }
+
   getPending(id: string): ConfirmationQueueEntry | null {
     this.expirePending();
     const found = this.pending.get(id);
@@ -141,6 +164,14 @@ export class ConfirmationQueue {
     const now = this.now();
     if (pending.entry.expiresAt <= now) {
       this.pending.delete(request.id);
+      this.history.push(this.snapshotHistory({
+        ...pending.entry,
+        status: 'expired',
+        decision: request.decision,
+        resolvedAt: now,
+        executed: false,
+        message: 'Confirmation request expired before resolution.',
+      }));
       this.expirePending();
       return {
         id: request.id,
@@ -152,6 +183,14 @@ export class ConfirmationQueue {
 
     if (request.decision === 'deny') {
       this.pending.delete(request.id);
+      this.history.push(this.snapshotHistory({
+        ...pending.entry,
+        status: 'denied',
+        decision: request.decision,
+        resolvedAt: now,
+        executed: false,
+        message: 'Action denied by operator.',
+      }));
       return {
         id: request.id,
         status: 'denied',
@@ -161,6 +200,14 @@ export class ConfirmationQueue {
     }
 
     if (request.decision === 'modify' && !isRecord(request.modifiedParams)) {
+      this.history.push(this.snapshotHistory({
+        ...pending.entry,
+        status: 'failed',
+        decision: request.decision,
+        resolvedAt: now,
+        executed: false,
+        message: 'Modified params are required and must be a JSON object.',
+      }));
       return {
         id: request.id,
         status: 'failed',
@@ -180,6 +227,17 @@ export class ConfirmationQueue {
 
     try {
       await pending.execute(nextParams, runEntry);
+      this.history.push(this.snapshotHistory({
+        ...pending.entry,
+        status: request.decision === 'modify' ? 'modified' : 'approved',
+        decision: request.decision,
+        resolvedAt: this.now(),
+        executed: true,
+        message: request.decision === 'modify'
+          ? 'Action executed with modified parameters.'
+          : 'Action approved and executed.',
+        appliedParams: nextParams,
+      }));
       return {
         id: request.id,
         status: request.decision === 'modify' ? 'modified' : 'approved',
@@ -189,6 +247,16 @@ export class ConfirmationQueue {
         executed: true,
       };
     } catch (error) {
+      this.history.push(this.snapshotHistory({
+        ...pending.entry,
+        status: 'failed',
+        decision: request.decision,
+        resolvedAt: this.now(),
+        executed: false,
+        message: toErrorMessage(error),
+        appliedParams: nextParams,
+        error: toErrorMessage(error),
+      }));
       return {
         id: request.id,
         status: 'failed',
@@ -204,6 +272,13 @@ export class ConfirmationQueue {
     for (const [id, pending] of this.pending) {
       if (pending.entry.expiresAt <= now) {
         this.pending.delete(id);
+        this.history.push(this.snapshotHistory({
+          ...pending.entry,
+          status: 'expired',
+          resolvedAt: now,
+          executed: false,
+          message: 'Confirmation request expired before resolution.',
+        }));
         expired += 1;
       }
     }
@@ -214,6 +289,14 @@ export class ConfirmationQueue {
     return {
       ...entry,
       params: cloneRecord(entry.params),
+    };
+  }
+
+  private snapshotHistory(entry: ConfirmationQueueHistoryEntry): ConfirmationQueueHistoryEntry {
+    return {
+      ...entry,
+      ...(entry.params ? { params: cloneRecord(entry.params) } : {}),
+      ...(entry.appliedParams ? { appliedParams: cloneRecord(entry.appliedParams) } : {}),
     };
   }
 }

@@ -123,10 +123,7 @@ export function resolveOptionalCredentialReference(
   if (vault) {
     return vault.resolveOptional(reference);
   }
-  if (reference.kind === 'env') {
-    return normalizeCredentialValue(fallbackEnv[reference.envName]);
-  }
-  return undefined;
+  return normalizeCredentialValue(fallbackEnv[reference.envName]);
 }
 
 export function resolveInlineOrEnvCredential(

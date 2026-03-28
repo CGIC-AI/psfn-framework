@@ -174,6 +174,7 @@ export class GatewayServer {
       approvalBoundary: this.approvalBoundary,
       notifyAll: (method, params) => this.notifyAll(method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
+      listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),
       resolveConfirmation: (params) => this.approvalBoundary.resolveConfirmation(params),
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       getRuntimeHealth: () => this.getRuntimeHealth(),

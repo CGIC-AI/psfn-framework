@@ -41,6 +41,7 @@ function createHarness() {
     sessionHmacKeyring: { activeVersion: 'v1', keys: { v1: 'test' } },
     notifyAll: vi.fn(),
     listPendingConfirmations: () => [],
+    listConfirmationHistory: () => [],
     resolveConfirmation: vi.fn(async () => ({
       id: 'noop',
       status: 'not_found',

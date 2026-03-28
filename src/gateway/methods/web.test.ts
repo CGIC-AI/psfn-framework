@@ -33,6 +33,7 @@ function createRuntimeHarness(policyConfig: PolicyConfig): RuntimeHarness {
     sessionHmacKeyring: keyring,
     notifyAll: vi.fn(),
     listPendingConfirmations: () => [],
+    listConfirmationHistory: () => [],
     resolveConfirmation: vi.fn(async () => ({
       id: 'noop',
       status: 'not_found',

@@ -491,6 +491,21 @@ describe('GatewayServer', () => {
 
       const empty = await invokeRpc(conn, 13, 'confirmation.list', {});
       expect(empty.result.entries).toEqual([]);
+
+      const history = await invokeRpc(conn, 14, 'confirmation.history', {});
+      expect(history.result.entries).toEqual([
+        expect.objectContaining({
+          id: entry.id,
+          status: 'approved',
+          decision: 'approve',
+          executed: true,
+          message: 'Action approved and executed.',
+          appliedParams: {
+            path: queuedPath,
+            content: 'queued-content',
+          },
+        }),
+      ]);
     });
 
     it('executes modify decision with operator-provided params', async () => {
@@ -578,6 +593,16 @@ describe('GatewayServer', () => {
         executed: false,
       });
       expect(existsSync(queuedPath)).toBe(false);
+
+      const history = await invokeRpc(conn, 43, 'confirmation.history', {});
+      expect(history.result.entries).toEqual([
+        expect.objectContaining({
+          id: entry.id,
+          status: 'expired',
+          executed: false,
+          message: 'Confirmation request expired before resolution.',
+        }),
+      ]);
     });
   });
 

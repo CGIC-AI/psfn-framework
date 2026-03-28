@@ -49,6 +49,7 @@ function createHarness(policyConfig: PolicyConfig): {
     sessionHmacKeyring: keyring,
     notifyAll: vi.fn(),
     listPendingConfirmations: () => [],
+    listConfirmationHistory: () => [],
     resolveConfirmation: vi.fn(async () => ({
       id: 'noop',
       status: 'not_found',

@@ -292,11 +292,27 @@ export interface ConfirmationQueueEntry {
   expiresAt: number;
 }
 
+export interface ConfirmationQueueHistoryEntry extends Partial<ConfirmationQueueEntry> {
+  id: string;
+  status: ConfirmationResolutionStatus;
+  resolvedAt: number;
+  executed: boolean;
+  message: string;
+  decision?: ConfirmationDecision;
+  appliedParams?: Record<string, unknown>;
+  error?: string;
+}
+
 export type ConfirmationListParams = Record<string, never>;
+export type ConfirmationHistoryListParams = Record<string, never>;
 export type RuntimeHealthParams = Record<string, never>;
 
 export interface ConfirmationListResult {
   entries: ConfirmationQueueEntry[];
+}
+
+export interface ConfirmationHistoryListResult {
+  entries: ConfirmationQueueHistoryEntry[];
 }
 
 export type RuntimeHealthResult = RuntimeServiceHealthSnapshot;
@@ -540,6 +556,7 @@ export interface GatewayMethods {
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
+  'confirmation.history': [ConfirmationHistoryListParams, ConfirmationHistoryListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
   'runtime.health': [RuntimeHealthParams, RuntimeHealthResult];
   'session.hmac.sign': [SessionHmacSignParams, SessionHmacSignResult];

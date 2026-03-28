@@ -1,7 +1,10 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type { CapabilityTier } from '../types.js';
 import type { ChannelOutboundDock } from '../channels/types.js';
-import type { ConfirmationQueueEntry } from '../capabilities/confirmation-queue.js';
+import type {
+  ConfirmationQueueEntry,
+  ConfirmationQueueHistoryEntry,
+} from '../capabilities/confirmation-queue.js';
 import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
@@ -47,6 +50,7 @@ export interface ApprovalBoundaryGateOptions<P, R> {
 
 export interface ApprovalBoundaryService {
   listPendingConfirmations(): ConfirmationQueueEntry[];
+  listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
   resolveConfirmation(params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }): Promise<{
     id: string;
     status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
@@ -70,6 +74,7 @@ export function createGatewayApprovalBoundaryService(
 
   return {
     listPendingConfirmations: () => confirmationQueue.listPending(),
+    listConfirmationHistory: () => confirmationQueue.listHistory(),
     resolveConfirmation: (params) => confirmationQueue.resolve(params),
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
       return async (params: P) => {

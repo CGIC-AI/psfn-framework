@@ -69,6 +69,16 @@ describe('ConfirmationQueue', () => {
       expect.objectContaining({ id: entry.id, method: 'fs.read' }),
     );
     expect(queue.listPending()).toEqual([]);
+    expect(queue.listHistory()).toEqual([
+      expect.objectContaining({
+        id: entry.id,
+        status: 'approved',
+        decision: 'approve',
+        executed: true,
+        message: 'Action approved and executed.',
+        appliedParams: { path: '/etc/hosts' },
+      }),
+    ]);
   });
 
   it('denies queued action without executing it', async () => {
@@ -101,6 +111,15 @@ describe('ConfirmationQueue', () => {
     });
     expect(execute).not.toHaveBeenCalled();
     expect(queue.listPending()).toEqual([]);
+    expect(queue.listHistory()).toEqual([
+      expect.objectContaining({
+        id: entry.id,
+        status: 'denied',
+        decision: 'deny',
+        executed: false,
+        message: 'Action denied by operator.',
+      }),
+    ]);
   });
 
   it('modifies params before execution when operator selects modify', async () => {
@@ -142,6 +161,19 @@ describe('ConfirmationQueue', () => {
       },
       expect.objectContaining({ id: entry.id }),
     );
+    expect(queue.listHistory()).toEqual([
+      expect.objectContaining({
+        id: entry.id,
+        status: 'modified',
+        decision: 'modify',
+        executed: true,
+        message: 'Action executed with modified parameters.',
+        appliedParams: {
+          url: 'https://example.com/docs',
+          prompt: 'operator-adjusted prompt',
+        },
+      }),
+    ]);
   });
 
   it('rejects modify decisions without a JSON object payload', async () => {
@@ -174,6 +206,57 @@ describe('ConfirmationQueue', () => {
     });
     expect(execute).not.toHaveBeenCalled();
     expect(queue.getPending(entry.id)?.id).toBe(entry.id);
+    expect(queue.listHistory()).toEqual([
+      expect.objectContaining({
+        id: entry.id,
+        status: 'failed',
+        decision: 'modify',
+        executed: false,
+        message: 'Modified params are required and must be a JSON object.',
+      }),
+    ]);
+  });
+
+  it('records failed execution outcomes explicitly in history', async () => {
+    const execute = vi.fn().mockRejectedValue(new Error('simulated execution failure'));
+    const queue = new ConfirmationQueue({
+      now: () => 700,
+      idFactory: () => 'failed-exec-1',
+    });
+    const entry = queue.enqueue(
+      {
+        method: 'fs.write',
+        action: 'write',
+        scope: '/tmp/failure',
+        params: { path: '/tmp/failure', content: 'x' },
+        companionReason: 'Write result',
+      },
+      execute,
+    );
+
+    const result = await queue.resolve({
+      id: entry.id,
+      decision: 'approve',
+    });
+
+    expect(result).toEqual({
+      id: entry.id,
+      status: 'failed',
+      message: 'simulated execution failure',
+      executed: false,
+    });
+    expect(queue.getPending(entry.id)).toBeNull();
+    expect(queue.listHistory()).toEqual([
+      expect.objectContaining({
+        id: entry.id,
+        status: 'failed',
+        decision: 'approve',
+        executed: false,
+        message: 'simulated execution failure',
+        appliedParams: { path: '/tmp/failure', content: 'x' },
+        error: 'simulated execution failure',
+      }),
+    ]);
   });
 
   it('expires stale requests using configured timeout', async () => {
@@ -203,6 +286,14 @@ describe('ConfirmationQueue', () => {
       decision: 'approve',
     });
     expect(result.status).toBe('not_found');
+    expect(queue.listHistory()).toEqual([
+      expect.objectContaining({
+        id: entry.id,
+        status: 'expired',
+        executed: false,
+        message: 'Confirmation request expired before resolution.',
+      }),
+    ]);
   });
 
   it('falls back to 24h default expiry when configured value is invalid', () => {

@@ -27,6 +27,7 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
     sessionHmacKeyring: keyring,
     notifyAll: vi.fn(),
     listPendingConfirmations: () => [],
+    listConfirmationHistory: () => [],
     resolveConfirmation: vi.fn(async () => ({
       id: 'noop',
       status: 'not_found',

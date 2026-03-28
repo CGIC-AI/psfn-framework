@@ -5,6 +5,7 @@ import type { GitOperations } from '../../git/ops.js';
 import type { ImageRuntimeConfig } from '../../images/types.js';
 import type {
   ConfirmationQueueEntry,
+  ConfirmationQueueHistoryEntry,
   ConfirmationResolveParams,
   ConfirmationResolveResult,
   NotifyNtfyParams,
@@ -29,6 +30,7 @@ export interface GatewayMethodRuntime {
   approvalBoundary: ApprovalBoundaryService;
   notifyAll(method: string, params: unknown): void;
   listPendingConfirmations(): ConfirmationQueueEntry[];
+  listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
   resolveConfirmation(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
   sendNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
   getRuntimeHealth(): RuntimeHealthResult;

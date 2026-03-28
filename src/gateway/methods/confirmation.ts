@@ -1,6 +1,8 @@
 import type {
   ConfirmationListParams,
+  ConfirmationHistoryListParams,
   ConfirmationListResult,
+  ConfirmationHistoryListResult,
   ConfirmationResolveParams,
   ConfirmationResolveResult,
 } from '../protocol.js';
@@ -13,6 +15,14 @@ const confirmationDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     handler: async (_params: ConfirmationListParams, runtime): Promise<ConfirmationListResult> => {
       return {
         entries: runtime.listPendingConfirmations(),
+      };
+    },
+  },
+  {
+    name: 'confirmation.history',
+    handler: async (_params: ConfirmationHistoryListParams, runtime): Promise<ConfirmationHistoryListResult> => {
+      return {
+        entries: runtime.listConfirmationHistory(),
       };
     },
   },

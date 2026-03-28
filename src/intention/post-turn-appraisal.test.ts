@@ -8,15 +8,15 @@ describe('createSignalWisePostTurnAppraiser', () => {
         name: 'first',
         infer: () => [{
           kind: 'heartbeat.run_template',
-          dedupeKey: 'heartbeat.run_template:whisper',
-          payload: { templateId: 'whisper' },
+          dedupeKey: 'heartbeat.run_template:musing',
+          payload: { templateId: 'musing' },
         }],
       },
       {
         name: 'second',
         infer: () => [{
           kind: 'heartbeat.run_template',
-          dedupeKey: 'heartbeat.run_template:whisper',
+          dedupeKey: 'heartbeat.run_template:musing',
           payload: { templateId: 'shadowed' },
         }, {
           kind: 'tool_handoff.continue',
@@ -30,8 +30,8 @@ describe('createSignalWisePostTurnAppraiser', () => {
 
     expect(inferred).toEqual([{
       kind: 'heartbeat.run_template',
-      dedupeKey: 'heartbeat.run_template:whisper',
-      payload: { templateId: 'whisper' },
+      dedupeKey: 'heartbeat.run_template:musing',
+      payload: { templateId: 'musing' },
     }, {
       kind: 'tool_handoff.continue',
       dedupeKey: 'tool_handoff.continue:msg-1',
@@ -52,7 +52,7 @@ describe('createSignalWisePostTurnAppraiser', () => {
         name: 'healthy',
         infer: () => [{
           kind: 'heartbeat.run_template',
-          payload: { templateId: 'whisper' },
+          payload: { templateId: 'musing' },
         }],
       },
     ], { onPassError });
@@ -61,7 +61,7 @@ describe('createSignalWisePostTurnAppraiser', () => {
 
     expect(inferred).toEqual([{
       kind: 'heartbeat.run_template',
-      payload: { templateId: 'whisper' },
+      payload: { templateId: 'musing' },
     }]);
     expect(onPassError).toHaveBeenCalledWith(
       'failing',

@@ -24,8 +24,8 @@ describe('inferDeferredPostTurnActions', () => {
           details: {
             deferredAction: {
               kind: 'heartbeat.run_template',
-              payload: { templateId: 'whisper' },
-              dedupeKey: 'heartbeat.run_template:whisper',
+              payload: { templateId: 'musing' },
+              dedupeKey: 'heartbeat.run_template:musing',
               maxRetries: 2,
             },
           },
@@ -47,8 +47,8 @@ describe('inferDeferredPostTurnActions', () => {
 
     expect(actions).toEqual([{
       kind: 'heartbeat.run_template',
-      payload: { templateId: 'whisper' },
-      dedupeKey: 'heartbeat.run_template:whisper',
+      payload: { templateId: 'musing' },
+      dedupeKey: 'heartbeat.run_template:musing',
       maxRetries: 2,
     }]);
   });

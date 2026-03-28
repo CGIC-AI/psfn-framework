@@ -45,8 +45,8 @@ function makeAction(overrides: Partial<InferredPostTurnAction> = {}): InferredPo
   return {
     id: 'action-1',
     kind: 'heartbeat.run_template',
-    payload: { templateId: 'whisper' },
-    dedupeKey: 'heartbeat.run_template:whisper',
+    payload: { templateId: 'musing' },
+    dedupeKey: 'heartbeat.run_template:musing',
     channelId: 'test-channel',
     sourceMessageId: 'msg-1',
     inferredAt: Date.now(),
@@ -380,7 +380,7 @@ describe('wirePostTurnActionRuntime', () => {
         action: {
           id: 'invalid-action',
           kind: 'heartbeat.run_template',
-          payload: { templateId: 'whisper' },
+          payload: { templateId: 'musing' },
           dedupeKey: 'invalid:key',
           channelId: 'test-channel',
           sourceMessageId: 'msg-1',

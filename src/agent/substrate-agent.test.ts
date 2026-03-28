@@ -1077,8 +1077,8 @@ describe('SubstrateAgent.handleMessage', () => {
     agent.registerPostTurnActionInferer(() => ([
       {
         kind: 'heartbeat.run_template',
-        payload: { templateId: 'whisper' },
-        dedupeKey: 'heartbeat.run_template:whisper',
+        payload: { templateId: 'musing' },
+        dedupeKey: 'heartbeat.run_template:musing',
       },
     ]));
 
@@ -1100,7 +1100,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(inferredActions).toEqual([
       {
         kind: 'heartbeat.run_template',
-        dedupeKey: 'heartbeat.run_template:whisper',
+        dedupeKey: 'heartbeat.run_template:musing',
       },
     ]);
   });
@@ -1115,12 +1115,12 @@ describe('SubstrateAgent.handleMessage', () => {
     agent.registerPostTurnActionInferer(() => ([
       {
         kind: 'heartbeat.run_template',
-        payload: { templateId: 'whisper' },
+        payload: { templateId: 'musing' },
         dedupeKey: 'heartbeat.run_template:shared',
       },
       {
         kind: 'heartbeat.run_template',
-        payload: { templateId: 'whisper' },
+        payload: { templateId: 'musing' },
         dedupeKey: 'heartbeat.run_template:shared',
       },
     ]));

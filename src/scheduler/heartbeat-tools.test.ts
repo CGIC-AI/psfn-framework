@@ -50,7 +50,7 @@ describe('heartbeat_get_policy', () => {
     const result = await tool.execute('call-1', {}, new AbortController().signal);
     const text = (result.content[0] as { text: string }).text;
 
-    expect(text).toContain('whisper');
+    expect(text).toContain('musing');
     expect(text).toContain('daily-review');
     expect(text).toContain('emotional-check');
     expect(text).toContain('goal-update');
@@ -110,7 +110,7 @@ describe('heartbeat_update_policy', () => {
   it('disables a template', async () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     const result = await tool.execute('call-1', {
-      templateId: 'whisper',
+      templateId: 'musing',
       enabled: false,
     }, new AbortController().signal);
 
@@ -120,19 +120,19 @@ describe('heartbeat_update_policy', () => {
 
     // Verify persisted
     const policy = store.load();
-    const whisper = policy.templates.find(t => t.id === 'whisper');
-    expect(whisper!.enabled).toBe(false);
+    const musing = policy.templates.find(t => t.id === 'musing');
+    expect(musing!.enabled).toBe(false);
   });
 
   it('changes interval', async () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     await tool.execute('call-2', {
-      templateId: 'whisper',
+      templateId: 'musing',
       intervalMs: 7_200_000, // 2 hours
     }, new AbortController().signal);
 
     const policy = store.load();
-    expect(policy.templates.find(t => t.id === 'whisper')!.intervalMs).toBe(7_200_000);
+    expect(policy.templates.find(t => t.id === 'musing')!.intervalMs).toBe(7_200_000);
     expect(syncFn).toHaveBeenCalled();
   });
 
@@ -174,18 +174,18 @@ describe('heartbeat_update_policy', () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     const newPrompt = 'Tell me about the weather in your inner world today, in detail.';
     await tool.execute('call-3', {
-      templateId: 'whisper',
+      templateId: 'musing',
       prompt: newPrompt,
     }, new AbortController().signal);
 
     const policy = store.load();
-    expect(policy.templates.find(t => t.id === 'whisper')!.prompt).toBe(newPrompt);
+    expect(policy.templates.find(t => t.id === 'musing')!.prompt).toBe(newPrompt);
   });
 
   it('rejects invalid intervalMs', async () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     const result = await tool.execute('call-4', {
-      templateId: 'whisper',
+      templateId: 'musing',
       intervalMs: 1000, // too short
     }, new AbortController().signal);
 
@@ -198,7 +198,7 @@ describe('heartbeat_update_policy', () => {
   it('rejects short prompt', async () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     const result = await tool.execute('call-5', {
-      templateId: 'whisper',
+      templateId: 'musing',
       prompt: 'short',
     }, new AbortController().signal);
 
@@ -246,7 +246,7 @@ describe('heartbeat_update_policy', () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     const result = await tool.execute('call-8', {
       action: 'add' as const,
-      id: 'whisper', // already exists
+      id: 'musing', // already exists
       name: 'Dupe',
       prompt: 'A duplicate template prompt text',
       intervalMs: 600_000,
@@ -285,14 +285,14 @@ describe('heartbeat_update_policy', () => {
     const policyBefore = store.load();
     const vBefore = policyBefore.version;
 
-    await tool.execute('call-11', { templateId: 'whisper', enabled: false }, new AbortController().signal);
+    await tool.execute('call-11', { templateId: 'musing', enabled: false }, new AbortController().signal);
     const policyAfter = store.load();
     expect(policyAfter.version).toBe(vBefore + 1);
   });
 
   it('calls syncFn after save', async () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
-    await tool.execute('call-12', { templateId: 'whisper', enabled: true }, new AbortController().signal);
+    await tool.execute('call-12', { templateId: 'musing', enabled: true }, new AbortController().signal);
     expect(syncFn).toHaveBeenCalledOnce();
   });
 });
@@ -313,16 +313,16 @@ describe('heartbeat_run_template', () => {
 
   it('runs a known template and returns output', async () => {
     const runTemplate = vi.fn(async () => ({
-      templateId: 'whisper',
+      templateId: 'musing',
       templateName: 'Musing',
       reflection: 'A quiet reflection',
     }));
 
     const tool = createHeartbeatRunTemplateTool(store, runTemplate);
-    const result = await tool.execute('call-run-1', { templateId: 'whisper' }, new AbortController().signal);
+    const result = await tool.execute('call-run-1', { templateId: 'musing' }, new AbortController().signal);
     const text = (result.content[0] as { text: string }).text;
 
-    expect(runTemplate).toHaveBeenCalledWith('whisper', { deferIfBusy: true });
+    expect(runTemplate).toHaveBeenCalledWith('musing', { deferIfBusy: true });
     expect(text).toContain('Triggered reflection template');
     expect(text).toContain('Musing');
     expect(text).toContain('A quiet reflection');
@@ -347,12 +347,12 @@ describe('heartbeat_run_template', () => {
     const tool = createHeartbeatRunTemplateTool(store, runTemplate);
     const result = await tool.execute(
       'call-run-3',
-      { templateId: 'whisper', sendToDiscord: true },
+      { templateId: 'musing', sendToDiscord: true },
       new AbortController().signal,
     );
     const text = (result.content[0] as { text: string }).text;
 
-    expect(runTemplate).toHaveBeenCalledWith('whisper', {
+    expect(runTemplate).toHaveBeenCalledWith('musing', {
       sendToDiscordOverride: true,
       deferIfBusy: true,
     });
@@ -362,7 +362,7 @@ describe('heartbeat_run_template', () => {
 
   it('reports queued status when template execution is deferred', async () => {
     const runTemplate = vi.fn(async () => ({
-      templateId: 'whisper',
+      templateId: 'musing',
       templateName: 'Musing',
       reflection: '',
       queued: true,
@@ -370,12 +370,12 @@ describe('heartbeat_run_template', () => {
     const tool = createHeartbeatRunTemplateTool(store, runTemplate);
     const result = await tool.execute(
       'call-run-4',
-      { templateId: 'whisper', deferIfBusy: true },
+      { templateId: 'musing', deferIfBusy: true },
       new AbortController().signal,
     );
     const text = (result.content[0] as { text: string }).text;
 
-    expect(runTemplate).toHaveBeenCalledWith('whisper', { deferIfBusy: true });
+    expect(runTemplate).toHaveBeenCalledWith('musing', { deferIfBusy: true });
     expect(text).toContain('Queued reflection template');
     expect(text).toContain('Musing');
     expect(result.details.isError).toBeFalsy();

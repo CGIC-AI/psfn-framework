@@ -304,11 +304,11 @@ describe('wireHeartbeatRuntime', () => {
   it('registers reflection tasks using template cadence', () => {
     const store = new HeartbeatPolicyStore(join(tempDir, 'heartbeat-policy.json'));
     const policy = store.load();
-    const whisper = policy.templates.find(template => template.id === 'whisper');
-    if (!whisper) {
-      throw new Error('whisper template missing');
+    const musing = policy.templates.find(template => template.id === 'musing');
+    if (!musing) {
+      throw new Error('musing template missing');
     }
-    whisper.cadence = { kind: 'hourly', minute: 0, timezone: 'utc' };
+    musing.cadence = { kind: 'hourly', minute: 0, timezone: 'utc' };
     store.save(policy);
 
     const eventBus = new EventBus();
@@ -334,7 +334,7 @@ describe('wireHeartbeatRuntime', () => {
       tempDir,
     );
 
-    const task = scheduler.getTask('reflection:whisper');
+    const task = scheduler.getTask('reflection:musing');
     expect(task).toBeDefined();
     expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
   });
@@ -704,7 +704,7 @@ describe('wireHeartbeatRuntime', () => {
 
       const runResult = await runTemplateTool.execute(
         'manual-1',
-        { templateId: 'whisper' },
+        { templateId: 'musing' },
         new AbortController().signal,
       );
       const runText = runResult.content.map((part: { text: string }) => part.text).join('');
@@ -718,7 +718,7 @@ describe('wireHeartbeatRuntime', () => {
 
       expect(agentLoop.waitForIdle).toHaveBeenCalledOnce();
       expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
-      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:musing');
     } finally {
       nowSpy.mockRestore();
     }
@@ -786,8 +786,8 @@ describe('wireHeartbeatRuntime', () => {
           details: {
             deferredAction: {
               kind: 'heartbeat.run_template',
-              payload: { templateId: 'whisper' },
-              dedupeKey: 'heartbeat.run_template:whisper',
+              payload: { templateId: 'musing' },
+              dedupeKey: 'heartbeat.run_template:musing',
               maxRetries: 2,
             },
           },
@@ -796,8 +796,8 @@ describe('wireHeartbeatRuntime', () => {
     });
     expect(inferredActions).toEqual([{
       kind: 'heartbeat.run_template',
-      payload: { templateId: 'whisper' },
-      dedupeKey: 'heartbeat.run_template:whisper',
+      payload: { templateId: 'musing' },
+      dedupeKey: 'heartbeat.run_template:musing',
       maxRetries: 2,
     }]);
 
@@ -807,7 +807,7 @@ describe('wireHeartbeatRuntime', () => {
 
     const runResult = await runTemplateTool.execute(
       'manual-2',
-      { templateId: 'whisper' },
+      { templateId: 'musing' },
       new AbortController().signal,
     );
     const runText = runResult.content.map((part: { text: string }) => part.text).join('');
@@ -832,15 +832,15 @@ describe('wireHeartbeatRuntime', () => {
     await deferredHandler({
       id: 'deferred-1',
       kind: 'heartbeat.run_template',
-      payload: { templateId: 'whisper' },
-      dedupeKey: 'heartbeat.run_template:whisper',
+      payload: { templateId: 'musing' },
+      dedupeKey: 'heartbeat.run_template:musing',
       channelId: 'test-channel',
       sourceMessageId: 'msg-1',
       inferredAt: Date.now(),
     });
 
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
-    expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+    expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:musing');
   });
 
   it('gates composed post-turn appraisal by compositional policy', async () => {
@@ -1442,13 +1442,13 @@ describe('wireHeartbeatRuntime', () => {
         tempDir,
       );
 
-      const whisperTask = scheduler.getTask('reflection:whisper');
-      expect(whisperTask).toBeDefined();
+      const musingTask = scheduler.getTask('reflection:musing');
+      expect(musingTask).toBeDefined();
 
-      nowSpy.mockReturnValue(1_700_000_000_000 + (whisperTask?.intervalMs ?? 0) + 1);
+      nowSpy.mockReturnValue(1_700_000_000_000 + (musingTask?.intervalMs ?? 0) + 1);
       await scheduler.tick();
 
-      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:whisper'));
+      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:musing'));
       expect(deferredTask).toBeDefined();
 
       nowSpy.mockReturnValue((deferredTask?.runAt ?? 0) + 1);
@@ -1456,7 +1456,7 @@ describe('wireHeartbeatRuntime', () => {
 
       expect(agentLoop.waitForIdle).toHaveBeenCalledOnce();
       expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
-      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:whisper');
+      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:musing');
     } finally {
       nowSpy.mockRestore();
     }

@@ -1,9 +1,9 @@
 import type { AgentResponse, SubstrateMessage } from '../../../../src/shared/contracts/runtime.js';
+import { ActiveEmanationAuthority } from '../../../../src/core/agent/active-emanation-state.js';
 import {
   buildSatellitePresenceMetadata,
   normalizePresenceMetadata,
   resolvePresenceSubjectId,
-  resolvePresenceMetadataResult,
 } from '../../../../src/core/agent/presence-metadata.js';
 import {
   isRecord,
@@ -37,6 +37,7 @@ export interface WyomingHandleServiceOptions {
   timeoutMs?: number;
   now?: () => number;
   companionId: string;
+  activeEmanationAuthority?: ActiveEmanationAuthority;
 }
 
 interface HandleSessionState {
@@ -90,6 +91,66 @@ function readString(data: WyomingJsonObject | undefined, keys: string[]): string
   }
 
   return undefined;
+}
+
+function readBoolean(data: WyomingJsonObject | undefined, keys: string[]): boolean | undefined {
+  if (!data) return undefined;
+
+  for (const key of keys) {
+    const value = data[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function hasPresenceMarkers(data: WyomingJsonObject | undefined): boolean {
+  if (!data) return false;
+  return typeof data.kind === 'string'
+    || typeof data.presenceKind === 'string'
+    || typeof data.embodimentId === 'string'
+    || typeof data.embodiment_id === 'string'
+    || typeof data.emanationId === 'string'
+    || typeof data.emanation_id === 'string'
+    || typeof data.satelliteId === 'string'
+    || typeof data.satellite_id === 'string';
+}
+
+function withCompanionPresenceDefaults(
+  data: WyomingJsonObject | undefined,
+  companionId: string,
+): WyomingJsonObject | undefined {
+  if (!data) return data;
+
+  let nextData: WyomingJsonObject = data;
+  const nestedPresence = data.presence;
+  if (isRecord(nestedPresence)) {
+    const nestedPresenceRecord = nestedPresence as WyomingJsonObject;
+    const nestedCompanionId = readString(nestedPresenceRecord, ['companionId', 'companion_id']);
+    if (!nestedCompanionId) {
+      nextData = {
+        ...nextData,
+        presence: {
+          ...nestedPresenceRecord,
+          companion_id: companionId,
+        },
+      };
+    }
+  }
+
+  if (
+    hasPresenceMarkers(nextData)
+    && !readString(nextData, ['companionId', 'companion_id'])
+  ) {
+    nextData = {
+      ...nextData,
+      companion_id: companionId,
+    };
+  }
+
+  return nextData;
 }
 
 function resolveContextId(data: WyomingJsonObject | undefined): string | undefined {
@@ -206,6 +267,7 @@ export function createWyomingHandleServiceAdapter(
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
   const sessionStates = new Map<string, HandleSessionState>();
   const companionId = options.companionId.trim();
+  const activeEmanationAuthority = options.activeEmanationAuthority ?? new ActiveEmanationAuthority();
   if (!companionId) {
     throw new Error('Wyoming handle service requires a companionId');
   }
@@ -243,7 +305,18 @@ export function createWyomingHandleServiceAdapter(
       const connectionId = request.transportSession.connectionId;
       const key = toSessionKey(connectionId, sessionId);
       const requestedContextId = resolveContextId(request.frame.data);
-      const routingPresenceResolution = resolvePresenceMetadataResult(request.frame.data);
+      const presenceInput = withCompanionPresenceDefaults(request.frame.data, companionId);
+      const routingPresenceResolution = activeEmanationAuthority.resolve(presenceInput, {
+        sourceKey: key,
+        allowPrimaryEmbodimentHandoff: readBoolean(
+          presenceInput,
+          ['presence_handoff', 'presenceHandoff'],
+        ) === true,
+        handoffFromEmbodimentId: readString(
+          presenceInput,
+          ['handoff_from_embodiment_id', 'handoffFromEmbodimentId'],
+        ),
+      });
       if (routingPresenceResolution.error) {
         return createInvalidPresenceErrorFrame(
           request.frame,
@@ -262,19 +335,20 @@ export function createWyomingHandleServiceAdapter(
       state.sequence += 1;
       sessionStates.set(key, state);
 
-      const channelId = resolveChannelId(connectionId, request.frame.data);
-      const satelliteId = readString(request.frame.data, ['satellite_id', 'satelliteId'])
+      const channelId = resolveChannelId(connectionId, presenceInput);
+      const satelliteId = readString(presenceInput, ['satellite_id', 'satelliteId'])
+        ?? routingPresence?.satelliteId
         ?? resolvePresenceSubjectId(routingPresence);
       const wyomingPresence = routingPresence
         ?? buildSatellitePresenceMetadata({
-          siteId: readString(request.frame.data, ['site_id', 'siteId']),
+          siteId: readString(presenceInput, ['site_id', 'siteId']),
           satelliteId: satelliteId ?? 'unknown',
           companionId,
         });
-      const userId = readString(request.frame.data, ['ha_user_id', 'haUserId', 'user_id', 'userId'])
+      const userId = readString(presenceInput, ['ha_user_id', 'haUserId', 'user_id', 'userId'])
         ?? satelliteId
         ?? 'unknown';
-      const authorName = readString(request.frame.data, ['user_name', 'userName'])
+      const authorName = readString(presenceInput, ['user_name', 'userName'])
         ?? 'Wyoming Voice User';
       const turnId = `wyoming-turn-${connectionId}-${sessionId}-${state.sequence}`;
       const timestampMs = now();
@@ -321,8 +395,8 @@ export function createWyomingHandleServiceAdapter(
           () => options.handleMessage(message),
           timeoutMs,
         );
-        const language = readString(request.frame.data, ['language', 'lang']);
-        const modelHint = readString(request.frame.data, ['name', 'model']);
+        const language = readString(presenceInput, ['language', 'lang']);
+        const modelHint = readString(presenceInput, ['name', 'model']);
         const resolvedModel = response.metadata.model || modelHint;
 
         if (emit) {
@@ -389,7 +463,9 @@ export function createWyomingHandleServiceAdapter(
       }
     },
     onSessionClosed(requestContext: WyomingServiceSessionClosedRequest): void {
-      sessionStates.delete(toSessionKey(requestContext.connectionId, requestContext.sessionId));
+      const sourceKey = toSessionKey(requestContext.connectionId, requestContext.sessionId);
+      sessionStates.delete(sourceKey);
+      activeEmanationAuthority.clearSource(sourceKey);
     },
   };
 }

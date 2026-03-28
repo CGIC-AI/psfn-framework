@@ -11,6 +11,17 @@ export interface ActiveEmanationStateResolution {
   error?: string;
 }
 
+export interface ActiveEmanationAuthoritySnapshot {
+  sourceKey: string;
+  presence: CompanionPresenceMetadata;
+}
+
+export interface ActiveEmanationAuthorityResolveOptions {
+  sourceKey?: string;
+  allowPrimaryEmbodimentHandoff?: boolean;
+  handoffFromEmbodimentId?: string;
+}
+
 function readString(record: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -178,6 +189,20 @@ export function resolveCanonicalEmbodimentContext(
     return presence;
   }
 
+  if (presence.kind === 'satellite' && presence.embodimentId) {
+    return {
+      kind: 'embodiment',
+      embodimentId: presence.embodimentId,
+      companionId: presence.companionId,
+      ...(presence.siteId ? { siteId: presence.siteId } : {}),
+      ...(presence.satelliteId ? { satelliteId: presence.satelliteId } : {}),
+      ...(presence.channelId ? { channelId: presence.channelId } : {}),
+      ...(presence.label ? { label: presence.label } : {}),
+      isPrimary: true,
+      ...(presence.emanationId ? { emanationId: presence.emanationId } : {}),
+    };
+  }
+
   if (presence.kind !== 'emanation' || !presence.embodimentId) {
     return undefined;
   }
@@ -192,4 +217,136 @@ export function resolveCanonicalEmbodimentContext(
     ...(presence.label ? { label: presence.label } : {}),
     isPrimary: true,
   };
+}
+
+interface ActiveEmbodiedPresenceState {
+  sourceKey: string;
+  presence: CompanionPresenceMetadata;
+  embodimentContext: EmbodimentPresenceMetadata;
+}
+
+function normalizeSourceKey(sourceKey: string | undefined): string | undefined {
+  const normalized = sourceKey?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function buildPrimaryEmbodimentHandoffError(
+  currentEmbodimentId: string,
+  nextEmbodimentId: string,
+): ActiveEmanationStateResolution {
+  return {
+    error: `primary embodiment handoff required: ${currentEmbodimentId} -> ${nextEmbodimentId}`,
+  };
+}
+
+function buildPrimaryEmbodimentHandoffMismatchError(
+  expectedEmbodimentId: string,
+  providedEmbodimentId: string,
+): ActiveEmanationStateResolution {
+  return {
+    error: `primary embodiment handoff source mismatch: expected ${expectedEmbodimentId}, received ${providedEmbodimentId}`,
+  };
+}
+
+export class ActiveEmanationAuthority {
+  private bySource = new Map<string, CompanionPresenceMetadata>();
+  private primaryEmbodiedState: ActiveEmbodiedPresenceState | null = null;
+
+  resolve(
+    value: unknown,
+    options: ActiveEmanationAuthorityResolveOptions = {},
+  ): ActiveEmanationStateResolution {
+    const resolution = resolveActiveEmanationState(value);
+    if (resolution.error) {
+      return resolution;
+    }
+
+    const sourceKey = normalizeSourceKey(options.sourceKey);
+    const sourcePresence = sourceKey ? this.bySource.get(sourceKey) : undefined;
+    const incomingPresence = resolution.presence;
+    if (!incomingPresence) {
+      return sourcePresence ? { presence: sourcePresence } : {};
+    }
+
+    const embodimentContext = resolveCanonicalEmbodimentContext(incomingPresence);
+    if (!sourceKey) {
+      return { presence: incomingPresence };
+    }
+
+    if (!embodimentContext) {
+      if (sourcePresence && resolveCanonicalEmbodimentContext(sourcePresence)) {
+        return { presence: sourcePresence };
+      }
+      return { presence: incomingPresence };
+    }
+
+    const currentPrimary = this.primaryEmbodiedState;
+    const nextEmbodimentId = embodimentContext.embodimentId;
+    if (
+      currentPrimary
+      && currentPrimary.embodimentContext.embodimentId !== nextEmbodimentId
+    ) {
+      if (!options.allowPrimaryEmbodimentHandoff) {
+        return buildPrimaryEmbodimentHandoffError(
+          currentPrimary.embodimentContext.embodimentId,
+          nextEmbodimentId,
+        );
+      }
+
+      if (
+        options.handoffFromEmbodimentId
+        && options.handoffFromEmbodimentId !== currentPrimary.embodimentContext.embodimentId
+      ) {
+        return buildPrimaryEmbodimentHandoffMismatchError(
+          currentPrimary.embodimentContext.embodimentId,
+          options.handoffFromEmbodimentId,
+        );
+      }
+
+      this.bySource.delete(currentPrimary.sourceKey);
+    }
+
+    this.bySource.set(sourceKey, incomingPresence);
+    this.primaryEmbodiedState = {
+      sourceKey,
+      presence: incomingPresence,
+      embodimentContext,
+    };
+    return { presence: incomingPresence };
+  }
+
+  clearSource(sourceKey: string): void {
+    const normalized = normalizeSourceKey(sourceKey);
+    if (!normalized) return;
+    this.bySource.delete(normalized);
+    if (this.primaryEmbodiedState?.sourceKey === normalized) {
+      this.primaryEmbodiedState = null;
+    }
+  }
+
+  captureSnapshot(): ActiveEmanationAuthoritySnapshot | undefined {
+    if (!this.primaryEmbodiedState) {
+      return undefined;
+    }
+
+    return {
+      sourceKey: this.primaryEmbodiedState.sourceKey,
+      presence: this.primaryEmbodiedState.presence,
+    };
+  }
+
+  restoreSnapshot(snapshot: ActiveEmanationAuthoritySnapshot | undefined): ActiveEmanationStateResolution {
+    if (!snapshot) {
+      this.bySource.clear();
+      this.primaryEmbodiedState = null;
+      return {};
+    }
+
+    this.bySource.clear();
+    this.primaryEmbodiedState = null;
+    return this.resolve(snapshot.presence, {
+      sourceKey: snapshot.sourceKey,
+      allowPrimaryEmbodimentHandoff: true,
+    });
+  }
 }

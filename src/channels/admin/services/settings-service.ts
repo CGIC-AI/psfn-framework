@@ -12,13 +12,7 @@ import {
 import { createSystemConfigRepository } from '../../../config/system-config-repository.js';
 import {
   applyProvidersRuntimeConfig,
-  loadProvidersConfig,
-  saveProvidersConfig,
 } from '../../../config/providers-config.js';
-import {
-  loadBackupConfig,
-  saveBackupConfig,
-} from '../../../config/backup-config.js';
 import {
   buildSettingsContractData,
   IMPORT_PROCESSING_ROUTE_MODE_VALUES,
@@ -166,15 +160,13 @@ export function applyAdminSettingsMutation(options: {
 
   if (Object.hasOwn(domainSplit.runtime, 'openRouterModelsApiUrl')) {
     try {
-      const currentProviders = loadProvidersConfig(config.dataDir, {
-        seedDir: process.env.CONFIG_DIR,
-      });
+      const currentProviders = repository.loadProviders();
       const nextRegistry = structuredClone(currentProviders.registry);
       const openrouterProvider = nextRegistry.providers.find((entry) => entry.type === 'openrouter');
       const nextUrl = mergedRuntimeSettings.openRouterModelsApiUrl?.trim();
       if (openrouterProvider && nextUrl) {
         openrouterProvider.modelsApiUrl = nextUrl;
-        const savedProviders = saveProvidersConfig(config.dataDir, nextRegistry);
+        const savedProviders = repository.saveProviders(nextRegistry);
         applyProvidersRuntimeConfig(config, savedProviders);
       }
     } catch (error) {
@@ -316,12 +308,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
     const repository = createRepository(this.deps.config);
     return {
       models: repository.loadModels(),
-      providers: loadProvidersConfig(this.deps.config.dataDir),
+      providers: repository.loadProviders(),
       skills: repository.loadSkills(),
       scheduler: repository.loadScheduler(),
       trustPolicy: repository.loadTrustPolicy(),
       capabilities: repository.loadCapabilityTier(),
-      backup: loadBackupConfig(this.deps.config.dataDir),
+      backup: repository.loadBackup(),
     };
   }
 
@@ -770,10 +762,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
   }
 
-  private get companionDataDir(): string {
-    return this.deps.config.companionDataDir ?? this.deps.config.dataDir;
-  }
-
   /**
    * Returns the raw pretty-printed JSON for a named settings subsystem.
    * Returns null when the key is unknown.
@@ -787,7 +775,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
         case 'models':
           return JSON.stringify(repository.loadModels(), null, 2);
         case 'providers':
-          return JSON.stringify(loadProvidersConfig(this.companionDataDir).registry, null, 2);
+          return JSON.stringify(repository.loadProviders().registry, null, 2);
         case 'skills':
           return JSON.stringify(repository.loadSkills(), null, 2);
         case 'scheduler':
@@ -799,7 +787,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
         case 'channels':
           return JSON.stringify(repository.loadChannels(), null, 2);
         case 'backup':
-          return JSON.stringify(loadBackupConfig(this.companionDataDir), null, 2);
+          return JSON.stringify(repository.loadBackup(), null, 2);
         default:
           return null;
       }
@@ -839,11 +827,11 @@ export class AdminSettingsDataService implements AdminSettingsService {
             : { ok: false, message: result.message };
         }
         case 'backup': {
-          saveBackupConfig(this.companionDataDir, parsed);
+          repository.saveBackup(parsed);
           return { ok: true, message: 'backup.json saved' };
         }
         case 'providers': {
-          const saved = saveProvidersConfig(this.companionDataDir, parsed);
+          const saved = repository.saveProviders(parsed);
           applyProvidersRuntimeConfig(this.deps.config, saved);
           refreshModels(this.deps.config);
           return { ok: true, message: 'providers.json saved' };

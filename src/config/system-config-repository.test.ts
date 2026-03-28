@@ -46,6 +46,11 @@ describe('createSystemConfigRepository', () => {
     expect(repo.loadModels()).toEqual(models);
     expect(readJson(join(dataDir, 'models.json'))).toEqual(models.modelRegistry);
 
+    const providers = repo.loadProviders();
+    repo.saveProviders(providers.registry);
+    expect(repo.loadProviders()).toEqual(providers);
+    expect(readJson(join(dataDir, 'providers.json'))).toEqual(providers.registry);
+
     const scheduler = repo.loadScheduler();
     repo.saveScheduler(scheduler);
     expect(repo.loadScheduler()).toEqual(scheduler);
@@ -55,6 +60,11 @@ describe('createSystemConfigRepository', () => {
     repo.saveCapabilityTier(capabilities);
     expect(repo.loadCapabilityTier()).toEqual(capabilities);
     expect(readJson(join(dataDir, 'capability-tier.json'))).toEqual(capabilities);
+
+    const backup = repo.loadBackup();
+    repo.saveBackup(backup);
+    expect(repo.loadBackup()).toEqual(backup);
+    expect(readJson(join(dataDir, 'backup.json'))).toEqual(backup);
 
     const skills = repo.loadSkills();
     repo.saveSkills(skills);

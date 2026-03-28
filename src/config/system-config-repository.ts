@@ -6,11 +6,21 @@ import {
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
 } from './capability-tier-config.js';
+import type { BackupJsonConfig } from './backup-config.js';
+import {
+  loadBackupConfig,
+  saveBackupConfig,
+} from './backup-config.js';
 import type { ModelsRuntimeConfig } from './models-config.js';
 import {
   loadModelsConfig,
   saveModelsConfig,
 } from './models-config.js';
+import type { ProvidersRuntimeConfig } from './providers-config.js';
+import {
+  loadProvidersConfig,
+  saveProvidersConfig,
+} from './providers-config.js';
 import type { SchedulerRuntimeConfig } from './scheduler-config.js';
 import {
   loadSchedulerConfig,
@@ -40,11 +50,15 @@ export interface SystemConfigRepository {
   saveRuntimeSettings(settings: EditableSettings): void;
   loadModels(): ModelsRuntimeConfig;
   saveModels(nextConfig: unknown): ModelsRuntimeConfig;
+  loadProviders(): ProvidersRuntimeConfig;
+  saveProviders(nextConfig: unknown): ProvidersRuntimeConfig;
   loadScheduler(): SchedulerRuntimeConfig;
   saveScheduler(nextConfig: unknown): SchedulerRuntimeConfig;
   loadCapabilityTier(): CapabilityTierConfig;
   saveCapabilityTier(nextConfig: unknown): CapabilityTierConfig;
   loadChannels(env?: ProcessEnv, overrides?: RuntimeChannelsConfigOverrides): RuntimeChannelsConfig;
+  loadBackup(): BackupJsonConfig;
+  saveBackup(nextConfig: unknown): BackupJsonConfig;
   loadSkills(): SkillsRuntimeConfig;
   saveSkills(nextConfig: unknown): SkillsRuntimeConfig;
   loadTrustPolicy(): TrustPolicyConfig;
@@ -65,6 +79,8 @@ export function createSystemConfigRepository(
     saveRuntimeSettings: (settings) => saveSettings(options.dataDir, settings),
     loadModels: () => loadModelsConfig(options.dataDir, modelLoadOptions),
     saveModels: (nextConfig) => saveModelsConfig(options.dataDir, nextConfig, modelLoadOptions),
+    loadProviders: () => loadProvidersConfig(options.dataDir, loadOptions),
+    saveProviders: (nextConfig) => saveProvidersConfig(options.dataDir, nextConfig),
     loadScheduler: () => loadSchedulerConfig(options.dataDir, loadOptions),
     saveScheduler: (nextConfig) => saveSchedulerConfig(options.dataDir, nextConfig),
     loadCapabilityTier: () => loadCapabilityTierConfig(options.dataDir, loadOptions),
@@ -74,6 +90,8 @@ export function createSystemConfigRepository(
       env,
       overrides,
     ),
+    loadBackup: () => loadBackupConfig(options.dataDir, loadOptions),
+    saveBackup: (nextConfig) => saveBackupConfig(options.dataDir, nextConfig),
     loadSkills: () => loadSkillsConfig(options.dataDir, loadOptions),
     saveSkills: (nextConfig) => saveSkillsConfig(options.dataDir, nextConfig),
     loadTrustPolicy: () => loadTrustPolicyConfig(options.dataDir, loadOptions),

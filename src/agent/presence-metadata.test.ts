@@ -4,6 +4,7 @@ import {
   buildEmbodimentPresenceMetadata,
   buildSatellitePresenceMetadata,
   normalizePresenceMetadata,
+  resolvePresenceMetadataResult,
   resolvePresenceSubjectId,
 } from './presence-metadata.js';
 
@@ -62,7 +63,20 @@ describe('presence metadata contract', () => {
       emanationId: 'voice-node',
       embodimentId: 'display',
       satelliteId: 'kitchen',
+      isActive: true,
     });
     expect(resolvePresenceSubjectId(normalized)).toBe('voice-node');
+  });
+
+  it('rejects conflicting active presence flags', () => {
+    expect(resolvePresenceMetadataResult({
+      presence: {
+        kind: 'embodiment',
+        embodimentId: 'display',
+        isActive: true,
+      },
+    })).toEqual({
+      error: 'conflicting active emanation metadata',
+    });
   });
 });

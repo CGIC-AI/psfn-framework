@@ -126,6 +126,82 @@ describe('Wyoming handle service adapter', () => {
     }));
   });
 
+  it('preserves canonical active embodiment presence in routing metadata', async () => {
+    const handleMessage = vi.fn(async () => ({
+      content: 'hello',
+      channelId: 'api:wyoming:home:display',
+      metadata: {
+        model: 'model-x',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+      },
+    }));
+
+    const adapter = createWyomingHandleServiceAdapter({ handleMessage });
+    await adapter.handle({
+      transportSession: createTransportSession('conn-handle-4'),
+      sessionId: 'session-d',
+      frame: {
+        type: 'handle',
+        data: {
+          session_id: 'session-d',
+          text: 'hey',
+          presence: {
+            kind: 'embodiment',
+            embodiment_id: 'display',
+            satellite_id: 'kitchen',
+          },
+        },
+      },
+    });
+
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining<Partial<SubstrateMessage>>({
+      routing: {
+        source: 'wyoming',
+        wyoming: expect.objectContaining({
+          presence: {
+            kind: 'embodiment',
+            embodimentId: 'display',
+            satelliteId: 'kitchen',
+            isPrimary: true,
+          },
+        }),
+      },
+    }));
+  });
+
+  it('rejects conflicting active emanation metadata', async () => {
+    const adapter = createWyomingHandleServiceAdapter({
+      handleMessage: vi.fn(),
+    });
+
+    const response = await adapter.handle({
+      transportSession: createTransportSession('conn-handle-5'),
+      sessionId: 'session-e',
+      frame: {
+        type: 'handle',
+        data: {
+          session_id: 'session-e',
+          text: 'hello',
+          presence: {
+            kind: 'emanation',
+            emanation_id: 'voice-node',
+            isPrimary: true,
+          },
+        },
+      },
+    }) as WyomingFrame;
+
+    expect(response).toEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        code: 'invalid_request',
+        message: expect.stringContaining('conflicting active emanation metadata'),
+      }),
+    }));
+  });
+
   it('returns invalid_request when text payload is missing', async () => {
     const adapter = createWyomingHandleServiceAdapter({
       handleMessage: vi.fn(),

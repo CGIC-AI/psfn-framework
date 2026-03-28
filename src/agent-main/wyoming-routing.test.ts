@@ -37,15 +37,17 @@ describe('resolveWyomingRoutingMetadata', () => {
     });
 
     expect(resolveWyomingRoutingMetadata(message)).toEqual({
-      siteId: 'ha-main',
-      satelliteId: 'kitchen',
-      presence: {
-        kind: 'satellite',
+      routing: {
         siteId: 'ha-main',
         satelliteId: 'kitchen',
-      },
-      shardDelegation: {
-        eligible: true,
+        presence: {
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'kitchen',
+        },
+        shardDelegation: {
+          eligible: true,
+        },
       },
     });
   });
@@ -57,12 +59,14 @@ describe('resolveWyomingRoutingMetadata', () => {
     });
 
     expect(resolveWyomingRoutingMetadata(message)).toEqual({
-      siteId: 'ha-main',
-      satelliteId: 'voice-pe:office',
-      presence: {
-        kind: 'satellite',
+      routing: {
         siteId: 'ha-main',
         satelliteId: 'voice-pe:office',
+        presence: {
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'voice-pe:office',
+        },
       },
     });
   });
@@ -83,6 +87,26 @@ describe('resolveWyomingRoutingMetadata', () => {
     });
 
     expect(resolveWyomingRoutingMetadata(message)).toBeUndefined();
+  });
+
+  it('rejects conflicting active presence metadata', () => {
+    const message = makeMessage({
+      routing: {
+        wyoming: {
+          siteId: 'ha-main',
+          satelliteId: 'kitchen',
+          presence: {
+            kind: 'emanation',
+            emanationId: 'voice-node',
+            isPrimary: true,
+          },
+        },
+      },
+    });
+
+    expect(resolveWyomingRoutingMetadata(message)).toEqual({
+      error: 'conflicting active emanation metadata',
+    });
   });
 });
 
@@ -160,6 +184,30 @@ describe('evaluateWyomingDelegation', () => {
           reason: 'too_busy',
         },
       },
+    });
+  });
+
+  it('rejects conflicting active presence at the routing boundary', () => {
+    const message = makeMessage({
+      routing: {
+        wyoming: {
+          siteId: 'ha-main',
+          satelliteId: 'office',
+          presence: {
+            kind: 'embodiment',
+            embodimentId: 'display',
+            isActive: true,
+          },
+        },
+      },
+    });
+
+    expect(evaluateWyomingDelegation(message, {
+      wyomingShardRouting: { enabled: true },
+    } as any)).toEqual({
+      isWyoming: true,
+      delegate: false,
+      reason: 'conflicting active emanation metadata',
     });
   });
 

@@ -3,6 +3,7 @@ import {
   buildSatellitePresenceMetadata,
   normalizePresenceMetadata,
   resolvePresenceSubjectId,
+  resolvePresenceMetadataResult,
 } from '../../../agent/presence-metadata.js';
 import {
   isRecord,
@@ -189,6 +190,14 @@ function createServiceErrorFrame(
   };
 }
 
+function createInvalidPresenceErrorFrame(
+  frame: WyomingFrame,
+  message: string,
+  sessionId?: string,
+): WyomingFrame {
+  return createServiceErrorFrame('invalid_request', frame, message, sessionId);
+}
+
 export function createWyomingHandleServiceAdapter(
   options: WyomingHandleServiceOptions,
 ): WyomingServiceAdapter {
@@ -229,7 +238,15 @@ export function createWyomingHandleServiceAdapter(
       const connectionId = request.transportSession.connectionId;
       const key = toSessionKey(connectionId, sessionId);
       const requestedContextId = resolveContextId(request.frame.data);
-      const routingPresence = normalizePresenceMetadata(request.frame.data);
+      const routingPresenceResolution = resolvePresenceMetadataResult(request.frame.data);
+      if (routingPresenceResolution.error) {
+        return createInvalidPresenceErrorFrame(
+          request.frame,
+          routingPresenceResolution.error,
+          sessionId,
+        );
+      }
+      const routingPresence = routingPresenceResolution.presence;
       const state = sessionStates.get(key) ?? {
         contextId: requestedContextId ?? `wyoming-ctx-${connectionId}-${sessionId}`,
         sequence: 0,

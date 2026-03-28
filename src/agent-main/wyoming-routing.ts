@@ -5,7 +5,8 @@ import type {
 } from '../types.js';
 import {
   buildSatellitePresenceMetadata,
-  normalizePresenceMetadata,
+  resolvePresenceMetadataResult,
+  resolvePresenceSubjectId,
 } from '../agent/presence-metadata.js';
 
 export interface WyomingDelegationDecision {
@@ -17,25 +18,50 @@ export interface WyomingDelegationDecision {
 
 export function resolveWyomingRoutingMetadata(
   message: SubstrateMessage,
-): WyomingRoutingMetadata | undefined {
+): { routing?: WyomingRoutingMetadata; error?: string } | undefined {
   const routing = message.routing?.wyoming;
   if (routing) {
-    const presence = normalizePresenceMetadata(routing.presence);
-    if (presence) {
-      return { ...routing, presence };
+    const presenceResolution = routing.presence
+      ? resolvePresenceMetadataResult(routing.presence)
+      : {};
+    if (presenceResolution.error) {
+      return { error: presenceResolution.error };
     }
-
-    if (routing.siteId && routing.satelliteId) {
+    if (presenceResolution.presence) {
+      const canonicalPresence = presenceResolution.presence;
       return {
-        ...routing,
-        presence: buildSatellitePresenceMetadata({
-          siteId: routing.siteId,
-          satelliteId: routing.satelliteId,
-        }),
+        routing: {
+          ...routing,
+          ...(canonicalPresence.siteId ? { siteId: canonicalPresence.siteId } : {}),
+          satelliteId: routing.satelliteId ?? resolvePresenceSubjectId(canonicalPresence),
+          presence: canonicalPresence,
+        },
       };
     }
 
-    return routing;
+    if (routing.siteId && routing.satelliteId) {
+      const fallbackResolution = resolvePresenceMetadataResult({
+        kind: 'satellite',
+        siteId: routing.siteId,
+        satelliteId: routing.satelliteId,
+      });
+      if (fallbackResolution.error) {
+        return { error: fallbackResolution.error };
+      }
+      return {
+        routing: {
+          ...routing,
+          presence: fallbackResolution.presence ?? buildSatellitePresenceMetadata({
+            siteId: routing.siteId,
+            satelliteId: routing.satelliteId,
+          }),
+        },
+      };
+    }
+
+    return {
+      routing,
+    };
   }
   if (message.channelType !== 'api' || !message.channelId.startsWith('api:wyoming:')) {
     return undefined;
@@ -46,13 +72,24 @@ export function resolveWyomingRoutingMetadata(
     return undefined;
   }
 
-  return {
+  const presenceResolution = resolvePresenceMetadataResult({
+    kind: 'satellite',
     siteId: parts[2],
     satelliteId: parts.slice(3).join(':'),
-    presence: buildSatellitePresenceMetadata({
+  });
+  if (presenceResolution.error) {
+    return { error: presenceResolution.error };
+  }
+
+  return {
+    routing: {
       siteId: parts[2],
       satelliteId: parts.slice(3).join(':'),
-    }),
+      presence: presenceResolution.presence ?? buildSatellitePresenceMetadata({
+        siteId: parts[2],
+        satelliteId: parts.slice(3).join(':'),
+      }),
+    },
   };
 }
 
@@ -60,7 +97,24 @@ export function evaluateWyomingDelegation(
   message: SubstrateMessage,
   config: SubstrateConfig,
 ): WyomingDelegationDecision {
-  const routing = resolveWyomingRoutingMetadata(message);
+  const routingResolution = resolveWyomingRoutingMetadata(message);
+  if (!routingResolution) {
+    return {
+      isWyoming: false,
+      delegate: false,
+      reason: 'not_wyoming',
+    };
+  }
+
+  if ('error' in routingResolution && routingResolution.error) {
+    return {
+      isWyoming: true,
+      delegate: false,
+      reason: routingResolution.error,
+    };
+  }
+
+  const routing = routingResolution.routing;
   if (!routing) {
     return {
       isWyoming: false,

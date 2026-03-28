@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { fetchRemoteImageBinary } from './remote-fetch.js';
 import {
   cloneImageWorkflowSettings,
   type ComfyWorkflowTemplate,
@@ -7,6 +8,7 @@ import {
   type ImageGenerationResult,
   type ImageMode,
   type ImageResultAsset,
+  type ImageRuntimeConfig,
   type ImageWorkflowSettings,
 } from './types.js';
 
@@ -161,6 +163,7 @@ export class ComfyUiImageClient {
   constructor(
     private readonly baseUrl: string,
     private readonly workflows: ImageWorkflowSettings,
+    private readonly config: ImageRuntimeConfig,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
@@ -326,41 +329,17 @@ export class ComfyUiImageClient {
     url: string,
     fallbackBaseName: string,
   ): Promise<{ bytes: Uint8Array; contentType: string; fileName: string }> {
-    if (url.startsWith('data:')) {
-      const match = url.match(/^data:([^;,]+)?(;base64)?,(.*)$/);
-      if (!match) {
-        throw new Error('Unsupported data URL image payload');
-      }
-      const mimeType = match[1] || 'application/octet-stream';
-      const encoded = match[3];
-      const bytes = match[2]
-        ? Uint8Array.from(Buffer.from(encoded, 'base64'))
-        : Uint8Array.from(Buffer.from(decodeURIComponent(encoded), 'utf8'));
-      return {
-        bytes,
-        contentType: mimeType,
-        fileName: `${fallbackBaseName}${inferExtension(mimeType)}`,
-      };
-    }
-
-    const response = await this.fetchImpl(url, {
-      headers: { Accept: 'image/*,*/*;q=0.8' },
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to download image input (${response.status} ${response.statusText})`);
-    }
-
-    const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
-    const pathname = new URL(url).pathname;
+    const remoteImage = await fetchRemoteImageBinary(url, this.config, this.fetchImpl);
+    const pathname = new URL(remoteImage.finalUrl).pathname;
     const fromUrl = basename(pathname);
     const fileName = sanitizeUploadName(
-      fromUrl || `${fallbackBaseName}${inferExtension(contentType)}`,
-      `${fallbackBaseName}${inferExtension(contentType)}`,
+      fromUrl || `${fallbackBaseName}${inferExtension(remoteImage.contentType)}`,
+      `${fallbackBaseName}${inferExtension(remoteImage.contentType)}`,
     );
 
     return {
-      bytes: new Uint8Array(await response.arrayBuffer()),
-      contentType,
+      bytes: remoteImage.bytes,
+      contentType: remoteImage.contentType,
       fileName,
     };
   }

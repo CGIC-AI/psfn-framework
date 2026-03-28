@@ -4,11 +4,11 @@
 // 2) transcript -> handle -> agent_text/tts_text round-trip
 // 3) interruption behavior for an in-flight handle request
 //
-// Run: npx tsx src/e2e-wyoming-roundtrip.ts
+// Run: npx tsx src/app/e2e/e2e-wyoming-roundtrip.ts
 
 import { setTimeout as delay } from 'node:timers/promises';
-import { WyomingRuntime } from './channels/wyoming/runtime.js';
-import { toErrorMessage } from './shared/utils/errors.js';
+import { WyomingRuntime } from '../../channels/wyoming/runtime.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   WYOMING_EVENT_DESCRIBE,
   WYOMING_EVENT_INFO,
@@ -16,7 +16,7 @@ import {
   WYOMING_EVENT_SESSION_START,
   type WyomingFrame,
   type WyomingTransportSession,
-} from './channels/wyoming/protocol.js';
+} from '../../channels/wyoming/protocol.js';
 
 const HANDLE_EVENT = 'handle';
 const HANDLE_RESULT_EVENT = 'handle.result';

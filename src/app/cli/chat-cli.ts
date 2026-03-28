@@ -1,20 +1,20 @@
 // ── CLI Chat Tool ──
 // Interactive terminal chat with the active companion, using the same runtime stack as Discord.
-// Run: npx tsx src/chat-cli.ts
+// Run: npx tsx src/app/cli/chat-cli.ts
 // Or:  npm run chat
 
 import 'dotenv/config';
 import { createInterface } from 'node:readline';
-import { loadConfig } from './types.js';
-import type { SubstrateMessage } from './types.js';
-import { EventBus } from './shared/event-bus.js';
-import { resolveCompanionNameFromCard } from './identity/companion-runtime.js';
-import { LLMClient } from './llm/client.js';
-import { MemoryStore } from './memory/store.js';
-import { SalienceDecay } from './memory/decay.js';
-import { DEFAULT_REPL_CONFIG } from './repl/types.js';
-import { initDatabase } from './persistence/sqlite-utils.js';
-import { hydrateCanonicalStartupConfig } from './runtime/bootstrap-helpers.js';
+import { loadConfig } from '../../types.js';
+import type { SubstrateMessage } from '../../types.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { resolveCompanionNameFromCard } from '../../identity/companion-runtime.js';
+import { LLMClient } from '../../llm/client.js';
+import { MemoryStore } from '../../memory/store.js';
+import { SalienceDecay } from '../../memory/decay.js';
+import { DEFAULT_REPL_CONFIG } from '../../repl/types.js';
+import { initDatabase } from '../../persistence/sqlite-utils.js';
+import { hydrateCanonicalStartupConfig } from '../../runtime/bootstrap-helpers.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -22,7 +22,7 @@ import {
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
-} from './bootstrap/composition.js';
+} from '../../bootstrap/composition.js';
 
 const CHANNEL_ID = 'cli:chat';
 

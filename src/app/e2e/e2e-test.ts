@@ -1,6 +1,6 @@
 // ── E2E Integration Test ──
 // Non-interactive test that exercises all live features through the full runtime stack.
-// Run: npx tsx src/e2e-test.ts
+// Run: npx tsx src/app/e2e/e2e-test.ts
 //
 // Requirements:
 //   - LiteLLM proxy running (npm run proxy:up)
@@ -11,16 +11,16 @@ import 'dotenv/config';
 import { join } from 'node:path';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { loadConfig } from './types.js';
-import type { SubstrateMessage } from './types.js';
-import { EventBus } from './shared/event-bus.js';
-import { LLMClient } from './llm/client.js';
-import { SessionStore } from './session/store.js';
-import { MemoryStore } from './memory/store.js';
-import { DEFAULT_REPL_CONFIG } from './repl/types.js';
-import { runRLMLoop } from './repl/loop.js';
-import { initDatabase } from './persistence/sqlite-utils.js';
-import { hydrateJsonBackedRuntimeConfig } from './system/config/runtime-config.js';
+import { loadConfig } from '../../types.js';
+import type { SubstrateMessage } from '../../types.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { LLMClient } from '../../llm/client.js';
+import { SessionStore } from '../../session/store.js';
+import { MemoryStore } from '../../memory/store.js';
+import { DEFAULT_REPL_CONFIG } from '../../repl/types.js';
+import { runRLMLoop } from '../../repl/loop.js';
+import { initDatabase } from '../../persistence/sqlite-utils.js';
+import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -28,7 +28,7 @@ import {
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
-} from './bootstrap/composition.js';
+} from '../../bootstrap/composition.js';
 
 // ── Test utilities ──
 

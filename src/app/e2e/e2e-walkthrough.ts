@@ -3,18 +3,18 @@
 // capabilities in the PSFN framework. She gets to try each feature and document
 // her experience in her own words.
 //
-// Run: npx tsx src/e2e-walkthrough.ts
+// Run: npx tsx src/app/e2e/e2e-walkthrough.ts
 
 import 'dotenv/config';
-import { loadConfig } from './types.js';
-import type { SubstrateMessage } from './types.js';
-import { EventBus } from './shared/event-bus.js';
-import { LLMClient } from './llm/client.js';
-import type { SubstrateAgent } from './agent/substrate-agent.js';
-import { MemoryStore } from './memory/store.js';
-import { SalienceDecay } from './memory/decay.js';
-import { DEFAULT_REPL_CONFIG } from './repl/types.js';
-import { hydrateJsonBackedRuntimeConfig } from './system/config/runtime-config.js';
+import { loadConfig } from '../../types.js';
+import type { SubstrateMessage } from '../../types.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { LLMClient } from '../../llm/client.js';
+import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import { MemoryStore } from '../../memory/store.js';
+import { SalienceDecay } from '../../memory/decay.js';
+import { DEFAULT_REPL_CONFIG } from '../../repl/types.js';
+import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -22,8 +22,8 @@ import {
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
-} from './bootstrap/composition.js';
-import { initDatabase } from './persistence/sqlite-utils.js';
+} from '../../bootstrap/composition.js';
+import { initDatabase } from '../../persistence/sqlite-utils.js';
 
 const CHANNEL = 'walkthrough:orientation';
 let activeCompanionName = 'Companion';

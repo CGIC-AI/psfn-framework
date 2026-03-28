@@ -6,7 +6,7 @@
 // 4) Runtime TTS audio -> Deepgram STT
 // 5) Compare text sent to TTS vs text recovered from audio
 //
-// Run: npx tsx src/e2e-voice-roundtrip.ts
+// Run: npx tsx src/app/e2e/e2e-voice-roundtrip.ts
 
 import 'dotenv/config';
 import type { IncomingMessage } from 'node:http';
@@ -16,28 +16,28 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { loadConfig } from './types.js';
-import type { SubstrateMessage } from './types.js';
-import { hydrateJsonBackedRuntimeConfig } from './system/config/runtime-config.js';
-import { EventBus } from './shared/event-bus.js';
-import { LLMClient } from './llm/client.js';
-import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from './bootstrap/composition.js';
-import { ElevenLabsTtsClient } from './voice/elevenlabs.js';
-import { DeepgramSttClient } from './voice/deepgram.js';
-import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
-import { serializeVoiceWireFrame } from './voice/transports/websocket/serializer.js';
+import { loadConfig } from '../../types.js';
+import type { SubstrateMessage } from '../../types.js';
+import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { LLMClient } from '../../llm/client.js';
+import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from '../../bootstrap/composition.js';
+import { ElevenLabsTtsClient } from '../../voice/elevenlabs.js';
+import { DeepgramSttClient } from '../../voice/deepgram.js';
+import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
+import { serializeVoiceWireFrame } from '../../voice/transports/websocket/serializer.js';
 import {
   VOICE_WIRE_PROTOCOL,
   type VoiceWireFrame,
   type VoiceWireInboundFrame,
   type WebSocketVoiceConnection,
-} from './voice/transports/websocket/types.js';
-import { INSECURE_LOCAL_API_PRINCIPAL } from './channels/http/auth.js';
-import { toErrorMessage } from './shared/utils/errors.js';
+} from '../../voice/transports/websocket/types.js';
+import { INSECURE_LOCAL_API_PRINCIPAL } from '../../channels/http/auth.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
-} from './channels/api/voice-websocket.js';
+} from '../../channels/api/voice-websocket.js';
 
 const execFileAsync = promisify(execFile);
 

@@ -73,13 +73,13 @@ import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import {
   composeIdentity,
   composeSessionRuntime,
-  createEmbeddingProviderFromConfig,
   composeSubstrateAgent,
   wireSelfModelRuntime,
   wireCoreMemoryRuntime,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
+import { createProviderRuntimeServices } from './config/provider-runtime-factory.js';
 import {
   wireFilesystemToolsRuntime,
   wirePromptRuntime,
@@ -466,19 +466,23 @@ export class SubstrateRuntime implements Lifecycle {
     const cardProposalQueue = new ConfirmationQueue();
 
     // Initialize core components
-    this.llmClient = new LLMClient(this.config, {
-      eligibilityGate,
-      onBudgetBlocked: (event) => {
-        this.eventBus.emit('model.budget.blocked', event).catch((error) => {
-          log.error('Failed to emit model budget blocked telemetry', {
-            error: error instanceof Error ? error.message : String(error),
-            provider: event.provider,
-            model: event.model,
-            reason: event.reason,
+    const providerRuntime = createProviderRuntimeServices({
+      config: this.config,
+      llmOptions: {
+        eligibilityGate,
+        onBudgetBlocked: (event) => {
+          this.eventBus.emit('model.budget.blocked', event).catch((error) => {
+            log.error('Failed to emit model budget blocked telemetry', {
+              error: error instanceof Error ? error.message : String(error),
+              provider: event.provider,
+              model: event.model,
+              reason: event.reason,
+            });
           });
-        });
+        },
       },
     });
+    this.llmClient = providerRuntime.llmClient;
     const sessionsDir = resolveSessionsDir(pathSnapshot.companionDataDir);
     const sessionHmacBoundary = createSessionHmacBoundaryService({
       env: process.env,
@@ -515,7 +519,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.restoreLatestSessionMetadata(pathSnapshot.companionDataDir);
 
     // Embedding provider (selected by EMBEDDING_PROVIDER)
-    const embeddingProvider = createEmbeddingProviderFromConfig(this.config);
+    const embeddingProvider = providerRuntime.embeddingProvider;
     log.info('Embedding provider initialized', {
       provider: embeddingProvider.kind,
       dims: embeddingProvider.dims,

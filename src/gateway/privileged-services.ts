@@ -1,12 +1,13 @@
 import type { SubstrateConfig } from '../types.js';
-import { createEmbeddingProviderFromConfig, type EmbeddingRuntimeProvider } from '../memory/embedding.js';
-import { LLMClient, type LLMClientRuntimeOptions } from '../llm/client.js';
+import type { LLMClientRuntimeOptions } from '../llm/client.js';
 import { VaultOps, type VaultOperations } from '../vault/ops.js';
+import {
+  createProviderRuntimeServices,
+  type ProviderRuntimeServices,
+} from '../config/provider-runtime-factory.js';
 import type { PolicyConfig } from './policy.js';
 
-export interface GatewayPrivilegedServiceRegistry {
-  embeddingProvider: EmbeddingRuntimeProvider;
-  llmClient: LLMClient;
+export interface GatewayPrivilegedServiceRegistry extends ProviderRuntimeServices {
   vaultOps?: VaultOperations;
 }
 
@@ -43,13 +44,15 @@ function createGatewayVaultOps(
 export function createGatewayPrivilegedServiceRegistry(
   input: GatewayPrivilegedServiceRegistryInput,
 ): GatewayPrivilegedServiceRegistry {
-  const embeddingProvider = createEmbeddingProviderFromConfig(input.config, input.providerEnv);
-  const llmClient = new LLMClient(input.config, input.llmOptions);
+  const providerRuntime = createProviderRuntimeServices({
+    config: input.config,
+    providerEnv: input.providerEnv,
+    llmOptions: input.llmOptions,
+  });
   const vaultOps = createGatewayVaultOps(input.config, input.vaultPolicyConfig);
 
   return {
-    embeddingProvider,
-    llmClient,
+    ...providerRuntime,
     ...(vaultOps ? { vaultOps } : {}),
   };
 }

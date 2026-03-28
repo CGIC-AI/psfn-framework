@@ -166,6 +166,33 @@ describe('GatewayClient streaming', () => {
     expect(chunks).toEqual(['before']);
   });
 
+  it('preserves reasoning from llm.chat responses', async () => {
+    const streamPromise = client.stream(
+      { systemPrompt: 'test', messages: [{ role: 'user', content: 'hi' }] },
+      { onText: () => {} },
+    );
+
+    const req = conn.sent[0] as { id: number; params: { requestId: string } };
+    conn._emit({
+      id: req.id,
+      jsonrpc: '2.0',
+      result: {
+        content: 'answer',
+        reasoning: 'chain of thought summary',
+        toolCalls: [],
+        model: 'test',
+        inputTokens: 10,
+        outputTokens: 5,
+        stopReason: 'end',
+      },
+    });
+
+    await expect(streamPromise).resolves.toMatchObject({
+      content: 'answer',
+      reasoning: 'chain of thought summary',
+    });
+  });
+
   it('cleans up chunk handler after stream error', async () => {
     const chunks: string[] = [];
 

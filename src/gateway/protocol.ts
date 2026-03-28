@@ -74,6 +74,9 @@ export interface LLMEmbedParams {
   texts: string[];
 }
 
+export type LLMDiscoverModelsParams = Record<string, never>;
+export type LLMInvalidateModelDiscoveryParams = Record<string, never>;
+
 export interface DiscordSendParams {
   channelId: string;
   content: string;
@@ -359,6 +362,14 @@ export interface LLMCompleteResult {
 
 export interface LLMEmbedResult {
   embeddings: number[][];
+}
+
+export interface LLMDiscoverModelsResult {
+  models: unknown[];
+}
+
+export interface LLMInvalidateModelDiscoveryResult {
+  success: boolean;
 }
 
 export interface DiscordSendResult {

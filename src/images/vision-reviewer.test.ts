@@ -106,4 +106,52 @@ describe('DefaultImageVisionReviewer', () => {
     );
     expect(result.summary).toContain('Comfy output still looks like the companion');
   });
+
+  it('uses injected llmProvider transport instead of local completion transport', async () => {
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: 'Gateway review summary',
+        toolCalls: [],
+        model: 'gateway-vision-model',
+        inputTokens: 11,
+        outputTokens: 7,
+        stopReason: 'stop',
+      })),
+    };
+    const completeImpl = vi.fn();
+    const reviewer = new DefaultImageVisionReviewer(
+      {
+        primaryProvider: 'openrouter',
+      } as any,
+      {
+        llmProvider: llmProvider as any,
+        binaryFetcher: vi.fn(async () => ({
+          dataBase64: 'AQID',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+        completeImpl,
+      },
+    );
+
+    const result = await reviewer.analyze({
+      imageUrls: ['https://images.example.test/review.png'],
+      question: 'Describe it.',
+    });
+
+    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+    expect(llmProvider.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelHint: expect.objectContaining({
+          model: 'vision-model',
+          provider: 'openrouter',
+          maxTokens: 1024,
+        }),
+      }),
+      'background',
+    );
+    expect(completeImpl).not.toHaveBeenCalled();
+    expect(result.summary).toBe('Gateway review summary');
+    expect(result.model).toBe('gateway-vision-model');
+  });
 });

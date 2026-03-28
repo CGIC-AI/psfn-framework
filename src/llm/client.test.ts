@@ -1112,4 +1112,46 @@ describe('LLMClient model budget gates and usage metering', () => {
       outputTokens: 7,
     });
   });
+
+  it('routes completion through injected transport without calling direct provider transport', async () => {
+    const config = makeConfig();
+    const transport = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => ({
+        content: 'gateway-result',
+        model: 'z-ai/glm-5',
+        inputTokens: 9,
+        outputTokens: 4,
+        stopReason: 'stop',
+        toolCalls: [],
+      })),
+    };
+    const client = new LLMClient(config, { transport: transport as any });
+
+    const response = await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+    );
+
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+    expect(transport.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelHint: expect.objectContaining({
+          model: 'deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          maxTokens: 2048,
+        }),
+      }),
+      'background',
+    );
+    expect(response).toMatchObject({
+      content: 'gateway-result',
+      model: 'z-ai/glm-5',
+      inputTokens: 9,
+      outputTokens: 4,
+    });
+  });
 });

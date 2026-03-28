@@ -26,11 +26,7 @@ import {
 } from './channels/api/active-health-probe.js';
 import { AdminServer } from './channels/admin/server.js';
 import { createGatewayAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
-import { ModelDiscovery } from './llm/discovery.js';
-import {
-  resolveConfiguredLiteLLMApiKey,
-  resolveConfiguredLiteLLMBaseUrl,
-} from './config/providers-config.js';
+import { GatewayModelDiscovery } from './llm/discovery.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
 import { registerScheduledBackupTask } from './backup/service.js';
 import {
@@ -88,7 +84,6 @@ import {
 } from './runtime/channel-lifecycle.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
-import { createGatewayBackedDiscoveryFetch } from './agent-main/discovery-gateway-fetch.js';
 import {
   resolveCharacterCardHistoryPath,
   resolveMemoryJournalPath,
@@ -803,15 +798,7 @@ async function main(): Promise<void> {
     log.info(`API server listening on port ${apiPort}`);
   }
 
-  // Model discovery (if LiteLLM is configured)
-  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
-  const modelDiscovery = litellmBaseUrl
-    ? new ModelDiscovery(litellmBaseUrl, resolveConfiguredLiteLLMApiKey(config), {
-      openRouterModelsApiUrl: config.openRouterModelsApiUrl ?? '',
-      fetchFn: createGatewayBackedDiscoveryFetch(gateway),
-      allowDirectNetworkEgress: false,
-    })
-    : null;
+  const modelDiscovery = new GatewayModelDiscovery(gateway);
 
   // ── Admin GUI (optional) ──
 

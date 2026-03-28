@@ -1,13 +1,19 @@
 import type { SubstrateConfig } from '../types.js';
 import type { LLMClientRuntimeOptions } from '../llm/client.js';
+import { ModelDiscovery } from '../llm/discovery.js';
 import { VaultOps, type VaultOperations } from '../vault/ops.js';
 import {
   createProviderRuntimeServices,
   type ProviderRuntimeServices,
 } from '../config/provider-runtime-factory.js';
+import {
+  resolveConfiguredLiteLLMApiKey,
+  resolveConfiguredLiteLLMBaseUrl,
+} from '../config/providers-config.js';
 import type { PolicyConfig } from './policy.js';
 
 export interface GatewayPrivilegedServiceRegistry extends ProviderRuntimeServices {
+  modelDiscovery?: ModelDiscovery;
   vaultOps?: VaultOperations;
 }
 
@@ -49,10 +55,17 @@ export function createGatewayPrivilegedServiceRegistry(
     providerEnv: input.providerEnv,
     llmOptions: input.llmOptions,
   });
+  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(input.config);
+  const modelDiscovery = litellmBaseUrl
+    ? new ModelDiscovery(litellmBaseUrl, resolveConfiguredLiteLLMApiKey(input.config), {
+      openRouterModelsApiUrl: input.config.openRouterModelsApiUrl ?? '',
+    })
+    : undefined;
   const vaultOps = createGatewayVaultOps(input.config, input.vaultPolicyConfig);
 
   return {
     ...providerRuntime,
+    ...(modelDiscovery ? { modelDiscovery } : {}),
     ...(vaultOps ? { vaultOps } : {}),
   };
 }

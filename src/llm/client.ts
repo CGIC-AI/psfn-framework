@@ -52,6 +52,7 @@ import {
   resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../config/providers-config.js';
+import type { LLMProvider } from '../agent/contracts.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -76,6 +77,7 @@ export interface LLMCompletionOptions {
 
 export interface LLMClientRuntimeOptions {
   litellmBaseUrl?: string;
+  transport?: LLMProvider;
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
@@ -116,6 +118,7 @@ export class LLMClient {
   private litellmApiKeyRef: CredentialReference;
   private fallbackRunner: FallbackRunner;
   private budgetController: ModelBudgetController;
+  private transport?: LLMProvider;
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
@@ -132,6 +135,7 @@ export class LLMClient {
     this.litellmApiKeyRef = resolveConfiguredLiteLLMApiKeyReference(config);
     this.fallbackRunner = new FallbackRunner();
     this.budgetController = new ModelBudgetController(config);
+    this.transport = runtimeOptions.transport;
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
@@ -213,6 +217,32 @@ export class LLMClient {
     }
 
     return requestOptions;
+  }
+
+  private buildTransportContext(
+    context: LLMContext,
+    candidate: RoutingCandidate,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ): LLMContext {
+    return {
+      systemPrompt: context.systemPrompt,
+      messages: context.messages,
+      ...(context.tools?.length ? { tools: context.tools } : {}),
+      modelHint: {
+        model: candidate.model,
+        provider: candidate.provider,
+        maxTokens: candidate.maxTokens,
+        ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
+        ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
+        ...(candidate.thinkingEffort ? { thinkingEffort: candidate.thinkingEffort } : {}),
+        ...(candidate.temperature !== undefined ? { temperature: candidate.temperature } : {}),
+        ...(candidate.topP !== undefined ? { topP: candidate.topP } : {}),
+        ...(candidate.topK !== undefined ? { topK: candidate.topK } : {}),
+        ...(candidate.frequencyPenalty !== undefined ? { frequencyPenalty: candidate.frequencyPenalty } : {}),
+        ...(candidate.repetitionPenalty !== undefined ? { repetitionPenalty: candidate.repetitionPenalty } : {}),
+      },
+      ...(correlation ? { correlation } : {}),
+    };
   }
 
   private resolveReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {
@@ -534,6 +564,12 @@ export class LLMClient {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
         'chat',
         async (candidateTarget) => {
+          if (this.transport) {
+            return await this.transport.stream(
+              this.buildTransportContext(context, candidateTarget, correlation),
+              callbacks,
+            );
+          }
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
           const requestOptions = this.buildRequestOptions(candidateTarget, apiKey);
 
@@ -689,6 +725,12 @@ export class LLMClient {
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
       async (candidateTarget) => {
+        if (this.transport) {
+          return await this.transport.complete(
+            this.buildTransportContext(context, candidateTarget, correlation),
+            purpose,
+          );
+        }
         const { model, apiKey } = this.getModelAndKey(candidateTarget);
         const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
           signal: options.signal,
@@ -747,10 +789,16 @@ export class LLMClient {
       routingPurpose,
     });
 
-    const content = extractTextContent(response.content as unknown[]);
-    const reasoning = extractReasoningContent(response.content as unknown[]);
-    const inputTokens = response.usage.input;
-    const outputTokens = response.usage.output;
+    const responseContent = response.content as unknown;
+    const contentBlocks = Array.isArray(responseContent) ? responseContent : undefined;
+    const content = typeof responseContent === 'string'
+      ? responseContent
+      : extractTextContent(contentBlocks);
+    const reasoning = 'reasoning' in response && typeof response.reasoning === 'string'
+      ? response.reasoning
+      : extractReasoningContent(contentBlocks);
+    const inputTokens = 'usage' in response ? response.usage.input : response.inputTokens;
+    const outputTokens = 'usage' in response ? response.usage.output : response.outputTokens;
 
     this.recordUsage(
       routingPurpose,
@@ -763,11 +811,11 @@ export class LLMClient {
     return {
       content: normalizeContent(content),
       ...(reasoning ? { reasoning } : {}),
-      toolCalls: [],
+      toolCalls: 'toolCalls' in response && Array.isArray(response.toolCalls) ? response.toolCalls : [],
       model: response.model,
       inputTokens,
       outputTokens,
-      stopReason: response.stopReason,
+      stopReason: 'stopReason' in response ? response.stopReason : 'unknown',
     };
   }
 

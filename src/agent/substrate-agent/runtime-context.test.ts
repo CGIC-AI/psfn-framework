@@ -38,6 +38,7 @@ describe('runtime subject identity', () => {
       speakerRole: 'system',
       resolvedUserName: 'Companion',
       subjectIdentityKey: DEFAULT_COMPANION_ID,
+      continuitySubjectKey: DEFAULT_COMPANION_ID,
     });
     expect(authorContext.canonicalContactKey).toBeUndefined();
   });
@@ -121,6 +122,43 @@ describe('runtime subject identity', () => {
     });
 
     expect(authorContext.speakerRole).toBe('user');
+  });
+
+  it('uses the canonical contact key as the continuity subject when contact resolution succeeds', () => {
+    const authorContext = resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord',
+        authorId: 'discord-user-1',
+        authorName: 'Alex',
+      }),
+      contactStore: {
+        resolveChannelIdentity: () => ({
+          id: 'contact-alex',
+          discordUserId: 'discord-user-1',
+          displayName: 'Alex',
+          trustLevel: 'trusted',
+          relationshipType: 'friend',
+          firstSeen: '2026-03-17T12:00:00Z',
+          lastSeen: '2026-03-17T12:00:00Z',
+        }),
+        getConversationChannelPrivacy: () => undefined,
+        updateLastSeen: () => undefined,
+        recordChannelActivity: () => undefined,
+      } as never,
+      logger: {
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext).toMatchObject({
+      canonicalContactKey: 'contact-alex',
+      continuitySubjectKey: 'contact-alex',
+      continuityFallbackKeys: ['discord-user-1'],
+    });
   });
 
   it('uses routed channel privacy in prompt variables and runtime context', () => {

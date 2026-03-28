@@ -55,6 +55,7 @@ export interface ResolvedAuthorContext {
   resolvedUserName: string;
   canonicalContactKey?: string;
   subjectIdentityKey?: string;
+  continuitySubjectKey?: string;
   channelPrivacyLevel?: ChannelVisibility;
   continuityFallbackKeys: string[];
 }
@@ -507,6 +508,21 @@ export function collectContinuityFallbackKeys(
   return [...keys].sort((a, b) => a.localeCompare(b));
 }
 
+export function resolveContinuitySubjectKey(input: {
+  canonicalContactKey?: string;
+  subjectIdentityKey?: string;
+  authorId?: string;
+}): string | undefined {
+  const canonicalContactKey = input.canonicalContactKey?.trim();
+  if (canonicalContactKey) return canonicalContactKey;
+
+  const subjectIdentityKey = input.subjectIdentityKey?.trim();
+  if (subjectIdentityKey) return subjectIdentityKey;
+
+  const authorId = input.authorId?.trim();
+  return authorId || undefined;
+}
+
 export function resolvePromptUserName(message: SubstrateMessage, contact?: Contact): string {
   const preferredContactName = resolvePreferredContactName(contact);
   if (preferredContactName) return preferredContactName;
@@ -541,6 +557,7 @@ export function resolveAuthorContext(input: {
         speakerRole: 'system',
         resolvedUserName,
         ...(subjectIdentityKey ? { subjectIdentityKey } : {}),
+        ...(subjectIdentityKey ? { continuitySubjectKey: subjectIdentityKey } : {}),
         continuityFallbackKeys: [],
       };
     }
@@ -550,6 +567,7 @@ export function resolveAuthorContext(input: {
       speakerRole: 'system',
       resolvedUserName: resolvePromptUserName(input.message),
       canonicalContactKey: input.message.authorId,
+      continuitySubjectKey: input.message.authorId,
       continuityFallbackKeys: [],
     };
   }
@@ -617,6 +635,11 @@ export function resolveAuthorContext(input: {
       speakerRole: 'user',
       resolvedUserName: resolvePromptUserName(input.message, contact),
       canonicalContactKey,
+      continuitySubjectKey: resolveContinuitySubjectKey({
+        canonicalContactKey,
+        subjectIdentityKey: input.message.authorId,
+        authorId: input.message.authorId,
+      }),
       ...(channelPrivacyLevel ? { channelPrivacyLevel } : {}),
       continuityFallbackKeys: canonicalContactKey
         ? collectContinuityFallbackKeys(input.message.authorId, canonicalContactKey, contact)
@@ -632,6 +655,10 @@ export function resolveAuthorContext(input: {
     trustLevel: 'regular',
     speakerRole: 'user',
     resolvedUserName: resolvePromptUserName(input.message),
+    continuitySubjectKey: resolveContinuitySubjectKey({
+      subjectIdentityKey: input.message.authorId,
+      authorId: input.message.authorId,
+    }),
     continuityFallbackKeys: [],
   };
 }

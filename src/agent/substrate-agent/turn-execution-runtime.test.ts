@@ -356,6 +356,73 @@ describe('handleMessageForTurn compaction scheduling', () => {
     }));
   });
 
+  it('routes external turns through the canonical continuity subject instead of the session-local author id', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
+    const awaitPendingAutoCompaction = vi.fn(async () => undefined);
+    const recordUserMessage = vi.fn(() => 1);
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns,
+      awaitPendingAutoCompaction,
+      recordUserMessage,
+      recordAssistantMessage,
+    });
+    runtime.resolveAuthorContext = vi.fn(() => ({
+      trustLevel: 'trusted',
+      speakerRole: 'user',
+      resolvedUserName: 'Alex',
+      canonicalContactKey: 'contact-123',
+      subjectIdentityKey: 'discord-user-1',
+      continuitySubjectKey: 'contact-123',
+      continuityFallbackKeys: ['discord-user-1'],
+    }));
+
+    await handleMessageForTurn(runtime, createMessage('msg-canonical-continuity', {
+      channelId: 'discord:dm:alex',
+      channelType: 'discord',
+      authorId: 'discord-user-1',
+      authorName: 'Alex',
+    }));
+
+    expect(recordUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: 'discord:dm:alex',
+        authorId: 'discord-user-1',
+        authorName: 'Alex',
+      }),
+      expect.any(String),
+      expect.any(String),
+      'trusted',
+      'contact-123',
+    );
+    expect(recordAssistantMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: 'discord:dm:alex',
+        authorId: 'discord-user-1',
+      }),
+      expect.any(String),
+      expect.any(String),
+      'assistant reply',
+      'trusted',
+      'contact-123',
+      null,
+    );
+    expect(buildContext.mock.calls[0]?.[4]).toBe('contact-123');
+    expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'discord:dm:alex',
+      userId: 'contact-123',
+    }));
+  });
+
   it('captures the full model-facing prompt context in the turn snapshot', async () => {
     const eventBus = new EventBus();
     const emittedSnapshots: Array<Record<string, unknown>> = [];

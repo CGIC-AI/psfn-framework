@@ -75,7 +75,10 @@ import {
   runMoaTurn,
 } from './moa-turn.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
-import type { ResolvedAuthorContext } from './runtime-context.js';
+import {
+  resolveContinuitySubjectKey,
+  type ResolvedAuthorContext,
+} from './runtime-context.js';
 import type { AutoloadTurnOutcome } from './adaptive-tools-runtime.js';
 import type {
   BackgroundContinuationCompletionSignal,
@@ -442,10 +445,12 @@ export async function handleMessageForTurn(
     message,
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
   });
-  const subjectIdentityKey = authorContext.subjectIdentityKey
-    ?? authorContext.canonicalContactKey
-    ?? message.authorId;
-  const continuityUserId = authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey;
+  const continuitySubjectKey = authorContext.continuitySubjectKey
+    ?? resolveContinuitySubjectKey({
+      canonicalContactKey: authorContext.canonicalContactKey,
+      subjectIdentityKey: authorContext.subjectIdentityKey,
+      authorId: message.authorId,
+    });
   emitObservedTurnStage('trust', {
     durationMs: Date.now() - trustStageStart,
     trustLevel: authorContext.trustLevel,
@@ -461,14 +466,14 @@ export async function handleMessageForTurn(
       turnId,
       requestId,
       message.content,
-      continuityUserId,
+      continuitySubjectKey,
     )
     : runtime.recordUserMessage(
       message,
       turnId,
       requestId,
       authorContext.trustLevel,
-      continuityUserId,
+      continuitySubjectKey,
     );
   const emotionSessionId = runtime.resolveSessionChannelId(message.channelId);
 
@@ -484,7 +489,7 @@ export async function handleMessageForTurn(
     }).captureTurnContextSnapshot === 'function'
       ? runtime.sessionManager.captureTurnContextSnapshot(
         message.channelId,
-        subjectIdentityKey,
+        continuitySubjectKey,
         channelMeta,
         authorContext.continuityFallbackKeys,
         turnBudgetCharacteristics,
@@ -497,11 +502,11 @@ export async function handleMessageForTurn(
       ),
       memoryProvider && typeof memoryProvider.captureTurnMemorySnapshot === 'function'
         ? memoryProvider.captureTurnMemorySnapshot(
-          message.content,
-          message.channelId,
-          trustLevel,
-          channelMeta,
-          authorContext.canonicalContactKey,
+      message.content,
+      message.channelId,
+      trustLevel,
+      channelMeta,
+      authorContext.canonicalContactKey,
           turnBudgetCharacteristics,
           focusMemoryScopeQuery ?? undefined,
         )
@@ -686,7 +691,7 @@ export async function handleMessageForTurn(
         fullPrompt,
         memoryContextBlock,
         undefined,
-        subjectIdentityKey,
+        continuitySubjectKey,
         channelMeta,
         authorContext.continuityFallbackKeys,
         turnSnapshot.sessionContext,
@@ -1074,7 +1079,7 @@ export async function handleMessageForTurn(
         requestId,
         safeResponseText,
         authorContext.trustLevel,
-        continuityUserId,
+        continuitySubjectKey,
         emotionSnapshot,
       );
     }
@@ -1258,7 +1263,7 @@ export async function handleMessageForTurn(
       memoriesBlock: memoryContextBlock,
       llmProvider: runtime.llmClient,
       channelMeta,
-      userId: subjectIdentityKey,
+      userId: continuitySubjectKey,
       compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
       turnBudgetCharacteristics,
     }).catch((error) => {

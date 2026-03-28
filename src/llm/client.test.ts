@@ -7,7 +7,7 @@ import type { SubstrateConfig } from '../system/config/runtime-config-contracts.
 import {
   createEnvCredentialVault,
   envCredential,
-} from '../custody/credential-vault.js';
+} from '../boundary/custody/credential-vault.js';
 import { FallbackRunner } from './fallback.js';
 import { createEligibilityGate, EligibilityDeniedError } from '../system/capabilities/eligibility.js';
 

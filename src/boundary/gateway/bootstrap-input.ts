@@ -19,7 +19,7 @@ import { buildShellExecPolicyConfig } from '../../execution/shell-policy-config.
 import {
   buildProviderCredentialEnv,
   resolveOptionalEnvCredential,
-} from '../../custody/credential-vault.js';
+} from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
 import { parseWyomingShardRoutingConfigEnv } from '../../system/config/load-config.js';
 import {

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
-import { createEnvCredentialVault } from '../../../custody/credential-vault.js';
+import { createEnvCredentialVault } from '../../../boundary/custody/credential-vault.js';
 import type { CanonicalModelRegistry } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {

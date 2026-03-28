@@ -5,11 +5,11 @@ import type { SubstrateConfig } from '../system/config/runtime-config-contracts.
 import type {
   CredentialReference,
   CredentialVaultPort,
-} from '../custody/credential-vault.js';
+} from '../boundary/custody/credential-vault.js';
 import {
   resolveHuggingFaceToken,
   resolveOptionalEnvCredential,
-} from '../custody/credential-vault.js';
+} from '../boundary/custody/credential-vault.js';
 import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,

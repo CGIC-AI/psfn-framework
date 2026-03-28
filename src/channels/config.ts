@@ -7,7 +7,7 @@ import {
   resolveOptionalCredentialReference,
   type CredentialReference,
   type CredentialVaultPort,
-} from '../custody/credential-vault.js';
+} from '../boundary/custody/credential-vault.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 import { parseBooleanEnv } from '../shared/utils/env.js';
 import { isRecord } from '../shared/utils/types.js';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createEnvCredentialVault } from '../custody/credential-vault.js';
+import { createEnvCredentialVault } from '../boundary/custody/credential-vault.js';
 import { createSessionHmacBoundaryService } from './hmac-boundary.js';
 
 describe('createSessionHmacBoundaryService', () => {

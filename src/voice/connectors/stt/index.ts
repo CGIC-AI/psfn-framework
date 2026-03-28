@@ -1,7 +1,7 @@
 import { createDeepgramStreamingSttConnector, type DeepgramStreamingSttConfig } from './deepgram-stream.js';
 import type { EligibilityRequirements } from '../../../system/capabilities/eligibility.js';
-import type { CredentialVaultPort } from '../../../custody/credential-vault.js';
-import { resolveInlineOrEnvCredential } from '../../../custody/credential-vault.js';
+import type { CredentialVaultPort } from '../../../boundary/custody/credential-vault.js';
+import { resolveInlineOrEnvCredential } from '../../../boundary/custody/credential-vault.js';
 import type { StreamingSttConnector } from './types.js';
 
 export * from './types.js';

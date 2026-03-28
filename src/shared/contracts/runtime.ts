@@ -1,6 +1,6 @@
 import type { ContextManifest } from '../../session/context-manifest.js';
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../agent/presence-metadata.js';
-import type { CredentialReference } from '../../custody/credential-vault.js';
+import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
 import type { ChannelVisibility, TrustLevel } from '../../trust/types.js';
 import type { TurnID } from '../../turns/types.js';
 import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';

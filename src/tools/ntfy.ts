@@ -9,7 +9,7 @@ import type {
 import {
   resolveOptionalEnvCredential,
   type CredentialVaultPort,
-} from '../custody/credential-vault.js';
+} from '../boundary/custody/credential-vault.js';
 import { textResult, textResultWithError } from './results.js';
 import { parsePositiveIntEnv } from '../shared/utils/env.js';
 import { toErrorMessage } from '../shared/utils/errors.js';

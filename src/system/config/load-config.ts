@@ -2,7 +2,7 @@ import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
 } from '../../shared/context-budget.js';
-import { createEnvCredentialVault, resolveOptionalEnvCredential } from '../../custody/credential-vault.js';
+import { createEnvCredentialVault, resolveOptionalEnvCredential } from '../../boundary/custody/credential-vault.js';
 import { resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
 import type {

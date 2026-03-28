@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createEnvCredentialVault } from '../../../custody/credential-vault.js';
+import { createEnvCredentialVault } from '../../../boundary/custody/credential-vault.js';
 import { DeepgramStreamingSttConnector } from './deepgram-stream.js';
 import {
   createStreamingSttConnector,

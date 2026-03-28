@@ -1,6 +1,6 @@
 import { ComfyUiImageClient } from './comfyui.js';
 import { FalImageClient, isFalContentPolicyError } from './fal.js';
-import { resolveInlineOrEnvCredential } from '../custody/credential-vault.js';
+import { resolveInlineOrEnvCredential } from '../boundary/custody/credential-vault.js';
 import type { ImageOperations } from './ops.js';
 import type {
   ImageCreateParams,

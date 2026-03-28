@@ -1,12 +1,12 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CanonicalProviderRegistry, CanonicalProviderType, ProviderRegistryEntry } from '../../shared/contracts/runtime.js';
-import type { CredentialReference } from '../../custody/credential-vault.js';
+import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
 import type { SubstrateConfig } from './runtime-config-contracts.js';
 import {
   envCredential,
   resolveOptionalCredentialReference,
-} from '../../custody/credential-vault.js';
+} from '../../boundary/custody/credential-vault.js';
 import { writeJsonAtomic, loadOrSeedJson } from './load-or-seed.js';
 import { isRecord } from '../../shared/utils/types.js';
 

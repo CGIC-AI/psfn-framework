@@ -1,5 +1,5 @@
 import { isRecord } from '../shared/utils/types.js';
-import type { CredentialVaultPort } from '../custody/credential-vault.js';
+import type { CredentialVaultPort } from '../boundary/custody/credential-vault.js';
 import type { DnsResolver } from '../boundary/gateway/url-policy.js';
 
 export const FAL_CREATE_MODELS = [

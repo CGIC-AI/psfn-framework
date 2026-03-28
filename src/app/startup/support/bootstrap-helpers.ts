@@ -36,7 +36,7 @@ import {
   wrapStreamingSttConnectorWithEligibility,
   wrapStreamingTtsConnectorWithEligibility,
 } from './plugin-eligibility.js';
-import { createEnvCredentialVault } from '../../../custody/credential-vault.js';
+import { createEnvCredentialVault } from '../../../boundary/custody/credential-vault.js';
 import { createSystemConfigRepository } from '../../../system/config/system-config-repository.js';
 import { type ModelsLoadResult } from '../../../system/config/models-config.js';
 import {

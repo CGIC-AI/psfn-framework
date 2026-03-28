@@ -33,7 +33,7 @@ import {
 import {
   resolveOptionalEnvCredential,
   resolveProviderApiKey,
-} from '../custody/credential-vault.js';
+} from '../boundary/custody/credential-vault.js';
 import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMApiKeyReference,

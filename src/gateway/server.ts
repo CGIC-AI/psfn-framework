@@ -11,7 +11,6 @@ import {
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { ChannelOutboundDock } from '../channels/types.js';
 import {
-  parseWyomingShardRoutingConfigEnv,
   type CapabilityTier,
   type SubstrateMessage,
   type WyomingShardRoutingConfig,
@@ -29,7 +28,6 @@ import type { ImageRuntimeConfig } from '../images/types.js';
 import type { AuditStore } from './audit.js';
 import type { SessionHmacKeyring } from '../session/journal-utils.js';
 import { createComponentLogger } from '../logger.js';
-import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
 import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
@@ -102,10 +100,10 @@ export interface GatewayServerOptions {
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: AuditStore;
-  sessionHmacKeyring?: SessionHmacKeyring;
+  sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
-  wyomingShardRouting?: WyomingShardRoutingConfig;
+  wyomingShardRouting: WyomingShardRoutingConfig;
 }
 
 export class GatewayServer {
@@ -125,8 +123,7 @@ export class GatewayServer {
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
-    this.sessionHmacKeyring = options.sessionHmacKeyring
-      ?? requireGatewaySessionHmacKeyring(process.env);
+    this.sessionHmacKeyring = options.sessionHmacKeyring;
     this.confirmationConfig = {
       expiryMs: this.normalizePositiveInt(
         options.confirmation?.expiryMs,
@@ -139,7 +136,7 @@ export class GatewayServer {
       defaultExpiryMs: this.confirmationConfig.expiryMs,
     });
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
-    this.wyomingShardRouting = options.wyomingShardRouting ?? parseWyomingShardRoutingConfigEnv(process.env);
+    this.wyomingShardRouting = options.wyomingShardRouting;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
     this.runtimeHealthTracker = new GatewayRuntimeHealthTracker({
       ntfyConfigured: Boolean(options.ntfy),

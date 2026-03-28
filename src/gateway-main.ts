@@ -5,28 +5,17 @@
 import 'dotenv/config';
 import { ensureActiveTimezone } from './time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { LLMClient } from './llm/client.js';
 import { createEmbeddingProviderFromConfig } from './memory/embedding.js';
 import type { DiscordAdapter } from './channels/discord/adapter.js';
 import type { TelegramAdapter } from './channels/telegram/adapter.js';
-import {
-  loadRuntimeChannelsConfig,
-  type RuntimeChannelsConfigOverrides,
-} from './channels/config.js';
 import { EventBus } from './event-bus.js';
 import { GatewayServer } from './gateway/server.js';
 import { AuditStore } from './gateway/audit.js';
-import {
-  resolveAllowedReadPathsFromEnv,
-  resolveFullCodebaseReadRootFromEnv,
-} from './gateway/policy-config.js';
-import {
-  ensureRegistryFile,
-  resolveModuleRegistryPathFromWorkspace,
-} from './modules/registry.js';
+import { ensureRegistryFile } from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
 import type { SubstrateMessage } from './types.js';
@@ -45,14 +34,8 @@ import {
   type EligibilityDecision,
 } from './capabilities/eligibility.js';
 import { GitOps } from './git/ops.js';
-import { resolveGitRepoRoot } from './git/repo-root.js';
 import { initDatabase } from './persistence/sqlite-utils.js';
-import {
-  parseBooleanEnv as parseEnvBoolean,
-  parseEnvList,
-  parsePositiveIntEnv,
-} from './utils/env.js';
-import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
+import { resolveGatewayBootstrapInput } from './gateway/bootstrap-input.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -60,20 +43,9 @@ import {
   resolveRuntimeVoiceProviderGate,
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
-import { getIgnoredJsonBackedConfigEnvKeys } from './config/legacy-env.js';
-import { resolveConfiguredLiteLLMBaseUrl } from './config/providers-config.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
-import type { SubstrateConfig } from './types.js';
-import type { EditableSettings } from './settings.js';
-import type { BeadsAction } from './gateway/protocol.js';
-import type { VaultPolicyAction } from './gateway/policy.js';
 import { VaultOps } from './vault/ops.js';
-import {
-  startDiscordWithRetry,
-  DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
-  DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
-  DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
-} from './gateway/discord-startup.js';
+import { startDiscordWithRetry } from './gateway/discord-startup.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
   createOpenHomeChannelAdapterFactoryEntry,
@@ -88,29 +60,6 @@ import {
 import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Gateway');
-const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
-const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
-const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
-const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
-const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;
-const DEFAULT_SHELL_EXEC_OUTPUT_CHARS = 20_000;
-const DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP = 100_000;
-const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
-const ALL_BEADS_ACTIONS: readonly BeadsAction[] = [
-  'ready',
-  'show',
-  'create',
-  'update',
-  'close',
-  'sync',
-];
-const ALL_VAULT_ACTIONS: readonly VaultPolicyAction[] = [
-  'write',
-  'read',
-  'search',
-  'daily',
-];
 
 ensureActiveTimezone();
 
@@ -255,137 +204,6 @@ function createDiscordReverseRpcVoiceModule(): GatewayVoiceModule {
   };
 }
 
-function parseBooleanEnvWithFallback(value: string | undefined, fallback = false): boolean {
-  const parsed = parseEnvBoolean(value);
-  return parsed === undefined ? fallback : parsed;
-}
-
-function parseBeadsActionsEnv(value: string | undefined): BeadsAction[] | undefined {
-  const parsed = parseEnvList(value, { separators: [','] });
-  if (!parsed) {
-    return value === undefined ? undefined : [];
-  }
-
-  const valid = new Set(ALL_BEADS_ACTIONS);
-  const actions: BeadsAction[] = [];
-  for (const entry of parsed) {
-    const normalized = entry.toLowerCase();
-    if (valid.has(normalized as BeadsAction)) {
-      actions.push(normalized as BeadsAction);
-    }
-  }
-  return actions;
-}
-
-function parseVaultActionsEnv(value: string | undefined): VaultPolicyAction[] | undefined {
-  const parsed = parseEnvList(value, { separators: [','] });
-  if (!parsed) {
-    return value === undefined ? undefined : [];
-  }
-
-  const valid = new Set(ALL_VAULT_ACTIONS);
-  const actions: VaultPolicyAction[] = [];
-  for (const entry of parsed) {
-    const normalized = entry.toLowerCase();
-    if (valid.has(normalized as VaultPolicyAction)) {
-      actions.push(normalized as VaultPolicyAction);
-    }
-  }
-  return actions;
-}
-
-function resolveGatewayRuntimeMode(raw: string | undefined): string {
-  const normalized = raw?.trim().toLowerCase() ?? '';
-  if (!normalized) {
-    throw new Error(
-      'PSFN_RUNTIME_MODE is required for gateway startup. Set it to "split" or "yolo".',
-    );
-  }
-
-  const allowedModes = new Set([
-    'split',
-    'yolo',
-    'gateway',
-    'gateway-agent',
-    'gateway_agent',
-    'gatewayagent',
-    'agent',
-  ]);
-  if (!allowedModes.has(normalized)) {
-    throw new Error(
-      `Unsupported PSFN_RUNTIME_MODE "${raw}". Expected one of: split, yolo, gateway, gateway-agent.`,
-    );
-  }
-
-  if (normalized === 'gateway_agent' || normalized === 'gatewayagent') {
-    return 'gateway-agent';
-  }
-  if (normalized === 'agent') {
-    return 'gateway-agent';
-  }
-  return normalized;
-}
-
-function normalizeConfiguredHttpUrl(raw: string | undefined): string | null {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return null;
-    }
-    if ((parsed.protocol === 'http:' && parsed.port === '80')
-      || (parsed.protocol === 'https:' && parsed.port === '443')) {
-      parsed.port = '';
-    }
-    parsed.hash = '';
-    return parsed.toString();
-  } catch {
-    return null;
-  }
-}
-
-function resolveLiteLLMDiscoveryModelsUrl(rawBaseUrl: string | undefined): string | null {
-  const normalizedBaseUrl = normalizeConfiguredHttpUrl(rawBaseUrl);
-  if (!normalizedBaseUrl) return null;
-
-  const parsed = new URL(normalizedBaseUrl);
-  const basePath = parsed.pathname
-    .replace(/\/+$/, '')
-    .replace(/\/v1$/i, '');
-  parsed.pathname = `${basePath}/v1/models`.replace(/\/{2,}/g, '/');
-  parsed.search = '';
-  parsed.hash = '';
-  return parsed.toString();
-}
-
-function resolveDiscoveryLaneConfig(input: {
-  litellmBaseUrl: string | undefined;
-  openRouterModelsApiUrl: string | undefined;
-}): { enabled: true; allowHttp: boolean; urlAllowlist: string[] } | undefined {
-  const litellmModelsUrl = resolveLiteLLMDiscoveryModelsUrl(input.litellmBaseUrl);
-  if (!litellmModelsUrl) {
-    return undefined;
-  }
-
-  const openRouterUrl = normalizeConfiguredHttpUrl(input.openRouterModelsApiUrl);
-  const urlAllowlist = [...new Set(
-    [litellmModelsUrl, openRouterUrl]
-      .filter((value): value is string => Boolean(value)),
-  )];
-  if (urlAllowlist.length === 0) {
-    return undefined;
-  }
-
-  return {
-    enabled: true,
-    allowHttp: urlAllowlist.some(url => url.startsWith('http://')),
-    urlAllowlist,
-  };
-}
-
 async function runShutdownStep(
   step: string,
   action: () => void | Promise<void>,
@@ -423,120 +241,36 @@ async function runShutdownStep(
   }
 }
 
-function buildGatewayChannelsConfigOverrides(
-  config: SubstrateConfig,
-  settings: EditableSettings,
-): RuntimeChannelsConfigOverrides {
-  const telegramOverride: RuntimeChannelsConfigOverrides['telegram'] = {};
-
-  if (Object.hasOwn(settings, 'telegramEnabled')) {
-    telegramOverride.enabled = config.telegramEnabled ?? false;
-  }
-  if (Object.hasOwn(settings, 'telegramAuthorizedUsers')) {
-    telegramOverride.allowedUsers = config.telegramAuthorizedUsers
-      ? [...config.telegramAuthorizedUsers]
-      : [];
-  }
-
-  if (telegramOverride.enabled === undefined && telegramOverride.allowedUsers === undefined) {
-    return {};
-  }
-
-  return { telegram: telegramOverride };
-}
-
 async function main(): Promise<void> {
+  const env = process.env;
   const config = loadConfig();
-  const ignoredMutableEnvKeys = getIgnoredJsonBackedConfigEnvKeys(process.env);
-  if (ignoredMutableEnvKeys.length > 0) {
+  const startupHydration = hydrateCanonicalStartupConfig(config, {
+    env,
+  });
+  logStartupHydrationDiagnostics(startupHydration.diagnostics);
+  const bootstrap = resolveGatewayBootstrapInput({
+    config,
+    env,
+    startupHydration,
+  });
+  if (bootstrap.diagnostics.ignoredMutableEnvKeys.length > 0) {
     log.warn('Ignoring JSON-owned config env vars; move runtime config into system-data JSON files and keep .env for secrets/bootstrap wiring only', {
-      keys: ignoredMutableEnvKeys,
+      keys: bootstrap.diagnostics.ignoredMutableEnvKeys,
     });
   }
-  const startupHydration = hydrateCanonicalStartupConfig(config, {
-    env: process.env,
-  });
-  const {
-    systemDataDir,
-    companionDataDir,
-    runtimePathLayout,
-    settingsDomains,
-    trustPolicyConfig,
-  } = startupHydration;
-  logStartupHydrationDiagnostics(startupHydration.diagnostics);
   log.info('Loaded trust policy configuration', {
     exactOverrideCount: Object.keys(
-      trustPolicyConfig.channelClassification.visibilityOverrides.exact,
+      startupHydration.trustPolicyConfig.channelClassification.visibilityOverrides.exact,
     ).length,
     prefixOverrideCount: Object.keys(
-      trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
+      startupHydration.trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
   });
-  const channelsConfig = loadRuntimeChannelsConfig(
-    systemDataDir,
-    process.env,
-    buildGatewayChannelsConfigOverrides(config, settingsDomains.runtime),
-  );
-  const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
-  const workspacePathEnv = process.env.WORKSPACE_PATH;
-  const workspacePath = runtimePathLayout.workspacePath;
-  if (!workspacePathEnv) {
+  if (!bootstrap.diagnostics.workspacePathProvided) {
     log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
-      mode: runtimePathLayout.mode,
-      workspacePath,
+      workspacePath: bootstrap.workspacePath,
     });
   }
-  const ntfyBaseUrl = process.env.NTFY_BASE_URL?.trim() || undefined;
-  const ntfyTopic = process.env.NTFY_TOPIC?.trim() || undefined;
-  const ntfyToken = process.env.NTFY_TOKEN?.trim() || undefined;
-  const ntfyTimeoutMs = parsePositiveIntEnv(process.env.NTFY_TIMEOUT_MS, DEFAULT_NTFY_TIMEOUT_MS);
-  const ntfyDebounceMs = parsePositiveIntEnv(process.env.NTFY_DEBOUNCE_MS, DEFAULT_NTFY_DEBOUNCE_MS);
-  const confirmationExpiryMs = parsePositiveIntEnv(
-    process.env.CONFIRMATION_EXPIRY_MS,
-    DEFAULT_CONFIRMATION_EXPIRY_MS,
-  );
-  const confirmationOperatorDiscordChannelId = process.env.CONFIRMATION_OPERATOR_DISCORD_CHANNEL_ID?.trim() || undefined;
-  const confirmationNtfyTopic = process.env.CONFIRMATION_NTFY_TOPIC?.trim() || undefined;
-  const shellExecEnabled = parseBooleanEnvWithFallback(process.env.SHELL_EXEC_ENABLED, false);
-  const shellExecAllowlist = parseEnvList(process.env.SHELL_EXEC_ALLOWLIST, { separators: [','] });
-  const shellExecAllowedCwd = parseEnvList(process.env.SHELL_EXEC_ALLOWED_CWD, { separators: [','] });
-  const shellExecDefaultTimeoutMs = parsePositiveIntEnv(
-    process.env.SHELL_EXEC_DEFAULT_TIMEOUT_MS,
-    DEFAULT_SHELL_EXEC_TIMEOUT_MS,
-  );
-  const shellExecMaxTimeoutMs = parsePositiveIntEnv(
-    process.env.SHELL_EXEC_MAX_TIMEOUT_MS,
-    DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS,
-  );
-  const shellExecDefaultMaxOutputChars = parsePositiveIntEnv(
-    process.env.SHELL_EXEC_DEFAULT_MAX_OUTPUT_CHARS,
-    DEFAULT_SHELL_EXEC_OUTPUT_CHARS,
-  );
-  const shellExecMaxOutputChars = parsePositiveIntEnv(
-    process.env.SHELL_EXEC_MAX_OUTPUT_CHARS,
-    DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
-  );
-  const beadsToolsEnabled = parseBooleanEnvWithFallback(process.env.BEADS_TOOLS_ENABLED, false);
-  const beadsAllowActions = parseBeadsActionsEnv(process.env.BEADS_ALLOW_ACTIONS)
-    ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
-  const vaultToolsEnabled = parseBooleanEnvWithFallback(
-    process.env.VAULT_TOOLS_ENABLED,
-    Boolean(config.obsidianVaultName),
-  );
-  const vaultAllowActions = parseVaultActionsEnv(process.env.VAULT_ALLOW_ACTIONS)
-    ?? (vaultToolsEnabled ? [...ALL_VAULT_ACTIONS] : undefined);
-  const discordStartRetryBaseDelayMs = parsePositiveIntEnv(
-    process.env.DISCORD_START_RETRY_BASE_DELAY_MS,
-    DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
-  );
-  const discordStartRetryMaxDelayMs = parsePositiveIntEnv(
-    process.env.DISCORD_START_RETRY_MAX_DELAY_MS,
-    DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
-  );
-  const discordStartRetryMaxAttempts = parsePositiveIntEnv(
-    process.env.DISCORD_START_RETRY_MAX_ATTEMPTS,
-    DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
-  );
   // ── Apply TLS config early, before any HTTPS connections ──
   applyGatewayTlsConfig({
     caPath: config.gatewayTlsCaPath,
@@ -547,35 +281,37 @@ async function main(): Promise<void> {
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
   log.info('Initializing...');
-  if (systemDataDir !== companionDataDir) {
+  if (startupHydration.systemDataDir !== startupHydration.companionDataDir) {
     log.info('Configured split persistence roots', {
-      systemDataDir,
-      companionDataDir,
+      systemDataDir: startupHydration.systemDataDir,
+      companionDataDir: startupHydration.companionDataDir,
     });
   }
 
   // Ensure gateway socket directory exists
-  mkdirSync(dirname(socketPath), { recursive: true });
-  const runtimeMode = resolveGatewayRuntimeMode(process.env.PSFN_RUNTIME_MODE);
-  const codebaseRoot = resolve('.');
-  const workspaceRoot = resolveWorkspaceRoot(workspacePath);
-  const gitRepoRoot = resolveGitRepoRoot({
-    codebaseRoot,
-    configuredGitRepoRoot: process.env.GIT_REPO_ROOT,
-  });
-  mkdirSync(workspaceRoot, { recursive: true });
-  if (workspaceRoot !== gitRepoRoot) {
+  mkdirSync(dirname(bootstrap.socketPath), { recursive: true });
+  mkdirSync(bootstrap.workspaceRoot, { recursive: true });
+  if (bootstrap.workspaceRoot !== bootstrap.gitRepoRoot) {
     log.info('Gateway workspace and git roots diverge', {
-      workspaceRoot,
-      gitRepoRoot,
+      workspaceRoot: bootstrap.workspaceRoot,
+      gitRepoRoot: bootstrap.gitRepoRoot,
     });
   }
-  if (vaultToolsEnabled && !config.obsidianVaultName) {
+  if (bootstrap.server.ntfy) {
+    log.info('Gateway ntfy notifier configured', {
+      baseUrl: bootstrap.server.ntfy.baseUrl,
+      defaultTopic: bootstrap.server.ntfy.defaultTopic,
+    });
+  } else if (bootstrap.diagnostics.ntfyConfigIncomplete) {
+    log.warn('ntfy alerts disabled: both NTFY_BASE_URL and NTFY_TOPIC are required');
+  }
+  const vaultPolicyConfig = bootstrap.policyConfig.vault;
+  if (vaultPolicyConfig?.enabled && !config.obsidianVaultName) {
     throw new Error(
       'VAULT_TOOLS_ENABLED is true but obsidianVaultName is not configured in settings.',
     );
   }
-  const vaultOps = vaultToolsEnabled
+  const vaultOps = vaultPolicyConfig?.enabled
     ? new VaultOps({
       vaultName: config.obsidianVaultName!,
       ...(config.obsidianCliPath ? { cliPath: config.obsidianCliPath } : {}),
@@ -584,40 +320,31 @@ async function main(): Promise<void> {
         : {}),
     })
     : undefined;
-  const fullCodebaseReadRoot = resolveFullCodebaseReadRootFromEnv(process.env, codebaseRoot);
-  const discoveryLaneConfig = resolveDiscoveryLaneConfig({
-    litellmBaseUrl: resolveConfiguredLiteLLMBaseUrl(config) ?? undefined,
-    openRouterModelsApiUrl: config.openRouterModelsApiUrl,
-  });
-  if (fullCodebaseReadRoot) {
+  if (bootstrap.fullCodebaseReadRoot) {
     log.warn('YOLO runtime mode active: full-codebase fs.read is enabled', {
-      runtimeMode,
-      fullCodebaseReadRoot,
-      workspaceWriteScope: workspaceRoot,
+      runtimeMode: bootstrap.runtimeMode,
+      fullCodebaseReadRoot: bootstrap.fullCodebaseReadRoot,
+      workspaceWriteScope: bootstrap.workspaceRoot,
     });
   } else {
-    log.info('Gateway runtime mode', { runtimeMode });
+    log.info('Gateway runtime mode', { runtimeMode: bootstrap.runtimeMode });
   }
 
   // Ensure the module registry file exists regardless of policy — prevents
   // ENOENT when the REPL sandbox or ModuleLoader reads it for the first time.
-  const moduleRegistryAbsolute = resolveModuleRegistryPathFromWorkspace(
-    workspaceRoot,
-    process.env.MODULE_REGISTRY_PATH,
-  );
-  ensureRegistryFile(moduleRegistryAbsolute);
+  ensureRegistryFile(bootstrap.moduleRegistryAbsolute);
 
   // ── Create providers (these hold secrets / have network access) ──
-  const embeddingProvider = createEmbeddingProviderFromConfig(config, process.env);
+  const embeddingProvider = createEmbeddingProviderFromConfig(config, bootstrap.providerEnv);
   log.info('Embedding provider initialized', {
     provider: embeddingProvider.kind,
     dims: embeddingProvider.dims,
   });
   const gitOps = new GitOps({
-    repoRoot: gitRepoRoot,
+    repoRoot: bootstrap.gitRepoRoot,
   });
   const capabilityRuntime = new CapabilityRuntime({
-    dataDir: systemDataDir,
+    dataDir: startupHydration.systemDataDir,
   });
   const eligibilityGate = createEligibilityGate(
     () => capabilityRuntime,
@@ -646,7 +373,7 @@ async function main(): Promise<void> {
     }),
     createOpenHomeChannelAdapterFactoryEntry(),
     createTelegramChannelAdapterFactoryEntry({
-      config: channelsConfig.telegram,
+      config: bootstrap.channelsConfig.telegram,
       eventBus,
     }),
   ]);
@@ -662,82 +389,36 @@ async function main(): Promise<void> {
 
   // ── Audit database (separate from agent's runtime DB) ──
 
-  const auditDbPath = process.env.AUDIT_DB_PATH ?? join(systemDataDir, 'gateway-audit.db');
-  const auditDb = initDatabase(auditDbPath, { foreignKeys: false });
+  const auditDb = initDatabase(bootstrap.auditDbPath, { foreignKeys: false });
   const auditStore = new AuditStore(auditDb);
-  log.info(`Audit log: ${auditDbPath}`);
+  log.info(`Audit log: ${bootstrap.auditDbPath}`);
 
   // ── Create gateway server ──
 
   const gateway = new GatewayServer({
-    socketPath,
+    socketPath: bootstrap.socketPath,
     llmProvider: llmClient,
     embeddingService: embeddingProvider,
     discordAdapter: discord,
     gitOps,
     imageConfig: config,
     policyConfig: {
-      workspacePath: workspaceRoot,
-      allowedReadPaths: resolveAllowedReadPathsFromEnv(process.env, workspaceRoot),
-      ...(fullCodebaseReadRoot ? { fullCodebaseReadRoot } : {}),
-      urlPolicy: {
-        allowHttp: config.webFetchAllowHttp === true,
-        ...(config.webFetchDomainAllowlist && config.webFetchDomainAllowlist.length > 0
-          ? { domainAllowlist: config.webFetchDomainAllowlist }
-          : {}),
-        allowInternalNetwork: config.webFetchAllowInternalNetwork === true,
-        ...(discoveryLaneConfig ? { discoveryLane: discoveryLaneConfig } : {}),
-        // Deprecated: local crawler lane preserved for backward compat
-        localCrawlerLane: {
-          enabled: config.webFetchLocalCrawlerEnabled === true,
-          allowHttp: config.webFetchLocalCrawlerAllowHttp === true,
-          ...(config.webFetchLocalCrawlerHostAllowlist && config.webFetchLocalCrawlerHostAllowlist.length > 0
-            ? { hostAllowlist: config.webFetchLocalCrawlerHostAllowlist }
-            : {}),
-          ...(config.webFetchLocalCrawlerDomainAllowlist && config.webFetchLocalCrawlerDomainAllowlist.length > 0
-            ? { domainAllowlist: config.webFetchLocalCrawlerDomainAllowlist }
-            : {}),
-        },
-      },
-      ...(config.webFetchTlsCaCertPaths && config.webFetchTlsCaCertPaths.length > 0
-        ? { webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths }
+      ...bootstrap.policyConfig,
+      ...(vaultPolicyConfig
+        ? {
+            vault: {
+              ...vaultPolicyConfig,
+              ...(vaultOps ? { ops: vaultOps } : {}),
+            },
+          }
         : {}),
-      shellExec: {
-        enabled: shellExecEnabled,
-        ...(shellExecAllowlist ? { allowlist: shellExecAllowlist } : {}),
-        ...(shellExecAllowedCwd ? { allowedCwd: shellExecAllowedCwd } : {}),
-        defaultTimeoutMs: shellExecDefaultTimeoutMs,
-        maxTimeoutMs: shellExecMaxTimeoutMs,
-        defaultMaxOutputChars: shellExecDefaultMaxOutputChars,
-        maxOutputChars: shellExecMaxOutputChars,
-      },
-      beads: {
-        enabled: beadsToolsEnabled,
-        ...(beadsAllowActions ? { allowActions: beadsAllowActions } : {}),
-      },
-      vault: {
-        enabled: vaultToolsEnabled,
-        ...(vaultAllowActions ? { allowActions: vaultAllowActions } : {}),
-        ...(vaultOps ? { ops: vaultOps } : {}),
-      },
     },
-    ntfy: ntfyBaseUrl && ntfyTopic
-      ? {
-        baseUrl: ntfyBaseUrl,
-        defaultTopic: ntfyTopic,
-        token: ntfyToken,
-        timeoutMs: ntfyTimeoutMs,
-        debounceWindowMs: ntfyDebounceMs,
-      }
-      : undefined,
-    confirmation: {
-      expiryMs: confirmationExpiryMs,
-      operatorDiscordChannelId: confirmationOperatorDiscordChannelId,
-      ntfyTopic: confirmationNtfyTopic,
-    },
+    ntfy: bootstrap.server.ntfy,
+    confirmation: bootstrap.server.confirmation,
     capabilityTierProvider: () => capabilityRuntime.getTier(),
     auditStore,
-    wyomingShardRouting: config.wyomingShardRouting,
+    sessionHmacKeyring: bootstrap.server.sessionHmacKeyring,
+    wyomingShardRouting: bootstrap.server.wyomingShardRouting,
   });
 
   const voiceModuleHost = new GatewayVoiceModuleHost({
@@ -747,10 +428,6 @@ async function main(): Promise<void> {
   });
   voiceModuleHost.registerModule(createDiscordReverseRpcVoiceModule());
   await voiceModuleHost.registerAll();
-
-  if ((ntfyBaseUrl && !ntfyTopic) || (!ntfyBaseUrl && ntfyTopic)) {
-    log.warn('ntfy alerts disabled: both NTFY_BASE_URL and NTFY_TOPIC are required');
-  }
 
   // ── Wyoming voice bridge (opt-in) ──
 
@@ -918,9 +595,9 @@ async function main(): Promise<void> {
       await discord.start();
     },
     {
-      baseDelayMs: discordStartRetryBaseDelayMs,
-      maxDelayMs: discordStartRetryMaxDelayMs,
-      maxAttempts: discordStartRetryMaxAttempts,
+      baseDelayMs: bootstrap.discordStartRetry.baseDelayMs,
+      maxDelayMs: bootstrap.discordStartRetry.maxDelayMs,
+      maxAttempts: bootstrap.discordStartRetry.maxAttempts,
       onRetry: ({ attempt, delayMs, maxAttempts, error }) => {
         const rawCode = (error as Error & { code?: unknown }).code;
         const code = typeof rawCode === 'string' ? rawCode : undefined;
@@ -940,13 +617,13 @@ async function main(): Promise<void> {
   if (telegram) {
     await telegram.start();
     log.info('Telegram gateway bridge enabled', {
-      mode: channelsConfig.telegram.mode,
-      allowlistSize: channelsConfig.telegram.allowedUsers.length,
+      mode: bootstrap.channelsConfig.telegram.mode,
+      allowlistSize: bootstrap.channelsConfig.telegram.allowedUsers.length,
     });
   }
 
-  log.info(`Ready — listening on ${socketPath}`);
-  log.info(`Workspace: ${workspaceRoot}`);
+  log.info(`Ready — listening on ${bootstrap.socketPath}`);
+  log.info(`Workspace: ${bootstrap.workspaceRoot}`);
 
   // ── Graceful shutdown ──
 
@@ -977,10 +654,7 @@ async function main(): Promise<void> {
     logger: log,
     runGracefulShutdown: stop,
     exit: (code) => { process.exit(code); },
-    forceExitTimeoutMs: parsePositiveIntEnv(
-      process.env.SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
-      DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
-    ),
+    forceExitTimeoutMs: bootstrap.shutdownForceExitTimeoutMs,
   });
 
   process.on('SIGINT', () => {

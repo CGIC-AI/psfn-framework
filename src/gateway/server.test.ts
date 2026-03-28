@@ -30,6 +30,10 @@ const TEST_SESSION_HMAC_KEYRING: SessionHmacKeyring = {
   },
 };
 
+const TEST_WYOMING_SHARD_ROUTING = {
+  enabled: false,
+};
+
 function createMockConnection(
   onSend?: (message: any, emit: (response: unknown) => void) => void,
 ) {
@@ -127,6 +131,7 @@ function createMinimalOptions(): GatewayServerOptions {
       workspacePath: '/workspace',
     },
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
+    wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
   };
 }
 

@@ -143,7 +143,18 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
     expect(harness.shardManager.delegateWyomingSession).toHaveBeenCalledWith({
       message,
-      routing: message.routing?.wyoming,
+      routing: expect.objectContaining({
+        connectionId: 'conn-1',
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        siteId: 'ha-main',
+        satelliteId: 'den',
+        presence: expect.objectContaining({
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'den',
+        }),
+      }),
     });
     expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
     expect(response).toEqual({

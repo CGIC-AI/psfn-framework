@@ -3,8 +3,8 @@ import type {
   Attachment,
   SubstrateConfig,
   SubstrateMessage,
-  WyomingRoutingMetadata,
 } from '../types.js';
+import type { ShardExecutionPort } from '../shards/port.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { evaluateWyomingDelegation } from './wyoming-routing.js';
 
@@ -32,21 +32,7 @@ export interface GatewayMessageAgentLoop {
   handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
 }
 
-export interface WyomingShardDelegationResult {
-  shardId: string;
-  content: string;
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-  durationMs: number;
-}
-
-export interface GatewayMessageShardManager {
-  delegateWyomingSession(request: {
-    message: SubstrateMessage;
-    routing?: WyomingRoutingMetadata;
-  }): Promise<WyomingShardDelegationResult>;
-}
+export type GatewayMessageShardManager = Pick<ShardExecutionPort, 'delegateWyomingSession'>;
 
 export interface GatewayMessageAuditTrail {
   append(event: string, details?: Record<string, unknown>): unknown;

@@ -4,7 +4,7 @@ import type { MemoryStore } from '../../memory/store.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
-import type { ShardManager } from '../../shards/manager.js';
+import type { ShardExecutionPort } from '../../shards/port.js';
 import type { EventBus } from '../../event-bus.js';
 import type { EmbeddingService } from '../../agent/contracts.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
@@ -48,7 +48,7 @@ export interface AdminServerConfig {
   sessionStore: SessionStore;
   sessionManager: SessionManager;
   scheduler: Scheduler;
-  shardManager: ShardManager;
+  shardManager: ShardExecutionPort;
   eventBus: EventBus;
   characterCard: CharacterCardV2;
   config: SubstrateConfig;

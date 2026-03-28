@@ -27,6 +27,7 @@ import {
   type ShardSessionMemorySyncEnvelope,
 } from '../gateway/policy.js';
 import { appendShardSessionMemorySyncAudit } from '../persistence/jsonl.js';
+import type { ShardExecutionPort } from './port.js';
 import type {
   ShardConfig,
   ShardContextPack,
@@ -129,7 +130,7 @@ export interface ActiveShard {
   failureReason?: string;
 }
 
-export class ShardManager {
+export class ShardManager implements ShardExecutionPort {
   private deps: ShardManagerDeps;
   private auditTrail: ShardAuditTrail | null;
   private activeCount = 0;

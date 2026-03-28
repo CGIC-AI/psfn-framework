@@ -28,6 +28,10 @@ import { MemoryExtractor } from '../memory/extraction.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
+import {
+  createShardExecutionPort,
+  type ShardExecutionPort,
+} from '../shards/port.js';
 import { createSpawnShardTool } from '../shards/tools.js';
 import { createThinkTool } from '../repl/tools.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
@@ -269,8 +273,8 @@ export interface ToolRuntimeOptions {
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
 }
 
-export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardManager {
-  const shardManager = new ShardManager({
+export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
+  const shardManager = createShardExecutionPort(new ShardManager({
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
     sessionStore: options.sessionStore,
@@ -285,7 +289,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     shardSessionMemorySyncAuditPath: options.companionDataDir
       ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
       : undefined,
-  });
+  }));
   options.agentLoop.registerTool(createSpawnShardTool(shardManager));
 
   options.agentLoop.registerTool(createThinkTool({

@@ -244,7 +244,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         await moduleLoader.applyRegistryMutation(mutation);
       });
 
-      wireShardAndThinkRuntime({
+      const shardPort = wireShardAndThinkRuntime({
         agentLoop: target as any,
         eventBus,
         llmProvider: llm,
@@ -260,6 +260,8 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         moduleInstallConfirmationQueue: queue,
         onModuleRegistryMutation: onMutation,
       });
+      expect(shardPort.getActiveCount()).toBe(0);
+      expect(shardPort.getActiveShards()).toEqual([]);
 
       const think = findThinkTool(target);
       const result = await think.execute('call-2', { task: 'install module' });

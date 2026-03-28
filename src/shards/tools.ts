@@ -4,12 +4,12 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { ShardManager } from './manager.js';
+import type { ShardExecutionPort } from './port.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
-export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
+export function createSpawnShardTool(manager: ShardExecutionPort): AgentTool<any> {
   return {
     name: 'spawn_shard',
     description:

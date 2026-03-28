@@ -3,7 +3,7 @@ import type { MemoryStore } from '../../../memory/store.js';
 import type { Scheduler } from '../../../scheduler/scheduler.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
-import type { ShardManager } from '../../../shards/manager.js';
+import type { ShardExecutionPort } from '../../../shards/port.js';
 import type { DashboardCostWindow, DashboardSessionContextPressure, ThinkTraceView } from '../types.js';
 import type { AdminDashboardData, AdminDashboardService } from './types.js';
 import {
@@ -47,7 +47,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     sessionStore: SessionStore;
     sessionManager?: SessionManager;
     scheduler: Scheduler;
-    shardManager: ShardManager;
+    shardManager: ShardExecutionPort;
     eventBus: EventBus;
   }) {
     this.deps.eventBus.on('agent.turn.usage', ({ message, usage }) => {

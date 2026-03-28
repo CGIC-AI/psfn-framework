@@ -713,6 +713,7 @@ export interface AdminSettingsData {
   editors: {
     models: unknown;
     providers: ProvidersRuntimeConfig;
+    channels: Record<string, unknown>;
     skills: unknown;
     scheduler: unknown;
     trustPolicy: unknown;

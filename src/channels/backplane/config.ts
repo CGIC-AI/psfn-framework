@@ -11,6 +11,7 @@ import {
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { writeJsonAtomic } from '../../system/config/load-or-seed.js';
 import {
   normalizeChannelVisibility,
   type ChannelVisibility,
@@ -19,7 +20,7 @@ import type { ChannelType } from '../../shared/contracts/runtime.js';
 
 const log = createComponentLogger('ChannelConfig');
 
-const CHANNELS_CONFIG_FILE = 'channels.json';
+export const CHANNELS_FILE_NAME = 'channels.json';
 const ENV_TOKEN_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const ENV_CREDENTIAL_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const DEFAULT_TELEGRAM_POLL_INTERVAL_MS = 1_000;
@@ -299,7 +300,7 @@ function parseSectionObject(
 }
 
 export function loadChannelsOwnerFile(dataDir: string): Record<string, unknown> {
-  const filePath = join(dataDir, CHANNELS_CONFIG_FILE);
+  const filePath = join(dataDir, CHANNELS_FILE_NAME);
   if (!existsSync(filePath)) {
     return {};
   }
@@ -314,6 +315,19 @@ export function loadChannelsOwnerFile(dataDir: string): Record<string, unknown> 
   } catch (error) {
     throw new Error(`Failed to load channels config from ${filePath}: ${toErrorMessage(error)}`);
   }
+}
+
+export function saveChannelsOwnerFile(
+  dataDir: string,
+  nextConfig: unknown,
+): Record<string, unknown> {
+  if (!isRecord(nextConfig)) {
+    throw new Error('channels.json must contain a JSON object at the root');
+  }
+
+  const filePath = join(dataDir, CHANNELS_FILE_NAME);
+  writeJsonAtomic(filePath, nextConfig);
+  return nextConfig;
 }
 
 function rejectInlineSecretField(

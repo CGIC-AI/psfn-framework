@@ -471,6 +471,50 @@ describe('AdminSettingsDataService', () => {
     expect(JSON.parse(service.getSubConfigJson('channels') ?? '{}')).toEqual(payload);
   });
 
+  it('round-trips channels.json owner-file saves through the Garden raw editor surface', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = new AdminSettingsDataService({ config });
+    const payload = {
+      discord: {
+        heartbeatChannelId: 'heartbeat-123',
+      },
+      telegram: {
+        enabled: false,
+        tokenRef: {
+          kind: 'env',
+          envName: 'TELEGRAM_BOT_TOKEN',
+        },
+        allowedUsers: [],
+        mode: 'polling',
+        pollIntervalMs: 1_000,
+        webhook: {
+          url: 'https://example.test/telegram/webhook',
+          secretRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_WEBHOOK_SECRET',
+          },
+          host: '0.0.0.0',
+          port: 8_080,
+          path: '/telegram/webhook',
+        },
+      },
+    };
+
+    const result = service.saveSubConfigJson('channels', JSON.stringify(payload));
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'channels.json saved',
+    });
+    expect(JSON.parse(service.getSubConfigJson('channels') ?? '{}')).toEqual(payload);
+    expect(await service.getSettingsData()).toEqual(expect.objectContaining({
+      editors: expect.objectContaining({
+        channels: payload,
+      }),
+    }));
+  });
+
   it('round-trips providers through providers.json owner-file saves and refreshes runtime routing', async () => {
     const root = makeTempDir();
     const refreshModelsSpy = vi.fn();

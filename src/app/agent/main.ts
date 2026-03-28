@@ -30,7 +30,6 @@ import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { buildShellExecPolicyConfig } from '../../boundary/sandbox/execution/shell-policy-config.js';
-} from '../startup/composition/composition.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,

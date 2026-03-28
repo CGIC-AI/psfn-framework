@@ -9,6 +9,10 @@ import { GatewayClient } from '../gateway/client.js';
 import { GatewayGitOps } from './gateway-ops.js';
 import { GitOps } from './ops.js';
 
+const TEST_WYOMING_SHARD_ROUTING = {
+  enabled: false,
+};
+
 function createServerOptions(
   socketPath: string,
   gitOps: GatewayServerOptions['gitOps'],
@@ -41,6 +45,7 @@ function createServerOptions(
         v1: 'test-gateway-rpc-secret',
       },
     },
+    wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
     capabilityTierProvider: () => 'autonomous',
   };
 }

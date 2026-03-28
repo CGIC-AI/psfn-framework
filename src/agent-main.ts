@@ -46,17 +46,12 @@ import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
 import { registerBeadsTools } from './beads/runtime-wiring.js';
 import { GatewayBeadsOps } from './beads/gateway-ops.js';
-import {
-  DiscordLifecycleNotifier,
-  writeLastActiveSession,
-} from './lifecycle/notifications.js';
-import type { MessageSender } from './lifecycle/notifications.js';
+import { writeLastActiveSession } from './lifecycle/notifications.js';
 import {
   RUNTIME_MODE,
 } from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
-import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
-import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
+import { createGatewayNtfyNotifier } from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { createBehavioralPatternMemoryPromotionHook } from './intention/patterns.js';
 import {
@@ -118,14 +113,14 @@ import {
 } from './runtime/ml-warmup.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
-import { runShutdownSequence } from './runtime/shutdown-helpers.js';
 import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 import { buildAgentCoreRuntime } from './agent-main/core-runtime.js';
+import { buildAgentControlPlane } from './agent-main/control-plane.js';
+import type { AgentControlPlaneShutdownTargets } from './agent-main/control-plane.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
 const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
-const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
@@ -313,10 +308,10 @@ async function main(): Promise<void> {
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
   log.info('Connected to gateway');
   let shuttingDown = false;
-  let stopPromise: Promise<void> | null = null;
   let stopFn: () => Promise<void> = async () => {};
   const unregisterGatewayDisconnect = gateway.onDisconnect(async (event) => {
     if (shuttingDown) return;
+    shuttingDown = true;
     log.error('Gateway connection lost; shutting down agent process', {
       source: event.source,
       error: event.error?.message,
@@ -877,100 +872,42 @@ async function main(): Promise<void> {
     log.info(`Admin GUI listening on port ${adminPort}`);
   }
 
-  // ── Lifecycle notifier + tools ──
-
-  const startTime = Date.now();
   const heartbeatChannelId = channelsConfig.discord.heartbeatChannelId || undefined;
-  const gatewaySender: MessageSender = {
-    send: (channelId, content) => gateway.discordSend(channelId, content),
-  };
-  const lifecycleNotifier = new DiscordLifecycleNotifier({
-    sender: gatewaySender,
+  const shutdownTargets: AgentControlPlaneShutdownTargets = {};
+  const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
     dataDir: pathSnapshot.companionDataDir,
-    startTime,
-  });
-
-  stopFn = async () => {
-    if (stopPromise) {
-      await stopPromise;
-      return;
-    }
-
-    shuttingDown = true;
-    stopPromise = (async () => {
-      const timeoutMs = parsePositiveIntEnv(
-        process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
-        DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
-      );
-      await runShutdownSequence([
-        { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
-        { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
-        { step: 'stop debug observer', action: () => stopDebugObserver() },
-        { step: 'stop scheduler', action: () => scheduler.stop() },
-        {
-          step: 'drain memory extractor',
-          action: async () => {
-            const drained = await memoryExtractor.stop({ timeoutMs });
-            if (!drained) {
-              log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
-            }
-          },
-        },
-        {
-          step: 'write graceful shutdown markers',
-          action: () => {
-            const markedChannels = sessionStore.markGracefulShutdownForActiveChannels();
-            if (markedChannels.length > 0) {
-              log.info('Wrote graceful shutdown markers', { channels: markedChannels });
-            }
-          },
-        },
-        { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
-        { step: 'stop API server', action: () => apiServer?.stop() },
-        { step: 'stop admin server', action: () => adminServer?.stop() },
-        { step: 'destroy gateway client', action: () => gateway.destroy() },
-        {
-          step: 'close database',
-          action: () => {
-            db.close();
-          },
-        },
-      ], log);
-      log.info('Stopped');
-    })();
-
-    await stopPromise;
-  };
-
-  agentLoop.registerTool(createRestartTool(
-    lifecycleNotifier,
-    stopFn,
-    {
-      restartSafeguard: lifecycleRestartSafeguard,
-      getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRuntimeContract.restart.command,
-      runtimeMode: lifecycleRuntimeContract.mode,
+    eventBus,
+    gateway,
+    unregisterGatewayDisconnect,
+    stopDebugObserver,
+    writeGracefulShutdownMarkers: () => {
+      const markedChannels = sessionStore.markGracefulShutdownForActiveChannels();
+      if (markedChannels.length > 0) {
+        log.info('Wrote graceful shutdown markers', { channels: markedChannels });
+      }
     },
-  ));
-  agentLoop.registerTool(createRebuildTool(
-    lifecycleNotifier,
-    stopFn,
-    {
-      restartSafeguard: lifecycleRestartSafeguard,
-      getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRuntimeContract.restart.command,
-      runtimeMode: lifecycleRuntimeContract.mode,
+    closeDatabase: () => {
+      db.close();
     },
-  ));
-  agentLoop.registerTool(createNotifyOperatorTool(
+    scheduler,
+    moduleLoader,
+    memoryExtractor,
+    agentLoop,
     operatorNotifier,
-    {
-      rateLimiter: externalRateLimiter,
-      defaultChannel: 'discord',
-      gatewayMode: true,
-    },
-  ));
+    lifecycleRestartSafeguard,
+    externalRateLimiter,
+    capabilityRuntime,
+    lifecycleRuntimeContract: lifecycleRuntimeContract as { mode: typeof lifecycleRuntimeContract.mode; restart: { command: string } },
+    shutdownTargets,
+  });
+  const { lifecycleNotifier } = controlPlane;
+  stopFn = controlPlane.stopFn;
+  shutdownTargets.apiServer = apiServer;
+  shutdownTargets.adminServer = adminServer;
+  const gatewaySender = {
+    send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
+  };
 
   // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
   let vaultAutoPublisher: import('./vault/auto-publish.js').VaultAutoPublisher | undefined;

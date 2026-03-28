@@ -1,0 +1,160 @@
+import { createComponentLogger } from '../logger.js';
+import { DiscordLifecycleNotifier } from '../lifecycle/notifications.js';
+import type { MessageSender } from '../lifecycle/notifications.js';
+import { createRestartTool, createRebuildTool } from '../tools/lifecycle.js';
+import { createNotifyOperatorTool, type NtfyNotifier } from '../tools/ntfy.js';
+import { runShutdownSequence } from '../runtime/shutdown-helpers.js';
+import { parsePositiveIntEnv } from '../utils/env.js';
+import type { EventBus } from '../event-bus.js';
+import type { Scheduler } from '../scheduler/scheduler.js';
+import type { ModuleLoader } from '../modules/loader.js';
+import type { MemoryExtractor } from '../memory/extraction.js';
+import type { GatewayClient } from '../gateway/client.js';
+import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
+import type { CapabilityRuntime } from '../capabilities/runtime.js';
+import type { LifecycleRestartSafeguard, ExternalCommunicationRateLimiter } from '../capabilities/safeguards.js';
+import type { SubstrateAgent } from '../agent/substrate-agent.js';
+import type { ApiServer } from '../channels/api/server.js';
+import type { AdminServer } from '../channels/admin/server.js';
+
+const log = createComponentLogger('AgentControlPlane');
+const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
+
+export interface AgentControlPlaneShutdownTargets {
+  apiServer?: ApiServer;
+  adminServer?: AdminServer;
+}
+
+export interface BuildAgentControlPlaneOptions {
+  heartbeatChannelId?: string;
+  dataDir: string;
+  eventBus: EventBus;
+  gateway: GatewayClient;
+  unregisterGatewayDisconnect: () => void;
+  stopDebugObserver: () => void;
+  writeGracefulShutdownMarkers: () => void;
+  closeDatabase: () => void;
+  scheduler: Scheduler;
+  moduleLoader: ModuleLoader;
+  memoryExtractor: MemoryExtractor;
+  agentLoop: SubstrateAgent;
+  operatorNotifier: NtfyNotifier;
+  lifecycleRestartSafeguard: LifecycleRestartSafeguard;
+  externalRateLimiter: ExternalCommunicationRateLimiter;
+  capabilityRuntime: CapabilityRuntime;
+  lifecycleRuntimeContract: { mode: string; restart: { command: string } };
+  shutdownTargets: AgentControlPlaneShutdownTargets;
+}
+
+export interface AgentControlPlaneRuntime {
+  lifecycleNotifier: DiscordLifecycleNotifier;
+  stopFn: () => Promise<void>;
+}
+
+export function buildAgentControlPlane(
+  options: BuildAgentControlPlaneOptions,
+): AgentControlPlaneRuntime {
+  const {
+    heartbeatChannelId,
+    dataDir,
+    eventBus,
+    gateway,
+    unregisterGatewayDisconnect,
+    stopDebugObserver,
+    writeGracefulShutdownMarkers,
+    closeDatabase,
+    scheduler,
+    moduleLoader,
+    memoryExtractor,
+    agentLoop,
+    operatorNotifier,
+    lifecycleRestartSafeguard,
+    externalRateLimiter,
+    capabilityRuntime,
+    lifecycleRuntimeContract,
+    shutdownTargets,
+  } = options;
+  let stopPromise: Promise<void> | null = null;
+
+  const gatewaySender: MessageSender = {
+    send: (channelId, content) => gateway.discordSend(channelId, content),
+  };
+  const lifecycleNotifier = new DiscordLifecycleNotifier({
+    sender: gatewaySender,
+    heartbeatChannelId,
+    dataDir,
+    startTime: Date.now(),
+  });
+
+  const stopFn = async () => {
+    if (stopPromise) {
+      await stopPromise;
+      return;
+    }
+
+    stopPromise = (async () => {
+      const timeoutMs = parsePositiveIntEnv(
+        process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
+        DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+      );
+      await runShutdownSequence([
+        { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
+        { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
+        { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop scheduler', action: () => scheduler.stop() },
+        {
+          step: 'drain memory extractor',
+          action: async () => {
+            const drained = await memoryExtractor.stop({ timeoutMs });
+            if (!drained) {
+              log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+            }
+          },
+        },
+        {
+          step: 'write graceful shutdown markers',
+          action: () => writeGracefulShutdownMarkers(),
+        },
+        { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
+        { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
+        { step: 'stop admin server', action: () => shutdownTargets.adminServer?.stop() },
+        { step: 'destroy gateway client', action: () => gateway.destroy() },
+        { step: 'close database', action: () => closeDatabase() },
+      ], log);
+      log.info('Stopped');
+    })();
+
+    await stopPromise;
+  };
+
+  agentLoop.registerTool(createRestartTool(
+    lifecycleNotifier,
+    stopFn,
+    {
+      restartSafeguard: lifecycleRestartSafeguard,
+      getCapabilityTier: () => capabilityRuntime.getTier(),
+      restartCommand: lifecycleRuntimeContract.restart.command,
+      runtimeMode: lifecycleRuntimeContract.mode as RuntimeMode,
+    },
+  ));
+  agentLoop.registerTool(createRebuildTool(
+    lifecycleNotifier,
+    stopFn,
+    {
+      restartSafeguard: lifecycleRestartSafeguard,
+      getCapabilityTier: () => capabilityRuntime.getTier(),
+      restartCommand: lifecycleRuntimeContract.restart.command,
+      runtimeMode: lifecycleRuntimeContract.mode as RuntimeMode,
+    },
+  ));
+  agentLoop.registerTool(createNotifyOperatorTool(
+    operatorNotifier,
+    {
+      rateLimiter: externalRateLimiter,
+      defaultChannel: 'discord',
+      gatewayMode: true,
+    },
+  ));
+
+  return { lifecycleNotifier, stopFn };
+}

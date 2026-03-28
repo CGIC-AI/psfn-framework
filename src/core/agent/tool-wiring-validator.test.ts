@@ -41,7 +41,7 @@ function makeConcurrencyMeta(
     exclusivityKeyPolicy: toolClass === 'exclusive' ? 'category_tool_name' : 'none',
     ...(toolClass === 'exclusive' ? { exclusivityKey: 'core:test_tool' } : {}),
     ...(toolClass === 'exclusive' ? {} : { maxParallel: 3 }),
-    interruptibility: toolClass === 'spawn_shard' ? 'non_interruptible' : 'cooperative',
+    interruptibility: toolClass === 'spawn_subagent' ? 'non_interruptible' : 'cooperative',
     eligibility,
   };
 
@@ -304,8 +304,8 @@ describe('validateToolWiring', () => {
           exclusivityKeyPolicy: 'static_key',
         }),
       }),
-      makeTool('spawn_shard', {
-        concurrency: makeConcurrencyMeta('spawn_shard', { maxParallel: 5 }),
+      makeTool('spawn_subagent', {
+        concurrency: makeConcurrencyMeta('spawn_subagent', { maxParallel: 5 }),
       }),
     ];
     const report = validateToolWiring({

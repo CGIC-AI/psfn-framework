@@ -786,7 +786,7 @@ describe('ShardManager', () => {
     const repoStatus = makeTestTool('repo_status');
     const repoDiff = makeTestTool('repo_diff');
     const repoCommit = makeTestTool('repo_commit');
-    const spawnShard = makeTestTool('spawn_shard');
+    const spawnSubagent = makeTestTool('spawn_subagent');
 
     const manager = new ShardManager({
       eventBus,
@@ -798,7 +798,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
         core: [memoryWrite.tool, contactLookup.tool],
-        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
+        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnSubagent.tool],
       }),
     });
 
@@ -807,7 +807,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining(['load_tools', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
-    expect(injected).not.toContain('spawn_shard');
+    expect(injected).not.toContain('spawn_subagent');
   });
 
   it('unlocks additional shard tools for apprentice tier', async () => {
@@ -918,7 +918,7 @@ describe('ShardManager', () => {
     const repoStatus = makeTestTool('repo_status');
     const repoDiff = makeTestTool('repo_diff');
     const repoCommit = makeTestTool('repo_commit');
-    const spawnShard = makeTestTool('spawn_shard');
+    const spawnSubagent = makeTestTool('spawn_subagent');
 
     const manager = new ShardManager({
       eventBus,
@@ -939,7 +939,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
         core: [memoryWrite.tool, contactLookup.tool],
-        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
+        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnSubagent.tool],
       }),
     });
 
@@ -956,7 +956,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining(['load_tools', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
-    expect(injected).not.toContain('spawn_shard');
+    expect(injected).not.toContain('spawn_subagent');
   });
 
   it('stamps shard source provenance on shard memory tools', async () => {
@@ -1550,9 +1550,9 @@ describe('createBoundedSubagentLaunchTool', () => {
 
     const tool = createBoundedSubagentLaunchTool(manager);
 
-    expect(tool.name).toBe('spawn_shard');
+    expect(tool.name).toBe('spawn_subagent');
     expect(tool.description).toBeTruthy();
-    expect(tool.label).toBe('spawn_shard');
+    expect(tool.label).toBe('spawn_subagent');
     expect(tool.parameters).toBeDefined();
     expect(typeof tool.execute).toBe('function');
   });
@@ -1582,7 +1582,7 @@ describe('createBoundedSubagentLaunchTool', () => {
 
   it('surfaces explicit lifecycle failure diagnostics from bounded subagent results', async () => {
     const launchBoundedSubagent = vi.fn(async () => ({
-      shardId: 'shard-failure',
+      subagentId: 'subagent-failure',
       name: 'degraded-shard',
       content: 'partial output',
       model: 'mock-model',
@@ -1611,7 +1611,7 @@ describe('createBoundedSubagentLaunchTool', () => {
 
   it('passes source request context into bounded subagent launches', async () => {
     const launchBoundedSubagent = vi.fn(async () => ({
-      shardId: 'shard-test',
+      subagentId: 'subagent-test',
       name: 'ctx',
       content: 'ok',
       model: 'mock-model',

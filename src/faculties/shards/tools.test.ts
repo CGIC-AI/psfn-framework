@@ -6,7 +6,7 @@ import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 describe('createBoundedSubagentLaunchTool', () => {
   it('returns a bounded subagent launch envelope in details', async () => {
     const launchBoundedSubagent = vi.fn(async () => ({
-      shardId: 'shard-123',
+      subagentId: 'subagent-123',
       name: 'research',
       content: 'result text',
       model: 'mock-model',
@@ -69,7 +69,7 @@ describe('createBoundedSubagentLaunchTool', () => {
         expect(result.details).toEqual({
           boundedSubagent: {
             kind: 'bounded_subagent_launch',
-            toolName: 'spawn_shard',
+            toolName: 'spawn_subagent',
             request: {
               name: 'research',
               task: 'explore',
@@ -91,7 +91,7 @@ describe('createBoundedSubagentLaunchTool', () => {
               },
             },
             result: {
-              shardId: 'shard-123',
+              subagentId: 'subagent-123',
               content: 'result text',
               model: 'mock-model',
               inputTokens: 12,

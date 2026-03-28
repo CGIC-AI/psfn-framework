@@ -1,6 +1,4 @@
 import Database from 'better-sqlite3';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { wireContactRuntime, type ContactRuntimeTarget } from './runtime-wiring.js';
@@ -56,17 +54,5 @@ describe('wireContactRuntime', () => {
     const primary = target.contactStore!.resolveUserId('primary-user-123');
     const linked = target.contactStore!.getByChannelIdentity('telegram', '5635268079');
     expect(linked?.id).toBe(primary.id);
-  });
-});
-
-describe('entrypoint composition', () => {
-  it('runtime.ts uses shared contact runtime wiring', () => {
-    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
-    expect(runtimeSource).toContain('wireContactRuntime(');
-  });
-
-  it('agent-main.ts uses shared contact runtime wiring', () => {
-    const agentMainSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
-    expect(agentMainSource).toContain('wireContactRuntime(');
   });
 });

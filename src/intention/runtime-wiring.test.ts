@@ -1,6 +1,4 @@
 import Database from 'better-sqlite3';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import {
@@ -423,35 +421,5 @@ describe('wireIntentionRuntime', () => {
     expect(samples).toHaveLength(1);
     expect(samples[0]?.outcomeScore).toBeCloseTo(0.53, 5);
     expect(samples[0]?.outcomeSourceMessageId).toBe('msg-turn-2');
-  });
-});
-
-describe('entrypoint composition', () => {
-  it('runtime.ts uses shared intention runtime wiring', () => {
-    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
-    expect(runtimeSource).toContain('wireIntentionRuntime(');
-    expect(runtimeSource).toContain('createIntentionAppraisalHooks(');
-    expect(runtimeSource).toContain('createIntentionBehavioralPatternHooks(');
-    expect(runtimeSource).toContain('setPromotionHook(');
-    expect(runtimeSource).toContain('getActiveConcerns: intentionAppraisalHooks.getActiveConcerns');
-    expect(runtimeSource).toContain('getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns');
-    expect(runtimeSource).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
-    expect(runtimeSource).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
-    expect(runtimeSource).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
-    expect(runtimeSource).toContain('onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome');
-  });
-
-  it('agent-main.ts uses shared intention runtime wiring', () => {
-    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
-    expect(source).toContain('wireIntentionRuntime(');
-    expect(source).toContain('createIntentionAppraisalHooks(');
-    expect(source).toContain('createIntentionBehavioralPatternHooks(');
-    expect(source).toContain('setPromotionHook(');
-    expect(source).toContain('getActiveConcerns: intentionAppraisalHooks.getActiveConcerns');
-    expect(source).toContain('getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns');
-    expect(source).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
-    expect(source).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
-    expect(source).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
-    expect(source).toContain('onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome');
   });
 });

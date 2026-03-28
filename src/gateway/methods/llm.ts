@@ -1,7 +1,11 @@
 import type {
   LLMChatParams,
   LLMCompleteParams,
+  LLMDiscoverModelsParams,
+  LLMDiscoverModelsResult,
   LLMEmbedParams,
+  LLMInvalidateModelDiscoveryParams,
+  LLMInvalidateModelDiscoveryResult,
   LLMChunkNotification,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
@@ -145,10 +149,39 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     },
     summary: (p: LLMEmbedParams) => ({ textCount: p.texts.length }),
   },
+  {
+    name: 'llm.discover_models',
+    handler: async (_params: LLMDiscoverModelsParams, runtime): Promise<LLMDiscoverModelsResult> => {
+      const discovery = requireModelDiscovery(runtime);
+      return {
+        models: await discovery.getAvailableModels(),
+      };
+    },
+  },
+  {
+    name: 'llm.invalidate_model_discovery',
+    handler: async (
+      _params: LLMInvalidateModelDiscoveryParams,
+      runtime,
+    ): Promise<LLMInvalidateModelDiscoveryResult> => {
+      const discovery = requireModelDiscovery(runtime);
+      discovery.invalidateCache();
+      return { success: true };
+    },
+  },
 ];
 
 export function registerLLMMethods(runtime: GatewayMethodRuntime): void {
   registerAuditedDescriptors(runtime, llmDescriptors);
+}
+
+function requireModelDiscovery(
+  runtime: GatewayMethodRuntime,
+): NonNullable<GatewayMethodRuntime['modelDiscovery']> {
+  if (!runtime.modelDiscovery) {
+    throw new Error('Gateway model discovery is unavailable.');
+  }
+  return runtime.modelDiscovery;
 }
 
 function buildCorrelation(params: {

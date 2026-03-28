@@ -19,6 +19,10 @@ function createHarness() {
     outputTokens: 2,
     stopReason: 'stop',
   }));
+  const modelDiscovery = {
+    getAvailableModels: vi.fn(async () => [{ id: 'model-1' }]),
+    invalidateCache: vi.fn(),
+  };
 
   const runtime: GatewayMethodRuntime = {
     target: {
@@ -35,6 +39,7 @@ function createHarness() {
       embedBatch: vi.fn(async () => []),
       dims: 1,
     } as any,
+    modelDiscovery,
     discordAdapter: {} as any,
     policyConfig: { workspacePath: process.cwd() },
     workspacePath: process.cwd(),
@@ -58,7 +63,7 @@ function createHarness() {
 
   registerLLMMethods(runtime);
   return {
-    invoke(method: 'llm.chat' | 'llm.complete', params: Record<string, unknown>) {
+    invoke(method: string, params: Record<string, unknown>) {
       const handler = methods.get(method);
       if (!handler) {
         throw new Error(`Method not registered: ${method}`);
@@ -67,6 +72,7 @@ function createHarness() {
     },
     stream,
     complete,
+    modelDiscovery,
   };
 }
 
@@ -174,5 +180,23 @@ describe('registerLLMMethods', () => {
       frequencyPenalty: -0.3,
       repetitionPenalty: 1.2,
     });
+  });
+
+  it('routes model discovery through the privileged discovery backend', async () => {
+    const harness = createHarness();
+
+    await expect(harness.invoke('llm.discover_models', {})).resolves.toEqual({
+      models: [{ id: 'model-1' }],
+    });
+    expect(harness.modelDiscovery.getAvailableModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates the privileged discovery cache on demand', async () => {
+    const harness = createHarness();
+
+    await expect(harness.invoke('llm.invalidate_model_discovery', {})).resolves.toEqual({
+      success: true,
+    });
+    expect(harness.modelDiscovery.invalidateCache).toHaveBeenCalledTimes(1);
   });
 });

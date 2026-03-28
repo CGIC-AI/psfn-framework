@@ -82,6 +82,10 @@ export interface GatewayServerOptions {
   socketPath: string;
   llmProvider: LLMProvider;
   embeddingService: EmbeddingService;
+  modelDiscovery?: {
+    getAvailableModels(): Promise<unknown[]>;
+    invalidateCache(): void;
+  };
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
@@ -166,6 +170,7 @@ export class GatewayServer {
       target,
       llmProvider: this.options.llmProvider,
       embeddingService: this.options.embeddingService,
+      ...(this.options.modelDiscovery ? { modelDiscovery: this.options.modelDiscovery } : {}),
       discordAdapter: this.options.discordAdapter,
       gitOps: this.options.gitOps,
       imageConfig: this.options.imageConfig,

@@ -83,6 +83,7 @@ export function buildGatewayPrivilegedCore(
       socketPath: input.bootstrap.socketPath,
       llmProvider: privilegedServices.llmClient,
       embeddingService: privilegedServices.embeddingProvider,
+      modelDiscovery: privilegedServices.modelDiscovery,
       discordAdapter,
       gitOps,
       imageConfig: input.config,

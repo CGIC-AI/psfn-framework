@@ -23,6 +23,16 @@ export interface ModelDiscoveryOptions {
   openRouterModelsApiUrl: string;
 }
 
+export interface ModelDiscoveryBackend {
+  getAvailableModels(): Promise<DiscoveredModel[]>;
+  invalidateCache(): void;
+}
+
+export interface GatewayModelDiscoveryTransport {
+  getAvailableModels(): Promise<unknown[]>;
+  invalidateModelDiscoveryCache(): Promise<void>;
+}
+
 interface LiteLLMModelEntry {
   id: string;
   object?: string;
@@ -235,7 +245,7 @@ function isGatewayAgentEntrypoint(): boolean {
   return entrypoint.endsWith('/agent-main.ts') || entrypoint.endsWith('/agent-main.js');
 }
 
-export class ModelDiscovery {
+export class ModelDiscovery implements ModelDiscoveryBackend {
   private litellmBaseUrl: string;
   private litellmApiKey?: string;
   private openRouterModelsApiUrl: string;
@@ -348,5 +358,30 @@ export class ModelDiscovery {
       log.warn('Failed to fetch OpenRouter metadata', { error: String(err) });
       return [];
     }
+  }
+}
+
+export class GatewayModelDiscovery implements ModelDiscoveryBackend {
+  private pendingInvalidation: Promise<void> | null = null;
+
+  constructor(private readonly transport: GatewayModelDiscoveryTransport) {}
+
+  async getAvailableModels(): Promise<DiscoveredModel[]> {
+    if (this.pendingInvalidation) {
+      await this.pendingInvalidation;
+    }
+    return await this.transport.getAvailableModels() as DiscoveredModel[];
+  }
+
+  invalidateCache(): void {
+    this.pendingInvalidation = this.transport.invalidateModelDiscoveryCache()
+      .catch((error) => {
+        log.warn('Failed to invalidate gateway-backed model discovery cache', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        this.pendingInvalidation = null;
+      });
   }
 }

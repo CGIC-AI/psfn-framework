@@ -21,6 +21,10 @@ export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
   llmProvider: LLMProvider;
   embeddingService: EmbeddingService;
+  modelDiscovery?: {
+    getAvailableModels(): Promise<unknown[]>;
+    invalidateCache(): void;
+  };
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;

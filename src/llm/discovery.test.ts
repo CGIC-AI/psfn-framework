@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ModelDiscovery } from './discovery.js';
+import { GatewayModelDiscovery, ModelDiscovery } from './discovery.js';
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -343,5 +343,32 @@ describe('ModelDiscovery', () => {
     expect(models[0].id).toBe('model-1');
     expect(injectedFetch).toHaveBeenCalledTimes(2);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('awaits gateway invalidation before the next discovery fetch', async () => {
+    let invalidateReleased = false;
+    let releaseInvalidate: (() => void) | null = null;
+    const transport = {
+      getAvailableModels: vi.fn(async () => [{ id: invalidateReleased ? 'fresh' : 'stale' }]),
+      invalidateModelDiscoveryCache: vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          releaseInvalidate = () => {
+            invalidateReleased = true;
+            resolve();
+          };
+        });
+      }),
+    };
+
+    const discovery = new GatewayModelDiscovery(transport);
+    discovery.invalidateCache();
+    const pendingModels = discovery.getAvailableModels();
+
+    expect(transport.getAvailableModels).not.toHaveBeenCalled();
+    releaseInvalidate?.();
+
+    await expect(pendingModels).resolves.toEqual([{ id: 'fresh' }]);
+    expect(transport.invalidateModelDiscoveryCache).toHaveBeenCalledTimes(1);
+    expect(transport.getAvailableModels).toHaveBeenCalledTimes(1);
   });
 });

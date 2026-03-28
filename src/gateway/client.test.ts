@@ -223,6 +223,32 @@ describe('GatewayClient streaming', () => {
     conn._emit({ method: 'llm.chunk', params: { requestId, text: 'after-error' } });
     expect(chunks).toEqual(['before-error']);
   });
+
+  it('routes model discovery calls through gateway RPC', async () => {
+    const discoverPromise = client.getAvailableModels();
+    const discoverReq = conn.sent[0] as { id: number; method: string };
+    expect(discoverReq.method).toBe('llm.discover_models');
+    conn._emit({
+      id: discoverReq.id,
+      jsonrpc: '2.0',
+      result: {
+        models: [{ id: 'model-1' }],
+      },
+    });
+    await expect(discoverPromise).resolves.toEqual([{ id: 'model-1' }]);
+
+    const invalidatePromise = client.invalidateModelDiscoveryCache();
+    const invalidateReq = conn.sent[1] as { id: number; method: string };
+    expect(invalidateReq.method).toBe('llm.invalidate_model_discovery');
+    conn._emit({
+      id: invalidateReq.id,
+      jsonrpc: '2.0',
+      result: {
+        success: true,
+      },
+    });
+    await expect(invalidatePromise).resolves.toBeUndefined();
+  });
 });
 
 describe('GatewayClient reverse RPC (onHandleMessage)', () => {

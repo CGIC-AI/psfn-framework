@@ -28,7 +28,9 @@ import type { JournalEntry } from '../session/types.js';
 import type {
   LLMChatResult,
   LLMCompleteResult,
+  LLMDiscoverModelsResult,
   LLMEmbedResult,
+  LLMInvalidateModelDiscoveryResult,
   DiscordSendResult,
   DiscordSendMediaResult,
   WebFetchResult,
@@ -549,6 +551,15 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     );
 
     return result.embeddings.map(e => new Float32Array(e));
+  }
+
+  async getAvailableModels(): Promise<unknown[]> {
+    const result = await this.rpcInstance.request('llm.discover_models', {}) as LLMDiscoverModelsResult;
+    return result.models;
+  }
+
+  async invalidateModelDiscoveryCache(): Promise<void> {
+    await this.rpcInstance.request('llm.invalidate_model_discovery', {}) as LLMInvalidateModelDiscoveryResult;
   }
 
   // ── Discord methods ──

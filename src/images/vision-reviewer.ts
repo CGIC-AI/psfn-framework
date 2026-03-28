@@ -5,6 +5,7 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
+import type { LLMProvider } from '../agent/contracts.js';
 import { resolveModel } from '../agent/stream-adapter.js';
 import {
   resolveConfiguredLiteLLMApiKey,
@@ -41,6 +42,7 @@ type BinaryFetcher = (
 
 export interface ImageVisionReviewerOptions {
   binaryFetcher?: BinaryFetcher;
+  llmProvider?: LLMProvider;
   fetchImpl?: typeof fetch;
   completeImpl?: (
     model: Model<any>,
@@ -172,30 +174,48 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
     const model = resolveModel(this.config, 'vision');
     const question = normalizeQuestion(input);
     const imageBlocks = await Promise.all(imageUrls.map((url) => this.resolveImageContent(url)));
-    const response = await this.completeImpl(
-      model,
-      {
-        systemPrompt: [
-          'You are the companion\'s vision review path.',
-          'Inspect the attached image content directly.',
-          'Answer concretely, keep it concise, and do not tell the user to check the image for you.',
-        ].join(' '),
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: question },
-            ...imageBlocks,
-          ],
-          timestamp: Date.now(),
-        }],
-      } satisfies PiContext,
-      {
-        apiKey: resolveApiKey(model, this.config),
-        maxTokens: model.maxTokens,
-      },
-    );
+    const context = {
+      systemPrompt: [
+        'You are the companion\'s vision review path.',
+        'Inspect the attached image content directly.',
+        'Answer concretely, keep it concise, and do not tell the user to check the image for you.',
+      ].join(' '),
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: question },
+          ...imageBlocks,
+        ],
+        timestamp: Date.now(),
+      }],
+    } satisfies PiContext;
+    const response = this.options.llmProvider
+      ? await this.options.llmProvider.complete(
+        {
+          systemPrompt: context.systemPrompt,
+          messages: context.messages,
+          modelHint: {
+            model: String(model.id),
+            ...(typeof (model as { provider?: unknown }).provider === 'string'
+              ? { provider: (model as { provider?: string }).provider }
+              : {}),
+            ...(typeof model.maxTokens === 'number' ? { maxTokens: model.maxTokens } : {}),
+          },
+        },
+        'background',
+      )
+      : await this.completeImpl(
+        model,
+        context,
+        {
+          apiKey: resolveApiKey(model, this.config),
+          maxTokens: model.maxTokens,
+        },
+      );
 
-    const summary = extractTextContent(response.content).trim();
+    const summary = typeof response.content === 'string'
+      ? response.content.trim()
+      : extractTextContent(response.content).trim();
     if (!summary) {
       throw new Error('vision review returned empty text');
     }

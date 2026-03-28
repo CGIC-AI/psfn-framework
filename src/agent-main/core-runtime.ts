@@ -140,6 +140,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
+    llmProvider: gateway,
   });
   registerImageTools(agentLoop, new GatewayImageOps(gateway), {
     gatewayMode: true,

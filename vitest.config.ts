@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-const DEFAULT_INCLUDE = ['src/**/*.test.ts'];
+const DEFAULT_INCLUDE = ['src/**/*.test.ts', 'satellites/**/*.test.ts'];
 const PHASE_V_AUTONOMY_SMOKE_PROFILE = 'phase-v-autonomy-smoke';
 const PHASE_V_AUTONOMY_SMOKE_INCLUDE = [
   'src/agent/substrate-agent.test.ts',

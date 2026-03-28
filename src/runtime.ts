@@ -121,7 +121,6 @@ import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { ModuleLoader } from './modules/loader.js';
 import {
   resolveCharacterCardHistoryPath,
-  resolveConfiguredCompanionDataDir,
   resolveContactsDir,
   resolveMemoryJournalPath,
   resolveNotesDir,
@@ -384,8 +383,7 @@ export class SubstrateRuntime implements Lifecycle {
     }
   }
 
-  private restoreLatestSessionMetadata(): void {
-    const companionDataDir = resolveConfiguredCompanionDataDir(this.config);
+  private restoreLatestSessionMetadata(companionDataDir: string): void {
     const behavior = this.config.sessionRestartBehavior ?? 'reuse_latest_session';
     const resolved = this.sessionManager.resolveStartupSessionMetadata(behavior);
     if (!resolved) return;
@@ -420,9 +418,7 @@ export class SubstrateRuntime implements Lifecycle {
       env: process.env,
     });
     const {
-      systemDataDir,
-      companionDataDir,
-      runtimePathLayout,
+      pathSnapshot,
       settingsDomains,
       trustPolicyConfig,
       schedulerConfig,
@@ -445,11 +441,11 @@ export class SubstrateRuntime implements Lifecycle {
       ).length,
     });
     const backupConfig = resolveBackupRuntimeConfig({
-      dataDir: companionDataDir,
-      defaultRootDir: runtimePathLayout.backupsDir,
+      dataDir: pathSnapshot.companionDataDir,
+      defaultRootDir: pathSnapshot.runtimePathLayout.backupsDir,
     });
     this.capabilityRuntime = new CapabilityRuntime({
-      dataDir: systemDataDir,
+      dataDir: pathSnapshot.systemDataDir,
       seedDir: process.env.CONFIG_DIR,
     });
     this.config.capabilityTier = this.capabilityRuntime.getTier();
@@ -470,11 +466,11 @@ export class SubstrateRuntime implements Lifecycle {
     } = composeIdentity(this.config);
     const cardVersionStore = new CharacterCardVersionStore(
       this.config.characterCardPath,
-      resolveCharacterCardHistoryPath(companionDataDir),
+      resolveCharacterCardHistoryPath(pathSnapshot.companionDataDir),
     );
     log.info(`Loaded character: ${card.data.name}`);
     this.config.characterName = card.data.name;
-    const promptRegistry = wireStaticPromptRegistry(companionDataDir);
+    const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
     const cardProposalQueue = new ConfirmationQueue();
 
     // Initialize core components
@@ -491,7 +487,7 @@ export class SubstrateRuntime implements Lifecycle {
         });
       },
     });
-    const sessionsDir = resolveSessionsDir(companionDataDir);
+    const sessionsDir = resolveSessionsDir(pathSnapshot.companionDataDir);
     const sessionHmacKeyring = buildSessionHmacKeyring({
       serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
       singleKey: process.env.GATEWAY_SESSION_HMAC_KEY,
@@ -525,7 +521,7 @@ export class SubstrateRuntime implements Lifecycle {
     }
     this.crashRecoveryQueue = this.sessionStore.getCrashRecoveryExtractionCandidates();
     this.seedCrashRecoveryRetryBacklog(this.crashRecoveryQueue);
-    this.restoreLatestSessionMetadata();
+    this.restoreLatestSessionMetadata(pathSnapshot.companionDataDir);
 
     // Embedding provider (selected by EMBEDDING_PROVIDER)
     const embeddingProvider = createEmbeddingProviderFromConfig(this.config);
@@ -534,11 +530,11 @@ export class SubstrateRuntime implements Lifecycle {
       dims: embeddingProvider.dims,
     });
 
-    const notesDir = resolveNotesDir(companionDataDir);
+    const notesDir = resolveNotesDir(pathSnapshot.companionDataDir);
     this.memoryStore = new MemoryStore(this.db, embeddingProvider.dims, {
       notesDir,
-      scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
-      journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
+      journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
     });
     const embeddingDimensionCheck = validateEmbeddingDimensions(
       this.db,
@@ -595,7 +591,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
     this.agentLoop.scratchpadProvider = this.memoryStore;
     this.agentLoop.setCapabilityRuntime(this.capabilityRuntime);
-    const safeguardAuditTrail = createSafeguardAuditTrail(companionDataDir);
+    const safeguardAuditTrail = createSafeguardAuditTrail(pathSnapshot.companionDataDir);
     const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
       auditTrail: safeguardAuditTrail,
     });
@@ -607,7 +603,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     const skillsRuntime = wireSkillsRuntime(this.agentLoop, {
-      dataDir: systemDataDir,
+      dataDir: pathSnapshot.systemDataDir,
       seedDir: process.env.CONFIG_DIR,
       repoRoot: process.cwd(),
     });
@@ -617,7 +613,7 @@ export class SubstrateRuntime implements Lifecycle {
     // Prompt stack — layered, editable system prompt
     const promptStore = wirePromptRuntime(
       this.agentLoop,
-      companionDataDir,
+      pathSnapshot.companionDataDir,
       composeSystemPromptTemplate(),
       {
         identityCoolingOff,
@@ -629,7 +625,7 @@ export class SubstrateRuntime implements Lifecycle {
       confirmationQueue: cardProposalQueue,
     });
     wireSettingsRuntime(this.agentLoop, this.config);
-    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir, this.llmClient);
+    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, pathSnapshot.companionDataDir, this.llmClient);
     const coreMemoryStore = wireCoreMemoryRuntime({
       agentLoop: this.agentLoop,
       sessionManager: this.sessionManager,
@@ -648,7 +644,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.db,
       primaryUserId,
       {
-        exportDir: resolveContactsDir(companionDataDir),
+        exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
         ...(primaryTelegramUserId
           ? {
             bootstrapPrimaryIdentityLinks: [{
@@ -728,9 +724,9 @@ export class SubstrateRuntime implements Lifecycle {
       db: this.db,
       databasePath: this.config.databasePath,
       sessionsDir,
-      memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
+      memoriesJournalPath: resolveMemoryJournalPath(pathSnapshot.companionDataDir),
       characterCardPath: this.config.characterCardPath,
-      characterCardHistoryPath: resolveCharacterCardHistoryPath(companionDataDir),
+      characterCardHistoryPath: resolveCharacterCardHistoryPath(pathSnapshot.companionDataDir),
       config: backupConfig,
     });
     log.info('Scheduled backups enabled', {
@@ -752,7 +748,7 @@ export class SubstrateRuntime implements Lifecycle {
       scheduler: this.scheduler,
       agentLoop: this.agentLoop,
       eligibilityGate,
-      persistencePath: resolvePostTurnActionQueuePath(companionDataDir),
+      persistencePath: resolvePostTurnActionQueuePath(pathSnapshot.companionDataDir),
     });
     this.eventBus.on('agent.turn.end', ({ message, response }) => {
       const captured = this.sessionManager.recordCompressionFailureFromResponse(
@@ -787,7 +783,7 @@ export class SubstrateRuntime implements Lifecycle {
       config: this.config,
       parentSystemPrompt: systemPrompt,
       runtimeMode: 'single',
-      companionDataDir,
+      companionDataDir: pathSnapshot.companionDataDir,
       scheduler: this.scheduler,
       replConfig,
       shardAuditTrail: safeguardAuditTrail,
@@ -841,7 +837,7 @@ export class SubstrateRuntime implements Lifecycle {
     this.agentLoop.validateToolWiring('single');
 
     const channelsConfig = loadRuntimeChannelsConfig(
-      systemDataDir,
+      pathSnapshot.systemDataDir,
       process.env,
       buildRuntimeChannelsConfigOverrides(this.config, settingsDomains.runtime),
     );
@@ -881,14 +877,14 @@ export class SubstrateRuntime implements Lifecycle {
     this.lifecycleNotifier = new DiscordLifecycleNotifier({
       sender: this.discord,
       heartbeatChannelId,
-      dataDir: companionDataDir,
+      dataDir: pathSnapshot.companionDataDir,
       startTime: this.startTime,
     });
 
     // Track last-active channel on every incoming message
     this.eventBus.on('message.received', ({ message }) => {
       const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
-      writeLastActiveSession(companionDataDir, {
+      writeLastActiveSession(pathSnapshot.companionDataDir, {
         sessionId,
         channelId: message.channelId,
         channelType: inferSessionChannelType(sessionId) ?? message.channelType,
@@ -953,7 +949,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.scheduler,
       this.agentLoop,
       this.discord,
-      companionDataDir,
+      pathSnapshot.companionDataDir,
       heartbeatChannelId,
       {
         eventBus: this.eventBus,

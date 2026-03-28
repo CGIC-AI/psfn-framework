@@ -964,6 +964,9 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(result.systemDataDir).toBe(systemDataDir);
     expect(result.companionDataDir).toBe(companionDataDir);
     expect(result.runtimePathLayout.systemDataDir).toBe(systemDataDir);
+    expect(result.pathSnapshot.systemDataDir).toBe(systemDataDir);
+    expect(result.pathSnapshot.companionDataDir).toBe(companionDataDir);
+    expect(result.pathSnapshot.runtimePathLayout).toEqual(result.runtimePathLayout);
     expect(config.sessionMessageLimit).toBe(30);
     expect(config.memoryRetrievalLimit).toBe(15);
     expect(config.extractionThresholdPct).toBe(34);
@@ -1030,6 +1033,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     for (const snapshot of snapshots) {
       expect(snapshot.systemDataDir).toBe(runtimeSnapshot.systemDataDir);
       expect(snapshot.companionDataDir).toBe(runtimeSnapshot.companionDataDir);
+      expect(snapshot.pathSnapshot).toEqual(runtimeSnapshot.pathSnapshot);
       expect(snapshot.settingsDomains).toEqual(runtimeSnapshot.settingsDomains);
       expect(snapshot.runtimePathLayout).toEqual(runtimeSnapshot.runtimePathLayout);
       expect(snapshot.trustPolicyConfig).toEqual(runtimeSnapshot.trustPolicyConfig);

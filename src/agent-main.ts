@@ -130,7 +130,6 @@ import {
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
 import { createGatewayBackedDiscoveryFetch } from './agent-main/discovery-gateway-fetch.js';
-import { resolveWorkspaceRoot } from './gateway/filesystem-paths.js';
 import {
   resolveCharacterCardHistoryPath,
   resolveContactsDir,
@@ -292,9 +291,7 @@ async function main(): Promise<void> {
     env: process.env,
   });
   const {
-    systemDataDir,
-    companionDataDir,
-    runtimePathLayout,
+    pathSnapshot,
     trustPolicyConfig,
     schedulerConfig,
   } = startupHydration;
@@ -309,16 +306,16 @@ async function main(): Promise<void> {
     ).length,
   });
   const channelsConfig = loadRuntimeChannelsConfig(
-    systemDataDir,
+    pathSnapshot.systemDataDir,
     process.env,
     buildRuntimeChannelsConfigOverrides(config, startupHydration.settingsDomains.runtime),
   );
   const backupConfig = resolveBackupRuntimeConfig({
-    dataDir: companionDataDir,
-    defaultRootDir: runtimePathLayout.backupsDir,
+    dataDir: pathSnapshot.companionDataDir,
+    defaultRootDir: pathSnapshot.runtimePathLayout.backupsDir,
   });
   const capabilityRuntime = new CapabilityRuntime({
-    dataDir: systemDataDir,
+    dataDir: pathSnapshot.systemDataDir,
     seedDir: process.env.CONFIG_DIR,
   });
   config.capabilityTier = capabilityRuntime.getTier();
@@ -333,18 +330,15 @@ async function main(): Promise<void> {
   });
   const runtimeStatusMeta = toRuntimeStatusMetadata(lifecycleRuntimeContract);
   const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
-  const workspacePathEnv = process.env.WORKSPACE_PATH;
-  const workspacePath = runtimePathLayout.workspacePath;
-  const workspaceRoot = resolveWorkspaceRoot(workspacePath);
-  if (!workspacePathEnv) {
+  if (!process.env.WORKSPACE_PATH) {
     log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
-      mode: runtimePathLayout.mode,
-      workspacePath,
-      resolved: workspaceRoot,
+      mode: pathSnapshot.runtimePathLayout.mode,
+      workspacePath: pathSnapshot.workspacePath,
+      resolved: pathSnapshot.workspaceRoot,
     });
   }
   const moduleRegistryPath = resolveModuleRegistryPathFromWorkspace(
-    workspaceRoot,
+    pathSnapshot.workspaceRoot,
     process.env.MODULE_REGISTRY_PATH,
   );
   ensureRegistryFile(moduleRegistryPath);
@@ -392,18 +386,18 @@ async function main(): Promise<void> {
   } = composeIdentity(config);
   const cardVersionStore = new CharacterCardVersionStore(
     config.characterCardPath,
-    resolveCharacterCardHistoryPath(companionDataDir),
+    resolveCharacterCardHistoryPath(pathSnapshot.companionDataDir),
   );
   const cardProposalQueue = new ConfirmationQueue({
     idFactory: () => `card-${randomUUID()}`,
   });
   log.info(`Loaded character: ${card.data.name}`);
   config.characterName = card.data.name;
-  const promptRegistry = wireStaticPromptRegistry(companionDataDir);
+  const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
 
   // ── Initialize local components ──
 
-  const sessionsDir = resolveSessionsDir(companionDataDir);
+  const sessionsDir = resolveSessionsDir(pathSnapshot.companionDataDir);
   const sessionComposition = composeSessionRuntime({
     config,
     eventBus,
@@ -417,7 +411,7 @@ async function main(): Promise<void> {
   const restartBehavior = config.sessionRestartBehavior ?? 'reuse_latest_session';
   const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
   if (startupSession) {
-    writeLastActiveSession(companionDataDir, startupSession);
+    writeLastActiveSession(pathSnapshot.companionDataDir, startupSession);
     if (restartBehavior === 'new_session') {
       log.info('Initialized fresh startup session metadata', {
         sessionId: startupSession.sessionId,
@@ -434,9 +428,9 @@ async function main(): Promise<void> {
   }
 
   const memoryStore = new MemoryStore(db, gateway.dims, {
-    notesDir: resolveNotesDir(companionDataDir),
-    scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
-    journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
+    notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
+    scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
+    journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
   });
   const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
   const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
@@ -489,7 +483,7 @@ async function main(): Promise<void> {
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
-  const safeguardAuditTrail = createSafeguardAuditTrail(companionDataDir);
+    const safeguardAuditTrail = createSafeguardAuditTrail(pathSnapshot.companionDataDir);
   const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
     auditTrail: safeguardAuditTrail,
   });
@@ -501,7 +495,7 @@ async function main(): Promise<void> {
   });
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
-    dataDir: systemDataDir,
+    dataDir: pathSnapshot.systemDataDir,
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
   });
@@ -516,7 +510,7 @@ async function main(): Promise<void> {
   agentLoop.imageVisionReviewer = imageVisionReviewer;
 
   // Prompt stack — layered, editable system prompt
-  const promptStore = wirePromptRuntime(agentLoop, companionDataDir, composeSystemPromptTemplate(), {
+  const promptStore = wirePromptRuntime(agentLoop, pathSnapshot.companionDataDir, composeSystemPromptTemplate(), {
     identityCoolingOff,
     getCapabilityTier: () => capabilityRuntime.getTier(),
   });
@@ -525,7 +519,7 @@ async function main(): Promise<void> {
     confirmationQueue: cardProposalQueue,
   });
   wireSettingsRuntime(agentLoop, config);
-  wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir, gateway);
+  wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway);
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,
@@ -544,7 +538,7 @@ async function main(): Promise<void> {
     db,
     primaryUserId,
     {
-      exportDir: resolveContactsDir(companionDataDir),
+      exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
       ...(primaryTelegramUserId
         ? {
           bootstrapPrimaryIdentityLinks: [{
@@ -625,9 +619,9 @@ async function main(): Promise<void> {
     db,
     databasePath: config.databasePath,
     sessionsDir,
-    memoriesJournalPath: resolveMemoryJournalPath(companionDataDir),
+    memoriesJournalPath: resolveMemoryJournalPath(pathSnapshot.companionDataDir),
     characterCardPath: config.characterCardPath,
-    characterCardHistoryPath: resolveCharacterCardHistoryPath(companionDataDir),
+    characterCardHistoryPath: resolveCharacterCardHistoryPath(pathSnapshot.companionDataDir),
     config: backupConfig,
   });
   log.info('Scheduled backups enabled', {
@@ -648,7 +642,7 @@ async function main(): Promise<void> {
     scheduler,
     agentLoop,
     eligibilityGate,
-    persistencePath: resolvePostTurnActionQueuePath(companionDataDir),
+    persistencePath: resolvePostTurnActionQueuePath(pathSnapshot.companionDataDir),
   });
   eventBus.on('agent.turn.end', ({ message, response }) => {
     const captured = sessionManager.recordCompressionFailureFromResponse(
@@ -1013,7 +1007,7 @@ async function main(): Promise<void> {
   const lifecycleNotifier = new DiscordLifecycleNotifier({
     sender: gatewaySender,
     heartbeatChannelId,
-    dataDir: companionDataDir,
+    dataDir: pathSnapshot.companionDataDir,
     startTime,
   });
 
@@ -1109,7 +1103,7 @@ async function main(): Promise<void> {
     scheduler,
     agentLoop,
     gatewaySender,
-    companionDataDir,
+    pathSnapshot.companionDataDir,
     heartbeatChannelId,
     {
       eventBus,
@@ -1136,7 +1130,7 @@ async function main(): Promise<void> {
 
   const trackSessionActivity = (message: SubstrateMessage): void => {
     const sessionId = sessionManager.resolveSessionChannelId(message.channelId);
-    writeLastActiveSession(companionDataDir, {
+    writeLastActiveSession(pathSnapshot.companionDataDir, {
       sessionId,
       channelId: message.channelId,
       channelType: inferSessionChannelType(sessionId) ?? message.channelType,

@@ -6,8 +6,8 @@ import { createWyomingServiceRegistry } from './services/index.js';
 import { createWyomingHandleServiceAdapter } from './services/handle.js';
 import { createWyomingAsrServiceAdapter } from './services/asr.js';
 import { createWyomingTtsServiceAdapter } from './services/tts.js';
-import type { StreamingSttConnector } from '../../../src/voice/connectors/stt/types.js';
-import type { StreamingTtsConnector } from '../../../src/voice/connectors/tts/types.js';
+import type { StreamingSttConnector } from '../../../src/primitives/voice/connectors/stt/types.js';
+import type { StreamingTtsConnector } from '../../../src/primitives/voice/connectors/tts/types.js';
 
 /**
  * Tests that verify Wyoming voice bridge production wiring:

@@ -14,7 +14,7 @@ import {
   type PendingFollowUpPriority,
   type PendingFollowUpTiming,
 } from '../intention/pending-follow-ups.js';
-import { TRUST_LEVELS, type TrustLevel } from '../../trust/types.js';
+import { TRUST_LEVELS, type TrustLevel } from '../../system/trust/types.js';
 
 export const INTERNAL_STATE_PROCESSING_QUALITIES = ['fluent', 'deliberate', 'struggling'] as const;
 export type InternalStateProcessingQuality = typeof INTERNAL_STATE_PROCESSING_QUALITIES[number];

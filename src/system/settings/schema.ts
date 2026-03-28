@@ -1,11 +1,11 @@
 import { CANONICAL_MODEL_PURPOSES, type CanonicalModelRegistry, type CanonicalModelPurpose, type ModelRegistryBudgetPolicy, type ModelRegistryEntry, type ModelCatalogEntry, type ModelContextBudgetConfig, type ModelRouteConfig, type ModelPurpose, type ModelRoleAssignments, type ModelSlot, type ModelSlotDefaults, type ModelSlotOverrides } from '../../shared/contracts/runtime.js';
 import { DEFAULT_UI_THEME_ID, PROMOTED_EXTENDED_TOOL_SLOTS_MAX } from '../config/runtime-config-contracts.js';
-import { normalizeImageWorkflowSettings } from '../../images/types.js';
+import { normalizeImageWorkflowSettings } from '../../primitives/images/types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from '../../shared/context-budget.js';
-import { normalizeCompositionalPolicyConfig } from '../../compositional/policy.js';
+import { normalizeCompositionalPolicyConfig } from '../capabilities/compositional-policy.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import {

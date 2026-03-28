@@ -3,7 +3,7 @@ import type {
   TtsAudioEncoding,
   TtsSynthesisRequest,
   TtsSynthesisSession,
-} from '../../../../src/voice/connectors/tts/types.js';
+} from '../../../../src/primitives/voice/connectors/tts/types.js';
 import { isRecord, type WyomingFrame, type WyomingJsonObject } from '../../protocol/index.js';
 import type {
   WyomingServiceAdapter,

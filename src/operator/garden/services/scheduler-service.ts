@@ -3,19 +3,19 @@
 // Provides task CRUD and reflection template management.
 
 import { join } from 'node:path';
-import type { Scheduler } from '../../../scheduler/scheduler.js';
+import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
   HeartbeatPolicyStore,
   validateTemplate,
   type ReflectionTemplate,
   type ValidationError,
-} from '../../../scheduler/heartbeat-policy.js';
+} from '../../../core/scheduler/heartbeat-policy.js';
 import type {
   RecurringCadence,
   RecurringCadenceTimezone,
   ScheduledTask,
   TaskType,
-} from '../../../scheduler/types.js';
+} from '../../../core/scheduler/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 
 const log = createComponentLogger('AdminSchedulerService');

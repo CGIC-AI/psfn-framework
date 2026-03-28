@@ -2,10 +2,10 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { Scheduler } from '../../../scheduler/scheduler.js';
-import type { ScheduledTask } from '../../../scheduler/types.js';
+import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import type { ScheduledTask } from '../../../core/scheduler/types.js';
 import { AdminSchedulerService } from './scheduler-service.js';
-import type { HeartbeatPolicy } from '../../../scheduler/heartbeat-policy.js';
+import type { HeartbeatPolicy } from '../../../core/scheduler/heartbeat-policy.js';
 
 function makeTask(overrides: Partial<ScheduledTask> & { id: string; name: string }): ScheduledTask {
   return {

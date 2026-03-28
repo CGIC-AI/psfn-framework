@@ -1,5 +1,5 @@
 import type { ContactStore } from '../../../core/contacts/store.js';
-import type { TrustLevel } from '../../../trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import type {
   ChannelPrivacyLevel,
   Contact,

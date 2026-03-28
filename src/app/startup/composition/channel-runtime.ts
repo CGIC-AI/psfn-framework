@@ -5,13 +5,13 @@ import type { EligibilityGate } from '../../../system/capabilities/eligibility.j
 import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
 import { DiscordAdapter } from '../../../channels/discord/adapter.js';
 import { OpenHomeAdapter } from '../../../../satellites/openhome/host/adapter.js';
-import type { TelegramChannelConfig } from '../../../channels/config.js';
+import type { TelegramChannelConfig } from '../../../channels/backplane/config.js';
 import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
 import type {
   ChannelAdapter,
   ChannelAdapterFactoryEntry,
   MessageHandler,
-} from '../../../channels/types.js';
+} from '../../../channels/backplane/types.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 
 export interface DiscordChannelAdapterFactoryOptions {

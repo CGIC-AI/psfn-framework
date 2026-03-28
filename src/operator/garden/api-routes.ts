@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendJson } from '../../channels/http/primitives.js';
-import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
-import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
+import { sendJson } from '../../channels/backplane/http/primitives.js';
+import { VALID_MEMORY_TYPES, type MemoryType } from '../../faculties/memory/types.js';
+import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../system/trust/types.js';
 import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl, resolveRequestOrigin } from './request-url.js';
@@ -26,8 +26,8 @@ import {
   isDashboardCostWindow,
   resolveDashboardCostWindow,
 } from './services/dashboard-cost-windows.js';
-import type { RecurringCadence, ScheduledTask, TaskType } from '../../scheduler/types.js';
-import type { SkillSnapshot } from '../../skills/types.js';
+import type { RecurringCadence, ScheduledTask, TaskType } from '../../core/scheduler/types.js';
+import type { SkillSnapshot } from '../../faculties/skills/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   AdminAuditActionType,
@@ -35,8 +35,8 @@ import type {
   AdminAuditDecision,
   ConfirmationQueueAdminApi,
 } from './types.js';
-import type { ValuesJournalEntry } from '../../values/store.js';
-import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
+import type { ValuesJournalEntry } from '../../faculties/values/store.js';
+import type { ReflectionTemplate } from '../../core/scheduler/heartbeat-policy.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
 import { applyAdminModelsConfigMutation } from './services/settings-service.js';
 import { loadModelsConfig } from '../../system/config/models-config.js';

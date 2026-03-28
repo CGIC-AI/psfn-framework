@@ -3,7 +3,7 @@
 // Persisted to data/settings.json (runtime-owned domain fields only).
 // Loaded at startup from canonical system-data JSON owners.
 
-export { createDefaultCompositionalPolicyConfig } from '../compositional/policy.js';
+export { createDefaultCompositionalPolicyConfig } from './capabilities/compositional-policy.js';
 
 export {
   SETTINGS_FILE_NAME,

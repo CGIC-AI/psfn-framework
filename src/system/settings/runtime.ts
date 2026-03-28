@@ -2,7 +2,7 @@ import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, DEFAULT_UI_THEME_ID, type SubstrateConf
 import {
   cloneImageWorkflowSettings,
   normalizeImageWorkflowSettings,
-} from '../../images/types.js';
+} from '../../primitives/images/types.js';
 import {
   resolveMemoryRetrievalBudgetPct,
   resolveSessionHistoryBudgetPct,
@@ -10,7 +10,7 @@ import {
 import {
   createDefaultCompositionalPolicyConfig,
   cloneCompositionalPolicyConfig,
-} from '../../compositional/policy.js';
+} from '../capabilities/compositional-policy.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import {
   normalizeSttProvider,

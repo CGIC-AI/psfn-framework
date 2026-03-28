@@ -9,11 +9,11 @@ import * as sqliteVec from 'sqlite-vec';
 import WebSocket from 'ws';
 import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
-import { MemoryStore } from '../../memory/store.js';
+import { MemoryStore } from '../../faculties/memory/store.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
-import { Scheduler } from '../../scheduler/scheduler.js';
-import { ShardManager } from '../../shards/manager.js';
+import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { ShardManager } from '../../faculties/shards/manager.js';
 import { ContactStore } from '../../core/contacts/store.js';
 import { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import {
@@ -32,10 +32,10 @@ import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.j
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../core/agent/contracts.js';
-import type { ScheduledTask } from '../../scheduler/types.js';
+import type { ScheduledTask } from '../../core/scheduler/types.js';
 import { createTurnId } from '../../core/turns/id.js';
-import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
-import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
+import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 
 function request(
   port: number,

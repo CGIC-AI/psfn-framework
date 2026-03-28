@@ -14,7 +14,7 @@ import { registerAuditedDescriptors } from './register.js';
 import {
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
-} from '../../../llm/correlation.js';
+} from '../../../primitives/llm/correlation.js';
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SttTranscriptChunk } from '../../../../src/voice/connectors/stt/types.js';
+import type { SttTranscriptChunk } from '../../../../src/primitives/voice/connectors/stt/types.js';
 import type { WyomingFrame, WyomingTransportSession } from '../../protocol/index.js';
 import { createWyomingAsrServiceAdapter } from './asr.js';
 

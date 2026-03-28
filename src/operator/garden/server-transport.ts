@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
-import { sendText } from '../../channels/http/primitives.js';
+import { sendText } from '../../channels/backplane/http/primitives.js';
 
 
 const STATIC_CACHE_CONTROL = 'public, max-age=86400';

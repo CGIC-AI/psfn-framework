@@ -8,7 +8,7 @@ import {
   isRuntimeSettingKey,
   type RuntimeSettingKey,
 } from './settings.js';
-import { textResultWithError as textResult } from '../tools/results.js';
+import { textResultWithError as textResult } from '../core/tools/results.js';
 
 interface SettingsGetParams {
   key?: string;

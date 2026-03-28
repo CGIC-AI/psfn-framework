@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TtsAudioChunk } from '../../../../src/voice/connectors/tts/types.js';
+import type { TtsAudioChunk } from '../../../../src/primitives/voice/connectors/tts/types.js';
 import type { WyomingFrame, WyomingTransportSession } from '../../protocol/index.js';
 import { createWyomingTtsServiceAdapter } from './tts.js';
 

@@ -7,9 +7,9 @@ import type { AgentEvent } from '@mariozechner/pi-agent-core';
 import type { CanonicalModelRegistry, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
-import * as models from '../../llm/models.js';
-import { ModelBudgetController } from '../../llm/model-budget.js';
-import { runWithRequestContext } from '../../llm/request-context.js';
+import * as models from '../../primitives/llm/models.js';
+import { ModelBudgetController } from '../../primitives/llm/model-budget.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 const streamAdapterMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),

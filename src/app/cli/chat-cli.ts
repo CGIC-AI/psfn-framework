@@ -9,10 +9,10 @@ import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';
-import { LLMClient } from '../../llm/client.js';
-import { MemoryStore } from '../../memory/store.js';
-import { SalienceDecay } from '../../memory/decay.js';
-import { DEFAULT_REPL_CONFIG } from '../../repl/types.js';
+import { LLMClient } from '../../primitives/llm/client.js';
+import { MemoryStore } from '../../faculties/memory/store.js';
+import { SalienceDecay } from '../../faculties/memory/decay.js';
+import { DEFAULT_REPL_CONFIG } from '../../core/tools/think/types.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 import { hydrateCanonicalStartupConfig } from '../startup/support/bootstrap-helpers.js';
 import {

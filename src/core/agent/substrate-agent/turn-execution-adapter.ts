@@ -8,19 +8,19 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { EventBridge } from '../event-bridge.js';
 import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
-import type { SkillsRuntime } from '../../../skills/runtime.js';
-import type { TurnToolSummary } from '../../../skills/reflection-nudge.js';
-import type { TrustLevel } from '../../../trust/types.js';
+import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
+import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ResolvedAuthorContext } from './runtime-context.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
-import type { ChannelMeta } from '../../../trust/policy.js';
+import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
-import type { ImageVisionReviewer } from '../../../images/types.js';
+import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;

@@ -26,7 +26,7 @@ import type {
   ChannelThreadingAdapter,
   MessageHandler,
   OutboundContext,
-} from '../types.js';
+} from '../backplane/types.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';

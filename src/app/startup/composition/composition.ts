@@ -2,7 +2,7 @@
 // Common builders used across runtime, agent container, CLI, and test harnesses.
 //
 // Intentional wiring differences:
-// - src/agent-main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
+// - src/app/agent/main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
 // Keep core construction through these helpers so behavior stays aligned across split entrypoints.
 
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -16,40 +16,40 @@ import {
   createEmbeddingProviderFromConfig as createEmbeddingProviderFromMemoryConfig,
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
   type EmbeddingRuntimeProvider,
-} from '../../../memory/embedding.js';
+} from '../../../faculties/memory/embedding.js';
 import {
   SubstrateAgent,
   type EmotionRuntimeWiring,
   type SubstrateAgentOptions,
 } from '../../../core/agent/substrate-agent.js';
-import { MemoryRetriever } from '../../../memory/retrieval.js';
-import { MemoryExtractor } from '../../../memory/extraction.js';
-import type { MemoryStore } from '../../../memory/store.js';
+import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
+import { MemoryExtractor } from '../../../faculties/memory/extraction.js';
+import type { MemoryStore } from '../../../faculties/memory/store.js';
 import type { ContactStore } from '../../../core/contacts/store.js';
-import { ShardManager } from '../../../shards/manager.js';
+import { ShardManager } from '../../../faculties/shards/manager.js';
 import {
   createShardExecutionPort,
   type ShardExecutionPort,
-} from '../../../shards/port.js';
-import { createSpawnShardTool } from '../../../shards/tools.js';
-import { createThinkTool } from '../../../repl/tools.js';
-import { CoreMemoryStore } from '../../../core-memory/store.js';
+} from '../../../faculties/shards/port.js';
+import { createSpawnShardTool } from '../../../faculties/shards/tools.js';
+import { createThinkTool } from '../../../core/tools/think/tools.js';
+import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import {
   createCoreMemoryAppendTool,
   createCoreMemoryReplaceTool,
   createMemoryRethinkTool,
-} from '../../../core-memory/tools.js';
-import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../repl/types.js';
+} from '../../../faculties/core-memory/tools.js';
+import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/think/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
-import type { Scheduler } from '../../../scheduler/scheduler.js';
+import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
-import type { ShardAuditTrail } from '../../../shards/manager.js';
+import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
-import type { ModuleRegistryMutation } from '../../../modules/types.js';
+import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { RuntimeMode } from '../../../core/agent/tool-wiring-validator.js';
 import {
   ensurePersistenceLayout,

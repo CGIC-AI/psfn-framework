@@ -1,14 +1,14 @@
-import { MemoryWriter } from '../../../memory/writer.js';
+import { MemoryWriter } from '../../../faculties/memory/writer.js';
 import type { EmbeddingService, LLMProvider } from '../../../core/agent/contracts.js';
-import type { MemoryStore } from '../../../memory/store.js';
+import type { MemoryStore } from '../../../faculties/memory/store.js';
 import type { SessionManager } from '../../../core/session/manager.js';
-import type { MemoryType, MemoryRedactionOperation } from '../../../memory/types.js';
+import type { MemoryType, MemoryRedactionOperation } from '../../../faculties/memory/types.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_MEMORY_REDACTION_OPERATIONS,
-} from '../../../memory/types.js';
-import type { TrustLevel } from '../../../trust/types.js';
-import type { ThinkEvidence } from '../../../repl/types.js';
+} from '../../../faculties/memory/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
+import type { ThinkEvidence } from '../../../core/tools/think/types.js';
 import { addEvidence, splitCsvTags, toTrimmedString } from './common.js';
 import {
   runSessionSearch,

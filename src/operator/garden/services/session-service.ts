@@ -13,8 +13,8 @@ import { resolveSessionEntryRoleEnvelopePreview } from '../../../core/session/tu
 import {
   classifyChannel,
   visibilitiesShareContinuity,
-} from '../../../trust/policy.js';
-import type { ChannelVisibility } from '../../../trust/types.js';
+} from '../../../system/trust/policy.js';
+import type { ChannelVisibility } from '../../../system/trust/types.js';
 import type {
   AdminContinuityProvenanceView,
   AdminSessionListData,

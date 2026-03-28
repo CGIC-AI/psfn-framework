@@ -15,8 +15,8 @@ import {
 } from './settings.js';
 import { createDefaultCompositionalPolicyConfig, type SubstrateConfig } from './config/runtime-config-contracts.js';
 import type { CanonicalModelRegistry } from '../shared/contracts/runtime.js';
-import { registerStreamingSttProvider } from '../voice/connectors/stt/index.js';
-import { registerStreamingTtsProvider } from '../voice/connectors/tts/index.js';
+import { registerStreamingSttProvider } from '../primitives/voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../primitives/voice/connectors/tts/index.js';
 
 function makeConfig(): SubstrateConfig {
   return {

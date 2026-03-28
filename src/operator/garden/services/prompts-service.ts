@@ -26,7 +26,7 @@ import {
   NORTH_STAR_SCOPES,
   type NorthStarScope,
   type NorthStarStore,
-} from '../../../north-star/store.js';
+} from '../../../faculties/north-star/store.js';
 import {
   containsStructuredPromptSections,
   getMalformedStructuredPromptErrors,

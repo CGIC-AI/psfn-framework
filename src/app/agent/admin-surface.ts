@@ -1,13 +1,13 @@
-import type { ShardExecutionPort } from '../../shards/port.js';
+import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import { AdminServer } from '../../operator/garden/server.js';
 import { createGatewayAdminToolHealthProvider } from '../../operator/garden/tool-health-provider.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
-import { GatewayModelDiscovery } from '../../llm/discovery.js';
+import { GatewayModelDiscovery } from '../../primitives/llm/discovery.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
-import type { AgentCoreRuntime } from '../../agent-main/core-runtime.js';
+import type { AgentCoreRuntime } from './core-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { Scheduler } from '../../scheduler/scheduler.js';
+import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';

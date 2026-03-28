@@ -8,7 +8,7 @@ import type {
   ImageAspectRatio,
   ImageGenerationResult,
   ImageProviderPreference,
-} from '../../images/types.js';
+} from '../../primitives/images/types.js';
 import type { JournalEntry } from '../../core/session/types.js';
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';

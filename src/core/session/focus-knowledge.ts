@@ -2,8 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { SessionEntry } from './types.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { MemoryScopeQuery } from '../../memory/types.js';
-import { normalizeMemoryScopeRefs, normalizeMemoryScopeTags } from '../../memory/types.js';
+import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
+import { normalizeMemoryScopeRefs, normalizeMemoryScopeTags } from '../../faculties/memory/types.js';
 
 const log = createComponentLogger('FocusKnowledge');
 

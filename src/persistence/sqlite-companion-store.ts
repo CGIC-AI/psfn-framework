@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
-import { MemoryJournal } from '../memory/journal.js';
-import { MemoryStore } from '../memory/store.js';
+import { MemoryJournal } from '../faculties/memory/journal.js';
+import { MemoryStore } from '../faculties/memory/store.js';
 import {
   resolveMemoryJournalPath,
   resolveNotesDir,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildContextBudgetPreview } from '../../../admin-ui/src/lib/settings/context-budget-preview.ts';
+import { buildContextBudgetPreview } from '../../../admin-ui/src/lib/settings/context-budget-preview.js';
 
 describe('buildContextBudgetPreview', () => {
   it('uses the effective chat slot context window instead of the fallback window', () => {

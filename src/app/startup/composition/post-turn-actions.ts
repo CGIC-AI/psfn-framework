@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
-import type { Scheduler } from '../../../scheduler/scheduler.js';
+import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import { isRecord } from '../../../shared/utils/types.js';

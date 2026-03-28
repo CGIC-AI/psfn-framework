@@ -5,7 +5,7 @@ import {
   loadRuntimeChannelsConfig,
   type RuntimeChannelsConfig,
   type RuntimeChannelsConfigOverrides,
-} from '../../channels/config.js';
+} from '../../channels/backplane/config.js';
 import {
   resolveAllowedReadPathsFromEnv,
   resolveFullCodebaseReadRootFromEnv,
@@ -13,7 +13,7 @@ import {
 } from './policy-config.js';
 import { resolveWorkspaceRoot } from './filesystem-paths.js';
 import { resolveGitRepoRoot } from '../integrations/git/repo-root.js';
-import { resolveModuleRegistryPathFromWorkspace } from '../../modules/registry.js';
+import { resolveModuleRegistryPathFromWorkspace } from '../../system/modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { buildShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
 import {

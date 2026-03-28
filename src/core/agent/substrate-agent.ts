@@ -21,14 +21,14 @@ import {
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStore } from '../contacts/store.js';
-import type { ImageVisionReviewer } from '../../images/types.js';
+import type { ImageVisionReviewer } from '../../primitives/images/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
-import type { TrustLevel } from '../../trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
 import {
   resolveChannelResponseStyle,
   type ChannelMeta,
-} from '../../trust/policy.js';
-import type { ChannelPromptDock } from '../../channels/types.js';
+} from '../../system/trust/policy.js';
+import type { ChannelPromptDock } from '../../channels/backplane/types.js';
 import {
   type PromptComposer,
 } from '../identity/prompt-composer.js';
@@ -43,8 +43,8 @@ import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { SkillsRuntime } from '../../skills/runtime.js';
-import { ReflectionNudgeTracker } from '../../skills/reflection-nudge.js';
+import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
+import { ReflectionNudgeTracker } from '../../faculties/skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';
 import {
   gateToolWithCapabilities,

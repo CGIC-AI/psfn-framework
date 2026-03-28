@@ -10,8 +10,8 @@ import type {
 import type { PromptHistoryEntry, PromptLayer } from '../../../core/identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { EditableSettings } from '../../../system/settings.js';
-import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
-import type { PurrMemory } from '../../../memory/types.js';
+import type { ContactProfileArtifact, MemoryLink } from '../../../faculties/memory/store.js';
+import type { PurrMemory } from '../../../faculties/memory/types.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
@@ -24,7 +24,7 @@ import type {
   SocialGraphEntitySource,
   SocialRelationshipKind,
 } from '../../../core/contacts/types.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../trust/types.js';
+import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
 import type {
   CapabilityTierConfig,
 } from '../../../system/config/capability-tier-config.js';
@@ -35,7 +35,7 @@ import type { ProvidersRuntimeConfig } from '../../../system/config/providers-co
 import type { SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../system/config/skills-config.js';
 import type { TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
-import type { NorthStarItem, NorthStarScope } from '../../../north-star/store.js';
+import type { NorthStarItem, NorthStarScope } from '../../../faculties/north-star/store.js';
 import type {
   ChannelInfo,
   CompactionAuditView,

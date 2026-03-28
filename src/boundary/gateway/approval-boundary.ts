@@ -1,6 +1,6 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
-import type { ChannelOutboundDock } from '../../channels/types.js';
+import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,

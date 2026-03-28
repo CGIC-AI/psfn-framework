@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,
-} from '../http/auth.js';
+} from '../backplane/http/auth.js';
 import {
   appendVaryValue,
   clampHttpHeader,

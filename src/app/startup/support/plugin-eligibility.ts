@@ -3,9 +3,9 @@ import type {
   EligibilityOperation,
   EligibilityRequirements,
 } from '../../../system/capabilities/eligibility.js';
-import type { ChannelAdapter } from '../../../channels/types.js';
-import type { StreamingSttConnector } from '../../../voice/connectors/stt/index.js';
-import type { StreamingTtsConnector } from '../../../voice/connectors/tts/index.js';
+import type { ChannelAdapter } from '../../../channels/backplane/types.js';
+import type { StreamingSttConnector } from '../../../primitives/voice/connectors/stt/index.js';
+import type { StreamingTtsConnector } from '../../../primitives/voice/connectors/tts/index.js';
 
 export type RuntimePluginKind = 'channel' | 'stt' | 'tts';
 

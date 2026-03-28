@@ -3,11 +3,11 @@
 // This module is intentionally dependency-light to avoid circular imports.
 
 import type { CompletionPurpose, LLMRequestMetadata, LLMContext, LLMResponse, StreamCallbacks, TurnID } from '../../shared/contracts/runtime.js';
-import type { TrustLevel } from '../../trust/types.js';
-import type { ChannelMeta } from '../../trust/policy.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import type { ChannelMeta } from '../../system/trust/policy.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
 import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
-import type { MemoryScopeQuery } from '../../memory/types.js';
+import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
 
 export interface LLMProvider {
   stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;

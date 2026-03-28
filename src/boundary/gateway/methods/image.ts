@@ -3,7 +3,7 @@ import type {
   ImageEditParams,
   ImageGenerationRpcResult,
 } from '../protocol.js';
-import { ImageService } from '../../../images/service.js';
+import { ImageService } from '../../../primitives/images/service.js';
 import type { GatewayMethodRuntime, AuditedMethodDescriptor } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
 

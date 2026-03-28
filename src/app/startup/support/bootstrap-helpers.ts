@@ -11,8 +11,8 @@ import type { EligibilityGate } from '../../../system/capabilities/eligibility.j
 import {
   createEmbeddingDimensionMismatchWarning,
   type EmbeddingDimensionValidationResult,
-} from '../../../backup/startup-checks.js';
-import type { RuntimeChannelsConfigOverrides } from '../../../channels/config.js';
+} from '../../../persistence/backups/startup-checks.js';
+import type { RuntimeChannelsConfigOverrides } from '../../../channels/backplane/config.js';
 import {
   createStreamingSttConnector,
   getStreamingSttProviderMetadata,
@@ -21,7 +21,7 @@ import {
   resolveStreamingSttRuntimeConfig,
   type StreamingSttConnector,
   type StreamingSttProvider,
-} from '../../../voice/connectors/stt/index.js';
+} from '../../../primitives/voice/connectors/stt/index.js';
 import {
   createStreamingTtsConnector,
   getStreamingTtsProviderMetadata,
@@ -30,7 +30,7 @@ import {
   resolveStreamingTtsRuntimeConfig,
   type StreamingTtsConnector,
   type StreamingTtsProvider,
-} from '../../../voice/connectors/tts/index.js';
+} from '../../../primitives/voice/connectors/tts/index.js';
 import {
   requirePluginActivationEligibility,
   wrapStreamingSttConnectorWithEligibility,
@@ -47,7 +47,7 @@ import { CAPABILITY_TIER_FILE_NAME } from '../../../system/config/capability-tie
 import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
 import { type TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
 import { resolveRuntimeSchedulerConfig } from '../../../system/config/scheduler-runtime.js';
-import { setRuntimeTrustPolicy } from '../../../trust/runtime-policy.js';
+import { setRuntimeTrustPolicy } from '../../../system/trust/runtime-policy.js';
 import {
   resolveRuntimePathSnapshotFromConfig,
   type RuntimePathSnapshot,

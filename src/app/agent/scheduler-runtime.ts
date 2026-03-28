@@ -1,11 +1,11 @@
 import type Database from 'better-sqlite3';
-import type { BackupRuntimeConfig } from '../../backup/config.js';
-import { registerScheduledBackupTask } from '../../backup/service.js';
+import type { BackupRuntimeConfig } from '../../persistence/backups/config.js';
+import { registerScheduledBackupTask } from '../../persistence/backups/service.js';
 import { wirePostTurnActionRuntime, type PostTurnActionRuntime } from '../startup/composition/post-turn-actions.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
-import { SalienceDecay } from '../../memory/decay.js';
-import type { MemoryStore } from '../../memory/store.js';
-import { Scheduler } from '../../scheduler/scheduler.js';
+import { SalienceDecay } from '../../faculties/memory/decay.js';
+import type { MemoryStore } from '../../faculties/memory/store.js';
+import { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';

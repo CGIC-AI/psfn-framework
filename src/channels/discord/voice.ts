@@ -22,14 +22,14 @@ import {
   type StreamingTtsProvider,
   type TtsAudioChunk,
   type TtsSynthesisSession,
-} from '../../voice/connectors/tts/index.js';
+} from '../../primitives/voice/connectors/tts/index.js';
 import {
   buildFallbackOrder,
   resolveVoiceReliabilityBudgets,
   runWithVoiceStageBudget,
   selectFallbackCandidate,
   type VoiceReliabilityBudgets,
-} from '../../voice/policy/reliability.js';
+} from '../../primitives/voice/policy/reliability.js';
 import {
   resolveVoiceSecurityLimits,
   validatePcmAudio,
@@ -37,8 +37,8 @@ import {
   validateTtsAudioChunk,
   validateTtsInputText,
   type VoiceSecurityLimits,
-} from '../../voice/policy/security.js';
-import type { MessageHandler } from '../types.js';
+} from '../../primitives/voice/policy/security.js';
+import type { MessageHandler } from '../backplane/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   createRuntimeVoiceSttConnector,
@@ -48,7 +48,7 @@ import {
   resolveRuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProviderOrder,
 } from '../../app/startup/support/bootstrap-helpers.js';
-import type { StreamingSttConnector, SttStreamSession } from '../../voice/connectors/stt/index.js';
+import type { StreamingSttConnector, SttStreamSession } from '../../primitives/voice/connectors/stt/index.js';
 
 const log = createComponentLogger('DiscordVoice');
 const CAPTURE_SILENCE_MS = 1_200;

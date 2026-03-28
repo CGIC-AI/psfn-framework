@@ -2,7 +2,7 @@ import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
-import { normalizeChannelVisibility, type TrustLevel } from '../../../trust/types.js';
+import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
@@ -46,8 +46,8 @@ import {
   type PostTurnActionInferer,
   type PostTurnInferenceContext,
 } from './post-turn-actions.js';
-import type { TurnToolSummary } from '../../../skills/reflection-nudge.js';
-import type { ChannelMeta } from '../../../trust/policy.js';
+import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
+import type { ChannelMeta } from '../../../system/trust/policy.js';
 
 const log = createComponentLogger('SubstrateAgent');
 

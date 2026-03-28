@@ -1,5 +1,5 @@
 import type { LLMProvider } from '../../agent/contracts.js';
-import { countMessageTokens, countTokens } from '../../../llm/tokens.js';
+import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ContextMessage, LLMContext } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -19,7 +19,7 @@ import { resolveSessionEntryTurnContext } from '../turn-provenance.js';
 import {
   classifyChannel,
   type ChannelMeta,
-} from '../../../trust/policy.js';
+} from '../../../system/trust/policy.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { UserContinuityStore } from '../continuity.js';
 import type {
@@ -43,7 +43,7 @@ import {
 import { runAutoCompaction } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
-import { buildPromptSectionTelemetryList } from '../../../prompt/sections.js';
+import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';

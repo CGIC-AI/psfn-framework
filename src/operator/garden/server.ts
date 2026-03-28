@@ -11,9 +11,9 @@ import type { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { readBodyWithLimit, sendText } from '../../channels/http/primitives.js';
-import { ValuesJournalStore } from '../../values/store.js';
-import { NorthStarStore } from '../../north-star/store.js';
+import { readBodyWithLimit, sendText } from '../../channels/backplane/http/primitives.js';
+import { ValuesJournalStore } from '../../faculties/values/store.js';
+import { NorthStarStore } from '../../faculties/north-star/store.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveLegacyValuesJournalPath,
@@ -57,8 +57,8 @@ export class AdminServer implements Lifecycle {
   private adaptiveToolsService: AdminAdaptiveToolsDataService;
   private valuesJournal!: ValuesJournalStore;
   private schedulerService!: AdminSchedulerService;
-  private scheduler!: import('../../scheduler/scheduler.js').Scheduler;
-  private skillsRuntimeRef!: import('../../skills/runtime.js').SkillsRuntime | null;
+  private scheduler!: import('../../core/scheduler/scheduler.js').Scheduler;
+  private skillsRuntimeRef!: import('../../faculties/skills/runtime.js').SkillsRuntime | null;
   private confirmationQueueApiRef!: import('./types.js').ConfirmationQueueAdminApi | null;
   private chatBootstrapService: AdminChatBootstrapService;
   private routes: AdminRoute[];

@@ -4,7 +4,7 @@ import {
   VALID_SENSITIVITY_LEVELS,
   type MemoryType,
   type SensitivityLevel,
-} from '../../memory/types.js';
+} from '../../faculties/memory/types.js';
 import {
   VALID_RELATIONSHIP_TYPES,
   type RelationshipType,

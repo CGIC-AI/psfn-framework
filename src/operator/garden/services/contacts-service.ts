@@ -1,5 +1,5 @@
 import type { ContactStore } from '../../../core/contacts/store.js';
-import type { MemoryStore } from '../../../memory/store.js';
+import type { MemoryStore } from '../../../faculties/memory/store.js';
 import {
   CHANNEL_PRIVACY_LEVELS,
   CONTACT_MUTATION_AUDIT_FIELDS,
@@ -16,9 +16,9 @@ import type {
   SocialGraphEntity,
   SocialRelationshipEdge,
 } from '../../../core/contacts/types.js';
-import type { TrustLevel } from '../../../trust/types.js';
-import { TRUST_LEVELS } from '../../../trust/types.js';
-import type { ContactProfileArtifact } from '../../../memory/store.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
+import { TRUST_LEVELS } from '../../../system/trust/types.js';
+import type { ContactProfileArtifact } from '../../../faculties/memory/store.js';
 import {
   buildRelatedConversationChannelMap,
 } from './contact-session-linker.js';

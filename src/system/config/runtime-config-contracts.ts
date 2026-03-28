@@ -1,7 +1,7 @@
-import type { ImageWorkflowSettings } from '../../images/types.js';
+import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 import type { CredentialReference, CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
-import type { StreamingSttProvider } from '../../voice/connectors/stt/index.js';
-import type { StreamingTtsProvider } from '../../voice/connectors/tts/index.js';
+import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
+import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type {
   CanonicalModelRegistry,

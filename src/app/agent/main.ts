@@ -8,15 +8,15 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
-import { resolveBackupRuntimeConfig } from '../../backup/config.js';
+import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import {
   createEmbeddingDimensionMismatchWarning,
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
-} from '../../backup/startup-checks.js';
+} from '../../persistence/backups/startup-checks.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
-import { MemoryWriter } from '../../memory/writer.js';
-import { registerMemoryTools } from '../../memory/runtime-wiring.js';
+import { MemoryWriter } from '../../faculties/memory/writer.js';
+import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
@@ -24,7 +24,7 @@ import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.j
 import {
   RUNTIME_MODE,
 } from '../../system/lifecycle/runtime-mode.js';
-import { attachTerminalDebugObserver } from '../../debug/terminal-observer.js';
+import { attachTerminalDebugObserver } from '../startup/support/terminal-observer.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
   wireShardAndThinkRuntime,
@@ -40,24 +40,24 @@ import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import {
   createEligibilityGate,
 } from '../../system/capabilities/eligibility.js';
-import { ModuleLoader } from '../../modules/loader.js';
+import { ModuleLoader } from '../../system/modules/loader.js';
 import {
   ensureRegistryFile,
   resolveModuleRegistryPathFromWorkspace,
-} from '../../modules/registry.js';
+} from '../../system/modules/registry.js';
 import {
   loadRuntimeChannelsConfig,
-} from '../../channels/config.js';
+} from '../../channels/backplane/config.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
-import { registerGatewayMessageHandlers } from '../../agent-main/gateway-message-handlers.js';
+import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
 import {
   buildRuntimeChannelsConfigOverrides,
 } from '../startup/support/bootstrap-helpers.js';
 import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
 import { emitEligibilityDecisionTelemetry } from '../startup/support/eligibility-telemetry.js';
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
-import { buildAgentControlPlane } from '../../agent-main/control-plane.js';
-import type { AgentControlPlaneShutdownTargets } from '../../agent-main/control-plane.js';
+import { buildAgentControlPlane } from './control-plane.js';
+import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
 import {
   bootstrapAgentCoreRuntime,

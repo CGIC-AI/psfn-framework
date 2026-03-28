@@ -2,7 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { BeadsActionResult } from '../../gateway/protocol.js';
 import type { BeadsOperations } from './ops.js';
-import { textResult, textResultWithError } from '../../../tools/results.js';
+import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 function formatActionResult(result: BeadsActionResult): string {

@@ -1,4 +1,4 @@
-import type { ChannelPromptDock } from '../../../channels/types.js';
+import type { ChannelPromptDock } from '../../../channels/backplane/types.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';

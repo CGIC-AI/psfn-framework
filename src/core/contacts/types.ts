@@ -1,4 +1,4 @@
-import type { TrustLevel, ChannelVisibility, SensitivityLevel } from '../../trust/types.js';
+import type { TrustLevel, ChannelVisibility, SensitivityLevel } from '../../system/trust/types.js';
 
 export type RelationshipType = 'partner' | 'family' | 'friend' | 'acquaintance' | 'stranger' | 'ai_companion';
 export type ContactChannel = string;

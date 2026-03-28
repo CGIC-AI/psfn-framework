@@ -1,6 +1,6 @@
 import type { ProcessEnv } from 'node:process';
-import type { RuntimeChannelsConfigOverrides, RuntimeChannelsConfig } from '../../channels/config.js';
-import { loadChannelsOwnerFile, loadRuntimeChannelsConfig } from '../../channels/config.js';
+import type { RuntimeChannelsConfigOverrides, RuntimeChannelsConfig } from '../../channels/backplane/config.js';
+import { loadChannelsOwnerFile, loadRuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import type { CapabilityTierConfig } from './capability-tier-config.js';
 import {
   loadCapabilityTierConfig,

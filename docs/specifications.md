@@ -11,9 +11,9 @@ This document is the compact contract for how the live runtime is supposed to be
    - `src/app/startup/composition/composition.ts`
    - `src/app/startup/composition/parity.ts`
 2. Config and persistence contracts
-   - `src/types.ts`
-   - `src/settings.ts`
-   - `src/config/settings-contract.ts`
+   - `src/shared/contracts/runtime.ts`
+   - `src/system/settings.ts`
+   - `src/system/settings/contracts.ts`
    - `src/persistence/layout.ts`
 3. Bootstrap example only
    - `.env.example`

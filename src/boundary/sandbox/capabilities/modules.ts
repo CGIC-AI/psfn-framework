@@ -1,9 +1,9 @@
 import { resolveRequiredModuleRegistryPath } from '../../../system/security/policy-constants.js';
 import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
-import { isModuleRecord } from '../../../modules/registry.js';
-import type { ModuleRegistryMutation } from '../../../modules/types.js';
-import type { ThinkEvidence } from '../../../repl/types.js';
+import { isModuleRecord } from '../../../system/modules/registry.js';
+import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
+import type { ThinkEvidence } from '../../../core/tools/think/types.js';
 import type { GatewayREPLCapabilities, ModuleRecord } from './contracts.js';
 import { addEvidence, toErrorMessage, toTrimmedString } from './common.js';
 

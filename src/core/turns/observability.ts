@@ -1,9 +1,9 @@
 import type { EventMap } from '../../shared/event-bus.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
-import { cloneMemoryWithheldSummary } from '../../memory/withheld-summary.js';
-import type { MemoryWithheldSummary } from '../../memory/withheld-summary.js';
-import type { ContactProfileArtifact } from '../../memory/store.js';
-import type { PurrMemory } from '../../memory/types.js';
+import { cloneMemoryWithheldSummary } from '../../faculties/memory/withheld-summary.js';
+import type { MemoryWithheldSummary } from '../../faculties/memory/withheld-summary.js';
+import type { ContactProfileArtifact } from '../../faculties/memory/store.js';
+import type { PurrMemory } from '../../faculties/memory/types.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
   TurnToolContextSnapshot,

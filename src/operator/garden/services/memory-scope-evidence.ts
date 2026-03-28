@@ -2,11 +2,11 @@ import type {
   MemoryScopeKind,
   MemoryScopeRef,
   PurrMemory,
-} from '../../../memory/types.js';
+} from '../../../faculties/memory/types.js';
 import {
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
-} from '../../../memory/types.js';
+} from '../../../faculties/memory/types.js';
 
 export type AdminMemoryManagedScopeKind = Extract<MemoryScopeKind, 'project' | 'north_star'>;
 

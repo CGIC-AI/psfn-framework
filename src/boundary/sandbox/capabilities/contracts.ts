@@ -1,14 +1,14 @@
 import type vm from 'node:vm';
 import type { LLMProvider, EmbeddingService, LLMRequestMetadata } from '../../../core/agent/contracts.js';
-import type { MemoryStore } from '../../../memory/store.js';
+import type { MemoryStore } from '../../../faculties/memory/store.js';
 import type { SessionManager } from '../../../core/session/manager.js';
-import type { Scheduler } from '../../../scheduler/scheduler.js';
-import type { TaskState, TaskType } from '../../../scheduler/types.js';
+import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import type { TaskState, TaskType } from '../../../core/scheduler/types.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
-import type { ModuleRegistryMutation } from '../../../modules/types.js';
-import type { NestedThinkRunner } from '../../../repl/types.js';
+import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
+import type { NestedThinkRunner } from '../../../core/tools/think/types.js';
 
 export interface GitStatusView {
   branch: string;
@@ -67,7 +67,7 @@ export interface SandboxExecutionPort {
   ) => Promise<ShellExecView>;
 }
 
-export type { ModuleRecord } from '../../../modules/types.js';
+export type { ModuleRecord } from '../../../system/modules/types.js';
 
 export type GatewayREPLCapabilities = {
   webFetch?: (

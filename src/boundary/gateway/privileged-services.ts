@@ -1,6 +1,6 @@
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { LLMClientRuntimeOptions } from '../../llm/client.js';
-import { ModelDiscovery } from '../../llm/discovery.js';
+import type { LLMClientRuntimeOptions } from '../../primitives/llm/client.js';
+import { ModelDiscovery } from '../../primitives/llm/discovery.js';
 import { VaultOps, type VaultOperations } from '../integrations/vault/ops.js';
 import {
   createProviderRuntimeServices,

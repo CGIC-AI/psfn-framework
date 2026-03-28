@@ -11,7 +11,7 @@ import type {
   RelationshipType,
 } from '../types.js';
 import { CHANNEL_PRIVACY_LEVELS } from '../types.js';
-import type { TrustLevel } from '../../../trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import type { ContactIdentityVerificationRow } from './domain-types.js';
 
 export const LEGACY_DISCORD_CHANNEL = 'discord';

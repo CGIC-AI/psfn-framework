@@ -1,6 +1,6 @@
 import type { EventName } from '../../../shared/event-bus.js';
-import type { TaskState } from '../../../scheduler/types.js';
-import type { ThinkEvidence } from '../../../repl/types.js';
+import type { TaskState } from '../../../core/scheduler/types.js';
+import type { ThinkEvidence } from '../../../core/tools/think/types.js';
 import type { SandboxBudgetRef } from './contracts.js';
 import { toErrorMessage as baseToErrorMessage } from '../../../shared/utils/errors.js';
 

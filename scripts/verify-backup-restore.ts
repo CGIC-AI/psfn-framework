@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { verifyBackupRestore } from '../src/backup/service.js';
+import { verifyBackupRestore } from '../src/persistence/backups/service.js';
 
 interface CliArgs {
   backupRootDir?: string;

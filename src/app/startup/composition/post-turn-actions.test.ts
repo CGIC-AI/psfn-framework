@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import { createEligibilityGate } from '../../../system/capabilities/eligibility.js';
-import { Scheduler } from '../../../scheduler/scheduler.js';
+import { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

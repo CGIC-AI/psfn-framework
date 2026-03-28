@@ -25,8 +25,8 @@ import {
   resolveRuntimeVoiceTtsProviderOrder,
   resolveRuntimeVoiceTtsProvider,
 } from './bootstrap-helpers.js';
-import { registerStreamingSttProvider } from '../../../voice/connectors/stt/index.js';
-import { registerStreamingTtsProvider } from '../../../voice/connectors/tts/index.js';
+import { registerStreamingSttProvider } from '../../../primitives/voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../../../primitives/voice/connectors/tts/index.js';
 
 function createMutableEligibilityGate(initialTokens: CapabilityToken[]) {
   let grantedTokens = new Set(initialTokens);

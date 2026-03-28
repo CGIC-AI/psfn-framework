@@ -2,15 +2,15 @@ import { randomUUID } from 'node:crypto';
 import type { EmbeddingService } from '../../../core/agent/contracts.js';
 import type { ContactStore } from '../../../core/contacts/store.js';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
-import { isInternalMemoryArtifact } from '../../../memory/internal-artifacts.js';
-import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
+import { isInternalMemoryArtifact } from '../../../faculties/memory/internal-artifacts.js';
+import type { MemoryLink, MemoryStore } from '../../../faculties/memory/store.js';
 import {
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   VALID_MEMORY_TYPES,
   type MemoryType,
-} from '../../../memory/types.js';
-import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../trust/types.js';
+} from '../../../faculties/memory/types.js';
+import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
 import {
   buildManagedScopeEvidence,
   buildManagedScopeRepairPreview,
@@ -496,7 +496,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, count: 0, message: 'Bulk update limited to 500 items' };
     }
 
-    const storeFields: Partial<Pick<import('../../../memory/types.js').PurrMemory, 'type' | 'sensitivity'>> = {};
+    const storeFields: Partial<Pick<import('../../../faculties/memory/types.js').PurrMemory, 'type' | 'sensitivity'>> = {};
 
     if (fields.memoryType !== undefined) {
       const normalized = fields.memoryType.trim().toLowerCase();

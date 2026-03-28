@@ -1,6 +1,6 @@
-import type { TrustLevel } from '../../trust/types.js';
+import type { TrustLevel } from '../../system/trust/types.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
-import { wrapPromptSectionXml } from '../../prompt/sections.js';
+import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 
 export interface EmotionalExpressionDisplayRange {
   min: number;

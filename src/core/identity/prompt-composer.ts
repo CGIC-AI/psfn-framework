@@ -20,7 +20,7 @@ import type { PromptLayerStore } from './prompt-store.js';
 import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import { wrapPromptSectionXml } from '../../prompt/sections.js';
+import { wrapPromptSectionXml } from './prompt-sections.js';
 
 // Keep only identity/foundation + operator policy in the frozen prompt prefix.
 // Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.

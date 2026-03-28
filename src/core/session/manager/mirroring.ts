@@ -5,8 +5,8 @@ import {
   evaluateMemoryPolicy,
   getVisibilityDisclosureCeiling,
   visibilitiesShareContinuity,
-} from '../../../trust/policy.js';
-import type { ChannelVisibility, TrustLevel } from '../../../trust/types.js';
+} from '../../../system/trust/policy.js';
+import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
 import {
   DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS,
   DEFAULT_SESSION_MIRROR_MAX_CHARS,

@@ -3,7 +3,7 @@ import type {
   ChannelVisibility,
   SensitivityLevel,
   TrustLevel,
-} from '../../trust/types.js';
+} from '../trust/types.js';
 import {
   loadOrSeedJson,
   writeJsonAtomic,

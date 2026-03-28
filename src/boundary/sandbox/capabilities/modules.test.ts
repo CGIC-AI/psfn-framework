@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
-import type { ModuleRecord } from '../../../modules/types.js';
+import type { ModuleRecord } from '../../../system/modules/types.js';
 import { createModuleCapabilities } from './modules.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;

@@ -23,10 +23,10 @@ import {
 } from '../../../system/config/settings-contract.js';
 import {
   validateCompositionalPolicyConfig,
-} from '../../../compositional/policy.js';
-import { normalizeImageWorkflowSettings } from '../../../images/types.js';
+} from '../../../system/capabilities/compositional-policy.js';
+import { normalizeImageWorkflowSettings } from '../../../primitives/images/types.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../system/capabilities/tokens.js';
-import { MEMORY_CONFIG } from '../../../memory/types.js';
+import { MEMORY_CONFIG } from '../../../faculties/memory/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
@@ -34,13 +34,13 @@ import {
   isStreamingSttProvider,
   isStreamingSttProviderConfigured,
   listStreamingSttProviders,
-} from '../../../voice/connectors/stt/index.js';
+} from '../../../primitives/voice/connectors/stt/index.js';
 import {
   getStreamingTtsProviderMetadata,
   isStreamingTtsProvider,
   isStreamingTtsProviderConfigured,
   listStreamingTtsProviders,
-} from '../../../voice/connectors/tts/index.js';
+} from '../../../primitives/voice/connectors/tts/index.js';
 import type {
   AdminSettingsData,
   AdminSettingsService,

@@ -1,5 +1,5 @@
 import { cloneInternalState, type InternalState } from './state.js';
-import { wrapPromptSectionXml } from '../../prompt/sections.js';
+import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 
 export const METACOGNITIVE_FLAG_NAMES = [
   'uncertainty',

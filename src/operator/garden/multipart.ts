@@ -3,7 +3,7 @@
 // Parses boundary from Content-Type, extracts file field from body.
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendText } from '../../channels/http/primitives.js';
+import { sendText } from '../../channels/backplane/http/primitives.js';
 import { parseImportedCharacterCard } from '../../core/identity/importer.js';
 
 const MAX_UPLOAD_SIZE = 2 * 1024 * 1024; // 2MB

@@ -3,10 +3,10 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
-import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
-import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
-import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
+import type { StreamingSttConnector } from '../../primitives/voice/connectors/stt/types.js';
+import type { StreamingTtsConnector } from '../../primitives/voice/connectors/tts/types.js';
+import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 
 const {
   createStreamingSttConnectorMock,
@@ -16,16 +16,16 @@ const {
   createStreamingTtsConnectorMock: vi.fn(),
 }));
 
-vi.mock('../../voice/connectors/stt/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../voice/connectors/stt/index.js')>();
+vi.mock('../../primitives/voice/connectors/stt/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../primitives/voice/connectors/stt/index.js')>();
   return {
     ...actual,
     createStreamingSttConnector: createStreamingSttConnectorMock,
   };
 });
 
-vi.mock('../../voice/connectors/tts/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../voice/connectors/tts/index.js')>();
+vi.mock('../../primitives/voice/connectors/tts/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../primitives/voice/connectors/tts/index.js')>();
   return {
     ...actual,
     createStreamingTtsConnector: createStreamingTtsConnectorMock,

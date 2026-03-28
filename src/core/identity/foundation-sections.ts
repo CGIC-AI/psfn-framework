@@ -2,7 +2,7 @@ import {
   normalizePromptSectionId,
   unwrapSingleWrappedPromptSection,
   wrapPromptSectionXml,
-} from '../../prompt/sections.js';
+} from './prompt-sections.js';
 
 export const FOUNDATION_SECTION_DEFINITIONS = [
   {

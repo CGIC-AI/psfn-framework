@@ -4,12 +4,12 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ContactStore } from './store.js';
-import type { TrustLevel } from '../../trust/types.js';
-import { TRUST_LEVELS, isHighTierTrustLevel } from '../../trust/types.js';
-import type { TrustDriftBehaviorSignals } from '../../trust/policy.js';
+import type { TrustLevel } from '../../system/trust/types.js';
+import { TRUST_LEVELS, isHighTierTrustLevel } from '../../system/trust/types.js';
+import type { TrustDriftBehaviorSignals } from '../../system/trust/policy.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel } from './types.js';
 import { resolvePreferredContactName } from './preferred-name.js';
-import { textResult, textResultWithError } from '../../tools/results.js';
+import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 function errorMessage(error: unknown): string {

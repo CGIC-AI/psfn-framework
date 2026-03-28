@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { MemoryScopeQuery } from '../../memory/types.js';
+import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type {
   SessionStore,
@@ -15,8 +15,8 @@ import type { SessionEntry } from './types.js';
 import type { SessionSearchHit } from '../../persistence/sessions/search-index.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
-import { classifyChannel, type ChannelMeta } from '../../trust/policy.js';
-import { countTokens } from '../../llm/tokens.js';
+import { classifyChannel, type ChannelMeta } from '../../system/trust/policy.js';
+import { countTokens } from '../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
@@ -871,11 +871,11 @@ export class SessionManager {
   private mirrorMessageToActiveSessions(params: {
     continuityKey?: string;
     sourceChannelId: string;
-    sourceVisibility: import('../../trust/types.js').ChannelVisibility;
+    sourceVisibility: import('../../system/trust/types.js').ChannelVisibility;
     sourceRole: 'user' | 'assistant';
     sourceAuthorName?: string;
     content: string;
-    trustLevel: import('../../trust/types.js').TrustLevel;
+    trustLevel: import('../../system/trust/types.js').TrustLevel;
     timestamp: number;
     mirrorEnabled: boolean;
   }): void {

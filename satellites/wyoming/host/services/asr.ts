@@ -2,7 +2,7 @@ import type {
   SttStreamConfig,
   SttStreamSession,
   StreamingSttConnector,
-} from '../../../../src/voice/connectors/stt/types.js';
+} from '../../../../src/primitives/voice/connectors/stt/types.js';
 import type {
   WyomingFrame,
   WyomingJsonObject,

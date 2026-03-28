@@ -5,7 +5,7 @@ import type {
   ChannelPrivacyLevel,
   ContactIdentityLinkVerification,
 } from '../types.js';
-import type { TrustLevel } from '../../../trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import type {
   ContactIdentityVerificationRow,
   ContactRow,

@@ -3,7 +3,7 @@ import type { CharacterCardV2 } from './types.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
 import { normalizeCompanionName } from './companion-naming.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
-import { wrapPromptSectionXml } from '../../prompt/sections.js';
+import { wrapPromptSectionXml } from './prompt-sections.js';
 import { composeDefaultFoundationTemplate } from './foundation-sections.js';
 
 export function loadCharacterCard(path: string): CharacterCardV2 {

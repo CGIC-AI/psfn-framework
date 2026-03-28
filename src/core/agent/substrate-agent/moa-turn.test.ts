@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runMoaTurn, type ResolvedMoaSettings } from './moa-turn.js';
-import { runDeliberation } from '../../../llm/deliberation.js';
+import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { LLMContext, ObservabilityCallType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 
-vi.mock('../../../llm/deliberation.js', () => ({
+vi.mock('../../../primitives/llm/deliberation.js', () => ({
   runDeliberation: vi.fn(),
 }));
 

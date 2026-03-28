@@ -13,7 +13,7 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import { isChannelVisibility, type ChannelVisibility } from '../../trust/types.js';
+import { isChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
 import type {
   ChannelAdapter,
   ChannelCapabilities,
@@ -22,7 +22,7 @@ import type {
   ChannelOutboundAdapter,
   ChannelPromptAdapter,
   OutboundContext,
-} from '../types.js';
+} from '../backplane/types.js';
 import type {
   ApiContinuityWatchdogCheck,
   ApiHealthResponse,
@@ -36,7 +36,7 @@ import type {
 } from './types.js';
 import { API_CONTINUITY_WATCHDOG_CHECKS, API_HEALTH_SUBSYSTEMS } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { type ApiAuthPrincipal } from '../http/auth.js';
+import { type ApiAuthPrincipal } from '../backplane/http/auth.js';
 import {
   ApiVoiceWebSocketAdapter,
   type VoiceWebSocketRuntime,
@@ -47,7 +47,7 @@ import {
   readJsonBodyWithLimit,
   sendEmpty,
   sendJson,
-} from '../http/primitives.js';
+} from '../backplane/http/primitives.js';
 import {
   type FifoChannelLease,
   FifoChannelLock,
@@ -76,7 +76,7 @@ import {
   formatSseDoneEvent,
 } from './response-format.js';
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
-import type { ExternalChannelProfileConfig } from '../config.js';
+import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB

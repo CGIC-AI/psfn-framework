@@ -6,7 +6,7 @@ import type {
   RelationshipType,
   ChannelPrivacyLevel,
 } from '../types.js';
-import type { TrustLevel } from '../../../trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import {
   LEGACY_DISCORD_CHANNEL,
   defaultPrivacyForChannel,

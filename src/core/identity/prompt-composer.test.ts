@@ -8,8 +8,8 @@ import {
   IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
   PromptComposer,
 } from './prompt-composer.js';
-import { ValuesJournalStore } from '../../values/store.js';
-import { NorthStarStore } from '../../north-star/store.js';
+import { ValuesJournalStore } from '../../faculties/values/store.js';
+import { NorthStarStore } from '../../faculties/north-star/store.js';
 
 describe('PromptComposer', () => {
   let tmpDir: string;

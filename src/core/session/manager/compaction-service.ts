@@ -1,8 +1,8 @@
 import type { LLMProvider } from '../../agent/contracts.js';
-import { countMessageTokens, countTokens } from '../../../llm/tokens.js';
+import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { ChannelVisibility } from '../../../trust/types.js';
+import type { ChannelVisibility } from '../../../system/trust/types.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../../identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
@@ -22,7 +22,7 @@ import {
 } from '../manager-primitives.js';
 import type { PreCompactionExtractionHandler } from './contracts.js';
 import { entriesToMessages } from './context-support.js';
-import { getRequestContext } from '../../../llm/request-context.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
 
 const log = createComponentLogger('CompactionService');
 

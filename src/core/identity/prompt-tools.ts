@@ -16,7 +16,7 @@ import {
   IdentityCoolingOffManager,
 } from '../../system/capabilities/safeguards.js';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
-import { textResult, textResultWithError } from '../../tools/results.js';
+import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 const DEFAULT_DIFF_LINE_LIMIT = 160;

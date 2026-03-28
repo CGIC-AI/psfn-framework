@@ -4,7 +4,7 @@
 import type { CapabilityTier, CompositionalPolicyConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
-import type { Scheduler } from '../../../scheduler/scheduler.js';
+import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ToolRegistrarTarget } from '../../../core/agent/tool-registrar.js';
 import {
@@ -16,7 +16,7 @@ import type {
   ExtendedToolActivationResult,
   PostTurnActionInferer,
 } from '../../../core/agent/substrate-agent.js';
-import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../repl/types.js';
+import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/think/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
 import type { LLMProvider } from '../../../core/agent/contracts.js';
 import {
@@ -29,18 +29,18 @@ import {
 } from '../../../system/settings-tools.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
 import type { SessionManager } from '../../../core/session/manager.js';
-import type { CoreMemoryStore } from '../../../core-memory/store.js';
-import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../../../tools/session.js';
-import { createSessionGrepTool, createSessionSearchTool } from '../../../tools/session-search.js';
+import type { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
+import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../../../core/tools/session.js';
+import { createSessionGrepTool, createSessionSearchTool } from '../../../core/tools/session-search.js';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
-import { createCompleteFocusTool, createStartFocusTool } from '../../../tools/focus.js';
+import { createCompleteFocusTool, createStartFocusTool } from '../../../core/tools/focus.js';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { PromptComposer } from '../../../core/identity/prompt-composer.js';
 import { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
 import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt-layers.js';
-import { wrapPromptSectionXml } from '../../../prompt/sections.js';
-import { runDeliberation } from '../../../llm/deliberation.js';
-import type { DeliberationResult } from '../../../llm/deliberation.js';
+import { wrapPromptSectionXml } from '../../../core/identity/prompt-sections.js';
+import { runDeliberation } from '../../../primitives/llm/deliberation.js';
+import type { DeliberationResult } from '../../../primitives/llm/deliberation.js';
 import {
   createPersonaUpdateTool,
   type PersonaUpdateToolOptions,
@@ -57,30 +57,30 @@ import {
   createPromptLayerToggleTool,
   type PromptLayerUpdateToolOptions,
 } from '../../../core/identity/prompt-tools.js';
-import { NorthStarStore } from '../../../north-star/store.js';
+import { NorthStarStore } from '../../../faculties/north-star/store.js';
 import {
   createNorthStarCreateTool,
   createNorthStarDeleteTool,
   createNorthStarListTool,
   createNorthStarReorderTool,
   createNorthStarUpdateTool,
-} from '../../../north-star/tools.js';
-import { HeartbeatPolicyStore } from '../../../scheduler/heartbeat-policy.js';
+} from '../../../faculties/north-star/tools.js';
+import { HeartbeatPolicyStore } from '../../../core/scheduler/heartbeat-policy.js';
 import {
   createHeartbeatGetPolicyTool,
   createHeartbeatRunTemplateTool,
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
-} from '../../../scheduler/heartbeat-tools.js';
-import type { ReflectionTemplate } from '../../../scheduler/heartbeat-policy.js';
-import type { MemoryWriter } from '../../../memory/writer.js';
-import { ValuesJournalStore } from '../../../values/store.js';
-import type { ValuesDeliberationMetadata } from '../../../values/store.js';
+} from '../../../core/scheduler/heartbeat-tools.js';
+import type { ReflectionTemplate } from '../../../core/scheduler/heartbeat-policy.js';
+import type { MemoryWriter } from '../../../faculties/memory/writer.js';
+import { ValuesJournalStore } from '../../../faculties/values/store.js';
+import type { ValuesDeliberationMetadata } from '../../../faculties/values/store.js';
 import {
   createValuesAddTool,
   createValuesListTool,
   createValuesUpdateTool,
-} from '../../../values/tools.js';
+} from '../../../faculties/values/tools.js';
 import {
   resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,
@@ -92,7 +92,7 @@ import {
   resolveReflectionJournalPath,
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
-import { ReflectionJournalStore } from '../../../notes/reflection-journal.js';
+import { ReflectionJournalStore } from '../../../persistence/journals/reflection-journal.js';
 import type { PostTurnActionRuntime } from './post-turn-actions.js';
 import { isBusyTurnError } from '../../../system/lifecycle/turn-contention.js';
 import {
@@ -105,11 +105,11 @@ import {
   inferComposedDeferredPostTurnActions,
   inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages,
 } from './deferred-post-turn-inference.js';
-import { evaluateCompositionalPolicyForChannelId } from '../../../compositional/policy.js';
+import { evaluateCompositionalPolicyForChannelId } from '../../../system/capabilities/compositional-policy.js';
 import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
-} from '../../../memory/sleeptime-agent.js';
+} from '../../../faculties/memory/sleeptime-agent.js';
 import type { EmotionStateSnapshot } from '../../../core/emotion/state.js';
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import {

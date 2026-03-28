@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
-import { classifyChannel } from '../../trust/policy.js';
-import type { ChannelVisibility } from '../../trust/types.js';
+import { classifyChannel } from '../../system/trust/policy.js';
+import type { ChannelVisibility } from '../../system/trust/types.js';
 import { initDatabase } from '../sqlite-utils.js';
 import type { SessionEntry } from '../../core/session/types.js';
 

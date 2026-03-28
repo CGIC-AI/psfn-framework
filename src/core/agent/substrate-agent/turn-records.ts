@@ -2,14 +2,14 @@ import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, MessagePromptOverrideMode, SubstrateMessage, TurnID, TurnRecord, TurnRecordToolCall, TurnUsage } from '../../../shared/contracts/runtime.js';
-import { normalizeChannelVisibility, type TrustLevel } from '../../../trust/types.js';
-import type { ChannelMeta } from '../../../trust/policy.js';
+import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
+import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import { cloneTurnObservabilityRecord } from '../../turns/observability.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
-import type { TurnToolSummary } from '../../../skills/reflection-nudge.js';
+import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 
 function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {

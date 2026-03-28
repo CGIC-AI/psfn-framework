@@ -2,8 +2,8 @@ import type { ImageContent, UserMessage } from '@mariozechner/pi-ai';
 import type { Attachment, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { LLMProvider } from '../contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
-import type { ImageVisionReviewer } from '../../../images/types.js';
-import type { CurrentTurnVisionReviewContext } from '../../../images/request-context.js';
+import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { CurrentTurnVisionReviewContext } from '../../../primitives/images/request-context.js';
 import { inferImageMimeTypeFromAttachmentCandidate } from '../substrate-agent-helpers.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 

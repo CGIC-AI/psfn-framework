@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   INSECURE_LOCAL_API_PRINCIPAL,
   principalFromApiKeyToken,
-} from '../http/auth.js';
+} from '../backplane/http/auth.js';
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
 
 describe('resolveApiTurnIdentity', () => {

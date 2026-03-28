@@ -11,11 +11,11 @@ import type {
   MediaAttachment,
   MessageHandler,
   OutboundContext,
-} from '../types.js';
+} from '../backplane/types.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { TelegramChannelConfig } from '../config.js';
+import type { TelegramChannelConfig } from '../backplane/config.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {

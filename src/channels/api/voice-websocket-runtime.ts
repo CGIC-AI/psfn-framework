@@ -9,41 +9,41 @@ import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
-import { createWavFromPcm16le } from '../../voice/audio.js';
-import { DeepgramSttClient } from '../../voice/deepgram.js';
+import { createWavFromPcm16le } from '../../primitives/voice/audio.js';
+import { DeepgramSttClient } from '../../primitives/voice/deepgram.js';
 import {
   resolveVoiceReliabilityBudgets,
   runWithVoiceStageBudget,
-} from '../../voice/policy/reliability.js';
+} from '../../primitives/voice/policy/reliability.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
 } from '../../app/startup/support/bootstrap-helpers.js';
-import type { SttStreamConfig, SttStreamSession, SttTranscriptChunk, StreamingSttConnector } from '../../voice/connectors/stt/types.js';
-import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
+import type { SttStreamConfig, SttStreamSession, SttTranscriptChunk, StreamingSttConnector } from '../../primitives/voice/connectors/stt/types.js';
+import type { StreamingTtsConnector } from '../../primitives/voice/connectors/tts/types.js';
 import {
   resolveVoiceSecurityLimits,
   validatePcmAudio,
   validateTranscriptText,
   validateTtsAudioChunk,
   validateTtsInputText,
-} from '../../voice/policy/security.js';
-import { serializeVoiceWireFrame } from '../../voice/transports/websocket/serializer.js';
-import { WebSocketVoiceRuntime } from '../../voice/transports/websocket/runtime.js';
-import { WebSocketVoiceServer } from '../../voice/transports/websocket/server.js';
+} from '../../primitives/voice/policy/security.js';
+import { serializeVoiceWireFrame } from '../../primitives/voice/transports/websocket/serializer.js';
+import { WebSocketVoiceRuntime } from '../../primitives/voice/transports/websocket/runtime.js';
+import { WebSocketVoiceServer } from '../../primitives/voice/transports/websocket/server.js';
 import type {
   WebSocketVoiceConnection,
   WebSocketVoiceServerOptions,
   WebSocketVoiceSession,
-} from '../../voice/transports/websocket/types.js';
+} from '../../primitives/voice/transports/websocket/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { WebRequestBinaryResult } from '../../boundary/gateway/protocol.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
 } from './voice-websocket.js';
-import type { ApiAuthPrincipal } from '../http/auth.js';
+import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 const log = createComponentLogger('ApiVoiceRuntime');
 

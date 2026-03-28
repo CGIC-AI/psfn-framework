@@ -1,4 +1,4 @@
-import { parseJsonBody } from '../../channels/http/primitives.js';
+import { parseJsonBody } from '../../channels/backplane/http/primitives.js';
 
 export function parseAdminJsonBody(body: string): { ok: true; value: unknown } | { ok: false; error: string } {
   const trimmed = body.trim();

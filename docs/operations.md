@@ -130,4 +130,4 @@ Check these first:
 - SQLite integrity and embedding-dimension warnings
 - backup and migration manifests under the runtime backup root
 
-If behavior seems inconsistent with old docs, prefer the split-runtime entrypoints and the contracts in `src/persistence/layout.ts` and `src/config/settings-contract.ts`.
+If behavior seems inconsistent with old docs, prefer the split-runtime entrypoints and the contracts in `src/persistence/layout.ts` and `src/system/settings/contracts.ts`.

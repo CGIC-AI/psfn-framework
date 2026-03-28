@@ -5,7 +5,7 @@ import {
   ActiveConcernStore,
   type ActiveConcernPriority,
 } from './concerns.js';
-import { textResultWithError } from '../../tools/results.js';
+import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface ListConcernsParams {

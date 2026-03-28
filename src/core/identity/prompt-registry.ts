@@ -35,7 +35,7 @@ const PROMPT_SEEDS: PromptSeed[] = [
     key: EXTRACTION_PROMPT_KEY,
     description:
       'Memory extraction system prompt. Must include {existing_facts} and {recent_messages}.',
-    consumers: ['src/memory/extraction.ts'],
+    consumers: ['src/faculties/memory/extraction.ts'],
     text: `You are analyzing a conversation to extract important facts about the user. Extract atomic, specific facts - each should be a single piece of information.
 
 For each fact, provide:
@@ -91,14 +91,14 @@ If there are no new facts worth extracting, respond with an empty response block
   {
     key: COMPACTION_SUMMARY_PROMPT_KEY,
     description: 'Session compaction system prompt used when conversation context exceeds budget.',
-    consumers: ['src/session/manager.ts'],
+    consumers: ['src/core/session/manager.ts'],
     text: 'Summarize this conversation excerpt concisely, preserving key facts and context.',
   },
   {
     key: PROFILE_SYNTHESIS_PROMPT_KEY,
     description:
       'Canonical contact profile synthesis prompt. Must include {contact_id}, {existing_profile}, and {memory_facts}.',
-    consumers: ['src/memory/extraction.ts'],
+    consumers: ['src/faculties/memory/extraction.ts'],
     text: `Synthesize a stable contact profile for canonical contact: {contact_id}.
 
 Existing profile (if any):

@@ -1,7 +1,7 @@
 import type {
   ChannelAdapter,
   ChannelAdapterFactoryEntry,
-} from '../../../channels/types.js';
+} from '../../../channels/backplane/types.js';
 import {
   EligibilityDeniedError,
   type EligibilityGate,

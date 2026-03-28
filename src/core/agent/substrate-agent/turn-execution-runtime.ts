@@ -1,17 +1,17 @@
 import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
-import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../../broadcast/safety.js';
+import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
-import { collectGeneratedImageAttachments } from '../../../images/generated-media.js';
-import type { ImageVisionReviewer } from '../../../images/types.js';
-import { runWithVisionToolRequestContext } from '../../../images/request-context.js';
-import { runWithRequestContext } from '../../../llm/request-context.js';
-import { contextMessagesToPiMessages } from '../../../llm/message-conversion.js';
-import { countTokens } from '../../../llm/tokens.js';
+import { collectGeneratedImageAttachments } from '../../../primitives/images/generated-media.js';
+import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import { runWithVisionToolRequestContext } from '../../../primitives/images/request-context.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { contextMessagesToPiMessages } from '../../../primitives/llm/message-conversion.js';
+import { countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -25,10 +25,10 @@ import {
   cloneInternalState,
   type InternalState,
 } from '../../self-model/state.js';
-import type { SkillsRuntime } from '../../../skills/runtime.js';
-import type { TurnToolSummary } from '../../../skills/reflection-nudge.js';
-import { classifyChannel, type ChannelMeta } from '../../../trust/policy.js';
-import { normalizeChannelVisibility, type TrustLevel } from '../../../trust/types.js';
+import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
+import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
+import { classifyChannel, type ChannelMeta } from '../../../system/trust/policy.js';
+import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
 import { resolveCanonicalEmbodimentContext } from '../active-emanation-state.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -54,7 +54,7 @@ import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import { resolveModel } from '../stream-adapter.js';
 import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
-import type { MemoryScopeQuery } from '../../../memory/types.js';
+import type { MemoryScopeQuery } from '../../../faculties/memory/types.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import {
   collectVisionTurnImageUrls,
@@ -82,7 +82,7 @@ import {
 import {
   buildPromptSectionTelemetryList,
   extractWrappedPromptSections,
-} from '../../../prompt/sections.js';
+} from '../../identity/prompt-sections.js';
 
 const log = createComponentLogger('SubstrateAgent');
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();

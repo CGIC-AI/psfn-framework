@@ -15,7 +15,7 @@ import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,
-} from '../http/auth.js';
+} from '../backplane/http/auth.js';
 import { resolveApiCorsAllowedOrigins } from './http-policy.js';
 import type {
   VoiceWebSocketCloseReason,

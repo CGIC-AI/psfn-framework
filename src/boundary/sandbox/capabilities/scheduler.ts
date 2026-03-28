@@ -1,6 +1,6 @@
 import type { EventBus, EventName } from '../../../shared/event-bus.js';
-import type { Scheduler } from '../../../scheduler/scheduler.js';
-import type { TaskState } from '../../../scheduler/types.js';
+import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import type { TaskState } from '../../../core/scheduler/types.js';
 import type { ContextGetter, ScheduleMutationResult, ScheduleView } from './contracts.js';
 import { parseRunAt, REPL_EVENT_ALLOWLIST, nextReplTaskId, toTrimmedString, VALID_TASK_STATES } from './common.js';
 

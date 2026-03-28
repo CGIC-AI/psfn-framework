@@ -1,10 +1,10 @@
 // ── Admin GUI Types ──
 
-import type { MemoryStore } from '../../memory/store.js';
+import type { MemoryStore } from '../../faculties/memory/store.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import type { Scheduler } from '../../scheduler/scheduler.js';
-import type { ShardExecutionPort } from '../../shards/port.js';
+import type { Scheduler } from '../../core/scheduler/scheduler.js';
+import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { EmbeddingService } from '../../core/agent/contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
@@ -12,7 +12,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
-import type { SkillsRuntime } from '../../skills/runtime.js';
+import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import type { AdaptiveToolRuntimeState } from '../../core/agent/adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from '../../core/agent/tool-catalog.js';
 import type {

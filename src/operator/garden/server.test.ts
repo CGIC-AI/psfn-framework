@@ -9,16 +9,16 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
-import { MemoryStore } from '../../memory/store.js';
+import { MemoryStore } from '../../faculties/memory/store.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
-import { Scheduler } from '../../scheduler/scheduler.js';
-import { ShardManager } from '../../shards/manager.js';
+import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { ShardManager } from '../../faculties/shards/manager.js';
 import { formatPossessiveCompanionName } from '../../core/identity/companion-naming.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProvider } from '../../core/agent/contracts.js';
-import { resetRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
+import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 
 function request(
   port: number,

@@ -8,9 +8,9 @@
 import 'dotenv/config';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 import * as sqliteVec from 'sqlite-vec';
-import { createEmbeddingProviderFromEnv } from '../../memory/embedding.js';
-import { migrateMemoryEmbeddings } from '../../memory/migration.js';
-import type { ReembedMigrationProgress } from '../../memory/migration.js';
+import { createEmbeddingProviderFromEnv } from '../../faculties/memory/embedding.js';
+import { migrateMemoryEmbeddings } from '../../faculties/memory/migration.js';
+import type { ReembedMigrationProgress } from '../../faculties/memory/migration.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 

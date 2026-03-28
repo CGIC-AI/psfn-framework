@@ -23,15 +23,15 @@ import type {
   SocialRelationshipEdgeQuery,
   SocialRelationshipEdgeUpsertInput,
 } from './types.js';
-import type { TrustLevel, LowTierTrustLevel, TrustMutationSource } from '../../trust/types.js';
-import { isHighTierTrustLevel, isLowTierTrustLevel } from '../../trust/types.js';
+import type { TrustLevel, LowTierTrustLevel, TrustMutationSource } from '../../system/trust/types.js';
+import { isHighTierTrustLevel, isLowTierTrustLevel } from '../../system/trust/types.js';
 import {
   evaluateLowTierTrustDriftSuggestion,
   isManualHighTierTrustMutationAuthorized,
   resolveTrustMutationSource,
   type LowTierTrustDriftSuggestion,
   type TrustDriftBehaviorSignals,
-} from '../../trust/policy.js';
+} from '../../system/trust/policy.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { appendMutationAuditEntry, listMutationAuditEntries } from './store/audit.js';

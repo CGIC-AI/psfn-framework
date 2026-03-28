@@ -1,4 +1,4 @@
-import type { ChannelOutboundDock } from '../../channels/types.js';
+import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import {
   createEligibilityGate,
   type EligibilityDecision,

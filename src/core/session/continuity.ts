@@ -11,8 +11,8 @@ import {
   classifyChannel,
   visibilitiesShareContinuity,
   type ChannelMeta,
-} from '../../trust/policy.js';
-import type { ChannelVisibility } from '../../trust/types.js';
+} from '../../system/trust/policy.js';
+import type { ChannelVisibility } from '../../system/trust/types.js';
 import {
   appendJournalEntry,
   buildMessageJournalEntry,

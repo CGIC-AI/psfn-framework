@@ -1,4 +1,4 @@
-import { countTokens } from '../../../llm/tokens.js';
+import { countTokens } from '../../../primitives/llm/tokens.js';
 import type { LegacyChatImportRange, SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionEntry } from '../types.js';
 import { normalizeImportBootstrapMaxTokens } from '../manager-primitives.js';

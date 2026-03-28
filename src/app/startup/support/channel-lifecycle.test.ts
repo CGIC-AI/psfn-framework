@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChannelAdapter } from '../../../channels/types.js';
+import type { ChannelAdapter } from '../../../channels/backplane/types.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,

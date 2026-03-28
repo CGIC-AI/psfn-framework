@@ -44,13 +44,13 @@ Rules:
 Prefer these files when checking behavior:
 
 1. Runtime entrypoints and wiring
-   - `src/index.ts`
-   - `src/gateway-main.ts`
-   - `src/agent-main.ts`
+   - `src/app/startup/index.ts`
+   - `src/app/gateway/main.ts`
+   - `src/app/agent/main.ts`
 2. Config and ownership contracts
-   - `src/types.ts`
-   - `src/settings.ts`
-   - `src/config/settings-contract.ts`
+   - `src/shared/contracts/runtime.ts`
+   - `src/system/settings.ts`
+   - `src/system/settings/contracts.ts`
    - `src/persistence/layout.ts`
 3. Product/runtime overview and deeper design docs
    - `README.md`

@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { FilesystemReadOperations } from './ops.js';
-import { textResult, textResultWithError } from '../../../tools/results.js';
+import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const DEFAULT_LIST_MAX_ENTRIES = 200;

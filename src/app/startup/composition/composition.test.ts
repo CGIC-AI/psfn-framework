@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { EventBus } from '../../../shared/event-bus.js';
 import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
-import { ModuleLoader } from '../../../modules/loader.js';
-import { DEFAULT_REPL_CONFIG } from '../../../repl/types.js';
+import { ModuleLoader } from '../../../system/modules/loader.js';
+import { DEFAULT_REPL_CONFIG } from '../../../core/tools/think/types.js';
 import {
   DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
   extractGatewayMethods,
@@ -16,7 +16,7 @@ import {
 } from '../../../core/agent/tool-wiring-validator.js';
 import type { LLMProvider } from '../../../core/agent/contracts.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
-import type { ModuleRegistryMutation } from '../../../modules/types.js';
+import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import { wireShardAndThinkRuntime } from './composition.js';
 
@@ -237,7 +237,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
     }
   });
 
-  it('queues apprentice installs for approval and activates module on approval', async () => {
+  it('queues apprentice installs for approval and surfaces activation failure on approval', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-split-apprentice-'));
     const registryPath = join(root, 'registry.json');
     writeFileSync(registryPath, '[]', 'utf-8');
@@ -289,16 +289,17 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         id: pending[0].id,
         decision: 'approve',
       });
-      expect(resolution.status).toBe('approved');
-      expect(resolution.executed).toBe(true);
+      expect(resolution.status).toBe('failed');
+      expect(resolution.executed).toBe(false);
+      expect(resolution.message).toContain('registry-backed module source execution is disabled');
       expect(onMutation).toHaveBeenCalledTimes(1);
-      expect(target.tools.map((tool) => tool.name)).toContain('planner_probe_queue');
+      expect(target.tools.map((tool) => tool.name)).not.toContain('planner_probe_queue');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('allows autonomous installs immediately and activates enabled module', async () => {
+  it('surfaces autonomous install activation failure and leaves the module inactive', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-split-autonomous-'));
     const registryPath = join(root, 'registry.json');
     writeFileSync(registryPath, '[]', 'utf-8');
@@ -336,10 +337,11 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       const result = await think.execute('call-3', { task: 'install module' });
       const text = extractText(result);
 
-      expect(text).toContain('"ok":true');
+      expect(text).toContain('"ok":false');
+      expect(text).toContain('registry-backed module source execution is disabled');
       expect(text).not.toContain('"queued":true');
       expect(onMutation).toHaveBeenCalledTimes(1);
-      expect(target.tools.map((tool) => tool.name)).toContain('planner_probe_auto');
+      expect(target.tools.map((tool) => tool.name)).not.toContain('planner_probe_auto');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -391,7 +393,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
 });
 
 describe('module loader + tool wiring revalidation', () => {
-  it('disables dynamically loaded invalid gateway-dependent tools before use', async () => {
+  it('records blocked startup module activation and leaves invalid tools unavailable', async () => {
     class FakeGatewayClient {
       gitStatus(): void { /* noop */ }
       gitCommit(): void { /* noop */ }
@@ -425,8 +427,8 @@ describe('module loader + tool wiring revalidation', () => {
       // Mirrors startup flow: pre-load validation, module activation, post-load validation.
       target.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
       const summary = await moduleLoader.loadEnabledModules();
-      expect(summary).toEqual({ attempted: 1, loaded: 1, failed: 0 });
-      expect(target.tools.map((tool) => tool.name)).toContain('repo_commit');
+      expect(summary).toEqual({ attempted: 1, loaded: 0, failed: 1 });
+      expect(target.tools.map((tool) => tool.name)).not.toContain('repo_commit');
 
       target.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
       expect(target.tools.map((tool) => tool.name)).not.toContain('repo_commit');

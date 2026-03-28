@@ -8,7 +8,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStore } from '../contacts/store.js';
-import type { ChannelPromptDock } from '../../channels/types.js';
+import type { ChannelPromptDock } from '../../channels/backplane/types.js';
 import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import { isTurnId } from '../turns/id.js';
 import { EmotionState } from '../emotion/state.js';

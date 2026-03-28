@@ -1,8 +1,8 @@
 import type { LLMProvider } from '../agent/contracts.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
-import { classifyChannel, getAllowedSensitivities } from '../../trust/policy.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../trust/types.js';
+import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
+import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
 
 const DEFAULT_SESSION_SEARCH_LIMIT = 8;
 const MAX_SESSION_SEARCH_LIMIT = 25;

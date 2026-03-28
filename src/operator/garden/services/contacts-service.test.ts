@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { ContactStore } from '../../../core/contacts/store.js';
-import type { MemoryStore } from '../../../memory/store.js';
+import type { MemoryStore } from '../../../faculties/memory/store.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { AdminContactsDataService } from './contacts-service.js';
 

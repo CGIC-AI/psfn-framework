@@ -1,6 +1,6 @@
 import type { ContextMessage } from '../../../shared/contracts/runtime.js';
-import type { ChannelMeta } from '../../../trust/policy.js';
-import type { ChannelVisibility } from '../../../trust/types.js';
+import type { ChannelMeta } from '../../../system/trust/policy.js';
+import type { ChannelVisibility } from '../../../system/trust/types.js';
 import type { UserContinuityStore } from '../continuity.js';
 import type { SessionEntry } from '../types.js';
 import {

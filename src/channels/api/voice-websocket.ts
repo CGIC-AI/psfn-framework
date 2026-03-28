@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { WebSocketVoiceConnection } from '../../voice/transports/websocket/types.js';
+import type { WebSocketVoiceConnection } from '../../primitives/voice/transports/websocket/types.js';
 import {
   getBearerToken,
   getCookieValue,
@@ -11,7 +11,7 @@ import {
   principalFromApiKeyToken,
   INSECURE_LOCAL_API_PRINCIPAL,
   type ApiAuthPrincipal,
-} from '../http/auth.js';
+} from '../backplane/http/auth.js';
 
 const log = createComponentLogger('ApiVoiceWebSocket');
 

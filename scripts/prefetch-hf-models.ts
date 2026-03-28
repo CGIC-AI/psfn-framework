@@ -4,7 +4,7 @@ import { config as loadDotenv } from 'dotenv';
 import {
   resolveProjectTransformersCacheDir,
   TransformersEmbeddingProvider,
-} from '../src/memory/embedding.js';
+} from '../src/faculties/memory/embedding.js';
 import {
   TextEmotionClassifier,
 } from '../src/core/emotion/text-classifier.js';

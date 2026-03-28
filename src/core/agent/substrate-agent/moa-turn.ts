@@ -1,4 +1,4 @@
-import { runDeliberation } from '../../../llm/deliberation.js';
+import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { LLMContext, ObservabilityCallType, SubstrateMessage, TurnID, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { LLMProvider } from '../contracts.js';

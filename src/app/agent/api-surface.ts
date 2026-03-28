@@ -15,12 +15,12 @@ import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websock
 import {
   buildExternalChannelProfiles,
   type RuntimeChannelsConfig,
-} from '../../channels/config.js';
-import type { ChannelAdapter } from '../../channels/types.js';
+} from '../../channels/backplane/config.js';
+import type { ChannelAdapter } from '../../channels/backplane/types.js';
 import type { ContactStore } from '../../core/contacts/store.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
-import type { MemoryStore } from '../../memory/store.js';
-import type { Scheduler } from '../../scheduler/scheduler.js';
+import type { MemoryStore } from '../../faculties/memory/store.js';
+import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from '../../shared/utils/env.js';

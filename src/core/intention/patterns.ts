@@ -1,8 +1,8 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
-import type { MemoryWriter } from '../../memory/writer.js';
-import { wrapPromptSectionXml } from '../../prompt/sections.js';
+import type { MemoryWriter } from '../../faculties/memory/writer.js';
+import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 
 export const BEHAVIORAL_RESPONSE_STRATEGIES = [
   'empathy',

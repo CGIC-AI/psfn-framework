@@ -117,9 +117,9 @@ If embeddings change materially, re-embed and validate the store before trusting
 
 Start here when behavior matters:
 
-- `src/memory/types.ts`
-- `src/memory/store.ts`
-- `src/memory/writer.ts`
-- `src/memory/extraction.ts`
-- `src/memory/retrieval.ts`
+- `src/faculties/memory/types.ts`
+- `src/faculties/memory/store.ts`
+- `src/faculties/memory/writer.ts`
+- `src/faculties/memory/extraction.ts`
+- `src/faculties/memory/retrieval.ts`
 - `src/app/startup/composition/composition.ts`

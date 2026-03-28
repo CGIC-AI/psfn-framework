@@ -6,7 +6,7 @@ import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import { wireHeartbeatRuntime } from '../../app/startup/composition/parity.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { Scheduler } from '../../scheduler/scheduler.js';
+import { Scheduler } from '../scheduler/scheduler.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 

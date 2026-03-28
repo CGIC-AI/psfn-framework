@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createServer, type AddressInfo } from 'node:net';
 import { EventBus } from '../../shared/event-bus.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { TelegramChannelConfig } from '../config.js';
+import type { TelegramChannelConfig } from '../backplane/config.js';
 import { TelegramAdapter } from './adapter.js';
 
 interface FetchCall {

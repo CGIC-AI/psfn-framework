@@ -8,28 +8,28 @@ import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } fr
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createModel, resolveRegisteredModel } from '../../llm/models.js';
-import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../llm/routing.js';
+import { createModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
+import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
 import {
   DEFAULT_BASE_DELAY_MS,
   DEFAULT_MAX_RETRIES,
   isRetryableError,
-} from '../../llm/retry.js';
-import { llmRetryConfig } from '../../llm/retry-config.js';
+} from '../../primitives/llm/retry.js';
+import { llmRetryConfig } from '../../primitives/llm/retry-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { getRequestContext } from '../../llm/request-context.js';
-import { toCorrelationLogFields } from '../../llm/correlation.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { toCorrelationLogFields } from '../../primitives/llm/correlation.js';
 import {
   FallbackRunner,
   NonRecoverableFallbackError,
-} from '../../llm/fallback.js';
+} from '../../primitives/llm/fallback.js';
 import {
   findRegistryEntryByModelId,
   findRegistryEntryByProviderModel,
   ModelBudgetController,
   ModelBudgetExceededError,
   normalizeModelIdForProvider,
-} from '../../llm/model-budget.js';
+} from '../../primitives/llm/model-budget.js';
 import {
   resolveOptionalEnvCredential,
   resolveProviderApiKey,

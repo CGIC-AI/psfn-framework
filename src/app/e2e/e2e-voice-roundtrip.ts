@@ -20,19 +20,19 @@ import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { LLMClient } from '../../llm/client.js';
+import { LLMClient } from '../../primitives/llm/client.js';
 import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from '../startup/composition/composition.js';
-import { ElevenLabsTtsClient } from '../../voice/elevenlabs.js';
-import { DeepgramSttClient } from '../../voice/deepgram.js';
+import { ElevenLabsTtsClient } from '../../primitives/voice/elevenlabs.js';
+import { DeepgramSttClient } from '../../primitives/voice/deepgram.js';
 import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
-import { serializeVoiceWireFrame } from '../../voice/transports/websocket/serializer.js';
+import { serializeVoiceWireFrame } from '../../primitives/voice/transports/websocket/serializer.js';
 import {
   VOICE_WIRE_PROTOCOL,
   type VoiceWireFrame,
   type VoiceWireInboundFrame,
   type WebSocketVoiceConnection,
-} from '../../voice/transports/websocket/types.js';
-import { INSECURE_LOCAL_API_PRINCIPAL } from '../../channels/http/auth.js';
+} from '../../primitives/voice/transports/websocket/types.js';
+import { INSECURE_LOCAL_API_PRINCIPAL } from '../../channels/backplane/http/auth.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type {
   VoiceWebSocketRuntime,

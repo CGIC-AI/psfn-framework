@@ -1,9 +1,9 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { SubstrateMessage, ResponseStyle } from '../../../shared/contracts/runtime.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
-import type { ChannelVisibility, TrustLevel } from '../../../trust/types.js';
-import { normalizeChannelVisibility } from '../../../trust/types.js';
-import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } from '../../../trust/policy.js';
+import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
+import { normalizeChannelVisibility } from '../../../system/trust/types.js';
+import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } from '../../../system/trust/policy.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
@@ -33,7 +33,7 @@ import {
   isSingleWrappedPromptSection,
   unwrapSingleWrappedPromptSection,
   wrapPromptSectionXml,
-} from '../../../prompt/sections.js';
+} from '../../identity/prompt-sections.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;

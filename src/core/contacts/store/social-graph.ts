@@ -21,9 +21,9 @@ import type {
   SocialGraphEntityRow,
   SocialRelationshipEdgeRow,
 } from './domain-types.js';
-import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../trust/types.js';
-import { SENSITIVITY_LEVELS, sensitivityOrd } from '../../../trust/types.js';
-import { getAllowedSensitivities } from '../../../trust/policy.js';
+import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
+import { SENSITIVITY_LEVELS, sensitivityOrd } from '../../../system/trust/types.js';
+import { getAllowedSensitivities } from '../../../system/trust/policy.js';
 
 function clampUnit(value: number | undefined, fallback: number): number {
   if (!Number.isFinite(value)) return fallback;

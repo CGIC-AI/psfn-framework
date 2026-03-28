@@ -9,11 +9,11 @@ import 'dotenv/config';
 import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { LLMClient } from '../../llm/client.js';
+import { LLMClient } from '../../primitives/llm/client.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
-import { MemoryStore } from '../../memory/store.js';
-import { SalienceDecay } from '../../memory/decay.js';
-import { DEFAULT_REPL_CONFIG } from '../../repl/types.js';
+import { MemoryStore } from '../../faculties/memory/store.js';
+import { SalienceDecay } from '../../faculties/memory/decay.js';
+import { DEFAULT_REPL_CONFIG } from '../../core/tools/think/types.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import {
   composeIdentity,

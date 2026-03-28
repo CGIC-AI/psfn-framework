@@ -2,7 +2,7 @@ import type {
   AdaptiveContextBudgetProfile,
   ContextBudgetTurnCategory,
 } from '../../shared/context-budget.js';
-import type { MemoryWithheldReasonCounts } from '../../memory/withheld-summary.js';
+import type { MemoryWithheldReasonCounts } from '../../faculties/memory/withheld-summary.js';
 
 export type ContextManifestCompositionalMode =
   | 'disabled_policy'

@@ -206,7 +206,7 @@ vi.mock('prism-media', () => {
   };
 });
 
-vi.mock('../../voice/connectors/stt/index.js', () => {
+vi.mock('../../primitives/voice/connectors/stt/index.js', () => {
   return {
     createStreamingSttConnector: connectorMocks.createStreamingSttConnector,
     getStreamingSttProviderMetadata: connectorMocks.getStreamingSttProviderMetadata,
@@ -217,7 +217,7 @@ vi.mock('../../voice/connectors/stt/index.js', () => {
   };
 });
 
-vi.mock('../../voice/connectors/tts/index.js', () => {
+vi.mock('../../primitives/voice/connectors/tts/index.js', () => {
   return {
     createStreamingTtsConnector: connectorMocks.createStreamingTtsConnector,
     getStreamingTtsProviderMetadata: connectorMocks.getStreamingTtsProviderMetadata,
@@ -229,7 +229,7 @@ vi.mock('../../voice/connectors/tts/index.js', () => {
   };
 });
 
-vi.mock('../../voice/policy/reliability.js', () => {
+vi.mock('../../primitives/voice/policy/reliability.js', () => {
   return {
     runWithVoiceStageBudget: reliabilityMocks.runWithVoiceStageBudget,
     resolveVoiceReliabilityBudgets: reliabilityMocks.resolveVoiceReliabilityBudgets,
@@ -238,7 +238,7 @@ vi.mock('../../voice/policy/reliability.js', () => {
   };
 });
 
-vi.mock('../../voice/policy/security.js', () => {
+vi.mock('../../primitives/voice/policy/security.js', () => {
   return {
     resolveVoiceSecurityLimits: securityMocks.resolveVoiceSecurityLimits,
     validatePcmAudio: securityMocks.validatePcmAudio,

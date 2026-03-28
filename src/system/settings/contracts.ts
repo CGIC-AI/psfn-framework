@@ -1,6 +1,6 @@
 import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
-import type { ImageWorkflowSettings } from '../../images/types.js';
+import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';
 export const PRIMARY_MODEL_SLOT_KEY = 'primary';

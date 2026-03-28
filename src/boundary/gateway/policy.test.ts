@@ -353,7 +353,7 @@ describe('evaluatePolicy', () => {
       fullCodebaseReadRoot: '/app',
     };
     expect(evaluatePolicy(
-      { method: 'fs.read', params: { path: '/app/src/gateway-main.ts' } },
+      { method: 'fs.read', params: { path: '/app/src/app/gateway/main.ts' } },
       yoloConfig,
     )).toBe('ALLOW');
   });
@@ -375,7 +375,7 @@ describe('evaluatePolicy', () => {
       fullCodebaseReadRoot: '/app',
     };
     expect(evaluatePolicy(
-      { method: 'fs.write', params: { path: '/app/src/gateway-main.ts' } },
+      { method: 'fs.write', params: { path: '/app/src/app/gateway/main.ts' } },
       yoloConfig,
     )).toBe('NEEDS_APPROVAL');
   });

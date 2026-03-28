@@ -54,6 +54,7 @@ export interface BoundedSubagentLaunchSummary extends BoundedSubagentLaunchResul
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
+  returnedArtifacts?: readonly Record<string, unknown>[];
 }
 
 export interface BoundedSubagentLaunchDiagnostics {

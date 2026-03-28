@@ -217,6 +217,7 @@ export class ShardManager implements ShardExecutionPort, BoundedSubagentLaunchPo
       ...(result.failureReason ? { failureReason: result.failureReason } : {}),
       capabilities: [...result.capabilities],
       requiredCapabilities: [...result.requiredCapabilities],
+      ...(result.artifacts ? { returnedArtifacts: result.artifacts } : {}),
     };
   }
 

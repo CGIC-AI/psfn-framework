@@ -41,6 +41,7 @@ import {
   createMemoryRethinkTool,
 } from '../core-memory/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
+import type { SandboxExecutionPort } from '../repl/sandbox-capabilities/contracts.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { CapabilityTier } from '../types.js';
 import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../identity/loader.js';
@@ -271,6 +272,7 @@ export interface ToolRuntimeOptions {
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
+  executionPort?: SandboxExecutionPort | null;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
@@ -303,6 +305,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     compositionalPolicy: options.compositionalPolicy,
     moduleInstallConfirmationQueue: options.moduleInstallConfirmationQueue,
     onModuleRegistryMutation: options.onModuleRegistryMutation,
+    executionPort: options.executionPort ?? null,
     config: options.replConfig ?? DEFAULT_REPL_CONFIG,
   }));
 

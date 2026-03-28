@@ -17,6 +17,7 @@ import {
 import type { LLMProvider } from '../agent/contracts.js';
 import type { LLMResponse } from '../types.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
+import type { SandboxExecutionPort } from '../repl/sandbox-capabilities/contracts.js';
 import { wireShardAndThinkRuntime } from './composition.js';
 
 type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous';
@@ -62,6 +63,15 @@ function makeInstallScript(source: string): string {
     '```repl',
     `const result = await module_install("planner", ${JSON.stringify(source)}, true);`,
     'FINAL(JSON.stringify(result));',
+    '```',
+  ].join('\n');
+}
+
+function makeShellExecScript(): string {
+  return [
+    '```repl',
+    'const result = await shell_exec("node", ["-v"]);',
+    'FINAL(JSON.stringify({ ok: result.ok, stdout: result.stdout }));',
     '```',
   ].join('\n');
 }
@@ -177,6 +187,7 @@ function wireSplitThinkTool(options: {
   eventBus: EventBus;
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
+  executionPort?: SandboxExecutionPort | null;
 }): FakeSubstrateAgent {
   const target = new FakeSubstrateAgent();
   wireShardAndThinkRuntime({
@@ -194,6 +205,7 @@ function wireSplitThinkTool(options: {
     getCapabilityTier: () => options.tier,
     moduleInstallConfirmationQueue: options.moduleInstallConfirmationQueue ?? null,
     onModuleRegistryMutation: options.onModuleRegistryMutation,
+    executionPort: options.executionPort ?? null,
   });
   return target;
 }
@@ -328,6 +340,50 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       expect(text).not.toContain('"queued":true');
       expect(onMutation).toHaveBeenCalledTimes(1);
       expect(target.tools.map((tool) => tool.name)).toContain('planner_probe_auto');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('routes shell_exec through the explicit sandbox broker port', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-split-shell-broker-'));
+    const registryPath = join(root, 'registry.json');
+    writeFileSync(registryPath, '[]', 'utf-8');
+
+    try {
+      const llm = makeGatewayLLM([makeShellExecScript()], registryPath);
+      const executionPort: SandboxExecutionPort = {
+        boundary: {
+          kind: 'sandbox_broker',
+          isolatedFromGatewaySecrets: true,
+          brokerId: 'test-broker',
+        },
+        shellExec: vi.fn(async () => ({
+          command: 'node',
+          args: ['-v'],
+          cwd: '/sandbox/workspace',
+          exitCode: 0,
+          stdout: 'v22.0.0',
+          stderr: '',
+          timedOut: false,
+          truncated: false,
+          durationMs: 7,
+        })),
+      };
+      const target = wireSplitThinkTool({
+        tier: 'autonomous',
+        llmProvider: llm,
+        eventBus: new EventBus(),
+        executionPort,
+      });
+
+      const think = findThinkTool(target);
+      const result = await think.execute('call-shell', { task: 'check brokered shell path' });
+      const text = extractText(result);
+
+      expect(text).toContain('"ok":true');
+      expect(text).toContain('"stdout":"v22.0.0"');
+      expect(executionPort.shellExec).toHaveBeenCalledWith('node', ['-v'], {});
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -57,6 +57,7 @@ import {
   composeIdentity,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
+import { buildShellExecPolicyConfig } from './execution/shell-policy-config.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
@@ -113,6 +114,7 @@ import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 import { buildAgentCoreRuntime } from './agent-main/core-runtime.js';
 import { buildAgentControlPlane } from './agent-main/control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './agent-main/control-plane.js';
+import { createSandboxBrokerExecutionPort } from './repl/sandbox-execution-broker.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -539,6 +541,11 @@ async function main(): Promise<void> {
   log.info('Split module registry path resolved', { moduleRegistryPath });
 
   const replConfig = buildReplConfig(config);
+  const sandboxExecutionPort = createSandboxBrokerExecutionPort({
+    workspacePath: pathSnapshot.workspaceRoot,
+    policy: buildShellExecPolicyConfig(process.env),
+    brokerId: 'agent-process',
+  });
   const shardManager = wireShardAndThinkRuntime({
     agentLoop,
     eventBus,
@@ -559,6 +566,7 @@ async function main(): Promise<void> {
     onModuleRegistryMutation: async (mutation) => {
       await moduleLoader.applyRegistryMutation(mutation);
     },
+    executionPort: sandboxExecutionPort,
   });
 
   // Memory write/import tools — intentional memory creation

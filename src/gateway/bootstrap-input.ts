@@ -15,6 +15,7 @@ import { resolveWorkspaceRoot } from './filesystem-paths.js';
 import { resolveGitRepoRoot } from '../git/repo-root.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../utils/env.js';
+import { buildShellExecPolicyConfig } from '../execution/shell-policy-config.js';
 import {
   buildProviderCredentialEnv,
   resolveOptionalEnvCredential,
@@ -37,10 +38,6 @@ const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_SHELL_EXEC_TIMEOUT_MS = 5_000;
-const DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS = 30_000;
-const DEFAULT_SHELL_EXEC_OUTPUT_CHARS = 20_000;
-const DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP = 100_000;
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 const ALL_BEADS_ACTIONS = ['ready', 'show', 'create', 'update', 'close', 'sync'] as const;
 const ALL_VAULT_ACTIONS = ['write', 'read', 'search', 'daily'] as const;
@@ -239,25 +236,7 @@ function buildGatewayPolicyConfig(
     litellmBaseUrl: config.litellmBaseUrl ?? undefined,
     openRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
-  const shellExecEnabled = parseBooleanEnvWithFallback(env.SHELL_EXEC_ENABLED, false);
-  const shellExecAllowlist = parseEnvList(env.SHELL_EXEC_ALLOWLIST, { separators: [','] });
-  const shellExecAllowedCwd = parseEnvList(env.SHELL_EXEC_ALLOWED_CWD, { separators: [','] });
-  const shellExecDefaultTimeoutMs = parsePositiveIntEnv(
-    env.SHELL_EXEC_DEFAULT_TIMEOUT_MS,
-    DEFAULT_SHELL_EXEC_TIMEOUT_MS,
-  );
-  const shellExecMaxTimeoutMs = parsePositiveIntEnv(
-    env.SHELL_EXEC_MAX_TIMEOUT_MS,
-    DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS,
-  );
-  const shellExecDefaultMaxOutputChars = parsePositiveIntEnv(
-    env.SHELL_EXEC_DEFAULT_MAX_OUTPUT_CHARS,
-    DEFAULT_SHELL_EXEC_OUTPUT_CHARS,
-  );
-  const shellExecMaxOutputChars = parsePositiveIntEnv(
-    env.SHELL_EXEC_MAX_OUTPUT_CHARS,
-    DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP,
-  );
+  const shellExecPolicy = buildShellExecPolicyConfig(env);
   const beadsToolsEnabled = parseBooleanEnvWithFallback(env.BEADS_TOOLS_ENABLED, false);
   const beadsAllowActions = parseBeadsActionsEnv(env.BEADS_ALLOW_ACTIONS)
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
@@ -293,15 +272,7 @@ function buildGatewayPolicyConfig(
     ...(config.webFetchTlsCaCertPaths && config.webFetchTlsCaCertPaths.length > 0
       ? { webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths }
       : {}),
-    shellExec: {
-      enabled: shellExecEnabled,
-      ...(shellExecAllowlist ? { allowlist: shellExecAllowlist } : {}),
-      ...(shellExecAllowedCwd ? { allowedCwd: shellExecAllowedCwd } : {}),
-      defaultTimeoutMs: shellExecDefaultTimeoutMs,
-      maxTimeoutMs: shellExecMaxTimeoutMs,
-      defaultMaxOutputChars: shellExecDefaultMaxOutputChars,
-      maxOutputChars: shellExecMaxOutputChars,
-    },
+    shellExec: shellExecPolicy,
     beads: {
       enabled: beadsToolsEnabled,
       ...(beadsAllowActions ? { allowActions: beadsAllowActions } : {}),

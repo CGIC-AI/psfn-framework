@@ -16,7 +16,7 @@ import type {
   ScheduledTask,
   TaskType,
 } from '../../../scheduler/types.js';
-import { createComponentLogger } from '../../../logger.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 
 const log = createComponentLogger('AdminSchedulerService');
 const REFLECTION_TASK_PREFIX = 'reflection:';

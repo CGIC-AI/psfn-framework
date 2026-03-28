@@ -13,7 +13,7 @@ import prism from 'prism-media';
 import { Events, type Client, type VoiceBasedChannel, type VoiceState } from 'discord.js';
 import { Readable } from 'node:stream';
 import type { EventBus } from '../../shared/event-bus.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import {

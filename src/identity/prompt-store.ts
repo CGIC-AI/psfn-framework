@@ -30,7 +30,7 @@ import {
   CANONICAL_CHARACTER_FOUNDATION_NAME,
   isCanonicalCharacterFoundationLayer,
 } from './canonical-foundation.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
 

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {

@@ -30,7 +30,7 @@ import {
   normalizeMemoryTags,
   resolveConsentRedactionBehavior,
 } from './types.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 
 const log = createComponentLogger('MemoryWriter');
 

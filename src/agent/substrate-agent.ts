@@ -50,7 +50,7 @@ import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
 import { ReflectionNudgeTracker } from '../skills/reflection-nudge.js';
 import type { ToolCategory } from './tool-registrar.js';

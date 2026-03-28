@@ -1,6 +1,6 @@
 import type { LLMProvider } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../llm/tokens.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import type { ContextMessage, LLMContext, SubstrateConfig } from '../../types.js';
 import {
   resolveAdaptiveContextBudgetProfile,

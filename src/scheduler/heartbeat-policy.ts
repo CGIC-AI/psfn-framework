@@ -4,7 +4,7 @@
 // The companion can read, edit, and extend its own reflection schedule.
 
 import { readFileSync } from 'node:fs';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
 import type { RecurringCadence } from './types.js';
 

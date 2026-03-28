@@ -25,7 +25,7 @@ import type { GitOperations } from '../git/ops.js';
 import type { ImageRuntimeConfig } from '../images/types.js';
 import type { AuditStore } from './audit.js';
 import type { SessionHmacKeyring } from '../session/journal-utils.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
 import type { GatewayMethodRuntime } from './methods/types.js';

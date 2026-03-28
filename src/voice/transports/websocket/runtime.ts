@@ -1,4 +1,4 @@
-import { createComponentLogger } from '../../../logger.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import type { SttStreamSession } from '../../connectors/stt/types.js';
 import type { TtsSynthesisSession } from '../../connectors/tts/types.js';
 import type { VoiceRuntimeStage } from '../../policy/reliability.js';

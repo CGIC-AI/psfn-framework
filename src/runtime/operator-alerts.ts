@@ -1,4 +1,4 @@
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { StreamTerminalFailureEvent } from '../agent/stream-adapter.js';
 import type { NtfyNotifier } from '../tools/ntfy.js';
 import { toErrorMessage } from '../shared/utils/errors.js';

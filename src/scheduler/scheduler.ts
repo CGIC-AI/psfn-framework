@@ -12,7 +12,7 @@ import type {
   TaskState,
 } from './types.js';
 import { DEFAULT_SCHEDULER_CONFIG } from './types.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type {
   EligibilityDecision,
   EligibilityGate,

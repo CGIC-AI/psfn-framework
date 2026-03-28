@@ -7,7 +7,7 @@ import { ensureActiveTimezone } from './shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from './types.js';
-import { createComponentLogger } from './logger.js';
+import { createComponentLogger } from './shared/logger.js';
 import type { EventBus } from './shared/event-bus.js';
 import { ensureRegistryFile } from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';

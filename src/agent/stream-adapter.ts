@@ -25,7 +25,7 @@ import {
   isRetryableError,
 } from '../llm/retry.js';
 import { llmRetryConfig } from '../llm/retry-config.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { toCorrelationLogFields } from '../llm/correlation.js';
 import {

@@ -1,4 +1,4 @@
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { DiscordLifecycleNotifier } from '../system/lifecycle/notifications.js';
 import type { MessageSender } from '../system/lifecycle/notifications.js';
 import { resolveRuntimeCommandInvocation } from '../system/lifecycle/runtime-mode.js';

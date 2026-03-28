@@ -32,7 +32,7 @@ import {
   type LowTierTrustDriftSuggestion,
   type TrustDriftBehaviorSignals,
 } from '../trust/policy.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
 import { appendMutationAuditEntry, listMutationAuditEntries } from './store/audit.js';
 import {

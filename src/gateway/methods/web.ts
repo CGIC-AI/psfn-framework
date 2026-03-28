@@ -21,7 +21,7 @@ import {
   type WebRequestBinaryParams,
 } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   WEB_FETCH_TIMEOUT_MS,
   WEB_FETCH_USER_AGENT,

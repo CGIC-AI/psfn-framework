@@ -5,7 +5,7 @@
 // backing service (e.g. gateway RPC method) is not wired.
 
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 
 const log = createComponentLogger('ToolWiringValidator');
 

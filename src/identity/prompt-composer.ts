@@ -18,7 +18,7 @@ import type {
 import { LAYER_TYPE_ORDER } from './prompt-types.js';
 import type { PromptLayerStore } from './prompt-store.js';
 import { PromptManager } from './prompt-manager.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
 import { wrapPromptSectionXml } from '../prompt/sections.js';
 

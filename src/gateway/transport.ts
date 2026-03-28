@@ -5,7 +5,7 @@ import * as net from 'node:net';
 import * as readline from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { unlinkSync, chmodSync } from 'node:fs';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 
 const log = createComponentLogger('Transport');
 const FRAME_PREVIEW_LIMIT = 200;

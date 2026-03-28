@@ -9,7 +9,7 @@ import {
   DEFAULT_COMPANION_ID,
   DEFAULT_COMPANION_NAME,
 } from '../identity/companion-naming.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { REPO_ALLOWED_PATHS } from '../system/security/policy-constants.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { toErrorMessage } from '../shared/utils/errors.js';

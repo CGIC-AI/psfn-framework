@@ -21,7 +21,7 @@ import type { EventBus } from '../shared/event-bus.js';
 import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import { countTokens } from '../llm/tokens.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   getDefaultPromptText,

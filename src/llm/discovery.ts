@@ -2,7 +2,7 @@
 // Fetches available models from LiteLLM proxy and enriches with OpenRouter metadata.
 // Admin-only — not a runtime dependency. 5-minute cache.
 
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 
 const log = createComponentLogger('ModelDiscovery');
 

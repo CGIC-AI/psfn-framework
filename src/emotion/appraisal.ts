@@ -1,6 +1,6 @@
 import type { LLMProvider } from '../agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, LLMResponse } from '../types.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
 

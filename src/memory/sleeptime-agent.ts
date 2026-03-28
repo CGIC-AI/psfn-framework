@@ -1,6 +1,6 @@
 import type { LLMProvider } from '../agent/contracts.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../types.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { SessionEntry } from '../session/types.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../core-memory/store.js';

@@ -1,6 +1,6 @@
 import type { LLMProvider } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../llm/tokens.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig } from '../../types.js';
 import type { ChannelVisibility } from '../../trust/types.js';
 import type { EventBus } from '../../shared/event-bus.js';

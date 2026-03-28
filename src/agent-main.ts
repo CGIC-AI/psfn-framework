@@ -8,7 +8,7 @@ import { loadConfig } from './types.js';
 import type {
   SubstrateMessage,
 } from './types.js';
-import { createComponentLogger } from './logger.js';
+import { createComponentLogger } from './shared/logger.js';
 import { EventBus } from './shared/event-bus.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';

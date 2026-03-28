@@ -11,7 +11,7 @@ import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,
 } from '../agent/adaptive-tools-telemetry.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
 

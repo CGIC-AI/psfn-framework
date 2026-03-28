@@ -1,5 +1,5 @@
 import type { EventBus, EventMap } from '../../shared/event-bus.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   WYOMING_EVENT_ACK,
   WYOMING_EVENT_DESCRIBE,

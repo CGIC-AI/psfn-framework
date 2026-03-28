@@ -9,7 +9,7 @@ import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { readBodyWithLimit, sendText } from '../http/primitives.js';
 import { ValuesJournalStore } from '../../values/store.js';

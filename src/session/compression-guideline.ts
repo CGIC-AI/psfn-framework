@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import type { LLMProvider } from '../agent/contracts.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
 

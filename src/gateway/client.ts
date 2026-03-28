@@ -18,7 +18,7 @@ import type {
 } from '../types.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketClient } from './transport.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { registerReverseGatewayMethods } from './reverse-methods.js';
 const log = createComponentLogger('GatewayClient');

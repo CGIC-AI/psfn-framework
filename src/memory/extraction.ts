@@ -7,7 +7,7 @@ import type { SessionManager } from '../session/manager.js';
 import type { SessionStore } from '../session/store.js';
 import type { SessionEntry } from '../session/types.js';
 import type { SubstrateConfig, TurnID } from '../types.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import type { MemoryStore } from './store.js';
 import type { ExtractedFact, MemoryFormationVAD } from './types.js';

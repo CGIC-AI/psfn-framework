@@ -1,5 +1,5 @@
 import type { SessionEntry } from '../../session/types.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { ExtractedFact } from '../types.js';

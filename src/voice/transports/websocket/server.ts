@@ -1,4 +1,4 @@
-import { createComponentLogger } from '../../../logger.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import { VoiceWireDecodeError, parseInboundVoiceWireFrame } from './serializer.js';
 import type {
   VoiceWireInboundFrame,

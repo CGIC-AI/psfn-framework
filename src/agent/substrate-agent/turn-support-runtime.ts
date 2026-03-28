@@ -1,5 +1,5 @@
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import type { EventBus, EventMap } from '../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';

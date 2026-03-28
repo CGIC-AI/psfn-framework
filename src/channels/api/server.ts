@@ -42,7 +42,7 @@ import type {
   TelemetryIngestResponse,
 } from './types.js';
 import { API_CONTINUITY_WATCHDOG_CHECKS, API_HEALTH_SUBSYSTEMS } from './types.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { type ApiAuthPrincipal } from '../http/auth.js';
 import {
   ApiVoiceWebSocketAdapter,

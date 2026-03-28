@@ -1,5 +1,5 @@
 import type { LLMProvider } from '../../agent/contracts.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import {
   PROFILE_SYNTHESIS_PROMPT_KEY,

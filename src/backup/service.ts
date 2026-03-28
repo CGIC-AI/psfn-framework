@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { runDatabaseIntegrityCheck } from './startup-checks.js';

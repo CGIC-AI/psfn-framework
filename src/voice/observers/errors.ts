@@ -1,5 +1,5 @@
 import type { EventBus } from '../../shared/event-bus.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('VoiceErrorsObserver');
 

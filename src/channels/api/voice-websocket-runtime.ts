@@ -6,7 +6,7 @@ import {
   type EligibilityGate,
 } from '../../system/capabilities/eligibility.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
 import { createWavFromPcm16le } from '../../voice/audio.js';
 import { DeepgramSttClient } from '../../voice/deepgram.js';

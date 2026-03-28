@@ -16,7 +16,7 @@ import type { SubstrateMessage } from '../../types.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { TelegramChannelConfig } from '../config.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   DeferredLatestByChannel,

@@ -5,7 +5,7 @@
 
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 
 const log = createComponentLogger('GatewayTLS');
 

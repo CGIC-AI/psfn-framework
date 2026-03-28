@@ -1,5 +1,5 @@
 import type { EventBus } from '../../shared/event-bus.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { countMessageTokens } from '../../llm/tokens.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionStore } from '../../session/store.js';

@@ -10,7 +10,7 @@ import type {
 } from '../types.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
 import {
   createDefaultExtendedToolAutoloadPolicy,

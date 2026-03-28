@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import { getIgnoredTelegramChannelEnvKeys } from '../system/config/legacy-env.js';
 import {
   envCredential,

@@ -5,7 +5,7 @@ import {
   loadOrSeedJsonCached,
   writeJsonAtomic,
 } from '../config/load-or-seed.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { SETTINGS_FILE_NAME, type EditableSettings } from './contracts.js';
 import { normalizeEditableSettings, splitSettingsByDomain } from './schema.js';

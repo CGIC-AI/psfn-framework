@@ -30,7 +30,7 @@ import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SessionStore } from '../../session/store.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
 import {
   DeferredLatestByChannel,

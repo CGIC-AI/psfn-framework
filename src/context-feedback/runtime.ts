@@ -2,7 +2,7 @@ import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type { PostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
 import type { EventBus } from '../shared/event-bus.js';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { ContextManifest } from '../session/context-manifest.js';
 import type { SessionStore } from '../session/store.js';
 import type { PostTurnActionCandidate } from '../types.js';

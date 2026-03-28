@@ -1,6 +1,6 @@
 import * as net from 'node:net';
 import type { EventBus, EventMap } from '../../shared/event-bus.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { WyomingFrameCodec, type WyomingFrameCodecOptions } from './codec.js';
 import {
   WyomingCodecError,

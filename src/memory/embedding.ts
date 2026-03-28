@@ -1,6 +1,6 @@
 import type { EmbeddingService } from '../agent/contracts.js';
 import path from 'node:path';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { SubstrateConfig } from '../types.js';
 import type {
   CredentialReference,

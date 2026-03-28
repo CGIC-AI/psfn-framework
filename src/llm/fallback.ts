@@ -1,4 +1,4 @@
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../shared/logger.js';
 import type { CorrelationMetadata } from '../types.js';
 import { classifyLLMError } from './error-classify.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';

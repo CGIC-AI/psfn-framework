@@ -5,7 +5,7 @@
 import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { resolveLastActiveSessionPath } from '../../persistence/layout.js';
 import { inferSessionChannelType, isInternalSessionId } from '../../session/session-id.js';
 

@@ -12,7 +12,7 @@ import { runWithVisionToolRequestContext } from '../../images/request-context.js
 import { runWithRequestContext } from '../../llm/request-context.js';
 import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
 import { countTokens } from '../../llm/tokens.js';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';

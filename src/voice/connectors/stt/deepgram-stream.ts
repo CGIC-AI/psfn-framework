@@ -1,4 +1,4 @@
-import { createComponentLogger } from '../../../logger.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import type {
   SttStreamConfig,
   SttStreamSession,

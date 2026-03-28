@@ -27,7 +27,7 @@ import {
 import { normalizeImageWorkflowSettings } from '../../../images/types.js';
 import { isCapabilityToken, type CapabilityToken } from '../../../system/capabilities/tokens.js';
 import { MEMORY_CONFIG } from '../../../memory/types.js';
-import { createComponentLogger } from '../../../logger.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
   getStreamingSttProviderMetadata,

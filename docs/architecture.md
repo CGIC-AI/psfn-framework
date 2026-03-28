@@ -4,9 +4,9 @@ This is the current runtime shape. For the component graph, start with [`docs/ar
 
 ## Canonical Runtime Model
 
-- `src/index.ts` is disabled and exits fail-closed.
-- `src/gateway-main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, and gateway-backed tool execution.
-- `src/agent-main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop.
+- `src/app/startup/index.ts` is disabled and exits fail-closed.
+- `src/app/gateway/main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, and gateway-backed tool execution.
+- `src/app/agent/main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop.
 
 ## Composition Layer
 
@@ -29,7 +29,7 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 
 ## Gateway Responsibilities
 
-`src/gateway-main.ts` builds the privileged edge:
+`src/app/gateway/main.ts` builds the privileged edge:
 
 - `GatewayServer` exposes JSON-RPC over the NDJSON Unix socket.
 - `LLMClient` and embedding creation happen on the gateway side so provider secrets stay out of the agent.
@@ -39,7 +39,7 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 
 ## Agent Responsibilities
 
-`src/agent-main.ts` builds the companion runtime:
+`src/app/agent/main.ts` builds the companion runtime:
 
 - loads config, owner-file state, and trust policy
 - initializes SQLite-backed companion data

@@ -163,7 +163,7 @@ validate_args() {
 }
 
 warn_if_runtime_active() {
-  if pgrep -af 'src/gateway-main.ts|src/agent-main.ts|start-gateway-agent.sh' >/dev/null 2>&1; then
+  if pgrep -af 'src/app/gateway/main.ts|src/app/agent/main.ts|start-gateway-agent.sh' >/dev/null 2>&1; then
     log "warning: live runtime processes are active; deleted-file recovery works better with the service stopped"
   fi
 }

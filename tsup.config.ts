@@ -1,7 +1,11 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/gateway-main.ts', 'src/agent-main.ts'],
+  entry: {
+    index: 'src/app/startup/index.ts',
+    'gateway-main': 'src/app/gateway/main.ts',
+    'agent-main': 'src/app/agent/main.ts',
+  },
   format: ['esm'],
   target: 'node22',
   dts: true,

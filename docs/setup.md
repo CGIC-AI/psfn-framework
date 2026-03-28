@@ -1,6 +1,6 @@
 # Setup
 
-PSFN now boots through the split runtime. `src/index.ts` is disabled and exits fail-closed; use `npm run split`, `npm run gateway`, or `npm run agent`.
+PSFN now boots through the split runtime. `src/app/startup/index.ts` is disabled and exits fail-closed; use `npm run split`, `npm run gateway`, or `npm run agent`.
 
 ## Prerequisites
 

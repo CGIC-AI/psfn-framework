@@ -102,7 +102,7 @@ AGENT_PID=""
 
 start_gateway() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    ./node_modules/.bin/tsx src/gateway-main.ts &
+    ./node_modules/.bin/tsx src/app/gateway/main.ts &
   else
     npm run gateway &
   fi
@@ -111,7 +111,7 @@ start_gateway() {
 
 start_agent() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    ./node_modules/.bin/tsx src/agent-main.ts &
+    ./node_modules/.bin/tsx src/app/agent/main.ts &
   else
     npm run agent &
   fi

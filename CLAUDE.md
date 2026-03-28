@@ -22,9 +22,9 @@ The codebase currently supports:
 When checking behavior, prefer this order:
 
 1. Runtime entrypoints and composition
-   - `src/index.ts`
-   - `src/gateway-main.ts`
-   - `src/agent-main.ts`
+   - `src/app/startup/index.ts`
+   - `src/app/gateway/main.ts`
+   - `src/app/agent/main.ts`
    - `src/bootstrap/composition.ts`
    - `src/bootstrap/parity.ts`
 2. Config and persistence contracts
@@ -58,9 +58,9 @@ npm run agent:docker:continuous
 
 Entry point roles:
 
-- `src/index.ts`: disabled fail-closed entrypoint with dotenv
-- `src/gateway-main.ts`: host-side gateway holding secrets and external egress
-- `src/agent-main.ts`: isolated agent process, no dotenv import, gateway-backed providers
+- `src/app/startup/index.ts`: disabled fail-closed entrypoint with dotenv
+- `src/app/gateway/main.ts`: host-side gateway holding secrets and external egress
+- `src/app/agent/main.ts`: isolated agent process, no dotenv import, gateway-backed providers
 
 ## Configuration And Persistence Model
 
@@ -210,7 +210,7 @@ Main wiring locations:
 
 - `src/bootstrap/composition.ts`
 - `src/bootstrap/parity.ts`
-- `src/agent-main.ts`
+- `src/app/agent/main.ts`
 
 ## Validation Commands
 

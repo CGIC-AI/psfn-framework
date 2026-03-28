@@ -931,8 +931,8 @@ Entrypoints and runtime hubs must stop growing into architecture by accumulation
 
 The current obvious split pressure includes files like:
 
-- `src/agent-main.ts`
-- `src/gateway-main.ts`
+- `src/app/agent/main.ts`
+- `src/app/gateway/main.ts`
 
 Rules:
 

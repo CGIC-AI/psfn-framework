@@ -572,8 +572,8 @@ async function main(): Promise<void> {
 
   // Vault tools — Obsidian note read/write via gateway shell.exec
   if (config.obsidianVaultName) {
-    const { GatewayVaultOps } = await import('./vault/gateway-ops.js');
-    const { registerVaultTools } = await import('./vault/runtime-wiring.js');
+    const { GatewayVaultOps } = await import('../../vault/gateway-ops.js');
+    const { registerVaultTools } = await import('../../vault/runtime-wiring.js');
     const vaultOps = new GatewayVaultOps(gateway, {
       vaultName: config.obsidianVaultName,
       cliPath: config.obsidianCliPath,
@@ -871,10 +871,10 @@ async function main(): Promise<void> {
   };
 
   // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
-  let vaultAutoPublisher: import('./vault/auto-publish.js').VaultAutoPublisher | undefined;
+  let vaultAutoPublisher: import('../../vault/auto-publish.js').VaultAutoPublisher | undefined;
   if (config.obsidianAutoPublish && config.obsidianVaultName) {
-    const { GatewayVaultOps } = await import('./vault/gateway-ops.js');
-    const { VaultAutoPublisher } = await import('./vault/auto-publish.js');
+    const { GatewayVaultOps } = await import('../../vault/gateway-ops.js');
+    const { VaultAutoPublisher } = await import('../../vault/auto-publish.js');
     const vaultOps = new GatewayVaultOps(gateway, {
       vaultName: config.obsidianVaultName,
       cliPath: config.obsidianCliPath,

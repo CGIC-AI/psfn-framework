@@ -10,7 +10,7 @@ function readSource(fileName: string): string {
 }
 
 describe('agent startup network isolation enforcement', () => {
-  const source = readSource('agent-main.ts');
+  const source = readSource('main.ts');
 
   it('probes outbound network access on startup', () => {
     expect(source).toContain("const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace'");

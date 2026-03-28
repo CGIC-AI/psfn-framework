@@ -109,7 +109,7 @@ describe('validateToolWiring', () => {
       makeTool('think'),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'gateway',
       tools,
     });
     expect(report.totalTools).toBe(2);
@@ -203,7 +203,7 @@ describe('validateToolWiring', () => {
     ];
     // In parity mode, gateway methods are irrelevant
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'gateway',
       tools,
     });
     expect(report.totalTools).toBe(1);
@@ -218,7 +218,7 @@ describe('validateToolWiring', () => {
       }),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'gateway',
       tools,
       availableServices: new Set(['memoryStore']),
     });
@@ -283,7 +283,7 @@ describe('validateToolWiring', () => {
       makeTool('memory_write'),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'gateway',
       tools,
       requireConcurrencyMetadata: true,
     });
@@ -339,7 +339,7 @@ describe('validateToolWiring', () => {
       }),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'gateway',
       tools,
       requireConcurrencyMetadata: true,
     });
@@ -357,7 +357,7 @@ describe('validateAndLogToolWiring', () => {
       makeTool('ok_tool'),
     ];
     const disabled = validateAndLogToolWiring({
-      mode: 'single',
+      mode: 'gateway',
       tools,
     });
     expect(disabled).toEqual([]);
@@ -404,7 +404,7 @@ describe('production tools validation', () => {
       makeTool('repo_open_pr'),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'gateway',
       tools: gitTools,
     });
     expect(report.invalidTools).toHaveLength(0);

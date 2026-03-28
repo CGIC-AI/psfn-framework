@@ -5,7 +5,7 @@
 // - src/app/agent/main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
 // Keep core construction through these helpers so behavior stays aligned across split entrypoints.
 
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
 import { SessionManager } from '../../../core/session/manager.js';
@@ -132,10 +132,11 @@ export interface SubstrateAgentCompositionOptions {
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
-  config: SubstrateConfig;
+  config: CoreSubstrateConfig;
   runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
+  streamTransport?: SubstrateAgentOptions['streamTransport'];
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -154,6 +155,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
       ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
+      ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),
     },
   );
 }

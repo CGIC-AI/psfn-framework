@@ -350,8 +350,8 @@ export function installPromotedToolsPersistenceHook(config: SubstrateConfig): vo
 }
 
 function assertSecuritySensitiveStartupConfig(config: SubstrateConfig): void {
-  const discordToken = config.discordToken.trim();
-  const discordBotId = config.discordBotId.trim();
+  const discordToken = config.discordToken?.trim() ?? '';
+  const discordBotId = config.discordBotId?.trim() ?? '';
   const hasDiscordToken = discordToken.length > 0;
   const hasDiscordBotId = discordBotId.length > 0;
 

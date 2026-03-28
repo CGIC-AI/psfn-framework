@@ -1,6 +1,6 @@
 import type { Model } from '@mariozechner/pi-ai';
 import type { MessageModelOverride, ModelPurpose, SubstrateMessage } from '../../../shared/contracts/runtime.js';
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
   resolveExplicitModel,
@@ -22,7 +22,7 @@ export interface ModelRuntimeLogger {
 }
 
 export function getModelSignatureForPurpose(
-  config: SubstrateConfig,
+  config: CoreSubstrateConfig,
   purpose: ModelPurpose,
 ): string {
   try {
@@ -68,7 +68,7 @@ export function normalizeTurnModelOverride(
 }
 
 export function getTurnModelSignature(
-  config: SubstrateConfig,
+  config: CoreSubstrateConfig,
   message?: SubstrateMessage,
 ): string {
   const override = normalizeTurnModelOverride(message);
@@ -81,7 +81,7 @@ export function getTurnModelSignature(
 
 interface RefreshModelFromConfigParams {
   reason: ModelRefreshReason;
-  config: SubstrateConfig;
+  config: CoreSubstrateConfig;
   state: ModelRuntimeState;
   message?: SubstrateMessage;
   setAgentModel: (model: Model<any>) => void;
@@ -102,7 +102,7 @@ export function refreshModelFromConfig(
 
   try {
     const resolved = override
-      ? resolveExplicitModel(override)
+      ? resolveExplicitModel(params.config, override)
       : resolveModel(params.config, purpose ?? 'chat');
     params.setAgentModel(resolved);
     if (purpose === 'vision' && !resolved.input.includes('image')) {

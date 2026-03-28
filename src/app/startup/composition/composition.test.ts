@@ -118,9 +118,7 @@ class FakeSubstrateAgent {
     const disabled = validateAndLogToolWiring({
       mode,
       tools: this.tools,
-      ...(mode === 'gateway' && gatewayClient
-        ? { gatewayClientMethods: extractGatewayMethods(gatewayClient) }
-        : {}),
+      ...(gatewayClient ? { gatewayClientMethods: extractGatewayMethods(gatewayClient) } : {}),
       requiredGatewayMetadataCoverage,
     });
     if (disabled.length === 0) return;

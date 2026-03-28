@@ -19,7 +19,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { CapabilityTier, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
@@ -36,6 +36,7 @@ import type { ComposeContext } from '../identity/prompt-types.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import {
   createSubstrateStreamFn,
+  type SubstrateStreamTransport,
   type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
@@ -179,6 +180,7 @@ export interface SubstrateAgentOptions {
   runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
   selfModelRuntime?: SelfModelRuntimeWiring;
+  streamTransport?: SubstrateStreamTransport;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 
@@ -192,7 +194,7 @@ export class SubstrateAgent {
   private systemPrompt: string;
   private characterName: string;
   private resolveCharacterPromptVariables: () => Record<string, string>;
-  private config: SubstrateConfig;
+  private config: CoreSubstrateConfig;
   private modelResolved = false;
   private modelSignature: string | null = null;
   private bridge: EventBridge;
@@ -257,7 +259,7 @@ export class SubstrateAgent {
     llmClient: LLMProvider,
     sessionManager: SessionManager,
     systemPrompt: string,
-    config: SubstrateConfig,
+    config: CoreSubstrateConfig,
     options?: SubstrateAgentOptions,
   ) {
     this.eventBus = eventBus;
@@ -269,7 +271,7 @@ export class SubstrateAgent {
     this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
     this.config = config;
-    this.runtimeMode = options?.runtimeMode ?? 'single';
+    this.runtimeMode = options?.runtimeMode ?? 'gateway';
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
@@ -293,16 +295,14 @@ export class SubstrateAgent {
         });
       });
     };
-    const defaultStreamTransport = this.runtimeMode === 'single'
-      ? undefined
-      : {
-        stream: this.llmClient.stream.bind(this.llmClient),
-      };
+    const defaultStreamTransport = options?.streamTransport ?? {
+      stream: this.llmClient.stream.bind(this.llmClient),
+    };
 
     this.agent = new Agent({
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
-        ...(defaultStreamTransport ? { transport: defaultStreamTransport } : {}),
         ...(options?.streamRuntimeOptions ?? {}),
+        transport: defaultStreamTransport,
         onBudgetBlocked: emitBudgetBlocked,
       }),
       convertToLlm,

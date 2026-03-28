@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryJournal } from '../../faculties/memory/journal.js';
@@ -43,7 +43,7 @@ import {
 } from '../../persistence/layout.js';
 
 export interface AgentCoreRuntimeOptions {
-  config: SubstrateConfig;
+  config: CoreSubstrateConfig;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
@@ -123,6 +123,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
     runtimeMode: 'gateway',
+    streamTransport: {
+      stream: gateway.stream.bind(gateway),
+    },
     streamRuntimeOptions: {
       onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
     },

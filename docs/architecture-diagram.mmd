@@ -7,7 +7,7 @@ graph TB
   %% ═══════════════════════════════════════════════
   subgraph Entry["Entry Points"]
     direction LR
-    IDX["index.ts<br/><i>Disabled — monolithic unavailable</i>"]
+    IDX["index.ts<br/><i>Disabled — split runtime only</i>"]
     GWM["gateway-main.ts<br/><i>Host process — holds secrets + external egress</i>"]
     AGM["agent-main.ts<br/><i>Container process — network-isolated</i>"]
   end

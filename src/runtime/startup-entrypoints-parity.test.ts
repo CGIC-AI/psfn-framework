@@ -47,9 +47,9 @@ describe('startup entrypoint parity wiring', () => {
     });
   });
 
-  it('rejects monolithic startup contracts', () => {
+  it('rejects disabled startup contracts', () => {
     expect(() => resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SINGLE,
-    })).toThrow('Monolithic runtime mode has been removed');
+    })).toThrow('Unsupported runtime entrypoint "single"');
   });
 });

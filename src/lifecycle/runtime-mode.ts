@@ -34,13 +34,7 @@ export interface ResolveRuntimeModeContractOptions {
   restartCommandEnv?: string;
 }
 
-const MONOLITHIC_MODE_REMOVAL_MESSAGE =
-  'Monolithic runtime mode has been removed. Use "npm run split" or "npm run yolo".';
-
 const RUNTIME_MODE_ALIASES: Readonly<Record<string, RuntimeMode>> = Object.freeze({
-  single: RUNTIME_MODE.SINGLE,
-  'single-process': RUNTIME_MODE.SINGLE,
-  single_process: RUNTIME_MODE.SINGLE,
   split: RUNTIME_MODE.SPLIT,
   yolo: RUNTIME_MODE.SPLIT,
   gateway: RUNTIME_MODE.GATEWAY_AGENT,
@@ -136,14 +130,16 @@ function resolveRuntimeModeForEntrypoint(
   runtimeModeEnv: string | undefined,
 ): RuntimeMode {
   if (entrypoint === RUNTIME_MODE.SINGLE) {
-    throw new Error(MONOLITHIC_MODE_REMOVAL_MESSAGE);
+    throw new Error(
+      'Unsupported runtime entrypoint "single". Use the split runtime or the gateway and agent entrypoints.',
+    );
   }
 
   const normalizedRequestedMode = normalizeToken(runtimeModeEnv);
   const requestedMode = normalizeRuntimeMode(runtimeModeEnv);
   if (normalizedRequestedMode && !requestedMode) {
     throw new Error(
-      `Unsupported PSFN_RUNTIME_MODE "${runtimeModeEnv}". Expected one of: split, yolo, gateway, gateway-agent.`,
+      `Unsupported PSFN_RUNTIME_MODE "${runtimeModeEnv}". Expected one of: split, yolo, gateway, or gateway-agent.`,
     );
   }
   if (!requestedMode) return entrypoint;

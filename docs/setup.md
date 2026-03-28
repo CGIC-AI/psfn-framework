@@ -1,6 +1,6 @@
 # Setup
 
-PSFN now boots through the split runtime. `src/index.ts` only validates the runtime mode contract and exits; use `npm run dev`, `npm run split`, `npm run gateway`, or `npm run agent`.
+PSFN now boots through the split runtime. `src/index.ts` is disabled and exits fail-closed; use `npm run split`, `npm run gateway`, or `npm run agent`.
 
 ## Prerequisites
 
@@ -66,7 +66,7 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 2. Start the split runtime:
 
    ```bash
-   npm run dev
+   npm run split
    ```
 
 3. If you want the integrated Garden SPA served by the admin host, build it once:
@@ -99,8 +99,7 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 ## Common Launch Commands
 
 ```bash
-npm run dev          # gateway + agent launcher
-npm run split        # same as dev
+npm run split        # gateway + agent launcher
 npm run yolo         # split runtime with broader fs.read policy
 npm run gateway      # gateway only
 npm run agent        # agent only

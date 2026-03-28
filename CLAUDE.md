@@ -10,7 +10,6 @@ PSFN is a TypeScript runtime for long-lived AI companions.
 
 The codebase currently supports:
 
-- direct single-process runtime entrypoints
 - split gateway/agent runtime with policy enforcement
 - persistent session and memory systems
 - trust-aware privacy and contact modeling
@@ -50,7 +49,6 @@ When checking behavior, prefer this order:
 ## Runtime Entry Points
 
 ```bash
-npm run dev                 # split launcher (gateway + agent)
 npm run split               # same launcher, explicit name
 npm run gateway             # gateway only
 npm run agent               # agent only
@@ -61,10 +59,10 @@ npm run agent:docker:continuous
 
 Entry point roles:
 
-- `src/index.ts`: direct single-process runtime entrypoint with dotenv
+- `src/index.ts`: disabled fail-closed entrypoint with dotenv
 - `src/gateway-main.ts`: host-side gateway holding secrets and external egress
 - `src/agent-main.ts`: isolated agent process, no dotenv import, gateway-backed providers
-- `src/runtime.ts`: single-process `SubstrateRuntime`
+- `src/runtime.ts`: parity harness for shared wiring
 
 ## Configuration And Persistence Model
 

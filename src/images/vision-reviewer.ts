@@ -1,6 +1,5 @@
 import {
   completeSimple,
-  getEnvApiKey,
   type Context as PiContext,
   type ImageContent,
   type Model,
@@ -8,9 +7,10 @@ import {
 } from '@mariozechner/pi-ai';
 import { resolveModel } from '../agent/stream-adapter.js';
 import {
-  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../config/providers-config.js';
+import { resolveProviderApiKey } from '../custody/credential-vault.js';
 import { createComponentLogger } from '../logger.js';
 import type { SubstrateConfig } from '../types.js';
 import { extractTextContent } from '../llm/conversion.js';
@@ -69,15 +69,15 @@ function normalizeQuestion(input: ImageVisionReviewRequest): string {
 function resolveApiKey(model: Model<any>, config: SubstrateConfig): string | undefined {
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   if (litellmBaseUrl) {
-    return process.env[resolveConfiguredLiteLLMApiKeyEnv(config)] ?? undefined;
+    return resolveConfiguredLiteLLMApiKey(config);
   }
 
   const modelProvider = (model as { provider?: unknown }).provider;
   if (typeof modelProvider === 'string' && modelProvider.trim().length > 0) {
-    return getEnvApiKey(modelProvider as any) ?? undefined;
+    return resolveProviderApiKey(modelProvider, config);
   }
 
-  return getEnvApiKey(config.primaryProvider) ?? undefined;
+  return resolveProviderApiKey(config.primaryProvider, config);
 }
 
 function isDirectFetchFallbackAllowed(url: URL, comfyUiBaseUrl: string | undefined): boolean {

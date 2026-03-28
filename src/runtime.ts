@@ -35,7 +35,7 @@ import { AdminServer } from './channels/admin/server.js';
 import { createLocalAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import {
-  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
 } from './config/providers-config.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
@@ -1169,7 +1169,7 @@ export class SubstrateRuntime implements Lifecycle {
     // Model discovery (if LiteLLM is configured)
     const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(this.config);
     const modelDiscovery = litellmBaseUrl
-      ? new ModelDiscovery(litellmBaseUrl, process.env[resolveConfiguredLiteLLMApiKeyEnv(this.config)] ?? undefined, {
+      ? new ModelDiscovery(litellmBaseUrl, resolveConfiguredLiteLLMApiKey(this.config), {
         openRouterModelsApiUrl: this.config.openRouterModelsApiUrl ?? '',
       })
       : null;

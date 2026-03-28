@@ -1,5 +1,7 @@
 import { createDeepgramStreamingSttConnector, type DeepgramStreamingSttConfig } from './deepgram-stream.js';
 import type { EligibilityRequirements } from '../../../capabilities/eligibility.js';
+import type { CredentialVaultPort } from '../../../custody/credential-vault.js';
+import { resolveInlineOrEnvCredential } from '../../../custody/credential-vault.js';
 import type { StreamingSttConnector } from './types.js';
 
 export * from './types.js';
@@ -14,6 +16,7 @@ export interface StreamingSttConfigByProvider {
 
 export interface StreamingSttProviderRuntimeConfig {
   [key: string]: unknown;
+  credentialVault?: CredentialVaultPort;
   deepgramApiKey?: string;
   deepgramModel?: string;
   deepgramSttEndpoint?: string;
@@ -32,17 +35,23 @@ export interface StreamingSttProviderRegistration<TConfig = unknown> {
 
 type AnyStreamingSttProviderRegistration = StreamingSttProviderRegistration<any>;
 
+function resolveDeepgramApiKey(config: StreamingSttProviderRuntimeConfig): string | undefined {
+  return resolveInlineOrEnvCredential(
+    config.deepgramApiKey,
+    config.credentialVault,
+    'DEEPGRAM_API_KEY',
+  );
+}
+
 const providerRegistrations = new Map<string, AnyStreamingSttProviderRegistration>([
   ['deepgram', {
     createConnector: createDeepgramStreamingSttConnector,
     metadata: {
-      isConfigured: (config) => Boolean(config.deepgramApiKey),
+      isConfigured: (config) => Boolean(resolveDeepgramApiKey(config)),
       eligibility: { requiredTokens: ['external.web'] },
     },
     resolveRuntimeConfig: (config) => {
-      const apiKey = typeof config.deepgramApiKey === 'string'
-        ? config.deepgramApiKey.trim()
-        : '';
+      const apiKey = resolveDeepgramApiKey(config) ?? '';
       if (!apiKey) {
         throw new Error('Deepgram STT provider selected but DEEPGRAM_API_KEY is not configured');
       }

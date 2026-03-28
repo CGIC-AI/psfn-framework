@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createEnvCredentialVault } from '../../../custody/credential-vault.js';
 import { DeepgramStreamingSttConnector } from './deepgram-stream.js';
 import {
   createStreamingSttConnector,
@@ -90,6 +91,20 @@ describe('createStreamingSttConnector', () => {
       deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
     })).toEqual({
       apiKey: 'test-key',
+      model: 'nova-3',
+      endpoint: 'wss://api.deepgram.com/v1/listen',
+    });
+  });
+
+  it('resolves built-in runtime config from the credential vault when inline secrets are absent', () => {
+    expect(resolveStreamingSttRuntimeConfig('deepgram', {
+      credentialVault: createEnvCredentialVault({
+        DEEPGRAM_API_KEY: 'vault-key',
+      }),
+      deepgramModel: 'nova-3',
+      deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
+    })).toEqual({
+      apiKey: 'vault-key',
       model: 'nova-3',
       endpoint: 'wss://api.deepgram.com/v1/listen',
     });

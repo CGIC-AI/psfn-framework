@@ -11,6 +11,11 @@ import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import type { ChannelVisibility, TrustLevel } from './trust/types.js';
 import type { ImageWorkflowSettings } from './images/types.js';
 import type { CompanionPresenceMetadata } from './agent/presence-metadata.js';
+import type { CredentialVaultPort } from './custody/credential-vault.js';
+import {
+  createEnvCredentialVault,
+  resolveOptionalEnvCredential,
+} from './custody/credential-vault.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
 import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './config/seed-defaults.js';
 import { parseOptionalStringEnv } from './utils/env.js';
@@ -619,6 +624,7 @@ export interface SubstrateConfig {
   modelRoleAssignments?: ModelRoleAssignments;
   modelRegistry?: CanonicalModelRegistry;
   providerRegistry?: CanonicalProviderRegistry;
+  credentialVault?: CredentialVaultPort;
   litellmBaseUrl?: string;
   litellmApiKeyEnv?: string;
   openRouterApiBaseUrl?: string;
@@ -764,6 +770,7 @@ export const DEFAULT_UI_THEME_ID = 'garden';
 export function loadConfig(): SubstrateConfig {
   const modelSeedDefaults = loadModelSeedDefaults();
   const runtimeSeedDefaults = loadRuntimeSettingsSeedDefaults();
+  const credentialVault = createEnvCredentialVault(process.env);
   const primaryModel = modelSeedDefaults.primary.model;
   const primaryProvider = modelSeedDefaults.primary.provider;
   const primaryMaxTokens = modelSeedDefaults.primary.maxOutputTokens;
@@ -903,6 +910,7 @@ export function loadConfig(): SubstrateConfig {
     companionDataDir,
     dataDir,
     databasePath,
+    sessionMessageLimit: 30,
     sessionRestartBehavior: 'reuse_latest_session',
     ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
     sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_DEFAULT,
@@ -939,6 +947,7 @@ export function loadConfig(): SubstrateConfig {
     modelCatalog,
     modelRoleAssignments,
     modelRegistry,
+    credentialVault,
     modelRoster: {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
@@ -957,15 +966,15 @@ export function loadConfig(): SubstrateConfig {
     voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
-    deepgramApiKey: process.env.DEEPGRAM_API_KEY,
+    deepgramApiKey: resolveOptionalEnvCredential(credentialVault, 'DEEPGRAM_API_KEY'),
     deepgramModel: runtimeSeedDefaults.deepgramModel,
     deepgramSttEndpoint: runtimeSeedDefaults.deepgramSttEndpoint,
     deepgramListenEndpoint: runtimeSeedDefaults.deepgramListenEndpoint,
-    elevenLabsApiKey: process.env.ELEVENLABS_API_KEY,
+    elevenLabsApiKey: resolveOptionalEnvCredential(credentialVault, 'ELEVENLABS_API_KEY'),
     elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
     elevenLabsModelId: runtimeSeedDefaults.elevenLabsModelId,
     elevenLabsEndpointBase: runtimeSeedDefaults.elevenLabsEndpointBase,
-    falApiKey: process.env.FAL_API_KEY,
+    falApiKey: resolveOptionalEnvCredential(credentialVault, 'FAL_API_KEY'),
     imageWorkflows: {},
     ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,

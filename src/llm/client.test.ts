@@ -8,6 +8,7 @@ import type {
   ModelSlot,
   SubstrateConfig,
 } from '../types.js';
+import { createEnvCredentialVault } from '../custody/credential-vault.js';
 import { FallbackRunner } from './fallback.js';
 import { createEligibilityGate, EligibilityDeniedError } from '../capabilities/eligibility.js';
 
@@ -390,6 +391,34 @@ describe('LLMClient completion model hints', () => {
     expect(model.baseUrl).toBe('http://provider-config.test/v1');
     expect(requestOptions.apiKey).toBe('provider-key');
     delete process.env.CUSTOM_LITELLM_KEY;
+  });
+
+  it('uses the credential vault for provider-configured LiteLLM routing', async () => {
+    const client = new LLMClient(makeConfig({
+      litellmBaseUrl: 'http://provider-config.test/v1',
+      litellmApiKeyEnv: 'CUSTOM_LITELLM_KEY',
+      credentialVault: createEnvCredentialVault({
+        CUSTOM_LITELLM_KEY: 'vault-provider-key',
+      }),
+    }));
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'provider-config response' }],
+      model: 'z-ai/glm-5',
+      usage: { input: 12, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'chat',
+      { disableRetry: true },
+    );
+
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
+    expect(requestOptions.apiKey).toBe('vault-provider-key');
   });
 });
 

@@ -6,6 +6,7 @@ import type {
   ProviderRegistryEntry,
   SubstrateConfig,
 } from '../types.js';
+import { resolveOptionalEnvCredential } from '../custody/credential-vault.js';
 import { writeJsonAtomic, loadOrSeedJson } from './load-or-seed.js';
 import { isRecord } from '../utils/types.js';
 
@@ -310,6 +311,19 @@ export function resolveConfiguredLiteLLMBaseUrl(config: SubstrateConfig): string
   return toNonEmptyString(process.env.LITELLM_BASE_URL) ?? null;
 }
 
-export function resolveConfiguredLiteLLMApiKeyEnv(config: SubstrateConfig): string {
+export function resolveConfiguredLiteLLMApiKeyEnv(
+  config: Pick<SubstrateConfig, 'litellmApiKeyEnv'>,
+): string {
   return toNonEmptyString(config.litellmApiKeyEnv) ?? 'LITELLM_API_KEY';
+}
+
+export function resolveConfiguredLiteLLMApiKey(
+  config: Pick<SubstrateConfig, 'credentialVault' | 'litellmApiKeyEnv'>,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return resolveOptionalEnvCredential(
+    config.credentialVault,
+    resolveConfiguredLiteLLMApiKeyEnv(config),
+    env,
+  );
 }

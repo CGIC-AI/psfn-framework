@@ -3,7 +3,7 @@
 // Single-process: wraps streamSimple with LiteLLM proxy / direct provider apiKey.
 // Gateway mode: would use GatewayClient (future, PSFN-d5n).
 
-import { streamSimple, getEnvApiKey } from '@mariozechner/pi-ai';
+import { streamSimple } from '@mariozechner/pi-ai';
 import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type {
@@ -36,6 +36,11 @@ import {
   normalizeModelIdForProvider,
 } from '../llm/model-budget.js';
 import {
+  resolveOptionalEnvCredential,
+  resolveProviderApiKey,
+} from '../custody/credential-vault.js';
+import {
+  resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMApiKeyEnv,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../config/providers-config.js';
@@ -425,7 +430,7 @@ function getModelAndKey(
 ): { model: Model<any>; apiKey: string | undefined } {
   if (candidate.requestBaseUrl) {
     const apiKey = candidate.requestApiKeyEnv
-      ? process.env[candidate.requestApiKeyEnv] ?? undefined
+      ? resolveOptionalEnvCredential(config.credentialVault, candidate.requestApiKeyEnv)
       : undefined;
     return {
       model: createModel(candidate.requestBaseUrl, candidate.model, candidate.maxTokens, candidate.contextWindow),
@@ -441,7 +446,10 @@ function getModelAndKey(
         candidate.maxTokens,
         candidate.contextWindow,
       ),
-      apiKey: process.env[resolveConfiguredLiteLLMApiKeyEnv(config)] ?? undefined,
+      apiKey: resolveConfiguredLiteLLMApiKey({
+        credentialVault: config.credentialVault,
+        litellmApiKeyEnv: resolveConfiguredLiteLLMApiKeyEnv(config),
+      }),
     };
   }
 
@@ -458,7 +466,7 @@ function getModelAndKey(
       ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
       maxTokens: candidate.maxTokens,
     },
-    apiKey: getEnvApiKey(candidate.provider as any) ?? undefined,
+    apiKey: resolveProviderApiKey(candidate.provider, config),
   };
 }
 

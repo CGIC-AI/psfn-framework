@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import path from 'node:path';
+import { createEnvCredentialVault } from '../custody/credential-vault.js';
 import {
   DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR,
   STARTUP_EMBEDDING_WARMUP_TEXT,
   OllamaEmbeddingProvider,
   TransformersEmbeddingProvider,
+  createEmbeddingProviderFromConfig,
   createEmbeddingProviderFromEnv,
   warmupEmbeddingService,
 } from './embedding.js';
@@ -344,6 +346,26 @@ describe('embedding providers', () => {
 
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://localhost:4000/v1/embeddings');
+  });
+
+  it('uses the credential vault for api embeddings loaded from runtime config', async () => {
+    fetchMock.mockResolvedValue(okJson({ embeddings: [[9, 8]] }));
+
+    const provider = createEmbeddingProviderFromConfig({
+      embeddingProvider: 'api',
+      embeddingApiUrl: 'https://embeddings.example/v1/embeddings',
+      embeddingApiModel: 'text-embedding-3-small',
+      embeddingApiDims: 2,
+      credentialVault: createEnvCredentialVault({
+        EMBEDDING_API_KEY: 'vault-api-key',
+      }),
+    });
+
+    await provider.embed('vault-backed');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe('Bearer vault-api-key');
   });
 
   it('throws for unsupported provider names', () => {

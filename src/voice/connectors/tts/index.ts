@@ -1,6 +1,8 @@
 import { createElevenLabsStreamingTtsConnector, type ElevenLabsStreamingTtsConfig } from './elevenlabs-stream.js';
 import { createEchoStreamingTtsConnector } from './echo-stream.js';
 import type { EligibilityRequirements } from '../../../capabilities/eligibility.js';
+import type { CredentialVaultPort } from '../../../custody/credential-vault.js';
+import { resolveInlineOrEnvCredential } from '../../../custody/credential-vault.js';
 import type { StreamingTtsConnector } from './types.js';
 
 export * from './types.js';
@@ -24,6 +26,7 @@ export interface StreamingTtsConfigByProvider {
 
 export interface StreamingTtsProviderRuntimeConfig {
   [key: string]: unknown;
+  credentialVault?: CredentialVaultPort;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId?: string;
   elevenLabsModelId?: string;
@@ -55,21 +58,27 @@ export interface StreamingTtsProviderRegistration<TConfig = unknown> {
 
 type AnyStreamingTtsProviderRegistration = StreamingTtsProviderRegistration<any>;
 
+function resolveElevenLabsApiKey(config: StreamingTtsProviderRuntimeConfig): string | undefined {
+  return resolveInlineOrEnvCredential(
+    config.elevenLabsApiKey,
+    config.credentialVault,
+    'ELEVENLABS_API_KEY',
+  );
+}
+
 const providerRegistrations = new Map<string, AnyStreamingTtsProviderRegistration>([
   ['elevenlabs', {
     createConnector: createElevenLabsStreamingTtsConnector,
     metadata: {
       isConfigured: (config, options) => (
         options?.requireElevenLabsVoiceId === true
-          ? Boolean(config.elevenLabsApiKey && config.elevenLabsVoiceId)
-          : Boolean(config.elevenLabsApiKey)
+          ? Boolean(resolveElevenLabsApiKey(config) && config.elevenLabsVoiceId)
+          : Boolean(resolveElevenLabsApiKey(config))
       ),
       eligibility: { requiredTokens: ['external.web'] },
     },
     resolveRuntimeConfig: (config) => {
-      const apiKey = typeof config.elevenLabsApiKey === 'string'
-        ? config.elevenLabsApiKey.trim()
-        : '';
+      const apiKey = resolveElevenLabsApiKey(config) ?? '';
       const voiceId = typeof config.elevenLabsVoiceId === 'string'
         ? config.elevenLabsVoiceId.trim()
         : '';

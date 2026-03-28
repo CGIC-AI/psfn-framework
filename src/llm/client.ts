@@ -1,7 +1,6 @@
 import {
   streamSimple,
   completeSimple,
-  getEnvApiKey,
   type Context as PiContext,
   type Model,
   type SimpleStreamOptions,
@@ -44,6 +43,11 @@ import {
 } from './correlation.js';
 import { ModelBudgetController, ModelBudgetExceededError } from './model-budget.js';
 import {
+  resolveProviderApiKey,
+  resolveOptionalEnvCredential,
+} from '../custody/credential-vault.js';
+import {
+  resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMApiKeyEnv,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../config/providers-config.js';
@@ -137,7 +141,7 @@ export class LLMClient {
 
     if (candidate.requestBaseUrl) {
       const apiKey = candidate.requestApiKeyEnv
-        ? process.env[candidate.requestApiKeyEnv] ?? undefined
+        ? resolveOptionalEnvCredential(this.config.credentialVault, candidate.requestApiKeyEnv)
         : undefined;
       return {
         model: createModel(candidate.requestBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
@@ -148,7 +152,10 @@ export class LLMClient {
     if (this.litellmBaseUrl) {
       return {
         model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
-        apiKey: process.env[this.litellmApiKeyEnv] ?? undefined,
+        apiKey: resolveConfiguredLiteLLMApiKey({
+          credentialVault: this.config.credentialVault,
+          litellmApiKeyEnv: this.litellmApiKeyEnv,
+        }),
       };
     }
     const model = resolveRegisteredModel(candidate.provider, modelId);
@@ -160,7 +167,7 @@ export class LLMClient {
     }
     return {
       model,
-      apiKey: getEnvApiKey(candidate.provider) ?? undefined,
+      apiKey: resolveProviderApiKey(candidate.provider, this.config),
     };
   }
 

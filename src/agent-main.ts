@@ -28,7 +28,7 @@ import { AdminServer } from './channels/admin/server.js';
 import { createGatewayAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
 import { ModelDiscovery } from './llm/discovery.js';
 import {
-  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
 } from './config/providers-config.js';
 import { resolveBackupRuntimeConfig } from './backup/config.js';
@@ -809,7 +809,7 @@ async function main(): Promise<void> {
   // Model discovery (if LiteLLM is configured)
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   const modelDiscovery = litellmBaseUrl
-    ? new ModelDiscovery(litellmBaseUrl, process.env[resolveConfiguredLiteLLMApiKeyEnv(config)] ?? undefined, {
+    ? new ModelDiscovery(litellmBaseUrl, resolveConfiguredLiteLLMApiKey(config), {
       openRouterModelsApiUrl: config.openRouterModelsApiUrl ?? '',
       fetchFn: createGatewayBackedDiscoveryFetch(gateway),
       allowDirectNetworkEgress: false,

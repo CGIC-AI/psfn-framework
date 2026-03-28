@@ -36,6 +36,7 @@ import {
   wrapStreamingSttConnectorWithEligibility,
   wrapStreamingTtsConnectorWithEligibility,
 } from './plugin-eligibility.js';
+import { createEnvCredentialVault } from '../custody/credential-vault.js';
 import { createSystemConfigRepository } from '../config/system-config-repository.js';
 import { type ModelsLoadResult } from '../config/models-config.js';
 import {
@@ -370,6 +371,7 @@ export function hydrateCanonicalStartupConfig(
   options: StartupConfigHydrationOptions = {},
 ): StartupConfigHydrationResult {
   const env = options.env ?? process.env;
+  config.credentialVault ??= createEnvCredentialVault(env);
   const pathSnapshot = resolveRuntimePathSnapshotFromConfig(config, {
     mode: env.PSFN_RUNTIME_LAYOUT_MODE,
     nodeEnv: env.NODE_ENV,

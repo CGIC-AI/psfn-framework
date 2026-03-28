@@ -15,6 +15,7 @@ import { resolveWorkspaceRoot } from './filesystem-paths.js';
 import { resolveGitRepoRoot } from '../git/repo-root.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../utils/env.js';
+import { buildProviderCredentialEnv } from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
 import { parseWyomingShardRoutingConfigEnv } from '../types.js';
 import {
@@ -349,15 +350,7 @@ export function resolveGatewayBootstrapInput(
   const sessionHmacKeyring = requireGatewaySessionHmacKeyring(env);
   const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(env);
   const auditDbPath = env.AUDIT_DB_PATH ?? resolve(systemDataDir, 'gateway-audit.db');
-  const providerEnv: NodeJS.ProcessEnv = {
-    EMBEDDING_API_KEY: env.EMBEDDING_API_KEY,
-    OPENAI_API_KEY: env.OPENAI_API_KEY,
-    LITELLM_API_KEY: env.LITELLM_API_KEY,
-    HF_TOKEN: env.HF_TOKEN,
-    HF_ACCESS_TOKEN: env.HF_ACCESS_TOKEN,
-    HUGGINGFACE_HUB_TOKEN: env.HUGGINGFACE_HUB_TOKEN,
-    TRANSFORMERS_HF_TOKEN: env.TRANSFORMERS_HF_TOKEN,
-  };
+  const providerEnv = buildProviderCredentialEnv(config, env);
   const channelsConfig = loadRuntimeChannelsConfig(
     systemDataDir,
     env,

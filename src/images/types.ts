@@ -1,4 +1,5 @@
 import { isRecord } from '../utils/types.js';
+import type { CredentialVaultPort } from '../custody/credential-vault.js';
 
 export const FAL_CREATE_MODELS = [
   'fal-ai/nano-banana-2',
@@ -64,6 +65,7 @@ export interface ImageWorkflowSettings {
 }
 
 export interface ImageRuntimeConfig {
+  credentialVault?: CredentialVaultPort;
   falApiKey?: string;
   comfyUiBaseUrl?: string;
   imageWorkflows?: ImageWorkflowSettings;

@@ -2,6 +2,15 @@ import type { EmbeddingService } from '../agent/contracts.js';
 import path from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import type { SubstrateConfig } from '../types.js';
+import type { CredentialVaultPort } from '../custody/credential-vault.js';
+import {
+  resolveHuggingFaceToken,
+  resolveOptionalEnvCredential,
+} from '../custody/credential-vault.js';
+import {
+  resolveConfiguredLiteLLMApiKey,
+  resolveConfiguredLiteLLMBaseUrl,
+} from '../config/providers-config.js';
 import { loadRuntimeSettingsSeedDefaults } from '../config/seed-defaults.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -17,6 +26,9 @@ export interface EmbeddingProviderRuntimeConfig {
   embeddingApiUrl?: string;
   embeddingApiModel?: string;
   embeddingApiDims?: number;
+  credentialVault?: CredentialVaultPort;
+  litellmApiKeyEnv?: string;
+  litellmBaseUrl?: string;
 }
 
 /** Callable feature-extraction pipeline from @huggingface/transformers. */
@@ -131,10 +143,7 @@ function normalizeTransformersCacheDir(cacheDir: string | undefined): string {
 }
 
 function resolveOptionalHfToken(env: NodeJS.ProcessEnv): string | undefined {
-  return normalizeOptionalString(env.HF_TOKEN)
-    ?? normalizeOptionalString(env.HF_ACCESS_TOKEN)
-    ?? normalizeOptionalString(env.HUGGINGFACE_HUB_TOKEN)
-    ?? normalizeOptionalString(env.TRANSFORMERS_HF_TOKEN);
+  return resolveHuggingFaceToken({}, env);
 }
 
 function toPositiveInteger(value: unknown): number | undefined {
@@ -487,7 +496,9 @@ function resolveApiProvider(env: NodeJS.ProcessEnv): ApiEmbeddingProvider {
   const dims = parsePositiveInt(env.EMBEDDING_API_DIMS)
     ?? parsePositiveInt(env.EMBEDDING_DIMS);
   const model = env.EMBEDDING_API_MODEL ?? env.EMBEDDING_MODEL;
-  const apiKey = env.EMBEDDING_API_KEY ?? env.OPENAI_API_KEY ?? env.LITELLM_API_KEY;
+  const apiKey = resolveOptionalEnvCredential(undefined, 'EMBEDDING_API_KEY', env)
+    ?? resolveOptionalEnvCredential(undefined, 'OPENAI_API_KEY', env)
+    ?? resolveOptionalEnvCredential(undefined, 'LITELLM_API_KEY', env);
 
   return new ApiEmbeddingProvider({
     ...(endpoint ? { endpoint } : {}),
@@ -520,7 +531,7 @@ function resolveTransformersProviderFromRuntimeConfig(
 ): TransformersEmbeddingProvider {
   const model = (config.transformersModel ?? config.embeddingModel)?.trim();
   const dims = toPositiveInteger(config.embeddingDims);
-  const hfToken = resolveOptionalHfToken(env);
+  const hfToken = resolveHuggingFaceToken(config, env);
   if (!model || !dims) {
     throw new Error(
       'Transformers embeddings require transformersModel (or embeddingModel) and embeddingDims in settings.json',
@@ -541,10 +552,14 @@ function resolveApiProviderFromRuntimeConfig(
   config: EmbeddingProviderRuntimeConfig,
   env: NodeJS.ProcessEnv,
 ): ApiEmbeddingProvider {
-  const endpoint = config.embeddingApiUrl?.trim();
+  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config as SubstrateConfig);
+  const endpoint = config.embeddingApiUrl?.trim()
+    ?? (litellmBaseUrl ? appendPath(litellmBaseUrl, '/embeddings') : undefined);
   const model = (config.embeddingApiModel ?? config.embeddingModel)?.trim();
   const dims = toPositiveInteger(config.embeddingApiDims ?? config.embeddingDims);
-  const apiKey = env.EMBEDDING_API_KEY ?? env.OPENAI_API_KEY ?? env.LITELLM_API_KEY;
+  const apiKey = resolveOptionalEnvCredential(config.credentialVault, 'EMBEDDING_API_KEY', env)
+    ?? resolveOptionalEnvCredential(config.credentialVault, 'OPENAI_API_KEY', env)
+    ?? resolveConfiguredLiteLLMApiKey(config as SubstrateConfig, env);
   if (!endpoint || !model || !dims) {
     throw new Error('API embeddings require embeddingApiUrl, embeddingApiModel (or embeddingModel), and embeddingApiDims in settings.json');
   }

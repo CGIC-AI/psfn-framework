@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createEnvCredentialVault } from '../../../custody/credential-vault.js';
 import { ElevenLabsStreamingTtsConnector } from './elevenlabs-stream.js';
 import { EchoStreamingTtsConnector } from './echo-stream.js';
 import {
@@ -140,6 +141,22 @@ describe('createStreamingTtsConnector', () => {
       voice: 'echo-voice-1',
       preset: 'normal',
       model: 'echo-v1',
+    });
+  });
+
+  it('resolves elevenlabs runtime config from the credential vault when inline secrets are absent', () => {
+    expect(resolveStreamingTtsRuntimeConfig('elevenlabs', {
+      credentialVault: createEnvCredentialVault({
+        ELEVENLABS_API_KEY: 'vault-elevenlabs-key',
+      }),
+      elevenLabsVoiceId: 'voice-id',
+      elevenLabsModelId: 'eleven_turbo_v2_5',
+      elevenLabsEndpointBase: 'https://api.elevenlabs.io/v1',
+    })).toEqual({
+      apiKey: 'vault-elevenlabs-key',
+      voiceId: 'voice-id',
+      modelId: 'eleven_turbo_v2_5',
+      endpointBase: 'https://api.elevenlabs.io/v1',
     });
   });
 

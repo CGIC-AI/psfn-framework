@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { CapabilityToken } from '../capabilities/tokens.js';
+import { createEnvCredentialVault } from '../custody/credential-vault.js';
 import type { CanonicalModelRegistry, SubstrateConfig } from '../types.js';
 import {
   createEligibilityGate,
@@ -259,6 +260,25 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       } as any,
     );
     expect(relaxedGate.ttsEnabled).toBe(true);
+  });
+
+  it('treats vault-backed voice credentials as configured during provider gating', () => {
+    const gate = resolveRuntimeVoiceProviderGate({
+      credentialVault: createEnvCredentialVault({
+        DEEPGRAM_API_KEY: 'deepgram-key',
+        ELEVENLABS_API_KEY: 'elevenlabs-key',
+      }),
+      sttProvider: 'deepgram',
+      ttsProvider: 'elevenlabs',
+      elevenLabsVoiceId: 'voice-id',
+    } as any);
+
+    expect(gate).toEqual({
+      sttProvider: 'deepgram',
+      ttsProvider: 'elevenlabs',
+      sttEnabled: true,
+      ttsEnabled: true,
+    });
   });
 
   it('uses registered STT provider metadata to determine enablement', () => {

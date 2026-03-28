@@ -10,7 +10,7 @@ import {
 import {
   resolveMemoryRetrievalBudgetPct,
   resolveSessionHistoryBudgetPct,
-} from '../../context-budget.js';
+} from '../../shared/context-budget.js';
 import {
   createDefaultCompositionalPolicyConfig,
   cloneCompositionalPolicyConfig,

@@ -1,7 +1,7 @@
 import type {
   AdaptiveContextBudgetProfile,
   ContextBudgetTurnCategory,
-} from '../context-budget.js';
+} from '../shared/context-budget.js';
 import type { MemoryWithheldReasonCounts } from '../memory/withheld-summary.js';
 
 export type ContextManifestCompositionalMode =

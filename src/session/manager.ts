@@ -35,7 +35,7 @@ import {
   resolveAdaptiveContextBudgetProfile,
   resolveSessionHistoryBudget,
   type ContextBudgetTurnCharacteristics,
-} from '../context-budget.js';
+} from '../shared/context-budget.js';
 import {
   collectRecentEntriesWithinTokenBudget,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,

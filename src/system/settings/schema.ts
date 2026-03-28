@@ -19,7 +19,7 @@ import { normalizeImageWorkflowSettings } from '../../images/types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
-} from '../../context-budget.js';
+} from '../../shared/context-budget.js';
 import { normalizeCompositionalPolicyConfig } from '../../compositional/policy.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';

@@ -23,7 +23,7 @@ import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import type { ChannelMeta } from '../../trust/policy.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
-import type { ContextBudgetTurnCharacteristics } from '../../context-budget.js';
+import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
 
 interface TurnExecutionAdapterCallbacks {

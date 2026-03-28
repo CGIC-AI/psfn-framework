@@ -16,12 +16,12 @@ import {
   type SensitivityLevel,
 } from '../trust/types.js';
 import { countTokens } from '../llm/tokens.js';
-import type { ContextBudgetConfigLike } from '../context-budget.js';
+import type { ContextBudgetConfigLike } from '../shared/context-budget.js';
 import {
   MEMORY_RETRIEVAL_MIN_ITEMS,
   resolveMemoryRetrievalBudget,
   type ContextBudgetTurnCharacteristics,
-} from '../context-budget.js';
+} from '../shared/context-budget.js';
 import {
   classifyChannel,
   evaluateMemoryPolicy,

@@ -13,7 +13,7 @@ import type {
 import type { TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
-import type { ContextBudgetTurnCharacteristics } from '../context-budget.js';
+import type { ContextBudgetTurnCharacteristics } from '../shared/context-budget.js';
 import type { MemoryScopeQuery } from '../memory/types.js';
 
 export interface LLMProvider {

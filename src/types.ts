@@ -1,9 +1,9 @@
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
-} from './context-budget.js';
+} from './shared/context-budget.js';
 import type { CapabilityTier } from './system/capabilities/tier-types.js';
-import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
+import type { ModelContextBudgetConfig } from './shared/context-budget-contracts.js';
 import type { ContextManifest } from './session/context-manifest.js';
 import type { TurnID } from './turns/types.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
@@ -344,7 +344,7 @@ export interface ToolCall {
 
 // ── Model roster ──
 
-export type { ModelContextBudgetConfig } from './context-budget-contracts.js';
+export type { ModelContextBudgetConfig } from './shared/context-budget-contracts.js';
 
 export interface ModelRouteConfig {
   providerOrder?: string[];

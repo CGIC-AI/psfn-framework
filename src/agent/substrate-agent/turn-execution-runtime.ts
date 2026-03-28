@@ -45,7 +45,7 @@ import type {
   TurnUsage,
 } from '../../types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import type { ContextBudgetTurnCharacteristics } from '../../context-budget.js';
+import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
 import { createTurnId } from '../../turns/id.js';
 import type {

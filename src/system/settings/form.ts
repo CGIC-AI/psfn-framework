@@ -5,7 +5,7 @@ import {
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   SESSION_HISTORY_BUDGET_PCT_RANGE,
-} from '../../context-budget.js';
+} from '../../shared/context-budget.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import {
   toBoolean,

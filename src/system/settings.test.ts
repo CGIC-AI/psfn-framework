@@ -300,6 +300,33 @@ describe('settings', () => {
       expect(parsed.extractionInterval).toBe(10);
     });
 
+    it('round-trips the audited runtime owner-file fields through settings.json', () => {
+      const settings = {
+        sessionMirrorEnabled: false,
+        sessionMirrorMaxChars: 512,
+        sessionMirrorActiveWindowMs: 42_000,
+        sessionMirrorChannelOverrides: {
+          discord: false,
+        },
+        continuityMessageLimit: 7,
+        voiceEnabled: true,
+        voiceTargetGuildId: 'guild-123',
+        voiceTargetUserId: 'user-456',
+        voiceReadyCueText: 'ready',
+        wyomingShardRouting: {
+          enabled: true,
+          siteAllowlist: ['site-a'],
+        },
+        shardToolsets: {
+          nursery: ['tool-a'],
+        },
+      };
+
+      saveSettings(tempDir, settings);
+
+      expect(loadSettings(tempDir)).toMatchObject(settings);
+    });
+
     it('creates data dir if missing', () => {
       const nested = join(tempDir, 'sub', 'dir');
       saveSettings(nested, { extractionInterval: 4 });
@@ -653,12 +680,10 @@ describe('settings', () => {
       const config = makeConfig();
       applySettings(config, {
         extractionInterval: 9,
-        sessionMessageLimit: 55,
         extractionThresholdPct: 34,
         compactionThresholdPct: 76,
       });
       expect(config.extractionInterval).toBe(9);
-      expect(config.sessionMessageLimit).toBe(55);
       expect(config.extractionThresholdPct).toBe(34);
       expect(config.compactionThresholdPct).toBe(76);
     });
@@ -669,14 +694,12 @@ describe('settings', () => {
       const originalPrimaryMax = config.primaryMaxTokens;
       const originalExtraction = config.extractionModel;
       const originalExtractionMax = config.extractionMaxTokens;
-      const originalSessionLimit = config.sessionMessageLimit;
       const originalMemoryLimit = config.memoryRetrievalLimit;
       applySettings(config, {});
       expect(config.primaryModel).toBe(originalPrimary);
       expect(config.primaryMaxTokens).toBe(originalPrimaryMax);
       expect(config.extractionModel).toBe(originalExtraction);
       expect(config.extractionMaxTokens).toBe(originalExtractionMax);
-      expect(config.sessionMessageLimit).toBe(originalSessionLimit);
       expect(config.memoryRetrievalLimit).toBe(originalMemoryLimit);
     });
 
@@ -687,9 +710,7 @@ describe('settings', () => {
         memoryRetrievalBudgetPct: 3,
         moodCongruenceWeight: 0.4,
         adaptiveContextBudgetsEnabled: true,
-        sessionMessageLimit: 50,
         sessionRestartBehavior: 'new_session',
-        memoryRetrievalLimit: 25,
         extractionInterval: 10,
         compactionEmotionalSalienceThresholdPct: 55,
         retryMaxAttempts: 5,
@@ -699,9 +720,7 @@ describe('settings', () => {
       expect(config.memoryRetrievalBudgetPct).toBe(3);
       expect(config.moodCongruenceWeight).toBe(0.4);
       expect(config.adaptiveContextBudgetsEnabled).toBe(true);
-      expect(config.sessionMessageLimit).toBe(50);
       expect(config.sessionRestartBehavior).toBe('new_session');
-      expect(config.memoryRetrievalLimit).toBe(25);
       expect(config.extractionInterval).toBe(10);
       expect(config.compactionEmotionalSalienceThresholdPct).toBe(55);
       expect(config.retryMaxAttempts).toBe(5);
@@ -1001,9 +1020,7 @@ describe('settings', () => {
       const expected = {
         sessionHistoryBudgetPct: 9,
         memoryRetrievalBudgetPct: 4,
-        sessionMessageLimit: 42,
         sessionRestartBehavior: 'new_session' as const,
-        memoryRetrievalLimit: 11,
         extractionInterval: 6,
         extractionThresholdPct: 34,
         compactionThresholdPct: 76,
@@ -1351,17 +1368,15 @@ describe('settings', () => {
       const params = new URLSearchParams({
         primaryMaxTokens: '100',
         sessionHistoryBudgetPct: '0',
-        sessionMessageLimit: '999',
         extractionThresholdPct: '101',
         compactionThresholdPct: '0',
         retryBaseDelayMs: '100',
         moodCongruenceWeight: '1.2',
       });
       const [, errors] = parseSettingsForm(params);
-      expect(errors.length).toBe(7);
+      expect(errors.length).toBe(6);
       expect(errors.some(err => err.includes('primaryMaxTokens'))).toBe(true);
       expect(errors.some(err => err.includes('sessionHistoryBudgetPct'))).toBe(true);
-      expect(errors.some(err => err.includes('sessionMessageLimit'))).toBe(true);
       expect(errors.some(err => err.includes('extractionThresholdPct'))).toBe(true);
       expect(errors.some(err => err.includes('compactionThresholdPct'))).toBe(true);
       expect(errors.some(err => err.includes('retryBaseDelayMs'))).toBe(true);
@@ -1549,14 +1564,10 @@ describe('settings', () => {
       const config = makeConfig();
       config.sessionHistoryBudgetPct = undefined;
       config.memoryRetrievalBudgetPct = undefined;
-      config.sessionMessageLimit = undefined;
-      config.memoryRetrievalLimit = undefined;
 
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.sessionHistoryBudgetPct).toBe(6);
       expect(snapshot.memoryRetrievalBudgetPct).toBe(2);
-      expect(snapshot.sessionMessageLimit).toBeNull();
-      expect(snapshot.memoryRetrievalLimit).toBeNull();
     });
 
     it('validates setting key membership', () => {

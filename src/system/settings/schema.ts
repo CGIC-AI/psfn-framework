@@ -141,6 +141,94 @@ function normalizeTextEmotionDtype(value: unknown): EditableSettings['textEmotio
   return normalized as EditableSettings['textEmotionDtype'];
 }
 
+function normalizeBooleanMap(
+  value: unknown,
+  fieldPath: string,
+): Record<string, boolean> | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected object`);
+  }
+
+  const parsed: Record<string, boolean> = {};
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    const key = rawKey.trim();
+    if (!key) continue;
+    const normalized = toBoolean(rawValue);
+    if (normalized === undefined) {
+      throw new Error(`Invalid settings at ${fieldPath}.${rawKey}: expected boolean`);
+    }
+    parsed[key] = normalized;
+  }
+
+  return parsed;
+}
+
+function normalizeWyomingShardRoutingConfig(
+  value: unknown,
+  fieldPath: string,
+): EditableSettings['wyomingShardRouting'] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected object`);
+  }
+
+  const enabled = value.enabled === undefined
+    ? false
+    : toBoolean(value.enabled);
+  if (enabled === undefined) {
+    throw new Error(`Invalid settings at ${fieldPath}.enabled: expected boolean`);
+  }
+
+  const parseAllowlist = (name: 'siteAllowlist' | 'satelliteAllowlist'): string[] | undefined => {
+    const raw = value[name];
+    if (raw === undefined) {
+      return undefined;
+    }
+    if (!Array.isArray(raw)) {
+      throw new Error(`Invalid settings at ${fieldPath}.${name}: expected array of strings`);
+    }
+    return toStringList(raw) ?? [];
+  };
+
+  const siteAllowlist = parseAllowlist('siteAllowlist');
+  const satelliteAllowlist = parseAllowlist('satelliteAllowlist');
+
+  return {
+    enabled,
+    ...(siteAllowlist ? { siteAllowlist } : {}),
+    ...(satelliteAllowlist ? { satelliteAllowlist } : {}),
+  };
+}
+
+function normalizeShardToolsetConfig(
+  value: unknown,
+  fieldPath: string,
+): EditableSettings['shardToolsets'] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected object`);
+  }
+
+  const parsed: NonNullable<EditableSettings['shardToolsets']> = {};
+  for (const tier of ['nursery', 'apprentice', 'autonomous', 'custom'] as const) {
+    const raw = value[tier];
+    if (raw === undefined) continue;
+    if (!Array.isArray(raw)) {
+      throw new Error(`Invalid settings at ${fieldPath}.${tier}: expected array of strings`);
+    }
+    parsed[tier] = toStringList(raw) ?? [];
+  }
+
+  return parsed;
+}
+
 function removeAliases(
   target: Record<string, unknown>,
   aliases: readonly string[],
@@ -1281,6 +1369,29 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
     }
   }
 
+  if ('sessionMirrorEnabled' in settings) {
+    normalized.sessionMirrorEnabled = toBoolean(settings.sessionMirrorEnabled) ?? false;
+  }
+  if ('sessionMirrorMaxChars' in settings) {
+    normalized.sessionMirrorMaxChars = toIntegerInRange(settings.sessionMirrorMaxChars, 32, 1_000_000);
+  }
+  if ('sessionMirrorActiveWindowMs' in settings) {
+    normalized.sessionMirrorActiveWindowMs = toIntegerInRange(
+      settings.sessionMirrorActiveWindowMs,
+      1_000,
+      86_400_000,
+    );
+  }
+  if ('sessionMirrorChannelOverrides' in settings) {
+    normalized.sessionMirrorChannelOverrides = normalizeBooleanMap(
+      settings.sessionMirrorChannelOverrides,
+      'sessionMirrorChannelOverrides',
+    );
+  }
+  if ('continuityMessageLimit' in settings) {
+    normalized.continuityMessageLimit = toIntegerInRange(settings.continuityMessageLimit, 1, 1_000);
+  }
+
   if ('chatApiBaseUrl' in settings) {
     normalized.chatApiBaseUrl = typeof settings.chatApiBaseUrl === 'string'
       ? settings.chatApiBaseUrl.trim()
@@ -1302,6 +1413,9 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
   }
 
   // Voice / TTS
+  if ('voiceEnabled' in settings) {
+    normalized.voiceEnabled = toBoolean(settings.voiceEnabled) ?? false;
+  }
   if ('ttsProvider' in settings) {
     const provider = normalizeTtsProvider(settings.ttsProvider);
     if (provider !== undefined) {
@@ -1312,6 +1426,21 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
   }
   if ('voiceId' in settings) {
     normalized.voiceId = typeof settings.voiceId === 'string' ? settings.voiceId.trim() : '';
+  }
+  if ('voiceTargetGuildId' in settings) {
+    normalized.voiceTargetGuildId = typeof settings.voiceTargetGuildId === 'string'
+      ? settings.voiceTargetGuildId.trim()
+      : '';
+  }
+  if ('voiceTargetUserId' in settings) {
+    normalized.voiceTargetUserId = typeof settings.voiceTargetUserId === 'string'
+      ? settings.voiceTargetUserId.trim()
+      : '';
+  }
+  if ('voiceReadyCueText' in settings) {
+    normalized.voiceReadyCueText = typeof settings.voiceReadyCueText === 'string'
+      ? settings.voiceReadyCueText.trim()
+      : '';
   }
   if ('echoTtsUrl' in settings) {
     normalized.echoTtsUrl = typeof settings.echoTtsUrl === 'string' ? settings.echoTtsUrl.trim() : '';
@@ -1348,6 +1477,16 @@ function normalizeContextControlSettings(settings: EditableSettings): EditableSe
   if ('elevenLabsEndpointBase' in settings) {
     normalized.elevenLabsEndpointBase =
       typeof settings.elevenLabsEndpointBase === 'string' ? settings.elevenLabsEndpointBase.trim() : '';
+  }
+
+  if ('wyomingShardRouting' in settings) {
+    normalized.wyomingShardRouting = normalizeWyomingShardRoutingConfig(
+      settings.wyomingShardRouting,
+      'wyomingShardRouting',
+    );
+  }
+  if ('shardToolsets' in settings) {
+    normalized.shardToolsets = normalizeShardToolsetConfig(settings.shardToolsets, 'shardToolsets');
   }
 
   // Channels

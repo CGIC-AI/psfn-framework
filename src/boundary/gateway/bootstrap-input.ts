@@ -21,7 +21,6 @@ import {
   resolveOptionalEnvCredential,
 } from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
-import { parseWyomingShardRoutingConfigEnv } from '../../system/config/load-config.js';
 import {
   buildRuntimeChannelsConfigOverrides,
   type StartupConfigHydrationResult,
@@ -322,7 +321,7 @@ export function resolveGatewayBootstrapInput(
   const confirmationNtfyTopic = env.CONFIRMATION_NTFY_TOPIC?.trim() || undefined;
   const workspacePathProvided = Boolean(env.WORKSPACE_PATH?.trim());
   const sessionHmacKeyring = requireGatewaySessionHmacKeyring(env);
-  const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(env);
+  const wyomingShardRouting = config.wyomingShardRouting ?? { enabled: false };
   const auditDbPath = env.AUDIT_DB_PATH ?? resolve(systemDataDir, 'gateway-audit.db');
   const providerEnv = buildProviderCredentialEnv(config, env);
   const channelsConfig = loadRuntimeChannelsConfig(

@@ -73,6 +73,11 @@ export interface EditableSettings {
   memoryRetrievalBudgetPct?: number;
   moodCongruenceWeight?: number;
   adaptiveContextBudgetsEnabled?: boolean;
+  sessionMirrorEnabled?: boolean;
+  sessionMirrorMaxChars?: number;
+  sessionMirrorActiveWindowMs?: number;
+  sessionMirrorChannelOverrides?: Record<string, boolean>;
+  continuityMessageLimit?: number;
   sessionMessageLimit?: number;
   sessionRestartBehavior?: SessionRestartBehavior;
   memoryRetrievalLimit?: number;
@@ -191,6 +196,11 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryRetrievalBudgetPct',
   'moodCongruenceWeight',
   'adaptiveContextBudgetsEnabled',
+  'sessionMirrorEnabled',
+  'sessionMirrorMaxChars',
+  'sessionMirrorActiveWindowMs',
+  'sessionMirrorChannelOverrides',
+  'continuityMessageLimit',
   'sessionRestartBehavior',
   'extractionInterval',
   'maintenanceIntervalMs',
@@ -253,8 +263,12 @@ export const RUNTIME_SETTINGS_KEYS = [
   'imageWorkflows',
   'uiThemeId',
   // Voice / TTS
+  'voiceEnabled',
   'ttsProvider',
   'voiceId',
+  'voiceTargetGuildId',
+  'voiceTargetUserId',
+  'voiceReadyCueText',
   'echoTtsUrl',
   'echoTtsVoice',
   'echoTtsPreset',
@@ -270,6 +284,8 @@ export const RUNTIME_SETTINGS_KEYS = [
   'discordTriggerListenWindowMs',
   'telegramEnabled',
   'telegramAuthorizedUsers',
+  'wyomingShardRouting',
+  'shardToolsets',
   // Obsidian vault
   'obsidianVaultName',
   'obsidianCliPath',
@@ -292,5 +308,8 @@ export type RuntimeSettingValue =
   | null
   | string[]
   | CompositionalPolicyConfig
-  | ImageWorkflowSettings;
+  | ImageWorkflowSettings
+  | Record<string, boolean>
+  | Partial<Record<'nursery' | 'apprentice' | 'autonomous' | 'custom', string[]>>
+  | { enabled: boolean; siteAllowlist?: string[]; satelliteAllowlist?: string[] };
 export type RuntimeSettingsSnapshot = Record<RuntimeSettingKey, RuntimeSettingValue>;

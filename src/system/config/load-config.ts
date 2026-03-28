@@ -19,9 +19,7 @@ import {
   createDefaultCompositionalPolicyConfig,
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   DEFAULT_UI_THEME_ID,
-  type ShardToolsetConfig,
   type SubstrateConfig,
-  type WyomingShardRoutingConfig,
 } from './runtime-config-contracts.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
@@ -156,16 +154,9 @@ export function loadConfig(): SubstrateConfig {
   const discordToken = parseOptionalStringEnv(process.env.DISCORD_TOKEN);
   const discordBotId = parseOptionalStringEnv(process.env.DISCORD_BOT_ID);
   assertMutuallyRequiredEnvPair('DISCORD_TOKEN', discordToken, 'DISCORD_BOT_ID', discordBotId);
-  const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(process.env);
   const wyomingEnabled = parseOptionalBooleanEnv(process.env.WYOMING_ENABLED) ?? false;
   const wyomingHost = parseOptionalStringEnv(process.env.WYOMING_HOST) ?? '127.0.0.1';
   const wyomingPort = parseOptionalIntegerEnv(process.env.WYOMING_PORT, 1);
-  const shardToolsets = parseShardToolsetEnv(process.env);
-  const sessionMirrorEnabled = parseOptionalBooleanEnv(process.env.SESSION_MIRROR_ENABLED);
-  const sessionMirrorMaxChars = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_MAX_CHARS, 32);
-  const sessionMirrorActiveWindowMs = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS, 1_000);
-  const sessionMirrorChannelOverrides = parseBooleanMapEnv(process.env.SESSION_MIRROR_CHANNEL_OVERRIDES);
-  const continuityMessageLimit = parseOptionalIntegerEnv(process.env.CONTINUITY_MESSAGE_LIMIT, 1);
   const voiceDaveEncryption = parseOptionalBooleanEnv(process.env.DISCORD_VOICE_DAVE_ENCRYPTION) ?? true;
   const voiceDecryptionFailureTolerance = parseIntegerEnv(
     process.env.DISCORD_VOICE_DECRYPTION_FAILURE_TOLERANCE,
@@ -209,11 +200,15 @@ export function loadConfig(): SubstrateConfig {
     databasePath,
     sessionMessageLimit: 30,
     sessionRestartBehavior: 'reuse_latest_session',
-    ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
+    continuityMessageLimit: runtimeSeedDefaults.continuityMessageLimit,
     sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_DEFAULT,
     memoryRetrievalBudgetPct: MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
     moodCongruenceWeight: DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled: false,
+    sessionMirrorEnabled: runtimeSeedDefaults.sessionMirrorEnabled,
+    sessionMirrorMaxChars: runtimeSeedDefaults.sessionMirrorMaxChars,
+    sessionMirrorActiveWindowMs: runtimeSeedDefaults.sessionMirrorActiveWindowMs,
+    sessionMirrorChannelOverrides: runtimeSeedDefaults.sessionMirrorChannelOverrides,
     extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
     maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
     defaultContextWindow,
@@ -221,10 +216,6 @@ export function loadConfig(): SubstrateConfig {
     compactionThresholdPct: DEFAULT_COMPACTION_THRESHOLD_PCT,
     observationMaskingWindow: DEFAULT_OBSERVATION_MASKING_WINDOW,
     compactionEmotionalSalienceThresholdPct: DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT,
-    ...(sessionMirrorEnabled !== undefined ? { sessionMirrorEnabled } : {}),
-    ...(sessionMirrorMaxChars !== undefined ? { sessionMirrorMaxChars } : {}),
-    ...(sessionMirrorActiveWindowMs !== undefined ? { sessionMirrorActiveWindowMs } : {}),
-    ...(sessionMirrorChannelOverrides ? { sessionMirrorChannelOverrides } : {}),
     memoryExtractionMinImportance: DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE,
     memoryExtractionMinConfidence: DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE,
     memoryExtractionMinNovelty: DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY,
@@ -251,16 +242,16 @@ export function loadConfig(): SubstrateConfig {
       memory: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
       context: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
     },
-    voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
+    voiceEnabled: runtimeSeedDefaults.voiceEnabled,
     discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
     discordTriggerWords: undefined,
     discordTriggerReactions: [...DEFAULT_DISCORD_TRIGGER_REACTIONS],
     discordTriggerListenWindowMs: DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS,
     characterName: '',
     uiThemeId: DEFAULT_UI_THEME_ID,
-    voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
-    voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
-    voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
+    voiceTargetGuildId: runtimeSeedDefaults.voiceTargetGuildId,
+    voiceTargetUserId: runtimeSeedDefaults.voiceTargetUserId,
+    voiceReadyCueText: runtimeSeedDefaults.voiceReadyCueText,
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
     deepgramApiKey: resolveOptionalEnvCredential(credentialVault, 'DEEPGRAM_API_KEY'),
@@ -297,36 +288,16 @@ export function loadConfig(): SubstrateConfig {
     webFetchLocalCrawlerAllowHttp: false,
     ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),
     ...(gatewayTlsRejectUnauthorized !== undefined ? { gatewayTlsRejectUnauthorized } : {}),
-    wyomingShardRouting,
+    wyomingShardRouting: runtimeSeedDefaults.wyomingShardRouting,
     wyomingEnabled,
     wyomingHost,
     ...(wyomingPort !== undefined ? { wyomingPort } : {}),
     telegramEnabled: false,
     capabilityTier: DEFAULT_CAPABILITY_TIER,
-    ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
+    shardToolsets: runtimeSeedDefaults.shardToolsets,
     // Obsidian vault
     obsidianAutoPublish: false,
     obsidianTimeoutMs: DEFAULT_OBSIDIAN_TIMEOUT_MS,
-  };
-}
-
-export function parseWyomingShardRoutingConfigEnv(
-  env: NodeJS.ProcessEnv,
-): WyomingShardRoutingConfig {
-  const enabled = parseOptionalBooleanEnv(
-    env.WYOMING_SHARD_DELEGATION_ENABLED ?? env.WYOMING_SHARD_ROUTING_ENABLED,
-  ) ?? false;
-  const siteAllowlist = parseStringListEnv(
-    env.WYOMING_SHARD_DELEGATION_SITE_ALLOWLIST ?? env.WYOMING_SHARD_ROUTING_SITE_ALLOWLIST,
-  );
-  const satelliteAllowlist = parseStringListEnv(
-    env.WYOMING_SHARD_DELEGATION_SATELLITE_ALLOWLIST ?? env.WYOMING_SHARD_ROUTING_SATELLITE_ALLOWLIST,
-  );
-
-  return {
-    enabled,
-    ...(siteAllowlist.length > 0 ? { siteAllowlist } : {}),
-    ...(satelliteAllowlist.length > 0 ? { satelliteAllowlist } : {}),
   };
 }
 
@@ -379,26 +350,6 @@ function assertMutuallyRequiredEnvPair(
   throw new Error(`${secondaryName} is required when ${primaryName} is configured`);
 }
 
-function parseShardToolsetEnv(
-  env: NodeJS.ProcessEnv,
-): ShardToolsetConfig {
-  const entries: Array<[CapabilityTier, string | undefined]> = [
-    ['nursery', env.SHARD_TOOLSET_NURSERY],
-    ['apprentice', env.SHARD_TOOLSET_APPRENTICE],
-    ['autonomous', env.SHARD_TOOLSET_AUTONOMOUS],
-    ['custom', env.SHARD_TOOLSET_CUSTOM],
-  ];
-
-  const result: ShardToolsetConfig = {};
-  for (const [tier, raw] of entries) {
-    const parsed = parseStringListEnv(raw);
-    if (parsed.length > 0) {
-      result[tier] = parsed;
-    }
-  }
-  return result;
-}
-
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -449,16 +400,6 @@ function parseResponseStyleOverridesEnv(value: string | undefined): ResponseStyl
   }
 }
 
-function parseStringListEnv(value: string | undefined): string[] {
-  if (typeof value !== 'string') return [];
-  return [...new Set(
-    value
-      .split(',')
-      .map(item => item.trim())
-      .filter(Boolean),
-  )];
-}
-
 function sanitizeDatabaseBasename(value: string | undefined): string {
   if (typeof value !== 'string') return 'companion';
   const normalized = value
@@ -467,19 +408,4 @@ function sanitizeDatabaseBasename(value: string | undefined): string {
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return normalized.length > 0 ? normalized : 'companion';
-}
-
-function parseBooleanMapEnv(value: string | undefined): Record<string, boolean> | undefined {
-  if (typeof value !== 'string') return undefined;
-
-  const parsed: Record<string, boolean> = {};
-  for (const item of value.split(',')) {
-    const [rawKey, rawValue] = item.split('=');
-    const key = rawKey.trim();
-    const boolValue = parseOptionalBooleanEnv(rawValue.trim());
-    if (!key || boolValue === undefined) continue;
-    parsed[key] = boolValue;
-  }
-
-  return Object.keys(parsed).length > 0 ? parsed : undefined;
 }

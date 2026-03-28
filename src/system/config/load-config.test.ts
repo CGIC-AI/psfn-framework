@@ -15,6 +15,7 @@ function restoreEnv(): void {
 }
 
 function clearRuntimePathEnv(): void {
+  process.env.COMPANION_ID = 'companion';
   delete process.env.DATA_DIR;
   delete process.env.SYSTEM_DATA_DIR;
   delete process.env.COMPANION_DATA_DIR;
@@ -151,6 +152,20 @@ describe('loadConfig path defaults', () => {
     process.env.EMBEDDING_API_URL = 'https://embed.invalid/v1/embeddings';
     process.env.EMBEDDING_API_MODEL = 'env-embed-api-model';
     process.env.EMBEDDING_API_DIMS = '3072';
+    process.env.SESSION_MIRROR_ENABLED = 'false';
+    process.env.SESSION_MIRROR_MAX_CHARS = '999';
+    process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS = '3000';
+    process.env.SESSION_MIRROR_CHANNEL_OVERRIDES = 'discord=false';
+    process.env.CONTINUITY_MESSAGE_LIMIT = '77';
+    process.env.DISCORD_VOICE_ENABLED = 'true';
+    process.env.DISCORD_VOICE_GUILD_ID = 'env-guild';
+    process.env.DISCORD_VOICE_USER_ID = 'env-user';
+    process.env.DISCORD_VOICE_READY_CUE_TEXT = 'env-ready';
+    process.env.WYOMING_SHARD_DELEGATION_ENABLED = 'true';
+    process.env.WYOMING_SHARD_DELEGATION_SITE_ALLOWLIST = 'site-a,site-b';
+    process.env.WYOMING_SHARD_DELEGATION_SATELLITE_ALLOWLIST = 'sat-a';
+    process.env.SHARD_TOOLSET_NURSERY = 'env-tool';
+    process.env.SHARD_TOOLSET_AUTONOMOUS = 'env-auto';
     process.env.DISCORD_TRIGGER_REACTIONS = '🔥';
     process.env.TELEGRAM_ENABLED = 'true';
     process.env.OBSIDIAN_AUTO_PUBLISH = 'true';
@@ -165,8 +180,13 @@ describe('loadConfig path defaults', () => {
     expect(config.extractionProvider).toBe('openrouter');
     expect(config.extractionMaxTokens).toBe(8_192);
     expect(config.sessionMessageLimit).toBe(30);
+    expect(config.continuityMessageLimit).toBe(10);
     expect(config.maintenanceIntervalMs).toBe(300_000);
     expect(config.retryMaxAttempts).toBe(3);
+    expect(config.sessionMirrorEnabled).toBe(true);
+    expect(config.sessionMirrorMaxChars).toBe(220);
+    expect(config.sessionMirrorActiveWindowMs).toBe(1_800_000);
+    expect(config.sessionMirrorChannelOverrides).toEqual({});
     expect(config.deepgramModel).toBe('nova-3');
     expect(config.deepgramSttEndpoint).toBe('wss://api.deepgram.com/v1/listen');
     expect(config.deepgramListenEndpoint).toBe('https://api.deepgram.com/v1/listen');
@@ -185,8 +205,14 @@ describe('loadConfig path defaults', () => {
     expect(config.embeddingApiUrl).toBeUndefined();
     expect(config.embeddingApiModel).toBe('snowflake-arctic-embed2');
     expect(config.embeddingApiDims).toBe(1024);
+    expect(config.voiceEnabled).toBe(false);
+    expect(config.voiceTargetGuildId).toBe('');
+    expect(config.voiceTargetUserId).toBe('');
+    expect(config.voiceReadyCueText).toBe('');
     expect(config.discordTriggerReactions).toEqual(['👆']);
     expect(config.telegramEnabled).toBe(false);
+    expect(config.wyomingShardRouting).toMatchObject({ enabled: false });
+    expect(config.shardToolsets).toEqual({});
     expect(config.obsidianAutoPublish).toBe(false);
     expect(config.ttsProvider).toBeUndefined();
   });

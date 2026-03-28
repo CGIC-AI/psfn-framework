@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ShardToolsetConfig, WyomingShardRoutingConfig } from './runtime-config-contracts.js';
 
 export const MODELS_SEED_FILE_NAME = 'models.seed.json';
 export const SETTINGS_SEED_FILE_NAME = 'settings.seed.json';
@@ -29,6 +30,17 @@ export interface ModelSeedDefaults {
 }
 
 export interface RuntimeSettingsSeedDefaults {
+  sessionMirrorEnabled: boolean;
+  sessionMirrorMaxChars: number;
+  sessionMirrorActiveWindowMs: number;
+  sessionMirrorChannelOverrides: Record<string, boolean>;
+  continuityMessageLimit: number;
+  voiceEnabled: boolean;
+  voiceTargetGuildId: string;
+  voiceTargetUserId: string;
+  voiceReadyCueText: string;
+  wyomingShardRouting: WyomingShardRoutingConfig;
+  shardToolsets: ShardToolsetConfig;
   deepgramModel: string;
   deepgramSttEndpoint: string;
   deepgramListenEndpoint: string;
@@ -98,12 +110,83 @@ function asOptionalString(value: unknown, fieldPath: string): string | undefined
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function asString(value: unknown, fieldPath: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${fieldPath} must be a string`);
+  }
+  return value.trim();
+}
+
 function asEmbeddingProvider(value: unknown, fieldPath: string): EmbeddingProviderSeedValue {
   const provider = asNonEmptyString(value, fieldPath).toLowerCase();
   if (provider === 'ollama' || provider === 'transformers' || provider === 'api') {
     return provider;
   }
   throw new Error(`${fieldPath} must be one of: ollama, transformers, api`);
+}
+
+function asBoolean(value: unknown, fieldPath: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${fieldPath} must be a boolean`);
+  }
+  return value;
+}
+
+function asBooleanMap(value: unknown, fieldPath: string): Record<string, boolean> {
+  const root = asRecord(value, fieldPath);
+  const parsed: Record<string, boolean> = {};
+  for (const [rawKey, rawValue] of Object.entries(root)) {
+    const key = rawKey.trim();
+    if (!key) {
+      continue;
+    }
+    if (typeof rawValue !== 'boolean') {
+      throw new Error(`${fieldPath}.${rawKey} must be a boolean`);
+    }
+    parsed[key] = rawValue;
+  }
+  return parsed;
+}
+
+function asWyomingShardRoutingConfig(value: unknown, fieldPath: string): WyomingShardRoutingConfig {
+  const root = asRecord(value, fieldPath);
+  const enabled = root.enabled === undefined ? false : asBoolean(root.enabled, `${fieldPath}.enabled`);
+
+  const parseAllowlist = (name: 'siteAllowlist' | 'satelliteAllowlist'): string[] | undefined => {
+    const raw = root[name];
+    if (raw === undefined) {
+      return undefined;
+    }
+    const entries = asArray(raw, `${fieldPath}.${name}`);
+    const parsed = entries.map((entry, index) => asString(entry, `${fieldPath}.${name}[${index}]`)).filter(Boolean);
+    return parsed.length > 0 ? parsed : [];
+  };
+
+  const siteAllowlist = parseAllowlist('siteAllowlist');
+  const satelliteAllowlist = parseAllowlist('satelliteAllowlist');
+
+  return {
+    enabled,
+    ...(siteAllowlist ? { siteAllowlist } : {}),
+    ...(satelliteAllowlist ? { satelliteAllowlist } : {}),
+  };
+}
+
+function asShardToolsetConfig(value: unknown, fieldPath: string): ShardToolsetConfig {
+  const root = asRecord(value, fieldPath);
+  const parsed: ShardToolsetConfig = {};
+  for (const tier of ['nursery', 'apprentice', 'autonomous', 'custom'] as const) {
+    const raw = root[tier];
+    if (raw === undefined) continue;
+    const entries = asArray(raw, `${fieldPath}.${tier}`);
+    const toolNames = entries.map((entry, index) => asString(entry, `${fieldPath}.${tier}[${index}]`)).filter(Boolean);
+    if (toolNames.length > 0) {
+      parsed[tier] = toolNames;
+    } else {
+      parsed[tier] = [];
+    }
+  }
+  return parsed;
 }
 
 function asTextEmotionDtype(value: unknown, fieldPath: string): TextEmotionDtypeSeedValue {
@@ -169,6 +252,29 @@ function parseRuntimeSettingsDefaults(seedDir: string): RuntimeSettingsSeedDefau
   const root = asRecord(readJsonFile(settingsSeedPath), settingsSeedPath);
 
   return {
+    sessionMirrorEnabled: asBoolean(root.sessionMirrorEnabled, `${settingsSeedPath}.sessionMirrorEnabled`),
+    sessionMirrorMaxChars: asPositiveInteger(root.sessionMirrorMaxChars, `${settingsSeedPath}.sessionMirrorMaxChars`),
+    sessionMirrorActiveWindowMs: asPositiveInteger(
+      root.sessionMirrorActiveWindowMs,
+      `${settingsSeedPath}.sessionMirrorActiveWindowMs`,
+    ),
+    sessionMirrorChannelOverrides: asBooleanMap(
+      root.sessionMirrorChannelOverrides,
+      `${settingsSeedPath}.sessionMirrorChannelOverrides`,
+    ),
+    continuityMessageLimit: asPositiveInteger(
+      root.continuityMessageLimit,
+      `${settingsSeedPath}.continuityMessageLimit`,
+    ),
+    voiceEnabled: asBoolean(root.voiceEnabled, `${settingsSeedPath}.voiceEnabled`),
+    voiceTargetGuildId: asString(root.voiceTargetGuildId, `${settingsSeedPath}.voiceTargetGuildId`),
+    voiceTargetUserId: asString(root.voiceTargetUserId, `${settingsSeedPath}.voiceTargetUserId`),
+    voiceReadyCueText: asString(root.voiceReadyCueText, `${settingsSeedPath}.voiceReadyCueText`),
+    wyomingShardRouting: asWyomingShardRoutingConfig(
+      root.wyomingShardRouting,
+      `${settingsSeedPath}.wyomingShardRouting`,
+    ),
+    shardToolsets: asShardToolsetConfig(root.shardToolsets, `${settingsSeedPath}.shardToolsets`),
     deepgramModel: asNonEmptyString(root.deepgramModel, `${settingsSeedPath}.deepgramModel`),
     deepgramSttEndpoint: asNonEmptyString(root.deepgramSttEndpoint, `${settingsSeedPath}.deepgramSttEndpoint`),
     deepgramListenEndpoint: asNonEmptyString(root.deepgramListenEndpoint, `${settingsSeedPath}.deepgramListenEndpoint`),

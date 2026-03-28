@@ -35,6 +35,9 @@ export const SETTINGS_VALIDATION = {
     min: MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
     max: MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
   },
+  sessionMirrorMaxChars: { min: 32, max: 1_000_000 },
+  sessionMirrorActiveWindowMs: { min: 1_000, max: 86_400_000 },
+  continuityMessageLimit: { min: 1, max: 1_000 },
   extractionInterval: { min: 1, max: 50 },
   extractionThresholdPct: {
     min: EXTRACTION_THRESHOLD_PCT_RANGE.min,

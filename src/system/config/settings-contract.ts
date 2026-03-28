@@ -148,6 +148,7 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
 
 export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
   'adaptiveContextBudgetsEnabled',
+  'sessionMirrorEnabled',
   'importProcessingStrictPolicy',
   'webFetchAllowHttp',
   'webFetchAllowInternalNetwork',
@@ -159,6 +160,7 @@ export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
   'profileSynthesisEnabled',
+  'voiceEnabled',
 ]);
 
 export const SETTINGS_STRING_ARRAY_FIELDS = new Set<string>([
@@ -177,6 +179,9 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'extractionMaxTokens',
   'sessionHistoryBudgetPct',
   'memoryRetrievalBudgetPct',
+  'sessionMirrorMaxChars',
+  'sessionMirrorActiveWindowMs',
+  'continuityMessageLimit',
   'extractionInterval',
   'maintenanceIntervalMs',
   'extractionThresholdPct',
@@ -220,6 +225,9 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'modelCatalog',
   'modelRoleAssignments',
   'modelRoster',
+  'sessionMirrorChannelOverrides',
+  'wyomingShardRouting',
+  'shardToolsets',
 ]);
 
 const DEPRECATED_SETTINGS_FIELDS = new Set<string>([

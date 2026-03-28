@@ -62,6 +62,11 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     memoryRetrievalBudgetPct: retrievalBudgetPct,
     moodCongruenceWeight: config.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled: config.adaptiveContextBudgetsEnabled ?? false,
+    sessionMirrorEnabled: config.sessionMirrorEnabled ?? true,
+    sessionMirrorMaxChars: config.sessionMirrorMaxChars ?? 220,
+    sessionMirrorActiveWindowMs: config.sessionMirrorActiveWindowMs ?? 30 * 60 * 1000,
+    sessionMirrorChannelOverrides: structuredClone(config.sessionMirrorChannelOverrides ?? {}),
+    continuityMessageLimit: config.continuityMessageLimit ?? 10,
     sessionRestartBehavior: config.sessionRestartBehavior ?? 'reuse_latest_session',
     extractionInterval: config.extractionInterval,
     maintenanceIntervalMs: config.maintenanceIntervalMs,
@@ -128,8 +133,12 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     imageWorkflows: cloneImageWorkflowSettings(config.imageWorkflows),
     uiThemeId: toNonEmptyString(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
     // Voice / TTS
+    voiceEnabled: config.voiceEnabled ?? false,
     ttsProvider: resolveRuntimeTtsProvider(config),
     voiceId: config.elevenLabsVoiceId ?? '',
+    voiceTargetGuildId: config.voiceTargetGuildId ?? '',
+    voiceTargetUserId: config.voiceTargetUserId ?? '',
+    voiceReadyCueText: config.voiceReadyCueText ?? '',
     echoTtsUrl: config.echoTtsUrl ?? '',
     echoTtsVoice: config.echoTtsVoice ?? '',
     echoTtsPreset: config.echoTtsPreset ?? '',
@@ -145,6 +154,8 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     discordTriggerListenWindowMs: config.discordTriggerListenWindowMs ?? 120_000,
     telegramEnabled: config.telegramEnabled ?? false,
     telegramAuthorizedUsers: config.telegramAuthorizedUsers?.join(', ') ?? null,
+    wyomingShardRouting: structuredClone(config.wyomingShardRouting ?? { enabled: false }),
+    shardToolsets: structuredClone(config.shardToolsets ?? {}),
     // Obsidian vault
     obsidianVaultName: config.obsidianVaultName ?? null,
     obsidianCliPath: config.obsidianCliPath ?? 'obsidian',
@@ -173,6 +184,21 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
   if (settings.adaptiveContextBudgetsEnabled !== undefined) {
     config.adaptiveContextBudgetsEnabled = settings.adaptiveContextBudgetsEnabled;
+  }
+  if (settings.sessionMirrorEnabled !== undefined) {
+    config.sessionMirrorEnabled = settings.sessionMirrorEnabled;
+  }
+  if (settings.sessionMirrorMaxChars !== undefined) {
+    config.sessionMirrorMaxChars = settings.sessionMirrorMaxChars;
+  }
+  if (settings.sessionMirrorActiveWindowMs !== undefined) {
+    config.sessionMirrorActiveWindowMs = settings.sessionMirrorActiveWindowMs;
+  }
+  if ('sessionMirrorChannelOverrides' in settings) {
+    config.sessionMirrorChannelOverrides = structuredClone(settings.sessionMirrorChannelOverrides ?? {});
+  }
+  if (settings.continuityMessageLimit !== undefined) {
+    config.continuityMessageLimit = settings.continuityMessageLimit;
   }
   if ('sessionRestartBehavior' in settings) {
     const behavior = settings.sessionRestartBehavior;
@@ -372,12 +398,27 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   }
 
   // Voice / TTS
+  if (settings.voiceEnabled !== undefined) {
+    config.voiceEnabled = settings.voiceEnabled;
+  }
   if ('ttsProvider' in settings) {
     config.ttsProvider = normalizeTtsProvider(settings.ttsProvider);
   }
   if ('voiceId' in settings) {
     const trimmed = settings.voiceId?.trim() ?? '';
     config.elevenLabsVoiceId = trimmed || undefined;
+  }
+  if ('voiceTargetGuildId' in settings) {
+    const trimmed = settings.voiceTargetGuildId?.trim() ?? '';
+    config.voiceTargetGuildId = trimmed || '';
+  }
+  if ('voiceTargetUserId' in settings) {
+    const trimmed = settings.voiceTargetUserId?.trim() ?? '';
+    config.voiceTargetUserId = trimmed || '';
+  }
+  if ('voiceReadyCueText' in settings) {
+    const trimmed = settings.voiceReadyCueText?.trim() ?? '';
+    config.voiceReadyCueText = trimmed || '';
   }
   if ('echoTtsUrl' in settings) {
     const trimmed = settings.echoTtsUrl?.trim() ?? '';
@@ -413,6 +454,12 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
   if ('elevenLabsEndpointBase' in settings) {
     const trimmed = settings.elevenLabsEndpointBase?.trim() ?? '';
     config.elevenLabsEndpointBase = trimmed || undefined;
+  }
+  if ('wyomingShardRouting' in settings) {
+    config.wyomingShardRouting = structuredClone(settings.wyomingShardRouting ?? { enabled: false });
+  }
+  if ('shardToolsets' in settings) {
+    config.shardToolsets = structuredClone(settings.shardToolsets);
   }
 
   // Channels

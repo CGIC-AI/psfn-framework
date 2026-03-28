@@ -67,6 +67,7 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
   const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
   const confirmationQueue = options.confirmationQueue ?? null;
   const moduleRegistryPath = resolveRequiredModuleRegistryPath();
+  let registryMutationChain: Promise<void> = Promise.resolve();
 
   const loadModuleRegistry = async (): Promise<ModuleRecord[]> => {
     if (typeof options.gatewayCaps.fsRead !== 'function') {
@@ -94,6 +95,15 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
       throw new Error('module ops require gateway fs policy (fsWrite unavailable)');
     }
     await options.gatewayCaps.fsWrite(moduleRegistryPath, JSON.stringify(records, null, 2));
+  };
+
+  const runRegistryMutation = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const next = registryMutationChain.then(operation, operation);
+    registryMutationChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   };
 
   const notifyMutation = async (
@@ -124,63 +134,65 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
     enable = false,
     recordEvidence = true,
   ): Promise<ModuleMutationResult> => {
-    const normalizedInput = normalizeInstallInput(name, source);
-    if ('error' in normalizedInput) {
-      return { ok: false, error: normalizedInput.error };
-    }
+    return await runRegistryMutation(async () => {
+      const normalizedInput = normalizeInstallInput(name, source);
+      if ('error' in normalizedInput) {
+        return { ok: false, error: normalizedInput.error };
+      }
 
-    const now = Date.now();
-    const items = await loadModuleRegistry();
-    const existing = items.find(item => item.name === normalizedInput.name);
+      const now = Date.now();
+      const items = await loadModuleRegistry();
+      const existing = items.find(item => item.name === normalizedInput.name);
 
-    if (existing) {
-      const previous = { ...existing };
-      existing.source = normalizedInput.source;
-      existing.enabled = Boolean(enable);
-      existing.updatedAt = now;
-      existing.version += 1;
+      if (existing) {
+        const previous = { ...existing };
+        existing.source = normalizedInput.source;
+        existing.enabled = Boolean(enable);
+        existing.updatedAt = now;
+        existing.version += 1;
+        await saveModuleRegistry(items);
+
+        await notifyMutation('update', existing, previous);
+
+        if (recordEvidence) {
+          addEvidence(options.pushEvidence, {
+            source: 'module',
+            query: normalizedInput.name,
+            snippet: `updated module v${existing.version}`,
+            resultCount: 1,
+            timestamp: now,
+          });
+        }
+
+        return { ok: true, id: existing.id, version: existing.version };
+      }
+
+      const created: ModuleRecord = {
+        id: `mod-${now}-${Math.random().toString(36).slice(2, 8)}`,
+        name: normalizedInput.name,
+        source: normalizedInput.source,
+        enabled: Boolean(enable),
+        installedAt: now,
+        updatedAt: now,
+        version: 1,
+      };
+      items.push(created);
       await saveModuleRegistry(items);
 
-      await notifyMutation('update', existing, previous);
+      await notifyMutation('install', created, null);
 
       if (recordEvidence) {
         addEvidence(options.pushEvidence, {
           source: 'module',
           query: normalizedInput.name,
-          snippet: `updated module v${existing.version}`,
+          snippet: 'installed module v1',
           resultCount: 1,
           timestamp: now,
         });
       }
 
-      return { ok: true, id: existing.id, version: existing.version };
-    }
-
-    const created: ModuleRecord = {
-      id: `mod-${now}-${Math.random().toString(36).slice(2, 8)}`,
-      name: normalizedInput.name,
-      source: normalizedInput.source,
-      enabled: Boolean(enable),
-      installedAt: now,
-      updatedAt: now,
-      version: 1,
-    };
-    items.push(created);
-    await saveModuleRegistry(items);
-
-    await notifyMutation('install', created, null);
-
-    if (recordEvidence) {
-      addEvidence(options.pushEvidence, {
-        source: 'module',
-        query: normalizedInput.name,
-        snippet: 'installed module v1',
-        resultCount: 1,
-        timestamp: now,
-      });
-    }
-
-    return { ok: true, id: created.id, version: created.version };
+      return { ok: true, id: created.id, version: created.version };
+    });
   };
 
   const module_install = async (
@@ -259,32 +271,34 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
 
   const setModuleEnabled = async (idOrName: string, enabled: boolean): Promise<{ ok: boolean; error?: string }> => {
     try {
-      const key = toTrimmedString(idOrName);
-      if (!key) {
-        return { ok: false, error: 'module id or name is required' };
-      }
-      const items = await loadModuleRegistry();
-      const target = items.find(item => item.id === key || item.name === key);
-      if (!target) {
-        return { ok: false, error: 'module not found' };
-      }
+      return await runRegistryMutation(async () => {
+        const key = toTrimmedString(idOrName);
+        if (!key) {
+          return { ok: false, error: 'module id or name is required' };
+        }
+        const items = await loadModuleRegistry();
+        const target = items.find(item => item.id === key || item.name === key);
+        if (!target) {
+          return { ok: false, error: 'module not found' };
+        }
 
-      const previous = { ...target };
-      target.enabled = enabled;
-      target.updatedAt = Date.now();
-      target.version += 1;
-      await saveModuleRegistry(items);
-      await notifyMutation(enabled ? 'enable' : 'disable', target, previous);
+        const previous = { ...target };
+        target.enabled = enabled;
+        target.updatedAt = Date.now();
+        target.version += 1;
+        await saveModuleRegistry(items);
+        await notifyMutation(enabled ? 'enable' : 'disable', target, previous);
 
-      addEvidence(options.pushEvidence, {
-        source: 'module',
-        query: target.name,
-        snippet: `${enabled ? 'enabled' : 'disabled'} module v${target.version}`,
-        resultCount: 1,
-        timestamp: target.updatedAt,
+        addEvidence(options.pushEvidence, {
+          source: 'module',
+          query: target.name,
+          snippet: `${enabled ? 'enabled' : 'disabled'} module v${target.version}`,
+          resultCount: 1,
+          timestamp: target.updatedAt,
+        });
+
+        return { ok: true };
       });
-
-      return { ok: true };
     } catch (err) {
       return { ok: false, error: toErrorMessage(err) };
     }

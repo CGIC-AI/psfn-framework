@@ -59,27 +59,18 @@ describe('ModuleLoader', () => {
     }
   });
 
-  it('loads enabled modules through validate -> load -> activate lifecycle', async () => {
+  it('refuses to execute registry-backed module source in process', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-module-loader-'));
     const registryPath = join(root, 'registry.json');
     writeRegistry(registryPath, [
       baseRecord({
         source: [
+          'globalThis.__psfnModuleLoaderSpy = true;',
           'export default {',
           '  name: "planner",',
           '  validate(ctx) {',
           '    if (!ctx.module || !ctx.module.name) throw new Error("missing module context");',
           '  },',
-          '  activate(ctx) {',
-          '    ctx.registerTool({',
-          '      name: "mod_probe",',
-          '      description: "module probe",',
-          '      label: "mod_probe",',
-          '      parameters: { type: "object", properties: {}, additionalProperties: false },',
-          '      execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),',
-          '    });',
-          '  },',
-          '  health() { return { ok: true, details: "ready" }; },',
           '};',
         ].join('\n'),
       }),
@@ -87,12 +78,8 @@ describe('ModuleLoader', () => {
 
     const registerTool = vi.fn();
     const eventBus = new EventBus();
-    const moduleInstalls: Array<{ id: string; name: string }> = [];
-    const moduleHealth: Array<{ id: string; ok: boolean }> = [];
-    const moduleUninstalls: Array<{ id: string; reason: string }> = [];
-    eventBus.on('module.install', (event) => moduleInstalls.push({ id: event.id, name: event.name }));
-    eventBus.on('module.health', (event) => moduleHealth.push({ id: event.id, ok: event.ok }));
-    eventBus.on('module.uninstall', (event) => moduleUninstalls.push({ id: event.id, reason: event.reason }));
+    const errors: Array<{ id: string; error: string }> = [];
+    eventBus.on('module.error', (event) => errors.push({ id: event.id, error: event.error }));
 
     const loader = new ModuleLoader({
       eventBus,
@@ -104,32 +91,22 @@ describe('ModuleLoader', () => {
       const summary = await loader.loadEnabledModules();
       expect(summary).toEqual({
         attempted: 1,
-        loaded: 1,
-        failed: 0,
+        loaded: 0,
+        failed: 1,
       });
-      expect(registerTool).toHaveBeenCalledTimes(1);
-      expect(moduleInstalls).toEqual([{ id: 'mod-1', name: 'planner' }]);
-      expect(moduleHealth).toEqual([{ id: 'mod-1', ok: true }]);
-      expect(readRegistry(registryPath)[0].lastError).toBeUndefined();
-
-      await loader.applyRegistryMutation({
-        action: 'disable',
-        previous: readRegistry(registryPath)[0],
-        next: {
-          ...readRegistry(registryPath)[0],
-          enabled: false,
-          updatedAt: 200,
-          version: 2,
-        },
-      });
-      expect(moduleUninstalls).toEqual([{ id: 'mod-1', reason: 'disable' }]);
+      expect(registerTool).not.toHaveBeenCalled();
+      expect((globalThis as { __psfnModuleLoaderSpy?: boolean }).__psfnModuleLoaderSpy).toBeUndefined();
+      expect(errors).toHaveLength(1);
+      expect(errors[0].error).toContain('registry-backed module source execution is disabled');
+      expect(readRegistry(registryPath)[0].lastError).toContain('registry-backed module source execution is disabled');
     } finally {
+      delete (globalThis as { __psfnModuleLoaderSpy?: boolean }).__psfnModuleLoaderSpy;
       await loader.shutdown();
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it('persists lastError for modules that fail validation/activation', async () => {
+  it('persists lastError for blocked module source execution', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-module-loader-fail-'));
     const registryPath = join(root, 'registry.json');
     writeRegistry(registryPath, [
@@ -158,8 +135,8 @@ describe('ModuleLoader', () => {
       });
       expect(registerTool).not.toHaveBeenCalled();
       expect(errors).toHaveLength(1);
-      expect(errors[0].error).toContain('invalid module');
-      expect(readRegistry(registryPath)[0].lastError).toContain('invalid module');
+      expect(errors[0].error).toContain('registry-backed module source execution is disabled');
+      expect(readRegistry(registryPath)[0].lastError).toContain('registry-backed module source execution is disabled');
     } finally {
       await loader.shutdown();
       rmSync(root, { recursive: true, force: true });

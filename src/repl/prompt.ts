@@ -51,7 +51,7 @@ Variables persist across iterations. When you have the answer, call FINAL().
 
 ### Modules
 - \`await module_list()\` — List installed modules (metadata + enabled state)
-- \`await module_install(name, source, enable?)\` — Install or update a module source blob in the registry
+- \`await module_install(name, source, enable?)\` — Register or update a module record in the registry
 - \`await module_enable(idOrName)\` / \`await module_disable(idOrName)\` — Toggle module state
 - \`await module_health(idOrName?)\` — View module health snapshots
 

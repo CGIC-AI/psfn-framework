@@ -23,6 +23,11 @@ export interface RuntimeModeContract {
   restart: RuntimeRestartContract;
 }
 
+export interface RuntimeCommandInvocation {
+  command: string;
+  args: string[];
+}
+
 export interface ResolveRuntimeModeContractOptions {
   entrypoint: RuntimeEntrypoint;
   runtimeModeEnv?: string;
@@ -70,6 +75,60 @@ export function normalizeRuntimeMode(raw: string | undefined): RuntimeMode | nul
 export function normalizeRestartCommand(raw: string | undefined): string | undefined {
   const normalized = raw?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+export function resolveRuntimeCommandInvocation(raw: string | undefined): RuntimeCommandInvocation | undefined {
+  const normalized = normalizeRestartCommand(raw);
+  if (!normalized) return undefined;
+
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index]!;
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (quote) {
+    throw new Error(`Invalid runtime command "${normalized}": unmatched quote`);
+  }
+
+  if (current.length > 0) {
+    tokens.push(current);
+  }
+
+  if (tokens.length === 0) {
+    return undefined;
+  }
+
+  const [command, ...args] = tokens;
+  return {
+    command,
+    args,
+  };
 }
 
 function resolveRuntimeModeForEntrypoint(

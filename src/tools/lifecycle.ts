@@ -4,37 +4,19 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import { spawn } from 'node:child_process';
 import type { LifecycleNotifier } from '../lifecycle/notifications.js';
-import { normalizeRestartCommand, type RuntimeMode } from '../lifecycle/runtime-mode.js';
 import { createComponentLogger } from '../logger.js';
 import type { CapabilityTier } from '../types.js';
 import type { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
 import { textResultWithError } from './results.js';
-import { toErrorMessage } from '../utils/errors.js';
 
 const log = createComponentLogger('LifecycleTools');
 
 interface LifecycleToolOptions {
   restartSafeguard?: LifecycleRestartSafeguard;
   getCapabilityTier?: () => CapabilityTier;
-  restartCommand?: string;
-  runtimeMode?: RuntimeMode;
-}
-
-async function launchRestartCommand(command: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, {
-      shell: true,
-      detached: true,
-      stdio: 'ignore',
-    });
-    child.once('error', reject);
-    child.once('spawn', () => {
-      child.unref();
-      resolve();
-    });
-  });
+  runRestartCommand?: () => Promise<void>;
+  runBuildCommand?: () => Promise<void>;
 }
 
 /**
@@ -87,18 +69,15 @@ export function createRestartTool(
 
       // Send pre-restart notification — must complete before we exit
       await notifier.notifyPreRestart(reason);
-      const restartCommand = normalizeRestartCommand(options.restartCommand);
 
       // Schedule clean shutdown + exit after returning the tool result
       // Use setImmediate so the tool result gets back to the LLM first
       setImmediate(async () => {
         try {
           await stopFn();
-          if (restartCommand) {
-            await launchRestartCommand(restartCommand);
-            log.info('Spawned restart command', {
-              runtimeMode: options.runtimeMode ?? 'unknown',
-            });
+          if (options.runRestartCommand) {
+            await options.runRestartCommand();
+            log.info('Ran restart command through configured boundary');
           }
         } catch (err) {
           log.error('Error during shutdown', { error: String(err) });
@@ -156,7 +135,6 @@ export function createRebuildTool(
         }
       }
       const fullReason = `rebuild: ${reason}`;
-      const restartCommand = normalizeRestartCommand(options.restartCommand);
 
       log.info('Self-rebuild requested', { reason, tier });
 
@@ -166,16 +144,15 @@ export function createRebuildTool(
       // Schedule build + shutdown after tool result returns
       setImmediate(async () => {
         try {
-          const { execSync } = await import('node:child_process');
-          log.info('Running npm run build...');
-          execSync('npm run build', {
-            cwd: process.cwd(),
-            stdio: 'pipe',
-            timeout: 120_000,
-          });
-          log.info('Build complete, shutting down...');
+          if (options.runBuildCommand) {
+            log.info('Running configured rebuild command...');
+            await options.runBuildCommand();
+            log.info('Build complete, shutting down...');
+          } else {
+            log.warn('No rebuild command configured; skipping build step before shutdown');
+          }
         } catch (err) {
-          const errorText = toErrorMessage(err);
+          const errorText = err instanceof Error ? err.message : String(err);
           log.error('Build failed; aborting restart', { error: errorText });
           await notifier.notifyShutdown(`rebuild failed: ${errorText.slice(0, 160)}`);
           return;
@@ -183,11 +160,9 @@ export function createRebuildTool(
 
         try {
           await stopFn();
-          if (restartCommand) {
-            await launchRestartCommand(restartCommand);
-            log.info('Spawned restart command after rebuild', {
-              runtimeMode: options.runtimeMode ?? 'unknown',
-            });
+          if (options.runRestartCommand) {
+            await options.runRestartCommand();
+            log.info('Ran restart command through configured boundary after rebuild');
           }
         } catch (err) {
           log.error('Error during shutdown', { error: String(err) });

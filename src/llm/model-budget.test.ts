@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { ModelBudgetController } from './model-budget.js';
 
 function makeConfig(dataDir: string, overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {

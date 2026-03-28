@@ -1,4 +1,4 @@
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { loadCharacterCard } from './loader.js';
 import type { CharacterCardV2 } from './types.js';
 

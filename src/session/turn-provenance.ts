@@ -1,4 +1,4 @@
-import type { TurnID } from '../types.js';
+import type { TurnID } from '../shared/contracts/runtime.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
 import {
   parseSessionRoleEnvelopePreview,

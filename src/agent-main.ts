@@ -4,10 +4,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { ensureActiveTimezone } from './shared/time/active-timezone.js';
-import { loadConfig } from './types.js';
-import type {
-  SubstrateMessage,
-} from './types.js';
+import { loadConfig } from './system/config/load-config.js';
+import type { SubstrateMessage } from './shared/contracts/runtime.js';
 import { createComponentLogger } from './shared/logger.js';
 import { EventBus } from './shared/event-bus.js';
 import { EmotionObserver } from './emotion/observer.js';

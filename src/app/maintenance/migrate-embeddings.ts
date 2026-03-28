@@ -11,7 +11,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { createEmbeddingProviderFromEnv } from '../../memory/embedding.js';
 import { migrateMemoryEmbeddings } from '../../memory/migration.js';
 import type { ReembedMigrationProgress } from '../../memory/migration.js';
-import { loadConfig } from '../../types.js';
+import { loadConfig } from '../../system/config/load-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface CliOptions {

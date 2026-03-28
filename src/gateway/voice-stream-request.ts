@@ -2,7 +2,8 @@ import {
   JSONRPCErrorException,
   type JSONRPCServerAndClient,
 } from 'json-rpc-2.0';
-import type { SubstrateMessage, WyomingShardRoutingConfig } from '../types.js';
+import type { SubstrateMessage } from '../shared/contracts/runtime.js';
+import type { WyomingShardRoutingConfig } from '../system/config/runtime-config-contracts.js';
 import {
   GatewayErrors,
   type RpcSubstrateMessage,

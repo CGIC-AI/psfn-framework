@@ -8,7 +8,7 @@ import { loadModelsConfig } from '../../../system/config/models-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
 import { loadSettings } from '../../../system/settings.js';
-import type { SubstrateConfig } from '../../../types.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { AdminSettingsDataService } from './settings-service.js';
 
 let tempDir: string | null = null;

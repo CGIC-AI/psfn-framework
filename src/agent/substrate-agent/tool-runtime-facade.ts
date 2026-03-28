@@ -1,12 +1,8 @@
 import type { Agent, AgentTool } from '@mariozechner/pi-agent-core';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import type { CapabilityAccess } from '../../system/capabilities/gate.js';
-import type {
-  CorrelationMetadata,
-  ObservabilityCallType,
-  SubstrateConfig,
-  SubstrateMessage,
-} from '../../types.js';
+import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ToolCategory } from '../tool-registrar.js';
 import type {
   AdaptiveLoadedExtendedToolState,

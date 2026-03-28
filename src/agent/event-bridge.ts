@@ -5,7 +5,7 @@
 import type { Agent, AgentEvent } from '@mariozechner/pi-agent-core';
 import type { ToolCall } from '@mariozechner/pi-ai';
 import type { EventBus } from '../shared/event-bus.js';
-import type { CorrelationMetadata, ObservabilityCallType } from '../types.js';
+import type { CorrelationMetadata, ObservabilityCallType } from '../shared/contracts/runtime.js';
 import { createComponentLogger } from '../shared/logger.js';
 
 const log = createComponentLogger('EventBridge');

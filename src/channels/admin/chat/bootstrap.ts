@@ -6,10 +6,8 @@ import type {
   RelationshipType,
 } from '../../../contacts/types.js';
 import { CHANNEL_PRIVACY_LEVELS } from '../../../contacts/types.js';
-import type {
-  ModelCatalogEntry,
-  SubstrateConfig,
-} from '../../../types.js';
+import type { ModelCatalogEntry } from '../../../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { DEFAULT_COMPANION_ID } from '../../../identity/companion-naming.js';
 import { isBootstrapStarterCard, loadCharacterCard } from '../../../identity/loader.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';

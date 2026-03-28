@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { SubstrateConfig } from '../../../types.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { CharacterCardVersionStore } from '../../../identity/card-versioning.js';
 import { PromptLayerStore } from '../../../identity/prompt-store.js';
 import { loadCharacterCard } from '../../../identity/loader.js';

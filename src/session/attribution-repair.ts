@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
-import type { TurnRecord, TurnRecordMessage } from '../types.js';
+import type { TurnRecord, TurnRecordMessage } from '../shared/contracts/runtime.js';
 import type { SessionHmacKeyring } from './journal-utils.js';
 import {
   parseJournalText,

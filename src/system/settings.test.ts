@@ -13,11 +13,8 @@ import {
   RUNTIME_SETTINGS_KEYS,
   normalizeEditableSettings,
 } from './settings.js';
-import {
-  createDefaultCompositionalPolicyConfig,
-  type CanonicalModelRegistry,
-  type SubstrateConfig,
-} from '../types.js';
+import { createDefaultCompositionalPolicyConfig, type SubstrateConfig } from './config/runtime-config-contracts.js';
+import type { CanonicalModelRegistry } from '../shared/contracts/runtime.js';
 import { registerStreamingSttProvider } from '../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../voice/connectors/tts/index.js';
 

@@ -6,7 +6,8 @@ import { startDiscordWithRetry } from './discord-startup.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import type { GatewayServer } from './server.js';
-import type { SubstrateConfig, SubstrateMessage } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
+import type { SubstrateMessage } from '../shared/contracts/runtime.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
   createOpenHomeChannelAdapterFactoryEntry,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
 
 function createConfig(): SubstrateConfig {

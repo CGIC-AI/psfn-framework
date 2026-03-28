@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { StartupConfigHydrationResult } from '../runtime/bootstrap-helpers.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import {
   buildGatewayChannelsConfigOverrides,
   resolveGatewayBootstrapInput,

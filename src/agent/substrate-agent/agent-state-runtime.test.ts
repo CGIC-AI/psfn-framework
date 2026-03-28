@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveContextWindow } from './agent-state-runtime.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   return {

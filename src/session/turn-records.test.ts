@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { TurnRecord } from '../types.js';
+import type { TurnRecord } from '../shared/contracts/runtime.js';
 import { appendTurnRecord, readRecentTurnRecords } from './turn-records.js';
 
 function createTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {

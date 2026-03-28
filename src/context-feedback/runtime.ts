@@ -5,7 +5,7 @@ import type { EventBus } from '../shared/event-bus.js';
 import { createComponentLogger } from '../shared/logger.js';
 import type { ContextManifest } from '../session/context-manifest.js';
 import type { SessionStore } from '../session/store.js';
-import type { PostTurnActionCandidate } from '../types.js';
+import type { PostTurnActionCandidate } from '../shared/contracts/runtime.js';
 import { isRecord } from '../shared/utils/types.js';
 import {
   ContextEvaluator,

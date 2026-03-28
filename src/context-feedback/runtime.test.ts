@@ -4,7 +4,7 @@ import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import type { ContextManifest } from '../session/context-manifest.js';
-import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../types.js';
+import type { AgentResponse, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../shared/contracts/runtime.js';
 import { CONTEXT_FEEDBACK_ACTION_KIND, wireContextFeedbackRuntime } from './runtime.js';
 
 function makeMessage(): SubstrateMessage {

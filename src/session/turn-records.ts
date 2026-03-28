@@ -1,15 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendJsonLine } from '../persistence/jsonl.js';
-import {
-  CHANNEL_TYPES,
-  type ChannelType,
-  type TurnID,
-  type TurnRecord,
-  type TurnRecordMessage,
-  type TurnRecordToolCall,
-  type TurnRecordVersionPointers,
-} from '../types.js';
+import { CHANNEL_TYPES, type ChannelType, type TurnID, type TurnRecord, type TurnRecordMessage, type TurnRecordToolCall, type TurnRecordVersionPointers } from '../shared/contracts/runtime.js';
 import { sanitizeChannelId } from './store-primitives.js';
 import { backfillLegacyTurnId, parseTurnId } from '../turns/id.js';
 import type {

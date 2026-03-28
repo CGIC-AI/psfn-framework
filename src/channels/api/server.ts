@@ -7,14 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
-import type {
-  ChannelType,
-  MessageModelOverride,
-  MessagePromptOverride,
-  MessageRoutingMetadata,
-  ResponseStyle,
-  SubstrateMessage,
-} from '../../types.js';
+import type { ChannelType, MessageModelOverride, MessagePromptOverride, MessageRoutingMetadata, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';

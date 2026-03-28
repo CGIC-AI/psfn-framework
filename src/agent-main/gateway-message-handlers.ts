@@ -1,9 +1,5 @@
-import type {
-  AgentResponse,
-  Attachment,
-  SubstrateConfig,
-  SubstrateMessage,
-} from '../types.js';
+import type { AgentResponse, Attachment, SubstrateMessage } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { ShardExecutionPort } from '../shards/port.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 import { evaluateWyomingDelegation } from './wyoming-routing.js';

@@ -1,14 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
-import type {
-  CanonicalModelRegistry,
-  LLMContext,
-  LLMResponse,
-  ModelRegistryEntry,
-  ModelSlot,
-  SubstrateConfig,
-  SubstrateMessage,
-} from '../types.js';
+import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { MemoryProvider, MemoryExtractor, LLMProvider } from './substrate-agent.js';
 import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../shared/event-bus.js';

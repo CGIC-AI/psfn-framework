@@ -1,11 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { LLMProvider } from '../agent/contracts.js';
-import type {
-  CompletionPurpose,
-  ContextMessage,
-  CorrelationMetadata,
-  ObservabilityCallType,
-} from '../types.js';
+import type { CompletionPurpose, ContextMessage, CorrelationMetadata, ObservabilityCallType } from '../shared/contracts/runtime.js';
 import type { LLMCompletionOptions } from './client.js';
 
 type DeliberationPurpose = Extract<CompletionPurpose, 'background' | 'reasoning'>;

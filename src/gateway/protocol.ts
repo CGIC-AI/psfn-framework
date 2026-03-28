@@ -1,15 +1,7 @@
 // ── JSON-RPC 2.0 method definitions ──
 // The contract between gateway (host) and agent (container).
 
-import type {
-  Attachment,
-  CompletionPurpose,
-  ContextMessage,
-  ModelThinkingEffort,
-  ObservabilityCallType,
-  SubstrateMessage,
-  ToolSchema,
-} from '../types.js';
+import type { Attachment, CompletionPurpose, ContextMessage, ModelThinkingEffort, ObservabilityCallType, SubstrateMessage, ToolSchema } from '../shared/contracts/runtime.js';
 import type {
   FalCreateModel,
   FalEditModel,

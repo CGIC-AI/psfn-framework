@@ -1,4 +1,4 @@
-import type { PostTurnActionCandidate } from '../types.js';
+import type { PostTurnActionCandidate } from '../shared/contracts/runtime.js';
 
 export interface PostTurnSignalPass<Context> {
   name: string;

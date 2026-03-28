@@ -1,12 +1,5 @@
 import { createHash } from 'node:crypto';
-import {
-  CHANNEL_TYPES,
-  type ChannelType,
-  type MessageRoutingMetadata,
-  type ObservabilityCallType,
-  type PostTurnActionCandidate,
-  type SubstrateMessage,
-} from '../types.js';
+import { CHANNEL_TYPES, type ChannelType, type MessageRoutingMetadata, type ObservabilityCallType, type PostTurnActionCandidate, type SubstrateMessage } from '../shared/contracts/runtime.js';
 
 export const DEFERRED_TOOL_HANDOFF_ACTION_KIND = 'tool_handoff.continue';
 export const DEFAULT_DEFERRED_TOOL_HANDOFF_MAX_RETRIES = 2;

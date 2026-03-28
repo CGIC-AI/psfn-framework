@@ -6,7 +6,7 @@ import {
   resolveCorrelationMetadata,
   toCorrelationLogFields,
 } from './correlation.js';
-import type { CorrelationMetadata } from '../types.js';
+import type { CorrelationMetadata } from '../shared/contracts/runtime.js';
 
 describe('correlation helpers', () => {
   describe('normalizeCorrelationValue', () => {

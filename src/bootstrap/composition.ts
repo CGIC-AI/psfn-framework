@@ -5,7 +5,7 @@
 // - src/agent-main.ts runs in split mode (gateway + isolated agent) and wires gateway-backed providers.
 // Keep core construction through these helpers so behavior stays aligned across split entrypoints.
 
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../shared/event-bus.js';
 import { SessionStore, type SessionIntegrityProvider } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
@@ -42,7 +42,7 @@ import {
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { SandboxExecutionPort } from '../repl/sandbox-capabilities/contracts.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
-import type { CapabilityTier } from '../types.js';
+import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
 import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../identity/loader.js';
 import type { CharacterCardV2 } from '../identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';

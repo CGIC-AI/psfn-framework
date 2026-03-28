@@ -12,7 +12,7 @@ import type {
   MessageHandler,
   OutboundContext,
 } from '../types.js';
-import type { SubstrateMessage } from '../../types.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { TelegramChannelConfig } from '../config.js';

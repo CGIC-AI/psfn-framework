@@ -15,7 +15,7 @@ import {
   type RuntimeMode,
 } from '../agent/tool-wiring-validator.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import type { LLMResponse } from '../types.js';
+import type { LLMResponse } from '../shared/contracts/runtime.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
 import type { SandboxExecutionPort } from '../repl/sandbox-capabilities/contracts.js';
 import { wireShardAndThinkRuntime } from './composition.js';

@@ -5,7 +5,8 @@ import { getVisionToolRequestContext } from '../../images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { InternalState } from '../../self-model/state.js';
-import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 

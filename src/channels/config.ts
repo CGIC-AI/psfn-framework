@@ -15,7 +15,7 @@ import {
   normalizeChannelVisibility,
   type ChannelVisibility,
 } from '../trust/types.js';
-import type { ChannelType } from '../types.js';
+import type { ChannelType } from '../shared/contracts/runtime.js';
 
 const log = createComponentLogger('ChannelConfig');
 

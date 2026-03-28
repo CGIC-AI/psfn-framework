@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SubstrateMessage } from '../../../types.js';
+import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { WyomingFrame, WyomingTransportSession } from '../protocol.js';
 import { createWyomingHandleServiceAdapter } from './handle.js';
 

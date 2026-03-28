@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { CorrelationMetadata } from '../types.js';
+import type { CorrelationMetadata } from '../shared/contracts/runtime.js';
 
 const requestContextStorage = new AsyncLocalStorage<Partial<CorrelationMetadata>>();
 

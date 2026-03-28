@@ -29,7 +29,7 @@ import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-c
 import { saveSchedulerConfig } from '../../system/config/scheduler-config.js';
 import { saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
 import type { ScheduledTask } from '../../scheduler/types.js';

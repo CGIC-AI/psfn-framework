@@ -6,17 +6,8 @@
 import { streamSimple } from '@mariozechner/pi-ai';
 import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
-import type {
-  LLMContext,
-  LLMResponse,
-  ModelBudgetBlockedEvent,
-  MessageModelOverride,
-  ModelPurpose,
-  CorrelationMetadata,
-  StreamCallbacks,
-  SubstrateConfig,
-  ToolCall,
-} from '../types.js';
+import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { createModel, resolveRegisteredModel } from '../llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../llm/routing.js';
 import {

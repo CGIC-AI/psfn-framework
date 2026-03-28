@@ -5,7 +5,7 @@ import type {
   TextContent as TextBlock,
   ThinkingContent as ThinkingBlock,
 } from '@mariozechner/pi-ai';
-import type { ContextMessage, LLMContext, ToolSchema } from '../types.js';
+import type { ContextMessage, LLMContext, ToolSchema } from '../shared/contracts/runtime.js';
 import { contextMessagesToPiMessages } from './message-conversion.js';
 
 interface GenericBlock {

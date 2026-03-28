@@ -7,7 +7,7 @@ import { UserContinuityStore } from '../../../session/continuity.js';
 import { SessionManager } from '../../../session/manager.js';
 import { SessionStore } from '../../../session/store.js';
 import { createTurnId } from '../../../turns/id.js';
-import type { SubstrateConfig } from '../../../types.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { AdminSessionDataService } from './session-service.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {

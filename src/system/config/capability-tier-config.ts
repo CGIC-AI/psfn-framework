@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import type { CapabilityTier } from '../../types.js';
+import type { CapabilityTier } from './runtime-config-contracts.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { normalizeCapabilityTokens } from '../capabilities/tokens.js';

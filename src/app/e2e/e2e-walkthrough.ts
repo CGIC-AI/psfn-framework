@@ -6,8 +6,8 @@
 // Run: npx tsx src/app/e2e/e2e-walkthrough.ts
 
 import 'dotenv/config';
-import { loadConfig } from '../../types.js';
-import type { SubstrateMessage } from '../../types.js';
+import { loadConfig } from '../../system/config/load-config.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../llm/client.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';

@@ -8,7 +8,7 @@ import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { InternalStateComputer } from '../self-model/state.js';
-import type { AgentResponse, SubstrateMessage } from '../types.js';
+import type { AgentResponse, SubstrateMessage } from '../shared/contracts/runtime.js';
 
 function makeMessage(): SubstrateMessage {
   return {

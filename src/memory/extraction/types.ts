@@ -1,5 +1,5 @@
 import type { ExtractedFact, MemoryType } from '../types.js';
-import type { TurnID } from '../../types.js';
+import type { TurnID } from '../../shared/contracts/runtime.js';
 
 export interface MemoryExtractorConfig {
   extractionInterval?: number;

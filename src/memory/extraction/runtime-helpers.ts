@@ -4,7 +4,8 @@ import { countMessageTokens } from '../../llm/tokens.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionEntry } from '../../session/types.js';
-import type { SubstrateConfig, TurnID } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { TurnID } from '../../shared/contracts/runtime.js';
 import type {
   AcceptedFactWrite,
   ExtractionEndTelemetry,

@@ -1,5 +1,5 @@
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
-import type { ContextMessage } from '../types.js';
+import type { ContextMessage } from '../shared/contracts/runtime.js';
 
 export type PiChatMessage = UserMessage | AssistantMessage;
 

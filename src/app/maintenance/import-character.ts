@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { loadConfig } from '../../types.js';
+import { loadConfig } from '../../system/config/load-config.js';
 import { importCharacterCardToPath } from '../../identity/importer.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 

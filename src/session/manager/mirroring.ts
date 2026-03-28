@@ -1,4 +1,4 @@
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SessionStore } from '../store.js';
 import type { UserContinuityStore } from '../continuity.js';
 import {

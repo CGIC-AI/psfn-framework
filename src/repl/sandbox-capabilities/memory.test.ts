@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMProvider } from '../../agent/contracts.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { LLMResponse } from '../../types.js';
+import type { LLMResponse } from '../../shared/contracts/runtime.js';
 import { createMemoryCapabilities } from './memory.js';
 
 function mockLLM(summary = 'Summarized search results.'): LLMProvider {

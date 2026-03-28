@@ -8,7 +8,7 @@ import { ContactStore } from '../../contacts/store.js';
 import { ApiServer } from './server.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, SubstrateMessage } from '../../types.js';
+import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ApiServerHealthChecks } from './types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';

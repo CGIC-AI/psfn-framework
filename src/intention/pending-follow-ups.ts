@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import { CHANNEL_TYPES, type ChannelType } from '../types.js';
+import { CHANNEL_TYPES, type ChannelType } from '../shared/contracts/runtime.js';
 
 export const PENDING_FOLLOW_UP_PRIORITIES = ['low', 'medium', 'high'] as const;
 export type PendingFollowUpPriority = typeof PENDING_FOLLOW_UP_PRIORITIES[number];

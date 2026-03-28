@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type { CapabilityTier } from '../../types.js';
+import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { resolveSafeguardAuditTrailPath } from '../../persistence/layout.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';

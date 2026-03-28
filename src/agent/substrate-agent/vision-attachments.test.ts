@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ImageVisionReviewer } from '../../images/types.js';
-import type { SubstrateMessage } from '../../types.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import {
   buildTurnUserContent,
   hasVisionTurnInputs,

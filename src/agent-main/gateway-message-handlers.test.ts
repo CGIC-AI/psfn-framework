@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type {
-  AgentResponse,
-  SubstrateConfig,
-  SubstrateMessage,
-  WyomingRoutingMetadata,
-} from '../types.js';
+import type { AgentResponse, SubstrateMessage, WyomingRoutingMetadata } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {

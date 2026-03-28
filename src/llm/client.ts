@@ -6,17 +6,8 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from '@mariozechner/pi-ai';
-import type {
-  CompletionPurpose,
-  CorrelationMetadata,
-  LLMContext,
-  LLMModelHint,
-  LLMResponse,
-  ModelBudgetBlockedEvent,
-  StreamCallbacks,
-  SubstrateConfig,
-  ToolCall,
-} from '../types.js';
+import type { CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, ToolCall } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { createModel } from './models.js';
 import { withRetry, markErrorAsNonRetryable } from './retry.js';
 import { llmRetryConfig } from './retry-config.js';

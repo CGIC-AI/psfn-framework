@@ -1,0 +1,473 @@
+import {
+  MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
+  SESSION_HISTORY_BUDGET_PCT_DEFAULT,
+} from '../../shared/context-budget.js';
+import { createEnvCredentialVault, resolveOptionalEnvCredential } from '../../custody/credential-vault.js';
+import { resolveRuntimePathLayout } from '../../persistence/layout.js';
+import { parseOptionalStringEnv } from '../../shared/utils/env.js';
+import type {
+  CanonicalModelRegistry,
+  ImportProcessingRouteMode,
+  ModelCatalogEntry,
+  ModelRoleAssignments,
+} from '../../shared/contracts/runtime.js';
+import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './seed-defaults.js';
+import {
+  type CapabilityTier,
+  createDefaultCompositionalPolicyConfig,
+  DEFAULT_MOOD_CONGRUENCE_WEIGHT,
+  DEFAULT_UI_THEME_ID,
+  type ShardToolsetConfig,
+  type SubstrateConfig,
+  type WyomingShardRoutingConfig,
+} from './runtime-config-contracts.js';
+
+const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
+  chat: 'primary',
+  background: 'extraction',
+  memory: 'extraction',
+  context: 'extraction',
+  extraction: 'extraction',
+  summary: 'primary',
+  reasoning: 'primary',
+  longContext: 'primary',
+  vision: 'primary',
+  import_processing: 'extraction',
+};
+const DEFAULT_EXTRACTION_INTERVAL = 5;
+const DEFAULT_MAINTENANCE_INTERVAL_MS = 300_000;
+const DEFAULT_EXTRACTION_THRESHOLD_PCT = 30;
+const DEFAULT_COMPACTION_THRESHOLD_PCT = 70;
+const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
+const DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
+const DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE = 0.45;
+const DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE = 0.6;
+const DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY = 0.35;
+const DEFAULT_MEMORY_EXTRACTION_EMOTIONAL_INTENSITY_WEIGHT = 0.2;
+const DEFAULT_MEMORY_EXTRACTION_MAX_WRITES = 2;
+const DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS = 5 * 60 * 1000;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_WRITES = 1;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_IMPORTANCE = 0.65;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_CONFIDENCE = 0.7;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_NOVELTY = 0.12;
+const DEFAULT_PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT = 16;
+const DEFAULT_PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES = 2;
+const DEFAULT_RETRY_MAX_ATTEMPTS = 3;
+const DEFAULT_RETRY_BASE_DELAY_MS = 2_000;
+const DEFAULT_IMPORT_PROCESSING_ROUTE_MODE: ImportProcessingRouteMode = 'background';
+const DEFAULT_DISCORD_TRIGGER_REACTIONS = ['👆'] as const;
+const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
+const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
+const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
+export function loadConfig(): SubstrateConfig {
+  const modelSeedDefaults = loadModelSeedDefaults();
+  const runtimeSeedDefaults = loadRuntimeSettingsSeedDefaults();
+  const credentialVault = createEnvCredentialVault(process.env);
+  const primaryModel = modelSeedDefaults.primary.model;
+  const primaryProvider = modelSeedDefaults.primary.provider;
+  const primaryMaxTokens = modelSeedDefaults.primary.maxOutputTokens;
+  const defaultContextWindow = modelSeedDefaults.primary.contextWindow;
+  const extractionModel = modelSeedDefaults.extraction.model;
+  const extractionProvider = modelSeedDefaults.extraction.provider;
+  const extractionMaxTokens = modelSeedDefaults.extraction.maxOutputTokens;
+  const modelCatalog = {
+    primary: {
+      model: primaryModel,
+      provider: primaryProvider,
+      defaults: {
+        maxTokens: primaryMaxTokens,
+        contextWindow: defaultContextWindow,
+      },
+      overrides: {
+        maxTokens: primaryMaxTokens,
+      },
+    },
+    extraction: {
+      model: extractionModel,
+      provider: extractionProvider,
+      defaults: {
+        maxTokens: extractionMaxTokens,
+      },
+      overrides: {
+        maxTokens: extractionMaxTokens,
+      },
+    },
+  } satisfies Record<string, ModelCatalogEntry>;
+  const modelRoleAssignments: ModelRoleAssignments = {
+    ...DEFAULT_MODEL_ROLE_ASSIGNMENTS,
+  };
+  const modelRegistry: CanonicalModelRegistry = {
+    schemaVersion: 1,
+    models: [
+      {
+        id: 'primary',
+        rank: 100,
+        identity: {
+          provider: primaryProvider,
+          model: primaryModel,
+          source: { type: 'openrouter' },
+        },
+        purposes: [
+          { purpose: 'chat', primary: true },
+          { purpose: 'summary', primary: true },
+          { purpose: 'reasoning', primary: true },
+          { purpose: 'longContext', primary: true },
+          { purpose: 'vision', primary: true },
+          { purpose: 'moa', primary: true },
+        ],
+        capabilities: {
+          maxOutputTokens: primaryMaxTokens,
+          contextWindow: defaultContextWindow,
+        },
+        tuning: {
+          maxOutputTokens: primaryMaxTokens,
+        },
+      },
+      {
+        id: 'extraction',
+        rank: 80,
+        identity: {
+          provider: extractionProvider,
+          model: extractionModel,
+          source: { type: 'openrouter' },
+        },
+        purposes: [
+          { purpose: 'background', primary: true },
+          { purpose: 'memory', primary: true },
+          { purpose: 'extraction', primary: true },
+          { purpose: 'import_processing', primary: true },
+        ],
+        capabilities: {
+          maxOutputTokens: extractionMaxTokens,
+          contextWindow: defaultContextWindow,
+        },
+        tuning: {
+          maxOutputTokens: extractionMaxTokens,
+        },
+      },
+    ],
+  };
+  const responseStyleOverrides = parseResponseStyleOverridesEnv(process.env.RESPONSE_STYLE_OVERRIDES);
+  const gatewayTlsCaPath = parseOptionalStringEnv(process.env.GATEWAY_TLS_CA_PATH);
+  const gatewayTlsRejectUnauthorized = parseOptionalBooleanEnv(process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED);
+  const discordToken = parseOptionalStringEnv(process.env.DISCORD_TOKEN);
+  const discordBotId = parseOptionalStringEnv(process.env.DISCORD_BOT_ID);
+  assertMutuallyRequiredEnvPair('DISCORD_TOKEN', discordToken, 'DISCORD_BOT_ID', discordBotId);
+  const wyomingShardRouting = parseWyomingShardRoutingConfigEnv(process.env);
+  const wyomingEnabled = parseOptionalBooleanEnv(process.env.WYOMING_ENABLED) ?? false;
+  const wyomingHost = parseOptionalStringEnv(process.env.WYOMING_HOST) ?? '127.0.0.1';
+  const wyomingPort = parseOptionalIntegerEnv(process.env.WYOMING_PORT, 1);
+  const shardToolsets = parseShardToolsetEnv(process.env);
+  const sessionMirrorEnabled = parseOptionalBooleanEnv(process.env.SESSION_MIRROR_ENABLED);
+  const sessionMirrorMaxChars = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_MAX_CHARS, 32);
+  const sessionMirrorActiveWindowMs = parseOptionalIntegerEnv(process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS, 1_000);
+  const sessionMirrorChannelOverrides = parseBooleanMapEnv(process.env.SESSION_MIRROR_CHANNEL_OVERRIDES);
+  const continuityMessageLimit = parseOptionalIntegerEnv(process.env.CONTINUITY_MESSAGE_LIMIT, 1);
+  const voiceDaveEncryption = parseOptionalBooleanEnv(process.env.DISCORD_VOICE_DAVE_ENCRYPTION) ?? true;
+  const voiceDecryptionFailureTolerance = parseIntegerEnv(
+    process.env.DISCORD_VOICE_DECRYPTION_FAILURE_TOLERANCE,
+    24,
+    0,
+  );
+  const echoTtsModel = parseOptionalStringEnv(process.env.ECHO_TTS_MODEL);
+  const runtimePathLayout = resolveRuntimePathLayout({
+    mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
+    nodeEnv: process.env.NODE_ENV,
+    runtimeRootDir: process.env.PSFN_RUNTIME_ROOT,
+    systemDataDir: process.env.SYSTEM_DATA_DIR,
+    companionDataDir: process.env.COMPANION_DATA_DIR,
+    legacyDataDir: process.env.DATA_DIR,
+    workspacePath: process.env.WORKSPACE_PATH,
+    logsDir: process.env.PSFN_LOGS_DIR,
+    tempDir: process.env.PSFN_TEMP_DIR,
+    backupsDir: process.env.BACKUP_ROOT_DIR,
+  });
+  const dataDir = runtimePathLayout.systemDataDir;
+  const companionDataDir = runtimePathLayout.companionDataDir;
+  const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${companionDataDir}/character.json`;
+  const databaseBasename = sanitizeDatabaseBasename(process.env.DATABASE_BASENAME);
+  const databasePath = process.env.DATABASE_PATH ?? `${companionDataDir}/${databaseBasename}.db`;
+
+  return {
+    primaryModel,
+    primaryProvider,
+    extractionModel,
+    extractionProvider,
+    primaryMaxTokens,
+    extractionMaxTokens,
+    discordToken: discordToken ?? '',
+    discordBotId: discordBotId ?? '',
+    characterCardPath,
+    systemDataDir: runtimePathLayout.systemDataDir,
+    companionDataDir,
+    dataDir,
+    databasePath,
+    sessionMessageLimit: 30,
+    sessionRestartBehavior: 'reuse_latest_session',
+    ...(continuityMessageLimit !== undefined ? { continuityMessageLimit } : {}),
+    sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_DEFAULT,
+    memoryRetrievalBudgetPct: MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
+    moodCongruenceWeight: DEFAULT_MOOD_CONGRUENCE_WEIGHT,
+    adaptiveContextBudgetsEnabled: false,
+    extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
+    maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
+    defaultContextWindow,
+    extractionThresholdPct: DEFAULT_EXTRACTION_THRESHOLD_PCT,
+    compactionThresholdPct: DEFAULT_COMPACTION_THRESHOLD_PCT,
+    observationMaskingWindow: DEFAULT_OBSERVATION_MASKING_WINDOW,
+    compactionEmotionalSalienceThresholdPct: DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT,
+    ...(sessionMirrorEnabled !== undefined ? { sessionMirrorEnabled } : {}),
+    ...(sessionMirrorMaxChars !== undefined ? { sessionMirrorMaxChars } : {}),
+    ...(sessionMirrorActiveWindowMs !== undefined ? { sessionMirrorActiveWindowMs } : {}),
+    ...(sessionMirrorChannelOverrides ? { sessionMirrorChannelOverrides } : {}),
+    memoryExtractionMinImportance: DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE,
+    memoryExtractionMinConfidence: DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE,
+    memoryExtractionMinNovelty: DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY,
+    memoryExtractionEmotionalIntensityWeight: DEFAULT_MEMORY_EXTRACTION_EMOTIONAL_INTENSITY_WEIGHT,
+    memoryExtractionMaxWrites: DEFAULT_MEMORY_EXTRACTION_MAX_WRITES,
+    memoryExtractionTelemetryEnabled: true,
+    memoryRetrievalTelemetryEnabled: true,
+    profileSynthesisEnabled: true,
+    profileSynthesisRefreshIntervalMs: DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS,
+    profileSynthesisCooldownMs: DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS,
+    profileSynthesisMinWrites: DEFAULT_PROFILE_SYNTHESIS_MIN_WRITES,
+    profileSynthesisMinImportance: DEFAULT_PROFILE_SYNTHESIS_MIN_IMPORTANCE,
+    profileSynthesisMinConfidence: DEFAULT_PROFILE_SYNTHESIS_MIN_CONFIDENCE,
+    profileSynthesisMinNovelty: DEFAULT_PROFILE_SYNTHESIS_MIN_NOVELTY,
+    profileSynthesisSourceMemoryLimit: DEFAULT_PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT,
+    profileSynthesisMinSourceMemories: DEFAULT_PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES,
+    modelCatalog,
+    modelRoleAssignments,
+    modelRegistry,
+    credentialVault,
+    modelRoster: {
+      chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
+      background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
+      memory: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
+      context: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
+    },
+    voiceEnabled: process.env.DISCORD_VOICE_ENABLED === 'true',
+    discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
+    discordTriggerWords: undefined,
+    discordTriggerReactions: [...DEFAULT_DISCORD_TRIGGER_REACTIONS],
+    discordTriggerListenWindowMs: DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS,
+    characterName: '',
+    uiThemeId: DEFAULT_UI_THEME_ID,
+    voiceTargetGuildId: process.env.DISCORD_VOICE_GUILD_ID ?? '',
+    voiceTargetUserId: process.env.DISCORD_VOICE_USER_ID ?? process.env.PRIMARY_USER_ID ?? '',
+    voiceReadyCueText: process.env.DISCORD_VOICE_READY_CUE_TEXT ?? '',
+    voiceDaveEncryption,
+    voiceDecryptionFailureTolerance,
+    deepgramApiKey: resolveOptionalEnvCredential(credentialVault, 'DEEPGRAM_API_KEY'),
+    deepgramModel: runtimeSeedDefaults.deepgramModel,
+    deepgramSttEndpoint: runtimeSeedDefaults.deepgramSttEndpoint,
+    deepgramListenEndpoint: runtimeSeedDefaults.deepgramListenEndpoint,
+    elevenLabsApiKey: resolveOptionalEnvCredential(credentialVault, 'ELEVENLABS_API_KEY'),
+    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
+    elevenLabsModelId: runtimeSeedDefaults.elevenLabsModelId,
+    elevenLabsEndpointBase: runtimeSeedDefaults.elevenLabsEndpointBase,
+    falApiKey: resolveOptionalEnvCredential(credentialVault, 'FAL_API_KEY'),
+    imageWorkflows: {},
+    ...(echoTtsModel ? { echoTtsModel } : {}),
+    retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,
+    retryBaseDelayMs: DEFAULT_RETRY_BASE_DELAY_MS,
+    openRouterModelsApiUrl: runtimeSeedDefaults.openRouterModelsApiUrl,
+    ...(responseStyleOverrides ? { responseStyleOverrides } : {}),
+    importProcessingRouteMode: DEFAULT_IMPORT_PROCESSING_ROUTE_MODE,
+    importProcessingStrictPolicy: false,
+    embeddingProvider: runtimeSeedDefaults.embeddingProvider,
+    embeddingModel: runtimeSeedDefaults.embeddingModel,
+    embeddingDims: runtimeSeedDefaults.embeddingDims,
+    embeddingOllamaUrl: runtimeSeedDefaults.embeddingOllamaUrl,
+    transformersModel: runtimeSeedDefaults.transformersModel,
+    textEmotionModel: runtimeSeedDefaults.textEmotionModel,
+    textEmotionCacheDir: runtimeSeedDefaults.textEmotionCacheDir,
+    textEmotionDtype: runtimeSeedDefaults.textEmotionDtype,
+    embeddingApiModel: runtimeSeedDefaults.embeddingApiModel,
+    embeddingApiDims: runtimeSeedDefaults.embeddingApiDims,
+    compositionalPolicy: createDefaultCompositionalPolicyConfig(),
+    webFetchAllowHttp: false,
+    webFetchAllowInternalNetwork: false,
+    webFetchLocalCrawlerEnabled: false,
+    webFetchLocalCrawlerAllowHttp: false,
+    ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),
+    ...(gatewayTlsRejectUnauthorized !== undefined ? { gatewayTlsRejectUnauthorized } : {}),
+    wyomingShardRouting,
+    wyomingEnabled,
+    wyomingHost,
+    ...(wyomingPort !== undefined ? { wyomingPort } : {}),
+    telegramEnabled: false,
+    capabilityTier: DEFAULT_CAPABILITY_TIER,
+    ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
+    // Obsidian vault
+    obsidianAutoPublish: false,
+    obsidianTimeoutMs: DEFAULT_OBSIDIAN_TIMEOUT_MS,
+  };
+}
+
+export function parseWyomingShardRoutingConfigEnv(
+  env: NodeJS.ProcessEnv,
+): WyomingShardRoutingConfig {
+  const enabled = parseOptionalBooleanEnv(
+    env.WYOMING_SHARD_DELEGATION_ENABLED ?? env.WYOMING_SHARD_ROUTING_ENABLED,
+  ) ?? false;
+  const siteAllowlist = parseStringListEnv(
+    env.WYOMING_SHARD_DELEGATION_SITE_ALLOWLIST ?? env.WYOMING_SHARD_ROUTING_SITE_ALLOWLIST,
+  );
+  const satelliteAllowlist = parseStringListEnv(
+    env.WYOMING_SHARD_DELEGATION_SATELLITE_ALLOWLIST ?? env.WYOMING_SHARD_ROUTING_SATELLITE_ALLOWLIST,
+  );
+
+  return {
+    enabled,
+    ...(siteAllowlist.length > 0 ? { siteAllowlist } : {}),
+    ...(satelliteAllowlist.length > 0 ? { satelliteAllowlist } : {}),
+  };
+}
+
+function parseIntegerEnv(value: string | undefined, fallback: number, min: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, parsed);
+}
+
+function parseOptionalIntegerEnv(value: string | undefined, min: number): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return undefined;
+  return parsed >= min ? parsed : undefined;
+}
+
+function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') {
+    return true;
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') {
+    return false;
+  }
+  return undefined;
+}
+
+function assertMutuallyRequiredEnvPair(
+  primaryName: string,
+  primaryValue: string | undefined,
+  secondaryName: string,
+  secondaryValue: string | undefined,
+): void {
+  const hasPrimary = typeof primaryValue === 'string' && primaryValue.length > 0;
+  const hasSecondary = typeof secondaryValue === 'string' && secondaryValue.length > 0;
+  if (hasPrimary === hasSecondary) return;
+
+  if (!hasPrimary) {
+    throw new Error(`${primaryName} is required when ${secondaryName} is configured`);
+  }
+  throw new Error(`${secondaryName} is required when ${primaryName} is configured`);
+}
+
+function parseShardToolsetEnv(
+  env: NodeJS.ProcessEnv,
+): ShardToolsetConfig {
+  const entries: Array<[CapabilityTier, string | undefined]> = [
+    ['nursery', env.SHARD_TOOLSET_NURSERY],
+    ['apprentice', env.SHARD_TOOLSET_APPRENTICE],
+    ['autonomous', env.SHARD_TOOLSET_AUTONOMOUS],
+    ['custom', env.SHARD_TOOLSET_CUSTOM],
+  ];
+
+  const result: ShardToolsetConfig = {};
+  for (const [tier, raw] of entries) {
+    const parsed = parseStringListEnv(raw);
+    if (parsed.length > 0) {
+      result[tier] = parsed;
+    }
+  }
+  return result;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseResponseStyle(value: unknown): ResponseStyle | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'concise' || normalized === 'expressive') {
+    return normalized;
+  }
+  return undefined;
+}
+
+function parseResponseStyleMap(value: unknown): Record<string, ResponseStyle> | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const parsed: Record<string, ResponseStyle> = {};
+  for (const [rawKey, rawStyle] of Object.entries(value)) {
+    const key = rawKey.trim();
+    const style = parseResponseStyle(rawStyle);
+    if (!key || !style) continue;
+    parsed[key] = style;
+  }
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function parseResponseStyleOverridesEnv(value: string | undefined): ResponseStyleOverrides | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!isPlainRecord(parsed)) return undefined;
+    const exact = parseResponseStyleMap(parsed.exact);
+    const prefix = parseResponseStyleMap(parsed.prefix);
+    const channelType = parseResponseStyleMap(parsed.channelType);
+    const defaultStyle = parseResponseStyle(parsed.defaultStyle);
+
+    if (!exact && !prefix && !channelType && !defaultStyle) return undefined;
+    return {
+      ...(exact ? { exact } : {}),
+      ...(prefix ? { prefix } : {}),
+      ...(channelType ? { channelType } : {}),
+      ...(defaultStyle ? { defaultStyle } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStringListEnv(value: string | undefined): string[] {
+  if (typeof value !== 'string') return [];
+  return [...new Set(
+    value
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean),
+  )];
+}
+
+function sanitizeDatabaseBasename(value: string | undefined): string {
+  if (typeof value !== 'string') return 'companion';
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return normalized.length > 0 ? normalized : 'companion';
+}
+
+function parseBooleanMapEnv(value: string | undefined): Record<string, boolean> | undefined {
+  if (typeof value !== 'string') return undefined;
+
+  const parsed: Record<string, boolean> = {};
+  for (const item of value.split(',')) {
+    const [rawKey, rawValue] = item.split('=');
+    const key = rawKey.trim();
+    const boolValue = parseOptionalBooleanEnv(rawValue.trim());
+    if (!key || boolValue === undefined) continue;
+    parsed[key] = boolValue;
+  }
+
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}

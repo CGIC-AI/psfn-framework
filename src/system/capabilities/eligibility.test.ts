@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CapabilityTier } from '../../types.js';
+import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import type { CapabilityToken } from './tokens.js';
 import {
   createEligibilityGate,

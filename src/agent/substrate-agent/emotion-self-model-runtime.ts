@@ -15,7 +15,7 @@ import {
   InternalStateComputer,
   type InternalState,
 } from '../../self-model/state.js';
-import type { SubstrateMessage, TurnID } from '../../types.js';
+import type { SubstrateMessage, TurnID } from '../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../trust/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { LLMProvider } from '../contracts.js';

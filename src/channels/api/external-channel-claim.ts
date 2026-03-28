@@ -1,9 +1,5 @@
 import type { IncomingHttpHeaders } from 'node:http';
-import {
-  CHANNEL_TYPES,
-  type ChannelType,
-  type MessageRoutingMetadata,
-} from '../../types.js';
+import { CHANNEL_TYPES, type ChannelType, type MessageRoutingMetadata } from '../../shared/contracts/runtime.js';
 import type { ChannelVisibility } from '../../trust/types.js';
 import type { ExternalChannelProfileConfig } from '../config.js';
 import type { ApiAuthPrincipal } from '../http/auth.js';

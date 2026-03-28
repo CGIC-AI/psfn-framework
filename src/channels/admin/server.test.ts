@@ -16,7 +16,7 @@ import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
 import { formatPossessiveCompanionName } from '../../identity/companion-naming.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProvider } from '../../agent/contracts.js';
 import { resetRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
 

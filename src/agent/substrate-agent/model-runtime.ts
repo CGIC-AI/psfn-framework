@@ -1,10 +1,6 @@
 import type { Model } from '@mariozechner/pi-ai';
-import type {
-  MessageModelOverride,
-  ModelPurpose,
-  SubstrateConfig,
-  SubstrateMessage,
-} from '../../types.js';
+import type { MessageModelOverride, ModelPurpose, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   resolveExplicitModel,

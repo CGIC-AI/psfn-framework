@@ -6,7 +6,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import { SessionManager } from '../../session/manager.js';
 import { SessionStore } from '../../session/store.js';
 import { createTurnId } from '../../turns/id.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { TurnSupportRuntime } from './turn-support-runtime.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {

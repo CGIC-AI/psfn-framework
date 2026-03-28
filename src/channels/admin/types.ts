@@ -8,7 +8,7 @@ import type { ShardExecutionPort } from '../../shards/port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { EmbeddingService } from '../../agent/contracts.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';

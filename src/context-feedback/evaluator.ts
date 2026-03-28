@@ -1,6 +1,6 @@
 import type { LLMProvider } from '../agent/contracts.js';
 import type { ContextManifest } from '../session/context-manifest.js';
-import type { ResponseMetadata } from '../types.js';
+import type { ResponseMetadata } from '../shared/contracts/runtime.js';
 import { isRecord } from '../shared/utils/types.js';
 
 export const CONTEXT_FEEDBACK_SIGNAL_KEYS = [

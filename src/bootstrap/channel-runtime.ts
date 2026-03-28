@@ -1,5 +1,5 @@
 import type { EventBus } from '../shared/event-bus.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { EligibilityGate } from '../system/capabilities/eligibility.js';
 import { ApiServer, type ApiServerConfig } from '../channels/api/server.js';

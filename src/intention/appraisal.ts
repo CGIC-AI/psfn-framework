@@ -13,14 +13,7 @@ import {
   normalizeSessionEntryAttribution,
 } from '../session/entry-attribution.js';
 import { renderPromptRuntimeTokens } from '../identity/prompt-runtime.js';
-import type {
-  ChannelType,
-  CompletionPurpose,
-  ContextMessage,
-  InferredPostTurnAction,
-  PostTurnActionCandidate,
-  SubstrateMessage,
-} from '../types.js';
+import type { ChannelType, CompletionPurpose, ContextMessage, InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../shared/contracts/runtime.js';
 
 const DEFAULT_APPRAISAL_FREQUENCY = 3;
 const DEFAULT_EMOTIONAL_SHIFT_THRESHOLD = 0.35;

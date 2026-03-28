@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { CapabilityTier } from '../../types.js';
+import type { CapabilityTier } from '../config/runtime-config-contracts.js';
 import type { CapabilityAccess, CapabilityAccessProvider } from './access.js';
 import type { CapabilityToken } from './tokens.js';
 import { resolveToolRequiredCapabilities } from './requirements.js';

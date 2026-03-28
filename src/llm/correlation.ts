@@ -1,8 +1,4 @@
-import type {
-  CompletionPurpose,
-  CorrelationMetadata,
-  ObservabilityCallType,
-} from '../types.js';
+import type { CompletionPurpose, CorrelationMetadata, ObservabilityCallType } from '../shared/contracts/runtime.js';
 
 const OBSERVABILITY_CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
   'chat',

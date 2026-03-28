@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import type { SubstrateConfig } from '../types.js';
-import type { CapabilityTier } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
+import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
 import {
   applySettings,
   type EditableSettings,

@@ -30,20 +30,8 @@ import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
 import { classifyChannel, type ChannelMeta } from '../../trust/policy.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../trust/types.js';
 import { resolveCanonicalEmbodimentContext } from '../active-emanation-state.js';
-import type {
-  AgentResponse,
-  CorrelationMetadata,
-  InferredPostTurnAction,
-  MessagePromptOverride,
-  MessagePromptOverrideMode,
-  ObservabilityCallType,
-  ResponseStyle,
-  SubstrateConfig,
-  SubstrateMessage,
-  TurnID,
-  TurnRecord,
-  TurnUsage,
-} from '../../types.js';
+import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
 import type { ContextManifest } from '../../session/context-manifest.js';

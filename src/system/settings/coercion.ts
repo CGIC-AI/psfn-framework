@@ -1,8 +1,5 @@
-import type {
-  ImportProcessingRouteMode,
-  SessionRestartBehavior,
-  SubstrateConfig,
-} from '../../types.js';
+import type { ImportProcessingRouteMode } from '../../shared/contracts/runtime.js';
+import type { SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
 import {
   isStreamingSttProvider,
 } from '../../voice/connectors/stt/index.js';

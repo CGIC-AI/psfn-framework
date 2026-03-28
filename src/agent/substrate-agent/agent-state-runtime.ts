@@ -1,5 +1,5 @@
 import type { AssistantMessage } from '@mariozechner/pi-ai';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 interface AgentStateRuntimeLogger {
   warn(message: string, payload?: Record<string, unknown>): void;

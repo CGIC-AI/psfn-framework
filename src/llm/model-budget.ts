@@ -1,14 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type {
-  CorrelationMetadata,
-  ModelBudgetBlockedEvent,
-  ModelBudgetBlockReason,
-  ModelBudgetWindowSnapshot,
-  ModelRegistryEntry,
-  ModelUsageLedgerRecord,
-  SubstrateConfig,
-} from '../types.js';
+import type { CorrelationMetadata, ModelBudgetBlockedEvent, ModelBudgetBlockReason, ModelBudgetWindowSnapshot, ModelRegistryEntry, ModelUsageLedgerRecord } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
 

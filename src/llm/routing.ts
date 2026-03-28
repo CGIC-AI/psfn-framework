@@ -1,12 +1,5 @@
-import type {
-  CanonicalModelPurpose,
-  ImportProcessingRouteMode,
-  ModelRegistryCostMetadata,
-  ModelRegistryEntry,
-  ModelRegistryPurposeTag,
-  ModelThinkingEffort,
-  SubstrateConfig,
-} from '../types.js';
+import type { CanonicalModelPurpose, ImportProcessingRouteMode, ModelRegistryCostMetadata, ModelRegistryEntry, ModelRegistryPurposeTag, ModelThinkingEffort } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 
 export type RoutingPurpose = CanonicalModelPurpose | 'context';
 export type ImportPolicyRejectionReason = 'strict_requires_openrouter_zdr';

@@ -6,7 +6,7 @@ import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { gateToolWithCapabilities, type CapabilityAccess } from '../system/capabilities/gate.js';
 import { resolveTierCapabilityTokens } from '../system/capabilities/tiers.js';
-import type { CapabilityTier } from '../types.js';
+import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
 import type { CapabilityToken } from '../system/capabilities/tokens.js';
 import { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
 import type { CharacterCardV2 } from './types.js';

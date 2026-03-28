@@ -1,8 +1,5 @@
-import type {
-  SubstrateConfig,
-  SubstrateMessage,
-  WyomingRoutingMetadata,
-} from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
+import type { SubstrateMessage, WyomingRoutingMetadata } from '../shared/contracts/runtime.js';
 import {
   buildSatellitePresenceMetadata,
   resolvePresenceMetadataResult,

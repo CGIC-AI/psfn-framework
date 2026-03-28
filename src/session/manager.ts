@@ -1,10 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type {
-  LLMContext,
-  SessionRestartBehavior,
-  SubstrateConfig,
-  TurnRecord,
-} from '../types.js';
+import type { LLMContext, TurnRecord } from '../shared/contracts/runtime.js';
+import type { SessionRestartBehavior, SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { MemoryScopeQuery } from '../memory/types.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type {

@@ -13,7 +13,8 @@ import type { EditableSettings } from '../../../system/settings.js';
 import type { ContactProfileArtifact, MemoryLink } from '../../../memory/store.js';
 import type { PurrMemory } from '../../../memory/types.js';
 import type { SessionEntry } from '../../../session/types.js';
-import type { SubstrateConfig, TurnRecord } from '../../../types.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type {
   Contact,
   ContactIdentityLinkVerification,

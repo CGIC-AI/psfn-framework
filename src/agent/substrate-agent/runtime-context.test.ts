@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
-import type { SubstrateMessage } from '../../types.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import {
   buildPromptTemplateVariables,
   buildRuntimeContext,

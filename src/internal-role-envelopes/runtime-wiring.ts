@@ -1,4 +1,4 @@
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { resolveConfiguredCompanionDataDir } from '../persistence/layout.js';
 import { InternalRoleEnvelopeLedgerStore } from './store.js';
 import type { InternalRoleEnvelopeLedger } from './types.js';

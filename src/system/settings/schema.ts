@@ -1,20 +1,5 @@
-import {
-  CANONICAL_MODEL_PURPOSES,
-  type CanonicalModelRegistry,
-  type CanonicalModelPurpose,
-  type ModelRegistryBudgetPolicy,
-  type ModelRegistryEntry,
-  type ModelCatalogEntry,
-  type ModelContextBudgetConfig,
-  type ModelRouteConfig,
-  type ModelPurpose,
-  type ModelRoleAssignments,
-  type ModelSlot,
-  type ModelSlotDefaults,
-  type ModelSlotOverrides,
-  DEFAULT_UI_THEME_ID,
-  PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
-} from '../../types.js';
+import { CANONICAL_MODEL_PURPOSES, type CanonicalModelRegistry, type CanonicalModelPurpose, type ModelRegistryBudgetPolicy, type ModelRegistryEntry, type ModelCatalogEntry, type ModelContextBudgetConfig, type ModelRouteConfig, type ModelPurpose, type ModelRoleAssignments, type ModelSlot, type ModelSlotDefaults, type ModelSlotOverrides } from '../../shared/contracts/runtime.js';
+import { DEFAULT_UI_THEME_ID, PROMOTED_EXTENDED_TOOL_SLOTS_MAX } from '../config/runtime-config-contracts.js';
 import { normalizeImageWorkflowSettings } from '../../images/types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,

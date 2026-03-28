@@ -1,4 +1,4 @@
-import type { SubstrateMessage } from '../types.js';
+import type { SubstrateMessage } from '../shared/contracts/runtime.js';
 
 export type TurnIntent = 'dev' | 'memory' | 'ops' | 'social';
 export type ToolTurnClass = 'core' | 'overlay' | 'background';

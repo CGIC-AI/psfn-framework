@@ -3,7 +3,7 @@ import { runRLMLoop } from './loop.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type { REPLDeps, REPLConfig } from './types.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
-import type { LLMResponse } from '../types.js';
+import type { LLMResponse } from '../shared/contracts/runtime.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 

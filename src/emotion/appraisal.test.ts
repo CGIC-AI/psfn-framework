@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMProvider } from '../agent/contracts.js';
-import type { CompletionPurpose, LLMContext, LLMResponse } from '../types.js';
+import type { CompletionPurpose, LLMContext, LLMResponse } from '../shared/contracts/runtime.js';
 import { EmotionAppraisal } from './appraisal.js';
 import type { EmotionStateSnapshot } from './state.js';
 import { InternalStateComputer } from '../self-model/state.js';

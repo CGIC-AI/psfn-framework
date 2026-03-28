@@ -6,7 +6,7 @@ import {
   createPromotedToolsSwapTool,
   createSettingsGetTool,
 } from './settings-tools.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from './config/runtime-config-contracts.js';
 
 function makeConfig(): SubstrateConfig {
   return {

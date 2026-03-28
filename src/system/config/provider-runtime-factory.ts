@@ -1,4 +1,4 @@
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from './runtime-config-contracts.js';
 import { LLMClient, type LLMClientRuntimeOptions } from '../../llm/client.js';
 import {
   createEmbeddingProviderFromConfig,

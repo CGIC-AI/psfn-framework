@@ -14,7 +14,8 @@ import { Events, type Client, type VoiceBasedChannel, type VoiceState } from 'di
 import { Readable } from 'node:stream';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import {
   type StreamingTtsConnector,

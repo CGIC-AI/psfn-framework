@@ -1,4 +1,4 @@
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from './runtime-config-contracts.js';
 import { applySettings, loadSettings, splitSettingsByDomain } from '../settings.js';
 import { loadModelsConfig } from './models-config.js';
 import {

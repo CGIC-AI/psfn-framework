@@ -1,8 +1,5 @@
-import type {
-  SubstrateMessage,
-  WyomingRoutingMetadata,
-  WyomingShardRoutingConfig,
-} from '../types.js';
+import type { SubstrateMessage, WyomingRoutingMetadata } from '../shared/contracts/runtime.js';
+import type { WyomingShardRoutingConfig } from '../system/config/runtime-config-contracts.js';
 import type { VoiceStreamMetadata } from './protocol.js';
 
 interface WyomingStreamMetadataFields {

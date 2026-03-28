@@ -18,16 +18,8 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
-import type {
-  AgentResponse,
-  CapabilityTier,
-  CorrelationMetadata,
-  ModelBudgetBlockedEvent,
-  MessagePromptOverride,
-  ResponseStyle,
-  SubstrateConfig,
-  SubstrateMessage,
-} from '../types.js';
+import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../shared/contracts/runtime.js';
+import type { CapabilityTier, SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ImageVisionReviewer } from '../images/types.js';
 import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';

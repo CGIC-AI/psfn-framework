@@ -4,12 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
-import type {
-  CanonicalModelRegistry,
-  ModelRegistryEntry,
-  ModelSlot,
-  SubstrateConfig,
-} from '../types.js';
+import type { CanonicalModelRegistry, ModelRegistryEntry, ModelSlot } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import * as models from '../llm/models.js';
 import { ModelBudgetController } from '../llm/model-budget.js';

@@ -4,7 +4,8 @@ import {
   type CapabilityAccess,
 } from '../../system/capabilities/gate.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
-import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX, type CorrelationMetadata, type ObservabilityCallType, type SubstrateConfig, type SubstrateMessage } from '../../types.js';
+import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX, type SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL,

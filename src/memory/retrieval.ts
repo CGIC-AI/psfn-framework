@@ -7,7 +7,7 @@ import type {
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
 import type { PurrMemory, MemoryPrivacyRiskBreakdown, MemoryScopeQuery } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
-import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../types.js';
+import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../shared/event-bus.js';
 import {
   isHighIntimacySensitivityLevel,

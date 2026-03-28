@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi } from 'vitest';
 import type { LLMProvider } from '../agent/contracts.js';
-import type { InferredPostTurnAction, SubstrateMessage, AgentResponse } from '../types.js';
+import type { InferredPostTurnAction, SubstrateMessage, AgentResponse } from '../shared/contracts/runtime.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';

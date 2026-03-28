@@ -1,4 +1,5 @@
-import type { SubstrateConfig, TurnID } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
+import type { TurnID } from '../shared/contracts/runtime.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
 import { countTokens } from '../llm/tokens.js';
 import { SESSION_HISTORY_MIN_MESSAGES } from '../shared/context-budget.js';

@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { createComponentLogger } from '../shared/logger.js';
 import { writeJsonAtomic } from '../system/config/load-or-seed.js';
 import {

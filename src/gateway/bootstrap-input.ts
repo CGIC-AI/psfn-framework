@@ -1,5 +1,5 @@
 import { resolve } from 'node:path';
-import type { SubstrateConfig, WyomingShardRoutingConfig } from '../types.js';
+import type { SubstrateConfig, WyomingShardRoutingConfig } from '../system/config/runtime-config-contracts.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from '../system/config/legacy-env.js';
 import {
   loadRuntimeChannelsConfig,
@@ -21,7 +21,7 @@ import {
   resolveOptionalEnvCredential,
 } from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
-import { parseWyomingShardRoutingConfigEnv } from '../types.js';
+import { parseWyomingShardRoutingConfigEnv } from '../system/config/load-config.js';
 import {
   buildRuntimeChannelsConfigOverrides,
   type StartupConfigHydrationResult,

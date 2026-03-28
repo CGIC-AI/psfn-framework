@@ -12,7 +12,7 @@ import {
   type RouteMatcher,
   type RouteParams,
 } from './route-matchers.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { formatPossessiveCompanionName } from '../../identity/companion-naming.js';
 import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
 import type {

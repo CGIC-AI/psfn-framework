@@ -1,4 +1,4 @@
-import type { AgentResponse, SubstrateMessage } from '../../../types.js';
+import type { AgentResponse, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import {
   buildSatellitePresenceMetadata,
   normalizePresenceMetadata,

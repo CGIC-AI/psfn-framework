@@ -13,7 +13,8 @@ import { SubstrateAgent } from '../agent/substrate-agent.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createSpawnShardTool } from './tools.js';
 import type { LLMProvider, MemoryProvider } from '../agent/contracts.js';
-import type { SubstrateConfig, LLMResponse } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
+import type { LLMResponse } from '../shared/contracts/runtime.js';
 import { createTurnId } from '../turns/id.js';
 
 // ── Mock pi-agent-core Agent ──

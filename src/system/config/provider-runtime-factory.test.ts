@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from './runtime-config-contracts.js';
 import { LLMClient } from '../../llm/client.js';
 import { createProviderRuntimeServices } from './provider-runtime-factory.js';
 

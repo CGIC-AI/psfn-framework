@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { SubstrateMessage } from '../../types.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
 import type { ComposeContext, ComposeSplitResult } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';

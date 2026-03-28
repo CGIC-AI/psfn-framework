@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
-import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../types.js';
+import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../shared/contracts/runtime.js';
 import { EventBus } from '../shared/event-bus.js';
 import { createEligibilityGate } from '../system/capabilities/eligibility.js';
 import { Scheduler } from '../scheduler/scheduler.js';

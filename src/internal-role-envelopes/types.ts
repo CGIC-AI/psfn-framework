@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { CHANNEL_TYPES, type ChannelType } from '../types.js';
+import { CHANNEL_TYPES, type ChannelType } from '../shared/contracts/runtime.js';
 
 export const INTERNAL_ROLE_ENVELOPE_SCHEMA_VERSION = 1 as const;
 export const INTERNAL_ROLE_ENVELOPE_KINDS = [

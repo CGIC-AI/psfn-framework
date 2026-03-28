@@ -1,8 +1,4 @@
-import {
-  DEFAULT_MOOD_CONGRUENCE_WEIGHT,
-  DEFAULT_UI_THEME_ID,
-  type SubstrateConfig,
-} from '../../types.js';
+import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, DEFAULT_UI_THEME_ID, type SubstrateConfig } from '../config/runtime-config-contracts.js';
 import {
   cloneImageWorkflowSettings,
   normalizeImageWorkflowSettings,

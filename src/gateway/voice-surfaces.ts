@@ -11,7 +11,7 @@ import type { DiscordAdapter } from '../channels/discord/adapter.js';
 import type { EventBus } from '../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import type { GatewayServer } from './server.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,

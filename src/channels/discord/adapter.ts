@@ -11,7 +11,8 @@ import {
   type TextChannel,
   type User,
 } from 'discord.js';
-import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ChannelAdapter,
   ChannelCapabilities,

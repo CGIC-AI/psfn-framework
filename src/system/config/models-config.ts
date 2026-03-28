@@ -6,13 +6,7 @@ import {
   type EditableSettings,
 } from '../settings.js';
 import { MODELS_SEED_FILE_NAME } from './seed-defaults.js';
-import type {
-  CanonicalModelRegistry,
-  ModelCatalogEntry,
-  ModelRoleAssignments,
-  ModelPurpose,
-  ModelSlot,
-} from '../../types.js';
+import type { CanonicalModelRegistry, ModelCatalogEntry, ModelRoleAssignments, ModelPurpose, ModelSlot } from '../../shared/contracts/runtime.js';
 import { writeJsonAtomic } from './load-or-seed.js';
 
 export const MODELS_FILE_NAME = 'models.json';

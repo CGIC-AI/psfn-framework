@@ -1,5 +1,5 @@
 import { createComponentLogger } from '../shared/logger.js';
-import type { CorrelationMetadata } from '../types.js';
+import type { CorrelationMetadata } from '../shared/contracts/runtime.js';
 import { classifyLLMError } from './error-classify.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
 import { toCorrelationLogFields } from './correlation.js';

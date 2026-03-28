@@ -1,5 +1,5 @@
 import type { ImageContent, UserMessage } from '@mariozechner/pi-ai';
-import type { Attachment, SubstrateMessage } from '../../types.js';
+import type { Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { LLMProvider } from '../contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { ImageVisionReviewer } from '../../images/types.js';

@@ -1,7 +1,4 @@
-import {
-  DEFAULT_UI_THEME_ID,
-  PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
-} from '../../types.js';
+import { DEFAULT_UI_THEME_ID, PROMOTED_EXTENDED_TOOL_SLOTS_MAX } from '../config/runtime-config-contracts.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
   SESSION_HISTORY_BUDGET_PCT_RANGE,

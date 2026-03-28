@@ -28,7 +28,7 @@ import {
 } from './services/dashboard-cost-windows.js';
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../scheduler/types.js';
 import type { SkillSnapshot } from '../../skills/types.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,

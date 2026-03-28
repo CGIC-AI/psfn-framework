@@ -15,7 +15,7 @@ import { withCapabilityRequirement } from '../system/capabilities/requirements.j
 import {
   IdentityCoolingOffManager,
 } from '../system/capabilities/safeguards.js';
-import type { CapabilityTier } from '../types.js';
+import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 

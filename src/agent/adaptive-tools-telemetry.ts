@@ -1,5 +1,5 @@
 import type { CapabilityToken } from '../system/capabilities/tokens.js';
-import type { ObservabilityCallType } from '../types.js';
+import type { ObservabilityCallType } from '../shared/contracts/runtime.js';
 
 export type AdaptiveToolActivationSource =
   | 'core'

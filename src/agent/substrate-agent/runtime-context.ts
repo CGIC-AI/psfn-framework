@@ -1,5 +1,6 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type { SubstrateMessage, ResponseStyle, CapabilityTier } from '../../types.js';
+import type { SubstrateMessage, ResponseStyle } from '../../shared/contracts/runtime.js';
+import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import type { ChannelVisibility, TrustLevel } from '../../trust/types.js';
 import { normalizeChannelVisibility } from '../../trust/types.js';
 import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } from '../../trust/policy.js';

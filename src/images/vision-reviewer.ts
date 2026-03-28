@@ -12,7 +12,7 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../system/config/providers-config.js';
 import { resolveProviderApiKey } from '../custody/credential-vault.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { extractTextContent } from '../llm/conversion.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 import type {

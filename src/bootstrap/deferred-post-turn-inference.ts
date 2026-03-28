@@ -1,8 +1,4 @@
-import type {
-  ObservabilityCallType,
-  PostTurnActionCandidate,
-  SubstrateMessage,
-} from '../types.js';
+import type { ObservabilityCallType, PostTurnActionCandidate, SubstrateMessage } from '../shared/contracts/runtime.js';
 import {
   buildDeferredToolHandoffCandidate,
   normalizeDeferredToolHandoffIntent,

@@ -1,7 +1,7 @@
 import type { EmbeddingService } from '../agent/contracts.js';
 import path from 'node:path';
 import { createComponentLogger } from '../shared/logger.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type {
   CredentialReference,
   CredentialVaultPort,

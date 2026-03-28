@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  CanonicalModelPurpose,
-  CanonicalModelRegistry,
-  ModelRegistryEntry,
-  SubstrateConfig,
-} from '../types.js';
+import type { CanonicalModelPurpose, CanonicalModelRegistry, ModelRegistryEntry } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
 
 interface RegistryModelInput {

@@ -1,13 +1,8 @@
 // ── Shared Runtime Wiring ──
 // Common primitives used by both split-runtime and gateway agent mode.
 
-import type {
-  CapabilityTier,
-  CompositionalPolicyConfig,
-  PostTurnActionCandidate,
-  SubstrateConfig,
-  SubstrateMessage,
-} from '../types.js';
+import type { CapabilityTier, CompositionalPolicyConfig, SubstrateConfig } from '../system/config/runtime-config-contracts.js';
+import type { PostTurnActionCandidate, SubstrateMessage } from '../shared/contracts/runtime.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
 import { createComponentLogger } from '../shared/logger.js';

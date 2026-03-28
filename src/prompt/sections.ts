@@ -1,5 +1,5 @@
 import { countTokens } from '../llm/tokens.js';
-import type { PromptSectionTelemetry } from '../types.js';
+import type { PromptSectionTelemetry } from '../shared/contracts/runtime.js';
 
 export interface PromptSectionInput {
   id: string;

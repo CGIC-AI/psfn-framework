@@ -1,5 +1,5 @@
 import type { LLMProvider } from '../agent/contracts.js';
-import type { CompletionPurpose, ContextMessage, LLMResponse } from '../types.js';
+import type { CompletionPurpose, ContextMessage, LLMResponse } from '../shared/contracts/runtime.js';
 import { createComponentLogger } from '../shared/logger.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';

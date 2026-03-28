@@ -2,14 +2,7 @@
 // Shared interfaces used by agent, session, memory, gateway, and REPL modules.
 // This module is intentionally dependency-light to avoid circular imports.
 
-import type {
-  CompletionPurpose,
-  LLMRequestMetadata,
-  LLMContext,
-  LLMResponse,
-  StreamCallbacks,
-  TurnID,
-} from '../types.js';
+import type { CompletionPurpose, LLMRequestMetadata, LLMContext, LLMResponse, StreamCallbacks, TurnID } from '../shared/contracts/runtime.js';
 import type { TrustLevel } from '../trust/types.js';
 import type { ChannelMeta } from '../trust/policy.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';

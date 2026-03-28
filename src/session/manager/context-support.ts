@@ -1,4 +1,4 @@
-import type { ContextMessage } from '../../types.js';
+import type { ContextMessage } from '../../shared/contracts/runtime.js';
 import type { ChannelMeta } from '../../trust/policy.js';
 import type { ChannelVisibility } from '../../trust/types.js';
 import type { UserContinuityStore } from '../continuity.js';

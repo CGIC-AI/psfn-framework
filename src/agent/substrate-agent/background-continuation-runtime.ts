@@ -1,6 +1,6 @@
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, SubstrateMessage } from '../../types.js';
+import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { BackgroundCompletionDeliveryQueue } from '../background-completion-delivery-queue.js';
 import {
   decideBackgroundCompletionNotification,

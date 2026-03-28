@@ -1,4 +1,4 @@
-import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage, type WyomingRoutingMetadata } from '../types.js';
+import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage, type WyomingRoutingMetadata } from '../shared/contracts/runtime.js';
 import type { ShardSourceContext } from './types.js';
 import { normalizePresenceMetadata, type CompanionPresenceMetadata } from '../agent/presence-metadata.js';
 

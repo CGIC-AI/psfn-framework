@@ -5,7 +5,7 @@ import {
 } from 'node:fs';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { CapabilityTier } from '../types.js';
+import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { withCapabilityRequirement } from '../system/capabilities/requirements.js';
 import type {

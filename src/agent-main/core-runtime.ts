@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../shared/event-bus.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryJournal } from '../memory/journal.js';

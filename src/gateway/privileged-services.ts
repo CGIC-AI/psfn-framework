@@ -1,4 +1,4 @@
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { LLMClientRuntimeOptions } from '../llm/client.js';
 import { ModelDiscovery } from '../llm/discovery.js';
 import { VaultOps, type VaultOperations } from '../vault/ops.js';

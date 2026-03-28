@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { join, resolve } from 'node:path';
 import { runSessionRepairScan } from '../../session/repair.js';
-import { loadConfig } from '../../types.js';
+import { loadConfig } from '../../system/config/load-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface CliOptions {

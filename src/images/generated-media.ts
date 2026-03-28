@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import type { Attachment } from '../types.js';
+import type { Attachment } from '../shared/contracts/runtime.js';
 import { createComponentLogger } from '../shared/logger.js';
 import { resolveGeneratedImagesDir } from '../persistence/layout.js';
 import type {

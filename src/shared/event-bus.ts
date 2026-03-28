@@ -1,11 +1,4 @@
-import type {
-  SubstrateMessage,
-  AgentResponse,
-  ModelBudgetBlockedEvent,
-  TurnUsage,
-  InferredPostTurnAction,
-  CorrelationMetadata,
-} from '../types.js';
+import type { SubstrateMessage, AgentResponse, ModelBudgetBlockedEvent, TurnUsage, InferredPostTurnAction, CorrelationMetadata } from './contracts/runtime.js';
 import type { TurnSnapshot } from '../turns/snapshot.js';
 import type {
   AdaptiveToolDecisionTelemetry,

@@ -4,13 +4,8 @@
 
 import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type {
-  CapabilityTier,
-  ShardToolsetConfig,
-  SubstrateConfig,
-  SubstrateMessage,
-  WyomingRoutingMetadata,
-} from '../types.js';
+import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../system/config/runtime-config-contracts.js';
+import type { SubstrateMessage, WyomingRoutingMetadata } from '../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../agent/presence-metadata.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent/contracts.js';

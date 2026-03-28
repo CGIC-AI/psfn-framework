@@ -23,7 +23,7 @@ import {
   normalizeChannelVisibility,
   sensitivityOrd,
 } from './types.js';
-import type { ResponseStyle, ResponseStyleOverrides } from '../types.js';
+import type { ResponseStyle, ResponseStyleOverrides } from '../shared/contracts/runtime.js';
 import { getRuntimeTrustPolicy } from './runtime-policy.js';
 
 export interface ChannelMeta {

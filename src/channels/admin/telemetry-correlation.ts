@@ -1,4 +1,4 @@
-import type { CorrelationMetadata, ObservabilityCallType } from '../../types.js';
+import type { CorrelationMetadata, ObservabilityCallType } from '../../shared/contracts/runtime.js';
 import type { EventMap, EventName } from '../../shared/event-bus.js';
 
 function asRecord(value: unknown): Record<string, unknown> | null {

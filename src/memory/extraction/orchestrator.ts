@@ -4,7 +4,7 @@ import type { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
 import { resolveLatestTurnContext } from '../../session/turn-provenance.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
-import type { TurnID } from '../../types.js';
+import type { TurnID } from '../../shared/contracts/runtime.js';
 import {
   EXTRACTION_PROMPT_KEY,
   getDefaultPromptText,

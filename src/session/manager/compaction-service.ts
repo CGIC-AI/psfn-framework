@@ -1,7 +1,7 @@
 import type { LLMProvider } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../llm/tokens.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ChannelVisibility } from '../../trust/types.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../../identity/prompt-registry.js';

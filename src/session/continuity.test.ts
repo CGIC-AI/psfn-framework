@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { UserContinuityStore, parseContinuityEntryProvenance } from './continuity.js';
 import { SessionStore } from './store.js';
 import { SessionManager } from './manager.js';
-import type { SubstrateConfig } from '../types.js';
+import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import * as journalUtils from './journal-utils.js';
 

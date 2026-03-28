@@ -1,7 +1,8 @@
 // ── RLM Iteration Loop ──
 // Runs an ephemeral think cycle: LLM → code → output → repeat until FINAL.
 
-import type { CapabilityTier, ContextMessage, CorrelationMetadata, LLMContext, LLMResponse } from '../types.js';
+import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
+import type { ContextMessage, CorrelationMetadata, LLMContext, LLMResponse } from '../shared/contracts/runtime.js';
 import type { LLMRequestMetadata } from '../agent/contracts.js';
 import type {
   BudgetStatus,

@@ -9,12 +9,7 @@ import type {
   LLMChunkNotification,
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
-import type {
-  CorrelationMetadata,
-  CompletionPurpose,
-  LLMModelHint,
-  ObservabilityCallType,
-} from '../../types.js';
+import type { CorrelationMetadata, CompletionPurpose, LLMModelHint, ObservabilityCallType } from '../../shared/contracts/runtime.js';
 import { registerAuditedDescriptors } from './register.js';
 import {
   inferCallType as inferCorrelationCallType,

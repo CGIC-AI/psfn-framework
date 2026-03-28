@@ -1,7 +1,7 @@
 import { mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from './types.js';
-import type { TurnRecord } from '../types.js';
+import type { TurnRecord } from '../shared/contracts/runtime.js';
 import { createComponentLogger } from '../shared/logger.js';
 import {
   buildExtractionMarkerJournalEntry,

@@ -171,4 +171,29 @@ describe('scheduled-agent-loop stream result contract', () => {
     expect(agentEnd?.messages).toHaveLength(1);
     expect(agentEnd?.messages?.[0]?.role).toBe('user');
   });
+
+  it('fails closed when no explicit streamFn is provided', async () => {
+    const events: any[] = [];
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
+      {
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [],
+      } as any,
+      makeLoopConfig() as any,
+      new AbortController().signal,
+      undefined,
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.find((event) => event.type === 'agent_error')?.error?.message)
+      .toBe('Scheduled agent loop requires an explicit streamFn; direct provider fallback is disabled.');
+    expect(events.some((event) => event.type === 'message_end' && event.message?.role === 'assistant')).toBe(false);
+  });
 });

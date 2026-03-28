@@ -535,6 +535,58 @@ describe('SubstrateAgent construction', () => {
     expect(refreshedModel.id).toBe('openrouter/moonshotai/kimi-k2.5');
     setModelSpy.mockRestore();
   });
+
+  it('uses llmProvider stream transport in gateway runtime mode', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const llmClient = makeMockLLMProvider();
+    const sessionManager = makeMockSessionManager();
+
+    const agent = new SubstrateAgent(
+      eventBus,
+      llmClient,
+      sessionManager,
+      'System prompt',
+      config,
+      { runtimeMode: 'gateway' },
+    );
+
+    const streamFn = ((agent as any).agent as { streamFn: (...args: any[]) => Promise<AsyncIterable<unknown>> }).streamFn;
+    const stream = await streamFn(
+      {
+        id: 'openrouter/deepseek/deepseek-v3.2',
+        api: 'chat',
+        provider: 'openrouter',
+        maxTokens: 4096,
+        contextWindow: 128_000,
+      },
+      {
+        systemPrompt: 'System prompt',
+        messages: [],
+        tools: [],
+      },
+      {
+        signal: new AbortController().signal,
+      },
+    );
+
+    const events: Array<{ type: string }> = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      events.push(event);
+    }
+
+    expect((llmClient.stream as any)).toHaveBeenCalledTimes(1);
+    expect((llmClient.stream as any).mock.calls[0]?.[0]).toMatchObject({
+      systemPrompt: 'System prompt',
+      messages: [],
+      modelHint: expect.objectContaining({
+        model: 'deepseek/deepseek-v3.2',
+        provider: 'openrouter',
+      }),
+    });
+    expect(events[0]?.type).toBe('start');
+    expect(events.at(-1)?.type).toBe('done');
+  });
 });
 
 describe('SubstrateAgent.registerTool', () => {

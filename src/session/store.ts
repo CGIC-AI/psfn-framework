@@ -47,6 +47,7 @@ import {
   upsertChannelIndex,
   loadChannelIndex,
 } from './store/channel-index.js';
+import { createFilesystemSessionJournalPort } from './journal/port.js';
 import {
   buildLegacyImportMetadata,
   listLegacyImportManifests,
@@ -115,7 +116,10 @@ export class SessionStore {
     this.importManifestPath = join(sessionsDir, IMPORT_MANIFEST_FILENAME);
     const integrityProvider = options.integrityProvider
       ?? createKeyringIntegrityProvider(options.integrityKeyring ?? null);
-    this.journalRuntime = new SessionJournalRuntime(integrityProvider);
+    this.journalRuntime = new SessionJournalRuntime(
+      integrityProvider,
+      createFilesystemSessionJournalPort(),
+    );
     mkdirSync(sessionsDir, { recursive: true });
     if (!options.disableSearchIndex) {
       try {

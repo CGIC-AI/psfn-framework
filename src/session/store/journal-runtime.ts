@@ -4,12 +4,8 @@ import { createComponentLogger } from '../../logger.js';
 import { toErrorMessage } from '../../utils/errors.js';
 import { backfillLegacyTurnId } from '../../turns/id.js';
 import {
-  appendJournalEntry,
   journalToCompactionSummary,
   journalToSessionEntry,
-  quarantineSidecarPath,
-  readJournalFile,
-  readJournalTailEntries,
   type JournalIntegrityVerificationResult,
   wrapUnverifiedHistory,
 } from '../journal-utils.js';
@@ -23,6 +19,10 @@ import type {
 } from '../store-primitives.js';
 import { applyJournalState } from './crash-recovery.js';
 import { snapshotIndexEntry } from './channel-index.js';
+import {
+  createFilesystemSessionJournalPort,
+  type SessionJournalPort,
+} from '../journal/port.js';
 
 const log = createComponentLogger('SessionStore');
 
@@ -47,12 +47,17 @@ function applyTurnTombstonesToSessionEntries(
 
 export class SessionJournalRuntime {
   private integrityProvider: SessionIntegrityProvider | null;
+  private journalPort: SessionJournalPort;
   private searchIndexFailureLogged = false;
   private channelIndexFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
 
-  constructor(integrityProvider: SessionIntegrityProvider | null) {
+  constructor(
+    integrityProvider: SessionIntegrityProvider | null,
+    journalPort: SessionJournalPort = createFilesystemSessionJournalPort(),
+  ) {
     this.integrityProvider = integrityProvider;
+    this.journalPort = journalPort;
     if (integrityProvider) {
       log.info('Session integrity mode: enabled (HMAC verification active)');
     } else {
@@ -107,7 +112,7 @@ export class SessionJournalRuntime {
       `Channel ${channelId}: ${quarantinedCount} quarantined entries, ${loadedCount} entries loaded successfully`,
       {
         path: filePath,
-        quarantinePath: quarantineSidecarPath(filePath),
+        quarantinePath: this.journalPort.quarantineSidecarPath(filePath),
       },
     );
   }
@@ -131,7 +136,7 @@ export class SessionJournalRuntime {
 
     if (!existsSync(filePath)) return cache;
 
-    const { entries, maxId, quarantined } = readJournalFile(filePath);
+    const { entries, maxId, quarantined } = this.journalPort.readJournalFile(filePath);
     if (quarantined.length > 0) {
       this.warnAboutQuarantinedEntries(channelId, filePath, quarantined.length, entries.length);
     }
@@ -237,7 +242,7 @@ export class SessionJournalRuntime {
       }
     }
 
-    appendJournalEntry(params.cache.resolvedPath, signed);
+    this.journalPort.appendJournalEntry(params.cache.resolvedPath, signed);
     applyJournalState(params.cache, signed);
     params.cache.lastHmac = nextHmac;
     try {
@@ -254,7 +259,7 @@ export class SessionJournalRuntime {
   }
 
   readRecentEntriesFromTail(_channelId: string, filePath: string, limit: number): SessionEntry[] {
-    const tail = readJournalTailEntries(filePath, {
+    const tail = this.journalPort.readJournalTailEntries(filePath, {
       messageLimit: limit,
       includeBoundaryEntry: true,
     });

@@ -8,8 +8,6 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
-import { LLMClient } from './llm/client.js';
-import { createEmbeddingProviderFromConfig } from './memory/embedding.js';
 import type { DiscordAdapter } from './channels/discord/adapter.js';
 import type { TelegramAdapter } from './channels/telegram/adapter.js';
 import { EventBus } from './event-bus.js';
@@ -44,8 +42,8 @@ import {
   type StartupConfigHydrationDiagnostics,
 } from './runtime/bootstrap-helpers.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
-import { VaultOps } from './vault/ops.js';
 import { startDiscordWithRetry } from './gateway/discord-startup.js';
+import { createGatewayPrivilegedServiceRegistry } from './gateway/privileged-services.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
   createOpenHomeChannelAdapterFactoryEntry,
@@ -305,21 +303,6 @@ async function main(): Promise<void> {
   } else if (bootstrap.diagnostics.ntfyConfigIncomplete) {
     log.warn('ntfy alerts disabled: both NTFY_BASE_URL and NTFY_TOPIC are required');
   }
-  const vaultPolicyConfig = bootstrap.policyConfig.vault;
-  if (vaultPolicyConfig?.enabled && !config.obsidianVaultName) {
-    throw new Error(
-      'VAULT_TOOLS_ENABLED is true but obsidianVaultName is not configured in settings.',
-    );
-  }
-  const vaultOps = vaultPolicyConfig?.enabled
-    ? new VaultOps({
-      vaultName: config.obsidianVaultName!,
-      ...(config.obsidianCliPath ? { cliPath: config.obsidianCliPath } : {}),
-      ...(typeof config.obsidianTimeoutMs === 'number'
-        ? { timeoutMs: config.obsidianTimeoutMs }
-        : {}),
-    })
-    : undefined;
   if (bootstrap.fullCodebaseReadRoot) {
     log.warn('YOLO runtime mode active: full-codebase fs.read is enabled', {
       runtimeMode: bootstrap.runtimeMode,
@@ -335,11 +318,6 @@ async function main(): Promise<void> {
   ensureRegistryFile(bootstrap.moduleRegistryAbsolute);
 
   // ── Create providers (these hold secrets / have network access) ──
-  const embeddingProvider = createEmbeddingProviderFromConfig(config, bootstrap.providerEnv);
-  log.info('Embedding provider initialized', {
-    provider: embeddingProvider.kind,
-    dims: embeddingProvider.dims,
-  });
   const gitOps = new GitOps({
     repoRoot: bootstrap.gitRepoRoot,
   });
@@ -350,19 +328,6 @@ async function main(): Promise<void> {
     () => capabilityRuntime,
     (decision) => emitEligibilityDecision(eventBus, decision),
   );
-  const llmClient = new LLMClient(config, {
-    eligibilityGate,
-    onBudgetBlocked: (event) => {
-      eventBus.emit('model.budget.blocked', event).catch((error) => {
-        log.error('Failed to emit model budget blocked telemetry', {
-          error: error instanceof Error ? error.message : String(error),
-          provider: event.provider,
-          model: event.model,
-          reason: event.reason,
-        });
-      });
-    },
-  });
 
   const gatewayChannelRegistry = new Map<string, ChannelAdapter>();
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([
@@ -377,6 +342,28 @@ async function main(): Promise<void> {
       eventBus,
     }),
   ]);
+  const privilegedServices = createGatewayPrivilegedServiceRegistry({
+    config,
+    providerEnv: bootstrap.providerEnv,
+    llmOptions: {
+      eligibilityGate,
+      onBudgetBlocked: (event) => {
+        eventBus.emit('model.budget.blocked', event).catch((error) => {
+          log.error('Failed to emit model budget blocked telemetry', {
+            error: error instanceof Error ? error.message : String(error),
+            provider: event.provider,
+            model: event.model,
+            reason: event.reason,
+          });
+        });
+      },
+    },
+    vaultPolicyConfig: bootstrap.policyConfig.vault,
+  });
+  log.info('Embedding provider initialized', {
+    provider: privilegedServices.embeddingProvider.kind,
+    dims: privilegedServices.embeddingProvider.dims,
+  });
   await loadChannelAdaptersFromManifest(
     gatewayChannelRegistry,
     gatewayChannelManifest,
@@ -397,18 +384,18 @@ async function main(): Promise<void> {
 
   const gateway = new GatewayServer({
     socketPath: bootstrap.socketPath,
-    llmProvider: llmClient,
-    embeddingService: embeddingProvider,
+    llmProvider: privilegedServices.llmClient,
+    embeddingService: privilegedServices.embeddingProvider,
     discordAdapter: discord,
     gitOps,
     imageConfig: config,
     policyConfig: {
       ...bootstrap.policyConfig,
-      ...(vaultPolicyConfig
+      ...(privilegedServices.vaultOps
         ? {
             vault: {
-              ...vaultPolicyConfig,
-              ...(vaultOps ? { ops: vaultOps } : {}),
+              ...bootstrap.policyConfig.vault,
+              ops: privilegedServices.vaultOps,
             },
           }
         : {}),

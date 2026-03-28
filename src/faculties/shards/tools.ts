@@ -1,10 +1,10 @@
-// ── spawn_shard tool ──
-// Registered on parent SubstrateAgent only. Shards don't get this tool (no recursion).
+// ── bounded subagent launch tool ──
+// Registered on parent SubstrateAgent only. Child subagents don't get this tool (no recursion).
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { ShardExecutionPort } from './port.js';
+import type { BoundedSubagentLaunchPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import {
   BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
   buildBoundedSubagentLaunchEnvelope,
@@ -14,31 +14,31 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
-export function createSpawnShardTool(manager: ShardExecutionPort): AgentTool<any> {
+export function createBoundedSubagentLaunchTool(manager: BoundedSubagentLaunchPort): AgentTool<any> {
   return {
     name: BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
     description:
-      'Spawn a sub-agent shard for parallel task execution. ' +
-      'Multiple spawn_shard calls in the same turn run concurrently. ' +
-      'Each shard is ephemeral — it runs a task and returns the result.',
+      'Launch a bounded subagent for parallel task execution. ' +
+      'Multiple bounded subagent launches in the same turn run concurrently. ' +
+      'Each launch is ephemeral — it runs a task and returns the result.',
     label: BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
     parameters: Type.Object({
-      name: Type.String({ description: 'Short label for this shard (e.g. "research", "analysis")' }),
-      task: Type.String({ description: 'The task/prompt for the shard to execute' }),
+      name: Type.String({ description: 'Short label for this bounded subagent (e.g. "research", "analysis")' }),
+      task: Type.String({ description: 'The task/prompt for the bounded subagent to execute' }),
       systemPrompt: Type.Optional(
         Type.String({ description: 'Optional system prompt override (default: inherit parent prompt)' }),
       ),
       maxTurns: Type.Optional(
-        Type.Number({ minimum: 1, maximum: 8, description: 'Optional max turns for the shard loop (default: 1)' }),
+        Type.Number({ minimum: 1, maximum: 8, description: 'Optional max turns for the bounded subagent loop (default: 1)' }),
       ),
       capabilities: Type.Optional(
         Type.Array(Type.String({ minLength: 1 }), {
-          description: 'Optional capability tokens this shard should advertise for routing diagnostics.',
+          description: 'Optional capability tokens this bounded subagent should advertise for routing diagnostics.',
         }),
       ),
       requiredCapabilities: Type.Optional(
         Type.Array(Type.String({ minLength: 1 }), {
-          description: 'Optional capability tokens that must be present before this shard executes.',
+          description: 'Optional capability tokens that must be present before this bounded subagent executes.',
         }),
       ),
     }),
@@ -69,11 +69,11 @@ export function createSpawnShardTool(manager: ShardExecutionPort): AgentTool<any
             }
             : undefined,
         });
-        const result = await manager.spawn(launchRequest);
+        const result = await manager.launchBoundedSubagent(launchRequest);
         const boundedSubagent = buildBoundedSubagentLaunchEnvelope(
           launchRequest,
           {
-            shardId: result.shardId,
+            subagentId: result.subagentId,
             content: result.content,
             model: result.model,
             inputTokens: result.inputTokens,
@@ -91,7 +91,7 @@ export function createSpawnShardTool(manager: ShardExecutionPort): AgentTool<any
           content: [{
             type: 'text',
             text:
-              `[Shard "${result.name}" completed in ${result.durationMs}ms, ` +
+              `[Bounded subagent "${result.name}" completed in ${result.durationMs}ms, ` +
               `${result.turns} turn(s), ` +
               `${result.inputTokens + result.outputTokens} tokens, ` +
               `state=${result.lifecycleState}, health=${result.health}]\n` +
@@ -112,7 +112,7 @@ export function createSpawnShardTool(manager: ShardExecutionPort): AgentTool<any
           },
         };
       } catch (error) {
-        return textResultWithError(`[Shard error: ${toErrorMessage(error)}]`, true);
+        return textResultWithError(`[Bounded subagent error: ${toErrorMessage(error)}]`, true);
       }
     },
   };

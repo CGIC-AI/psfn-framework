@@ -98,7 +98,7 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;
 
 export function inferToolConcurrencyClass(toolName: string): ToolConcurrencyClass {
-  if (isBoundedSubagentLaunchToolName(toolName)) return 'spawn_shard';
+  if (isBoundedSubagentLaunchToolName(toolName)) return 'spawn_subagent';
   if (PARALLEL_READ_ONLY_TOOL_NAMES.has(toolName)) return 'read_only';
   return 'exclusive';
 }
@@ -106,7 +106,7 @@ export function inferToolConcurrencyClass(toolName: string): ToolConcurrencyClas
 export function inferToolInterruptibility(
   concurrencyClass: ToolConcurrencyClass,
 ): ToolInterruptibility {
-  if (concurrencyClass === 'spawn_shard') return 'non_interruptible';
+  if (concurrencyClass === 'spawn_subagent') return 'non_interruptible';
   return 'cooperative';
 }
 

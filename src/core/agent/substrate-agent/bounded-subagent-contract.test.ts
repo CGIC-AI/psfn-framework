@@ -21,6 +21,7 @@ describe('bounded subagent contract', () => {
         embodimentContext: {
           kind: 'embodiment',
           embodimentId: '  display  ',
+          companionId: '  companion-test  ',
           siteId: '  ha-main  ',
           satelliteId: '  kitchen  ',
           channelId: '  api:wyoming:ha-main:display  ',
@@ -39,12 +40,13 @@ describe('bounded subagent contract', () => {
         channelId: 'api:source',
         requestId: 'req-1',
         turnId: 'turn-1',
-        embodimentContext: {
-          kind: 'embodiment',
-          embodimentId: 'display',
-          siteId: 'ha-main',
-          satelliteId: 'kitchen',
-          channelId: 'api:wyoming:ha-main:display',
+          embodimentContext: {
+            kind: 'embodiment',
+            embodimentId: 'display',
+            companionId: 'companion-test',
+            siteId: 'ha-main',
+            satelliteId: 'kitchen',
+            channelId: 'api:wyoming:ha-main:display',
         },
       },
     });
@@ -102,6 +104,7 @@ describe('bounded subagent contract', () => {
         embodimentContext: {
           kind: 'embodiment',
           embodimentId: '   ',
+          companionId: 'companion-test',
         } as any,
       },
     })).toThrow('non-empty sourceContext.embodimentContext.embodimentId');

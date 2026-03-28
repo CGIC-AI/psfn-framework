@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
-import type { CanonicalModelRegistry, ModelRegistryEntry, ModelSlot } from '../../shared/contracts/runtime.js';
+import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, StreamCallbacks } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import * as models from '../../primitives/llm/models.js';
@@ -12,18 +12,27 @@ import { ModelBudgetController } from '../../primitives/llm/model-budget.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 const streamAdapterMocks = vi.hoisted(() => ({
-  streamSimple: vi.fn(),
-  getEnvApiKey: vi.fn(),
+  transportStream: vi.fn(),
 }));
 
-vi.mock('@mariozechner/pi-ai', async () => {
-  const actual = await vi.importActual<typeof import('@mariozechner/pi-ai')>('@mariozechner/pi-ai');
+function makeTransport() {
   return {
-    ...actual,
-    streamSimple: streamAdapterMocks.streamSimple,
-    getEnvApiKey: streamAdapterMocks.getEnvApiKey,
+    stream: streamAdapterMocks.transportStream as unknown as (
+      context: LLMContext,
+      callbacks?: StreamCallbacks,
+    ) => Promise<LLMResponse>,
   };
-});
+}
+
+function makeStreamFn(
+  config: SubstrateConfig,
+  overrides: Partial<Parameters<typeof createSubstrateStreamFn>[1]> = {},
+) {
+  return createSubstrateStreamFn(config, {
+    transport: makeTransport(),
+    ...overrides,
+  });
+}
 
 // Minimal config fixture
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -70,8 +79,7 @@ afterEach(() => {
     if (!dir) continue;
     rmSync(dir, { recursive: true, force: true });
   }
-  streamAdapterMocks.streamSimple.mockReset();
-  streamAdapterMocks.getEnvApiKey.mockReset();
+  streamAdapterMocks.transportStream.mockReset();
 });
 
 function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistry {
@@ -160,13 +168,13 @@ async function collectStreamEvents(stream: AsyncIterable<unknown>): Promise<unkn
 describe('createSubstrateStreamFn', () => {
   it('returns a function with StreamFn signature', () => {
     const config = makeConfig();
-    const streamFn = createSubstrateStreamFn(config);
+    const streamFn = makeStreamFn(config);
     expect(typeof streamFn).toBe('function');
   });
 
   it('can be passed to Agent constructor', () => {
     const config = makeConfig();
-    const streamFn = createSubstrateStreamFn(config);
+    const streamFn = makeStreamFn(config);
     // Verify Agent accepts it without throwing
     const agent = new Agent({ streamFn });
     expect(agent).toBeDefined();
@@ -174,7 +182,15 @@ describe('createSubstrateStreamFn', () => {
     expect(agent.state.isStreaming).toBe(false);
   });
 
-  it('supports a transport-backed stream contract without direct streamSimple calls', async () => {
+  it('fails closed when no transport is injected', () => {
+    const config = makeConfig();
+    expect(() => createSubstrateStreamFn(
+      config,
+      {} as Parameters<typeof createSubstrateStreamFn>[1],
+    )).toThrow('requires an injected transport');
+  });
+
+  it('supports a transport-backed stream contract through the injected transport port', async () => {
     const config = makeConfig();
     const transport = {
       stream: vi.fn(async (_context, callbacks) => {
@@ -208,7 +224,6 @@ describe('createSubstrateStreamFn', () => {
     } as any, {});
     const events = await collectStreamEvents(stream);
 
-    expect(streamAdapterMocks.streamSimple).not.toHaveBeenCalled();
     expect(transport.stream).toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: 'System',
@@ -280,26 +295,18 @@ describe('createSubstrateStreamFn', () => {
     });
 
     const blockedEvents: Array<Record<string, unknown>> = [];
-    const streamFn = createSubstrateStreamFn(config, {
+    const streamFn = makeStreamFn(config, {
       onBudgetBlocked: (event) => blockedEvents.push(event as unknown as Record<string, unknown>),
     });
 
-    streamAdapterMocks.streamSimple.mockImplementation(() => (async function* emptyStream() {
-      yield {
-        type: 'done',
-        reason: 'stop',
-        message: {
-          role: 'assistant',
-          content: [{ type: 'text', text: 'ok' }],
-          api: 'openai-completions',
-          provider: 'litellm',
-          model: 'openrouter/deepseek/deepseek-v3.2',
-          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-          stopReason: 'stop',
-          timestamp: Date.now(),
-        },
-      };
-    })() as any);
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'ok',
+      toolCalls: [],
+      model: 'openrouter/deepseek/deepseek-v3.2',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'stop',
+    });
 
     await expect(runWithRequestContext(
       {
@@ -388,101 +395,23 @@ describe('createSubstrateStreamFn', () => {
         ],
       },
     });
-    streamAdapterMocks.streamSimple.mockImplementation((resolvedModel: { id: string }) => {
-      if (resolvedModel.id === 'openrouter/deepseek/deepseek-v3.2') {
-        return (async function* primaryFailure() {
-          yield {
-            type: 'start',
-            partial: {
-              role: 'assistant',
-              content: [],
-              api: 'openai-completions',
-              provider: 'litellm',
-              model: resolvedModel.id,
-              usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-              stopReason: 'error',
-              timestamp: Date.now(),
-            },
-          };
-          yield {
-            type: 'error',
-            reason: 'error',
-            error: {
-              role: 'assistant',
-              content: [],
-              api: 'openai-completions',
-              provider: 'litellm',
-              model: resolvedModel.id,
-              usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-              stopReason: 'error',
-              errorMessage: '403 Key limit exceeded (total limit)',
-              timestamp: Date.now(),
-            },
-          };
-        })() as any;
+    streamAdapterMocks.transportStream.mockImplementation((context: LLMContext) => {
+      const modelId = context.modelHint?.model;
+      if (modelId === 'deepseek/deepseek-v3.2') {
+        return Promise.reject(new Error('403 Key limit exceeded (total limit)'));
       }
 
-      return (async function* fallbackSuccess() {
-        yield {
-          type: 'start',
-          partial: {
-            role: 'assistant',
-            content: [],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'stop',
-            timestamp: Date.now(),
-          },
-        };
-        yield {
-          type: 'text_start',
-          contentIndex: 0,
-          partial: {
-            role: 'assistant',
-            content: [{ type: 'text', text: '' }],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'stop',
-            timestamp: Date.now(),
-          },
-        };
-        yield {
-          type: 'text_delta',
-          contentIndex: 0,
-          delta: 'Recovered on fallback.',
-          partial: {
-            role: 'assistant',
-            content: [{ type: 'text', text: 'Recovered on fallback.' }],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'stop',
-            timestamp: Date.now(),
-          },
-        };
-        yield {
-          type: 'done',
-          reason: 'stop',
-          message: {
-            role: 'assistant',
-            content: [{ type: 'text', text: 'Recovered on fallback.' }],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 7, output: 4, cacheRead: 0, cacheWrite: 0, totalTokens: 11, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'stop',
-            timestamp: Date.now(),
-          },
-        };
-      })() as any;
+      return Promise.resolve({
+        content: 'Recovered on fallback.',
+        toolCalls: [],
+        model: 'openrouter/moonshotai/kimi-k2.5',
+        inputTokens: 7,
+        outputTokens: 4,
+        stopReason: 'stop',
+      });
     });
 
-    const streamFn = createSubstrateStreamFn(config);
+    const streamFn = makeStreamFn(config);
     const model = resolveModel(config, 'chat');
     const stream = await streamFn(model, {
       systemPrompt: 'System',
@@ -494,9 +423,9 @@ describe('createSubstrateStreamFn', () => {
     expect((events[0] as { type: string }).type).toBe('start');
     expect((events.at(-1) as { type: string; message: { model: string } }).type).toBe('done');
     expect((events.at(-1) as { message: { model: string } }).message.model).toBe('openrouter/moonshotai/kimi-k2.5');
-    expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(2);
-    expect((streamAdapterMocks.streamSimple.mock.calls[0]?.[0] as { id: string }).id).toBe('openrouter/deepseek/deepseek-v3.2');
-    expect((streamAdapterMocks.streamSimple.mock.calls[1]?.[0] as { id: string }).id).toBe('openrouter/moonshotai/kimi-k2.5');
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint?.model).toBe('deepseek/deepseek-v3.2');
+    expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
   });
 
   it('emits a terminal failure hook when all configured candidates fail', async () => {
@@ -529,28 +458,12 @@ describe('createSubstrateStreamFn', () => {
         ],
       },
     });
-    streamAdapterMocks.streamSimple.mockImplementation((resolvedModel: { id: string }) => (
-      (async function* streamFailure() {
-        yield {
-          type: 'error',
-          reason: 'error',
-          error: {
-            role: 'assistant',
-            content: [],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'error',
-            errorMessage: `fatal failure for ${resolvedModel.id}`,
-            timestamp: Date.now(),
-          },
-        };
-      })()
-    ) as any);
+    streamAdapterMocks.transportStream.mockImplementation((context: LLMContext) => (
+      Promise.reject(new Error(`fatal failure for ${context.modelHint?.model}`))
+    ));
     const onTerminalFailure = vi.fn();
 
-    const streamFn = createSubstrateStreamFn(config, { onTerminalFailure });
+    const streamFn = makeStreamFn(config, { onTerminalFailure });
     const model = resolveModel(config, 'chat');
     const stream = await streamFn(model, {
       systemPrompt: 'System',
@@ -558,7 +471,7 @@ describe('createSubstrateStreamFn', () => {
     } as any, {});
 
     await expect(collectStreamEvents(stream as AsyncIterable<unknown>)).rejects.toThrow('fatal failure');
-    expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
     expect(onTerminalFailure).toHaveBeenCalledTimes(1);
     expect(onTerminalFailure.mock.calls[0]?.[0]).toMatchObject({
       purpose: 'chat',
@@ -572,58 +485,36 @@ describe('createSubstrateStreamFn', () => {
     });
   });
 
-  it('uses the configured LiteLLM API key env without referencing an undefined config variable', async () => {
-    const previousEnv = process.env.PSFN_TEST_LITELLM_KEY;
-    delete process.env.LITELLM_BASE_URL;
-    process.env.PSFN_TEST_LITELLM_KEY = 'test-litellm-key';
+  it('passes model hints through the injected transport without local API-key resolution', async () => {
+    const config = makeConfig({
+      litellmBaseUrl: 'http://localhost:4000/v1',
+    });
 
-    try {
-      const config = makeConfig({
-        litellmBaseUrl: 'http://localhost:4000/v1',
-        litellmApiKeyRef: {
-          kind: 'env',
-          envName: 'PSFN_TEST_LITELLM_KEY',
-        },
-      });
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'ok',
+      toolCalls: [],
+      model: 'openrouter/deepseek/deepseek-v3.2',
+      inputTokens: 1,
+      outputTokens: 1,
+      stopReason: 'stop',
+    });
 
-      streamAdapterMocks.streamSimple.mockImplementation((_resolvedModel: { id: string }, _context, _requestOptions) => (
-        (async function* success() {
-          yield {
-            type: 'done',
-            reason: 'stop',
-            message: {
-              role: 'assistant',
-              content: [{ type: 'text', text: 'ok' }],
-              api: 'openai-completions',
-              provider: 'litellm',
-              model: 'openrouter/deepseek/deepseek-v3.2',
-              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-              stopReason: 'stop',
-              timestamp: Date.now(),
-            },
-          };
-        })()
-      ) as any);
+    const streamFn = makeStreamFn(config);
+    const model = resolveModel(config, 'chat');
+    const stream = await streamFn(model, {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'hello' }],
+    } as any, {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
 
-      const streamFn = createSubstrateStreamFn(config);
-      const model = resolveModel(config, 'chat');
-      const stream = await streamFn(model, {
-        systemPrompt: 'System',
-        messages: [{ role: 'user', content: 'hello' }],
-      } as any, {});
-      const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
-
-      expect(events).toHaveLength(1);
-      expect((events[0] as { type: string }).type).toBe('done');
-      expect((streamAdapterMocks.streamSimple.mock.calls[0]?.[1] as { systemPrompt: string }).systemPrompt).toBe('System');
-      expect((streamAdapterMocks.streamSimple.mock.calls[0]?.[2] as { apiKey: string }).apiKey).toBe('test-litellm-key');
-    } finally {
-      if (previousEnv === undefined) {
-        delete process.env.PSFN_TEST_LITELLM_KEY;
-      } else {
-        process.env.PSFN_TEST_LITELLM_KEY = previousEnv;
-      }
-    }
+    expect(events).toHaveLength(4);
+    expect((events.at(-1) as { type: string }).type).toBe('done');
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).systemPrompt).toBe('System');
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint).toMatchObject({
+      model: 'deepseek/deepseek-v3.2',
+      provider: 'openrouter',
+      maxTokens: 16384,
+    });
   });
 
   it('does not switch candidates after output has already started streaming', async () => {
@@ -656,69 +547,14 @@ describe('createSubstrateStreamFn', () => {
         ],
       },
     });
-    streamAdapterMocks.streamSimple.mockImplementation((resolvedModel: { id: string }) => (
-      (async function* partialFailure() {
-        yield {
-          type: 'start',
-          partial: {
-            role: 'assistant',
-            content: [],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'stop',
-            timestamp: Date.now(),
-          },
-        };
-        yield {
-          type: 'text_start',
-          contentIndex: 0,
-          partial: {
-            role: 'assistant',
-            content: [{ type: 'text', text: '' }],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'stop',
-            timestamp: Date.now(),
-          },
-        };
-        yield {
-          type: 'text_delta',
-          contentIndex: 0,
-          delta: 'partial',
-          partial: {
-            role: 'assistant',
-            content: [{ type: 'text', text: 'partial' }],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'stop',
-            timestamp: Date.now(),
-          },
-        };
-        yield {
-          type: 'error',
-          reason: 'error',
-          error: {
-            role: 'assistant',
-            content: [{ type: 'text', text: 'partial' }],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'error',
-            errorMessage: 'stream broke after partial output',
-            timestamp: Date.now(),
-          },
-        };
-      })()
-    ) as any);
+    streamAdapterMocks.transportStream.mockImplementation(
+      async (_context: LLMContext, callbacks?: StreamCallbacks) => {
+        callbacks?.onText?.('partial');
+        throw new Error('stream broke after partial output');
+      },
+    );
 
-    const streamFn = createSubstrateStreamFn(config);
+    const streamFn = makeStreamFn(config);
     const model = resolveModel(config, 'chat');
     const stream = await streamFn(model, {
       systemPrompt: 'System',
@@ -736,16 +572,16 @@ describe('createSubstrateStreamFn', () => {
     }
 
     expect(terminalError?.message).toContain('stream broke after partial output');
-    expect(events).toHaveLength(3);
+    expect(events).toHaveLength(2);
     expect((events[0] as { type: string }).type).toBe('start');
-    expect((events[2] as { type: string }).type).toBe('text_delta');
-    expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect((events[1] as { type: string }).type).toBe('text_start');
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('resolveModel', () => {
   beforeEach(() => {
-    // Clear LITELLM_BASE_URL to test direct provider path
+    // Clear LITELLM_BASE_URL unless a test is explicitly exercising LiteLLM routing.
     delete process.env.LITELLM_BASE_URL;
   });
 
@@ -894,7 +730,7 @@ describe('resolveModel', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
     const model = resolveModel(config);
-    const agent = new Agent({ streamFn: createSubstrateStreamFn(config) });
+    const agent = new Agent({ streamFn: makeStreamFn(config) });
     agent.setModel(model);
     expect(agent.state.model.id).toBe('openrouter/deepseek/deepseek-v3.2');
   });
@@ -904,7 +740,7 @@ describe('Agent integration', () => {
   it('accepts streamFn + model + system prompt', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig();
-    const streamFn = createSubstrateStreamFn(config);
+    const streamFn = makeStreamFn(config);
     const model = resolveModel(config);
 
     const companionName = 'Companion';
@@ -922,7 +758,7 @@ describe('Agent integration', () => {
 
   it('supports event subscription', () => {
     const config = makeConfig();
-    const agent = new Agent({ streamFn: createSubstrateStreamFn(config) });
+    const agent = new Agent({ streamFn: makeStreamFn(config) });
 
     const events: AgentEvent[] = [];
     const unsub = agent.subscribe((e) => events.push(e));
@@ -934,7 +770,7 @@ describe('Agent integration', () => {
 
   it('supports steering/follow-up queue API', () => {
     const config = makeConfig();
-    const agent = new Agent({ streamFn: createSubstrateStreamFn(config) });
+    const agent = new Agent({ streamFn: makeStreamFn(config) });
 
     expect(agent.hasQueuedMessages()).toBe(false);
 
@@ -953,7 +789,7 @@ describe('Agent integration', () => {
 
   it('supports abort', () => {
     const config = makeConfig();
-    const agent = new Agent({ streamFn: createSubstrateStreamFn(config) });
+    const agent = new Agent({ streamFn: makeStreamFn(config) });
 
     // abort() should not throw even when not streaming
     expect(() => agent.abort()).not.toThrow();
@@ -961,7 +797,7 @@ describe('Agent integration', () => {
 
   it('supports waitForIdle when not streaming', async () => {
     const config = makeConfig();
-    const agent = new Agent({ streamFn: createSubstrateStreamFn(config) });
+    const agent = new Agent({ streamFn: makeStreamFn(config) });
 
     // Should resolve immediately when not streaming
     await agent.waitForIdle();
@@ -969,7 +805,7 @@ describe('Agent integration', () => {
 
   it('supports message manipulation', () => {
     const config = makeConfig();
-    const agent = new Agent({ streamFn: createSubstrateStreamFn(config) });
+    const agent = new Agent({ streamFn: makeStreamFn(config) });
 
     agent.appendMessage({ role: 'user', content: 'hello', timestamp: Date.now() });
     expect(agent.state.messages).toHaveLength(1);
@@ -986,7 +822,7 @@ describe('Agent integration', () => {
 
   it('reset() clears all state', () => {
     const config = makeConfig();
-    const agent = new Agent({ streamFn: createSubstrateStreamFn(config) });
+    const agent = new Agent({ streamFn: makeStreamFn(config) });
 
     agent.setSystemPrompt('test prompt');
     agent.appendMessage({ role: 'user', content: 'hello', timestamp: Date.now() });

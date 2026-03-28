@@ -82,6 +82,7 @@ import {
   createOptionalVaultAutoPublisher,
   registerOptionalVaultTools,
 } from './vault-runtime.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -90,6 +91,7 @@ const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  const coreConfig = sanitizeCoreSubstrateConfig(config);
   const {
     lifecycleRuntimeContract,
     runtimeStatusMeta,
@@ -197,7 +199,7 @@ async function main(): Promise<void> {
     operatorNotifier,
     safeguardSurfaces,
   } = await bootstrapAgentCoreRuntime({
-    config,
+    config: coreConfig,
     pathSnapshot,
     eventBus,
     gateway,

@@ -12,6 +12,7 @@ function readSource(fileName: string): string {
 describe('agent core runtime builder', () => {
   it('agent-main delegates core wiring to the extracted builder', () => {
     const agentMainSource = readSource('main.ts');
+    expect(agentMainSource).toContain('sanitizeCoreSubstrateConfig(config)');
     expect(agentMainSource).toContain('bootstrapAgentCoreRuntime(');
     expect(agentMainSource).toContain('createSqliteCompanionStore(');
     expect(agentMainSource).not.toContain('wirePromptRuntime(');

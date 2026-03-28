@@ -1,13 +1,12 @@
 // ── pi-agent-core Stream Adapter ──
 // Bridges our model-routing configuration into pi-agent-core's StreamFn interface.
-// Single-process callers can still use direct provider transport, while split-mode
-// callers can inject a gateway-backed transport port so core never resolves secrets.
+// Core always uses an injected transport port so provider credentials remain outside
+// the core runtime boundary.
 
-import { streamSimple } from '@mariozechner/pi-ai';
 import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall } from '../../shared/contracts/runtime.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
 import {
@@ -31,12 +30,6 @@ import {
   normalizeModelIdForProvider,
 } from '../../primitives/llm/model-budget.js';
 import {
-  resolveOptionalEnvCredential,
-  resolveProviderApiKey,
-} from '../../boundary/custody/credential-vault.js';
-import {
-  resolveConfiguredLiteLLMApiKey,
-  resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 
@@ -61,22 +54,24 @@ export interface SubstrateStreamTransport {
 export interface SubstrateStreamRuntimeOptions {
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   onTerminalFailure?: (event: StreamTerminalFailureEvent) => void | Promise<void>;
-  transport?: SubstrateStreamTransport;
+  transport: SubstrateStreamTransport;
 }
 
 /**
  * Create a StreamFn for pi-agent-core's Agent.
  *
- * The returned function wraps `streamSimple` with the API key resolved
- * from our config (LiteLLM proxy key or provider env key).
- *
  * The model is passed in by the Agent — use `resolveModel()` to create it
  * from SubstrateConfig and set it via `agent.setModel()`.
  */
 export function createSubstrateStreamFn(
-  config: SubstrateConfig,
-  runtimeOptions: SubstrateStreamRuntimeOptions = {},
+  config: CoreSubstrateConfig,
+  runtimeOptions?: SubstrateStreamRuntimeOptions,
 ): StreamFn {
+  if (!runtimeOptions?.transport) {
+    throw new Error(
+      'Core stream adapter requires an injected transport; direct provider transport is not supported.',
+    );
+  }
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
   const budgetController = new ModelBudgetController(config);
   const fallbackRunner = new FallbackRunner();
@@ -164,8 +159,8 @@ export function createSubstrateStreamFn(
 interface ExecuteStreamCandidateParams {
   candidate: RoutingCandidate;
   attempt: number;
-  config: SubstrateConfig;
-  transport?: SubstrateStreamTransport;
+  config: CoreSubstrateConfig;
+  transport: SubstrateStreamTransport;
   litellmBaseUrl: string | null;
   model: Model<any>;
   context: unknown;
@@ -201,20 +196,6 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     undefined,
     params.litellmBaseUrl,
   );
-  const transport = params.transport;
-  const { model: candidateModel, apiKey } = transport
-    ? {
-      model: params.model,
-      apiKey: undefined,
-    }
-    : getModelAndKey(
-      params.config,
-      params.litellmBaseUrl,
-      candidate,
-    );
-  if (!transport) {
-    requestOptions.apiKey = apiKey;
-  }
   const retryConfig = llmRetryConfig(params.config);
   const maxRetries = Number.isFinite(retryConfig.maxRetries)
     ? Math.max(0, Math.floor(retryConfig.maxRetries!))
@@ -229,16 +210,14 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
       const bufferedEvents: AssistantMessageEvent[] = [];
 
       try {
-        const stream = transport
-          ? createTransportEventStream({
-            candidate,
-            model: params.model,
-            context: params.context,
-            requestContext: params.requestContext,
-            requestOptions,
-            transport,
-          })
-          : streamSimple(candidateModel, params.context as any, requestOptions as any);
+        const stream = createTransportEventStream({
+          candidate,
+          model: params.model,
+          context: params.context,
+          requestContext: params.requestContext,
+          requestOptions,
+          transport: params.transport,
+        });
 
         for await (const rawEvent of stream) {
           const event = rawEvent as AssistantMessageEvent;
@@ -310,7 +289,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
 
         const delayMs = baseDelayMs * (2 ** retryAttempt);
         log.warn('LLM stream failed, retrying', {
-          model: String(candidateModel.id),
+          model: String(params.model.id),
           provider: candidate.provider,
           attempt: retryAttempt + 1,
           maxRetries,
@@ -435,6 +414,7 @@ type TransportMessageState = {
   partial: AssistantMessage;
   textContentIndex: number | null;
   thinkingContentIndex: number | null;
+  textStreamStarted: boolean;
 };
 
 function createTransportMessageState(input: {
@@ -455,6 +435,7 @@ function createTransportMessageState(input: {
     } as AssistantMessage,
     textContentIndex: null,
     thinkingContentIndex: null,
+    textStreamStarted: false,
   };
 }
 
@@ -474,6 +455,7 @@ function enqueueTextDelta(
     type: 'text',
     text: `${state.partial.content[contentIndex].text}${delta}`,
   };
+  state.textStreamStarted = true;
   queue.push({
     type: state.partial.content[contentIndex].text.length === delta.length ? 'text_start' : 'text_delta',
     contentIndex,
@@ -487,7 +469,7 @@ function enqueueMissingTextEvents(
   state: TransportMessageState,
   content: string,
 ): void {
-  if (!content || state.textContentIndex !== null) {
+  if (!content || state.textStreamStarted) {
     return;
   }
   const contentIndex = ensureTextContentIndex(state);
@@ -495,6 +477,7 @@ function enqueueMissingTextEvents(
     type: 'text',
     text: content,
   };
+  state.textStreamStarted = true;
   queue.push({
     type: 'text_start',
     contentIndex,
@@ -827,55 +810,8 @@ function buildStreamRequestOptions(
   return requestOptions;
 }
 
-function getModelAndKey(
-  config: SubstrateConfig,
-  litellmBaseUrl: string | null,
-  candidate: RoutingCandidate,
-): { model: Model<any>; apiKey: string | undefined } {
-  if (candidate.requestBaseUrl) {
-    const apiKey = candidate.requestApiKeyEnv
-      ? resolveOptionalEnvCredential(config.credentialVault, candidate.requestApiKeyEnv)
-      : undefined;
-    return {
-      model: createModel(candidate.requestBaseUrl, candidate.model, candidate.maxTokens, candidate.contextWindow),
-      apiKey,
-    };
-  }
-
-  if (litellmBaseUrl) {
-    return {
-      model: createModel(
-        litellmBaseUrl,
-        normalizeLiteLLMModelId(candidate.provider, candidate.model),
-        candidate.maxTokens,
-        candidate.contextWindow,
-      ),
-      apiKey: resolveConfiguredLiteLLMApiKey({
-        credentialVault: config.credentialVault,
-        litellmApiKeyRef: resolveConfiguredLiteLLMApiKeyReference(config),
-      }),
-    };
-  }
-
-  const model = resolveRegisteredModel(candidate.provider, candidate.model);
-  if (!model) {
-    throw new Error(
-      `Unknown model "${candidate.model}" for provider "${candidate.provider}". ` +
-      'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
-    );
-  }
-  return {
-    model: {
-      ...model,
-      ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
-      maxTokens: candidate.maxTokens,
-    },
-    apiKey: resolveProviderApiKey(candidate.provider, config),
-  };
-}
-
 function resolveStreamCandidates(
-  config: SubstrateConfig,
+  config: CoreSubstrateConfig,
   purpose: RoutingPurpose,
   model: Model<any>,
   callerMaxTokens: number | undefined,
@@ -913,7 +849,7 @@ function resolveStreamCandidates(
 }
 
 function buildCurrentCandidate(
-  config: SubstrateConfig,
+  config: CoreSubstrateConfig,
   model: Model<any>,
   callerMaxTokens: number | undefined,
   litellmBaseUrl: string | null,
@@ -951,7 +887,6 @@ function candidatesEquivalent(left: RoutingCandidate, right: RoutingCandidate): 
 
 function shouldCommitBufferedEvent(event: AssistantMessageEvent): boolean {
   return event.type !== 'start'
-    && event.type !== 'text_start'
     && event.type !== 'thinking_start';
 }
 
@@ -1003,7 +938,7 @@ function resolveModelProvider(model: Model<any>): string | undefined {
  * to pi-ai's built-in model registry via resolveRegisteredModel().
  */
 export function resolveModel(
-  config: SubstrateConfig,
+  config: CoreSubstrateConfig,
   purpose: ModelPurpose = 'chat',
 ): Model<any> {
   const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
@@ -1028,7 +963,7 @@ export function resolveModel(
 }
 
 export function resolveModelSelection(
-  config: SubstrateConfig,
+  config: CoreSubstrateConfig,
   purpose: ModelPurpose = 'chat',
 ): RoutingCandidate {
   const routingPurpose = toRoutingPurpose(purpose);
@@ -1044,9 +979,10 @@ export function resolveModelSelection(
 }
 
 export function resolveExplicitModel(
+  config: CoreSubstrateConfig,
   selection: MessageModelOverride,
 ): Model<any> {
-  const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
+  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
 
   if (litellmBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
@@ -1058,7 +994,7 @@ export function resolveExplicitModel(
   if (!registered) {
     throw new Error(
       `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
-      'Use a known direct provider model or configure LiteLLM.',
+      'Use a known canonical provider model or configure LiteLLM.',
     );
   }
 

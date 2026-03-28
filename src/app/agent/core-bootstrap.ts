@@ -19,7 +19,7 @@ import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryStore } from '../../faculties/memory/store.js';
 
 const log = createComponentLogger('Agent');
@@ -39,7 +39,7 @@ export interface BootstrappedAgentCoreRuntime {
 }
 
 export interface BootstrapAgentCoreRuntimeOptions {
-  config: SubstrateConfig;
+  config: CoreSubstrateConfig;
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;

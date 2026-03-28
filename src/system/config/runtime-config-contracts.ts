@@ -53,8 +53,8 @@ export interface SubstrateConfig {
   extractionProvider: string;
   primaryMaxTokens: number;
   extractionMaxTokens: number;
-  discordToken: string;
-  discordBotId: string;
+  discordToken?: string;
+  discordBotId?: string;
   characterCardPath: string;
   systemDataDir?: string;
   companionDataDir?: string;
@@ -204,3 +204,34 @@ export interface SubstrateConfig {
 }
 export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 export const DEFAULT_UI_THEME_ID = 'garden';
+
+export const CORE_SECRET_BEARING_CONFIG_KEYS = [
+  'credentialVault',
+  'discordToken',
+  'discordBotId',
+  'litellmApiKeyRef',
+  'openRouterApiKeyRef',
+  'deepgramApiKey',
+  'elevenLabsApiKey',
+  'falApiKey',
+] as const;
+
+export type CoreSecretBearingConfigKey = (typeof CORE_SECRET_BEARING_CONFIG_KEYS)[number];
+
+export type CoreSubstrateConfig = Omit<SubstrateConfig, CoreSecretBearingConfigKey>;
+
+export function sanitizeCoreSubstrateConfig(config: SubstrateConfig): CoreSubstrateConfig {
+  const {
+    credentialVault: _credentialVault,
+    discordToken: _discordToken,
+    discordBotId: _discordBotId,
+    litellmApiKeyRef: _litellmApiKeyRef,
+    openRouterApiKeyRef: _openRouterApiKeyRef,
+    deepgramApiKey: _deepgramApiKey,
+    elevenLabsApiKey: _elevenLabsApiKey,
+    falApiKey: _falApiKey,
+    ...coreConfig
+  } = config;
+
+  return coreConfig;
+}

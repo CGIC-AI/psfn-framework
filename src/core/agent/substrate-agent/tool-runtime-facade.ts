@@ -321,7 +321,7 @@ export class ToolRuntimeFacade {
       requireConcurrencyMetadata: true,
     };
 
-    if (mode === 'gateway' && gatewayClient) {
+    if (gatewayClient) {
       options.gatewayClientMethods = extractGatewayMethods(gatewayClient);
     }
 

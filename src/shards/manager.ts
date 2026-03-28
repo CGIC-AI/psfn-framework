@@ -37,6 +37,7 @@ import type {
   ShardResult,
   ShardSourceContext,
 } from './types.js';
+import { buildShardLineageEnvelope } from './result-lineage.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
@@ -177,7 +178,14 @@ export class ShardManager implements ShardExecutionPort {
       content: shardConfig.task,
       timestamp: new Date(),
     };
-    return this.executeShard(shardId, channelId, preparedConfig, baseMessage);
+    const lineage = buildShardLineageEnvelope({
+      kind: 'spawn',
+      shardId,
+      shardChannelId: channelId,
+      sourceMessage: baseMessage,
+      ...(shardConfig.sourceContext ? { sourceContext: shardConfig.sourceContext } : {}),
+    });
+    return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage);
   }
 
   async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {
@@ -211,6 +219,13 @@ export class ShardManager implements ShardExecutionPort {
       satelliteId: routing?.satelliteId,
       presence: routing?.presence,
     });
+    const lineage = buildShardLineageEnvelope({
+      kind: 'wyoming',
+      shardId,
+      shardChannelId: request.message.channelId,
+      sourceMessage: request.message,
+      ...(routing ? { wyomingRouting: routing } : {}),
+    });
 
     try {
       const result = await this.executeShard(
@@ -218,6 +233,7 @@ export class ShardManager implements ShardExecutionPort {
         request.message.channelId,
         shardConfig,
         request.message,
+        lineage,
       );
       this.auditTrail?.append('wyoming.shard.delegate.end', {
         shardId,
@@ -251,6 +267,7 @@ export class ShardManager implements ShardExecutionPort {
     channelId: string,
     shardConfig: ShardConfig,
     baseMessage: SubstrateMessage,
+    lineage: ShardResult['lineage'],
   ): Promise<ShardResult> {
     this.refreshShardHealth();
     if (this.activeCount >= this.maxConcurrent) {
@@ -398,6 +415,7 @@ export class ShardManager implements ShardExecutionPort {
         ...(finishedShard?.failureReason ? { failureReason: finishedShard.failureReason } : {}),
         capabilities: [...capabilities],
         requiredCapabilities: [...requiredCapabilities],
+        lineage,
       };
       this.auditTrail?.append('shard.spawn.end', {
         shardId,

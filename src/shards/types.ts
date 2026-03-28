@@ -1,4 +1,5 @@
 import type { SessionEntry } from '../session/types.js';
+import type { ShardResultLineageEnvelope } from './result-lineage.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
@@ -55,6 +56,7 @@ export interface ShardResult {
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
+  lineage: ShardResultLineageEnvelope;
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';

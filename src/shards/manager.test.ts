@@ -170,6 +170,20 @@ describe('ShardManager', () => {
     expect(result.turns).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
+    expect(result.lineage).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      kind: 'spawn',
+      shardId: result.shardId,
+      shardChannelId: `shard:${result.shardId}`,
+      sourceMessage: expect.objectContaining({
+        id: result.shardId,
+        channelId: `shard:${result.shardId}`,
+        channelType: 'api',
+        authorId: 'system',
+        authorName: 'ShardManager',
+        isDirectMessage: false,
+      }),
+    }));
   });
 
   it('uses isolated channelId for session entries', async () => {
@@ -933,6 +947,49 @@ describe('ShardManager', () => {
     );
   });
 
+  it('returns lineage provenance on shard spawns with explicit source context', async () => {
+    mockShardContent = 'lineage response';
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const result = await manager.spawn({
+      name: 'lineage',
+      task: 'Trace the fold-back path.',
+      sourceContext: {
+        channelId: 'api:source-channel',
+        requestId: 'req-lineage',
+        turnId: 'turn-lineage',
+      },
+    });
+
+    expect(result.lineage).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      kind: 'spawn',
+      shardId: result.shardId,
+      shardChannelId: `shard:${result.shardId}`,
+      sourceContext: {
+        channelId: 'api:source-channel',
+        requestId: 'req-lineage',
+        turnId: 'turn-lineage',
+      },
+      sourceMessage: expect.objectContaining({
+        id: result.shardId,
+        channelId: `shard:${result.shardId}`,
+        channelType: 'api',
+        authorId: 'system',
+        authorName: 'ShardManager',
+        isDirectMessage: false,
+      }),
+    }));
+  });
+
   it('denies disallowed shard-to-prime memory sync operations and audits the denial', async () => {
     const memoryRedact = makeTestTool('memory_redact');
     const auditTrail = { append: vi.fn() };
@@ -1074,6 +1131,33 @@ describe('ShardManager', () => {
       'wyoming:ha-main',
       'wyoming:ha-main:voice-pe-kitchen',
     ]));
+    expect(result.lineage).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      kind: 'wyoming',
+      shardId: result.shardId,
+      shardChannelId: 'api:wyoming:ha-main:voice-pe-kitchen',
+      sourceMessage: expect.objectContaining({
+        id: 'wyoming-msg-conn-kitchen-7',
+        channelId: 'api:wyoming:ha-main:voice-pe-kitchen',
+        channelType: 'api',
+        authorId: 'wyoming-user:owner',
+        authorName: 'Wyoming Voice User',
+        isDirectMessage: true,
+        timestampMs: new Date('2026-02-26T12:00:00.000Z').getTime(),
+      }),
+      wyomingRouting: {
+        connectionId: 'conn-kitchen',
+        sessionId: 'session-kitchen',
+        turnId: 'wyoming-turn-conn-kitchen-session-kitchen-1',
+        siteId: 'ha-main',
+        satelliteId: 'voice-pe-kitchen',
+        presence: {
+          kind: 'satellite',
+          siteId: 'ha-main',
+          satelliteId: 'voice-pe-kitchen',
+        },
+      },
+    }));
     const delegatedEntries = sessionStore.getRecent('api:wyoming:ha-main:voice-pe-kitchen', 10);
     expect(delegatedEntries).toHaveLength(2);
     expect(delegatedEntries[0]).toMatchObject({

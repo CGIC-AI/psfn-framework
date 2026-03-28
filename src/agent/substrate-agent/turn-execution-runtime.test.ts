@@ -127,6 +127,7 @@ function createRuntime(params: {
         agentState.messages.push({ role: 'user', content: message.content });
         agentState.messages.push({ role: 'assistant', content: 'assistant reply' });
       }),
+      abort: vi.fn(),
       setModel: vi.fn(),
     },
     bridge: {
@@ -849,5 +850,56 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         summary: 'A catgirl sits on a server rack holding a pink rifle.',
       },
     });
+  });
+
+  it('aborts a hung vision turn after 10 seconds', async () => {
+    vi.useFakeTimers();
+    try {
+      const eventBus = new EventBus();
+      const buildContext = vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      }));
+      const runtime = createRuntime({
+        eventBus,
+        sessionManager: {} as SessionManager,
+        buildContext,
+        scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+        awaitPendingAutoCompaction: vi.fn(async () => undefined),
+        recordUserMessage: vi.fn(() => 1),
+        recordAssistantMessage: vi.fn(() => 2),
+      });
+      const promptDeferred = createDeferred<void>();
+      const abort = vi.fn();
+      runtime.agent.abort = abort as typeof runtime.agent.abort;
+      runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+        (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+        return promptDeferred.promise;
+      });
+
+      const turnResultPromise = handleMessageForTurn(runtime, createMessage('msg-vision-timeout', {
+        channelType: 'discord',
+        content: 'what is in the image?',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+          contentType: 'image/png',
+          name: 'current-image.png',
+        }],
+      })).then(
+        () => null,
+        error => error,
+      );
+
+      await flushAsyncWork();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      const error = await turnResultPromise;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('Vision turn timed out after 10000ms');
+      expect(abort).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

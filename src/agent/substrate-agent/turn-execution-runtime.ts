@@ -87,6 +87,7 @@ import {
 } from './turn-tool-context.js';
 
 const log = createComponentLogger('SubstrateAgent');
+const VISION_TURN_TIMEOUT_MS = 10_000;
 
 interface ProactiveMemoryProvider extends MemoryProvider {
   retrieveProactiveRecall?: (
@@ -311,6 +312,74 @@ export interface TurnExecutionRuntime {
     completedAt: number;
     canonicalContactKey?: string;
   }) => Promise<void>;
+}
+
+async function runWithVisionTurnTimeout<T>({
+  channelId,
+  deadlineAt,
+  stage,
+  onTimeout,
+  run,
+}: {
+  channelId: string;
+  deadlineAt: number | null;
+  stage: string;
+  onTimeout?: (() => void) | undefined;
+  run: () => Promise<T>;
+}): Promise<T> {
+  if (deadlineAt == null) {
+    return run();
+  }
+
+  const remainingMs = deadlineAt - Date.now();
+  const timeoutError = new Error(`Vision turn timed out after ${VISION_TURN_TIMEOUT_MS}ms`);
+  if (remainingMs <= 0) {
+    log.warn('Vision turn exceeded its deadline before stage start', {
+      channelId,
+      stage,
+      timeoutMs: VISION_TURN_TIMEOUT_MS,
+    });
+    if (onTimeout) {
+      try {
+        onTimeout();
+      } catch (error) {
+        log.warn('Vision turn timeout cleanup failed', {
+          channelId,
+          stage,
+          error: toErrorMessage(error),
+        });
+      }
+    }
+    throw timeoutError;
+  }
+
+  let timeoutHandle!: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      log.warn('Vision turn timed out; aborting stage', {
+        channelId,
+        stage,
+        timeoutMs: VISION_TURN_TIMEOUT_MS,
+      });
+      if (onTimeout) {
+        try {
+          onTimeout();
+        } catch (error) {
+          log.warn('Vision turn timeout cleanup failed', {
+            channelId,
+            stage,
+            error: toErrorMessage(error),
+          });
+        }
+      }
+      reject(timeoutError);
+    }, remainingMs);
+  });
+  try {
+    return await Promise.race([run(), timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 }
 
 export async function handleMessageForTurn(
@@ -705,19 +774,26 @@ export async function handleMessageForTurn(
     let responseText: string;
     let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
     let turnIntent: string | null = null;
+    const isVisionTurn = hasVisionTurnInputs(message);
+    const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
 
     const moaSettings = resolveMoaSettings(runtime.config, log);
     if (moaSettings) {
-      const moaResult = await runMoaTurn({
-        llmClient: runtime.llmClient,
-        context,
-        message,
-        settings: moaSettings,
-        turnId,
-        requestId,
-        callType: turnCallType,
-        contextWindow: runtime.resolveContextWindow(),
-        emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
+      const moaResult = await runWithVisionTurnTimeout({
+        channelId: message.channelId,
+        deadlineAt: visionTurnDeadlineAt,
+        stage: 'moa_turn',
+        run: () => runMoaTurn({
+          llmClient: runtime.llmClient,
+          context,
+          message,
+          settings: moaSettings,
+          turnId,
+          requestId,
+          callType: turnCallType,
+          contextWindow: runtime.resolveContextWindow(),
+          emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
+        }),
       });
       firstTokenAt = Date.now();
       emitObservedTurnStage('first-token', {
@@ -787,12 +863,17 @@ export async function handleMessageForTurn(
         purpose: 'agent.turn.prompt',
       });
       runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, autoloadOutcome.intent);
-      const turnUserContentBuildResult = await buildTurnUserContent({
-        message,
-        llmClient: runtime.llmClient,
-        runtimeMode: runtime.runtimeMode,
-        logger: log,
-        visionReviewer: runtime.imageVisionReviewer,
+      const turnUserContentBuildResult = await runWithVisionTurnTimeout({
+        channelId: message.channelId,
+        deadlineAt: visionTurnDeadlineAt,
+        stage: 'build_turn_user_content',
+        run: () => buildTurnUserContent({
+          message,
+          llmClient: runtime.llmClient,
+          runtimeMode: runtime.runtimeMode,
+          logger: log,
+          visionReviewer: runtime.imageVisionReviewer,
+        }),
       });
       const visionToolRequestContext = {
         ...baseVisionToolRequestContext,
@@ -801,20 +882,26 @@ export async function handleMessageForTurn(
           : {}),
       };
       try {
-        await runWithRequestContext(
-          {
-            ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
-            ...viewerRequestContext,
-          },
-          async () => runWithVisionToolRequestContext(
-            visionToolRequestContext,
-            async () => runtime.agent.prompt({
-              role: 'user',
-              content: turnUserContentBuildResult.content,
-              timestamp: Date.now(),
-            } satisfies UserMessage),
+        await runWithVisionTurnTimeout({
+          channelId: message.channelId,
+          deadlineAt: visionTurnDeadlineAt,
+          stage: 'agent_prompt',
+          onTimeout: () => runtime.agent.abort(),
+          run: () => runWithRequestContext(
+            {
+              ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
+              ...viewerRequestContext,
+            },
+            async () => runWithVisionToolRequestContext(
+              visionToolRequestContext,
+              async () => runtime.agent.prompt({
+                role: 'user',
+                content: turnUserContentBuildResult.content,
+                timestamp: Date.now(),
+              } satisfies UserMessage),
+            ),
           ),
-        );
+        });
       } finally {
         unsubscribeFirstToken();
         runtime.bridge.clearChannel(bridgeToken);
@@ -839,7 +926,7 @@ export async function handleMessageForTurn(
       firstTokenAt = streamFirstTokenAt;
 
       responseText = runtime.extractResponseText();
-      if (hasVisionTurnInputs(message) && responseText.trim().length === 0) {
+      if (isVisionTurn && responseText.trim().length === 0) {
         const assistantMessage = runtime.getLatestAssistantMessage();
         log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
           channelId: message.channelId,
@@ -876,20 +963,26 @@ export async function handleMessageForTurn(
           });
           runtime.setActiveTurnCorrelation(turnCorrelationBase);
           try {
-            await runWithRequestContext(
-              {
-                ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
-                ...viewerRequestContext,
-              },
-              async () => runWithVisionToolRequestContext(
-                visionToolRequestContext,
-                async () => runtime.agent.prompt({
-                  role: 'user',
-                  content,
-                  timestamp: Date.now(),
-                } satisfies UserMessage),
+            await runWithVisionTurnTimeout({
+              channelId: message.channelId,
+              deadlineAt: visionTurnDeadlineAt,
+              stage: originStage,
+              onTimeout: () => runtime.agent.abort(),
+              run: () => runWithRequestContext(
+                {
+                  ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
+                  ...viewerRequestContext,
+                },
+                async () => runWithVisionToolRequestContext(
+                  visionToolRequestContext,
+                  async () => runtime.agent.prompt({
+                    role: 'user',
+                    content,
+                    timestamp: Date.now(),
+                  } satisfies UserMessage),
+                ),
               ),
-            );
+            });
           } finally {
             runtime.bridge.clearChannel(bridgeToken);
             runtime.setActiveTurnCorrelation(null);

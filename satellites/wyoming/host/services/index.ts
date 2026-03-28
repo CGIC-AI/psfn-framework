@@ -1,7 +1,7 @@
 import type {
   WyomingFrame,
   WyomingServiceInfo,
-} from '../protocol.js';
+} from '../../protocol/index.js';
 import type {
   WyomingServiceAdapter,
   WyomingServiceDispatchResult,

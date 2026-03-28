@@ -7,7 +7,7 @@
 // Run: npx tsx src/app/e2e/e2e-wyoming-roundtrip.ts
 
 import { setTimeout as delay } from 'node:timers/promises';
-import { WyomingRuntime } from '../../channels/wyoming/runtime.js';
+import { WyomingRuntime } from '../../../satellites/wyoming/host/runtime.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   WYOMING_EVENT_DESCRIBE,
@@ -16,7 +16,7 @@ import {
   WYOMING_EVENT_SESSION_START,
   type WyomingFrame,
   type WyomingTransportSession,
-} from '../../channels/wyoming/protocol.js';
+} from '../../../satellites/wyoming/protocol/index.js';
 
 const HANDLE_EVENT = 'handle';
 const HANDLE_RESULT_EVENT = 'handle.result';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WyomingFrameCodec } from './codec.js';
-import { WyomingCodecError } from './protocol.js';
+import { WyomingCodecError } from './index.js';
 
 function splitBuffer(buffer: Buffer, splitAt: number): [Buffer, Buffer] {
   return [buffer.subarray(0, splitAt), buffer.subarray(splitAt)];

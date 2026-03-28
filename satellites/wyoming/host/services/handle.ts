@@ -1,15 +1,15 @@
-import type { AgentResponse, SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, SubstrateMessage } from '../../../../src/shared/contracts/runtime.js';
 import {
   buildSatellitePresenceMetadata,
   normalizePresenceMetadata,
   resolvePresenceSubjectId,
   resolvePresenceMetadataResult,
-} from '../../../core/agent/presence-metadata.js';
+} from '../../../../src/core/agent/presence-metadata.js';
 import {
   isRecord,
   type WyomingFrame,
   type WyomingJsonObject,
-} from '../protocol.js';
+} from '../../protocol/index.js';
 import type {
   WyomingServiceAdapter,
   WyomingServiceSessionClosedRequest,

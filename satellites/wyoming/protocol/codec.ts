@@ -3,7 +3,7 @@ import {
   type WyomingFrame,
   type WyomingJsonObject,
   isRecord,
-} from './protocol.js';
+} from './index.js';
 
 const HEADER_DELIMITER = '\n\n';
 const DEFAULT_MAX_HEADER_BYTES = 8 * 1024;

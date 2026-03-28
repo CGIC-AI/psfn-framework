@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SttTranscriptChunk } from '../../../voice/connectors/stt/types.js';
-import type { WyomingFrame, WyomingTransportSession } from '../protocol.js';
+import type { SttTranscriptChunk } from '../../../../src/voice/connectors/stt/types.js';
+import type { WyomingFrame, WyomingTransportSession } from '../../protocol/index.js';
 import { createWyomingAsrServiceAdapter } from './asr.js';
 
 class AsyncQueue<T> implements AsyncIterable<T> {

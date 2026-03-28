@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
-import type { WyomingFrame, WyomingTransportSession } from '../protocol.js';
+import type { SubstrateMessage } from '../../../../src/shared/contracts/runtime.js';
+import type { WyomingFrame, WyomingTransportSession } from '../../protocol/index.js';
 import { createWyomingHandleServiceAdapter } from './handle.js';
 
 function createTransportSession(connectionId: string): WyomingTransportSession {

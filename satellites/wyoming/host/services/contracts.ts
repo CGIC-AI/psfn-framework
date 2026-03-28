@@ -2,7 +2,7 @@ import type {
   WyomingFrame,
   WyomingServiceInfo,
   WyomingTransportSession,
-} from '../protocol.js';
+} from '../../protocol/index.js';
 
 export type WyomingServiceFamily = 'handle' | 'asr' | 'tts';
 

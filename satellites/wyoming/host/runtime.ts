@@ -1,5 +1,5 @@
-import type { EventBus, EventMap } from '../../shared/event-bus.js';
-import { createComponentLogger } from '../../shared/logger.js';
+import type { EventBus, EventMap } from '../../../src/shared/event-bus.js';
+import { createComponentLogger } from '../../../src/shared/logger.js';
 import {
   WYOMING_EVENT_ACK,
   WYOMING_EVENT_DESCRIBE,
@@ -18,7 +18,7 @@ import {
   type WyomingTransportSession,
   cloneInfoData,
   normalizeSessionId,
-} from './protocol.js';
+} from '../protocol/index.js';
 import type { WyomingServiceRegistry } from './services/index.js';
 
 const log = createComponentLogger('WyomingRuntime');

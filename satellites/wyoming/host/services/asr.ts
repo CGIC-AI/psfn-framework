@@ -2,11 +2,11 @@ import type {
   SttStreamConfig,
   SttStreamSession,
   StreamingSttConnector,
-} from '../../../voice/connectors/stt/types.js';
+} from '../../../../src/voice/connectors/stt/types.js';
 import type {
   WyomingFrame,
   WyomingJsonObject,
-} from '../protocol.js';
+} from '../../protocol/index.js';
 import type {
   WyomingServiceAdapter,
   WyomingServiceSessionClosedRequest,

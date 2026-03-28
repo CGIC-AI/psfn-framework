@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   evaluateWyomingDelegation,
   resolveWyomingRoutingMetadata,
-} from './wyoming-routing.js';
+} from './routing.js';
 
 function makeMessage(overrides?: Record<string, unknown>) {
   return {

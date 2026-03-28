@@ -3,8 +3,8 @@ import type {
   TtsAudioEncoding,
   TtsSynthesisRequest,
   TtsSynthesisSession,
-} from '../../../voice/connectors/tts/types.js';
-import { isRecord, type WyomingFrame, type WyomingJsonObject } from '../protocol.js';
+} from '../../../../src/voice/connectors/tts/types.js';
+import { isRecord, type WyomingFrame, type WyomingJsonObject } from '../../protocol/index.js';
 import type {
   WyomingServiceAdapter,
   WyomingServiceSessionClosedRequest,

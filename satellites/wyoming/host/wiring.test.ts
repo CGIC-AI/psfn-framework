@@ -1,13 +1,13 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { EventBus } from '../../shared/event-bus.js';
+import { EventBus } from '../../../src/shared/event-bus.js';
 import { WyomingTcpServer } from './server.js';
 import { WyomingRuntime } from './runtime.js';
 import { createWyomingServiceRegistry } from './services/index.js';
 import { createWyomingHandleServiceAdapter } from './services/handle.js';
 import { createWyomingAsrServiceAdapter } from './services/asr.js';
 import { createWyomingTtsServiceAdapter } from './services/tts.js';
-import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
-import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
+import type { StreamingSttConnector } from '../../../src/voice/connectors/stt/types.js';
+import type { StreamingTtsConnector } from '../../../src/voice/connectors/tts/types.js';
 
 /**
  * Tests that verify Wyoming voice bridge production wiring:
@@ -245,7 +245,7 @@ describe('Wyoming production wiring', () => {
 describe('Wyoming config parsing', () => {
   it('parses WYOMING_ENABLED from env', async () => {
     // Dynamic import to get a clean module each time
-    const { loadConfig } = await import('../../types.js');
+    const { loadConfig } = await import('../../../src/system/config/load-config.js');
 
     // Save original env
     const origEnabled = process.env.WYOMING_ENABLED;
@@ -281,7 +281,7 @@ describe('Wyoming config parsing', () => {
   });
 
   it('parses WYOMING_HOST and WYOMING_PORT from env', async () => {
-    const { loadConfig } = await import('../../types.js');
+    const { loadConfig } = await import('../../../src/system/config/load-config.js');
 
     const origHost = process.env.WYOMING_HOST;
     const origPort = process.env.WYOMING_PORT;

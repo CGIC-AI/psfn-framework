@@ -1,10 +1,10 @@
-import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
-import type { SubstrateMessage, WyomingRoutingMetadata } from '../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../../src/system/config/runtime-config-contracts.js';
+import type { SubstrateMessage, WyomingRoutingMetadata } from '../../../src/shared/contracts/runtime.js';
 import {
   buildSatellitePresenceMetadata,
   resolvePresenceMetadataResult,
   resolvePresenceSubjectId,
-} from '../core/agent/presence-metadata.js';
+} from '../../../src/core/agent/presence-metadata.js';
 
 export interface WyomingDelegationDecision {
   isWyoming: boolean;

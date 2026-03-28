@@ -521,7 +521,10 @@ describe('createSubstrateStreamFn', () => {
     try {
       const config = makeConfig({
         litellmBaseUrl: 'http://localhost:4000/v1',
-        litellmApiKeyEnv: 'PSFN_TEST_LITELLM_KEY',
+        litellmApiKeyRef: {
+          kind: 'env',
+          envName: 'PSFN_TEST_LITELLM_KEY',
+        },
       });
 
       streamAdapterMocks.streamSimple.mockImplementation((_resolvedModel: { id: string }, _context, _requestOptions) => (

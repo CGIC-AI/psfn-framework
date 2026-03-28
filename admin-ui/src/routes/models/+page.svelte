@@ -31,7 +31,7 @@
     providerSupportsModelsApi,
   } from '$lib/providers/registry';
 
-  type ProviderEditableField = 'id' | 'label' | 'apiBaseUrl' | 'modelsApiUrl' | 'apiKeyEnv';
+  type ProviderEditableField = 'id' | 'label' | 'apiBaseUrl' | 'modelsApiUrl' | 'apiKeyRef';
   type CanonicalModelPurpose =
     | 'chat'
     | 'background'
@@ -365,6 +365,20 @@
           id: trimmed.toLowerCase(),
         };
       }
+      if (field === 'apiKeyRef') {
+        if (trimmed.length === 0) {
+          const nextEntry = { ...entry };
+          delete nextEntry.apiKeyRef;
+          return nextEntry;
+        }
+        return {
+          ...entry,
+          apiKeyRef: {
+            kind: 'env',
+            envName: trimmed,
+          },
+        };
+      }
       if (trimmed.length === 0) {
         const nextEntry = { ...entry };
         delete nextEntry[field];
@@ -392,8 +406,8 @@
         errors.push(`${label}: duplicate provider id.`);
       }
       seenIds.add(entry.id);
-      if (entry.apiKeyEnv && !providerEnvNameIsValid(entry.apiKeyEnv)) {
-        errors.push(`${label}: apiKeyEnv must be an uppercase environment variable name.`);
+      if (entry.apiKeyRef?.kind === 'env' && !providerEnvNameIsValid(entry.apiKeyRef.envName)) {
+        errors.push(`${label}: apiKeyRef.envName must be an uppercase environment variable name.`);
       }
       if (!entry.apiBaseUrl?.trim()) {
         errors.push(`${label}: apiBaseUrl is required for ${entry.type}.`);
@@ -1458,12 +1472,12 @@
               />
             </div>
             <div>
-              <label for={`provider-api-key-env-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">API Key Env</label>
+              <label for={`provider-api-key-env-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">API Key Ref</label>
               <input
                 id={`provider-api-key-env-${index}`}
                 type="text"
-                value={entry.apiKeyEnv ?? ''}
-                oninput={(event) => setProviderField(index, 'apiKeyEnv', (event.currentTarget as HTMLInputElement).value)}
+                value={entry.apiKeyRef?.kind === 'env' ? entry.apiKeyRef.envName : ''}
+                oninput={(event) => setProviderField(index, 'apiKeyRef', (event.currentTarget as HTMLInputElement).value)}
                 class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
                 placeholder="LITELLM_API_KEY"
               />

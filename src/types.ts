@@ -11,7 +11,10 @@ import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import type { ChannelVisibility, TrustLevel } from './trust/types.js';
 import type { ImageWorkflowSettings } from './images/types.js';
 import type { CompanionPresenceMetadata } from './agent/presence-metadata.js';
-import type { CredentialVaultPort } from './custody/credential-vault.js';
+import type {
+  CredentialReference,
+  CredentialVaultPort,
+} from './custody/credential-vault.js';
 import {
   createEnvCredentialVault,
   resolveOptionalEnvCredential,
@@ -446,7 +449,7 @@ export interface ProviderRegistryEntry {
   label?: string;
   apiBaseUrl?: string;
   modelsApiUrl?: string;
-  apiKeyEnv?: string;
+  apiKeyRef?: CredentialReference;
   metadata?: Record<string, unknown>;
 }
 
@@ -626,8 +629,9 @@ export interface SubstrateConfig {
   providerRegistry?: CanonicalProviderRegistry;
   credentialVault?: CredentialVaultPort;
   litellmBaseUrl?: string;
-  litellmApiKeyEnv?: string;
+  litellmApiKeyRef?: CredentialReference;
   openRouterApiBaseUrl?: string;
+  openRouterApiKeyRef?: CredentialReference;
   responseStyleOverrides?: ResponseStyleOverrides;
   runtimeHooks?: RuntimeConfigHooks;
   promotedExtendedTools?: string[];

@@ -36,7 +36,14 @@ export interface CredentialVaultPort {
 
 export interface CredentialVaultConfigLike {
   credentialVault?: CredentialVaultPort;
-  litellmApiKeyEnv?: string;
+  litellmApiKeyRef?: CredentialReference;
+  providerRegistry?: {
+    providers: readonly Array<{
+      type: string;
+      enabled: boolean;
+      apiKeyRef?: CredentialReference;
+    }>;
+  };
 }
 
 function normalizeCredentialValue(value: unknown): string | undefined {
@@ -53,18 +60,24 @@ function normalizeEnvCredentialName(envName: string): string {
   return normalized;
 }
 
-function resolveProviderCredentialEnvNames(
+function resolveProviderCredentialReferences(
   provider: string,
   config: CredentialVaultConfigLike,
-): readonly string[] {
+): readonly CredentialReference[] {
   const normalized = provider.trim().toLowerCase();
   if (!normalized) {
     return [];
   }
-  if (normalized === 'litellm' || normalized === 'litellm_proxy' || normalized === 'local_endpoint') {
-    return [normalizeCredentialValue(config.litellmApiKeyEnv) ?? DEFAULT_LITELLM_API_KEY_ENV];
+  const configuredRef = config.providerRegistry?.providers.find(
+    (entry) => entry.enabled && entry.type === normalized,
+  )?.apiKeyRef;
+  if (configuredRef) {
+    return [configuredRef];
   }
-  return PROVIDER_API_KEY_ENV_NAMES[normalized] ?? [];
+  if (normalized === 'litellm' || normalized === 'litellm_proxy' || normalized === 'local_endpoint') {
+    return [config.litellmApiKeyRef ?? envCredential(DEFAULT_LITELLM_API_KEY_ENV)];
+  }
+  return (PROVIDER_API_KEY_ENV_NAMES[normalized] ?? []).map((envName) => envCredential(envName));
 }
 
 export function envCredential(envName: string): EnvCredentialReference {
@@ -99,11 +112,21 @@ export function resolveOptionalEnvCredential(
   envName: string,
   fallbackEnv: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const reference = envCredential(envName);
+  return resolveOptionalCredentialReference(vault, envCredential(envName), fallbackEnv);
+}
+
+export function resolveOptionalCredentialReference(
+  vault: CredentialVaultPort | undefined,
+  reference: CredentialReference,
+  fallbackEnv: NodeJS.ProcessEnv = process.env,
+): string | undefined {
   if (vault) {
     return vault.resolveOptional(reference);
   }
-  return normalizeCredentialValue(fallbackEnv[reference.envName]);
+  if (reference.kind === 'env') {
+    return normalizeCredentialValue(fallbackEnv[reference.envName]);
+  }
+  return undefined;
 }
 
 export function resolveInlineOrEnvCredential(
@@ -124,8 +147,8 @@ export function resolveProviderApiKey(
   config: CredentialVaultConfigLike = {},
   fallbackEnv: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  for (const envName of resolveProviderCredentialEnvNames(provider, config)) {
-    const value = resolveOptionalEnvCredential(config.credentialVault, envName, fallbackEnv);
+  for (const reference of resolveProviderCredentialReferences(provider, config)) {
+    const value = resolveOptionalCredentialReference(config.credentialVault, reference, fallbackEnv);
     if (value) {
       return value;
     }

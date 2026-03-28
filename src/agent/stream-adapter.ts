@@ -41,7 +41,7 @@ import {
 } from '../custody/credential-vault.js';
 import {
   resolveConfiguredLiteLLMApiKey,
-  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../config/providers-config.js';
 
@@ -448,7 +448,7 @@ function getModelAndKey(
       ),
       apiKey: resolveConfiguredLiteLLMApiKey({
         credentialVault: config.credentialVault,
-        litellmApiKeyEnv: resolveConfiguredLiteLLMApiKeyEnv(config),
+        litellmApiKeyRef: resolveConfiguredLiteLLMApiKeyReference(config),
       }),
     };
   }

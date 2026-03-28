@@ -8,7 +8,10 @@ import type {
   ModelSlot,
   SubstrateConfig,
 } from '../types.js';
-import { createEnvCredentialVault } from '../custody/credential-vault.js';
+import {
+  createEnvCredentialVault,
+  envCredential,
+} from '../custody/credential-vault.js';
 import { FallbackRunner } from './fallback.js';
 import { createEligibilityGate, EligibilityDeniedError } from '../capabilities/eligibility.js';
 
@@ -367,7 +370,7 @@ describe('LLMClient completion model hints', () => {
     process.env.CUSTOM_LITELLM_KEY = 'provider-key';
     const client = new LLMClient(makeConfig({
       litellmBaseUrl: 'http://provider-config.test/v1',
-      litellmApiKeyEnv: 'CUSTOM_LITELLM_KEY',
+      litellmApiKeyRef: envCredential('CUSTOM_LITELLM_KEY'),
     }));
     mocks.completeSimple.mockResolvedValue({
       content: [{ type: 'text', text: 'provider-config response' }],
@@ -396,7 +399,7 @@ describe('LLMClient completion model hints', () => {
   it('uses the credential vault for provider-configured LiteLLM routing', async () => {
     const client = new LLMClient(makeConfig({
       litellmBaseUrl: 'http://provider-config.test/v1',
-      litellmApiKeyEnv: 'CUSTOM_LITELLM_KEY',
+      litellmApiKeyRef: envCredential('CUSTOM_LITELLM_KEY'),
       credentialVault: createEnvCredentialVault({
         CUSTOM_LITELLM_KEY: 'vault-provider-key',
       }),

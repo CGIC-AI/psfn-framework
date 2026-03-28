@@ -52,7 +52,7 @@
   } from '$lib/providers/registry';
 
   type ViewMode = 'simple' | 'advanced' | 'raw';
-  type ProviderEditableField = 'id' | 'label' | 'apiBaseUrl' | 'modelsApiUrl' | 'apiKeyEnv';
+  type ProviderEditableField = 'id' | 'label' | 'apiBaseUrl' | 'modelsApiUrl' | 'apiKeyRef';
 
   const DISABLED_PROVIDER_ID = 'disabled';
   const COMPOSITIONAL_TIER_OPTIONS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
@@ -1219,6 +1219,20 @@
           id: trimmed.toLowerCase(),
         };
       }
+      if (field === 'apiKeyRef') {
+        if (trimmed.length === 0) {
+          const nextEntry = { ...entry };
+          delete nextEntry.apiKeyRef;
+          return nextEntry;
+        }
+        return {
+          ...entry,
+          apiKeyRef: {
+            kind: 'env',
+            envName: trimmed,
+          },
+        };
+      }
       if (trimmed.length === 0) {
         const nextEntry = { ...entry };
         delete nextEntry[field];
@@ -1246,8 +1260,8 @@
         errors.push(`${label}: duplicate provider id.`);
       }
       seenIds.add(entry.id);
-      if (entry.apiKeyEnv && !providerEnvNameIsValid(entry.apiKeyEnv)) {
-        errors.push(`${label}: apiKeyEnv must be an uppercase environment variable name.`);
+      if (entry.apiKeyRef?.kind === 'env' && !providerEnvNameIsValid(entry.apiKeyRef.envName)) {
+        errors.push(`${label}: apiKeyRef.envName must be an uppercase environment variable name.`);
       }
       if (!entry.apiBaseUrl?.trim()) {
         errors.push(`${label}: apiBaseUrl is required for ${entry.type}.`);
@@ -1833,11 +1847,11 @@
                       />
                     </div>
                     <div>
-                      <label class={LABEL_CLS}>API Key Env</label>
+                      <label class={LABEL_CLS}>API Key Ref</label>
                       <input
                         type="text"
-                        value={entry.apiKeyEnv ?? ''}
-                        oninput={(event) => setProviderField(index, 'apiKeyEnv', (event.currentTarget as HTMLInputElement).value)}
+                        value={entry.apiKeyRef?.kind === 'env' ? entry.apiKeyRef.envName : ''}
+                        oninput={(event) => setProviderField(index, 'apiKeyRef', (event.currentTarget as HTMLInputElement).value)}
                         class={INPUT_CLS}
                         placeholder="OPENROUTER_API_KEY"
                       />

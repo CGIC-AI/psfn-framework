@@ -664,6 +664,13 @@ export type CanonicalProviderType =
   | 'mistral'
   | 'generic_openai';
 
+export interface EnvCredentialReference {
+  kind: 'env';
+  envName: string;
+}
+
+export type CredentialReference = EnvCredentialReference;
+
 export interface ProviderRegistryEntry {
   id: string;
   type: CanonicalProviderType;
@@ -671,7 +678,7 @@ export interface ProviderRegistryEntry {
   label?: string;
   apiBaseUrl?: string;
   modelsApiUrl?: string;
-  apiKeyEnv?: string;
+  apiKeyRef?: CredentialReference;
   metadata?: Record<string, unknown>;
 }
 
@@ -683,10 +690,10 @@ export interface CanonicalProviderRegistry {
 export interface ProvidersRuntimeConfig {
   registry: CanonicalProviderRegistry;
   litellmBaseUrl?: string;
-  litellmApiKeyEnv?: string;
+  litellmApiKeyRef?: CredentialReference;
   openRouterApiBaseUrl?: string;
   openRouterModelsApiUrl?: string;
-  openRouterApiKeyEnv?: string;
+  openRouterApiKeyRef?: CredentialReference;
 }
 
 export interface AdminSettingsData {

@@ -58,9 +58,10 @@ function buildConfig(
     modelRegistry: models.modelRegistry,
     providerRegistry: providers.registry,
     litellmBaseUrl: providers.litellmBaseUrl,
-    litellmApiKeyEnv: providers.litellmApiKeyEnv,
+    litellmApiKeyRef: providers.litellmApiKeyRef,
     openRouterApiBaseUrl: providers.openRouterApiBaseUrl,
     openRouterModelsApiUrl: providers.openRouterModelsApiUrl,
+    openRouterApiKeyRef: providers.openRouterApiKeyRef,
     runtimeHooks: hooks,
   };
 }
@@ -451,7 +452,10 @@ describe('AdminSettingsDataService', () => {
           type: 'litellm_proxy',
           enabled: true,
           apiBaseUrl: 'http://127.0.0.1:4100/v1',
-          apiKeyEnv: 'LITELLM_API_KEY',
+          apiKeyRef: {
+            kind: 'env',
+            envName: 'LITELLM_API_KEY',
+          },
         },
         {
           id: 'openrouter',
@@ -459,7 +463,10 @@ describe('AdminSettingsDataService', () => {
           enabled: true,
           apiBaseUrl: 'https://openrouter.ai/api/v1',
           modelsApiUrl: 'https://openrouter.ai/api/v1/models',
-          apiKeyEnv: 'OPENROUTER_API_KEY',
+          apiKeyRef: {
+            kind: 'env',
+            envName: 'OPENROUTER_API_KEY',
+          },
         },
       ],
     };

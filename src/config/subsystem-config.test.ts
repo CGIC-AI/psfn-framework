@@ -305,7 +305,10 @@ describe('subsystem config round-trip', () => {
           enabled: true,
           label: 'LiteLLM Proxy',
           apiBaseUrl: 'http://127.0.0.1:4000/v1',
-          apiKeyEnv: 'LITELLM_API_KEY',
+          apiKeyRef: {
+            kind: 'env',
+            envName: 'LITELLM_API_KEY',
+          },
         },
         {
           id: 'openrouter',
@@ -314,7 +317,10 @@ describe('subsystem config round-trip', () => {
           label: 'OpenRouter',
           apiBaseUrl: 'https://openrouter.ai/api/v1',
           modelsApiUrl: 'https://openrouter.ai/api/v1/models',
-          apiKeyEnv: 'OPENROUTER_API_KEY',
+          apiKeyRef: {
+            kind: 'env',
+            envName: 'OPENROUTER_API_KEY',
+          },
         },
       ],
     };
@@ -322,6 +328,10 @@ describe('subsystem config round-trip', () => {
     const saved = saveProvidersConfig(dataDir, expected);
     expect(saved.registry).toEqual(expected);
     expect(saved.litellmBaseUrl).toBe('http://127.0.0.1:4000/v1');
+    expect(saved.litellmApiKeyRef).toEqual({
+      kind: 'env',
+      envName: 'LITELLM_API_KEY',
+    });
     expect(saved.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
     expect(readJsonFile(join(dataDir, PROVIDERS_FILE_NAME))).toEqual(expected);
     expect(loadProvidersConfig(dataDir).registry).toEqual(expected);

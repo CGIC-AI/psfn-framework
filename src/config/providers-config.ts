@@ -3,10 +3,14 @@ import { join } from 'node:path';
 import type {
   CanonicalProviderRegistry,
   CanonicalProviderType,
+  CredentialReference,
   ProviderRegistryEntry,
   SubstrateConfig,
 } from '../types.js';
-import { resolveOptionalEnvCredential } from '../custody/credential-vault.js';
+import {
+  envCredential,
+  resolveOptionalCredentialReference,
+} from '../custody/credential-vault.js';
 import { writeJsonAtomic, loadOrSeedJson } from './load-or-seed.js';
 import { isRecord } from '../utils/types.js';
 
@@ -28,10 +32,10 @@ const KNOWN_PROVIDER_TYPES = new Set<CanonicalProviderType>([
 export interface ProvidersRuntimeConfig {
   registry: CanonicalProviderRegistry;
   litellmBaseUrl?: string;
-  litellmApiKeyEnv?: string;
+  litellmApiKeyRef?: CredentialReference;
   openRouterApiBaseUrl?: string;
   openRouterModelsApiUrl?: string;
-  openRouterApiKeyEnv?: string;
+  openRouterApiKeyRef?: CredentialReference;
 }
 
 interface ProvidersConfigLoadOptions {
@@ -74,6 +78,24 @@ function normalizeApiKeyEnv(value: unknown, field: string): string | undefined {
   return normalized;
 }
 
+function normalizeCredentialReference(
+  value: unknown,
+  field: string,
+): CredentialReference | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid providers config: ${field} must be an object`);
+  }
+  if (value.kind !== 'env') {
+    throw new Error(`Invalid providers config: ${field}.kind must be "env"`);
+  }
+  const envName = normalizeApiKeyEnv(value.envName, `${field}.envName`);
+  if (!envName) {
+    throw new Error(`Invalid providers config: ${field}.envName must be an uppercase env var name`);
+  }
+  return envCredential(envName);
+}
+
 function normalizeProviderType(value: unknown, field: string): CanonicalProviderType {
   const normalized = toNonEmptyString(value)?.toLowerCase() as CanonicalProviderType | undefined;
   if (!normalized || !KNOWN_PROVIDER_TYPES.has(normalized)) {
@@ -101,7 +123,10 @@ function normalizeProviderEntry(raw: unknown, field: string): ProviderRegistryEn
   const label = toNonEmptyString(raw.label);
   const apiBaseUrl = normalizeHttpUrl(toNonEmptyString(raw.apiBaseUrl), `${field}.apiBaseUrl`);
   const modelsApiUrl = normalizeHttpUrl(toNonEmptyString(raw.modelsApiUrl), `${field}.modelsApiUrl`);
-  const apiKeyEnv = normalizeApiKeyEnv(raw.apiKeyEnv, `${field}.apiKeyEnv`);
+  if ('apiKeyEnv' in raw) {
+    throw new Error(`Invalid providers config: ${field}.apiKeyEnv is not supported; use ${field}.apiKeyRef`);
+  }
+  const apiKeyRef = normalizeCredentialReference(raw.apiKeyRef, `${field}.apiKeyRef`);
 
   if (type === 'litellm_proxy' && !apiBaseUrl) {
     throw new Error(`Invalid providers config: ${field}.apiBaseUrl is required for litellm_proxy`);
@@ -128,7 +153,7 @@ function normalizeProviderEntry(raw: unknown, field: string): ProviderRegistryEn
     ...(label ? { label } : {}),
     ...(apiBaseUrl ? { apiBaseUrl } : {}),
     ...(modelsApiUrl ? { modelsApiUrl } : {}),
-    ...(apiKeyEnv ? { apiKeyEnv } : {}),
+    ...(apiKeyRef ? { apiKeyRef } : {}),
     ...(isRecord(raw.metadata) ? { metadata: { ...raw.metadata } } : {}),
   };
 }
@@ -179,10 +204,10 @@ function projectProvidersRuntimeConfig(registry: CanonicalProviderRegistry): Pro
   return {
     registry,
     ...(litellm?.apiBaseUrl ? { litellmBaseUrl: litellm.apiBaseUrl } : {}),
-    ...(litellm?.apiKeyEnv ? { litellmApiKeyEnv: litellm.apiKeyEnv } : {}),
+    ...(litellm?.apiKeyRef ? { litellmApiKeyRef: litellm.apiKeyRef } : {}),
     ...(openrouter?.apiBaseUrl ? { openRouterApiBaseUrl: openrouter.apiBaseUrl } : {}),
     ...(openrouter?.modelsApiUrl ? { openRouterModelsApiUrl: openrouter.modelsApiUrl } : {}),
-    ...(openrouter?.apiKeyEnv ? { openRouterApiKeyEnv: openrouter.apiKeyEnv } : {}),
+    ...(openrouter?.apiKeyRef ? { openRouterApiKeyRef: openrouter.apiKeyRef } : {}),
   };
 }
 
@@ -298,8 +323,9 @@ export function applyProvidersRuntimeConfig(
 ): void {
   config.providerRegistry = providers.registry;
   config.litellmBaseUrl = providers.litellmBaseUrl;
-  config.litellmApiKeyEnv = providers.litellmApiKeyEnv;
+  config.litellmApiKeyRef = providers.litellmApiKeyRef;
   config.openRouterApiBaseUrl = providers.openRouterApiBaseUrl;
+  config.openRouterApiKeyRef = providers.openRouterApiKeyRef;
   if (providers.openRouterModelsApiUrl) {
     config.openRouterModelsApiUrl = providers.openRouterModelsApiUrl;
   }
@@ -311,19 +337,19 @@ export function resolveConfiguredLiteLLMBaseUrl(config: SubstrateConfig): string
   return toNonEmptyString(process.env.LITELLM_BASE_URL) ?? null;
 }
 
-export function resolveConfiguredLiteLLMApiKeyEnv(
-  config: Pick<SubstrateConfig, 'litellmApiKeyEnv'>,
-): string {
-  return toNonEmptyString(config.litellmApiKeyEnv) ?? 'LITELLM_API_KEY';
+export function resolveConfiguredLiteLLMApiKeyReference(
+  config: Pick<SubstrateConfig, 'litellmApiKeyRef'>,
+): CredentialReference {
+  return config.litellmApiKeyRef ?? envCredential('LITELLM_API_KEY');
 }
 
 export function resolveConfiguredLiteLLMApiKey(
-  config: Pick<SubstrateConfig, 'credentialVault' | 'litellmApiKeyEnv'>,
+  config: Pick<SubstrateConfig, 'credentialVault' | 'litellmApiKeyRef'>,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return resolveOptionalEnvCredential(
+  return resolveOptionalCredentialReference(
     config.credentialVault,
-    resolveConfiguredLiteLLMApiKeyEnv(config),
+    resolveConfiguredLiteLLMApiKeyReference(config),
     env,
   );
 }

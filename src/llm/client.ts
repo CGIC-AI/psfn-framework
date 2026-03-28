@@ -43,12 +43,13 @@ import {
 } from './correlation.js';
 import { ModelBudgetController, ModelBudgetExceededError } from './model-budget.js';
 import {
+  type CredentialReference,
   resolveProviderApiKey,
   resolveOptionalEnvCredential,
 } from '../custody/credential-vault.js';
 import {
   resolveConfiguredLiteLLMApiKey,
-  resolveConfiguredLiteLLMApiKeyEnv,
+  resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../config/providers-config.js';
 
@@ -112,7 +113,7 @@ export class LegacyModelHintError extends Error {
 export class LLMClient {
   private config: SubstrateConfig;
   private litellmBaseUrl: string | null;
-  private litellmApiKeyEnv: string;
+  private litellmApiKeyRef: CredentialReference;
   private fallbackRunner: FallbackRunner;
   private budgetController: ModelBudgetController;
   private eligibilityGate?: EligibilityGate;
@@ -128,7 +129,7 @@ export class LLMClient {
       : (litellmBaseUrlOrOptions ?? {});
     this.config = config;
     this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? resolveConfiguredLiteLLMBaseUrl(config);
-    this.litellmApiKeyEnv = resolveConfiguredLiteLLMApiKeyEnv(config);
+    this.litellmApiKeyRef = resolveConfiguredLiteLLMApiKeyReference(config);
     this.fallbackRunner = new FallbackRunner();
     this.budgetController = new ModelBudgetController(config);
     this.eligibilityGate = runtimeOptions.eligibilityGate;
@@ -154,7 +155,7 @@ export class LLMClient {
         model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
         apiKey: resolveConfiguredLiteLLMApiKey({
           credentialVault: this.config.credentialVault,
-          litellmApiKeyEnv: this.litellmApiKeyEnv,
+          litellmApiKeyRef: this.litellmApiKeyRef,
         }),
       };
     }

@@ -28,7 +28,7 @@ describe('credential vault', () => {
 
     expect(resolveProviderApiKey('litellm_proxy', {
       credentialVault: vault,
-      litellmApiKeyEnv: 'CUSTOM_LITELLM_TOKEN',
+      litellmApiKeyRef: envCredential('CUSTOM_LITELLM_TOKEN'),
     })).toBe('litellm-secret');
     expect(resolveProviderApiKey('anthropic', {
       credentialVault: vault,

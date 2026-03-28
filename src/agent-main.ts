@@ -10,8 +10,6 @@ import type {
 } from './types.js';
 import { createComponentLogger } from './logger.js';
 import { EventBus } from './event-bus.js';
-import { MemoryStore } from './memory/store.js';
-import { MemoryJournal } from './memory/journal.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
 import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
@@ -44,16 +42,10 @@ import { initDatabase } from './persistence/sqlite-utils.js';
 import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from './utils/env.js';
 import { MemoryWriter } from './memory/writer.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
-import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
 import { registerBeadsTools } from './beads/runtime-wiring.js';
 import { GatewayBeadsOps } from './beads/gateway-ops.js';
-import { registerFilesystemTools } from './filesystem/runtime-wiring.js';
-import { GatewayFilesystemOps } from './filesystem/gateway-ops.js';
-import { registerImageTools } from './images/runtime-wiring.js';
-import { GatewayImageOps } from './images/gateway-ops.js';
-import { DefaultImageVisionReviewer } from './images/vision-reviewer.js';
 import {
   DiscordLifecycleNotifier,
   writeLastActiveSession,
@@ -66,28 +58,12 @@ import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
 import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
-import { wireSkillsRuntime } from './skills/runtime-wiring.js';
-import {
-  createIntentionAppraisalHooks,
-  createIntentionBehavioralPatternHooks,
-  wireIntentionRuntime,
-} from './intention/runtime-wiring.js';
 import { createBehavioralPatternMemoryPromotionHook } from './intention/patterns.js';
 import {
   composeIdentity,
-  composeSessionRuntime,
-  composeSubstrateAgent,
-  wireSelfModelRuntime,
-  wireCoreMemoryRuntime,
-  wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
 import {
-  wirePromptRuntime,
-  wireCharacterCardRuntime,
-  wireStaticPromptRegistry,
-  wireSettingsRuntime,
-  wireSessionToolsRuntime,
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
   wireHeartbeatRuntime,
@@ -105,9 +81,6 @@ import {
 } from './capabilities/safeguards.js';
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
-import {
-  composeSystemPromptTemplate,
-} from './identity/loader.js';
 import { ModuleLoader } from './modules/loader.js';
 import {
   ensureRegistryFile,
@@ -129,11 +102,8 @@ import { registerGatewayMessageHandlers } from './agent-main/gateway-message-han
 import { createGatewayBackedDiscoveryFetch } from './agent-main/discovery-gateway-fetch.js';
 import {
   resolveCharacterCardHistoryPath,
-  resolveContactsDir,
   resolveMemoryJournalPath,
-  resolveNotesDir,
   resolvePostTurnActionQueuePath,
-  resolveScratchpadMirrorPath,
   resolveSessionsDir,
 } from './persistence/layout.js';
 import {
@@ -146,11 +116,11 @@ import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,
 } from './runtime/ml-warmup.js';
-import { createPromptGenerationFailureAlertHandler } from './runtime/operator-alerts.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
 import { runShutdownSequence } from './runtime/shutdown-helpers.js';
 import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
+import { buildAgentCoreRuntime } from './agent-main/core-runtime.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -262,10 +232,13 @@ async function enforceNetworkIsolationOnStartup(): Promise<void> {
     `(probe=${NETWORK_ISOLATION_PROBE_URL}, status=${probeResult.status}).`,
   );
   log.error(`CRITICAL: ${error.message}`, {
-    requireNetworkIsolation: true,
+    requireNetworkIsolation: requireIsolation,
     requireNetworkIsolationEnv: process.env.REQUIRE_NETWORK_ISOLATION,
   });
-  throw error;
+  if (requireIsolation) {
+    throw error;
+  }
+  return;
 }
 
 async function main(): Promise<void> {
@@ -376,56 +349,7 @@ async function main(): Promise<void> {
   });
   log.info(`Loaded character: ${card.data.name}`);
   config.characterName = card.data.name;
-  const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
-
-  // ── Initialize local components ──
-
-  const sessionsDir = resolveSessionsDir(pathSnapshot.companionDataDir);
-  const sessionComposition = composeSessionRuntime({
-    config,
-    eventBus,
-    sessionsDir,
-    enableContinuity: true,
-    promptRegistry,
-    sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
-  });
-  const { sessionStore, sessionManager } = sessionComposition;
-  sessionManager.characterName = card.data.name;
   const restartBehavior = config.sessionRestartBehavior ?? 'reuse_latest_session';
-  const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
-  if (startupSession) {
-    writeLastActiveSession(pathSnapshot.companionDataDir, startupSession);
-    if (restartBehavior === 'new_session') {
-      log.info('Initialized fresh startup session metadata', {
-        sessionId: startupSession.sessionId,
-        channelType: startupSession.channelType ?? 'unknown',
-        timestamp: startupSession.timestamp,
-      });
-    } else {
-      log.info('Restored latest session metadata', {
-        sessionId: startupSession.sessionId,
-        channelType: startupSession.channelType ?? 'unknown',
-        timestamp: startupSession.timestamp,
-      });
-    }
-  }
-
-  const memoryStore = new MemoryStore(db, gateway.dims, {
-    notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
-    scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
-    journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
-  });
-  const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
-  const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
-    embeddingDimensionCheck,
-  );
-  if (embeddingDimensionWarning) {
-    log.warn(embeddingDimensionWarning.message, {
-      configuredDims: embeddingDimensionWarning.configuredDims,
-      storedDims: embeddingDimensionWarning.storedDims,
-      recommendation: embeddingDimensionWarning.recommendation,
-    });
-  }
 
   // ── Agent loop (uses gateway as LLM provider) ──
 
@@ -446,27 +370,7 @@ async function main(): Promise<void> {
   });
   const emotionState = new EmotionState();
   const operatorNotifier = createGatewayNtfyNotifier(gateway);
-  const agentLoop = composeSubstrateAgent({
-    eventBus,
-    llmProvider: gateway,
-    sessionManager,
-    systemPrompt,
-    characterName: card.data.name,
-    characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
-    config,
-    runtimeMode: 'gateway',
-    streamRuntimeOptions: {
-      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
-    },
-    emotionRuntime: {
-      observer: emotionObserver,
-      state: emotionState,
-      requireWiring: true,
-    },
-  });
-  agentLoop.scratchpadProvider = memoryStore;
-  agentLoop.setCapabilityRuntime(capabilityRuntime);
-    const safeguardAuditTrail = createSafeguardAuditTrail(pathSnapshot.companionDataDir);
+  const safeguardAuditTrail = createSafeguardAuditTrail(pathSnapshot.companionDataDir);
   const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
     auditTrail: safeguardAuditTrail,
   });
@@ -477,85 +381,78 @@ async function main(): Promise<void> {
     auditTrail: safeguardAuditTrail,
   });
 
-  const skillsRuntime = wireSkillsRuntime(agentLoop, {
-    dataDir: pathSnapshot.systemDataDir,
-    seedDir: process.env.CONFIG_DIR,
-    repoRoot: process.cwd(),
-  });
-  registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
-  const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
-    binaryFetcher: gateway.webFetchBinary.bind(gateway),
-  });
-  registerImageTools(agentLoop, new GatewayImageOps(gateway), {
-    gatewayMode: true,
-    reviewer: imageVisionReviewer,
-  });
-  agentLoop.imageVisionReviewer = imageVisionReviewer;
-
-  // Prompt stack — layered, editable system prompt
-  const promptStore = wirePromptRuntime(agentLoop, pathSnapshot.companionDataDir, composeSystemPromptTemplate(), {
-    identityCoolingOff,
-    getCapabilityTier: () => capabilityRuntime.getTier(),
-  });
-  wireCharacterCardRuntime(agentLoop, cardVersionStore, {
-    getCapabilityTier: () => capabilityRuntime.getTier(),
-    confirmationQueue: cardProposalQueue,
-  });
-  wireSettingsRuntime(agentLoop, config);
-  wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway);
-  const coreMemoryStore = wireCoreMemoryRuntime({
-    agentLoop,
-    sessionManager,
+  const coreRuntime = await buildAgentCoreRuntime({
     config,
-  });
-
-  // Contact store + tools — trust-gated privacy system
-  const primaryUserId = process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID;
-  const primaryTelegramUserId = (
-    process.env.PRIMARY_TELEGRAM_USER_ID
-    ?? process.env.TELEGRAM_PRIMARY_USER_ID
-    ?? ''
-  ).trim();
-  const contactStore = wireContactRuntime(
-    agentLoop,
-    db,
-    primaryUserId,
-    {
-      exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
-      ...(primaryTelegramUserId
-        ? {
-          bootstrapPrimaryIdentityLinks: [{
-            channel: 'telegram',
-            userId: primaryTelegramUserId,
-            privacyLevel: 'private',
-          }],
-        }
-      : {}),
-  },
-);
-  const intentionRuntime = wireIntentionRuntime(agentLoop, db);
-  wireSelfModelRuntime(agentLoop);
-  const intentionAppraisalHooks = createIntentionAppraisalHooks(
-    intentionRuntime.concernStore,
-    intentionRuntime.pendingFollowUpStore,
-  );
-  const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
-    intentionRuntime.behavioralPatternTracker,
-  );
-
-  // Wire memory system (uses gateway for embeddings + LLM extraction)
-  const memoryExtractor = wireMemoryRuntime({
-    agentLoop,
-    llmProvider: gateway,
-    sessionManager,
-    sessionStore,
-    memoryStore,
-    embeddingService: gateway,
+    pathSnapshot,
     eventBus,
-    config,
-    promptRegistry,
-    contactStore,
+    gateway,
+    db,
+    card,
+    systemPrompt,
+    capabilityRuntime,
+    cardVersionStore,
+    cardProposalQueue,
+    emotionRuntime: {
+      observer: emotionObserver,
+      state: emotionState,
+      requireWiring: true,
+    },
+    operatorNotifier,
+    identityCoolingOff,
+    primaryUserId: process.env.PRIMARY_USER_ID ?? process.env.DISCORD_VOICE_USER_ID,
+    primaryTelegramUserId: (
+      process.env.PRIMARY_TELEGRAM_USER_ID
+      ?? process.env.TELEGRAM_PRIMARY_USER_ID
+      ?? ''
+    ).trim() || undefined,
   });
+
+  const {
+    agentLoop,
+    sessionStore,
+    sessionManager,
+    promptRegistry,
+    promptStore,
+    skillsRuntime,
+    memoryStore,
+    contactStore,
+    coreMemoryStore,
+    intentionRuntime,
+    intentionAppraisalHooks,
+    intentionBehavioralHooks,
+    memoryExtractor,
+  } = coreRuntime;
+
+  sessionManager.characterName = card.data.name;
+  const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
+  if (startupSession) {
+    writeLastActiveSession(pathSnapshot.companionDataDir, startupSession);
+    if (restartBehavior === 'new_session') {
+      log.info('Initialized fresh startup session metadata', {
+        sessionId: startupSession.sessionId,
+        channelType: startupSession.channelType ?? 'unknown',
+        timestamp: startupSession.timestamp,
+      });
+    } else {
+      log.info('Restored latest session metadata', {
+        sessionId: startupSession.sessionId,
+        channelType: startupSession.channelType ?? 'unknown',
+        timestamp: startupSession.timestamp,
+      });
+    }
+  }
+
+  const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
+  const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
+    embeddingDimensionCheck,
+  );
+  if (embeddingDimensionWarning) {
+    log.warn(embeddingDimensionWarning.message, {
+      configuredDims: embeddingDimensionWarning.configuredDims,
+      storedDims: embeddingDimensionWarning.storedDims,
+      recommendation: embeddingDimensionWarning.recommendation,
+    });
+  }
 
   const salienceDecay = new SalienceDecay(memoryStore);
 
@@ -601,7 +498,7 @@ async function main(): Promise<void> {
     scheduler,
     db,
     databasePath: config.databasePath,
-    sessionsDir,
+    sessionsDir: resolveSessionsDir(pathSnapshot.companionDataDir),
     memoriesJournalPath: resolveMemoryJournalPath(pathSnapshot.companionDataDir),
     characterCardPath: config.characterCardPath,
     characterCardHistoryPath: resolveCharacterCardHistoryPath(pathSnapshot.companionDataDir),

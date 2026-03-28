@@ -4,8 +4,8 @@ import {
   normalizeWorkspaceRelativeGlob,
   resolveWorkspaceFsPathFromRoot,
   resolveWorkspaceRoot,
-} from '../boundary/gateway/filesystem-paths.js';
-import { isInsideAllowedPaths } from '../boundary/gateway/policy.js';
+} from '../../gateway/filesystem-paths.js';
+import { isInsideAllowedPaths } from '../../gateway/policy.js';
 
 const DEFAULT_LIST_GLOB = '**/*';
 const DEFAULT_LIST_MAX_ENTRIES = 200;

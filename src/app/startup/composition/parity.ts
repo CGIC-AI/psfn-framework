@@ -27,7 +27,7 @@ import {
   createSettingsGetTool,
   type PromotedExtendedToolsManager,
 } from '../../../system/settings-tools.js';
-import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../filesystem/runtime-wiring.js';
+import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { CoreMemoryStore } from '../../../core-memory/store.js';
 import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../../../tools/session.js';

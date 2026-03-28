@@ -20,8 +20,8 @@ import { composeSessionRuntime, composeSubstrateAgent, wireCoreMemoryRuntime, wi
 import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../app/startup/composition/parity.js';
 import { wireContactRuntime } from '../contacts/runtime-wiring.js';
 import { wireSkillsRuntime } from '../skills/runtime-wiring.js';
-import { registerFilesystemTools } from '../filesystem/runtime-wiring.js';
-import { GatewayFilesystemOps } from '../filesystem/gateway-ops.js';
+import { registerFilesystemTools } from '../boundary/integrations/filesystem/runtime-wiring.js';
+import { GatewayFilesystemOps } from '../boundary/integrations/filesystem/gateway-ops.js';
 import { registerImageTools } from '../images/runtime-wiring.js';
 import { GatewayImageOps } from '../images/gateway-ops.js';
 import { DefaultImageVisionReviewer } from '../images/vision-reviewer.js';

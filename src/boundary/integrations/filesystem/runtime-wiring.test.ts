@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
-import type { GatewayClient } from '../boundary/gateway/client.js';
+import type { GatewayClient } from '../../gateway/client.js';
 import { GatewayFilesystemOps } from './gateway-ops.js';
 import { WorkspaceFilesystemOps } from './local-ops.js';
 import { registerFilesystemTools, wireFilesystemRuntime, type FilesystemRuntimeTarget } from './runtime-wiring.js';

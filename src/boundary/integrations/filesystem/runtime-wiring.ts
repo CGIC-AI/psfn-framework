@@ -1,6 +1,6 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type { ToolRegistrar } from '../agent/tool-registrar.js';
-import type { ToolWiringMeta, WirableTool } from '../agent/tool-wiring-validator.js';
+import type { ToolRegistrar } from '../../../agent/tool-registrar.js';
+import type { ToolWiringMeta, WirableTool } from '../../../agent/tool-wiring-validator.js';
 import type { FilesystemReadOperations } from './ops.js';
 import { WorkspaceFilesystemOps } from './local-ops.js';
 import { createFsListTool, createFsReadTool } from './tools.js';

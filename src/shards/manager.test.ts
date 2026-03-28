@@ -1314,6 +1314,16 @@ describe('ShardManager', () => {
       expect.objectContaining({
         content: 'launch the worker',
       }),
+      expect.objectContaining({
+        kind: 'wyoming',
+        sourceMessage: expect.objectContaining({
+          id: 'wyoming-msg-conn-launch-1',
+          channelId: 'api:wyoming:ha-main:voice-pe-launch',
+        }),
+        wyomingRouting: expect.objectContaining({
+          turnId: 'wyoming-turn-conn-launch-session-launch-1',
+        }),
+      }),
     );
   });
 

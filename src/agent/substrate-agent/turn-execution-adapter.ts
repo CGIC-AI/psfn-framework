@@ -166,6 +166,8 @@ export function createTurnExecutionRuntimeAdapter(
     ),
     recordUserMessage: (message, turnId, requestId, trustLevel, continuityUserId) => options.turnSupportRuntime
       .recordUserMessage(message, turnId, requestId, trustLevel, continuityUserId),
+    recordSystemMessage: (message, turnId, requestId, content, continuityUserId) => options.turnSupportRuntime
+      .recordSystemMessage(message, turnId, requestId, content, continuityUserId),
     resolveSessionChannelId: (channelId) => options.turnSupportRuntime.resolveSessionChannelId(channelId),
     resolveChannelType: (message) => options.callbacks.resolveChannelType(message),
     ensureModel: (message) => options.callbacks.ensureModel(message),

@@ -3,6 +3,8 @@ import type { SessionEntry, SessionEntryRole } from './types.js';
 interface ParsedTurnMetadata {
   requestId?: string;
   sourceMessageId?: string;
+  role?: SessionEntryRole;
+  speakerRole?: SessionEntryRole;
 }
 
 const LEGACY_INTENTION_AUTHOR_NAME = 'Intention Appraisal';
@@ -34,10 +36,28 @@ function parseTurnMetadata(metadata: string | undefined): ParsedTurnMetadata {
   const turn = rawTurn as Record<string, unknown>;
   const requestId = typeof turn.requestId === 'string' ? turn.requestId.trim() : '';
   const sourceMessageId = typeof turn.sourceMessageId === 'string' ? turn.sourceMessageId.trim() : '';
+  const role = typeof turn.role === 'string' && (
+    turn.role === 'user'
+    || turn.role === 'assistant'
+    || turn.role === 'system'
+    || turn.role === 'tool'
+  )
+    ? turn.role
+    : undefined;
+  const speakerRole = typeof turn.speakerRole === 'string' && (
+    turn.speakerRole === 'user'
+    || turn.speakerRole === 'assistant'
+    || turn.speakerRole === 'system'
+    || turn.speakerRole === 'tool'
+  )
+    ? turn.speakerRole
+    : undefined;
 
   return {
     ...(requestId ? { requestId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(role ? { role } : {}),
+    ...(speakerRole ? { speakerRole } : {}),
   };
 }
 
@@ -112,6 +132,14 @@ export function normalizeSessionEntryAttribution(
   };
   const authorId = entry.authorId?.trim() ?? '';
   const authorName = entry.authorName?.trim() ?? '';
+
+  const explicitSpeakerRole = turn.speakerRole;
+  if (explicitSpeakerRole && explicitSpeakerRole !== 'tool') {
+    return {
+      role: explicitSpeakerRole === 'assistant' ? 'assistant' : explicitSpeakerRole === 'system' ? 'system' : 'user',
+      ...(authorName ? { authorName } : {}),
+    };
+  }
 
   if (isIntentionAppraisalArtifact(entry)) {
     return {

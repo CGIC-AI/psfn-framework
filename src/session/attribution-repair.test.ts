@@ -126,6 +126,7 @@ describe('runAttributionRepair', () => {
 
       const repairedJournal = readFileSync(signedJournalPath, 'utf-8').trim();
       expect(repairedJournal).toContain('"role":"system"');
+      expect(repairedJournal).toContain('\\"speakerRole\\":\\"system\\"');
       expect(repairedJournal).toContain('"authorId":"system:intention"');
       expect(repairedJournal).toContain('"authorName":"Intention Appraisal"');
       expect(repairedJournal).toContain('"role":"system"');

@@ -132,6 +132,7 @@ describe('TurnSupportRuntime role-envelope projections', () => {
       contextMessageCount: 2,
       memoryContextChars: 0,
       trustLevel: 'regular',
+      speakerRole: 'user',
       retrievalProvenanceRefs: [],
     });
 

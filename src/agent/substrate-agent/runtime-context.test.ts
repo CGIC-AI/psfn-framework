@@ -35,6 +35,7 @@ describe('runtime subject identity', () => {
 
     expect(authorContext).toMatchObject({
       trustLevel: 'primary',
+      speakerRole: 'system',
       resolvedUserName: 'Companion',
       subjectIdentityKey: DEFAULT_COMPANION_ID,
     });
@@ -100,6 +101,26 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).not.toContain('userId: scheduler');
     expect(runtimeContext).not.toContain('Channel: internal:reflection:whisper');
     expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
+  });
+
+  it('marks ordinary external turns as user speakers', () => {
+    const authorContext = resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'api:general',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+      }),
+      contactStore: null,
+      logger: {
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext.speakerRole).toBe('user');
   });
 
   it('uses routed channel privacy in prompt variables and runtime context', () => {

@@ -20,13 +20,6 @@ import { buildSessionMetadataWithEmotionState } from '../../emotion/session-meta
 import type { TurnToolSummary } from '../../skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 
-function resolveIncomingMessageRole(message: SubstrateMessage): 'user' | 'system' {
-  if (message.authorId.startsWith('system:') || message.authorId === 'scheduler') {
-    return 'system';
-  }
-  return 'user';
-}
-
 function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
   const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
   if (message.isDirectMessage === undefined && !privacyLevel) return undefined;
@@ -173,6 +166,7 @@ export function buildTurnRecord(input: {
   contextMessageCount: number;
   memoryContextChars: number;
   trustLevel: TrustLevel;
+  speakerRole: 'user' | 'system';
   canonicalContactKey?: string;
   retrievalProvenanceRefs: string[];
   roleEnvelopeRefs?: string[];
@@ -198,7 +192,7 @@ export function buildTurnRecord(input: {
     completedAt: Math.max(input.startedAt, input.completedAt),
     status: 'completed',
     userMessage: {
-      role: resolveIncomingMessageRole(input.message),
+      role: input.speakerRole,
       content: input.message.content,
       timestamp: input.message.timestamp.getTime(),
       sourceMessageId: input.message.id,

@@ -13,6 +13,7 @@ interface SessionTurnEnvelope {
   requestId?: string;
   sourceMessageId?: string;
   role: SessionEntry['role'];
+  speakerRole?: SessionEntry['role'];
 }
 
 interface SessionMetadataEnvelope {
@@ -85,6 +86,7 @@ export function buildSessionMetadataWithTurn(
     turnId: input.turnId,
     requestId,
     role: input.role,
+    speakerRole: input.role,
     ...(input.sourceMessageId ? { sourceMessageId: input.sourceMessageId } : {}),
   };
 

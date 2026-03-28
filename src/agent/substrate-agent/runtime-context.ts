@@ -51,6 +51,7 @@ interface RuntimeContextActiveToolCounts {
 
 export interface ResolvedAuthorContext {
   trustLevel: TrustLevel;
+  speakerRole: 'user' | 'system';
   resolvedUserName: string;
   canonicalContactKey?: string;
   subjectIdentityKey?: string;
@@ -537,6 +538,7 @@ export function resolveAuthorContext(input: {
       const resolvedUserName = input.companionDisplayName?.trim() || resolvePromptUserName(input.message);
       return {
         trustLevel: 'primary',
+        speakerRole: 'system',
         resolvedUserName,
         ...(subjectIdentityKey ? { subjectIdentityKey } : {}),
         continuityFallbackKeys: [],
@@ -545,6 +547,7 @@ export function resolveAuthorContext(input: {
 
     return {
       trustLevel: 'primary',
+      speakerRole: 'system',
       resolvedUserName: resolvePromptUserName(input.message),
       canonicalContactKey: input.message.authorId,
       continuityFallbackKeys: [],
@@ -554,6 +557,7 @@ export function resolveAuthorContext(input: {
   if (!input.message.authorId || !input.contactStore) {
     return {
       trustLevel: 'regular',
+      speakerRole: 'user',
       resolvedUserName: resolvePromptUserName(input.message),
       continuityFallbackKeys: [],
     };
@@ -610,6 +614,7 @@ export function resolveAuthorContext(input: {
 
     return {
       trustLevel: contact.trustLevel,
+      speakerRole: 'user',
       resolvedUserName: resolvePromptUserName(input.message, contact),
       canonicalContactKey,
       ...(channelPrivacyLevel ? { channelPrivacyLevel } : {}),
@@ -623,12 +628,13 @@ export function resolveAuthorContext(input: {
       channelId: input.message.channelId,
       error: toErrorMessage(error),
     });
-    return {
-      trustLevel: 'regular',
-      resolvedUserName: resolvePromptUserName(input.message),
-      continuityFallbackKeys: [],
-    };
-  }
+  return {
+    trustLevel: 'regular',
+    speakerRole: 'user',
+    resolvedUserName: resolvePromptUserName(input.message),
+    continuityFallbackKeys: [],
+  };
+}
 }
 
 export function resolveTaskKind(input: {

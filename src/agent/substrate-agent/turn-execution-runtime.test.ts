@@ -71,6 +71,7 @@ function createRuntime(params: {
   scheduleAutoCompactionBetweenTurns: ReturnType<typeof vi.fn>;
   awaitPendingAutoCompaction: ReturnType<typeof vi.fn>;
   recordUserMessage: ReturnType<typeof vi.fn>;
+  recordSystemMessage?: ReturnType<typeof vi.fn>;
   recordAssistantMessage: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
@@ -153,6 +154,7 @@ function createRuntime(params: {
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
     resolveAuthorContext: vi.fn(() => ({
       trustLevel: 'regular',
+      speakerRole: 'user',
       resolvedUserName: 'User',
       canonicalContactKey: 'contact-1',
       continuityFallbackKeys: [],
@@ -209,6 +211,7 @@ function createRuntime(params: {
     })),
     recordToolObservations: vi.fn(),
     recordAssistantMessage: params.recordAssistantMessage,
+    recordSystemMessage: params.recordSystemMessage ?? vi.fn(() => null),
     buildTurnToolSummary: vi.fn(() => ({ toolCalls: [] })),
     inferPostTurnActions: vi.fn(async () => []),
     buildTurnRecord: vi.fn(() => ({
@@ -291,6 +294,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
     const recordUserMessage = vi.fn(() => null);
+    const recordSystemMessage = vi.fn(() => null);
     const recordAssistantMessage = vi.fn(() => null);
     const runtime = createRuntime({
       eventBus,
@@ -299,11 +303,13 @@ describe('handleMessageForTurn compaction scheduling', () => {
       scheduleAutoCompactionBetweenTurns,
       awaitPendingAutoCompaction,
       recordUserMessage,
+      recordSystemMessage,
       recordAssistantMessage,
     });
     runtime.resolveTaskKind = vi.fn(() => taskKind);
     runtime.resolveAuthorContext = vi.fn(() => ({
       trustLevel: 'primary',
+      speakerRole: 'system',
       resolvedUserName: 'Companion',
       subjectIdentityKey: DEFAULT_COMPANION_ID,
       continuityFallbackKeys: [],
@@ -327,13 +333,19 @@ describe('handleMessageForTurn compaction scheduling', () => {
       mock: { calls: unknown[][] };
     };
 
-    expect(recordUserMessage).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(recordSystemMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId,
+        authorId: 'scheduler',
+        authorName: taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper',
+        content: `${taskKind} run`,
+      }),
       expect.any(String),
       expect.any(String),
-      'primary',
+      `${taskKind} run`,
       DEFAULT_COMPANION_ID,
     );
+    expect(recordUserMessage).not.toHaveBeenCalled();
     expect(buildPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
     expect(buildRuntimeContextMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
     expect(buildPromptPrefixCacheKeyMock.mock.calls[0]?.[3]).toBe(DEFAULT_COMPANION_ID);

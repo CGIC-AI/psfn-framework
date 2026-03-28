@@ -51,6 +51,7 @@ describe('buildTurnRecord', () => {
       contextMessageCount: 1,
       memoryContextChars: 0,
       trustLevel: 'regular',
+      speakerRole: 'system',
       retrievalProvenanceRefs: [],
       hashPromptText: (text) => text,
     });
@@ -81,11 +82,42 @@ describe('buildTurnRecord', () => {
       contextMessageCount: 0,
       memoryContextChars: 0,
       trustLevel: 'primary',
+      speakerRole: 'system',
       retrievalProvenanceRefs: [],
       hashPromptText: (text) => text,
     });
 
     expect(record.userMessage.role).toBe('system');
     expect(record.userMessage.authorId).toBe('scheduler');
+  });
+
+  it('preserves user role when the turn speaker is user-authored', () => {
+    const record = buildTurnRecord({
+      message: makeMessage({
+        id: 'user-turn-1',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'hello there',
+      }),
+      turnId: createTurnId(),
+      requestId: 'user-turn-1',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_100,
+      userSessionEntryId: 1,
+      assistantSessionEntryId: 2,
+      response: makeResponse(),
+      turnMessages: [],
+      promptMode: 'default',
+      promptText: 'prompt',
+      contextMessageCount: 1,
+      memoryContextChars: 0,
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      retrievalProvenanceRefs: [],
+      hashPromptText: (text) => text,
+    });
+
+    expect(record.userMessage.role).toBe('user');
+    expect(record.userMessage.authorId).toBe('user-1');
   });
 });

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { join, resolve } from 'node:path';
 import { loadConfig } from './types.js';
-import { buildSessionHmacKeyring } from './session/journal-utils.js';
+import { createSessionHmacBoundaryService } from './session/hmac-boundary.js';
 import { runSessionIntegrityRepair } from './session/integrity-repair.js';
 import { toErrorMessage } from './utils/errors.js';
 
@@ -54,14 +54,10 @@ async function main(): Promise<void> {
     options.backupDir
       ?? join(dataDir, 'repair-backups', `integrity-${new Date().toISOString().replace(/[:.]/g, '-')}`),
   );
-  const keyring = buildSessionHmacKeyring({
-    serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
-    singleKey: process.env.GATEWAY_SESSION_HMAC_KEY,
-    activeVersion: process.env.GATEWAY_SESSION_HMAC_ACTIVE_VERSION,
-  });
-  if (!keyring) {
-    throw new Error('Session HMAC keyring is required for integrity repair');
-  }
+  const keyring = createSessionHmacBoundaryService({
+    env: process.env,
+    credentialVault: config.credentialVault,
+  }).requireKeyring('Session HMAC keyring is required for integrity repair');
 
   const report = runSessionIntegrityRepair({
     sessionsDir: join(dataDir, 'sessions'),

@@ -585,7 +585,7 @@ describe('SubstrateRuntime latest session restoration', () => {
       }),
     };
 
-    runtime.restoreLatestSessionMetadata();
+    runtime.restoreLatestSessionMetadata(dataDir);
 
     expect(runtime.sessionManager.resolveStartupSessionMetadata).toHaveBeenCalledWith('reuse_latest_session');
     const restored = readLastActiveSession(dataDir);
@@ -607,7 +607,7 @@ describe('SubstrateRuntime latest session restoration', () => {
       }),
     };
 
-    runtime.restoreLatestSessionMetadata();
+    runtime.restoreLatestSessionMetadata(dataDir);
 
     expect(runtime.sessionManager.resolveStartupSessionMetadata).toHaveBeenCalledWith('new_session');
     const restored = readLastActiveSession(dataDir);

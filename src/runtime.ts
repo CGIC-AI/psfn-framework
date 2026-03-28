@@ -9,8 +9,7 @@ import {
 import { LLMClient } from './llm/client.js';
 import { SessionStore, type CrashRecoveryExtractionCandidate } from './session/store.js';
 import { SessionManager } from './session/manager.js';
-import { buildSessionHmacKeyring } from './session/journal-utils.js';
-import { createKeyringIntegrityProvider } from './session/store-primitives.js';
+import { createSessionHmacBoundaryService } from './session/hmac-boundary.js';
 import { SubstrateAgent } from './agent/substrate-agent.js';
 import { EmotionObserver } from './emotion/observer.js';
 import { EmotionState } from './emotion/state.js';
@@ -481,12 +480,11 @@ export class SubstrateRuntime implements Lifecycle {
       },
     });
     const sessionsDir = resolveSessionsDir(pathSnapshot.companionDataDir);
-    const sessionHmacKeyring = buildSessionHmacKeyring({
-      serializedKeys: process.env.GATEWAY_SESSION_HMAC_KEYS,
-      singleKey: process.env.GATEWAY_SESSION_HMAC_KEY,
-      activeVersion: process.env.GATEWAY_SESSION_HMAC_ACTIVE_VERSION,
+    const sessionHmacBoundary = createSessionHmacBoundaryService({
+      env: process.env,
+      credentialVault: this.config.credentialVault,
     });
-    const sessionIntegrityProvider = createKeyringIntegrityProvider(sessionHmacKeyring);
+    const sessionIntegrityProvider = sessionHmacBoundary.resolveIntegrityProvider();
     if (sessionIntegrityProvider) {
       log.info('Session HMAC integrity enabled (single-process mode)');
     }

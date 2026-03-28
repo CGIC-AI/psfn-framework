@@ -68,12 +68,6 @@ import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,
 } from './capabilities/eligibility.js';
-import {
-  createSafeguardAuditTrail,
-  createIdentityCoolingOffManagerFromEnv,
-  createLifecycleRestartSafeguardFromEnv,
-  createExternalCommunicationRateLimiterFromEnv,
-} from './capabilities/safeguards.js';
 import { ConfirmationQueue } from './capabilities/confirmation-queue.js';
 import { CharacterCardVersionStore } from './identity/card-versioning.js';
 import { ModuleLoader } from './modules/loader.js';
@@ -113,6 +107,8 @@ import {
 } from './runtime/ml-warmup.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
+import { createGatewayConfirmationQueueAdminApi } from './runtime/confirmation-queue-admin-api.js';
+import { createRuntimeSafeguardSurfaces } from './runtime/safeguard-surfaces.js';
 import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 import { buildAgentCoreRuntime } from './agent-main/core-runtime.js';
 import { buildAgentControlPlane } from './agent-main/control-plane.js';
@@ -366,16 +362,12 @@ async function main(): Promise<void> {
   });
   const emotionState = new EmotionState();
   const operatorNotifier = createGatewayNtfyNotifier(gateway);
-  const safeguardAuditTrail = createSafeguardAuditTrail(pathSnapshot.companionDataDir);
-  const identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, {
-    auditTrail: safeguardAuditTrail,
-  });
-  const lifecycleRestartSafeguard = createLifecycleRestartSafeguardFromEnv(process.env, {
-    auditTrail: safeguardAuditTrail,
-  });
-  const externalRateLimiter = createExternalCommunicationRateLimiterFromEnv(process.env, {
-    auditTrail: safeguardAuditTrail,
-  });
+  const {
+    safeguardAuditTrail,
+    identityCoolingOff,
+    lifecycleRestartSafeguard,
+    externalRateLimiter,
+  } = createRuntimeSafeguardSurfaces(pathSnapshot.companionDataDir, process.env);
 
   const coreRuntime = await buildAgentCoreRuntime({
     config,
@@ -823,24 +815,6 @@ async function main(): Promise<void> {
   if (adminPort) {
     const adminToken = process.env.ADMIN_TOKEN || undefined;
     const allowInsecureWithoutToken = isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE);
-    const confirmationQueueApi = {
-      listConfirmationQueue: async () => {
-        const [gatewayList, localEntries] = await Promise.all([
-          gateway.listConfirmationQueue(),
-          Promise.resolve(cardProposalQueue.listPending()),
-        ]);
-        return {
-          entries: [...localEntries, ...gatewayList.entries]
-            .sort((a, b) => a.requestedAt - b.requestedAt),
-        };
-      },
-      resolveConfirmationQueue: async (params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }) => {
-        if (cardProposalQueue.getPending(params.id)) {
-          return cardProposalQueue.resolve(params);
-        }
-        return gateway.resolveConfirmationQueue(params);
-      },
-    };
     adminServer = new AdminServer({
       port: adminPort,
       host: adminHost,
@@ -863,7 +837,7 @@ async function main(): Promise<void> {
       promptStore,
       promptRegistry,
       skillsRuntime,
-      confirmationQueueApi,
+      confirmationQueueApi: createGatewayConfirmationQueueAdminApi(gateway, cardProposalQueue),
       cardVersionStore,
       adaptiveToolsStateProvider: agentLoop,
       toolHealthProvider: createGatewayAdminToolHealthProvider(gateway),

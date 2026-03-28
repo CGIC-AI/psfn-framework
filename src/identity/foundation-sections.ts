@@ -1,5 +1,6 @@
 import {
   normalizePromptSectionId,
+  unwrapSingleWrappedPromptSection,
   wrapPromptSectionXml,
 } from '../prompt/sections.js';
 
@@ -7,48 +8,80 @@ export const FOUNDATION_SECTION_DEFINITIONS = [
   {
     id: 'identity',
     title: 'Identity',
+    layerName: 'Character Foundation · Identity',
+    identifier: 'main',
+    promptOrder: 0,
+    priority: 0,
     defaultContent: 'You are {{char}}.',
     defaultEnabled: true,
   },
   {
     id: 'description',
     title: 'Description',
+    layerName: 'Character Foundation · Description',
+    identifier: 'charDescription',
+    promptOrder: 10,
+    priority: 10,
     defaultContent: '{{description}}',
     defaultEnabled: true,
   },
   {
     id: 'personality',
     title: 'Personality',
+    layerName: 'Character Foundation · Personality',
+    identifier: 'charPersonality',
+    promptOrder: 20,
+    priority: 20,
     defaultContent: '{{personality}}',
     defaultEnabled: true,
   },
   {
     id: 'scenario',
     title: 'Scenario',
+    layerName: 'Character Foundation · Scenario',
+    identifier: 'scenario',
+    promptOrder: 30,
+    priority: 30,
     defaultContent: '{{scenario}}',
     defaultEnabled: true,
   },
   {
     id: 'system_prompt',
     title: 'System Prompt',
+    layerName: 'Character Foundation · System Prompt',
+    identifier: 'systemPrompt',
+    promptOrder: 40,
+    priority: 40,
     defaultContent: '{{system_prompt}}',
     defaultEnabled: true,
   },
   {
     id: 'post_history_instructions',
     title: 'Post-History Instructions',
+    layerName: 'Character Foundation · Post-History Instructions',
+    identifier: 'postHistoryInstructions',
+    promptOrder: 50,
+    priority: 50,
     defaultContent: '{{post_history_instructions}}',
     defaultEnabled: true,
   },
   {
     id: 'mes_example',
     title: 'Message Example',
+    layerName: 'Character Foundation · Message Example',
+    identifier: 'dialogueExamples',
+    promptOrder: 60,
+    priority: 60,
     defaultContent: '{{mes_example}}',
     defaultEnabled: false,
   },
   {
     id: 'first_mes',
     title: 'First Message',
+    layerName: 'Character Foundation · First Message',
+    identifier: 'firstMessage',
+    promptOrder: 70,
+    priority: 70,
     defaultContent: '{{first_mes}}',
     defaultEnabled: false,
   },
@@ -89,6 +122,10 @@ function isFoundationSectionId(value: string): value is FoundationSectionId {
 
 function resolveFoundationSectionDefinition(id: FoundationSectionId) {
   return FOUNDATION_SECTION_DEFINITIONS.find(section => section.id === id)!;
+}
+
+export function getFoundationSectionDefinitionById(id: FoundationSectionId) {
+  return resolveFoundationSectionDefinition(id);
 }
 
 function createSectionState(
@@ -151,16 +188,20 @@ export function createDefaultFoundationSections(): FoundationSectionState[] {
   return FOUNDATION_SECTION_DEFINITIONS.map(section => createSectionState(section.id));
 }
 
+export function composeFoundationSectionTemplate(section: Pick<FoundationSectionState, 'id' | 'content'>): string {
+  return wrapPromptSectionXml({
+    id: section.id,
+    title: resolveFoundationSectionDefinition(section.id).title,
+    content: section.content,
+  });
+}
+
 export function composeFoundationSections(
   sections: readonly Pick<FoundationSectionState, 'id' | 'content' | 'enabled'>[],
 ): string {
   return sections
     .filter(section => section.enabled)
-    .map(section => wrapPromptSectionXml({
-      id: section.id,
-      title: resolveFoundationSectionDefinition(section.id).title,
-      content: section.content,
-    }))
+    .map(section => composeFoundationSectionTemplate(section))
     .filter(section => section.trim().length > 0)
     .join('\n\n');
 }
@@ -246,4 +287,20 @@ export function decomposeFoundationSections(content: string): FoundationSectionS
 
 export function isMacroBackedFoundationContent(content: string): boolean {
   return /\{\{\s*[\w.]+\s*\}\}/.test(content);
+}
+
+export function decomposeFoundationLayerContent(
+  sectionId: FoundationSectionId,
+  content: string,
+): FoundationSectionState {
+  const definition = resolveFoundationSectionDefinition(sectionId);
+  const unwrapped = unwrapSingleWrappedPromptSection(content);
+  if (unwrapped && normalizePromptSectionId(unwrapped.id) === definition.id) {
+    return createSectionState(sectionId, {
+      content: trimSurroundingBlankLines(unwrapped.content),
+    });
+  }
+  return createSectionState(sectionId, {
+    content: trimSurroundingBlankLines(content),
+  });
 }

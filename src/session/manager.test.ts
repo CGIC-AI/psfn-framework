@@ -109,18 +109,22 @@ describe('SessionManager', () => {
     mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
     mgr.setCoreMemoryProvider({
       formatForContext: () => [
-        '[Core Memory]',
-        'persona:',
+        '<core_memory>',
+        '<persona>',
         'Analytical and direct.',
-        'human:',
+        '</persona>',
+        '<human>',
         'Prefers concise updates.',
-        'goals:',
+        '</human>',
+        '<goals>',
         'Complete Phase V task PSFN-du0t.',
+        '</goals>',
+        '</core_memory>',
       ].join('\n'),
     });
 
     const ctx = await mgr.buildContext('ch1', 'System', 'Retrieved memory block');
-    const coreIndex = ctx.systemPrompt.indexOf('[Core Memory]');
+    const coreIndex = ctx.systemPrompt.indexOf('<core_memory>');
     const memoryIndex = ctx.systemPrompt.indexOf('Retrieved memory block');
 
     expect(coreIndex).toBeGreaterThanOrEqual(0);

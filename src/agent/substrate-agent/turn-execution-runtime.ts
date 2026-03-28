@@ -5,6 +5,7 @@ import type { EventBus, EventMap } from '../../event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
 import { runWithVisionToolRequestContext } from '../../images/request-context.js';
@@ -92,6 +93,7 @@ import {
 } from '../../prompt/sections.js';
 
 const log = createComponentLogger('SubstrateAgent');
+const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 const VISION_TURN_TIMEOUT_MS = 10_000;
 
 interface ProactiveMemoryProvider extends MemoryProvider {
@@ -180,6 +182,21 @@ export interface TurnExecutionRuntime {
     canonicalContactKey: string | undefined,
     subjectIdentityKey: string | undefined,
     now: Date,
+  ) => Record<string, string>;
+  buildDynamicPromptTemplateVariables: (
+    message: SubstrateMessage,
+    resolvedUserName: string,
+    trustLevel: TrustLevel,
+    channelType: string | undefined,
+    canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
+    responseStyle: ResponseStyle,
+    now: Date,
+    taskKind: string | undefined,
+    templateVariables: Record<string, string>,
+    internalState: InternalState,
+    metacognitiveFlags: readonly MetacognitiveFlag[],
+    emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -670,7 +687,7 @@ export async function handleMessageForTurn(
       preTurnInternalStateSnapshotRef,
       preTurnMetacognitiveFlags,
     );
-    const runtimeContext = runtime.buildRuntimeContext(
+    const dynamicPromptVariables = runtime.buildDynamicPromptTemplateVariables(
       message,
       authorContext.resolvedUserName,
       trustLevel,
@@ -685,9 +702,14 @@ export async function handleMessageForTurn(
       preTurnMetacognitiveFlags,
       emotionAppraisalChain,
     );
+    const promptRuntimeVariables = {
+      ...templateVariables,
+      ...dynamicPromptVariables,
+    };
     let fullPrompt = '';
     let renderedStaticPrefix = '';
     let renderedDynamicSuffix = '';
+    let runtimeContext = '';
 
     if (promptOverride.mode === 'default') {
       const staticCacheKey = runtime.buildPromptPrefixCacheKey(
@@ -705,21 +727,13 @@ export async function handleMessageForTurn(
         now: runtimeNow,
         variables: templateVariables,
       });
-      const personaHint = runtime.getPersonaAdaptation(
-        trustLevel,
-        preTurnInternalState,
-        preTurnMetacognitiveFlags,
-        templateVariables,
-      );
-      const dynamicSuffixTemplate = [turnSnapshot.prompt?.dynamicSuffixTemplate ?? '', personaHint]
-        .map(section => section?.trim() ?? '')
-        .filter(section => section.length > 0)
-        .join('\n\n');
+      const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
+        || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
       renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
         now: runtimeNow,
-        variables: templateVariables,
+        variables: promptRuntimeVariables,
       });
-      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, runtimeContext, scratchpadBlock]
+      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, scratchpadBlock]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
@@ -727,6 +741,21 @@ export async function handleMessageForTurn(
       const customPrompt = promptOverride.mode === 'custom'
         ? (promptOverride.systemPrompt ?? '')
         : '';
+      runtimeContext = runtime.buildRuntimeContext(
+        message,
+        authorContext.resolvedUserName,
+        trustLevel,
+        channelType,
+        authorContext.canonicalContactKey,
+        authorContext.subjectIdentityKey,
+        responseStyle,
+        runtimeNow,
+        taskKind,
+        templateVariables,
+        preTurnInternalState,
+        preTurnMetacognitiveFlags,
+        emotionAppraisalChain,
+      );
       fullPrompt = [customPrompt, runtimeContext, scratchpadBlock]
         .map(section => section.trim())
         .filter(section => section.length > 0)

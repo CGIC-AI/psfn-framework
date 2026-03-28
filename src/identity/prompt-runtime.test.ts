@@ -113,4 +113,27 @@ describe('injectPromptRuntimeTokens', () => {
 
     expect(output).toBe('Hello Anon, this is Companion.');
   });
+
+  it('drops wrapped prompt sections whose body resolves to empty content', () => {
+    const input = [
+      '<current_datetime>',
+      '{{runtime_current_datetime_human}}',
+      '</current_datetime>',
+      '',
+      '<appearance_context>',
+      '{{runtime_appearance_context_body}}',
+      '</appearance_context>',
+    ].join('\n');
+
+    const output = injectPromptRuntimeTokens(input, {
+      now: fixedNow,
+      variables: {
+        runtime_current_datetime_human: 'Thursday, February 20, 2026 at 8:45 AM',
+        runtime_appearance_context_body: '',
+      },
+    });
+
+    expect(output).toContain('<current_datetime>');
+    expect(output).not.toContain('<appearance_context>');
+  });
 });

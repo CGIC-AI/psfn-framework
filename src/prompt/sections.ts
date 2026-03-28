@@ -8,6 +8,7 @@ export interface PromptSectionInput {
 }
 
 const WRAPPED_PROMPT_SECTION_PATTERN = /<([a-z0-9_]+)>\n?([\s\S]*?)<\/\1>/g;
+const SINGLE_WRAPPED_PROMPT_SECTION_PATTERN = /^<([a-z0-9_]+)>\n?([\s\S]*?)<\/\1>$/;
 
 function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, '\n');
@@ -37,10 +38,34 @@ export function wrapPromptSectionXml(input: PromptSectionInput): string {
   return `<${tag}>\n${content}\n</${tag}>`;
 }
 
+export function isSingleWrappedPromptSection(text: string): boolean {
+  const normalized = normalizeLineEndings(text).trim();
+  if (!normalized) return false;
+  return SINGLE_WRAPPED_PROMPT_SECTION_PATTERN.test(normalized);
+}
+
+export interface UnwrappedPromptSection {
+  id: string;
+  content: string;
+}
+
+export function unwrapSingleWrappedPromptSection(text: string): UnwrappedPromptSection | null {
+  const normalized = normalizeLineEndings(text).trim();
+  if (!normalized) return null;
+  const match = normalized.match(SINGLE_WRAPPED_PROMPT_SECTION_PATTERN);
+  if (!match) return null;
+  return {
+    id: normalizePromptSectionId(match[1]),
+    content: match[2].trim(),
+  };
+}
+
 export function buildPromptSectionTelemetry(
   input: PromptSectionInput,
 ): PromptSectionTelemetry | null {
-  const wrapped = wrapPromptSectionXml(input);
+  const wrapped = isSingleWrappedPromptSection(input.content)
+    ? normalizeLineEndings(input.content).trim()
+    : wrapPromptSectionXml(input);
   if (!wrapped) return null;
   return {
     id: normalizePromptSectionId(input.id),

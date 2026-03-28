@@ -1,11 +1,8 @@
 import { composeSystemPromptTemplate } from './loader.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
-import { isCanonicalCharacterFoundationLayer } from './canonical-foundation.js';
-import { isMacroBackedFoundationContent } from './foundation-sections.js';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { CharacterCardV2 } from './types.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
-import { toErrorMessage } from '../utils/errors.js';
 
 export interface PromptSyncResult {
   ok: boolean;
@@ -40,26 +37,13 @@ const ALLOWED_RUNTIME_UNRESOLVED_TOKENS = new Set([
 ]);
 const REQUIRED_CHARACTER_MACRO_FIELDS = ['name', 'personality'] as const;
 
-function resolveCharacterFoundationLayer(
-  promptStore: PromptLayerStore,
-): ReturnType<PromptLayerStore['getByType']>[number] | undefined {
-  const baseLayers = promptStore.getByType('base');
-  if (baseLayers.length === 0) return undefined;
-  return baseLayers.find(layer => isCanonicalCharacterFoundationLayer(layer)) ?? baseLayers[0];
-}
-
 export function syncCharacterFoundationPromptFromCard(
   promptStore: PromptLayerStore | null | undefined,
   card: CharacterCardV2,
-  updatedBy: string,
-  reason = 'Sync Character Foundation prompt from imported character card',
+  _updatedBy: string,
+  _reason = 'Sync Character Foundation prompt from imported character card',
 ): PromptSyncResult {
   if (!promptStore) {
-    return { ok: true, updated: false };
-  }
-
-  const foundation = resolveCharacterFoundationLayer(promptStore);
-  if (!foundation) {
     return { ok: true, updated: false };
   }
 
@@ -89,24 +73,17 @@ export function syncCharacterFoundationPromptFromCard(
       errorCode: 'unsupported_unresolved_macros',
     };
   }
-  if (foundation.content === nextPrompt) {
-    return { ok: true, updated: false };
-  }
-
-  const isSystemManagedFoundation = foundation.updatedBy === 'system'
-    || foundation.updatedBy.startsWith('system:');
-  if (!isSystemManagedFoundation || isMacroBackedFoundationContent(foundation.content)) {
-    return { ok: true, updated: false };
-  }
-
   try {
-    promptStore.update(foundation.id, nextPrompt, updatedBy, undefined, reason);
+    const updated = promptStore.seedFromCharacterCard(nextPrompt);
+    if (!updated) {
+      return { ok: true, updated: false };
+    }
     return { ok: true, updated: true };
   } catch (error) {
     return {
       ok: false,
       updated: false,
-      error: toErrorMessage(error),
+      error: error instanceof Error ? error.message : String(error),
       errorCode: 'prompt_store_update_failed',
     };
   }

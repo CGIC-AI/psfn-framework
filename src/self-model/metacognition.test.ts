@@ -131,11 +131,11 @@ describe('MetacognitiveMonitor', () => {
       minConfidence: 0.4,
       maxFlags: 2,
     });
-    expect(contextBlock).toContain('[Metacognitive Notes]');
+    expect(contextBlock).toContain('<metacognitive_notes>');
     expect(contextBlock.split('\n').filter(line => line.startsWith('- ')).length).toBeLessThanOrEqual(2);
 
     const personaHint = buildMetacognitivePersonaHint(flags);
-    expect(personaHint).toContain('[Metacognitive Persona Guidance]');
+    expect(personaHint).toContain('<metacognitive_persona_guidance>');
     expect(personaHint).toContain('acknowledge uncertainty');
   });
 });

@@ -1,5 +1,6 @@
 import type { TrustLevel } from '../trust/types.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
+import { wrapPromptSectionXml } from '../prompt/sections.js';
 
 export interface EmotionalExpressionDisplayRange {
   min: number;
@@ -233,7 +234,6 @@ export function buildEmotionalAffectSection(input: EmotionalAffectSectionInput):
   });
 
   const lines = [
-    '[Emotional Affect]',
     `Trust gate: ${affect.mode === 'honne' ? 'honne (genuine)' : 'tatemae (controlled)'}`,
     `Affect modifiers: warmth=${formatSigned(affect.warmth)},`
       + ` formality=${formatSigned(affect.formality)},`
@@ -247,7 +247,10 @@ export function buildEmotionalAffectSection(input: EmotionalAffectSectionInput):
     `Guidance: ${describeGuidance(affect)}`,
   ];
 
-  return lines.join('\n');
+  return wrapPromptSectionXml({
+    id: 'emotional_affect',
+    content: lines.join('\n'),
+  });
 }
 
 function parseProfileFromPromptVariables(

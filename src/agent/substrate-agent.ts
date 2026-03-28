@@ -103,6 +103,7 @@ import {
 import {
   buildActiveConcernsContextBlock as buildActiveConcernsContextBlockForTurn,
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
+  buildDynamicPromptTemplateVariables as buildDynamicPromptTemplateVariablesForTurn,
   buildPromptTemplateVariables as buildPromptTemplateVariablesForTurn,
   buildRuntimeContext as buildRuntimeContextForTurn,
   buildScratchpadContextBlock as buildScratchpadContextBlockForTurn,
@@ -756,6 +757,35 @@ export class SubstrateAgent {
           subjectIdentityKey,
           now,
         ),
+        buildDynamicPromptTemplateVariables: (
+          turnMessage,
+          resolvedUserName,
+          trustLevel,
+          channelType,
+          canonicalContactKey,
+          subjectIdentityKey,
+          responseStyle,
+          now,
+          taskKind,
+          templateVariables,
+          internalState,
+          metacognitiveFlags,
+          emotionAppraisalChain,
+        ) => this.buildDynamicPromptTemplateVariables(
+          turnMessage,
+          resolvedUserName,
+          trustLevel,
+          channelType,
+          canonicalContactKey,
+          subjectIdentityKey,
+          responseStyle,
+          now,
+          taskKind,
+          templateVariables,
+          internalState,
+          metacognitiveFlags,
+          emotionAppraisalChain,
+        ),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
           this.currentInternalStateSnapshotRef = snapshotRef;
@@ -911,6 +941,71 @@ export class SubstrateAgent {
     });
     this.characterName = runtimeCharacterName;
     return templateVariables;
+  }
+
+  private buildDynamicPromptTemplateVariables(
+    message: SubstrateMessage,
+    resolvedUserName: string,
+    trustLevel: TrustLevel,
+    channelType: string | undefined,
+    canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
+    responseStyle: ResponseStyle = 'concise',
+    now: Date = new Date(),
+    taskKind: string | undefined,
+    templateVariables: Record<string, string>,
+    internalState: InternalState,
+    metacognitiveFlags: readonly MetacognitiveFlag[],
+    emotionAppraisalChain: readonly EmotionAppraisalEntry[],
+  ): Record<string, string> {
+    const recentMessages = this.sessionManager.getRecentMessages(message.channelId, 6);
+    const latestPriorMessage = [...recentMessages]
+      .reverse()
+      .find((entry, index) => {
+        if (entry.role === 'system' || entry.role === 'tool') return false;
+        if (
+          index === 0
+          && entry.role === 'user'
+          && entry.authorId === message.authorId
+          && entry.content === message.content
+        ) {
+          return false;
+        }
+        return true;
+      });
+    const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
+    const loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>(
+      this.toolRuntimeFacade.getLoadedExtendedTools(),
+    );
+    const extendedTools = [...this.toolRuntimeFacade.getExtendedTools()];
+
+    return buildDynamicPromptTemplateVariablesForTurn({
+      message,
+      resolvedUserName,
+      trustLevel,
+      channelType,
+      canonicalContactKey,
+      subjectIdentityKey,
+      responseStyle,
+      now,
+      taskKind,
+      templateVariables,
+      internalState,
+      metacognitiveFlags,
+      emotionAppraisalChain,
+      modelId: this.agent.state.model.id,
+      capabilityTier: this.resolveCapabilityAccess().getTier(),
+      activeToolCounts,
+      extendedTools,
+      loadedExtended,
+      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
+      promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
+      skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
+      activeConcernsBlock: this.buildActiveConcernsContextBlock(canonicalContactKey),
+      behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
+      lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
+      config: this.config as Record<string, unknown>,
+    });
   }
 
   /** Build a runtime context block with current time, channel, user, model info */

@@ -256,18 +256,17 @@ export class CoreMemoryStore {
   }
 
   formatForContext(): string {
-    const lines = [
-      '[Core Memory]',
-    ];
+    const lines = ['<core_memory>'];
 
     for (const label of CORE_MEMORY_LABELS) {
       const block = this.snapshot.blocks[label];
-      lines.push(`${label}:`);
+      lines.push(`<${label}>`);
       lines.push(block.content.length > 0 ? block.content : '(empty)');
-      lines.push('');
+      lines.push(`</${label}>`);
     }
 
-    return lines.join('\n').trimEnd();
+    lines.push('</core_memory>');
+    return lines.join('\n');
   }
 
   private writeBlock(label: CoreMemoryLabel, content: string): CoreMemoryBlock {

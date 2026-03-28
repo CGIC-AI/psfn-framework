@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from '../../../identity/prompt-store.js';
 import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../identity/prompt-composer.js';
-import { CARD_BACKED_FOUNDATION_PROMPT_MESSAGE } from '../../../identity/canonical-foundation.js';
 import { composeDefaultFoundationTemplate } from '../../../identity/foundation-sections.js';
 import { NorthStarStore } from '../../../north-star/store.js';
 import { AdminPromptsDataService } from './prompts-service.js';
@@ -24,7 +23,7 @@ afterEach(() => {
 });
 
 describe('AdminPromptsDataService', () => {
-  it('rejects canonical Character Foundation mutations through the Garden API service', () => {
+  it('allows human Character Foundation mutations through the Garden API service', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(
       join(root, 'prompt-layers.json'),
@@ -48,18 +47,9 @@ describe('AdminPromptsDataService', () => {
       version: 1,
     }));
 
-    expect(updateResult).toEqual({
-      ok: false,
-      message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
-    });
-    expect(toggleResult).toEqual({
-      ok: false,
-      message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
-    });
-    expect(rollbackResult).toEqual({
-      ok: false,
-      message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
-    });
+    expect(updateResult.ok).toBe(true);
+    expect(toggleResult.ok).toBe(true);
+    expect(rollbackResult.ok).toBe(true);
 
     expect(promptStore.getById(foundation.id)).toMatchObject({
       content: before?.content,
@@ -115,7 +105,7 @@ describe('AdminPromptsDataService', () => {
       join(root, 'prompt-history.jsonl'),
     );
     promptStore.seedFromCharacterCard('seeded foundation');
-    const operatorLayer = promptStore.create({
+    promptStore.create({
       type: 'operator',
       name: 'Operator Constitution Layer',
       content: 'operator constitution content',
@@ -138,11 +128,9 @@ describe('AdminPromptsDataService', () => {
     expect(nonNullSnapshot.immutableBlocks).toHaveLength(3);
     expect(nonNullSnapshot.immutableBlocks.map(block => block.editable)).toEqual([false, false, false]);
     expect(nonNullSnapshot.companionLayer?.editable).toBe(false);
-    expect(nonNullSnapshot.mutableLayers).toHaveLength(1);
-    expect(nonNullSnapshot.mutableLayers.some(layer => layer.id === operatorLayer.id && layer.editable)).toBe(true);
-    expect(nonNullSnapshot.mutableLayers.some(layer => layer.type === 'base')).toBe(false);
+    expect(nonNullSnapshot.mutableLayers).toHaveLength(0);
     expect(nonNullSnapshot.preview.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
-    expect(nonNullSnapshot.preview.text).toContain('operator constitution content');
+    expect(nonNullSnapshot.preview.text).not.toContain('operator constitution content');
     expect(nonNullSnapshot.preview.text).not.toContain('seeded foundation');
   });
 
@@ -178,58 +166,21 @@ describe('AdminPromptsDataService', () => {
     expect(promptStore.getById(operatorLayer.id)?.content).toBe(beforeContent);
   });
 
-  it('round-trips mutable constitution layer save with order and content updates', () => {
+  it('treats mutable constitution save as a no-op when constitution has no mutable layers', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(
       join(root, 'prompt-layers.json'),
       join(root, 'prompt-history.jsonl'),
     );
     promptStore.seedFromCharacterCard('seeded foundation');
-    const operatorA = promptStore.create({
-      type: 'operator',
-      name: 'Operator A',
-      content: 'operator-a',
-      updatedBy: 'admin',
-    });
-    const operatorB = promptStore.create({
-      type: 'operator',
-      name: 'Operator B',
-      content: 'operator-b',
-      updatedBy: 'admin',
-    });
-
     const service = new AdminPromptsDataService({ promptStore });
-    const snapshot = service.getConstitutionSnapshot();
-    expect(snapshot).not.toBeNull();
-    const payload = (snapshot?.mutableLayers ?? []).map(layer => ({
-      id: layer.id,
-      content: layer.content,
-      enabled: layer.enabled,
-      identifier: layer.identifier ?? null,
-      role: layer.role ?? null,
-      promptOrder: layer.promptOrder ?? null,
-    }));
-    const aIndex = payload.findIndex(layer => layer.id === operatorA.id);
-    const bIndex = payload.findIndex(layer => layer.id === operatorB.id);
-    expect(aIndex).toBeGreaterThanOrEqual(0);
-    expect(bIndex).toBeGreaterThanOrEqual(0);
-    if (aIndex >= 0 && bIndex >= 0) {
-      const [moved] = payload.splice(bIndex, 1);
-      payload.splice(aIndex, 0, moved);
-      const operatorBPayload = payload.find(layer => layer.id === operatorB.id);
-      if (operatorBPayload) operatorBPayload.content = 'operator-b-updated';
-    }
-
     const result = service.saveConstitutionMutableLayers(JSON.stringify({
-      mutableLayers: payload,
+      mutableLayers: [],
     }));
 
     expect(result.ok).toBe(true);
-    expect(promptStore.getById(operatorB.id)?.content).toBe('operator-b-updated');
-    expect(result.snapshot?.preview.text).toContain('operator-b-updated');
-    expect(promptStore.getById(operatorB.id)?.priority).toBeLessThan(
-      promptStore.getById(operatorA.id)?.priority ?? Number.MAX_SAFE_INTEGER,
-    );
+    expect(result.message).toContain('No mutable constitution layers');
+    expect(result.snapshot?.mutableLayers).toEqual([]);
   });
 
   it('returns Character Foundation snapshot with prompt-soil sections', () => {

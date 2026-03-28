@@ -364,7 +364,6 @@ export function formatActiveConcernsContextBlock(
   const deduped = dedupeConcernsForRuntime(concerns);
   const selected = deduped.slice(0, normalizedLimit);
   const lines = [
-    '[Open Threads]',
     'Treat these as soft threads to verify, not alarms that must dominate the turn.',
   ];
 

@@ -28,6 +28,7 @@ function unixTimestamp(now: Date): string {
 }
 
 type TokenResolver = (now: Date) => string;
+const EMPTY_WRAPPED_SECTION_PATTERN = /<([a-z0-9_]+)>\s*<\/\1>/g;
 
 const TOKEN_RESOLVERS: Array<[RegExp, TokenResolver]> = [
   [/\{\{\s*(?:current_datetime|current_datetime_iso|now|now\(\))\s*\}\}/gi, activeIso],
@@ -123,6 +124,46 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     description: 'Current active model identifier.',
     example: 'moonshotai/kimi-k2.5',
   },
+  {
+    token: '{{active_timezone}}',
+    description: 'Active runtime timezone identifier.',
+    example: 'America/New_York',
+  },
+  {
+    token: '{{runtime_current_datetime_human}}',
+    description: 'Current local datetime formatted for prompt-facing companion context.',
+    example: 'Friday, March 27, 2026 at 10:27 PM',
+  },
+  {
+    token: '{{runtime_current_weekday}}',
+    description: 'Current weekday in the active timezone.',
+    example: 'Friday',
+  },
+  {
+    token: '{{runtime_current_date_human}}',
+    description: 'Current local calendar date in companion-facing format.',
+    example: 'March 27, 2026',
+  },
+  {
+    token: '{{runtime_current_time_human}}',
+    description: 'Current local clock time in companion-facing format.',
+    example: '10:27 PM',
+  },
+  {
+    token: '{{runtime_last_message_received_human}}',
+    description: 'Last pre-turn message timestamp plus relative elapsed wording.',
+    example: 'Friday, March 27, 2026 at 10:11 PM America/New_York (16 minutes ago)',
+  },
+  {
+    token: '{{runtime_last_message_received_at_iso}}',
+    description: 'ISO-8601 timestamp for the most recent pre-turn message.',
+    example: '2026-03-27T22:11:04.112-04:00',
+  },
+  {
+    token: '{{runtime_last_message_received_ago}}',
+    description: 'Relative time since the most recent pre-turn message.',
+    example: '16 minutes ago',
+  },
 ];
 
 export const PROMPT_RUNTIME_TOKEN_HINT = `Runtime tokens: ${PROMPT_RUNTIME_MACRO_HINTS
@@ -207,6 +248,13 @@ function collectUnresolvedTokens(text: string): string[] {
   return [...unresolved];
 }
 
+function pruneEmptyWrappedSections(text: string): string {
+  return text
+    .replace(EMPTY_WRAPPED_SECTION_PATTERN, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export interface PromptRuntimeRenderResult {
   text: string;
   unresolvedTokens: string[];
@@ -239,6 +287,8 @@ export function renderPromptRuntimeTokens(
       const resolved = variableLookup.get(normalized);
       return resolved ?? fullToken;
     });
+
+    output = pruneEmptyWrappedSections(output);
 
     if (output === before) break;
   }

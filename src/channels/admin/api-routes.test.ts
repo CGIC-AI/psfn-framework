@@ -2372,10 +2372,7 @@ describe('AdminServer JSON API routes', () => {
       JSON.stringify({ content: 'Updated API prompt content' }),
       authHeaders,
     );
-    expect(foundationPatchRes.status).toBe(400);
-    expect(JSON.parse(foundationPatchRes.body)).toEqual({
-      error: 'Character Foundation is managed through Prompt Soil → Character Foundation, not generic prompt-layer edits.',
-    });
+    expect(foundationPatchRes.status).toBe(200);
 
     const editableLayer = promptStore.create({
       type: 'runtime',
@@ -2476,13 +2473,13 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('supports constitution snapshot and mutable-layer round-trip with immutable fail-closed edits', async () => {
-    const operatorA = promptStore.create({
+    promptStore.create({
       type: 'operator',
       name: 'Constitution Operator A',
       content: 'constitution-operator-a',
       updatedBy: 'admin',
     });
-    const operatorB = promptStore.create({
+    promptStore.create({
       type: 'operator',
       name: 'Constitution Operator B',
       content: 'constitution-operator-b',
@@ -2507,55 +2504,30 @@ describe('AdminServer JSON API routes', () => {
     expect(snapshotPayload.immutableBlocks.every(block => block.editable === false)).toBe(true);
     expect(snapshotPayload.preview.text).toContain('[Immutable Human-Safety Amendments]');
     expect(snapshotPayload.preview.text).not.toContain('You are {{char}}.');
-
-    const mutableLayers = snapshotPayload.mutableLayers.map(layer => ({
-      id: layer.id,
-      content: layer.content,
-      enabled: layer.enabled,
-      identifier: layer.identifier ?? null,
-      role: layer.role ?? null,
-      promptOrder: layer.promptOrder ?? null,
-    }));
-    const aIndex = mutableLayers.findIndex(layer => layer.id === operatorA.id);
-    const bIndex = mutableLayers.findIndex(layer => layer.id === operatorB.id);
-    expect(aIndex).toBeGreaterThanOrEqual(0);
-    expect(bIndex).toBeGreaterThanOrEqual(0);
-    if (aIndex >= 0 && bIndex >= 0) {
-      const [moved] = mutableLayers.splice(bIndex, 1);
-      mutableLayers.splice(aIndex, 0, moved);
-      const operatorBPayload = mutableLayers.find(layer => layer.id === operatorB.id);
-      if (operatorBPayload) operatorBPayload.content = 'constitution-operator-b-updated';
-    }
+    expect(snapshotPayload.mutableLayers).toEqual([]);
 
     const saveRes = await request(
       port,
       'PUT',
       '/api/admin/prompts/constitution',
-      JSON.stringify({ mutableLayers }),
+      JSON.stringify({ mutableLayers: [] }),
       authHeaders,
     );
     expect(saveRes.status).toBe(200);
     const savePayload = JSON.parse(saveRes.body) as {
       ok: boolean;
-      snapshot?: { preview: { text: string } };
+      message?: string;
+      snapshot?: { preview: { text: string }; mutableLayers: unknown[] };
     };
     expect(savePayload.ok).toBe(true);
-    expect(promptStore.getById(operatorB.id)?.content).toBe('constitution-operator-b-updated');
-    expect(savePayload.snapshot?.preview.text).toContain('constitution-operator-b-updated');
-    expect(promptStore.getById(operatorB.id)?.priority).toBeLessThan(
-      promptStore.getById(operatorA.id)?.priority ?? Number.MAX_SAFE_INTEGER,
-    );
+    expect(savePayload.message).toContain('No mutable constitution layers');
+    expect(savePayload.snapshot?.mutableLayers).toEqual([]);
 
-    const immutableAttemptPayload = mutableLayers.map((layer, index) => (
-      index === 0
-        ? { ...layer, id: 'constitution:immutable:1', content: 'forbidden immutable edit' }
-        : layer
-    ));
     const immutableAttemptRes = await request(
       port,
       'PUT',
       '/api/admin/prompts/constitution',
-      JSON.stringify({ mutableLayers: immutableAttemptPayload }),
+      JSON.stringify({ mutableLayers: [{ id: 'constitution:immutable:1', content: 'forbidden immutable edit' }] }),
       authHeaders,
     );
     expect(immutableAttemptRes.status).toBe(400);
@@ -3605,14 +3577,19 @@ describe('AdminServer JSON API routes', () => {
     expect(identityPayload.card.data.alternate_greetings).toBeUndefined();
     expect(identityPayload.card.data.extensions?.visual_description).toBeUndefined();
 
-    const foundationLayer = promptStore.getAll().find(
-      layer => layer.type === 'base' && layer.name === 'Character Foundation',
+    const foundationLayers = promptStore.getAll().filter(
+      layer => layer.type === 'base' && layer.name.startsWith('Character Foundation ·'),
     );
-    expect(foundationLayer).toBeDefined();
-    expect(foundationLayer?.content).toContain('You are {{char}}.');
-    expect(foundationLayer?.content).toContain('{{description}}');
-    expect(foundationLayer?.content).toContain('{{personality}}');
-    expect(foundationLayer?.content).not.toContain('Imported Identity');
+    expect(foundationLayers.length).toBeGreaterThan(0);
+    const combinedFoundation = foundationLayers
+      .filter(layer => layer.enabled)
+      .sort((left, right) => (left.promptOrder ?? 0) - (right.promptOrder ?? 0))
+      .map(layer => layer.content)
+      .join('\n\n');
+    expect(combinedFoundation).toContain('You are {{char}}.');
+    expect(combinedFoundation).toContain('{{description}}');
+    expect(combinedFoundation).toContain('{{personality}}');
+    expect(combinedFoundation).not.toContain('Imported Identity');
   });
 
   it('sanitizes identity upload responses for hostile filenames and card names', async () => {

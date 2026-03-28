@@ -177,6 +177,7 @@ function createRuntime(params: {
     normalizeTurnPromptOverride: vi.fn(() => ({ mode: 'default' })),
     resolveResponseStyle: vi.fn(() => 'concise'),
     buildPromptTemplateVariables: vi.fn(() => ({})),
+    buildDynamicPromptTemplateVariables: vi.fn(() => ({})),
     setCurrentSelfModelState: vi.fn(),
     buildRuntimeContext: vi.fn(() => ''),
     buildPromptPrefixCacheKey: vi.fn(() => 'prompt-prefix'),
@@ -379,7 +380,6 @@ describe('handleMessageForTurn compaction scheduling', () => {
       versionPointer: 'prompt-v1',
     }));
     runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
-    runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
     (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mockImplementation(() => {
@@ -436,14 +436,14 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const toolContext = recordedInput.turnSnapshot?.toolContext as Record<string, unknown> | undefined;
     expect(promptContext).toMatchObject({
       renderedStaticPrefix: 'Rendered static prefix',
-      renderedDynamicSuffix: 'Dynamic suffix template\n\nPersona hint',
-      runtimeContext: 'Runtime context block',
+      renderedDynamicSuffix: 'Dynamic suffix template',
+      runtimeContext: '',
       memoryContextBlock: 'Retrieved memory block',
       scratchpadContext: 'Scratchpad block',
       finalSystemPrompt: 'Final system prompt',
     });
     expect(promptContext?.assembledPrompt).toContain('Rendered static prefix');
-    expect(promptContext?.assembledPrompt).toContain('Runtime context block');
+    expect(promptContext?.assembledPrompt).not.toContain('Runtime context block');
     expect(promptContext?.messages).toEqual([
       { role: 'user', content: 'Earlier user message' },
       { role: 'assistant', content: 'Earlier assistant reply' },
@@ -464,7 +464,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(emittedSnapshots).toHaveLength(3);
     expect(emittedSnapshots.at(-1)?.promptContext).toMatchObject({
       finalSystemPrompt: 'Final system prompt',
-      runtimeContext: 'Runtime context block',
+      runtimeContext: '',
     });
     expect(emittedSnapshots.at(-1)?.toolContext).toMatchObject({
       activeTools: [{ name: 'contact_lookup' }],

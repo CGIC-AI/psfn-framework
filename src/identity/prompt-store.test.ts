@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { FOUNDATION_SECTION_DEFINITIONS } from './foundation-sections.js';
 import { composeSystemPromptTemplate } from './loader.js';
 import { PromptLayerStore } from './prompt-store.js';
 
@@ -10,6 +11,19 @@ describe('PromptLayerStore', () => {
   let filePath: string;
   let historyPath: string;
   let store: PromptLayerStore;
+
+  function foundationLayers() {
+    return store.getByType('base')
+      .filter(layer => layer.name.startsWith('Character Foundation'));
+  }
+
+  function composeEnabledFoundationPrompt(): string {
+    return foundationLayers()
+      .filter(layer => layer.enabled)
+      .sort((left, right) => (left.promptOrder ?? 0) - (right.promptOrder ?? 0))
+      .map(layer => layer.content)
+      .join('\n\n');
+  }
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'psfn-prompt-'));
@@ -325,16 +339,13 @@ describe('PromptLayerStore', () => {
       const foundationTemplate = composeSystemPromptTemplate();
       store.seedFromCharacterCard(foundationTemplate);
 
-      const layers = store.getAll();
-      expect(layers).toHaveLength(1);
-      expect(layers[0].type).toBe('base');
-      expect(layers[0].name).toBe('Character Foundation');
-      expect(layers[0].content).toBe(foundationTemplate);
-      expect(layers[0].content).toContain('{{description}}');
-      expect(layers[0].content).not.toContain('PSFN');
-      expect(layers[0].identifier).toBe('main');
-      expect(layers[0].role).toBe('system');
-      expect(layers[0].promptOrder).toBe(0);
+      const layers = foundationLayers();
+      expect(layers).toHaveLength(FOUNDATION_SECTION_DEFINITIONS.length);
+      expect(layers.every(layer => layer.type === 'base')).toBe(true);
+      expect(composeEnabledFoundationPrompt()).toBe(foundationTemplate);
+      expect(layers[0]?.identifier).toBe('main');
+      expect(layers[0]?.role).toBe('system');
+      expect(layers[0]?.promptOrder).toBe(0);
     });
 
     it('skips seeding when layers already exist', () => {

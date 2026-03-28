@@ -1,6 +1,6 @@
-import type { ShellExecPolicyConfig } from '../boundary/gateway/policy.js';
-import { executeShellCommandWithPolicy } from '../execution/shell-runner.js';
-import type { SandboxExecutionPort } from './sandbox-capabilities/contracts.js';
+import type { ShellExecPolicyConfig } from './execution/shell-policy-config.js';
+import { executeShellCommandWithPolicy } from './execution/shell-runner.js';
+import type { SandboxExecutionPort } from './capabilities/contracts.js';
 
 export function createSandboxBrokerExecutionPort(options: {
   workspacePath: string;

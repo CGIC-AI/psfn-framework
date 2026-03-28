@@ -10,7 +10,7 @@ import type {
   GatewayREPLCapabilities,
   SandboxBudgetRef,
   SandboxDeps,
-} from './sandbox-capabilities/contracts.js';
+} from '../boundary/sandbox/capabilities/contracts.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 import {
   createLLMCapabilities,
@@ -22,9 +22,9 @@ import {
   createThinkCapabilities,
   createToolchainCapabilities,
   createWebCapabilities,
-} from './sandbox-capabilities/index.js';
+} from '../boundary/sandbox/capabilities/index.js';
 
-export type { SandboxDeps, SandboxBudgetRef, ExecuteResult } from './sandbox-capabilities/contracts.js';
+export type { SandboxDeps, SandboxBudgetRef, ExecuteResult } from '../boundary/sandbox/capabilities/contracts.js';
 
 export interface SandboxLimits {
   memoryCeilingBytes?: number;

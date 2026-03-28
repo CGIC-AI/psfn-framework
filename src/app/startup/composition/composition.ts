@@ -40,7 +40,7 @@ import {
   createMemoryRethinkTool,
 } from '../../../core-memory/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../repl/types.js';
-import type { SandboxExecutionPort } from '../../../repl/sandbox-capabilities/contracts.js';
+import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../../../identity/loader.js';

@@ -1,4 +1,4 @@
-import type { ThinkEvidence } from '../types.js';
+import type { ThinkEvidence } from '../../../repl/types.js';
 import type { GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
 import {
   addEvidence,

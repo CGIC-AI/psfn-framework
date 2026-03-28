@@ -8,7 +8,7 @@ import type { EventBus } from '../shared/event-bus.js';
 import type { CapabilityTier, CompositionalPolicyConfig } from '../system/config/runtime-config-contracts.js';
 import type { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
-import type { SandboxExecutionPort } from './sandbox-capabilities/contracts.js';
+import type { SandboxExecutionPort } from '../boundary/sandbox/capabilities/contracts.js';
 
 export interface ThinkBudget {
   maxIterations: number;      // default 15

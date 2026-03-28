@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { accessSync, constants, realpathSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
-import type { ShellExecParams, ShellExecResult } from '../boundary/gateway/protocol.js';
-import { isInsideAllowedPaths, type ShellExecPolicyConfig } from '../boundary/gateway/policy.js';
+import type { ShellExecParams, ShellExecResult } from '../../gateway/protocol.js';
+import { isInsideAllowedPaths } from '../../gateway/policy.js';
+import type { ShellExecPolicyConfig } from './shell-policy-config.js';
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_TIMEOUT_MS = 30_000;

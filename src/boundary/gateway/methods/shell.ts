@@ -3,7 +3,7 @@ import type { ShellExecParams } from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
 import type { GatedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import { registerGatedDescriptors } from './register.js';
-import { executeShellCommandWithPolicy, ShellExecPolicyError } from '../../../execution/shell-runner.js';
+import { executeShellCommandWithPolicy, ShellExecPolicyError } from '../../sandbox/execution/shell-runner.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [

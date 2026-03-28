@@ -29,7 +29,8 @@ import { createBehavioralPatternMemoryPromotionHook } from '../../intention/patt
 import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
-import { buildShellExecPolicyConfig } from '../../execution/shell-policy-config.js';
+import { buildShellExecPolicyConfig } from '../../boundary/sandbox/execution/shell-policy-config.js';
+} from '../startup/composition/composition.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
@@ -58,7 +59,7 @@ import { emitEligibilityDecisionTelemetry } from '../startup/support/eligibility
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from '../../agent-main/control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from '../../agent-main/control-plane.js';
-import { createSandboxBrokerExecutionPort } from '../../repl/sandbox-execution-broker.js';
+import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
 import {
   bootstrapAgentCoreRuntime,
 } from './core-bootstrap.js';

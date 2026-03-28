@@ -15,7 +15,7 @@ import { resolveWorkspaceRoot } from './filesystem-paths.js';
 import { resolveGitRepoRoot } from '../../git/repo-root.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../../modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../../shared/utils/env.js';
-import { buildShellExecPolicyConfig } from '../../execution/shell-policy-config.js';
+import { buildShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
 import {
   buildProviderCredentialEnv,
   resolveOptionalEnvCredential,

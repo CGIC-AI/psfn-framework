@@ -1,20 +1,20 @@
-import { MemoryWriter } from '../../memory/writer.js';
-import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
-import type { MemoryStore } from '../../memory/store.js';
-import type { SessionManager } from '../../session/manager.js';
-import type { MemoryType, MemoryRedactionOperation } from '../../memory/types.js';
+import { MemoryWriter } from '../../../memory/writer.js';
+import type { EmbeddingService, LLMProvider } from '../../../agent/contracts.js';
+import type { MemoryStore } from '../../../memory/store.js';
+import type { SessionManager } from '../../../session/manager.js';
+import type { MemoryType, MemoryRedactionOperation } from '../../../memory/types.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_MEMORY_REDACTION_OPERATIONS,
-} from '../../memory/types.js';
-import type { TrustLevel } from '../../trust/types.js';
-import type { ThinkEvidence } from '../types.js';
+} from '../../../memory/types.js';
+import type { TrustLevel } from '../../../trust/types.js';
+import type { ThinkEvidence } from '../../../repl/types.js';
 import { addEvidence, splitCsvTags, toTrimmedString } from './common.js';
 import {
   runSessionSearch,
   type SessionSearchResult,
   type SessionSearchViewerContext,
-} from '../../session/search-runtime.js';
+} from '../../../session/search-runtime.js';
 
 export interface SessionSearchOptions {
   channelId?: SessionSearchViewerContext['channelId'];

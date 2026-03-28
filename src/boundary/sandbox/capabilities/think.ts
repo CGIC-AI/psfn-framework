@@ -1,4 +1,4 @@
-import type { NestedThinkOptions, NestedThinkRunner } from '../types.js';
+import type { NestedThinkOptions, NestedThinkRunner } from '../../../repl/types.js';
 
 export interface ThinkCapabilities {
   sub_think: (task: string, options?: NestedThinkOptions) => Promise<string>;

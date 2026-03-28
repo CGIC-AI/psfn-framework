@@ -7,7 +7,7 @@ import type { SessionManager } from '../session/manager.js';
 import type { LLMResponse } from '../shared/contracts/runtime.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';
-import type { SandboxExecutionPort } from './sandbox-capabilities/contracts.js';
+import type { SandboxExecutionPort } from '../boundary/sandbox/capabilities/contracts.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 

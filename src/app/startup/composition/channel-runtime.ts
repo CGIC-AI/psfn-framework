@@ -4,7 +4,7 @@ import type { SubstrateAgent } from '../../../agent/substrate-agent.js';
 import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
 import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
 import { DiscordAdapter } from '../../../channels/discord/adapter.js';
-import { OpenHomeAdapter } from '../../../channels/openhome/adapter.js';
+import { OpenHomeAdapter } from '../../../../satellites/openhome/host/adapter.js';
 import type { TelegramChannelConfig } from '../../../channels/config.js';
 import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
 import type {

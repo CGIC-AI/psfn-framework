@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { BeadsAction, PolicyContext, PolicyDecision } from './protocol.js';
-import type { VaultOperations } from '../../vault/ops.js';
+import type { VaultOperations } from '../integrations/vault/ops.js';
 import type { ShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
 
 const log = createComponentLogger('Policy');

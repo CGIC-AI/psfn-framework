@@ -3,8 +3,8 @@
 // All operations use the Obsidian CLI which communicates with the running desktop app via IPC.
 
 import { execSync } from 'node:child_process';
-import { createComponentLogger } from '../shared/logger.js';
-import { toErrorMessage } from '../shared/utils/errors.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const OBSIDIAN_SERVICES = [
   'obsidian-xvfb',

@@ -3,7 +3,7 @@
 // vault RPC methods. Used in gateway/agent split mode where the agent
 // container has no direct access to the Obsidian CLI.
 
-import type { GatewayClient } from '../boundary/gateway/client.js';
+import type { GatewayClient } from '../../gateway/client.js';
 import type {
   VaultOperations,
   VaultWriteResult,

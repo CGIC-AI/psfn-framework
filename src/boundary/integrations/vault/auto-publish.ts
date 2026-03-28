@@ -4,7 +4,7 @@
 // reflection pipeline when Obsidian auto-publish is enabled in settings.json.
 
 import type { VaultOperations } from './ops.js';
-import { createComponentLogger } from '../shared/logger.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 
 const log = createComponentLogger('VaultAutoPublish');
 

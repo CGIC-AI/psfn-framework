@@ -153,12 +153,22 @@ describe('VaultOps', () => {
     });
 
     it('maps IPC errors to "app not running" error', async () => {
+      vi.useFakeTimers();
       mockExecSync.mockImplementation(() => {
         const err = new Error('IPC') as Error & { stderr: string };
         err.stderr = 'Failed to connect via IPC';
         throw err;
       });
-      await expect(ops.read('test')).rejects.toThrow('Obsidian desktop app is not running');
+      try {
+        const readPromise = ops.read('test');
+        const rejection = expect(readPromise).rejects.toThrow(
+          'Obsidian desktop app is not running',
+        );
+        await vi.runAllTimersAsync();
+        await rejection;
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('passes through timeout config', () => {

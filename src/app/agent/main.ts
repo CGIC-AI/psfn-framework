@@ -1,113 +1,113 @@
 // ── Agent Container Entry Point ──
 // Runs inside a --network=none container. Connects to gateway via Unix socket.
-// Run: npm run agent
+// Run: npx tsx src/app/agent/main.ts
 
 import { randomUUID } from 'node:crypto';
-import { ensureActiveTimezone } from './shared/time/active-timezone.js';
-import { loadConfig } from './system/config/load-config.js';
-import type { SubstrateMessage } from './shared/contracts/runtime.js';
-import { createComponentLogger } from './shared/logger.js';
-import { EventBus } from './shared/event-bus.js';
-import { EmotionObserver } from './emotion/observer.js';
-import { EmotionState } from './emotion/state.js';
-import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
-import { SalienceDecay } from './memory/decay.js';
-import { Scheduler } from './scheduler/scheduler.js';
-import { GatewayClient } from './gateway/client.js';
-import { DEFAULT_GATEWAY_SOCKET_PATH } from './system/security/policy-constants.js';
-import type { ApiServer } from './channels/api/server.js';
-import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
+import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
+import { loadConfig } from '../../system/config/load-config.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { EmotionObserver } from '../../emotion/observer.js';
+import { EmotionState } from '../../emotion/state.js';
+import { getSharedAudioEmotionClassifier } from '../../emotion/audio-classifier.js';
+import { SalienceDecay } from '../../memory/decay.js';
+import { Scheduler } from '../../scheduler/scheduler.js';
+import { GatewayClient } from '../../gateway/client.js';
+import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
+import type { ApiServer } from '../../channels/api/server.js';
+import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
 import {
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
   toActiveProbeMeta,
-} from './channels/api/active-health-probe.js';
-import { AdminServer } from './channels/admin/server.js';
-import { createGatewayAdminToolHealthProvider } from './channels/admin/tool-health-provider.js';
-import { GatewayModelDiscovery } from './llm/discovery.js';
-import { resolveBackupRuntimeConfig } from './backup/config.js';
-import { registerScheduledBackupTask } from './backup/service.js';
+} from '../../channels/api/active-health-probe.js';
+import { AdminServer } from '../../channels/admin/server.js';
+import { createGatewayAdminToolHealthProvider } from '../../channels/admin/tool-health-provider.js';
+import { GatewayModelDiscovery } from '../../llm/discovery.js';
+import { resolveBackupRuntimeConfig } from '../../backup/config.js';
+import { registerScheduledBackupTask } from '../../backup/service.js';
 import {
   createEmbeddingDimensionMismatchWarning,
   runDatabaseIntegrityCheck,
   validateEmbeddingDimensions,
-} from './backup/startup-checks.js';
-import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from './shared/utils/env.js';
-import { MemoryWriter } from './memory/writer.js';
-import { registerMemoryTools } from './memory/runtime-wiring.js';
-import { registerGitTools } from './git/runtime-wiring.js';
-import { GatewayGitOps } from './git/gateway-ops.js';
-import { registerBeadsTools } from './beads/runtime-wiring.js';
-import { GatewayBeadsOps } from './beads/gateway-ops.js';
-import { writeLastActiveSession } from './system/lifecycle/notifications.js';
+} from '../../backup/startup-checks.js';
+import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from '../../shared/utils/env.js';
+import { MemoryWriter } from '../../memory/writer.js';
+import { registerMemoryTools } from '../../memory/runtime-wiring.js';
+import { registerGitTools } from '../../git/runtime-wiring.js';
+import { GatewayGitOps } from '../../git/gateway-ops.js';
+import { registerBeadsTools } from '../../beads/runtime-wiring.js';
+import { GatewayBeadsOps } from '../../beads/gateway-ops.js';
+import { writeLastActiveSession } from '../../system/lifecycle/notifications.js';
 import {
   RUNTIME_MODE,
-} from './system/lifecycle/runtime-mode.js';
-import { inferSessionChannelType } from './session/session-id.js';
-import { createGatewayNtfyNotifier } from './tools/ntfy.js';
-import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
-import { createBehavioralPatternMemoryPromotionHook } from './intention/patterns.js';
+} from '../../system/lifecycle/runtime-mode.js';
+import { inferSessionChannelType } from '../../session/session-id.js';
+import { createGatewayNtfyNotifier } from '../../tools/ntfy.js';
+import { attachTerminalDebugObserver } from '../../debug/terminal-observer.js';
+import { createBehavioralPatternMemoryPromotionHook } from '../../intention/patterns.js';
 import {
   composeIdentity,
   wireShardAndThinkRuntime,
-} from './bootstrap/composition.js';
-import { buildShellExecPolicyConfig } from './execution/shell-policy-config.js';
+} from '../../bootstrap/composition.js';
+import { buildShellExecPolicyConfig } from '../../execution/shell-policy-config.js';
 import {
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
   wireHeartbeatRuntime,
-} from './bootstrap/parity.js';
-import { createSqliteCompanionStore } from './persistence/sqlite-companion-store.js';
-import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
-import { CapabilityRuntime } from './system/capabilities/runtime.js';
+} from '../../bootstrap/parity.js';
+import { createSqliteCompanionStore } from '../../persistence/sqlite-companion-store.js';
+import { wirePostTurnActionRuntime } from '../../bootstrap/post-turn-actions.js';
+import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import {
   createEligibilityGate,
-} from './system/capabilities/eligibility.js';
-import { ConfirmationQueue } from './system/capabilities/confirmation-queue.js';
-import { CharacterCardVersionStore } from './identity/card-versioning.js';
-import { ModuleLoader } from './modules/loader.js';
+} from '../../system/capabilities/eligibility.js';
+import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
+import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+import { ModuleLoader } from '../../modules/loader.js';
 import {
   ensureRegistryFile,
   resolveModuleRegistryPathFromWorkspace,
-} from './modules/registry.js';
-import type { ChannelAdapter } from './channels/types.js';
-import { buildExternalChannelProfiles, loadRuntimeChannelsConfig } from './channels/config.js';
+} from '../../modules/registry.js';
+import type { ChannelAdapter } from '../../channels/types.js';
+import { buildExternalChannelProfiles, loadRuntimeChannelsConfig } from '../../channels/config.js';
 import {
   createApiServerChannelAdapterFactoryEntry,
   createOpenHomeChannelAdapterFactoryEntry,
   requireChannelAdapter,
-} from './bootstrap/channel-runtime.js';
+} from '../../bootstrap/channel-runtime.js';
 import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
-} from './runtime/channel-lifecycle.js';
-import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from './agent/tool-wiring-validator.js';
-import { registerGatewayMessageHandlers } from './agent-main/gateway-message-handlers.js';
+} from '../../runtime/channel-lifecycle.js';
+import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../agent/tool-wiring-validator.js';
+import { registerGatewayMessageHandlers } from '../../agent-main/gateway-message-handlers.js';
 import {
   resolveCharacterCardHistoryPath,
   resolveMemoryJournalPath,
   resolvePostTurnActionQueuePath,
   resolveSessionsDir,
-} from './persistence/layout.js';
+} from '../../persistence/layout.js';
 import {
   buildRuntimeChannelsConfigOverrides,
   type StartupConfigHydrationDiagnostics,
-} from './runtime/bootstrap-helpers.js';
-import { isExplicitTrue, parseCommaSeparatedEnv } from './runtime/env-parsing.js';
-import { resolveStartupPreflightBundle } from './runtime/startup-preflight.js';
+} from '../../runtime/bootstrap-helpers.js';
+import { isExplicitTrue, parseCommaSeparatedEnv } from '../../runtime/env-parsing.js';
+import { resolveStartupPreflightBundle } from '../../runtime/startup-preflight.js';
 import {
   createStartupTextEmotionClassifier,
   warmRuntimeMlServices,
-} from './runtime/ml-warmup.js';
-import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
-import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
-import { createGatewayConfirmationQueueAdminApi } from './runtime/confirmation-queue-admin-api.js';
-import { createRuntimeSafeguardSurfaces } from './runtime/safeguard-surfaces.js';
-import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
-import { buildAgentCoreRuntime } from './agent-main/core-runtime.js';
-import { buildAgentControlPlane } from './agent-main/control-plane.js';
-import type { AgentControlPlaneShutdownTargets } from './agent-main/control-plane.js';
-import { createSandboxBrokerExecutionPort } from './repl/sandbox-execution-broker.js';
+} from '../../runtime/ml-warmup.js';
+import { resolveApiCorsAllowedOrigins } from '../../channels/api/http-policy.js';
+import { emitEligibilityDecisionTelemetry } from '../../runtime/eligibility-telemetry.js';
+import { createGatewayConfirmationQueueAdminApi } from '../../runtime/confirmation-queue-admin-api.js';
+import { createRuntimeSafeguardSurfaces } from '../../runtime/safeguard-surfaces.js';
+import { createSignalShutdownHandler } from '../../runtime/signal-shutdown.js';
+import { buildAgentCoreRuntime } from '../../agent-main/core-runtime.js';
+import { buildAgentControlPlane } from '../../agent-main/control-plane.js';
+import type { AgentControlPlaneShutdownTargets } from '../../agent-main/control-plane.js';
+import { createSandboxBrokerExecutionPort } from '../../repl/sandbox-execution-broker.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();

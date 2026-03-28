@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createNotifyOperatorTool, type NtfyNotifier } from './ntfy.js';
+import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool, type NtfyNotifier } from './ntfy.js';
 import { ExternalCommunicationRateLimiter } from '../capabilities/safeguards.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 
@@ -155,5 +155,50 @@ describe('notify_operator tool', () => {
         disallowScheduled: true,
       },
     });
+  });
+
+  it('resolves the ntfy token through the credential vault when constructing the notifier from env', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: () => null,
+      },
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    try {
+      const notifier = createHttpNtfyNotifierFromEnv(
+        {
+          NTFY_BASE_URL: 'https://ntfy.local',
+          NTFY_TOPIC: 'ops',
+        },
+        {
+          resolveOptional(reference) {
+            return reference.envName === 'NTFY_TOKEN' ? 'vault-token' : undefined;
+          },
+          resolveRequired(reference, description) {
+            const value = this.resolveOptional(reference);
+            if (value) return value;
+            throw new Error(`${description} is not configured`);
+          },
+          has(reference) {
+            return this.resolveOptional(reference) !== undefined;
+          },
+        },
+      );
+
+      await notifier.notify({ message: 'Operator alert' });
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://ntfy.local/ops',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer vault-token',
+          }),
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

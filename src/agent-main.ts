@@ -266,6 +266,7 @@ async function main(): Promise<void> {
     pathSnapshot.systemDataDir,
     process.env,
     buildRuntimeChannelsConfigOverrides(config, startupHydration.settingsDomains.runtime),
+    { credentialVault: config.credentialVault },
   );
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: pathSnapshot.companionDataDir,

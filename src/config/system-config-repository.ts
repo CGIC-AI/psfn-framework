@@ -1,6 +1,6 @@
 import type { ProcessEnv } from 'node:process';
 import type { RuntimeChannelsConfigOverrides, RuntimeChannelsConfig } from '../channels/config.js';
-import { loadRuntimeChannelsConfig } from '../channels/config.js';
+import { loadChannelsOwnerFile, loadRuntimeChannelsConfig } from '../channels/config.js';
 import type { CapabilityTierConfig } from './capability-tier-config.js';
 import {
   loadCapabilityTierConfig,
@@ -57,6 +57,7 @@ export interface SystemConfigRepository {
   loadCapabilityTier(): CapabilityTierConfig;
   saveCapabilityTier(nextConfig: unknown): CapabilityTierConfig;
   loadChannels(env?: ProcessEnv, overrides?: RuntimeChannelsConfigOverrides): RuntimeChannelsConfig;
+  loadChannelsOwnerFile(): Record<string, unknown>;
   loadBackup(): BackupJsonConfig;
   saveBackup(nextConfig: unknown): BackupJsonConfig;
   loadSkills(): SkillsRuntimeConfig;
@@ -90,6 +91,7 @@ export function createSystemConfigRepository(
       env,
       overrides,
     ),
+    loadChannelsOwnerFile: () => loadChannelsOwnerFile(options.dataDir),
     loadBackup: () => loadBackupConfig(options.dataDir, loadOptions),
     saveBackup: (nextConfig) => saveBackupConfig(options.dataDir, nextConfig),
     loadSkills: () => loadSkillsConfig(options.dataDir, loadOptions),

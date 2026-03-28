@@ -44,16 +44,13 @@ describe('loadRuntimeChannelsConfig', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
-        telegram: {
-          enabled: true,
-          token: '${TELEGRAM_BOT_TOKEN}',
-          mode: 'polling',
-          pollIntervalMs: 2500,
+        discord: {
+          heartbeatChannelId: '${DISCORD_HEARTBEAT_CHANNEL_ID}',
         },
       }));
 
       expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json references missing environment variables: TELEGRAM_BOT_TOKEN',
+        'channels.json references missing environment variables: DISCORD_HEARTBEAT_CHANNEL_ID',
       );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -66,13 +63,19 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: true,
-          token: '${TELEGRAM_BOT_TOKEN}',
+          tokenRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_BOT_TOKEN',
+          },
           allowedUsers: ['42', '@trusted_friend'],
           mode: 'polling',
           pollIntervalMs: 2500,
           webhook: {
-            url: 'https://example.com/hooks/telegram',
-            secret: '${TELEGRAM_WEBHOOK_SECRET}',
+            url: '${TELEGRAM_WEBHOOK_URL}',
+            secretRef: {
+              kind: 'env',
+              envName: 'TELEGRAM_WEBHOOK_SECRET',
+            },
             host: '127.0.0.1',
             port: 9091,
             path: '/hooks/telegram',
@@ -82,6 +85,7 @@ describe('loadRuntimeChannelsConfig', () => {
 
       const config = loadRuntimeChannelsConfig(dataDir, {
         TELEGRAM_BOT_TOKEN: 'token-from-env',
+        TELEGRAM_WEBHOOK_URL: 'https://example.com/hooks/telegram',
         TELEGRAM_WEBHOOK_SECRET: 'webhook-secret',
       });
 
@@ -114,7 +118,30 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
 
       expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json.telegram.token or TELEGRAM_BOT_TOKEN must be configured when telegram is enabled',
+        'channels.json.telegram.tokenRef or TELEGRAM_BOT_TOKEN must be configured when telegram is enabled',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects legacy inline telegram secrets in channels.json', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: false,
+          token: 'legacy-inline-token',
+          mode: 'polling',
+          pollIntervalMs: 2500,
+          webhook: {
+            secret: 'legacy-inline-secret',
+          },
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.telegram.tokenRef must be used instead of channels.json.telegram.token',
       );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -207,13 +234,19 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: false,
-          token: 'token-from-file',
+          tokenRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_BOT_TOKEN',
+          },
           allowedUsers: ['1'],
           mode: 'polling',
           pollIntervalMs: 1200,
           webhook: {
             url: 'https://example.com/from-file',
-            secret: 'file-secret',
+            secretRef: {
+              kind: 'env',
+              envName: 'TELEGRAM_WEBHOOK_SECRET',
+            },
             host: '127.0.0.1',
             port: 1234,
             path: '/from-file',
@@ -257,14 +290,19 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: false,
-          token: 'token-from-file',
+          tokenRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_BOT_TOKEN',
+          },
           allowedUsers: ['from-file'],
           mode: 'polling',
           pollIntervalMs: 1200,
         },
       }));
 
-      const config = loadRuntimeChannelsConfig(dataDir, {}, {
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        TELEGRAM_BOT_TOKEN: 'token-from-env',
+      }, {
         telegram: {
           enabled: true,
           allowedUsers: ['111', ' 222 ', '', '111'],
@@ -284,7 +322,10 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: true,
-          token: 'token-from-file',
+          tokenRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_BOT_TOKEN',
+          },
           allowedUsers: ['from-file'],
           mode: 'polling',
           pollIntervalMs: 1200,
@@ -292,6 +333,7 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
 
       const config = loadRuntimeChannelsConfig(dataDir, {
+        TELEGRAM_BOT_TOKEN: 'token-from-env',
         TELEGRAM_ENABLED: 'false',
         TELEGRAM_ALLOWED_USERS: 'env-1, @env-two',
       }, {
@@ -314,7 +356,10 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: true,
-          token: 'token-from-file',
+          tokenRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_BOT_TOKEN',
+          },
           allowedUsers: ['from-file'],
           mode: 'polling',
           pollIntervalMs: 1200,
@@ -322,6 +367,7 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
 
       const config = loadRuntimeChannelsConfig(dataDir, {
+        TELEGRAM_BOT_TOKEN: 'token-from-env',
         TELEGRAM_AUTHORIZED_USERS: '5635268079,@primary-user',
       });
 
@@ -357,13 +403,18 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
           enabled: 'YES',
-          token: 'token-from-file',
+          tokenRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_BOT_TOKEN',
+          },
           mode: 'polling',
           pollIntervalMs: 500,
         },
       }));
 
-      const truthyConfig = loadRuntimeChannelsConfig(dataDir, {});
+      const truthyConfig = loadRuntimeChannelsConfig(dataDir, {
+        TELEGRAM_BOT_TOKEN: 'token-from-env',
+      });
       expect(truthyConfig.telegram.enabled).toBe(true);
 
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({

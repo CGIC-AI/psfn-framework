@@ -15,7 +15,10 @@ import { resolveWorkspaceRoot } from './filesystem-paths.js';
 import { resolveGitRepoRoot } from '../git/repo-root.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../utils/env.js';
-import { buildProviderCredentialEnv } from '../custody/credential-vault.js';
+import {
+  buildProviderCredentialEnv,
+  resolveOptionalEnvCredential,
+} from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
 import { parseWyomingShardRoutingConfigEnv } from '../types.js';
 import {
@@ -337,7 +340,7 @@ export function resolveGatewayBootstrapInput(
   const runtimeMode = resolveGatewayRuntimeMode(env.PSFN_RUNTIME_MODE);
   const ntfyBaseUrl = env.NTFY_BASE_URL?.trim() || undefined;
   const ntfyTopic = env.NTFY_TOPIC?.trim() || undefined;
-  const ntfyToken = env.NTFY_TOKEN?.trim() || undefined;
+  const ntfyToken = resolveOptionalEnvCredential(config.credentialVault, 'NTFY_TOKEN', env);
   const ntfyTimeoutMs = parsePositiveIntEnv(env.NTFY_TIMEOUT_MS, DEFAULT_NTFY_TIMEOUT_MS);
   const ntfyDebounceMs = parsePositiveIntEnv(env.NTFY_DEBOUNCE_MS, DEFAULT_NTFY_DEBOUNCE_MS);
   const confirmationExpiryMs = parsePositiveIntEnv(
@@ -355,6 +358,7 @@ export function resolveGatewayBootstrapInput(
     systemDataDir,
     env,
     buildGatewayChannelsConfigOverrides(config, settingsDomains.runtime),
+    { credentialVault: config.credentialVault },
   );
 
   const ntfyConfigured = Boolean(ntfyBaseUrl && ntfyTopic);

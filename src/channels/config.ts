@@ -2,6 +2,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { getIgnoredTelegramChannelEnvKeys } from '../config/legacy-env.js';
+import {
+  envCredential,
+  resolveOptionalCredentialReference,
+  type CredentialReference,
+  type CredentialVaultPort,
+} from '../custody/credential-vault.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { parseBooleanEnv } from '../utils/env.js';
 import { isRecord } from '../utils/types.js';
@@ -15,6 +21,7 @@ const log = createComponentLogger('ChannelConfig');
 
 const CHANNELS_CONFIG_FILE = 'channels.json';
 const ENV_TOKEN_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+const ENV_CREDENTIAL_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const DEFAULT_TELEGRAM_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TELEGRAM_WEBHOOK_HOST = '0.0.0.0';
 const DEFAULT_TELEGRAM_WEBHOOK_PORT = 8_080;
@@ -203,6 +210,24 @@ function parseConfiguredStringArray(value: unknown, fieldName: string): string[]
   return parsed;
 }
 
+function parseConfiguredCredentialReference(
+  value: unknown,
+  fieldName: string,
+): CredentialReference | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
+  if (value.kind !== 'env') {
+    throw new Error(`${fieldName}.kind must be "env"`);
+  }
+  const envName = parseConfiguredString(value.envName, `${fieldName}.envName`);
+  if (!envName || !ENV_CREDENTIAL_NAME_PATTERN.test(envName)) {
+    throw new Error(`${fieldName}.envName must be an uppercase env var name`);
+  }
+  return envCredential(envName);
+}
+
 function parseOverrideStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -273,7 +298,7 @@ function parseSectionObject(
   return value;
 }
 
-function loadRawChannelsConfig(dataDir: string): Record<string, unknown> {
+export function loadChannelsOwnerFile(dataDir: string): Record<string, unknown> {
   const filePath = join(dataDir, CHANNELS_CONFIG_FILE);
   if (!existsSync(filePath)) {
     return {};
@@ -291,10 +316,34 @@ function loadRawChannelsConfig(dataDir: string): Record<string, unknown> {
   }
 }
 
+function rejectInlineSecretField(
+  scope: Record<string, unknown>,
+  legacyField: string,
+  replacementField: string,
+): void {
+  if (Object.hasOwn(scope, legacyField)) {
+    throw new Error(`${replacementField} must be used instead of ${replacementField.replace(/Ref$/, '')}`);
+  }
+}
+
+function resolveCredentialValue(
+  reference: CredentialReference | undefined,
+  defaultEnvName: string,
+  env: NodeJS.ProcessEnv,
+  credentialVault?: CredentialVaultPort,
+): string {
+  return resolveOptionalCredentialReference(
+    credentialVault,
+    reference ?? envCredential(defaultEnvName),
+    env,
+  ) ?? '';
+}
+
 export function loadRuntimeChannelsConfig(
   dataDir: string,
   env: NodeJS.ProcessEnv = process.env,
   overrides: RuntimeChannelsConfigOverrides = {},
+  options: { credentialVault?: CredentialVaultPort } = {},
 ): RuntimeChannelsConfig {
   const ignoredTelegramEnvKeys = getIgnoredTelegramChannelEnvKeys(env);
   if (ignoredTelegramEnvKeys.length > 0) {
@@ -303,7 +352,7 @@ export function loadRuntimeChannelsConfig(
     });
   }
 
-  const rawConfig = loadRawChannelsConfig(dataDir);
+  const rawConfig = loadChannelsOwnerFile(dataDir);
   const missingEnvTokens = new Set<string>();
   const interpolated = interpolateEnvTokens(rawConfig, env, missingEnvTokens);
   if (missingEnvTokens.size > 0) {
@@ -338,11 +387,19 @@ export function loadRuntimeChannelsConfig(
     ?? parseConfiguredBoolean(telegramConfig.enabled, 'channels.json.telegram.enabled')
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.enabled;
 
-  const tokenFromFile = parseConfiguredString(telegramConfig.token, 'channels.json.telegram.token')
-    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.token;
-  const token = (env.TELEGRAM_BOT_TOKEN ?? tokenFromFile).trim();
+  rejectInlineSecretField(telegramConfig, 'token', 'channels.json.telegram.tokenRef');
+  const tokenRef = parseConfiguredCredentialReference(
+    telegramConfig.tokenRef,
+    'channels.json.telegram.tokenRef',
+  );
+  const token = resolveCredentialValue(
+    tokenRef,
+    'TELEGRAM_BOT_TOKEN',
+    env,
+    options.credentialVault,
+  ).trim();
   if (enabled && !token) {
-    throw new Error('channels.json.telegram.token or TELEGRAM_BOT_TOKEN must be configured when telegram is enabled');
+    throw new Error('channels.json.telegram.tokenRef or TELEGRAM_BOT_TOKEN must be configured when telegram is enabled');
   }
 
   const allowedUsers = allowedUsersOverride
@@ -364,17 +421,29 @@ export function loadRuntimeChannelsConfig(
   }
 
   const webhookConfig = parseSectionObject(telegramConfig, 'webhook') ?? {};
+  rejectInlineSecretField(
+    webhookConfig,
+    'secret',
+    'channels.json.telegram.webhook.secretRef',
+  );
   const hasWebhookUrl = env.TELEGRAM_WEBHOOK_URL !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'url');
-  const hasWebhookSecret = env.TELEGRAM_WEBHOOK_SECRET !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'secret');
+  const hasWebhookSecret = env.TELEGRAM_WEBHOOK_SECRET !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'secretRef');
   const hasWebhookHost = env.TELEGRAM_WEBHOOK_HOST !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'host');
   const hasWebhookPort = env.TELEGRAM_WEBHOOK_PORT !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'port');
   const hasWebhookPath = env.TELEGRAM_WEBHOOK_PATH !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'path');
   const webhookUrl = (env.TELEGRAM_WEBHOOK_URL
     ?? parseConfiguredString(webhookConfig.url, 'channels.json.telegram.webhook.url')
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.url).trim();
-  const webhookSecret = (env.TELEGRAM_WEBHOOK_SECRET
-    ?? parseConfiguredString(webhookConfig.secret, 'channels.json.telegram.webhook.secret')
-    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.secret).trim();
+  const webhookSecretRef = parseConfiguredCredentialReference(
+    webhookConfig.secretRef,
+    'channels.json.telegram.webhook.secretRef',
+  );
+  const webhookSecret = resolveCredentialValue(
+    webhookSecretRef,
+    'TELEGRAM_WEBHOOK_SECRET',
+    env,
+    options.credentialVault,
+  ).trim();
   const webhookHost = (env.TELEGRAM_WEBHOOK_HOST
     ?? parseConfiguredString(webhookConfig.host, 'channels.json.telegram.webhook.host')
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.host).trim();
@@ -393,7 +462,7 @@ export function loadRuntimeChannelsConfig(
       throw new Error('channels.json.telegram.webhook.url or TELEGRAM_WEBHOOK_URL must be configured when telegram is enabled in webhook mode');
     }
     if (!hasWebhookSecret || !webhookSecret) {
-      throw new Error('channels.json.telegram.webhook.secret or TELEGRAM_WEBHOOK_SECRET must be configured when telegram is enabled in webhook mode');
+      throw new Error('channels.json.telegram.webhook.secretRef or TELEGRAM_WEBHOOK_SECRET must be configured when telegram is enabled in webhook mode');
     }
     if (!hasWebhookHost || !webhookHost) {
       throw new Error('channels.json.telegram.webhook.host or TELEGRAM_WEBHOOK_HOST must be configured when telegram is enabled in webhook mode');

@@ -785,7 +785,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
         case 'capabilities':
           return JSON.stringify(repository.loadCapabilityTier(), null, 2);
         case 'channels':
-          return JSON.stringify(repository.loadChannels(), null, 2);
+          return JSON.stringify(repository.loadChannelsOwnerFile(), null, 2);
         case 'backup':
           return JSON.stringify(repository.loadBackup(), null, 2);
         default:

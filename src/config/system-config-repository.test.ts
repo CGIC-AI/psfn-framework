@@ -88,13 +88,19 @@ describe('createSystemConfigRepository', () => {
       },
       telegram: {
         enabled: false,
-        token: 'telegram-token',
+        tokenRef: {
+          kind: 'env',
+          envName: 'TELEGRAM_BOT_TOKEN',
+        },
         allowedUsers: [],
         mode: 'polling',
         pollIntervalMs: 1_000,
         webhook: {
           url: 'https://example.test/telegram/webhook',
-          secret: 'webhook-secret',
+          secretRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_WEBHOOK_SECRET',
+          },
           host: '0.0.0.0',
           port: 8_080,
           path: '/telegram/webhook',
@@ -115,5 +121,38 @@ describe('createSystemConfigRepository', () => {
       },
     });
     expect(existsSync(join(dataDir, 'channels.json'))).toBe(true);
+  });
+
+  it('returns the raw channels owner file without materializing credential values', () => {
+    const dataDir = makeDataDir('psfn-system-config-repository-channels-owner-file-');
+    const payload = {
+      telegram: {
+        enabled: false,
+        tokenRef: {
+          kind: 'env',
+          envName: 'TELEGRAM_BOT_TOKEN',
+        },
+        allowedUsers: [],
+        mode: 'polling',
+        pollIntervalMs: 1_000,
+        webhook: {
+          url: 'https://example.test/telegram/webhook',
+          secretRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_WEBHOOK_SECRET',
+          },
+          host: '0.0.0.0',
+          port: 8_080,
+          path: '/telegram/webhook',
+        },
+      },
+    };
+    writeFileSync(join(dataDir, 'channels.json'), JSON.stringify(payload));
+
+    const repo = createSystemConfigRepository({
+      dataDir,
+    });
+
+    expect(repo.loadChannelsOwnerFile()).toEqual(payload);
   });
 });

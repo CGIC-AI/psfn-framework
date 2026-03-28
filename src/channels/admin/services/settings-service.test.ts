@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadBackupConfig } from '../../../config/backup-config.js';
@@ -67,6 +67,7 @@ function buildConfig(
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (tempDir) {
     rmSync(tempDir, { recursive: true, force: true });
     tempDir = null;
@@ -435,6 +436,39 @@ describe('AdminSettingsDataService', () => {
 
     const settingsData = await service.getSettingsData();
     expect(settingsData.editors.backup).toEqual(payload);
+  });
+
+  it('returns raw channels owner-file json with credential refs intact', () => {
+    const root = makeTempDir();
+    const payload = {
+      telegram: {
+        enabled: false,
+        tokenRef: {
+          kind: 'env',
+          envName: 'TELEGRAM_BOT_TOKEN',
+        },
+        allowedUsers: [],
+        mode: 'polling',
+        pollIntervalMs: 1_000,
+        webhook: {
+          url: 'https://example.test/telegram/webhook',
+          secretRef: {
+            kind: 'env',
+            envName: 'TELEGRAM_WEBHOOK_SECRET',
+          },
+          host: '0.0.0.0',
+          port: 8_080,
+          path: '/telegram/webhook',
+        },
+      },
+    };
+    writeFileSync(join(root, 'channels.json'), JSON.stringify(payload));
+    vi.stubEnv('TELEGRAM_BOT_TOKEN', 'resolved-secret');
+    vi.stubEnv('TELEGRAM_WEBHOOK_SECRET', 'resolved-webhook-secret');
+
+    const service = new AdminSettingsDataService({ config: buildConfig(root) });
+
+    expect(JSON.parse(service.getSubConfigJson('channels') ?? '{}')).toEqual(payload);
   });
 
   it('round-trips providers through providers.json owner-file saves and refreshes runtime routing', async () => {

@@ -6,6 +6,10 @@ import type {
   ExternalCommunicationChannel,
   ExternalCommunicationRateLimiter,
 } from '../capabilities/safeguards.js';
+import {
+  resolveOptionalEnvCredential,
+  type CredentialVaultPort,
+} from '../custody/credential-vault.js';
 import { textResult, textResultWithError } from './results.js';
 import { parsePositiveIntEnv } from '../utils/env.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -139,11 +143,14 @@ export function createHttpNtfyNotifier(options: HttpNtfyNotifierOptions): NtfyNo
   return new HttpNtfyNotifier(options);
 }
 
-export function createHttpNtfyNotifierFromEnv(env: NodeJS.ProcessEnv = process.env): NtfyNotifier {
+export function createHttpNtfyNotifierFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  credentialVault?: CredentialVaultPort,
+): NtfyNotifier {
   return createHttpNtfyNotifier({
     baseUrl: env.NTFY_BASE_URL,
     topic: env.NTFY_TOPIC,
-    token: env.NTFY_TOKEN,
+    token: resolveOptionalEnvCredential(credentialVault, 'NTFY_TOKEN', env),
     timeoutMs: parsePositiveIntEnv(env.NTFY_TIMEOUT_MS, DEFAULT_NTFY_TIMEOUT_MS),
     debounceWindowMs: parsePositiveIntEnv(env.NTFY_DEBOUNCE_MS, DEFAULT_NTFY_DEBOUNCE_MS),
   });

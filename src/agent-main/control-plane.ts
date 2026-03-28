@@ -1,6 +1,7 @@
 import { createComponentLogger } from '../logger.js';
 import { DiscordLifecycleNotifier } from '../lifecycle/notifications.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
+import { resolveRuntimeCommandInvocation } from '../lifecycle/runtime-mode.js';
 import { createRestartTool, createRebuildTool } from '../tools/lifecycle.js';
 import { createNotifyOperatorTool, type NtfyNotifier } from '../tools/ntfy.js';
 import { runShutdownSequence } from '../runtime/shutdown-helpers.js';
@@ -10,7 +11,6 @@ import type { Scheduler } from '../scheduler/scheduler.js';
 import type { ModuleLoader } from '../modules/loader.js';
 import type { MemoryExtractor } from '../memory/extraction.js';
 import type { GatewayClient } from '../gateway/client.js';
-import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
 import type { CapabilityRuntime } from '../capabilities/runtime.js';
 import type { LifecycleRestartSafeguard, ExternalCommunicationRateLimiter } from '../capabilities/safeguards.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
@@ -133,8 +133,15 @@ export function buildAgentControlPlane(
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRuntimeContract.restart.command,
-      runtimeMode: lifecycleRuntimeContract.mode as RuntimeMode,
+      runRestartCommand: async () => {
+        const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
+        if (!invocation) return;
+        await gateway.shellExec(invocation.command, invocation.args, {
+          cwd: process.cwd(),
+          timeoutMs: 30_000,
+          maxOutputChars: 10_000,
+        });
+      },
     },
   ));
   agentLoop.registerTool(createRebuildTool(
@@ -143,8 +150,22 @@ export function buildAgentControlPlane(
     {
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRuntimeContract.restart.command,
-      runtimeMode: lifecycleRuntimeContract.mode as RuntimeMode,
+      runBuildCommand: async () => {
+        await gateway.shellExec('npm', ['run', 'build'], {
+          cwd: process.cwd(),
+          timeoutMs: 120_000,
+          maxOutputChars: 40_000,
+        });
+      },
+      runRestartCommand: async () => {
+        const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
+        if (!invocation) return;
+        await gateway.shellExec(invocation.command, invocation.args, {
+          cwd: process.cwd(),
+          timeoutMs: 30_000,
+          maxOutputChars: 10_000,
+        });
+      },
     },
   ));
   agentLoop.registerTool(createNotifyOperatorTool(

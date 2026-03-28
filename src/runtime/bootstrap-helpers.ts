@@ -136,6 +136,7 @@ export interface RuntimeVoiceSttConnectorOptions extends RuntimeVoiceProviderGat
 export interface RuntimeVoiceTtsConnectorOptions extends RuntimeVoiceProviderGateOptions {
   provider?: RuntimeVoiceTtsProvider;
   eligibilityGate?: EligibilityGate;
+  fetchImpl?: typeof fetch;
 }
 
 export function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
@@ -269,10 +270,13 @@ export function createRuntimeVoiceTtsConnector(
   }
 
   const connectorConfig = resolveStreamingTtsRuntimeConfig(provider, config);
+  const resolvedConnectorConfig = options.fetchImpl
+    ? { ...connectorConfig, fetchImpl: options.fetchImpl }
+    : connectorConfig;
   return {
     provider,
     connector: wrapStreamingTtsConnectorWithEligibility(
-      createStreamingTtsConnector(provider, connectorConfig),
+      createStreamingTtsConnector(provider, resolvedConnectorConfig),
       provider,
       options.eligibilityGate,
       providerMetadata?.eligibility,

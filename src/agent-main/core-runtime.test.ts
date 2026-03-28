@@ -20,6 +20,7 @@ describe('agent core runtime builder', () => {
 
   it('core-runtime owns the prompt/session/memory wiring seam', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
+    expect(coreRuntimeSource).toContain('registerWebTools(');
     expect(coreRuntimeSource).toContain('wirePromptRuntime(');
     expect(coreRuntimeSource).toContain('wireSessionToolsRuntime(');
     expect(coreRuntimeSource).toContain('wireCoreMemoryRuntime(');

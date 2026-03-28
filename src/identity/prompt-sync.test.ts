@@ -6,6 +6,7 @@ import { composeSystemPromptTemplate } from './loader.js';
 import { PromptLayerStore } from './prompt-store.js';
 import { syncCharacterFoundationPromptFromCard } from './prompt-sync.js';
 import type { CharacterCardV2 } from './types.js';
+import { FOUNDATION_SECTION_DEFINITIONS } from './foundation-sections.js';
 
 const TEST_CARD: CharacterCardV2 = {
   spec: 'chara_card_v2',
@@ -38,6 +39,19 @@ afterEach(() => {
   }
 });
 
+function canonicalFoundationLayers(promptStore: PromptLayerStore) {
+  return promptStore.getByType('base')
+    .filter(layer => layer.name.startsWith('Character Foundation'))
+    .sort((left, right) => (left.promptOrder ?? 0) - (right.promptOrder ?? 0));
+}
+
+function composedFoundationPrompt(promptStore: PromptLayerStore): string {
+  return canonicalFoundationLayers(promptStore)
+    .filter(layer => layer.enabled)
+    .map(layer => layer.content)
+    .join('\n\n');
+}
+
 describe('syncCharacterFoundationPromptFromCard', () => {
   it('rewrites foundation to macro template content instead of rendered identity text', () => {
     const root = makeTempDir();
@@ -45,14 +59,15 @@ describe('syncCharacterFoundationPromptFromCard', () => {
       join(root, 'prompt-layers.json'),
       join(root, 'prompt-history.jsonl'),
     );
-    const previousContent = [
-      'You are Synced Companion.',
-      '',
-      'A synced card description.',
-      '',
-      'Steady and concise.',
-    ].join('\n');
-    promptStore.seedFromCharacterCard(previousContent);
+    promptStore.create({
+      type: 'base',
+      name: 'Character Foundation',
+      identifier: 'main',
+      role: 'system',
+      promptOrder: 0,
+      content: 'You are Synced Companion.\n\nA synced card description.\n\nSteady and concise.',
+      updatedBy: 'system',
+    });
 
     const result = syncCharacterFoundationPromptFromCard(
       promptStore,
@@ -62,14 +77,19 @@ describe('syncCharacterFoundationPromptFromCard', () => {
     );
 
     expect(result).toEqual({ ok: true, updated: true });
-    const foundation = promptStore.getByType('base')[0];
-    expect(foundation.content).toBe(composeSystemPromptTemplate());
-    expect(foundation.content).toContain('{{description}}');
-    expect(foundation.content).not.toContain('Synced Companion');
-
-    const history = promptStore.getLayerHistory(foundation.id);
-    expect(history).toHaveLength(1);
-    expect(history[0].reason).toBe('sync foundation for runtime macro resolution');
+    const foundationLayers = canonicalFoundationLayers(promptStore);
+    expect(foundationLayers).toHaveLength(FOUNDATION_SECTION_DEFINITIONS.length);
+    const composed = composedFoundationPrompt(promptStore);
+    const identityLayer = foundationLayers.find(layer => layer.identifier === 'main');
+    const descriptionLayer = foundationLayers.find(layer => layer.identifier === 'charDescription');
+    const personalityLayer = foundationLayers.find(layer => layer.identifier === 'charPersonality');
+    const systemPromptLayer = foundationLayers.find(layer => layer.identifier === 'systemPrompt');
+    expect(identityLayer?.content).toBe('<identity>\nYou are {{char}}.\n</identity>');
+    expect(descriptionLayer?.content).toBe('<description>\n{{description}}\n</description>');
+    expect(personalityLayer?.content).toBe('<personality>\n{{personality}}\n</personality>');
+    expect(systemPromptLayer?.content).toContain('A synced card description.');
+    expect(composed).toContain('{{description}}');
+    expect(composed).toContain('<system_prompt>');
   });
 
   it('skips update when foundation is already macro template content', () => {
@@ -87,9 +107,34 @@ describe('syncCharacterFoundationPromptFromCard', () => {
     );
 
     expect(result).toEqual({ ok: true, updated: false });
-    const foundation = promptStore.getByType('base')[0];
-    expect(foundation.content).toBe(composeSystemPromptTemplate());
-    expect(promptStore.getLayerHistory(foundation.id)).toHaveLength(0);
+    expect(composedFoundationPrompt(promptStore)).toBe(composeSystemPromptTemplate());
+    expect(promptStore.getHistory()).toHaveLength(0);
+  });
+
+  it('does not clobber admin-managed macro-backed foundation layouts', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    promptStore.seedFromCharacterCard(composeSystemPromptTemplate());
+    const foundation = canonicalFoundationLayers(promptStore)[0];
+    promptStore.update(
+      foundation.id,
+      '<identity>\nYou are {{char}}, custom laid out.\n</identity>',
+      'admin',
+      undefined,
+      'custom layout',
+    );
+
+    const result = syncCharacterFoundationPromptFromCard(
+      promptStore,
+      TEST_CARD,
+      'admin:sync-test',
+    );
+
+    expect(result).toEqual({ ok: true, updated: false });
+    expect(canonicalFoundationLayers(promptStore)[0]?.content).toContain('custom laid out');
   });
 
   it('fails closed when card-sourced macros introduce unsupported unresolved tokens', () => {
@@ -118,8 +163,8 @@ describe('syncCharacterFoundationPromptFromCard', () => {
     expect(result.updated).toBe(false);
     expect(result.error).toContain('mystery_macro');
 
-    const foundation = promptStore.getByType('base')[0];
-    expect(foundation.content).toBe('Legacy rendered foundation content');
+    const foundation = canonicalFoundationLayers(promptStore).find(layer => layer.identifier === 'systemPrompt');
+    expect(foundation?.content).toBe('<system_prompt>\nLegacy rendered foundation content\n</system_prompt>');
   });
 
   it('fails closed when required identity fields are effectively empty after normalization', () => {
@@ -149,7 +194,7 @@ describe('syncCharacterFoundationPromptFromCard', () => {
     expect(result.errorCode).toBe('missing_required_fields');
     expect(result.error).toContain('name');
 
-    const foundation = promptStore.getByType('base')[0];
-    expect(foundation.content).toBe('Legacy rendered foundation content');
+    const foundation = canonicalFoundationLayers(promptStore).find(layer => layer.identifier === 'systemPrompt');
+    expect(foundation?.content).toBe('<system_prompt>\nLegacy rendered foundation content\n</system_prompt>');
   });
 });

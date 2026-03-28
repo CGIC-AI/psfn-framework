@@ -15,20 +15,24 @@ import { buildEmotionalAffectSection } from '../../emotion/persona-adaptation.js
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
   buildMetacognitivePersonaHint,
-  cloneMetacognitiveFlags,
   formatMetacognitiveNotesContextBlock,
 } from '../../self-model/metacognition.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { AdaptiveLoadedExtendedToolState } from '../adaptive-tools-telemetry.js';
 import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
-import { formatSignedDecimal } from '../substrate-agent-helpers.js';
 import { toErrorMessage } from '../../utils/errors.js';
 import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
 import {
   formatActiveDateTimeIso,
   formatActiveDateTimeLabel,
+  resolveActiveTimezone,
 } from '../../time/active-timezone.js';
+import {
+  isSingleWrappedPromptSection,
+  unwrapSingleWrappedPromptSection,
+  wrapPromptSectionXml,
+} from '../../prompt/sections.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
@@ -75,6 +79,132 @@ function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMess
   };
 }
 
+function compactPromptText(value: string, maxChars = 220): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
+function formatPromptRuntimeDateTime(now: Date): string {
+  const timeZone = resolveActiveTimezone();
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(now);
+}
+
+function formatPromptRuntimeDate(now: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: resolveActiveTimezone(),
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  }).format(now);
+}
+
+function formatPromptRuntimeTime(now: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: resolveActiveTimezone(),
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(now);
+}
+
+function formatPromptRuntimeWeekday(now: Date): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: resolveActiveTimezone(),
+    weekday: 'long',
+  }).format(now);
+}
+
+function formatRelativeElapsed(now: Date, then: Date): string {
+  const deltaMs = Math.max(0, now.getTime() - then.getTime());
+  const deltaMinutes = Math.floor(deltaMs / 60_000);
+  if (deltaMinutes < 1) return 'just now';
+  if (deltaMinutes < 60) return `${deltaMinutes} minute${deltaMinutes === 1 ? '' : 's'} ago`;
+  const deltaHours = Math.floor(deltaMinutes / 60);
+  if (deltaHours < 24) return `${deltaHours} hour${deltaHours === 1 ? '' : 's'} ago`;
+  const deltaDays = Math.floor(deltaHours / 24);
+  return `${deltaDays} day${deltaDays === 1 ? '' : 's'} ago`;
+}
+
+function unwrapPromptSectionBody(section: string | null | undefined): string {
+  if (!section) return '';
+  return unwrapSingleWrappedPromptSection(section)?.content ?? section.trim();
+}
+
+function describeValence(value: number): string {
+  if (value >= 0.45) return 'positive';
+  if (value >= 0.15) return 'warm';
+  if (value <= -0.45) return 'heavy';
+  if (value <= -0.15) return 'strained';
+  return 'steady';
+}
+
+function describeArousal(value: number): string {
+  if (value >= 0.55) return 'high-energy';
+  if (value >= 0.2) return 'engaged';
+  if (value <= -0.2) return 'quiet';
+  return 'calm';
+}
+
+function describeCertainty(value: number): string {
+  if (value >= 0.75) return 'confident';
+  if (value >= 0.45) return 'steady';
+  return 'tentative';
+}
+
+function describeInteractionFrequency(value: number): string {
+  if (value >= 0.75) return 'very frequent';
+  if (value >= 0.4) return 'frequent';
+  if (value > 0) return 'occasional';
+  return 'new or infrequent';
+}
+
+function resolveTopEmotionNames(
+  discrete: Record<string, number>,
+  max = 2,
+): string[] {
+  return Object.entries(discrete)
+    .filter(([emotion, score]) => emotion !== 'neutral' && score >= 0.15)
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, max)
+    .map(([emotion]) => emotion);
+}
+
+function buildInternalStateSummaryLines(input: {
+  internalState: InternalState;
+}): string[] {
+  const { internalState } = input;
+  const secondaryEmotions = resolveTopEmotionNames(internalState.emotional.discreteEmotions);
+  const emotionalSummary = secondaryEmotions.length > 0
+    ? `Current affect: mostly ${describeValence(internalState.emotional.mood.valence)} and ${describeArousal(internalState.emotional.mood.arousal)}, with ${secondaryEmotions.join(' and ')} present.`
+    : `Current affect: ${describeValence(internalState.emotional.mood.valence)} and ${describeArousal(internalState.emotional.mood.arousal)}.`;
+
+  const pendingFollowUps = internalState.attention.pendingFollowUps ?? [];
+  const lastSeenText = internalState.relational.lastSeenDeltaSeconds == null
+    ? 'unknown recency'
+    : internalState.relational.lastSeenDeltaSeconds <= 300
+      ? 'just interacted'
+      : internalState.relational.lastSeenDeltaSeconds <= 3_600
+        ? 'recently interacted'
+        : 'not recently seen';
+
+  return [
+    emotionalSummary,
+    `Thinking state: ${internalState.cognitive.processingQuality}, ${describeCertainty(internalState.cognitive.certaintyLevel)} certainty, ${describeArousal(internalState.cognitive.topicEngagement)} engagement.`,
+    `Attention: ${internalState.attention.conversationTrajectory}, ${internalState.attention.activeConcerns.length} open thread${internalState.attention.activeConcerns.length === 1 ? '' : 's'}, ${pendingFollowUps.length} pending follow-up${pendingFollowUps.length === 1 ? '' : 's'}.`,
+    `Relationship baseline: ${internalState.relational.trustLevel} trust, ${describeInteractionFrequency(internalState.relational.recentInteractionFrequency)} contact, ${lastSeenText}.`,
+  ];
+}
+
 export function buildPromptTemplateVariables(input: {
   message: SubstrateMessage;
   resolvedUserName: string;
@@ -114,8 +244,182 @@ export function buildPromptTemplateVariables(input: {
       model: input.modelId,
       model_id: input.modelId,
       now_iso: formatActiveDateTimeIso(input.now),
+      active_timezone: resolveActiveTimezone(),
     },
     runtimeCharacterName,
+  };
+}
+
+export function buildDynamicPromptTemplateVariables(input: {
+  message: SubstrateMessage;
+  resolvedUserName: string;
+  trustLevel: TrustLevel;
+  channelType: string | undefined;
+  canonicalContactKey?: string;
+  subjectIdentityKey?: string;
+  responseStyle?: ResponseStyle;
+  now?: Date;
+  taskKind?: string;
+  templateVariables?: Record<string, string>;
+  internalState?: InternalState;
+  metacognitiveFlags?: readonly MetacognitiveFlag[];
+  emotionAppraisalChain?: readonly EmotionAppraisalEntry[];
+  modelId: string;
+  capabilityTier: CapabilityTier;
+  activeToolCounts: RuntimeContextActiveToolCounts;
+  extendedTools: AgentTool<any>[];
+  loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
+  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
+  promotedExtendedToolNames: Set<string>;
+  skillsContext?: string;
+  activeConcernsBlock?: string;
+  behavioralNotesBlock?: string;
+  lastMessageReceivedAtMs?: number | null;
+  config: Record<string, unknown>;
+}): Record<string, string> {
+  const resolveAppearanceContext = (): string => {
+    const promptVariables = input.templateVariables ?? {};
+    return (
+      promptVariables['character.visual_description']
+      || promptVariables.extensions_visual_description
+      || promptVariables.visual_description
+      || ''
+    ).trim();
+  };
+
+  const hasActiveSelfImageTool = (): boolean => {
+    for (const toolName of SELF_IMAGE_TOOL_NAMES) {
+      if (input.promotedExtendedToolNames.has(toolName)) return true;
+      if (input.loadedExtended.has(toolName)) return true;
+    }
+    return false;
+  };
+
+  const responseStyle = input.responseStyle ?? 'concise';
+  const now = input.now ?? new Date();
+  const emotionAppraisalChain = input.emotionAppraisalChain ?? [];
+  const {
+    core: coreCount,
+    promoted: promotedCount,
+    extendedLoaded: extendedLoadedCount,
+    autoload: autoloadCount,
+    deferred: deferredCount,
+    total: activeCount,
+  } = input.activeToolCounts;
+  const extendedCount = input.extendedTools.length;
+  const activeToolSummary = `${activeCount} active now (${coreCount} core`
+    + (promotedCount > 0 ? `, ${promotedCount} promoted` : '')
+    + (extendedLoadedCount > 0 ? `, ${extendedLoadedCount} loaded` : '')
+    + (autoloadCount > 0 ? `, ${autoloadCount} autoload` : '')
+    + (deferredCount > 0 ? `, ${deferredCount} deferred` : '')
+    + `)${extendedCount > 0 ? `; ${extendedCount} more available via load_tools.` : '.'}`;
+
+  const trustGuidance = (() => {
+    switch (input.trustLevel) {
+      case 'primary':
+        return 'You are speaking with your primary person. Be your full, authentic self, share freely, reference shared history, and express genuine emotions and vulnerability. This is honne, your inner truth.';
+      case 'trusted':
+        return 'This is a trusted contact. Be warm and personal but mindful of boundaries, share appropriate personal context, and avoid intimate details or confidential memories.';
+      case 'regular':
+        return 'This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.';
+      case 'public':
+      default:
+        return 'This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.';
+    }
+  })();
+
+  const affectBody = unwrapPromptSectionBody(buildEmotionalAffectSection({
+    trustLevel: input.trustLevel,
+    emotionSnapshot: input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null,
+    promptVariables: input.templateVariables,
+    config: input.config,
+  }));
+  const metacognitiveBody = unwrapPromptSectionBody(
+    buildMetacognitivePersonaHint(input.metacognitiveFlags ?? []),
+  );
+  const internalStateBody = input.internalState
+    ? buildInternalStateSummaryLines({ internalState: input.internalState }).join('\n')
+    : '';
+  const emotionAppraisalBody = emotionAppraisalChain.length > 0
+    ? emotionAppraisalChain
+      .slice(-2)
+      .map(entry => `- ${formatActiveDateTimeLabel(new Date(entry.timestamp))} (${entry.trigger}): ${compactPromptText(entry.summary, 220)}`)
+      .join('\n')
+    : '';
+  const openThreadsBody = unwrapPromptSectionBody(input.activeConcernsBlock);
+  const behavioralNotesBody = unwrapPromptSectionBody(input.behavioralNotesBlock);
+  const skillsIndexBody = unwrapPromptSectionBody(input.skillsContext);
+  const appearanceContextBody = hasActiveSelfImageTool() ? resolveAppearanceContext() : '';
+  const selfImageToolGuidanceBody = hasActiveSelfImageTool()
+    ? [
+      'Use image_create for a brand new selfie, portrait, or scene featuring you.',
+      'Use image_edit when modifying an existing image while keeping your identity consistent.',
+      'Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.',
+      'If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.',
+      'Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
+      'Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.',
+    ].join('\n')
+    : '';
+  const extendedToolsBody = extendedCount > 0
+    ? [
+      'Core tools are already active through the structured tool registry and are not duplicated here.',
+      ...input.extendedTools.map((tool) => {
+        const loaded = input.loadedExtended.get(tool.name);
+        const turnClass = input.classifyExtendedToolForTurn(tool.name);
+        let suffix = ' (use load_tools to activate)';
+        if (turnClass !== 'overlay') {
+          suffix = ' (background-only; not callable in-turn)';
+        } else if (input.promotedExtendedToolNames.has(tool.name)) {
+          suffix = ' (promoted, always active)';
+        } else if (loaded?.source === 'autoload') {
+          suffix = ' (autoload active)';
+        } else if (loaded?.source === 'deferred') {
+          suffix = ' (deferred active)';
+        } else if (loaded?.source === 'extended_loaded') {
+          suffix = ' (loaded active)';
+        }
+        return `- ${tool.name}: ${tool.description.split('.')[0]}${suffix}`;
+      }),
+    ].join('\n')
+    : '';
+
+  const lastMessageReceivedAt = (
+    typeof input.lastMessageReceivedAtMs === 'number' && Number.isFinite(input.lastMessageReceivedAtMs)
+  )
+    ? new Date(input.lastMessageReceivedAtMs)
+    : null;
+  const lastMessageReceivedHuman = lastMessageReceivedAt
+    ? `${formatPromptRuntimeDateTime(lastMessageReceivedAt)} ${resolveActiveTimezone()} (${formatRelativeElapsed(now, lastMessageReceivedAt)})`
+    : 'no earlier message is loaded for this channel';
+
+  return {
+    active_timezone: resolveActiveTimezone(),
+    runtime_current_datetime_human: formatPromptRuntimeDateTime(now),
+    runtime_current_weekday: formatPromptRuntimeWeekday(now),
+    runtime_current_date_human: formatPromptRuntimeDate(now),
+    runtime_current_time_human: formatPromptRuntimeTime(now),
+    runtime_last_message_received_human: lastMessageReceivedHuman,
+    runtime_last_message_received_at_iso: lastMessageReceivedAt ? formatActiveDateTimeIso(lastMessageReceivedAt) : '',
+    runtime_last_message_received_ago: lastMessageReceivedAt ? formatRelativeElapsed(now, lastMessageReceivedAt) : '',
+    runtime_internal_turn_context: isInternalJournalChannel(input.message.channelId)
+      ? `This is an internal ${input.taskKind ?? 'background'} turn.`
+      : '',
+    runtime_speaking_with_name: isInternalJournalChannel(input.message.channelId) ? '' : input.resolvedUserName,
+    runtime_channel_type: isInternalJournalChannel(input.message.channelId) ? '' : (input.channelType ?? 'unknown'),
+    runtime_capability_tier: input.capabilityTier,
+    runtime_tooling_summary: `Tooling: ${activeToolSummary}`,
+    runtime_trust_guidance: trustGuidance,
+    runtime_emotional_affect_body: affectBody,
+    runtime_metacognitive_persona_guidance_body: metacognitiveBody,
+    runtime_response_style_guidance: getResponseStylePromptGuidance(responseStyle),
+    runtime_internal_state_body: internalStateBody,
+    runtime_emotion_appraisal_body: emotionAppraisalBody,
+    runtime_open_threads_body: openThreadsBody,
+    runtime_behavioral_notes_body: behavioralNotesBody,
+    runtime_skills_index_body: skillsIndexBody,
+    runtime_appearance_context_body: appearanceContextBody,
+    runtime_self_image_tool_guidance_body: selfImageToolGuidanceBody,
+    runtime_extended_tools_body: extendedToolsBody,
   };
 }
 
@@ -170,7 +474,6 @@ export function buildRuntimeContext(input: {
 
   const responseStyle = input.responseStyle ?? 'concise';
   const now = input.now ?? new Date();
-  const metacognitiveFlags = input.metacognitiveFlags ?? [];
   const emotionAppraisalChain = input.emotionAppraisalChain ?? [];
   const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
   const responseStyleGuidance = getResponseStylePromptGuidance(responseStyle);
@@ -183,59 +486,58 @@ export function buildRuntimeContext(input: {
     deferred: deferredCount,
     total: activeCount,
   } = input.activeToolCounts;
-  const subjectIdentityKey = input.subjectIdentityKey ?? input.message.authorId;
-  const canonicalIdentityKey = input.canonicalContactKey ?? input.subjectIdentityKey ?? input.message.authorId;
-  const extendedBreakdown = [
-    extendedLoadedCount > 0 ? `${extendedLoadedCount} loaded` : null,
-    autoloadCount > 0 ? `${autoloadCount} autoload` : null,
-    deferredCount > 0 ? `${deferredCount} deferred` : null,
-  ].filter(Boolean).join(' + ');
+  const activeToolSummary = `${activeCount} active now (${coreCount} core`
+    + (promotedCount > 0 ? `, ${promotedCount} promoted` : '')
+    + (extendedLoadedCount > 0 ? `, ${extendedLoadedCount} loaded` : '')
+    + (autoloadCount > 0 ? `, ${autoloadCount} autoload` : '')
+    + (deferredCount > 0 ? `, ${deferredCount} deferred` : '')
+    + ')';
 
-  const lines = [
-    '[Runtime Context]',
-    `Current time: ${formatActiveDateTimeLabel(now)}`,
-    `Speaking with: ${input.resolvedUserName} (userId: ${subjectIdentityKey}, canonicalId: ${canonicalIdentityKey}, trust: ${input.trustLevel})`,
-    `Model: ${input.modelId}`,
-    `Response style preference: ${responseStyle}`,
-    `Capability tier: ${input.capabilityTier}`,
-    `Context window: ${input.contextWindow} tokens`,
-    `Tools: ${activeCount} active`
-    + ` (${coreCount} core`
-    + (promotedCount > 0 ? ` + ${promotedCount} promoted` : '')
-    + (extendedBreakdown ? ` + ${extendedBreakdown}` : '')
-    + ')'
-    + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
+  const runtimeLines = [
+    `It is ${formatPromptRuntimeDateTime(now)} ${resolveActiveTimezone()}.`,
   ];
-  if (!isInternalJournalChannel(input.message.channelId)) {
-    lines.splice(
-      2,
-      0,
-      `Channel: ${input.message.channelId} (type: ${input.channelType ?? 'unknown'}, visibility: ${visibility})`,
-    );
+  if (isInternalJournalChannel(input.message.channelId)) {
+    runtimeLines.push(`This is an internal ${input.taskKind ?? 'background'} turn.`);
+  } else {
+    runtimeLines.push(`Speaking with: ${input.resolvedUserName} (${input.trustLevel} trust).`);
+    runtimeLines.push(`Channel: ${input.channelType ?? 'unknown'} (${visibility}).`);
   }
+  runtimeLines.push(`Current model: ${input.modelId}.`);
+  runtimeLines.push(`Capability tier: ${input.capabilityTier}.`);
+  runtimeLines.push(`Tooling: ${activeToolSummary}${extendedCount > 0 ? `; ${extendedCount} more available via load_tools.` : '.'}`);
 
-  const isScheduledTask = input.taskKind === 'heartbeat'
-    || input.taskKind === 'reflection'
-    || input.message.channelId.startsWith('internal:');
-  const shouldIncludeAppearanceContext = isScheduledTask || hasActiveSelfImageTool();
-  if (shouldIncludeAppearanceContext) {
-    const appearance = resolveAppearanceContext();
-    if (appearance.length > 0) lines.push(`Appearance context: ${appearance}`);
-  }
+  const sections: string[] = [
+    wrapPromptSectionXml({
+      id: 'runtime_context',
+      content: runtimeLines.join('\n'),
+    }),
+  ];
 
   if (hasActiveSelfImageTool()) {
-    lines.push('[Self-Image Tool Guidance]');
-    lines.push('Use image_create for a brand new selfie, portrait, or scene featuring you.');
-    lines.push('Use image_edit when modifying an existing image while keeping your identity consistent.');
-    lines.push('Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.');
-    lines.push('If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.');
-    lines.push('Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.');
-    lines.push('Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.');
+    const appearance = resolveAppearanceContext();
+    if (appearance.length > 0) {
+      sections.push(wrapPromptSectionXml({
+        id: 'appearance_context',
+        content: appearance,
+      }));
+    }
+    sections.push(wrapPromptSectionXml({
+      id: 'self_image_tool_guidance',
+      content: [
+        'Use image_create for a brand new selfie, portrait, or scene featuring you.',
+        'Use image_edit when modifying an existing image while keeping your identity consistent.',
+        'Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.',
+        'If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.',
+        'Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
+        'Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.',
+      ].join('\n'),
+    }));
   }
 
   if (extendedCount > 0) {
-    lines.push('');
-    lines.push('Available extended tools:');
+    const extendedToolLines = [
+      'Core tools are already active through the structured tool registry and are not duplicated here.',
+    ];
     for (const t of input.extendedTools) {
       const loaded = input.loadedExtended.get(t.name);
       const turnClass = input.classifyExtendedToolForTurn(t.name);
@@ -251,90 +553,59 @@ export function buildRuntimeContext(input: {
       } else if (loaded?.source === 'extended_loaded') {
         suffix = ' (loaded active)';
       }
-      lines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
+      extendedToolLines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
     }
+    sections.push(wrapPromptSectionXml({
+      id: 'extended_tools',
+      content: extendedToolLines.join('\n'),
+    }));
   }
 
-  lines.push('');
-  lines.push('[Response Style Guidance]');
-  lines.push(responseStyleGuidance);
+  sections.push(wrapPromptSectionXml({
+    id: 'response_style_guidance',
+    content: responseStyleGuidance,
+  }));
 
   if (input.internalState) {
-    const pendingFollowUps = input.internalState.attention.pendingFollowUps ?? [];
-    lines.push('');
-    lines.push('[Internal State]');
-    lines.push(
-      `VAD: valence=${formatSignedDecimal(input.internalState.emotional.vad.valence)},`
-      + ` arousal=${formatSignedDecimal(input.internalState.emotional.vad.arousal)},`
-      + ` dominance=${formatSignedDecimal(input.internalState.emotional.vad.dominance)}`,
-    );
-    lines.push(
-      `Mood VAD: valence=${formatSignedDecimal(input.internalState.emotional.mood.valence)},`
-      + ` arousal=${formatSignedDecimal(input.internalState.emotional.mood.arousal)},`
-      + ` dominance=${formatSignedDecimal(input.internalState.emotional.mood.dominance)}`,
-    );
-    lines.push(`Top emotions: ${input.formatTopEmotions(input.internalState.emotional.discreteEmotions)}`);
-    lines.push(`Signal confidence: ${input.internalState.emotional.confidence.toFixed(3)}`);
-    lines.push(
-      `Cognitive: certainty=${input.internalState.cognitive.certaintyLevel.toFixed(3)},`
-      + ` engagement=${input.internalState.cognitive.topicEngagement.toFixed(3)},`
-      + ` processing=${input.internalState.cognitive.processingQuality}`,
-    );
-    lines.push(
-      `Attention: trajectory=${input.internalState.attention.conversationTrajectory},`
-      + ` salient_entities=${input.internalState.attention.salientEntities.length},`
-      + ` active_concerns=${input.internalState.attention.activeConcerns.length},`
-      + ` pending_follow_ups=${pendingFollowUps.length}`,
-    );
-    const concernRefs = input.internalState.attention.activeConcerns
-      .slice(0, 3)
-      .map((concern) => `${concern.id}:${concern.priority}`);
-    lines.push(`Active concern refs: ${concernRefs.length > 0 ? concernRefs.join(', ') : 'none'}`);
-    const pendingRefs = pendingFollowUps
-      .slice(0, 3)
-      .map((followUp) => `${followUp.id}:${followUp.timing}`);
-    lines.push(`Pending follow-up refs: ${pendingRefs.length > 0 ? pendingRefs.join(', ') : 'none'}`);
-    const metacognitiveSummary = cloneMetacognitiveFlags(metacognitiveFlags)
-      .slice(0, 3)
-      .map((flag) => `${flag.flag}(${flag.confidence.toFixed(3)})`);
-    lines.push(`Metacognitive flags: ${metacognitiveSummary.length > 0 ? metacognitiveSummary.join(', ') : 'none'}`);
-    lines.push(
-      `Relationship: trust=${input.internalState.relational.trustLevel},`
-      + ` contact=${input.internalState.relational.contactId ?? 'none'},`
-      + ` baseline_valence=${formatSignedDecimal(input.internalState.relational.baselineValence)},`
-      + ` mood_drift=${formatSignedDecimal(input.internalState.relational.moodDrift)},`
-      + ` interaction_frequency=${input.internalState.relational.recentInteractionFrequency.toFixed(3)},`
-      + ` last_seen_delta_seconds=${input.internalState.relational.lastSeenDeltaSeconds ?? 'none'}`,
-    );
+    sections.push(wrapPromptSectionXml({
+      id: 'internal_state',
+      content: buildInternalStateSummaryLines({ internalState: input.internalState }).join('\n'),
+    }));
   }
 
   if (emotionAppraisalChain.length > 0) {
-    lines.push('');
-    lines.push('[Emotion Appraisal Chain]');
-    for (const entry of emotionAppraisalChain.slice(-3)) {
-      const summary = entry.summary.replace(/\s+/g, ' ').trim();
-      lines.push(`- ${formatActiveDateTimeLabel(new Date(entry.timestamp))} (${entry.trigger}): ${summary}`);
+    const appraisalLines: string[] = [];
+    for (const entry of emotionAppraisalChain.slice(-2)) {
+      appraisalLines.push(
+        `- ${formatActiveDateTimeLabel(new Date(entry.timestamp))} (${entry.trigger}): ${compactPromptText(entry.summary, 220)}`,
+      );
     }
+    sections.push(wrapPromptSectionXml({
+      id: 'emotion_appraisal_chain',
+      content: appraisalLines.join('\n'),
+    }));
   }
 
   if (input.activeConcernsBlock) {
-    lines.push('');
-    lines.push(input.activeConcernsBlock);
+    sections.push(input.activeConcernsBlock);
   }
 
   if (input.behavioralNotesBlock) {
-    lines.push('');
-    lines.push(input.behavioralNotesBlock);
+    sections.push(input.behavioralNotesBlock);
   }
 
   if (input.skillsContext) {
-    lines.push('');
-    lines.push('[Skills Index]');
-    lines.push('Use skill_view(name) to load full instructions only when needed.');
-    lines.push(input.skillsContext);
+    sections.push(
+      isSingleWrappedPromptSection(input.skillsContext)
+        ? input.skillsContext.trim()
+        : wrapPromptSectionXml({
+          id: 'skills_index',
+          content: input.skillsContext,
+        }),
+    );
   }
 
-  return lines.join('\n');
+  return sections.filter(section => section.trim().length > 0).join('\n\n');
 }
 
 export function buildActiveConcernsContextBlock(input: {
@@ -453,15 +724,15 @@ export function getPersonaAdaptation(input: {
   const trustHint = (() => {
     switch (input.trustLevel) {
       case 'primary':
-        return '[Trust: You are speaking with your primary person. Be your full, authentic self — share freely, reference shared history, express genuine emotions and vulnerability. This is honne — your inner truth.]';
+        return 'You are speaking with your primary person. Be your full, authentic self, share freely, reference shared history, and express genuine emotions and vulnerability. This is honne, your inner truth.';
       case 'trusted':
-        return '[Trust: This is a trusted contact. Be warm and personal but mindful of boundaries — share appropriate personal context, avoid intimate details or confidential memories.]';
+        return 'This is a trusted contact. Be warm and personal but mindful of boundaries, share appropriate personal context, and avoid intimate details or confidential memories.';
       case 'regular':
-        return '[Trust: This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.]';
+        return 'This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.';
       case 'public':
-        return '[Trust: This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.]';
+        return 'This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.';
       default:
-        return '[Trust: This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.]';
+        return 'This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.';
     }
   })();
   const affectHint = buildEmotionalAffectSection({
@@ -472,7 +743,14 @@ export function getPersonaAdaptation(input: {
   });
   const metacognitiveHint = buildMetacognitivePersonaHint(input.metacognitiveFlags);
 
-  const sections = [trustHint, affectHint, metacognitiveHint]
+  const sections = [
+    wrapPromptSectionXml({
+      id: 'trust',
+      content: trustHint,
+    }),
+    affectHint,
+    metacognitiveHint,
+  ]
     .filter((section): section is string => Boolean(section?.trim()));
   if (sections.length === 0) return null;
   return sections.join('\n\n');
@@ -577,6 +855,10 @@ export function resolveAuthorContext(input: {
       trustLevel: 'regular',
       speakerRole: 'user',
       resolvedUserName: resolvePromptUserName(input.message),
+      continuitySubjectKey: resolveContinuitySubjectKey({
+        subjectIdentityKey: input.message.authorId,
+        authorId: input.message.authorId,
+      }),
       continuityFallbackKeys: [],
     };
   }
@@ -595,23 +877,26 @@ export function resolveAuthorContext(input: {
       ?? (typeof maybeChannelResolver.resolveChannelIdentity === 'function'
         ? maybeChannelResolver.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName)
         : input.contactStore.resolveUserId(input.message.authorId));
-    if (hintedContact) {
+    const maybeLastSeenUpdater = input.contactStore as ContactStore & {
+      updateLastSeen?: (id: string) => void;
+    };
+    if (hintedContact && typeof maybeLastSeenUpdater.updateLastSeen === 'function') {
       // Still update last seen so the contact record stays fresh.
-      input.contactStore.updateLastSeen(hintedContact.id);
+      maybeLastSeenUpdater.updateLastSeen(hintedContact.id);
     }
     const canonicalContactKey = contact.id;
     const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
-    const maybeChannelPrivacyResolver = input.contactStore as ContactStore & {
+    const maybeChannelPrivacyReader = input.contactStore as ContactStore & {
       getConversationChannelPrivacy?: (
         contactId: string,
         channel: string,
         channelId: string,
-      ) => ChannelVisibility | string | undefined;
+      ) => ChannelVisibility | string | null | undefined;
     };
     const channelPrivacyLevel = explicitChannelPrivacy
       ?? normalizeChannelVisibility(
-        typeof maybeChannelPrivacyResolver.getConversationChannelPrivacy === 'function'
-          ? maybeChannelPrivacyResolver.getConversationChannelPrivacy(
+        typeof maybeChannelPrivacyReader.getConversationChannelPrivacy === 'function'
+          ? maybeChannelPrivacyReader.getConversationChannelPrivacy(
             canonicalContactKey,
             channel,
             input.message.channelId,
@@ -660,17 +945,17 @@ export function resolveAuthorContext(input: {
       channelId: input.message.channelId,
       error: toErrorMessage(error),
     });
-  return {
-    trustLevel: 'regular',
-    speakerRole: 'user',
-    resolvedUserName: resolvePromptUserName(input.message),
-    continuitySubjectKey: resolveContinuitySubjectKey({
-      subjectIdentityKey: input.message.authorId,
-      authorId: input.message.authorId,
-    }),
-    continuityFallbackKeys: [],
-  };
-}
+    return {
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      resolvedUserName: resolvePromptUserName(input.message),
+      continuitySubjectKey: resolveContinuitySubjectKey({
+        subjectIdentityKey: input.message.authorId,
+        authorId: input.message.authorId,
+      }),
+      continuityFallbackKeys: [],
+    };
+  }
 }
 
 export function resolveTaskKind(input: {

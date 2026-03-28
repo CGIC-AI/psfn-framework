@@ -1,4 +1,5 @@
 import { cloneInternalState, type InternalState } from './state.js';
+import { wrapPromptSectionXml } from '../prompt/sections.js';
 
 export const METACOGNITIVE_FLAG_NAMES = [
   'uncertainty',
@@ -174,11 +175,14 @@ export function formatMetacognitiveNotesContextBlock(
     .slice(0, maxFlags);
   if (selected.length === 0) return '';
 
-  const lines = ['[Metacognitive Notes]'];
+  const lines: string[] = [];
   for (const flag of selected) {
     lines.push(`- ${flag.flag} (confidence=${flag.confidence.toFixed(3)}): ${flag.evidence}`);
   }
-  return lines.join('\n');
+  return wrapPromptSectionXml({
+    id: 'metacognitive_notes',
+    content: lines.join('\n'),
+  });
 }
 
 export function buildMetacognitivePersonaHint(flags: readonly MetacognitiveFlag[]): string | null {
@@ -188,10 +192,6 @@ export function buildMetacognitivePersonaHint(flags: readonly MetacognitiveFlag[
   if (uncertainty) {
     guidance.push('Use tentative language and acknowledge uncertainty explicitly.');
   }
-  const avoidance = normalizedFlags.find(flag => flag.flag === 'avoidance' && flag.confidence >= 0.45);
-  if (avoidance) {
-    guidance.push('Address unresolved concerns directly before shifting topics.');
-  }
   const confabulationRisk = normalizedFlags.find(
     flag => flag.flag === 'confabulation_risk' && flag.confidence >= 0.45,
   );
@@ -200,10 +200,10 @@ export function buildMetacognitivePersonaHint(flags: readonly MetacognitiveFlag[
   }
   if (guidance.length === 0) return null;
 
-  return [
-    '[Metacognitive Persona Guidance]',
-    ...guidance.map(entry => `- ${entry}`),
-  ].join('\n');
+  return wrapPromptSectionXml({
+    id: 'metacognitive_persona_guidance',
+    content: guidance.map(entry => `- ${entry}`).join('\n'),
+  });
 }
 
 function detectUncertaintyFlag(

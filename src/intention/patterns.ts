@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import type { MemoryWriter } from '../memory/writer.js';
+import { wrapPromptSectionXml } from '../prompt/sections.js';
 
 export const BEHAVIORAL_RESPONSE_STRATEGIES = [
   'empathy',
@@ -621,11 +622,14 @@ export class BehavioralPatternTracker implements BehavioralPatternContextProvide
       return '';
     }
 
-    const lines = ['[Behavioral Notes]'];
+    const lines: string[] = [];
     for (const summary of summaries) {
       lines.push(toBehavioralNote(summary));
     }
-    return lines.join('\n');
+    return wrapPromptSectionXml({
+      id: 'behavioral_notes',
+      content: lines.join('\n'),
+    });
   }
 
   private resolveOutcomeTarget(

@@ -301,6 +301,14 @@ export interface ContextMessage {
   content: string;
 }
 
+export interface PromptSectionTelemetry {
+  id: string;
+  title: string;
+  content: string;
+  charCount: number;
+  tokenCount: number;
+}
+
 export interface LLMContext {
   systemPrompt: string;
   messages: ContextMessage[];
@@ -308,6 +316,7 @@ export interface LLMContext {
   modelHint?: LLMModelHint;
   correlation?: CorrelationMetadata;
   manifest?: ContextManifest;
+  systemPromptSections?: PromptSectionTelemetry[];
 }
 
 export interface StreamCallbacks {

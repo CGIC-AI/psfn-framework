@@ -13,12 +13,23 @@ import {
   readSync,
 } from 'node:fs';
 import {
+  LAYER_TYPE_ORDER,
   PROMPT_LAYER_ROLES,
   type PromptLayer,
   type LayerType,
   type PromptHistoryEntry,
   type PromptLayerRole,
 } from './prompt-types.js';
+import {
+  FOUNDATION_SECTION_DEFINITIONS,
+  composeFoundationSectionTemplate,
+  decomposeFoundationSections,
+  type FoundationSectionState,
+} from './foundation-sections.js';
+import {
+  CANONICAL_CHARACTER_FOUNDATION_NAME,
+  isCanonicalCharacterFoundationLayer,
+} from './canonical-foundation.js';
 import { createComponentLogger } from '../logger.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { writeJsonAtomic } from '../utils/fs.js';
@@ -101,6 +112,7 @@ export interface PromptLayerMetadataUpdate {
 }
 
 export interface PromptLayerUpdatePatch {
+  name?: string;
   content?: string;
   priority?: number;
   metadata?: PromptLayerMetadataUpdate;
@@ -304,6 +316,7 @@ export class PromptLayerStore {
     type: LayerType;
     name: string;
     content: string;
+    enabled?: boolean;
     identifier?: string;
     role?: PromptLayerRole;
     promptOrder?: number;
@@ -324,7 +337,7 @@ export class PromptLayerStore {
       role,
       promptOrder,
       content: params.content,
-      enabled: true,
+      enabled: params.enabled ?? true,
       priority: params.priority ?? 0,
       channelType: params.channelType,
       taskKind: params.taskKind,
@@ -363,7 +376,9 @@ export class PromptLayerStore {
     if (!layer) throw new Error(`Prompt layer not found: ${id}`);
 
     let nextContent = layer.content;
+    let nextName = layer.name;
     let hasContent = false;
+    let hasName = false;
     let hasPriority = false;
     let nextPriority = layer.priority;
     let metadata: PromptLayerMetadataUpdate = {};
@@ -379,6 +394,13 @@ export class PromptLayerStore {
       }
     } else {
       const patch = contentOrPatch;
+      if (Object.prototype.hasOwnProperty.call(patch, 'name')) {
+        if (typeof patch.name !== 'string' || patch.name.trim().length === 0) {
+          throw new Error('name must be a non-empty string');
+        }
+        nextName = patch.name.trim();
+        hasName = true;
+      }
       if (Object.prototype.hasOwnProperty.call(patch, 'content')) {
         if (typeof patch.content !== 'string') {
           throw new Error('content must be a string');
@@ -404,7 +426,7 @@ export class PromptLayerStore {
     const role = hasRole ? validatePromptRole(metadata.role) : undefined;
     const promptOrder = hasPromptOrder ? validatePromptOrder(metadata.promptOrder) : undefined;
     const normalizedReason = normalizeReason(reason);
-    const hasAnyUpdate = hasContent || hasPriority || hasIdentifier || hasRole || hasPromptOrder;
+    const hasAnyUpdate = hasName || hasContent || hasPriority || hasIdentifier || hasRole || hasPromptOrder;
     if (!hasAnyUpdate) {
       throw new Error('No prompt update fields provided');
     }
@@ -424,6 +446,7 @@ export class PromptLayerStore {
       version: layer.version,
     });
 
+    if (hasName) layer.name = nextName;
     if (hasContent) layer.content = nextContent;
     if (hasPriority) layer.priority = nextPriority;
     if (hasIdentifier) layer.identifier = identifier;
@@ -467,11 +490,13 @@ export class PromptLayerStore {
 
     const layerById = new Map(this.layers.map(layer => [layer.id, layer]));
     const targetOrder: PromptLayer[] = [];
+    const requestedIndexById = new Map<string, number>();
     for (const layerId of layerIds) {
       const layer = layerById.get(layerId);
       if (!layer) {
         throw new Error(`Prompt layer not found: ${layerId}`);
       }
+      requestedIndexById.set(layerId, targetOrder.length);
       targetOrder.push(layer);
     }
 
@@ -479,13 +504,20 @@ export class PromptLayerStore {
       throw new Error('layerIds must include every prompt layer exactly once');
     }
 
+    const normalizedOrder = [...targetOrder].sort((left, right) => {
+      const typeOrder = LAYER_TYPE_ORDER[left.type] - LAYER_TYPE_ORDER[right.type];
+      if (typeOrder !== 0) return typeOrder;
+      return (requestedIndexById.get(left.id) ?? 0) - (requestedIndexById.get(right.id) ?? 0);
+    });
+
     const normalizedReason = normalizeReason(reason);
     const timestamp = new Date().toISOString();
     const touched: PromptLayer[] = [];
 
-    for (let nextPriority = 0; nextPriority < targetOrder.length; nextPriority++) {
-      const layer = targetOrder[nextPriority];
-      if (layer.priority === nextPriority) continue;
+    for (let nextPriority = 0; nextPriority < normalizedOrder.length; nextPriority++) {
+      const layer = normalizedOrder[nextPriority];
+      const nextPromptOrder = nextPriority;
+      if (layer.priority === nextPriority && layer.promptOrder === nextPromptOrder) continue;
 
       this.appendHistory({
         layerId: layer.id,
@@ -501,6 +533,7 @@ export class PromptLayerStore {
       });
 
       layer.priority = nextPriority;
+      layer.promptOrder = nextPromptOrder;
       layer.version += 1;
       layer.updatedAt = timestamp;
       layer.updatedBy = updatedBy;
@@ -576,25 +609,150 @@ export class PromptLayerStore {
     );
   }
 
-  /** Seed from character card if store is empty */
-  seedFromCharacterCard(systemPrompt: string): void {
-    if (this.layers.length === 0) {
-      this.create({
+  private buildFoundationLayers(
+    sections: readonly FoundationSectionState[],
+    updatedBy: string,
+  ): PromptLayer[] {
+    const now = new Date().toISOString();
+    return sections.map(section => {
+      const definition = FOUNDATION_SECTION_DEFINITIONS.find(entry => entry.id === section.id)!;
+      const content = composeFoundationSectionTemplate(section);
+      return {
+        id: randomUUID(),
         type: 'base',
-        name: 'Character Foundation',
-        identifier: 'main',
+        name: definition.layerName,
+        identifier: definition.identifier,
         role: 'system',
-        promptOrder: 0,
-        content: systemPrompt,
-        priority: 0,
-        updatedBy: 'system',
-      });
-      log.info('Seeded prompt store from character card');
-      return;
+        promptOrder: definition.promptOrder,
+        content,
+        enabled: section.enabled,
+        priority: definition.priority,
+        updatedAt: now,
+        updatedBy,
+        checksum: contentChecksum(content),
+        version: 1,
+      };
+    });
+  }
+
+  private normalizeFoundationMetadata(
+    layer: PromptLayer,
+    updatedBy: string,
+    reason: string,
+    definition: (typeof FOUNDATION_SECTION_DEFINITIONS)[number],
+  ): boolean {
+    const metadataPatch = {
+      ...(layer.identifier !== definition.identifier ? { identifier: definition.identifier } : {}),
+      ...(layer.role !== 'system' ? { role: 'system' as const } : {}),
+      ...(layer.promptOrder !== definition.promptOrder ? { promptOrder: definition.promptOrder } : {}),
+    };
+    const nextPriority = layer.priority !== definition.priority ? definition.priority : undefined;
+    const nextName = layer.name !== definition.layerName ? definition.layerName : undefined;
+    if (Object.keys(metadataPatch).length === 0 && nextPriority === undefined && nextName === undefined) {
+      return false;
+    }
+    this.update(layer.id, {
+      ...(nextPriority !== undefined ? { priority: nextPriority } : {}),
+      ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
+    }, updatedBy, reason);
+    if (nextName !== undefined) {
+      layer.name = nextName;
+      layer.updatedAt = new Date().toISOString();
+      layer.updatedBy = updatedBy;
+      this.save();
+    }
+    return true;
+  }
+
+  private migrateLegacyCanonicalFoundation(systemPrompt: string): boolean {
+    const baseLayers = this.layers.filter(layer => layer.type === 'base');
+    if (baseLayers.length !== 1) return false;
+    const legacy = baseLayers[0];
+    if (!isCanonicalCharacterFoundationLayer(legacy)) return false;
+
+    const sections = decomposeFoundationSections(legacy.content || systemPrompt);
+    const replacementLayers = this.buildFoundationLayers(sections, 'system:foundation-migration');
+    this.layers = this.layers
+      .filter(layer => layer.id !== legacy.id)
+      .concat(replacementLayers);
+    this.save();
+    log.info('Migrated legacy Character Foundation into per-section base layers');
+    return true;
+  }
+
+  private ensureFoundationLayers(systemPrompt: string): boolean {
+    const currentFoundationLayers = this.layers.filter(layer => isCanonicalCharacterFoundationLayer(layer));
+    const legacyMonolith = currentFoundationLayers.length === 1
+      && currentFoundationLayers[0]?.name === CANONICAL_CHARACTER_FOUNDATION_NAME
+      && currentFoundationLayers[0]?.identifier === 'main';
+    if (legacyMonolith) {
+      return this.migrateLegacyCanonicalFoundation(systemPrompt);
+    }
+    if (currentFoundationLayers.length === 0) {
+      if (this.layers.length === 0) {
+        const layers = this.buildFoundationLayers(
+          decomposeFoundationSections(systemPrompt),
+          'system',
+        );
+        this.layers.push(...layers);
+        this.save();
+        log.info('Seeded prompt store from character card');
+        return true;
+      }
+      return this.migrateLegacyCanonicalFoundation(systemPrompt);
+    }
+
+    let changed = false;
+    const byIdentifier = new Map(
+      currentFoundationLayers
+        .map(layer => [layer.identifier, layer] as const)
+        .filter((entry): entry is [string, PromptLayer] => Boolean(entry[0])),
+    );
+    for (const definition of FOUNDATION_SECTION_DEFINITIONS) {
+      const existing = byIdentifier.get(definition.identifier);
+      if (!existing) {
+        this.create({
+          type: 'base',
+          name: definition.layerName,
+          enabled: definition.defaultEnabled,
+          identifier: definition.identifier,
+          role: 'system',
+          promptOrder: definition.promptOrder,
+          content: composeFoundationSectionTemplate({
+            id: definition.id,
+            content: definition.defaultContent,
+            enabled: definition.defaultEnabled,
+            title: definition.title,
+            defaultEnabled: definition.defaultEnabled,
+          }),
+          priority: definition.priority,
+          updatedBy: 'system:foundation-seed',
+        });
+        changed = true;
+        continue;
+      }
+      changed = this.normalizeFoundationMetadata(
+        existing,
+        'system:foundation-normalize',
+        `Normalize Character Foundation layer ${definition.identifier}`,
+        definition,
+      ) || changed;
+    }
+    return changed;
+  }
+
+  /** Seed from character card if store is empty */
+  seedFromCharacterCard(systemPrompt: string): boolean {
+    if (this.ensureFoundationLayers(systemPrompt)) {
+      return true;
+    }
+
+    if (this.layers.length === 0) {
+      return false;
     }
 
     const baseLayers = this.layers.filter(layer => layer.type === 'base');
-    if (baseLayers.length !== 1) return;
+    if (baseLayers.length !== 1) return false;
 
     const base = baseLayers[0];
     let touched = false;
@@ -651,6 +809,7 @@ export class PromptLayerStore {
     if (touched) {
       this.save();
     }
+    return touched;
   }
 
   /** Get count of layers */

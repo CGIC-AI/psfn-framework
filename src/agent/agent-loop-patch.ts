@@ -74,6 +74,8 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
     };
 
     let partial: any = null;
+    let terminalStreamError: Error | null = null;
+    let sawTerminalStreamError = false;
     try {
       const stream = messages
         ? agentLoopWithScheduler(messages, context, config, this.abortController.signal, this.streamFn, schedulerOptions)
@@ -112,6 +114,15 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
               this._state.error = event.message.errorMessage;
             }
             break;
+          case 'agent_error':
+            terminalStreamError = event.error instanceof Error
+              ? event.error
+              : new Error(String(event.error));
+            sawTerminalStreamError = true;
+            partial = null;
+            this._state.error = terminalStreamError.message;
+            this._state.streamMessage = null;
+            break;
           case 'agent_end':
             this._state.isStreaming = false;
             this._state.streamMessage = null;
@@ -120,6 +131,10 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
             break;
         }
         this.emit(event);
+      }
+
+      if (terminalStreamError) {
+        throw terminalStreamError;
       }
 
       if (partial && partial.role === 'assistant' && partial.content.length > 0) {
@@ -137,35 +152,11 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this._state.error = errorMessage;
-      const assistantMessage = {
-        role: 'assistant',
-        content: [{ type: 'text', text: '' }],
-        api: model.api,
-        provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
-        stopReason: this.abortController.signal.aborted ? 'aborted' : 'error',
-        errorMessage,
-        timestamp: Date.now(),
-      } as any;
-      this.appendMessage(assistantMessage);
-      this.emit({ type: 'message_start', message: assistantMessage } as any);
-      this.emit({ type: 'message_end', message: assistantMessage } as any);
-      this.emit({ type: 'turn_end', message: assistantMessage, toolResults: [] } as any);
-      this.emit({ type: 'agent_end', messages: [] } as any);
+      partial = null;
+      if (!sawTerminalStreamError) {
+        this.emit({ type: 'agent_error', error: error instanceof Error ? error : new Error(errorMessage), messages: [] } as any);
+        this.emit({ type: 'agent_end', messages: [] } as any);
+      }
       throw error;
     } finally {
       this._state.isStreaming = false;

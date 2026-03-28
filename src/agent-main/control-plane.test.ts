@@ -26,6 +26,8 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('createRebuildTool(');
     expect(controlPlaneSource).toContain('createNotifyOperatorTool(');
     expect(controlPlaneSource).toContain('runShutdownSequence(');
+    expect(controlPlaneSource).toContain('resolveRuntimeCommandInvocation');
+    expect(controlPlaneSource).toContain("gateway.shellExec('npm', ['run', 'build']");
     expect(controlPlaneSource).toContain('unregister gateway disconnect hook');
     expect(controlPlaneSource).toContain('write graceful shutdown markers');
   });

@@ -42,6 +42,8 @@ import { createCompleteFocusTool, createStartFocusTool } from '../tools/focus.js
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
+import { ensureRuntimePromptLayers } from '../identity/runtime-prompt-layers.js';
+import { wrapPromptSectionXml } from '../prompt/sections.js';
 import { runDeliberation } from '../llm/deliberation.js';
 import type { DeliberationResult } from '../llm/deliberation.js';
 import {
@@ -286,6 +288,7 @@ export function wirePromptRuntime(
   });
   const northStarStore = new NorthStarStore(resolveNorthStarPath(dataDir));
   promptStore.seedFromCharacterCard(baseSystemPrompt);
+  ensureRuntimePromptLayers(promptStore);
 
   target.promptComposer = new PromptComposer(promptStore, undefined, undefined, {
     enableConstitution: true,
@@ -703,18 +706,24 @@ export function wireHeartbeatRuntime(
 
       sections.push(
         [
-          '[Internal State Input]',
+          '<internal_state_input>',
           `snapshot_ref: ${context.internalStateSnapshotRef}`,
           `serialized_internal_state: ${serializeInternalState(context.internalState)}`,
-          '[Recent Metacognitive Flags]',
+          '</internal_state_input>',
+          '<recent_metacognitive_flags>',
           metacognitiveSection,
-          '[Active Concerns]',
+          '</recent_metacognitive_flags>',
+          '<open_threads>',
           concernSection,
+          '</open_threads>',
         ].join('\n'),
       );
     }
     if (appearanceContext) {
-      sections.push(`Appearance context:\n${appearanceContext}`);
+      sections.push(wrapPromptSectionXml({
+        id: 'appearance_context',
+        content: appearanceContext,
+      }));
     }
     return sections.join('\n\n');
   };

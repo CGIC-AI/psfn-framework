@@ -182,18 +182,30 @@ describe('ActiveConcernStore', () => {
   });
 
   it('formats active concerns context block with bounded output', () => {
+    const uniqueTopics = [
+      'medication reminder logistics',
+      'calendar scheduling conflict',
+      'database migration rollback',
+      'voice latency regression',
+      'breakfast habit followup',
+      'sleep schedule drift',
+      'hydration routine check',
+      'avatar render pipeline',
+      'backup verification audit',
+    ];
     for (let i = 0; i < 9; i++) {
       store.create({
-        text: textFixture(`concern ${i} ${'x'.repeat(32)}`),
+        text: textFixture(uniqueTopics[i]!),
         priority: i === 0 ? 'high' : 'low',
         expiresAt: `2026-02-01T${(11 + i).toString().padStart(2, '0')}:00:00.000Z`,
       });
     }
 
     const block = formatActiveConcernsContextBlock(store.getActiveConcerns(), 6);
-    expect(block).toContain('[Active Concerns]');
-    expect(block).toContain('additional concerns omitted for context budget');
-    const concernLines = block.split('\n').filter(line => line.startsWith('- ('));
+    expect(block).toContain('<open_threads>');
+    expect(block).toContain('Treat these as soft threads to verify, not alarms that must dominate the turn.');
+    expect(block).toContain('additional lower-salience threads omitted');
+    const concernLines = block.split('\n').filter(line => line.startsWith('- '));
     expect(concernLines.length).toBe(7);
   });
 });

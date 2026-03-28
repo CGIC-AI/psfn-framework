@@ -186,8 +186,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     expect(result).toContain('Public fact');
     expect(result).not.toContain('Personal detail');
-    expect(result).toContain('Memory access note:');
-    expect(result).toContain('1 candidate memory was withheld');
+    expect(result).toContain('Memory context note:');
+    expect(result).toContain('1 candidate memory was kept out');
     expect(result).toContain('trust ceiling');
   });
 
@@ -711,8 +711,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
     // public trust + broadcast = only public allowed, none present
     const result = await retriever.retrieve('test query', 'twitter:feed', 'public');
 
-    expect(result).toContain('Memory access note:');
-    expect(result).toContain('2 candidate memories were withheld');
+    expect(result).toContain('Memory context note:');
+    expect(result).toContain('2 candidate memories were kept out');
     expect(result).toContain('trust ceiling');
     expect(result).not.toContain('Secret stuff');
     expect(result).not.toContain('Private detail');
@@ -1043,7 +1043,7 @@ describe('MemoryRetriever basic behavior', () => {
 
     expect(result).toContain('[semantic]');
     expect(result).toContain('[emotional]');
-    expect(result).toContain('What you remember about this person:');
+    expect(result).toContain('Relevant memories for this person:');
   });
 
   it('surfaces prior refusal boundaries for similar follow-up requests across sessions', async () => {
@@ -1120,7 +1120,7 @@ describe('MemoryRetriever basic behavior', () => {
     );
 
     const profileIndex = result.indexOf('Core profile for this person:');
-    const memoriesIndex = result.indexOf('What you remember about this person:');
+    const memoriesIndex = result.indexOf('Relevant memories for this person:');
     expect(profileIndex).toBeGreaterThanOrEqual(0);
     expect(memoriesIndex).toBeGreaterThan(profileIndex);
     expect(result).toContain('PrimaryUser is the primary partner');
@@ -1149,7 +1149,7 @@ describe('MemoryRetriever basic behavior', () => {
 
     expect(result).toContain('Core profile for this person:');
     expect(result).toContain('PrimaryUser prefers concise responses');
-    expect(result).not.toContain('What you remember about this person:');
+    expect(result).not.toContain('Relevant memories for this person:');
   });
 
   it('uses visible social graph context to separate related people from canonical memories', async () => {
@@ -1221,7 +1221,7 @@ describe('MemoryRetriever basic behavior', () => {
 
     expect(result).toContain('Relationship context for this person:');
     expect(result).toContain('Alice is a separate person connected to PrimaryUser as family.');
-    expect(result).toContain('What you remember about this person:');
+    expect(result).toContain('Relevant memories for this person:');
     expect(result).toContain('PrimaryUser likes direct and candid communication.');
     expect(result).toContain('Relevant memories about other people in their social context:');
     expect(result).toContain('Alice [family; trusted contact]: Alice is recovering from a long week');

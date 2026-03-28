@@ -9,8 +9,8 @@ import {
   type PromptLayerRole,
 } from '../../../identity/prompt-types.js';
 import {
-  PromptComposer,
   IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
+  buildImmutableHumanSafetySection,
 } from '../../../identity/prompt-composer.js';
 import type {
   PromptLayerMetadataUpdate,
@@ -19,7 +19,6 @@ import type {
 } from '../../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../../identity/prompt-registry.js';
 import {
-  CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
   isCanonicalCharacterFoundationLayer,
 } from '../../../identity/canonical-foundation.js';
 import {
@@ -33,16 +32,24 @@ import {
   getMalformedStructuredPromptErrors,
   parseStructuredPromptForm,
 } from '../prompt-structured-content.js';
+import {
+  FOUNDATION_SECTION_DEFINITIONS,
+  composeFoundationSectionTemplate,
+  decomposeFoundationLayerContent,
+  type FoundationSectionId,
+} from '../../../identity/foundation-sections.js';
 import type {
   AdminConstitutionCompanionLayer,
   AdminConstitutionImmutableBlock,
   AdminConstitutionMutableLayer,
   AdminConstitutionSnapshotData,
+  AdminFoundationSnapshotData,
   AdminNorthStarSnapshotData,
   AdminPromptDetailData,
   AdminPromptListData,
   AdminPromptsService,
   ConstitutionUpdateResult,
+  FoundationUpdateResult,
   NorthStarUpdateResult,
   PromptUpdateResult,
 } from './types.js';
@@ -57,6 +64,12 @@ interface ConstitutionMutableLayerPatchInput {
   identifier?: string | null;
   role?: string | null;
   promptOrder?: number | null;
+}
+
+interface FoundationSectionPatchInput {
+  id: FoundationSectionId;
+  content: string;
+  enabled: boolean;
 }
 
 interface NorthStarItemInput {
@@ -209,6 +222,47 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }));
   }
 
+  private getFoundationLayers() {
+    const promptStore = this.deps.promptStore;
+    if (!promptStore) return [];
+    const layers = promptStore.getAll().filter(layer => isCanonicalCharacterFoundationLayer(layer));
+    const orderByIdentifier = new Map(
+      FOUNDATION_SECTION_DEFINITIONS.map((section, index) => [section.identifier, index] as const),
+    );
+    return layers.sort((left, right) => {
+      const leftOrder = left.identifier ? (orderByIdentifier.get(left.identifier) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+      const rightOrder = right.identifier ? (orderByIdentifier.get(right.identifier) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+      if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+      return left.priority - right.priority;
+    });
+  }
+
+  private buildConstitutionPreview(
+    mutableLayers: readonly Pick<AdminConstitutionMutableLayer, 'content' | 'enabled'>[],
+    companionLayer: AdminConstitutionCompanionLayer | null,
+  ): AdminConstitutionSnapshotData['preview'] {
+    const sections: string[] = [buildImmutableHumanSafetySection()];
+
+    if (companionLayer?.content.trim()) {
+      sections.push(companionLayer.content.trim());
+    }
+
+    for (const layer of mutableLayers) {
+      if (!layer.enabled) continue;
+      const trimmed = layer.content.trim();
+      if (!trimmed) continue;
+      sections.push(trimmed);
+    }
+
+    const text = sections.filter(section => section.trim().length > 0).join('\n\n');
+    return {
+      text,
+      hash: this.hashText(text),
+      staticPrefix: text,
+      dynamicSuffix: '',
+    };
+  }
+
   private resolveCompanionLayerSnapshot(): AdminConstitutionCompanionLayer | null {
     const provider = this.deps.companionValuesLayerProvider;
     if (!provider) return null;
@@ -302,49 +356,203 @@ export class AdminPromptsDataService implements AdminPromptsService {
     };
   }
 
+  getFoundationSnapshot(): AdminFoundationSnapshotData | null {
+    const foundationLayers = this.getFoundationLayers();
+    if (foundationLayers.length === 0) return null;
+
+    const layersByIdentifier = new Map(
+      foundationLayers
+        .map(layer => [layer.identifier, layer] as const)
+        .filter((entry): entry is [string, typeof foundationLayers[number]] => Boolean(entry[0])),
+    );
+    const sections = FOUNDATION_SECTION_DEFINITIONS.map((definition) => {
+      const layer = layersByIdentifier.get(definition.identifier);
+      const parsed = layer
+        ? decomposeFoundationLayerContent(definition.id, layer.content)
+        : {
+          id: definition.id,
+          title: definition.title,
+          content: definition.defaultContent,
+          enabled: definition.defaultEnabled,
+          defaultEnabled: definition.defaultEnabled,
+        };
+      return {
+        ...parsed,
+        enabled: layer?.enabled ?? definition.defaultEnabled,
+        defaultEnabled: definition.defaultEnabled,
+      };
+    });
+    const previewText = foundationLayers
+      .filter(layer => layer.enabled)
+      .map(layer => layer.content.trim())
+      .filter(content => content.length > 0)
+      .join('\n\n');
+
+    return {
+      layerId: foundationLayers[0]?.id ?? 'foundation:composite',
+      layerName: 'Character Foundation',
+      sections,
+      preview: {
+        text: previewText,
+        hash: this.hashText(previewText),
+      },
+    };
+  }
+
   getConstitutionSnapshot(): AdminConstitutionSnapshotData | null {
     const promptStore = this.deps.promptStore;
     if (!promptStore) return null;
 
     const immutableBlocks = this.buildImmutableConstitutionBlocks();
     const companionLayer = this.resolveCompanionLayerSnapshot();
-    const mutableLayers: AdminConstitutionMutableLayer[] = promptStore
-      .getAll()
-      .sort((left, right) => left.priority - right.priority)
-      .map(layer => {
-        const editable = !isCanonicalCharacterFoundationLayer(layer);
-        return {
-          ...layer,
-          editable,
-          ...(editable ? {} : { readOnlyReason: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE }),
-        };
-      });
-
-    const composer = new PromptComposer(
-      promptStore,
-      undefined,
-      undefined,
-      {
-        enableConstitution: true,
-        companionValuesLayerProvider: this.deps.companionValuesLayerProvider,
-        northStarLayerProvider: () => this.getNorthStarStore()?.buildPromptLayer() ?? null,
-        persistLastKnownGood: false,
-      },
-    );
-    const composed = composer.composeSplit();
-    const staticPrefix = composed.staticPrefix;
-    const text = composed.text;
+    const mutableLayers: AdminConstitutionMutableLayer[] = [];
 
     return {
       immutableBlocks,
       companionLayer,
       mutableLayers,
-      preview: {
-        text,
-        hash: composed.hash,
-        staticPrefix,
-        dynamicSuffix: composed.dynamicSuffix,
-      },
+      preview: this.buildConstitutionPreview(mutableLayers, companionLayer),
+    };
+  }
+
+  private parseFoundationSectionPatch(
+    value: unknown,
+  ): FoundationSectionPatchInput | { error: string } {
+    if (!value || typeof value !== 'object') {
+      return { error: 'sections entries must be objects' };
+    }
+
+    const section = value as Record<string, unknown>;
+    if (typeof section.id !== 'string' || !FOUNDATION_SECTION_DEFINITIONS.some(entry => entry.id === section.id)) {
+      return { error: 'sections entries require a valid section id' };
+    }
+    if (typeof section.content !== 'string') {
+      return { error: `foundation section "${section.id}" content must be a string` };
+    }
+    if (typeof section.enabled !== 'boolean') {
+      return { error: `foundation section "${section.id}" enabled must be a boolean` };
+    }
+
+    return {
+      id: section.id as FoundationSectionId,
+      content: section.content,
+      enabled: section.enabled,
+    };
+  }
+
+  saveFoundationSections(body: string): FoundationUpdateResult {
+    const promptStore = this.deps.promptStore;
+    const foundationLayers = this.getFoundationLayers();
+    if (!promptStore || foundationLayers.length === 0) {
+      return { ok: false, message: 'Character Foundation is not configured' };
+    }
+
+    const params = this.parseBody(body);
+    const rawSections = params.get('sections');
+    if (!rawSections) {
+      return { ok: false, message: 'sections is required' };
+    }
+
+    let parsedSections: unknown;
+    try {
+      parsedSections = JSON.parse(rawSections);
+    } catch {
+      return { ok: false, message: 'sections must be a JSON array' };
+    }
+
+    if (!Array.isArray(parsedSections)) {
+      return { ok: false, message: 'sections must be a JSON array' };
+    }
+
+    if (parsedSections.length !== FOUNDATION_SECTION_DEFINITIONS.length) {
+      return { ok: false, message: 'sections must include every foundation section exactly once' };
+    }
+
+    const sectionPatches: FoundationSectionPatchInput[] = [];
+    const seen = new Set<FoundationSectionId>();
+    for (const entry of parsedSections) {
+      const parsedEntry = this.parseFoundationSectionPatch(entry);
+      if ('error' in parsedEntry) {
+        return { ok: false, message: parsedEntry.error };
+      }
+      if (seen.has(parsedEntry.id)) {
+        return { ok: false, message: `Duplicate foundation section id: ${parsedEntry.id}` };
+      }
+      seen.add(parsedEntry.id);
+      sectionPatches.push(parsedEntry);
+    }
+
+    try {
+      const layersByIdentifier = new Map(
+        foundationLayers
+          .map(layer => [layer.identifier, layer] as const)
+          .filter((entry): entry is [string, typeof foundationLayers[number]] => Boolean(entry[0])),
+      );
+      for (let index = 0; index < sectionPatches.length; index += 1) {
+        const section = sectionPatches[index];
+        const definition = FOUNDATION_SECTION_DEFINITIONS.find(entry => entry.id === section.id)!;
+        const content = composeFoundationSectionTemplate(section);
+        const priority = index * 10;
+        const existing = layersByIdentifier.get(definition.identifier);
+        if (!existing) {
+          promptStore.create({
+            type: 'base',
+            name: definition.layerName,
+            enabled: section.enabled,
+            identifier: definition.identifier,
+            role: 'system',
+            promptOrder: priority,
+            content,
+            priority,
+            updatedBy: 'admin',
+          });
+          continue;
+        }
+
+        const metadataPatch = {
+          ...(existing.identifier !== definition.identifier ? { identifier: definition.identifier } : {}),
+          ...(existing.role !== 'system' ? { role: 'system' as const } : {}),
+          ...(existing.promptOrder !== priority ? { promptOrder: priority } : {}),
+        };
+        const patch = {
+          ...(existing.content !== content ? { content } : {}),
+          ...(existing.priority !== priority ? { priority } : {}),
+          ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
+        };
+        if (Object.keys(patch).length > 0) {
+          promptStore.update(
+            existing.id,
+            patch,
+            'admin',
+            'Admin Character Foundation edit via Garden API',
+          );
+        }
+        if (existing.enabled !== section.enabled) {
+          promptStore.toggle(existing.id);
+        }
+      }
+      this.injectPromptEditSystemNote(
+        'Admin updated Character Foundation prompt soil.',
+      );
+      this.deps.appendAuditTimelineEntry?.(
+        'identity_edit',
+        'allowed',
+        'Admin updated Character Foundation sections.',
+        foundationLayers.map(layer => `layerId=${layer.id}`),
+      );
+    } catch (error) {
+      return { ok: false, message: String(error) };
+    }
+
+    const snapshot = this.getFoundationSnapshot();
+    if (!snapshot) {
+      return { ok: false, message: 'Failed to load Character Foundation after save' };
+    }
+
+    return {
+      ok: true,
+      message: 'Saved Character Foundation sections',
+      snapshot,
     };
   }
 
@@ -432,10 +640,46 @@ export class AdminPromptsDataService implements AdminPromptsService {
       return { ok: false, message: 'mutableLayers must be a JSON array' };
     }
 
-    const existingLayers = promptStore.getAll();
-    const existingLayerIds = new Set(existingLayers.map(layer => layer.id));
+    for (const entry of parsedLayers) {
+      if (!entry || typeof entry !== 'object') continue;
+      const candidateId = typeof (entry as { id?: unknown }).id === 'string'
+        ? ((entry as { id: string }).id).trim()
+        : '';
+      if (candidateId.startsWith(CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX)
+        || candidateId === CONSTITUTION_COMPANION_LAYER_ID) {
+        return { ok: false, message: 'Immutable constitution layers are read-only and cannot be edited' };
+      }
+    }
+
+    const currentSnapshot = this.getConstitutionSnapshot();
+    const existingLayerIds = new Set((currentSnapshot?.mutableLayers ?? []).map(layer => layer.id));
+    if (existingLayerIds.size === 0) {
+      if (parsedLayers.length !== 0) {
+        return { ok: false, message: 'Mutable constitution layers are not exposed through Constitution Builder' };
+      }
+      if (!currentSnapshot) {
+        return { ok: false, message: 'Failed to load constitution snapshot after save' };
+      }
+      return {
+        ok: true,
+        message: 'No mutable constitution layers to update',
+        snapshot: currentSnapshot,
+      };
+    }
+
     if (parsedLayers.length !== existingLayerIds.size) {
       return { ok: false, message: 'mutableLayers must include every mutable layer exactly once' };
+    }
+    if (existingLayerIds.size === 0 && parsedLayers.length === 0) {
+      const snapshot = this.getConstitutionSnapshot();
+      if (!snapshot) {
+        return { ok: false, message: 'Failed to load constitution snapshot after save' };
+      }
+      return {
+        ok: true,
+        message: 'No mutable constitution layers to update',
+        snapshot,
+      };
     }
 
     const mutableLayerPatches: ConstitutionMutableLayerPatchInput[] = [];
@@ -462,8 +706,23 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
 
     try {
+      const currentOrder = promptStore
+        .getAll()
+        .sort((left, right) => left.priority - right.priority);
+      const nextLayerIds: string[] = [];
+      let insertedOperators = false;
+      for (const layer of currentOrder) {
+        if (layer.type === 'operator') {
+          if (!insertedOperators) {
+            nextLayerIds.push(...mutableLayerPatches.map(entry => entry.id));
+            insertedOperators = true;
+          }
+          continue;
+        }
+        nextLayerIds.push(layer.id);
+      }
       promptStore.reorderByLayerIds(
-        mutableLayerPatches.map(entry => entry.id),
+        nextLayerIds,
         'admin',
         'Admin constitution layer reorder via Garden API',
       );
@@ -494,9 +753,6 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
       const updatePatch: PromptLayerUpdatePatch = {};
       if (patchEntry.content !== undefined && patchEntry.content !== layer.content) {
-        if (isCanonicalCharacterFoundationLayer(layer)) {
-          return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
-        }
         updatePatch.content = patchEntry.content;
       }
 
@@ -518,9 +774,6 @@ export class AdminPromptsDataService implements AdminPromptsService {
       }
 
       if (patchEntry.enabled !== undefined && patchEntry.enabled !== layer.enabled) {
-        if (isCanonicalCharacterFoundationLayer(layer)) {
-          return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
-        }
         try {
           promptStore.toggle(patchEntry.id);
         } catch (error) {
@@ -775,16 +1028,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? params.get('id') ?? '';
-    const layer = promptStore.getById(layerId);
-    if (isCanonicalCharacterFoundationLayer(layer)) {
-      this.deps.appendAuditTimelineEntry?.(
-        'identity_edit',
-        'denied',
-        `Prompt layer edit was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
-        [`layerId=${layerId}`],
-      );
-      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
-    }
+    const name = params.get('name')?.trim();
 
     const resolved = this.resolvePromptLayerContent(params);
     if ('error' in resolved) {
@@ -803,12 +1047,14 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const hasMetadata = Object.keys(resolvedMetadata.metadata).length > 0;
     const hasContent = resolved.content !== undefined;
+    const hasName = Boolean(name);
     const hasPriority = resolvedPriority.priority !== undefined;
-    if (!hasContent && !hasMetadata && !hasPriority) {
+    if (!hasName && !hasContent && !hasMetadata && !hasPriority) {
       return { ok: false, message: 'No prompt update fields provided' };
     }
 
     const patch: PromptLayerUpdatePatch = {};
+    if (hasName) patch.name = name;
     if (hasContent) patch.content = resolved.content;
     if (hasMetadata) patch.metadata = resolvedMetadata.metadata;
     if (hasPriority) patch.priority = resolvedPriority.priority;
@@ -931,16 +1177,6 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
-    const layer = promptStore.getById(layerId);
-    if (isCanonicalCharacterFoundationLayer(layer)) {
-      this.deps.appendAuditTimelineEntry?.(
-        'identity_edit',
-        'denied',
-        `Prompt layer toggle was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
-        [`layerId=${layerId}`],
-      );
-      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
-    }
 
     try {
       promptStore.toggle(layerId);
@@ -966,17 +1202,6 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
-    const layer = promptStore.getById(layerId);
-    if (isCanonicalCharacterFoundationLayer(layer)) {
-      this.deps.appendAuditTimelineEntry?.(
-        'identity_edit',
-        'denied',
-        `Prompt layer rollback was denied: ${CARD_BACKED_FOUNDATION_PROMPT_MESSAGE}`,
-        [`layerId=${layerId}`],
-      );
-      return { ok: false, message: CARD_BACKED_FOUNDATION_PROMPT_MESSAGE };
-    }
-
     const version = parseInt(params.get('version') ?? '0', 10);
     try {
       const rolledBackLayer = promptStore.rollback(layerId, version);

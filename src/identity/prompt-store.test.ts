@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { FOUNDATION_SECTION_DEFINITIONS } from './foundation-sections.js';
 import { composeSystemPromptTemplate } from './loader.js';
 import { PromptLayerStore } from './prompt-store.js';
 
@@ -10,6 +11,19 @@ describe('PromptLayerStore', () => {
   let filePath: string;
   let historyPath: string;
   let store: PromptLayerStore;
+
+  function foundationLayers() {
+    return store.getByType('base')
+      .filter(layer => layer.name.startsWith('Character Foundation'));
+  }
+
+  function composeEnabledFoundationPrompt(): string {
+    return foundationLayers()
+      .filter(layer => layer.enabled)
+      .sort((left, right) => (left.promptOrder ?? 0) - (right.promptOrder ?? 0))
+      .map(layer => layer.content)
+      .join('\n\n');
+  }
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'psfn-prompt-'));
@@ -234,10 +248,10 @@ describe('PromptLayerStore', () => {
   });
 
   describe('reorderByLayerIds()', () => {
-    it('reorders priorities in one pass without mutating content', () => {
-      const a = store.create({ type: 'runtime', name: 'A', content: 'alpha', priority: 10 });
-      const b = store.create({ type: 'runtime', name: 'B', content: 'bravo', priority: 20 });
-      const c = store.create({ type: 'runtime', name: 'C', content: 'charlie', priority: 30 });
+    it('reorders priorities and promptOrder in one pass without mutating content', () => {
+      const a = store.create({ type: 'runtime', name: 'A', content: 'alpha', priority: 10, promptOrder: 10, identifier: 'runtime.a' });
+      const b = store.create({ type: 'runtime', name: 'B', content: 'bravo', priority: 20, promptOrder: 20, identifier: 'runtime.b' });
+      const c = store.create({ type: 'runtime', name: 'C', content: 'charlie', priority: 30, promptOrder: 30, identifier: 'runtime.c' });
 
       const touched = store.reorderByLayerIds([c.id, a.id, b.id], 'admin');
 
@@ -245,9 +259,27 @@ describe('PromptLayerStore', () => {
       expect(store.getById(c.id)?.priority).toBe(0);
       expect(store.getById(a.id)?.priority).toBe(1);
       expect(store.getById(b.id)?.priority).toBe(2);
+      expect(store.getById(c.id)?.promptOrder).toBe(0);
+      expect(store.getById(a.id)?.promptOrder).toBe(1);
+      expect(store.getById(b.id)?.promptOrder).toBe(2);
       expect(store.getById(a.id)?.content).toBe('alpha');
       expect(store.getById(b.id)?.content).toBe('bravo');
       expect(store.getById(c.id)?.content).toBe('charlie');
+    });
+
+    it('keeps architectural type ordering while applying the requested order within each type', () => {
+      const base = store.create({ type: 'base', name: 'Base', content: 'base', priority: 0, promptOrder: 0, identifier: 'main' });
+      const runtimeA = store.create({ type: 'runtime', name: 'Runtime A', content: 'runtime-a', priority: 10, promptOrder: 10, identifier: 'runtime.a' });
+      const runtimeB = store.create({ type: 'runtime', name: 'Runtime B', content: 'runtime-b', priority: 20, promptOrder: 20, identifier: 'runtime.b' });
+
+      store.reorderByLayerIds([runtimeB.id, base.id, runtimeA.id], 'admin');
+
+      expect(store.getById(base.id)?.priority).toBe(0);
+      expect(store.getById(runtimeB.id)?.priority).toBe(1);
+      expect(store.getById(runtimeA.id)?.priority).toBe(2);
+      expect(store.getById(base.id)?.promptOrder).toBe(0);
+      expect(store.getById(runtimeB.id)?.promptOrder).toBe(1);
+      expect(store.getById(runtimeA.id)?.promptOrder).toBe(2);
     });
 
     it('requires the full layer-id set exactly once', () => {
@@ -325,16 +357,13 @@ describe('PromptLayerStore', () => {
       const foundationTemplate = composeSystemPromptTemplate();
       store.seedFromCharacterCard(foundationTemplate);
 
-      const layers = store.getAll();
-      expect(layers).toHaveLength(1);
-      expect(layers[0].type).toBe('base');
-      expect(layers[0].name).toBe('Character Foundation');
-      expect(layers[0].content).toBe(foundationTemplate);
-      expect(layers[0].content).toContain('{{description}}');
-      expect(layers[0].content).not.toContain('PSFN');
-      expect(layers[0].identifier).toBe('main');
-      expect(layers[0].role).toBe('system');
-      expect(layers[0].promptOrder).toBe(0);
+      const layers = foundationLayers();
+      expect(layers).toHaveLength(FOUNDATION_SECTION_DEFINITIONS.length);
+      expect(layers.every(layer => layer.type === 'base')).toBe(true);
+      expect(composeEnabledFoundationPrompt()).toBe(foundationTemplate);
+      expect(layers[0]?.identifier).toBe('main');
+      expect(layers[0]?.role).toBe('system');
+      expect(layers[0]?.promptOrder).toBe(0);
     });
 
     it('skips seeding when layers already exist', () => {

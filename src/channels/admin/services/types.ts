@@ -526,6 +526,26 @@ export interface AdminConstitutionMutableLayer extends PromptLayer {
   readOnlyReason?: string;
 }
 
+export interface AdminFoundationSection {
+  id: string;
+  title: string;
+  content: string;
+  enabled: boolean;
+  defaultEnabled: boolean;
+}
+
+export interface AdminFoundationPreview {
+  text: string;
+  hash: string;
+}
+
+export interface AdminFoundationSnapshotData {
+  layerId: string;
+  layerName: string;
+  sections: AdminFoundationSection[];
+  preview: AdminFoundationPreview;
+}
+
 export interface AdminConstitutionPreview {
   text: string;
   hash: string;
@@ -575,6 +595,12 @@ export interface ConstitutionUpdateResult {
   snapshot?: AdminConstitutionSnapshotData;
 }
 
+export interface FoundationUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: AdminFoundationSnapshotData;
+}
+
 export interface NorthStarUpdateResult {
   ok: boolean;
   message: string;
@@ -583,6 +609,8 @@ export interface NorthStarUpdateResult {
 
 export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
+  getFoundationSnapshot(): AdminFoundationSnapshotData | null;
+  saveFoundationSections(body: string): FoundationUpdateResult;
   getConstitutionSnapshot(): AdminConstitutionSnapshotData | null;
   saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult;
   getNorthStarSnapshot(): AdminNorthStarSnapshotData | null;

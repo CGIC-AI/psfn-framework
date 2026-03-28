@@ -128,6 +128,7 @@ function createRuntime(params: {
         agentState.messages.push({ role: 'user', content: message.content });
         agentState.messages.push({ role: 'assistant', content: 'assistant reply' });
       }),
+      abort: vi.fn(),
       setModel: vi.fn(),
     },
     bridge: {
@@ -178,6 +179,7 @@ function createRuntime(params: {
     normalizeTurnPromptOverride: vi.fn(() => ({ mode: 'default' })),
     resolveResponseStyle: vi.fn(() => 'concise'),
     buildPromptTemplateVariables: vi.fn(() => ({})),
+    buildDynamicPromptTemplateVariables: vi.fn(() => ({})),
     setCurrentSelfModelState: vi.fn(),
     buildRuntimeContext: vi.fn(() => ''),
     buildPromptPrefixCacheKey: vi.fn(() => 'prompt-prefix'),
@@ -326,6 +328,9 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildPromptTemplateVariablesMock = runtime.buildPromptTemplateVariables as unknown as {
       mock: { calls: unknown[][] };
     };
+    const buildDynamicPromptTemplateVariablesMock = runtime.buildDynamicPromptTemplateVariables as unknown as {
+      mock: { calls: unknown[][] };
+    };
     const buildRuntimeContextMock = runtime.buildRuntimeContext as unknown as {
       mock: { calls: unknown[][] };
     };
@@ -347,7 +352,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
     );
     expect(recordUserMessage).not.toHaveBeenCalled();
     expect(buildPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
-    expect(buildRuntimeContextMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildDynamicPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildRuntimeContextMock).not.toHaveBeenCalled();
     expect(buildPromptPrefixCacheKeyMock.mock.calls[0]?.[3]).toBe(DEFAULT_COMPANION_ID);
     expect(buildContext.mock.calls[0]?.[4]).toBe(DEFAULT_COMPANION_ID);
     expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({
@@ -457,7 +463,6 @@ describe('handleMessageForTurn compaction scheduling', () => {
       versionPointer: 'prompt-v1',
     }));
     runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
-    runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
     (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mockImplementation(() => {
@@ -514,14 +519,14 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const toolContext = recordedInput.turnSnapshot?.toolContext as Record<string, unknown> | undefined;
     expect(promptContext).toMatchObject({
       renderedStaticPrefix: 'Rendered static prefix',
-      renderedDynamicSuffix: 'Dynamic suffix template\n\nPersona hint',
-      runtimeContext: 'Runtime context block',
+      renderedDynamicSuffix: 'Dynamic suffix template',
+      runtimeContext: '',
       memoryContextBlock: 'Retrieved memory block',
       scratchpadContext: 'Scratchpad block',
       finalSystemPrompt: 'Final system prompt',
     });
     expect(promptContext?.assembledPrompt).toContain('Rendered static prefix');
-    expect(promptContext?.assembledPrompt).toContain('Runtime context block');
+    expect(promptContext?.assembledPrompt).not.toContain('Runtime context block');
     expect(promptContext?.messages).toEqual([
       { role: 'user', content: 'Earlier user message' },
       { role: 'assistant', content: 'Earlier assistant reply' },
@@ -542,7 +547,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(emittedSnapshots).toHaveLength(3);
     expect(emittedSnapshots.at(-1)?.promptContext).toMatchObject({
       finalSystemPrompt: 'Final system prompt',
-      runtimeContext: 'Runtime context block',
+      runtimeContext: '',
     });
     expect(emittedSnapshots.at(-1)?.toolContext).toMatchObject({
       activeTools: [{ name: 'contact_lookup' }],
@@ -928,5 +933,56 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         summary: 'A catgirl sits on a server rack holding a pink rifle.',
       },
     });
+  });
+
+  it('aborts a hung vision turn after 10 seconds', async () => {
+    vi.useFakeTimers();
+    try {
+      const eventBus = new EventBus();
+      const buildContext = vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      }));
+      const runtime = createRuntime({
+        eventBus,
+        sessionManager: {} as SessionManager,
+        buildContext,
+        scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+        awaitPendingAutoCompaction: vi.fn(async () => undefined),
+        recordUserMessage: vi.fn(() => 1),
+        recordAssistantMessage: vi.fn(() => 2),
+      });
+      const promptDeferred = createDeferred<void>();
+      const abort = vi.fn();
+      runtime.agent.abort = abort as typeof runtime.agent.abort;
+      runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+        (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+        return promptDeferred.promise;
+      });
+
+      const turnResultPromise = handleMessageForTurn(runtime, createMessage('msg-vision-timeout', {
+        channelType: 'discord',
+        content: 'what is in the image?',
+        attachments: [{
+          url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+          contentType: 'image/png',
+          name: 'current-image.png',
+        }],
+      })).then(
+        () => null,
+        error => error,
+      );
+
+      await flushAsyncWork();
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      const error = await turnResultPromise;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('Vision turn timed out after 10000ms');
+      expect(abort).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -5,11 +5,13 @@ import type { EventBus, EventMap } from '../../event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
 import { runWithVisionToolRequestContext } from '../../images/request-context.js';
 import { runWithRequestContext } from '../../llm/request-context.js';
 import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
+import { countTokens } from '../../llm/tokens.js';
 import { createComponentLogger } from '../../logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -89,8 +91,14 @@ import {
   cloneObservedAdaptiveToolSnapshot,
   readActiveTurnToolSchemas,
 } from './turn-tool-context.js';
+import {
+  buildPromptSectionTelemetryList,
+  extractWrappedPromptSections,
+} from '../../prompt/sections.js';
 
 const log = createComponentLogger('SubstrateAgent');
+const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
+const VISION_TURN_TIMEOUT_MS = 10_000;
 
 interface ProactiveMemoryProvider extends MemoryProvider {
   retrieveProactiveRecall?: (
@@ -185,6 +193,21 @@ export interface TurnExecutionRuntime {
     canonicalContactKey: string | undefined,
     subjectIdentityKey: string | undefined,
     now: Date,
+  ) => Record<string, string>;
+  buildDynamicPromptTemplateVariables: (
+    message: SubstrateMessage,
+    resolvedUserName: string,
+    trustLevel: TrustLevel,
+    channelType: string | undefined,
+    canonicalContactKey: string | undefined,
+    subjectIdentityKey: string | undefined,
+    responseStyle: ResponseStyle,
+    now: Date,
+    taskKind: string | undefined,
+    templateVariables: Record<string, string>,
+    internalState: InternalState,
+    metacognitiveFlags: readonly MetacognitiveFlag[],
+    emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -323,6 +346,74 @@ export interface TurnExecutionRuntime {
     completedAt: number;
     canonicalContactKey?: string;
   }) => Promise<void>;
+}
+
+async function runWithVisionTurnTimeout<T>({
+  channelId,
+  deadlineAt,
+  stage,
+  onTimeout,
+  run,
+}: {
+  channelId: string;
+  deadlineAt: number | null;
+  stage: string;
+  onTimeout?: (() => void) | undefined;
+  run: () => Promise<T>;
+}): Promise<T> {
+  if (deadlineAt == null) {
+    return run();
+  }
+
+  const remainingMs = deadlineAt - Date.now();
+  const timeoutError = new Error(`Vision turn timed out after ${VISION_TURN_TIMEOUT_MS}ms`);
+  if (remainingMs <= 0) {
+    log.warn('Vision turn exceeded its deadline before stage start', {
+      channelId,
+      stage,
+      timeoutMs: VISION_TURN_TIMEOUT_MS,
+    });
+    if (onTimeout) {
+      try {
+        onTimeout();
+      } catch (error) {
+        log.warn('Vision turn timeout cleanup failed', {
+          channelId,
+          stage,
+          error: toErrorMessage(error),
+        });
+      }
+    }
+    throw timeoutError;
+  }
+
+  let timeoutHandle!: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      log.warn('Vision turn timed out; aborting stage', {
+        channelId,
+        stage,
+        timeoutMs: VISION_TURN_TIMEOUT_MS,
+      });
+      if (onTimeout) {
+        try {
+          onTimeout();
+        } catch (error) {
+          log.warn('Vision turn timeout cleanup failed', {
+            channelId,
+            stage,
+            error: toErrorMessage(error),
+          });
+        }
+      }
+      reject(timeoutError);
+    }, remainingMs);
+  });
+  try {
+    return await Promise.race([run(), timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
 }
 
 export async function handleMessageForTurn(
@@ -622,7 +713,7 @@ export async function handleMessageForTurn(
       preTurnInternalStateSnapshotRef,
       preTurnMetacognitiveFlags,
     );
-    const runtimeContext = runtime.buildRuntimeContext(
+    const dynamicPromptVariables = runtime.buildDynamicPromptTemplateVariables(
       message,
       authorContext.resolvedUserName,
       trustLevel,
@@ -637,9 +728,14 @@ export async function handleMessageForTurn(
       preTurnMetacognitiveFlags,
       emotionAppraisalChain,
     );
+    const promptRuntimeVariables = {
+      ...templateVariables,
+      ...dynamicPromptVariables,
+    };
     let fullPrompt = '';
     let renderedStaticPrefix = '';
     let renderedDynamicSuffix = '';
+    let runtimeContext = '';
 
     if (promptOverride.mode === 'default') {
       const staticCacheKey = runtime.buildPromptPrefixCacheKey(
@@ -657,21 +753,13 @@ export async function handleMessageForTurn(
         now: runtimeNow,
         variables: templateVariables,
       });
-      const personaHint = runtime.getPersonaAdaptation(
-        trustLevel,
-        preTurnInternalState,
-        preTurnMetacognitiveFlags,
-        templateVariables,
-      );
-      const dynamicSuffixTemplate = [turnSnapshot.prompt?.dynamicSuffixTemplate ?? '', personaHint]
-        .map(section => section?.trim() ?? '')
-        .filter(section => section.length > 0)
-        .join('\n\n');
+      const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
+        || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
       renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
         now: runtimeNow,
-        variables: templateVariables,
+        variables: promptRuntimeVariables,
       });
-      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, runtimeContext, scratchpadBlock]
+      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, scratchpadBlock]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
@@ -679,6 +767,21 @@ export async function handleMessageForTurn(
       const customPrompt = promptOverride.mode === 'custom'
         ? (promptOverride.systemPrompt ?? '')
         : '';
+      runtimeContext = runtime.buildRuntimeContext(
+        message,
+        authorContext.resolvedUserName,
+        trustLevel,
+        channelType,
+        authorContext.canonicalContactKey,
+        authorContext.subjectIdentityKey,
+        responseStyle,
+        runtimeNow,
+        taskKind,
+        templateVariables,
+        preTurnInternalState,
+        preTurnMetacognitiveFlags,
+        emotionAppraisalChain,
+      );
       fullPrompt = [customPrompt, runtimeContext, scratchpadBlock]
         .map(section => section.trim())
         .filter(section => section.length > 0)
@@ -714,12 +817,50 @@ export async function handleMessageForTurn(
       assembledPrompt: fullPrompt,
       finalSystemPrompt: context.systemPrompt,
       messages: context.messages.map(contextMessage => ({ ...contextMessage })),
+      inputSections: buildPromptSectionTelemetryList([
+        {
+          id: 'rendered_static_prefix',
+          title: 'Rendered Static Prefix',
+          content: renderedStaticPrefix,
+        },
+        {
+          id: 'rendered_dynamic_suffix',
+          title: 'Rendered Dynamic Suffix',
+          content: renderedDynamicSuffix,
+        },
+        {
+          id: 'runtime_context',
+          title: 'Runtime Context',
+          content: runtimeContext,
+        },
+        {
+          id: 'memory_context',
+          title: 'Memory Context',
+          content: memoryContextBlock,
+        },
+        {
+          id: 'scratchpad_context',
+          title: 'Scratchpad Context',
+          content: scratchpadBlock,
+        },
+      ]),
+      runtimeContextSections: extractWrappedPromptSections(runtimeContext),
+      finalSystemSections: context.systemPromptSections ?? buildPromptSectionTelemetryList([
+        {
+          id: 'final_system_prompt',
+          title: 'Final System Prompt',
+          content: context.systemPrompt,
+        },
+      ]),
     };
     await emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: context.messages.length,
       systemPromptChars: context.systemPrompt.length,
+      systemPromptTokens: countTokens(context.systemPrompt),
+      assembledPromptChars: fullPrompt.length,
+      assembledPromptTokens: countTokens(fullPrompt),
       promptMode: promptOverride.mode,
     });
 
@@ -731,19 +872,26 @@ export async function handleMessageForTurn(
     let responseText: string;
     let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
     let turnIntent: string | null = null;
+    const isVisionTurn = hasVisionTurnInputs(message);
+    const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
 
     const moaSettings = resolveMoaSettings(runtime.config, log);
     if (moaSettings) {
-      const moaResult = await runMoaTurn({
-        llmClient: runtime.llmClient,
-        context,
-        message,
-        settings: moaSettings,
-        turnId,
-        requestId,
-        callType: turnCallType,
-        contextWindow: runtime.resolveContextWindow(),
-        emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
+      const moaResult = await runWithVisionTurnTimeout({
+        channelId: message.channelId,
+        deadlineAt: visionTurnDeadlineAt,
+        stage: 'moa_turn',
+        run: () => runMoaTurn({
+          llmClient: runtime.llmClient,
+          context,
+          message,
+          settings: moaSettings,
+          turnId,
+          requestId,
+          callType: turnCallType,
+          contextWindow: runtime.resolveContextWindow(),
+          emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
+        }),
       });
       firstTokenAt = Date.now();
       emitObservedTurnStage('first-token', {
@@ -813,12 +961,17 @@ export async function handleMessageForTurn(
         purpose: 'agent.turn.prompt',
       });
       runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, autoloadOutcome.intent);
-      const turnUserContentBuildResult = await buildTurnUserContent({
-        message,
-        llmClient: runtime.llmClient,
-        runtimeMode: runtime.runtimeMode,
-        logger: log,
-        visionReviewer: runtime.imageVisionReviewer,
+      const turnUserContentBuildResult = await runWithVisionTurnTimeout({
+        channelId: message.channelId,
+        deadlineAt: visionTurnDeadlineAt,
+        stage: 'build_turn_user_content',
+        run: () => buildTurnUserContent({
+          message,
+          llmClient: runtime.llmClient,
+          runtimeMode: runtime.runtimeMode,
+          logger: log,
+          visionReviewer: runtime.imageVisionReviewer,
+        }),
       });
       const visionToolRequestContext = {
         ...baseVisionToolRequestContext,
@@ -827,20 +980,26 @@ export async function handleMessageForTurn(
           : {}),
       };
       try {
-        await runWithRequestContext(
-          {
-            ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
-            ...viewerRequestContext,
-          },
-          async () => runWithVisionToolRequestContext(
-            visionToolRequestContext,
-            async () => runtime.agent.prompt({
-              role: 'user',
-              content: turnUserContentBuildResult.content,
-              timestamp: Date.now(),
-            } satisfies UserMessage),
+        await runWithVisionTurnTimeout({
+          channelId: message.channelId,
+          deadlineAt: visionTurnDeadlineAt,
+          stage: 'agent_prompt',
+          onTimeout: () => runtime.agent.abort(),
+          run: () => runWithRequestContext(
+            {
+              ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
+              ...viewerRequestContext,
+            },
+            async () => runWithVisionToolRequestContext(
+              visionToolRequestContext,
+              async () => runtime.agent.prompt({
+                role: 'user',
+                content: turnUserContentBuildResult.content,
+                timestamp: Date.now(),
+              } satisfies UserMessage),
+            ),
           ),
-        );
+        });
       } finally {
         unsubscribeFirstToken();
         runtime.bridge.clearChannel(bridgeToken);
@@ -865,7 +1024,7 @@ export async function handleMessageForTurn(
       firstTokenAt = streamFirstTokenAt;
 
       responseText = runtime.extractResponseText();
-      if (hasVisionTurnInputs(message) && responseText.trim().length === 0) {
+      if (isVisionTurn && responseText.trim().length === 0) {
         const assistantMessage = runtime.getLatestAssistantMessage();
         log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
           channelId: message.channelId,
@@ -902,20 +1061,26 @@ export async function handleMessageForTurn(
           });
           runtime.setActiveTurnCorrelation(turnCorrelationBase);
           try {
-            await runWithRequestContext(
-              {
-                ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
-                ...viewerRequestContext,
-              },
-              async () => runWithVisionToolRequestContext(
-                visionToolRequestContext,
-                async () => runtime.agent.prompt({
-                  role: 'user',
-                  content,
-                  timestamp: Date.now(),
-                } satisfies UserMessage),
+            await runWithVisionTurnTimeout({
+              channelId: message.channelId,
+              deadlineAt: visionTurnDeadlineAt,
+              stage: originStage,
+              onTimeout: () => runtime.agent.abort(),
+              run: () => runWithRequestContext(
+                {
+                  ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
+                  ...viewerRequestContext,
+                },
+                async () => runWithVisionToolRequestContext(
+                  visionToolRequestContext,
+                  async () => runtime.agent.prompt({
+                    role: 'user',
+                    content,
+                    timestamp: Date.now(),
+                  } satisfies UserMessage),
+                ),
               ),
-            );
+            });
           } finally {
             runtime.bridge.clearChannel(bridgeToken);
             runtime.setActiveTurnCorrelation(null);

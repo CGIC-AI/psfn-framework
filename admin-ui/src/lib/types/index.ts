@@ -317,6 +317,14 @@ export interface AdminTurnPromptContextMessage {
   content: string;
 }
 
+export interface AdminPromptSectionTelemetry {
+  id: string;
+  title: string;
+  content: string;
+  charCount: number;
+  tokenCount: number;
+}
+
 export interface AdminTurnPromptContextSnapshotData {
   renderedStaticPrefix: string;
   renderedDynamicSuffix: string;
@@ -326,6 +334,9 @@ export interface AdminTurnPromptContextSnapshotData {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: AdminTurnPromptContextMessage[];
+  inputSections?: AdminPromptSectionTelemetry[];
+  runtimeContextSections?: AdminPromptSectionTelemetry[];
+  finalSystemSections?: AdminPromptSectionTelemetry[];
 }
 
 export interface AdminTurnToolSchema {
@@ -872,6 +883,24 @@ export interface ConstitutionMutableLayer extends PromptLayer {
   readOnlyReason?: string;
 }
 
+export interface FoundationSection {
+  id: string;
+  title: string;
+  content: string;
+  enabled: boolean;
+  defaultEnabled: boolean;
+}
+
+export interface FoundationSnapshotData {
+  layerId: string;
+  layerName: string;
+  sections: FoundationSection[];
+  preview: {
+    text: string;
+    hash: string;
+  };
+}
+
 export interface ConstitutionSnapshotData {
   immutableBlocks: ConstitutionImmutableBlock[];
   companionLayer: ConstitutionCompanionLayer | null;
@@ -888,6 +917,12 @@ export interface ConstitutionUpdateResult {
   ok: boolean;
   message: string;
   snapshot?: ConstitutionSnapshotData;
+}
+
+export interface FoundationUpdateResult {
+  ok: boolean;
+  message: string;
+  snapshot?: FoundationSnapshotData;
 }
 
 export type NorthStarScope = 'shared' | 'companion';

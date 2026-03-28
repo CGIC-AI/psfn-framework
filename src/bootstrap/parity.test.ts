@@ -446,7 +446,7 @@ describe('wireHeartbeatRuntime', () => {
       const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
         (call) => call[0]?.channelId === 'internal:reflection:values-reflection',
       );
-      expect(valuesCall?.[0]?.content).toContain('[Internal State Input]');
+      expect(valuesCall?.[0]?.content).toContain('<internal_state_input>');
       expect(valuesCall?.[0]?.content).toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
@@ -575,9 +575,9 @@ describe('wireHeartbeatRuntime', () => {
         | { messages?: Array<{ content?: string }> }
         | undefined;
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(
-        'Appearance context:\nhands with cat ears and tail',
+        '<appearance_context>\nhands with cat ears and tail\n</appearance_context>',
       );
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Internal State Input]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('<internal_state_input>');
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
       expect(memoryWriter.write).toHaveBeenCalledTimes(1);
 
@@ -661,10 +661,10 @@ describe('wireHeartbeatRuntime', () => {
       (call) => call[0]?.channelId === 'internal:reflection:experiential-review',
     );
     expect(experientialCall).toBeDefined();
-    expect(experientialCall?.[0]?.content).toContain('[Internal State Input]');
+    expect(experientialCall?.[0]?.content).toContain('<internal_state_input>');
     expect(experientialCall?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
-    expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
-    expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
+    expect(experientialCall?.[0]?.content).toContain('<recent_metacognitive_flags>');
+    expect(experientialCall?.[0]?.content).toContain('<open_threads>');
   });
 
   it('defers manual template runs when the agent is busy and executes them after idle', async () => {

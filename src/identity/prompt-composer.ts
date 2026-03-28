@@ -20,6 +20,7 @@ import type { PromptLayerStore } from './prompt-store.js';
 import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../logger.js';
 import { writeJsonAtomic } from '../utils/fs.js';
+import { wrapPromptSectionXml } from '../prompt/sections.js';
 
 // Keep only identity/foundation + operator policy in the frozen prompt prefix.
 // Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.
@@ -70,12 +71,20 @@ function hashText(text: string): string {
 }
 
 export function buildImmutableHumanSafetySection(): string {
-  return [
+  const immutableLines = [
     IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
     ...IMMUTABLE_HUMAN_SAFETY_AMENDMENTS.map((amendment, index) => `${String(index + 1)}. ${amendment}`),
-    '',
-    CONSTITUTION_PRECEDENCE_GUARD,
   ].join('\n');
+  return [
+    wrapPromptSectionXml({
+      id: 'immutable_human_safety_amendments',
+      content: immutableLines,
+    }),
+    wrapPromptSectionXml({
+      id: 'constitution_precedence',
+      content: CONSTITUTION_PRECEDENCE_GUARD,
+    }),
+  ].join('\n\n');
 }
 
 function stripControlCharacters(text: string): string {
@@ -418,9 +427,12 @@ export class PromptComposer {
       const historyVersions = snapshot.historyVersions
         .filter(entry => Number.isFinite(entry))
         .map(entry => Math.floor(entry));
-      const normalizedContent = content.includes(COMPANION_VALUES_LAYER_HEADER)
-        ? content
-        : `${COMPANION_VALUES_LAYER_HEADER}\n${content}`;
+      const normalizedContent = wrapPromptSectionXml({
+        id: 'companion_values',
+        content: content.includes(COMPANION_VALUES_LAYER_HEADER)
+          ? content
+          : `${COMPANION_VALUES_LAYER_HEADER}\n${content}`,
+      });
       return {
         content: normalizedContent,
         provenanceRefs,
@@ -448,9 +460,12 @@ export class PromptComposer {
       const itemIds = snapshot.itemIds
         .map(entry => entry.trim())
         .filter(entry => entry.length > 0);
-      const normalizedContent = content.includes(NORTH_STAR_LAYER_HEADER)
-        ? content
-        : `${NORTH_STAR_LAYER_HEADER}\n${content}`;
+      const normalizedContent = wrapPromptSectionXml({
+        id: 'north_star',
+        content: content.includes(NORTH_STAR_LAYER_HEADER)
+          ? content
+          : `${NORTH_STAR_LAYER_HEADER}\n${content}`,
+      });
       return {
         content: normalizedContent,
         itemIds,

@@ -103,6 +103,11 @@ export interface WebFetchBinaryParams {
   headers?: Record<string, string>;
 }
 
+export interface WebRequestBinaryParams extends WebFetchBinaryParams {
+  method?: string;
+  bodyBase64?: string;
+}
+
 export interface FsReadParams {
   path: string;
 }
@@ -377,6 +382,12 @@ export interface WebFetchBinaryResult {
   sizeBytes: number;
 }
 
+export interface WebRequestBinaryResult extends WebFetchBinaryResult {
+  status: number;
+  statusText: string;
+  ok: boolean;
+}
+
 export interface FsReadResult {
   content: string;
 }
@@ -531,6 +542,7 @@ export interface GatewayMethods {
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
+  'web.request_binary': [WebRequestBinaryParams, WebRequestBinaryResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
   'vault.write': [VaultWriteParams, VaultWriteResult];
   'vault.read': [VaultReadParams, VaultReadResult];

@@ -1843,11 +1843,13 @@ describe('SubstrateAgent.handleMessage', () => {
       'user-1',
       'TestUser',
       undefined,
-      undefined,
+      'user-1',
       expect.objectContaining({
+        channelMeta: undefined,
         trustLevel: 'regular',
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
+        turnId: expect.any(String),
       }),
     );
   });
@@ -1867,11 +1869,13 @@ describe('SubstrateAgent.handleMessage', () => {
       TEST_ASSISTANT_RESPONSE,
       'user-1',
       undefined,
-      undefined,
+      'user-1',
       expect.objectContaining({
+        channelMeta: undefined,
         trustLevel: 'regular',
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
+        turnId: expect.any(String),
       }),
     );
   });
@@ -2157,6 +2161,8 @@ describe('SubstrateAgent.handleMessage', () => {
           purpose: 'chat',
         },
       }),
+      undefined,
+      undefined,
     );
   });
 
@@ -2192,6 +2198,7 @@ describe('SubstrateAgent.handleMessage', () => {
           purpose: 'chat',
         },
       }),
+      undefined,
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[2]).toContain('Relevant memories here');
@@ -2230,10 +2237,12 @@ describe('SubstrateAgent.handleMessage', () => {
         isDirectMessage: undefined,
         messageText: 'heartbeat check',
         modelSelection: {
-          purpose: 'chat',
+          purpose: 'memory',
         },
         taskKind: 'heartbeat',
       }),
+      undefined,
+      undefined,
     );
   });
 
@@ -2258,7 +2267,8 @@ describe('SubstrateAgent.handleMessage', () => {
       content: `${authorName} run`,
     }));
 
-    expect((sessionManager.recordUserMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
+    expect((sessionManager.recordUserMessage as any).mock.calls).toHaveLength(0);
+    expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.scheduleAutoCompactionBetweenTurns as any).mock.calls[0][0]).toMatchObject({
@@ -2267,11 +2277,8 @@ describe('SubstrateAgent.handleMessage', () => {
     });
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain(
-      `Speaking with: ${TEST_COMPANION_NAME} `
-      + `(userId: ${DEFAULT_COMPANION_ID}, canonicalId: ${DEFAULT_COMPANION_ID}, trust: primary)`,
-    );
-    expect(prompt).not.toContain('userId: scheduler');
+    expect(prompt).toContain(`This is an internal ${channelId.includes('reflection') ? 'reflection' : 'heartbeat'} turn.`);
+    expect(prompt).not.toContain('scheduler');
   });
 
   it('triggers memory extraction after response', async () => {
@@ -2952,11 +2959,13 @@ describe('SubstrateAgent.handleMessage', () => {
       'Synthesized MoA reply',
       'user-1',
       undefined,
-      undefined,
+      'user-1',
       expect.objectContaining({
+        channelMeta: undefined,
         trustLevel: 'regular',
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
+        turnId: expect.any(String),
       }),
     );
   });
@@ -3055,7 +3064,7 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
-  it('injects appearance context for scheduled internal heartbeat turns', async () => {
+  it('does not inject appearance context unless self-image tools are active', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
@@ -3078,7 +3087,7 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain('Appearance context: Cat ears and tail with human hands.');
+    expect(prompt).not.toContain('Appearance context: Cat ears and tail with human hands.');
   });
 
   it('prefers channel prompt adapter channelType from the runtime registry', async () => {
@@ -3161,7 +3170,7 @@ describe('SubstrateAgent.handleMessage', () => {
     // buildContext should have been called with adapted prompt containing trust hint
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[1]).toContain('Base prompt');
-    expect(buildCall[1]).toContain('[Trust:');
+    expect(buildCall[1]).toContain('<trust>');
     expect(buildCall[1]).toContain('honne');
   });
 
@@ -3179,8 +3188,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
-    expect(prompt).toContain('[Response Style Guidance]');
-    expect(prompt).toContain('Response style preference: expressive');
+    expect(prompt).toContain('<response_style_guidance>');
     expect(prompt).toContain('Prefer expressive responses');
   });
 
@@ -3212,9 +3220,9 @@ describe('SubstrateAgent.handleMessage', () => {
     const voicePrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
     const telegramPrompt = (sessionManager.buildContext as any).mock.calls[2][1] as string;
 
-    expect(guildPrompt).toContain('Response style preference: concise');
-    expect(voicePrompt).toContain('Response style preference: concise');
-    expect(telegramPrompt).toContain('Response style preference: concise');
+    expect(guildPrompt).toContain('<response_style_guidance>');
+    expect(voicePrompt).toContain('<response_style_guidance>');
+    expect(telegramPrompt).toContain('<response_style_guidance>');
     expect(guildPrompt).toContain('Prefer concise responses');
   });
 
@@ -3236,7 +3244,7 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain('Response style preference: concise');
+    expect(prompt).toContain('<response_style_guidance>');
     expect(prompt).toContain('Prefer concise responses');
   });
 
@@ -3260,7 +3268,8 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain('Response style preference: concise');
+    expect(prompt).toContain('<response_style_guidance>');
+    expect(prompt).toContain('Prefer concise responses');
   });
 
   it('interpolates {{user}} and {{char}} variables per turn before context build', async () => {
@@ -4014,12 +4023,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
       expect(firstPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-25T19:00:00.000-05:00');
       expect(firstPrompt).toContain('[DYNAMIC] 2026-02-25T19:00:00.000-05:00');
-      expect(firstPrompt.indexOf('[DYNAMIC] 2026-02-25T19:00:00.000-05:00'))
-        .toBeLessThan(firstPrompt.indexOf('[Runtime Context]'));
       expect(secondPrompt).toContain('[STATIC] PrimaryUser @ 2026-02-25T19:00:00.000-05:00');
       expect(secondPrompt).toContain('[DYNAMIC] 2026-02-25T19:10:00.000-05:00');
-      expect(secondPrompt.indexOf('[DYNAMIC] 2026-02-25T19:10:00.000-05:00'))
-        .toBeLessThan(secondPrompt.indexOf('[Runtime Context]'));
       expect(secondPrompt).not.toContain('[STATIC] PrimaryUser @ 2026-02-25T19:10:00.000-05:00');
     } finally {
       vi.useRealTimers();
@@ -4136,8 +4141,6 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage());
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
-    expect(buildCall[1]).toContain('[Skills Index]');
-    expect(buildCall[1]).toContain('skill_view(name)');
     expect(buildCall[1]).toContain('<skills_index>');
     expect(buildCall[1]).toContain('conversation');
   });
@@ -4170,15 +4173,19 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
-    expect(prompt).toContain('[Active Concerns]');
+    expect(prompt).toContain('<open_threads>');
+    expect(prompt).toContain('soft threads to verify');
     expect(prompt).toContain('Check whether V ate today');
-    expect(prompt).toContain('contact=user-123');
     expect(prompt).toContain('high');
   });
 
   it('injects behavioral notes into runtime context when provider is wired', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
+    const getBehavioralNotes = vi.fn().mockReturnValue([
+      '[Behavioral Notes]',
+      '- empathy: avg +0.42 over 3 outcome sample(s), 100% positive',
+    ].join('\n'));
     const agent = new SubstrateAgent(
       new EventBus(),
       makeMockLLMProvider(),
@@ -4187,10 +4194,7 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
     agent.setBehavioralPatternProvider({
-      getBehavioralNotes: vi.fn().mockReturnValue([
-        '[Behavioral Notes]',
-        '- empathy: avg +0.42 over 3 outcome sample(s), 100% positive',
-      ].join('\n')),
+      getBehavioralNotes,
     });
 
     await agent.handleMessage(makeMessage({
@@ -4199,6 +4203,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
+    expect(getBehavioralNotes).toHaveBeenCalled();
+    expect(prompt).toContain('<behavioral_notes>');
     expect(prompt).toContain('[Behavioral Notes]');
     expect(prompt).toContain('empathy: avg +0.42');
   });
@@ -4314,10 +4320,11 @@ describe('SubstrateAgent.handleMessage', () => {
 
       const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
       const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-      expect(firstPrompt).toContain('[Internal State]');
-      expect(firstPrompt).toContain('Top emotions: joy=');
-      expect(secondPrompt).toContain('Top emotions: anger=');
-      expect(secondPrompt).toContain('Metacognitive flags:');
+      expect(firstPrompt).toContain('<internal_state>');
+      expect(firstPrompt).toContain('joy and trust present');
+      expect(secondPrompt).toContain('Current affect:');
+      expect(secondPrompt).toContain('anger');
+      expect(secondPrompt).not.toContain('Metacognitive flags:');
 
       const firstAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[0][5] as { metadata?: string };
       const secondAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[1][5] as { metadata?: string };
@@ -4424,9 +4431,10 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(agent.getCurrentInternalStateSnapshotRef()).toBe(response.metadata.internalStateSnapshotRef);
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain('[Internal State]');
-    expect(prompt).toContain('Active concern refs: concern-1:high');
-    expect(prompt).toContain('Relationship: trust=trusted, contact=contact-123');
+    expect(prompt).toContain('<internal_state>');
+    expect(prompt).toContain('Relationship baseline: trusted trust');
+    expect(prompt).toContain('<open_threads>');
+    expect(prompt).toContain('Confirm release rollback owner');
   });
 
   it('derives metacognitive flags from internal state and injects compact notes on subsequent turns', async () => {
@@ -4504,10 +4512,10 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-    expect(secondPrompt).toContain('[Internal State]');
-    expect(secondPrompt).toContain('Metacognitive flags:');
-    expect(secondPrompt).toContain('uncertainty');
-    expect(secondPrompt).toContain('[Metacognitive Persona Guidance]');
+    expect(secondPrompt).toContain('<internal_state>');
+    expect(secondPrompt).not.toContain('Metacognitive flags:');
+    expect(secondPrompt).toContain('<metacognitive_persona_guidance>');
+    expect(secondPrompt).toContain('Use tentative language and acknowledge uncertainty explicitly.');
   });
 
   it('runs post-turn emotion appraisal and injects appraisal chain on the next turn', async () => {
@@ -4569,7 +4577,7 @@ describe('SubstrateAgent.handleMessage', () => {
     );
 
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-    expect(secondPrompt).toContain('[Emotion Appraisal Chain]');
+    expect(secondPrompt).toContain('<emotion_appraisal_chain>');
     expect(secondPrompt).toContain('Appraisal summary: she feels guarded but recovering composure.');
   });
 
@@ -4623,9 +4631,9 @@ describe('SubstrateAgent.handleMessage', () => {
     const primaryPrompt = (primarySessionManager.buildContext as any).mock.calls[0][1] as string;
     const publicPrompt = (publicSessionManager.buildContext as any).mock.calls[0][1] as string;
 
-    expect(primaryPrompt).toContain('[Emotional Affect]');
+    expect(primaryPrompt).toContain('<emotional_affect>');
     expect(primaryPrompt).toContain('Trust gate: honne (genuine)');
-    expect(publicPrompt).toContain('[Emotional Affect]');
+    expect(publicPrompt).toContain('<emotional_affect>');
     expect(publicPrompt).toContain('Trust gate: tatemae (controlled)');
 
     const primaryExpressiveness = extractPromptExpressiveness(primaryPrompt);
@@ -4702,11 +4710,15 @@ describe('SubstrateAgent.handleMessage', () => {
       'user-1',
       'TestUser',
       true,
-      undefined,
+      'user-1',
       expect.objectContaining({
+        channelMeta: {
+          isDirectMessage: true,
+        },
         trustLevel: 'regular',
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
+        turnId: expect.any(String),
       }),
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
@@ -4835,11 +4847,13 @@ describe('SubstrateAgent.handleMessage', () => {
       approvedText,
       'user-1',
       undefined,
-      undefined,
+      'user-1',
       expect.objectContaining({
+        channelMeta: undefined,
         trustLevel: 'regular',
         requestId: 'msg-1',
         sourceMessageId: 'msg-1',
+        turnId: expect.any(String),
       }),
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];

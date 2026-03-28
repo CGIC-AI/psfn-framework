@@ -3,21 +3,8 @@ import type { CharacterCardV2 } from './types.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
 import { normalizeCompanionName } from './companion-naming.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
-const SYSTEM_PROMPT_TEMPLATE = [
-  'You are {{char}}.',
-  '',
-  '{{description}}',
-  '',
-  '{{personality}}',
-  '',
-  '{{scenario}}',
-  '',
-  '{{system_prompt}}',
-  '',
-  '{{mes_example}}',
-  '',
-  '{{post_history_instructions}}',
-].join('\n');
+import { wrapPromptSectionXml } from '../prompt/sections.js';
+import { composeDefaultFoundationTemplate } from './foundation-sections.js';
 
 export function loadCharacterCard(path: string): CharacterCardV2 {
   if (!existsSync(path)) {
@@ -45,7 +32,7 @@ export function isBootstrapStarterCard(card: CharacterCardV2): boolean {
 }
 
 export function composeSystemPromptTemplate(): string {
-  return SYSTEM_PROMPT_TEMPLATE;
+  return composeDefaultFoundationTemplate();
 }
 
 export function buildCharacterPromptTemplateVariables(card: CharacterCardV2): Record<string, string> {
@@ -83,28 +70,28 @@ export function composeSystemPrompt(card: CharacterCardV2, userName = '{{user}}'
   };
 
   const sections: string[] = [];
-  sections.push(`You are ${runtimeCharacterName}.`);
+  sections.push(wrapPromptSectionXml({
+    id: 'identity',
+    title: 'Identity',
+    content: `You are ${runtimeCharacterName}.`,
+  }));
 
-  const appendRenderedMacro = (macroValue: string | undefined): void => {
+  const appendRenderedMacro = (sectionId: string, macroValue: string | undefined): void => {
     if (!macroValue) return;
     const rendered = renderWithCharacterMacros(macroValue, runtimeVariables);
-    if (rendered.length > 0) sections.push(rendered);
+    if (rendered.length > 0) {
+      sections.push(wrapPromptSectionXml({
+        id: sectionId,
+        content: rendered,
+      }));
+    }
   };
 
-  appendRenderedMacro(characterVariables.description);
-  appendRenderedMacro(characterVariables.personality);
-  appendRenderedMacro(characterVariables.scenario);
-  appendRenderedMacro(characterVariables.system_prompt);
+  appendRenderedMacro('description', characterVariables.description);
+  appendRenderedMacro('personality', characterVariables.personality);
+  appendRenderedMacro('scenario', characterVariables.scenario);
+  appendRenderedMacro('system_prompt', characterVariables.system_prompt);
+  appendRenderedMacro('post_history_instructions', characterVariables.post_history_instructions);
 
-  const messageExample = renderWithCharacterMacros(
-    characterVariables['character.mes_example'] ?? '',
-    runtimeVariables,
-  );
-  if (messageExample.length > 0) {
-    sections.push(`Example dialogue style:\n${messageExample}`);
-  }
-
-  appendRenderedMacro(characterVariables.post_history_instructions);
-
-  return sections.join('\n\n');
+  return sections.filter(section => section.trim().length > 0).join('\n\n');
 }

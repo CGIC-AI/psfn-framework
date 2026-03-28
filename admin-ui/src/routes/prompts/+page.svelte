@@ -3,7 +3,6 @@
   import {
     listPrompts,
     getConstitutionSnapshot,
-    saveConstitutionMutableLayers,
     getNorthStarSnapshot,
     saveNorthStarItems,
     createPromptLayer,
@@ -16,7 +15,6 @@
   import { apiPost } from '$lib/api/client';
   import type {
     PromptLayer,
-    PromptRegistryEntry,
     AdminPromptDetailData,
     PromptHistoryEntry,
     PromptDiffResult,
@@ -24,39 +22,10 @@
     ConstitutionSnapshotData,
     ConstitutionCompanionLayer,
     ConstitutionImmutableBlock,
-    ConstitutionMutableLayer,
     NorthStarItem,
     NorthStarScope,
     NorthStarSnapshotData,
   } from '$lib/types';
-
-  // ── Structured prompt constants ──
-  const STRUCTURED_SECTION_KEYS = [
-    'description', 'personality', 'system_prompt',
-    'post_history_instructions', 'scenario', 'mes_example', 'first_mes',
-  ] as const;
-
-  type StructuredSectionKey = typeof STRUCTURED_SECTION_KEYS[number];
-
-  const SECTION_LABELS: Record<StructuredSectionKey, string> = {
-    description: 'Description',
-    personality: 'Personality',
-    system_prompt: 'System Prompt',
-    post_history_instructions: 'Post-History Instructions',
-    scenario: 'Scenario',
-    mes_example: 'Message Example',
-    first_mes: 'First Message',
-  };
-
-  const SECTION_ROWS: Record<StructuredSectionKey, number> = {
-    description: 4,
-    personality: 4,
-    system_prompt: 7,
-    post_history_instructions: 4,
-    scenario: 4,
-    mes_example: 7,
-    first_mes: 4,
-  };
 
   // ── Macro catalog ──
   const MACROS = [
@@ -64,6 +33,14 @@
     { token: '{{current_date}}', alias: null, desc: 'Current UTC calendar date.', example: '2026-02-21' },
     { token: '{{current_time}}', alias: null, desc: 'Current UTC time.', example: '13:20:11Z' },
     { token: '{{unix_timestamp}}', alias: null, desc: 'Current Unix epoch timestamp in seconds.', example: '1769020811' },
+    { token: '{{active_timezone}}', alias: null, desc: 'Active runtime timezone identifier.', example: 'America/New_York' },
+    { token: '{{runtime_current_datetime_human}}', alias: null, desc: 'Current local datetime in companion-facing format.', example: 'Friday, March 27, 2026 at 10:27 PM' },
+    { token: '{{runtime_current_weekday}}', alias: null, desc: 'Current weekday in the active timezone.', example: 'Friday' },
+    { token: '{{runtime_current_date_human}}', alias: null, desc: 'Current local date in companion-facing format.', example: 'March 27, 2026' },
+    { token: '{{runtime_current_time_human}}', alias: null, desc: 'Current local time in companion-facing format.', example: '10:27 PM' },
+    { token: '{{runtime_last_message_received_human}}', alias: null, desc: 'Last pre-turn message timestamp plus relative elapsed wording.', example: 'Friday, March 27, 2026 at 10:11 PM America/New_York (16 minutes ago)' },
+    { token: '{{runtime_last_message_received_at_iso}}', alias: null, desc: 'ISO-8601 timestamp for the most recent pre-turn message.', example: '2026-03-27T22:11:04.112-04:00' },
+    { token: '{{runtime_last_message_received_ago}}', alias: null, desc: 'Relative time since the most recent pre-turn message.', example: '16 minutes ago' },
     { token: '{{user}}', alias: null, desc: 'Current author/user display name from runtime context.', example: 'PrimaryUser' },
     { token: '{{char}}', alias: null, desc: 'Character/assistant name from runtime context.', example: 'Companion' },
     { token: '{{description}}', alias: '{{character.description}}', desc: 'Character card description field.', example: 'A new companion identity waiting to be customized.' },
@@ -86,38 +63,23 @@
     channel:  { bg: 'bg-[#6C5B7B]', text: 'text-white', label: 'CHANNEL' },
     task:     { bg: 'bg-[#C44569]', text: 'text-white', label: 'TASK' },
   };
-
-  const STATIC_BADGE = { bg: 'bg-[#8B7355]', text: 'text-white', label: 'STATIC' };
-
-  // ── Runtime marker definitions ──
-  interface RuntimeMarker {
-    id: string;
-    label: string;
-    description: string;
-    afterType: string; // Insert after last layer of this type
-    afterPriority?: number;
-  }
-
-  const RUNTIME_MARKERS: RuntimeMarker[] = [
-    { id: 'runtime-context', label: 'RUNTIME CONTEXT', description: 'buildRuntimeContext() injects date/time, channel/visibility, user/trust, active model info', afterType: 'operator' },
-    { id: 'persona-adaptation', label: 'PERSONA ADAPTATION', description: 'Trust-tier persona hints (honne/tatemae) injected based on current user trust level', afterType: 'runtime' },
-    { id: 'memory-retrieval', label: 'MEMORY RETRIEVAL', description: 'L2 memory query results injected based on conversation context and trust-gated retrieval', afterType: 'runtime' },
-    { id: 'chat-history', label: 'CHAT HISTORY', description: 'Session messages from JSONL store, including cross-channel continuity and compaction summaries', afterType: 'channel' },
-  ];
+  const LAYER_TYPE_ORDER: Record<string, number> = {
+    base: 0,
+    operator: 1,
+    runtime: 2,
+    channel: 3,
+    task: 4,
+  };
 
   // ── State ──
   let layers = $state<PromptLayer[]>([]);
-  let staticPrompts = $state<PromptRegistryEntry[]>([]);
   let loading = $state(true);
   let error = $state('');
   let constitutionLoading = $state(true);
-  let constitutionSaving = $state(false);
   let constitutionError = $state('');
-  let constitutionSaveMessage = $state('');
   let showConstitutionSection = $state(true);
   let constitutionImmutableBlocks = $state<ConstitutionImmutableBlock[]>([]);
   let constitutionCompanionLayer = $state<ConstitutionCompanionLayer | null>(null);
-  let constitutionMutableLayers = $state<ConstitutionMutableLayer[]>([]);
   let constitutionServerPreview = $state('');
   let northStarLoading = $state(true);
   let northStarSaving = $state(false);
@@ -130,19 +92,14 @@
   let northStarItems = $state<NorthStarDraftItem[]>([]);
   let northStarServerPreview = $state('');
 
-  // Inline expansion state — which layer/static is expanded
+  // Inline expansion state
   let expandedLayerId = $state<string | null>(null);
   let detailData = $state<AdminPromptDetailData | null>(null);
   let detailLoading = $state(false);
 
   // Content editing state
   let editingContent = $state(false);
-  let editSections = $state<Record<StructuredSectionKey, string>>({
-    description: '', personality: '', system_prompt: '',
-    post_history_instructions: '', scenario: '', mes_example: '', first_mes: '',
-  });
   let editRawContent = $state('');
-  let isStructured = $state(false);
   let savingContent = $state(false);
   let saveMessage = $state('');
 
@@ -160,12 +117,8 @@
   let diffData = $state<PromptDiffResult | null>(null);
   let diffLoading = $state(false);
 
-  // Static prompt expansion
-  let expandedStatic = $state<string | null>(null);
-
   // Section toggles
-  let showMacroCatalog = $state(false);
-  let showStaticSection = $state(true);
+  let showMacroCatalog = $state(true);
 
   // Drag state
   let dragSourceIdx = $state<number | null>(null);
@@ -178,16 +131,16 @@
 
   // ── Derived ──
   let sortedLayers = $derived(
-    [...layers].sort((a, b) => {
-      return a.priority - b.priority;
-    })
+    [...layers]
+      .sort((a, b) => {
+        const typeOrder = (LAYER_TYPE_ORDER[a.type] ?? Number.MAX_SAFE_INTEGER)
+          - (LAYER_TYPE_ORDER[b.type] ?? Number.MAX_SAFE_INTEGER);
+        if (typeOrder !== 0) return typeOrder;
+        return a.priority - b.priority;
+      })
   );
 
-  let editCharCount = $derived(
-    isStructured
-      ? Object.values(editSections).reduce((sum, s) => sum + s.length, 0)
-      : editRawContent.length
-  );
+  let editCharCount = $derived(editRawContent.length);
 
   let constitutionPreviewText = $derived.by(() => {
     const sections: string[] = [];
@@ -201,13 +154,6 @@
     if (constitutionCompanionLayer?.content) {
       const companion = constitutionCompanionLayer.content.trim();
       if (companion) sections.push(companion);
-    }
-
-    for (const layer of constitutionMutableLayers) {
-      if (!layer.enabled) continue;
-      const trimmed = layer.content.trim();
-      if (!trimmed) continue;
-      sections.push(trimmed);
     }
 
     if (sections.length === 0) {
@@ -240,7 +186,6 @@
     id: 'constitution' | 'north-star';
     label: string;
     description: string;
-    sectionId: string;
     tokenCount: number;
     preview: string;
     status: string;
@@ -248,23 +193,20 @@
 
   type StackEntry =
     | { kind: 'fixed'; fixed: FixedStackEntry }
-    | { kind: 'layer'; layer: PromptLayer; idx: number }
-    | { kind: 'marker'; marker: RuntimeMarker };
+    | { kind: 'layer'; layer: PromptLayer; idx: number };
 
   let stackEntries = $derived.by((): StackEntry[] => {
     const entries: StackEntry[] = [];
-    const usedMarkers = new Set<string>();
 
     entries.push({
       kind: 'fixed',
       fixed: {
         id: 'constitution',
         label: 'CONSTITUTION',
-        description: 'Immutable human-care constitution and companion-derived values. Fixed at the top of the stack.',
-        sectionId: 'constitution-builder',
+        description: 'Immutable human-care law. Mutable operator policy now lives in the composition stack.',
         tokenCount: estimateTokens(constitutionPreviewText),
         preview: constitutionPreviewText,
-        status: `${constitutionImmutableBlocks.length} immutable, ${constitutionMutableLayers.length} mutable`,
+        status: `${constitutionImmutableBlocks.length} immutable`,
       },
     });
 
@@ -274,7 +216,6 @@
         id: 'north-star',
         label: 'NORTH STAR',
         description: 'Long-term goals layer. Fixed immediately after Constitution.',
-        sectionId: 'north-star-editor',
         tokenCount: estimateTokens(northStarPreviewText),
         preview: northStarPreviewText || 'No enabled North Star goals.',
         status: `${northStarItems.filter(item => item.enabled).length}/${northStarLimit} active`,
@@ -284,25 +225,6 @@
     for (let i = 0; i < sortedLayers.length; i++) {
       const layer = sortedLayers[i];
       entries.push({ kind: 'layer', layer, idx: i });
-
-      // After this layer, check if any markers should appear
-      const nextLayer = sortedLayers[i + 1];
-      for (const marker of RUNTIME_MARKERS) {
-        if (usedMarkers.has(marker.id)) continue;
-        // Insert marker after the last layer of marker.afterType
-        // i.e., when this layer matches the afterType and the next doesn't
-        if (layer.type === marker.afterType && (!nextLayer || nextLayer.type !== marker.afterType)) {
-          entries.push({ kind: 'marker', marker });
-          usedMarkers.add(marker.id);
-        }
-      }
-    }
-
-    // Any remaining markers go at the end
-    for (const marker of RUNTIME_MARKERS) {
-      if (!usedMarkers.has(marker.id)) {
-        entries.push({ kind: 'marker', marker });
-      }
     }
 
     return entries;
@@ -310,7 +232,7 @@
 
   // ── Helpers ──
   function isProtected(layer: PromptLayer): boolean {
-    return layer.type === 'base' || layer.type === 'operator';
+    return false;
   }
 
   function estimateTokens(text: string): number {
@@ -328,25 +250,12 @@
     toastTimeout = setTimeout(() => { toastMessage = ''; }, 3000);
   }
 
-  function scrollToSection(sectionId: string) {
-    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-
   function copyToClipboard(text: string) {
     navigator.clipboard.writeText(text).then(() => {
       showToast(`Copied: ${text}`);
     }).catch(() => {
       showToast('Failed to copy');
     });
-  }
-
-  // Backend static prompts use `text` not `content`, and may lack `name`
-  function spContent(sp: PromptRegistryEntry): string {
-    return sp.content ?? sp.text ?? '';
-  }
-
-  function spName(sp: PromptRegistryEntry): string {
-    return sp.name ?? sp.key ?? 'unnamed';
   }
 
   function layerBadge(type: string) {
@@ -363,12 +272,14 @@
     return { label: role, cls: map[role] ?? 'bg-bark-400 text-white' };
   }
 
+  function isConstitutionOwnedLayer(layer: PromptLayer): boolean {
+    return false;
+  }
+
   function applyConstitutionSnapshot(snapshot: ConstitutionSnapshotData) {
     constitutionImmutableBlocks = snapshot.immutableBlocks ?? [];
     constitutionCompanionLayer = snapshot.companionLayer ?? null;
-    constitutionMutableLayers = (snapshot.mutableLayers ?? []).map(layer => ({ ...layer }));
     constitutionServerPreview = snapshot.preview?.text ?? '';
-    constitutionSaveMessage = '';
   }
 
   function makeNorthStarClientKey(): string {
@@ -407,28 +318,6 @@
     } finally {
       northStarLoading = false;
     }
-  }
-
-  function updateConstitutionLayerContent(layerId: string, content: string) {
-    constitutionMutableLayers = constitutionMutableLayers.map(layer => (
-      layer.id === layerId ? { ...layer, content } : layer
-    ));
-  }
-
-  function updateConstitutionLayerEnabled(layerId: string, enabled: boolean) {
-    constitutionMutableLayers = constitutionMutableLayers.map(layer => (
-      layer.id === layerId ? { ...layer, enabled } : layer
-    ));
-  }
-
-  function moveConstitutionLayer(index: number, direction: 'up' | 'down') {
-    const target = direction === 'up' ? index - 1 : index + 1;
-    if (target < 0 || target >= constitutionMutableLayers.length) return;
-    const next = [...constitutionMutableLayers];
-    const [layer] = next.splice(index, 1);
-    if (!layer) return;
-    next.splice(target, 0, layer);
-    constitutionMutableLayers = next;
   }
 
   function addNorthStarItem() {
@@ -476,40 +365,6 @@
     northStarItems = next.map((entry, idx) => ({ ...entry, priority: idx }));
   }
 
-  async function saveConstitution() {
-    constitutionSaving = true;
-    constitutionError = '';
-    constitutionSaveMessage = '';
-    try {
-      const result = await saveConstitutionMutableLayers({
-        mutableLayers: constitutionMutableLayers.map(layer => ({
-          id: layer.id,
-          content: layer.content,
-          enabled: layer.enabled,
-          identifier: layer.identifier ?? null,
-          role: layer.role ?? null,
-          promptOrder: layer.promptOrder ?? null,
-        })),
-      });
-      if (!result.ok) {
-        constitutionError = result.message || 'Failed to save constitution layers';
-        return;
-      }
-      if (result.snapshot) {
-        applyConstitutionSnapshot(result.snapshot);
-      } else {
-        await refreshConstitution();
-      }
-      await refreshList();
-      constitutionSaveMessage = result.message || 'Saved constitution layers';
-      showToast('Constitution updated');
-    } catch (e) {
-      constitutionError = e instanceof Error ? e.message : 'Failed to save constitution layers';
-    } finally {
-      constitutionSaving = false;
-    }
-  }
-
   async function saveNorthStar() {
     northStarSaving = true;
     northStarError = '';
@@ -542,62 +397,6 @@
     }
   }
 
-  // ── Structured content parsing ──
-  function parseStructuredContent(content: string): { sections: Record<StructuredSectionKey, string>; isStructured: boolean } {
-    const sections: Record<StructuredSectionKey, string> = {
-      description: '', personality: '', system_prompt: '',
-      post_history_instructions: '', scenario: '', mes_example: '', first_mes: '',
-    };
-    if (!content) return { sections, isStructured: false };
-    const lines = (content ?? '').replace(/\r\n?/g, '\n').split('\n');
-    const hasHeadings = lines.some(l => /^###\s+[a-z_]+\s*$/.test(l.trim()));
-    if (!hasHeadings) {
-      sections.system_prompt = content.trim();
-      return { sections, isStructured: false };
-    }
-
-    let currentSection: StructuredSectionKey | null = null;
-    const buckets: Record<StructuredSectionKey, string[]> = {
-      description: [], personality: [], system_prompt: [],
-      post_history_instructions: [], scenario: [], mes_example: [], first_mes: [],
-    };
-
-    for (const line of lines) {
-      const match = line.trim().match(/^###\s+([a-z_]+)\s*$/);
-      if (match) {
-        const key = match[1] as StructuredSectionKey;
-        if (STRUCTURED_SECTION_KEYS.includes(key)) {
-          currentSection = key;
-          continue;
-        }
-      }
-      if (currentSection) {
-        buckets[currentSection].push(line);
-      }
-    }
-
-    for (const key of STRUCTURED_SECTION_KEYS) {
-      const lines2 = buckets[key];
-      let start = 0;
-      while (start < lines2.length && lines2[start].trim() === '') start++;
-      let end = lines2.length;
-      while (end > start && lines2[end - 1].trim() === '') end--;
-      sections[key] = lines2.slice(start, end).join('\n');
-    }
-
-    return { sections, isStructured: true };
-  }
-
-  function composeSections(sections: Record<StructuredSectionKey, string>): string {
-    const chunks: string[] = [];
-    for (const key of STRUCTURED_SECTION_KEYS) {
-      const value = (sections[key] ?? '').trim();
-      if (!value) continue;
-      chunks.push(`### ${key}\n${value}`);
-    }
-    return chunks.join('\n\n');
-  }
-
   // ── Diff computation ──
   function computeDiffLines(oldText: string, newText: string): Array<{ kind: 'same' | 'remove' | 'add'; line: string }> {
     const oldLines = oldText.split('\n');
@@ -627,7 +426,6 @@
 
     if (promptsResult.status === 'fulfilled') {
       layers = promptsResult.value?.layers ?? [];
-      staticPrompts = promptsResult.value?.staticPrompts ?? [];
     } else {
       const reason = promptsResult.reason;
       error = reason instanceof Error ? reason.message : 'Failed to load prompts';
@@ -660,7 +458,6 @@
   async function refreshList() {
     const data = await listPrompts();
     layers = data?.layers ?? [];
-    staticPrompts = data?.staticPrompts ?? [];
     await Promise.all([refreshConstitution(), refreshNorthStar()]);
   }
 
@@ -712,9 +509,6 @@
   }
 
   function startEditContent(layer: PromptLayer) {
-    const parsed = parseStructuredContent(layer.content);
-    isStructured = parsed.isStructured;
-    editSections = { ...parsed.sections };
     editRawContent = layer.content;
     editName = layer.name;
     editIdentifier = layer.identifier ?? '';
@@ -728,8 +522,8 @@
     savingContent = true;
     saveMessage = '';
     try {
-      const content = isStructured ? composeSections(editSections) : editRawContent;
-      const patch: Record<string, unknown> = { content };
+      const patch: Record<string, unknown> = { content: editRawContent };
+      if (editName.trim()) patch.name = editName.trim();
       if (editIdentifier) patch.identifier = editIdentifier;
       if (editRole) patch.role = editRole;
       if (editPromptOrder !== undefined) patch.promptOrder = editPromptOrder;
@@ -861,9 +655,6 @@
     }
   }
 
-  // Section tab state for structured editing
-  let activeSectionTab = $state<StructuredSectionKey>('system_prompt');
-
   // ── New layer form ──
   let showNewLayerForm = $state(false);
   let newLayerName = $state('');
@@ -922,7 +713,7 @@
     <div>
       <h1 class="text-2xl font-serif font-bold text-shadow-900">Prompt Soil</h1>
       <p class="text-sm text-shadow-600 mt-1">
-        Layered prompt composition stack -- {layers.length} layer{layers.length === 1 ? '' : 's'}, {staticPrompts.length} static
+        Layered prompt composition stack -- {layers.length} layer{layers.length === 1 ? '' : 's'}
       </p>
     </div>
     <div class="flex items-center gap-3 text-sm text-shadow-600">
@@ -971,7 +762,7 @@
       >
         <div>
           <h2 class="text-base font-serif font-semibold text-shadow-800">Constitution Builder</h2>
-          <p class="text-sm text-shadow-600 mt-0.5">Immutable amendments are locked. Mutable layers can be reordered and edited.</p>
+          <p class="text-sm text-shadow-600 mt-0.5">Immutable amendments are locked. Constitution content is fixed here; editable runtime/operator layers live in the composition stack below.</p>
         </div>
         <svg class="w-4 h-4 text-shadow-600 transition-transform shrink-0 ml-4 {showConstitutionSection ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 9l-7 7-7-7" />
@@ -993,82 +784,27 @@
               </div>
             {/if}
 
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div class="space-y-3">
-                <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Immutable Amendments</h3>
-                {#each constitutionImmutableBlocks as block (block.id)}
-                  <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
-                    <div class="flex items-center justify-between mb-1.5">
-                      <span class="text-sm font-medium text-shadow-800">{block.title}</span>
-                      <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Read only</span>
-                    </div>
-                    <p class="text-sm text-shadow-700 leading-relaxed whitespace-pre-wrap">{block.content}</p>
+            <div class="space-y-3">
+              <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Immutable Amendments</h3>
+              {#each constitutionImmutableBlocks as block (block.id)}
+                <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
+                  <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-sm font-medium text-shadow-800">{block.title}</span>
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Read only</span>
                   </div>
-                {/each}
-
-                {#if constitutionCompanionLayer}
-                  <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
-                    <div class="flex items-center justify-between mb-1.5">
-                      <span class="text-sm font-medium text-shadow-800">{constitutionCompanionLayer.title}</span>
-                      <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Derived</span>
-                    </div>
-                    <pre class="text-sm font-mono text-shadow-700 whitespace-pre-wrap bg-white/60 p-2 rounded border border-bark-200 max-h-48 overflow-y-auto">{constitutionCompanionLayer.content}</pre>
-                  </div>
-                {/if}
-              </div>
-
-              <div class="space-y-3">
-                <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Mutable Layers</h3>
-                <div class="space-y-2">
-                  {#each constitutionMutableLayers as layer, idx (layer.id)}
-                    {@const layerLocked = !layer.editable}
-                    <div class="rounded-lg border border-bark-300 bg-white p-3 space-y-2">
-                      <div class="flex items-center gap-2">
-                        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider {layerBadge(layer.type).bg} {layerBadge(layer.type).text}">
-                          {layerBadge(layer.type).label}
-                        </span>
-                        <span class="text-sm font-medium text-shadow-800 truncate">{layer.name}</span>
-                        <span class="ml-auto text-sm text-shadow-600">#{idx + 1}</span>
-                      </div>
-                      <div class="flex items-center gap-2">
-                        <button
-                          onclick={() => moveConstitutionLayer(idx, 'up')}
-                          disabled={idx === 0}
-                          class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
-                        >
-                          Up
-                        </button>
-                        <button
-                          onclick={() => moveConstitutionLayer(idx, 'down')}
-                          disabled={idx === constitutionMutableLayers.length - 1}
-                          class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
-                        >
-                          Down
-                        </button>
-                        <label class="ml-auto inline-flex items-center gap-1.5 text-sm text-shadow-700">
-                          <input
-                            type="checkbox"
-                            checked={layer.enabled}
-                            disabled={layerLocked}
-                            onchange={(e) => updateConstitutionLayerEnabled(layer.id, (e.target as HTMLInputElement).checked)}
-                          />
-                          enabled
-                        </label>
-                      </div>
-                      <textarea
-                        rows={4}
-                        value={layer.content}
-                        disabled={layerLocked}
-                        oninput={(e) => updateConstitutionLayerContent(layer.id, (e.target as HTMLTextAreaElement).value)}
-                        class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 disabled:opacity-60 disabled:cursor-not-allowed"
-                      ></textarea>
-                      {#if layerLocked && layer.readOnlyReason}
-                        <p class="text-sm text-shadow-600">{layer.readOnlyReason}</p>
-                      {/if}
-                    </div>
-                  {/each}
+                  <p class="text-sm text-shadow-700 leading-relaxed whitespace-pre-wrap">{block.content}</p>
                 </div>
-              </div>
+              {/each}
+
+              {#if constitutionCompanionLayer}
+                <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
+                  <div class="flex items-center justify-between mb-1.5">
+                    <span class="text-sm font-medium text-shadow-800">{constitutionCompanionLayer.title}</span>
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">Derived</span>
+                  </div>
+                  <pre class="text-sm font-mono text-shadow-700 whitespace-pre-wrap bg-white/60 p-2 rounded border border-bark-200 max-h-48 overflow-y-auto">{constitutionCompanionLayer.content}</pre>
+                </div>
+              {/if}
             </div>
 
             <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
@@ -1079,17 +815,8 @@
               <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-white/60 p-3 rounded border border-bark-200 max-h-64 overflow-y-auto leading-relaxed">{constitutionPreviewText}</pre>
             </div>
 
-            <div class="flex items-center gap-3">
-              <button
-                onclick={saveConstitution}
-                disabled={constitutionSaving}
-                class="px-4 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
-              >
-                {constitutionSaving ? 'Saving...' : 'Save Constitution Layers'}
-              </button>
-              {#if constitutionSaveMessage}
-                <span class="text-sm text-moss-700">{constitutionSaveMessage}</span>
-              {/if}
+            <div class="rounded-lg border border-bark-300 bg-bark-50 p-3 text-sm text-shadow-700 leading-relaxed">
+              Editable policy and runtime prompt layers belong in the composition stack, not inside Constitution Builder. This section is read-only by design except for direct file edits to the immutable source.
             </div>
           {/if}
         </div>
@@ -1254,7 +981,7 @@
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-3">
           <h2 class="text-base font-serif font-semibold text-shadow-800">Composition Stack</h2>
-          <span class="text-sm text-shadow-600">Drag prompt layers to reorder. Constitution and North Star stay fixed.</span>
+          <span class="text-sm text-shadow-600">Drag prompt layers to reorder. Constitution and North Star stay pinned; everything else in the stack is real prompt soil.</span>
         </div>
         <button
           onclick={() => { showNewLayerForm = !showNewLayerForm; if (!showNewLayerForm) resetNewLayerForm(); }}
@@ -1365,22 +1092,7 @@
                   <p class="text-sm text-shadow-700">{fixed.description}</p>
                   <pre class="text-xs font-mono text-shadow-700 whitespace-pre-wrap bg-white/70 p-2 rounded border border-bark-200 max-h-28 overflow-y-auto leading-relaxed">{fixed.preview}</pre>
                 </div>
-                <button
-                  onclick={() => scrollToSection(fixed.sectionId)}
-                  class="shrink-0 px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-700 text-sm hover:bg-bark-100 transition-colors"
-                >
-                  Open Editor
-                </button>
               </div>
-            </div>
-          {:else if entry.kind === 'marker'}
-            <!-- Runtime Marker -->
-            <div class="flex items-center gap-3 px-4 py-2.5 rounded-lg border border-dashed border-bark-400 bg-bark-100">
-              <svg class="w-4 h-4 text-shadow-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
-              </svg>
-              <span class="text-sm font-semibold text-shadow-600 italic tracking-wide">[{entry.marker.label}]</span>
-              <span class="text-sm text-shadow-500 italic">{entry.marker.description}</span>
             </div>
           {:else}
             {@const layer = entry.layer}
@@ -1618,43 +1330,11 @@
                           </div>
 
                           <!-- Content editor -->
-                          {#if isStructured}
-                            <!-- Section tabs for structured content -->
-                            <div>
-                              <div class="flex flex-wrap gap-1 border-b border-bark-300 mb-3">
-                                {#each STRUCTURED_SECTION_KEYS as key}
-                                  {@const hasContent = (editSections[key] ?? '').trim().length > 0}
-                                  <button
-                                    onclick={() => activeSectionTab = key}
-                                    class="px-3 py-1.5 text-sm font-medium rounded-t-lg border border-b-0 transition-colors
-                                      {activeSectionTab === key ? 'bg-white border-bark-300 text-shadow-800' : 'bg-bark-100 border-transparent text-shadow-600 hover:text-shadow-800 hover:bg-bark-200'}
-                                      {hasContent ? '' : 'opacity-60'}"
-                                  >
-                                    {SECTION_LABELS[key]}
-                                    {#if hasContent}
-                                      <span class="ml-1 text-[10px] text-gold-600 font-bold">*</span>
-                                    {/if}
-                                  </button>
-                                {/each}
-                              </div>
-                              {#each STRUCTURED_SECTION_KEYS as key}
-                                {#if activeSectionTab === key}
-                                  <textarea
-                                    bind:value={editSections[key]}
-                                    rows={SECTION_ROWS[key]}
-                                    placeholder="{SECTION_LABELS[key]} content..."
-                                    class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
-                                  ></textarea>
-                                {/if}
-                              {/each}
-                            </div>
-                          {:else}
-                            <textarea
-                              bind:value={editRawContent}
-                              rows={14}
-                              class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
-                            ></textarea>
-                          {/if}
+                          <textarea
+                            bind:value={editRawContent}
+                            rows={14}
+                            class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                          ></textarea>
 
                           <!-- Edit footer -->
                           <div class="flex items-center justify-between">
@@ -1732,121 +1412,6 @@
         {/if}
       </div>
     </div>
-
-    <!-- ─── Static Prompt Registry ─── -->
-    {#if staticPrompts.length > 0}
-      <hr class="divider-filigree my-6" />
-
-      <div>
-        <button
-          onclick={() => showStaticSection = !showStaticSection}
-          class="w-full flex items-center justify-between text-left mb-3"
-        >
-          <div>
-            <h2 class="text-base font-serif font-semibold text-shadow-800">Static Prompt Registry</h2>
-            <p class="text-sm text-shadow-600 mt-0.5">{staticPrompts.length} registered prompt{staticPrompts.length === 1 ? '' : 's'} -- always active, used by extraction/compaction/synthesis</p>
-          </div>
-          <svg class="w-4 h-4 text-shadow-600 transition-transform shrink-0 ml-4 {showStaticSection ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-
-        {#if showStaticSection}
-          <div class="space-y-1">
-            {#each staticPrompts as sp (sp.key)}
-              {@const isExpanded = expandedStatic === sp.key}
-              {@const spTokens = estimateTokens(spContent(sp))}
-
-              <div class="card-garden overflow-hidden {sp.enabled === false ? 'opacity-40' : ''} {isExpanded ? 'filigree-border-strong ring-1 ring-gold-300' : ''}">
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <div
-                  class="px-3 py-2.5 flex items-center gap-2.5 hover:bg-bark-100 transition-colors cursor-pointer select-none"
-                  onclick={() => expandedStatic = isExpanded ? null : sp.key}
-                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expandedStatic = isExpanded ? null : sp.key; }}}
-                  role="button"
-                  tabindex="0"
-                >
-                  <!-- No drag handle for static -->
-                  <span class="w-6 shrink-0"></span>
-
-                  <!-- Static badge -->
-                  <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider shrink-0 {STATIC_BADGE.bg} {STATIC_BADGE.text}">
-                    {STATIC_BADGE.label}
-                  </span>
-
-                  <!-- Name -->
-                  <span class="font-serif font-medium text-sm text-shadow-800">{spName(sp)}</span>
-
-                  <!-- Key -->
-                  <span class="text-sm font-mono text-shadow-600 hidden sm:inline">{sp.key}</span>
-
-                  <span class="flex-1"></span>
-
-                  <!-- Consumers -->
-                  {#if sp.consumers && sp.consumers.length > 0}
-                    <div class="hidden md:flex items-center gap-1">
-                      {#each sp.consumers as consumer}
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full bg-bark-200 text-shadow-600 font-mono">{consumer}</span>
-                      {/each}
-                    </div>
-                  {/if}
-
-                  <!-- Category -->
-                  {#if sp.category}
-                    <span class="text-sm px-1.5 py-0.5 rounded-full bg-bark-200 text-shadow-600">{sp.category}</span>
-                  {/if}
-
-                  <!-- Token count -->
-                  <span class="text-sm font-mono text-shadow-600 shrink-0">{formatTokenCount(spTokens)}t</span>
-
-                  <!-- Version -->
-                  <span class="text-sm font-mono text-shadow-600 shrink-0">v{sp.version ?? 1}</span>
-
-                  <!-- Chevron -->
-                  <svg class="w-4 h-4 text-shadow-500 shrink-0 transition-transform duration-200 {isExpanded ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-
-                {#if isExpanded}
-                  <div class="border-t border-bark-300 p-4 space-y-3">
-                    <!-- Metadata row -->
-                    <div class="flex flex-wrap items-center gap-3 text-sm">
-                      <span class="text-shadow-600">Key: <span class="font-mono text-shadow-800">{sp.key}</span></span>
-                      {#if sp.description}
-                        <span class="text-shadow-300">|</span>
-                        <span class="text-shadow-600">{sp.description}</span>
-                      {/if}
-                      <span class="text-shadow-300">|</span>
-                      <span class="text-shadow-600">Updated: <span class="text-shadow-800">{sp.updatedAt ? new Date(sp.updatedAt).toLocaleString() : 'unknown'}</span></span>
-                      {#if sp.updatedBy}
-                        <span class="text-shadow-300">|</span>
-                        <span class="text-shadow-600">By: <span class="text-shadow-800">{sp.updatedBy}</span></span>
-                      {/if}
-                      {#if sp.checksum}
-                        <span class="text-shadow-300">|</span>
-                        <span class="text-shadow-600">Checksum: <span class="font-mono text-shadow-700">{sp.checksum.slice(0, 12)}</span></span>
-                      {/if}
-                      {#if sp.consumers && sp.consumers.length > 0}
-                        <span class="text-shadow-300">|</span>
-                        <span class="text-shadow-600">Used by: <span class="text-shadow-800">{sp.consumers.join(', ')}</span></span>
-                      {/if}
-                    </div>
-
-                    <!-- Content -->
-                    <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-100 p-3 rounded-lg max-h-64 overflow-y-auto leading-relaxed">{spContent(sp)}</pre>
-                    <div class="flex justify-between">
-                      <span class="text-sm text-shadow-600">{spContent(sp).length} chars</span>
-                      <span class="text-sm text-shadow-600">~{formatTokenCount(spTokens)} tokens</span>
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
-      </div>
-    {/if}
 
     <!-- ─── Macro Catalog ─── -->
     <hr class="divider-filigree my-6" />

@@ -102,6 +102,7 @@ export class ImageService implements ImageOperations {
     const client = new ComfyUiImageClient(
       baseUrl,
       this.config.imageWorkflows ?? {},
+      this.config,
       this.fetchImpl,
     );
     return mode === 'create'

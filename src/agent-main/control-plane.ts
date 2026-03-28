@@ -15,7 +15,7 @@ import type { CapabilityRuntime } from '../system/capabilities/runtime.js';
 import type { LifecycleRestartSafeguard, ExternalCommunicationRateLimiter } from '../system/capabilities/safeguards.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { ApiServer } from '../channels/api/server.js';
-import type { AdminServer } from '../channels/admin/server.js';
+import type { AdminServer } from '../operator/garden/server.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;

@@ -1,5 +1,5 @@
 import type { ConfirmationQueue } from '../system/capabilities/confirmation-queue.js';
-import type { ConfirmationQueueAdminApi } from '../channels/admin/types.js';
+import type { ConfirmationQueueAdminApi } from '../operator/garden/types.js';
 import type {
   ConfirmationListResult,
   ConfirmationResolveParams,

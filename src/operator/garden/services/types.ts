@@ -54,7 +54,7 @@ import type { RuntimeToolCatalogSnapshot } from '../../../agent/tool-catalog.js'
 import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthStatus,
-} from '../../../tool-health/types.js';
+} from '../../tool-health/types.js';
 import type {
   ObservedMemory,
   ObservedScoredMemory,

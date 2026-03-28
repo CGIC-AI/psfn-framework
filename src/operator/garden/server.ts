@@ -11,7 +11,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { readBodyWithLimit, sendText } from '../http/primitives.js';
+import { readBodyWithLimit, sendText } from '../../channels/http/primitives.js';
 import { ValuesJournalStore } from '../../values/store.js';
 import { NorthStarStore } from '../../north-star/store.js';
 import {

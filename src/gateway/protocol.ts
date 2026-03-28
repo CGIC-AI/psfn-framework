@@ -11,7 +11,7 @@ import type {
 } from '../images/types.js';
 import type { JournalEntry } from '../session/types.js';
 import type { JournalIntegrityVerificationResult } from '../session/journal-utils.js';
-import type { RuntimeServiceHealthSnapshot } from '../tool-health/types.js';
+import type { RuntimeServiceHealthSnapshot } from '../operator/tool-health/types.js';
 
 // ── Request parameter types (agent → gateway) ──
 

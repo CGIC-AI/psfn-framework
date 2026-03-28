@@ -39,7 +39,7 @@
     type SettingsSimpleSectionId,
   } from '$lib/components/settings/navigation';
   import { resolveVoiceProviderSelection } from './voice-provider-selection';
-  import type { ContextBudgetConfigLike } from '../../../../src/context-budget.js';
+  import type { ContextBudgetConfigLike } from '../../../../src/shared/context-budget.js';
   import { buildContextBudgetPreview } from '$lib/settings/context-budget-preview';
   import {
     createEmptyProviderEntry,

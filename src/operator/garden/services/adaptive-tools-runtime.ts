@@ -5,7 +5,7 @@ import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,
   RuntimeServiceHealthStatus,
-} from '../../../tool-health/types.js';
+} from '../../tool-health/types.js';
 import type {
   AdminToolFailureEvent,
   AdminToolHealthView,

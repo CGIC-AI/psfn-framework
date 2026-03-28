@@ -4,8 +4,8 @@ import {
   hasBearerToken,
   hasCookieValue,
   isHtmxRequest,
-} from '../http/auth.js';
-import { sendRedirect, sendText } from '../http/primitives.js';
+} from '../../channels/http/auth.js';
+import { sendRedirect, sendText } from '../../channels/http/primitives.js';
 
 export function hasAdminRequestAuthCredentials(req: IncomingMessage, token?: string): boolean {
   if (!token) return true;

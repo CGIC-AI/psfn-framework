@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
-import { sendText } from '../http/primitives.js';
+import { sendText } from '../../channels/http/primitives.js';
 
 
 const STATIC_CACHE_CONTROL = 'public, max-age=86400';
@@ -201,7 +201,7 @@ export class AdminServerTransport {
   }
 
   private initializeGardenUi(): void {
-    // Resolve admin-ui/build relative to project root (3 dirs up from src/channels/admin/)
+    // Resolve admin-ui/build relative to project root (3 dirs up from src/operator/garden/)
     const projectRoot = resolve(import.meta.dirname, '..', '..', '..');
     const buildDir = join(projectRoot, 'admin-ui', 'build');
     if (!existsSync(buildDir)) {

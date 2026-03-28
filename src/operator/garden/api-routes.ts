@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendJson } from '../http/primitives.js';
+import { sendJson } from '../../channels/http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
 import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';

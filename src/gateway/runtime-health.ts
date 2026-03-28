@@ -5,7 +5,7 @@ import type {
   RuntimeServiceFailure,
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,
-} from '../tool-health/types.js';
+} from '../operator/tool-health/types.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 
 type GatewayTrackedMethod =

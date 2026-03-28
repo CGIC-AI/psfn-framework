@@ -27,7 +27,7 @@ import type {
 } from './services/types.js';
 import type { ConfirmationQueueAdminApi } from './types.js';
 import { GARDEN_PREFIX } from './server-request-routing.js';
-import { sendJson, sendRedirect, sendText } from '../http/primitives.js';
+import { sendJson, sendRedirect, sendText } from '../../channels/http/primitives.js';
 
 export interface AdminRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';

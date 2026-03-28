@@ -3,7 +3,7 @@ import type { RuntimeHealthResult } from '../../gateway/protocol.js';
 import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,
-} from '../../tool-health/types.js';
+} from '../tool-health/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 const ALL_VAULT_ACTIONS = ['write', 'read', 'search', 'daily'] as const;

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendText } from '../http/primitives.js';
+import { sendText } from '../../channels/http/primitives.js';
 import { parseRequestUrl } from './request-url.js';
 
 export const GARDEN_PREFIX = '/';

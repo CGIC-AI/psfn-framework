@@ -1,6 +1,6 @@
 import type { ShardExecutionPort } from '../../shards/port.js';
-import { AdminServer } from '../../channels/admin/server.js';
-import { createGatewayAdminToolHealthProvider } from '../../channels/admin/tool-health-provider.js';
+import { AdminServer } from '../../operator/garden/server.js';
+import { createGatewayAdminToolHealthProvider } from '../../operator/garden/tool-health-provider.js';
 import type { GatewayClient } from '../../gateway/client.js';
 import { GatewayModelDiscovery } from '../../llm/discovery.js';
 import type { CharacterCardVersionStore } from '../../identity/card-versioning.js';

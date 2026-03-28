@@ -6,19 +6,19 @@ import type { PostTurnActionCandidate, SubstrateMessage } from '../../../shared/
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../scheduler/scheduler.js';
 import { createComponentLogger } from '../../../shared/logger.js';
-import type { ToolRegistrarTarget } from '../../../agent/tool-registrar.js';
+import type { ToolRegistrarTarget } from '../../../core/agent/tool-registrar.js';
 import {
   createDefaultExtendedToolAutoloadPolicy,
   type ExtendedToolAutoloadPolicy,
-} from '../../../agent/extended-tool-autoload-policy.js';
+} from '../../../core/agent/extended-tool-autoload-policy.js';
 import type {
   ExtendedToolActivationOptions,
   ExtendedToolActivationResult,
   PostTurnActionInferer,
-} from '../../../agent/substrate-agent.js';
+} from '../../../core/agent/substrate-agent.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../repl/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
-import type { LLMProvider } from '../../../agent/contracts.js';
+import type { LLMProvider } from '../../../core/agent/contracts.js';
 import {
   createPromotedToolsAddTool,
   createPromotedToolsListTool,
@@ -100,7 +100,7 @@ import {
   DEFERRED_TOOL_HANDOFF_ACTION_KIND,
   normalizeDeferredToolHandoffPayload,
   type DeferredToolHandoffPayload,
-} from '../../../agent/deferred-tool-handoff.js';
+} from '../../../core/agent/deferred-tool-handoff.js';
 import {
   inferComposedDeferredPostTurnActions,
   inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages,

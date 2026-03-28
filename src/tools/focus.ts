@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { textResultWithError } from './results.js';
 import { toErrorMessage } from '../shared/utils/errors.js';

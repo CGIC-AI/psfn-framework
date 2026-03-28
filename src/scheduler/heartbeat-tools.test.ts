@@ -11,7 +11,7 @@ import {
 } from './heartbeat-tools.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from './scheduler.js';
-import type { SubstrateAgent } from '../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../core/agent/substrate-agent.js';
 import type { MessageSender } from '../system/lifecycle/notifications.js';
 
 // ── Mocks ──

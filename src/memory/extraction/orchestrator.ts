@@ -1,5 +1,5 @@
 import { createComponentLogger } from '../../shared/logger.js';
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProvider } from '../../core/agent/contracts.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
 import { resolveLatestTurnContext } from '../../session/turn-provenance.js';

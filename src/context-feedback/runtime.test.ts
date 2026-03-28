@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
+import type { PostTurnActionInferer } from '../core/agent/substrate-agent.js';
 import { wirePostTurnActionRuntime } from '../app/startup/composition/post-turn-actions.js';
 import { EventBus } from '../shared/event-bus.js';
 import { Scheduler } from '../scheduler/scheduler.js';

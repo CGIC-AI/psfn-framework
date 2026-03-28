@@ -4,7 +4,7 @@
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
-import type { LLMProvider, EmbeddingService } from '../../agent/contracts.js';
+import type { LLMProvider, EmbeddingService } from '../../core/agent/contracts.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketClient } from './transport.js';

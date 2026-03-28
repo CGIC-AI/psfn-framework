@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';

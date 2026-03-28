@@ -27,7 +27,7 @@ import type {
   MessageHandler,
   OutboundContext,
 } from '../types.js';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SessionStore } from '../../session/store.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';

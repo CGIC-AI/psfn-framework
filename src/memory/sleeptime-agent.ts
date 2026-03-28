@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../shared/contracts/runtime.js';
 import { createComponentLogger } from '../shared/logger.js';
 import type { SessionEntry } from '../session/types.js';

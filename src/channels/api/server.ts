@@ -9,7 +9,7 @@ import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ChannelType, MessageModelOverride, MessagePromptOverride, MessageRoutingMetadata, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ContactStore } from '../../contacts/store.js';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { SessionManager } from '../../session/manager.js';

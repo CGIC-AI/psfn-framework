@@ -7,7 +7,7 @@ import {
   JSONRPCClient,
   JSONRPCServerAndClient,
 } from 'json-rpc-2.0';
-import type { LLMProvider, EmbeddingService } from '../../agent/contracts.js';
+import type { LLMProvider, EmbeddingService } from '../../core/agent/contracts.js';
 import type { ChannelOutboundDock } from '../../channels/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';

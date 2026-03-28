@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProvider } from '../../core/agent/contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import {

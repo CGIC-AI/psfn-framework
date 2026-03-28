@@ -10,8 +10,8 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../session/store.js';
 import { SessionManager } from '../../../session/manager.js';
 import { UserContinuityStore } from '../../../session/continuity.js';
-import { InternalRoleEnvelopeLedgerStore } from '../../../internal-role-envelopes/store.js';
-import { wireInternalRoleEnvelopeRuntime } from '../../../internal-role-envelopes/runtime-wiring.js';
+import { InternalRoleEnvelopeLedgerStore } from '../../../core/internal-role-envelopes/store.js';
+import { wireInternalRoleEnvelopeRuntime } from '../../../core/internal-role-envelopes/runtime-wiring.js';
 import {
   createEmbeddingProviderFromConfig as createEmbeddingProviderFromMemoryConfig,
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
@@ -21,7 +21,7 @@ import {
   SubstrateAgent,
   type EmotionRuntimeWiring,
   type SubstrateAgentOptions,
-} from '../../../agent/substrate-agent.js';
+} from '../../../core/agent/substrate-agent.js';
 import { MemoryRetriever } from '../../../memory/retrieval.js';
 import { MemoryExtractor } from '../../../memory/extraction.js';
 import type { MemoryStore } from '../../../memory/store.js';
@@ -45,12 +45,12 @@ import type { Scheduler } from '../../../scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
-import type { LLMProvider, EmbeddingService } from '../../../agent/contracts.js';
+import type { LLMProvider, EmbeddingService } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
 import type { ShardAuditTrail } from '../../../shards/manager.js';
 import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../../../modules/types.js';
-import type { RuntimeMode } from '../../../agent/tool-wiring-validator.js';
+import type { RuntimeMode } from '../../../core/agent/tool-wiring-validator.js';
 import {
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,

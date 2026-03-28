@@ -49,8 +49,8 @@ import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolRuntimeState,
   AdaptiveToolSnapshotTelemetry,
-} from '../../../agent/adaptive-tools-telemetry.js';
-import type { RuntimeToolCatalogSnapshot } from '../../../agent/tool-catalog.js';
+} from '../../../core/agent/adaptive-tools-telemetry.js';
+import type { RuntimeToolCatalogSnapshot } from '../../../core/agent/tool-catalog.js';
 import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthStatus,
@@ -64,7 +64,7 @@ import type {
   TurnSnapshotRecord,
   TurnStageTelemetryRecord,
 } from '../../../core/turns/observability.js';
-import type { SessionRoleEnvelopePreview } from '../../../internal-role-envelopes/projections.js';
+import type { SessionRoleEnvelopePreview } from '../../../core/internal-role-envelopes/projections.js';
 import type {
   AdminMemoryManagedScopeKind,
   AdminMemoryScopeEvidenceItem,

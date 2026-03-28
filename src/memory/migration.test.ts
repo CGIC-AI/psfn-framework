@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { EmbeddingService } from '../agent/contracts.js';
+import type { EmbeddingService } from '../core/agent/contracts.js';
 import { MemoryStore } from './store.js';
 import { migrateMemoryEmbeddings } from './migration.js';
 import type { PurrMemory } from './types.js';

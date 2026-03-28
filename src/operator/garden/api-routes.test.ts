@@ -31,7 +31,7 @@ import { saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
-import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
+import type { EmbeddingService, LLMProvider } from '../../core/agent/contracts.js';
 import type { ScheduledTask } from '../../scheduler/types.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';

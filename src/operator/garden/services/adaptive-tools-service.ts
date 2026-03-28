@@ -1,7 +1,7 @@
 import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,
-} from '../../../agent/adaptive-tools-telemetry.js';
+} from '../../../core/agent/adaptive-tools-telemetry.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { AdaptiveToolsStateProvider } from '../types.js';
 import type { AdminToolHealthProvider } from '../tool-health-provider.js';

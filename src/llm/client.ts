@@ -43,7 +43,7 @@ import {
   resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../system/config/providers-config.js';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 
 const log = createComponentLogger('LLMClient');
 

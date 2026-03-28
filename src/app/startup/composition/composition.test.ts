@@ -13,8 +13,8 @@ import {
   validateAndLogToolWiring,
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
-} from '../../../agent/tool-wiring-validator.js';
-import type { LLMProvider } from '../../../agent/contracts.js';
+} from '../../../core/agent/tool-wiring-validator.js';
+import type { LLMProvider } from '../../../core/agent/contracts.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ModuleRegistryMutation } from '../../../modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';

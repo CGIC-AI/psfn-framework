@@ -1,7 +1,7 @@
 import type { EventBus } from '../shared/event-bus.js';
 import { createComponentLogger } from '../shared/logger.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
-import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import type { ToolRegistrar } from '../core/agent/tool-registrar.js';
 import {
   ensureRegistryFile,
   readModuleRegistry,

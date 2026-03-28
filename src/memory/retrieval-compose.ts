@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 
 export const RETRIEVAL_COMPOSITION_BATCH_SIZE = 4;
 export const RETRIEVAL_COMPOSITION_MAX_CANDIDATES = 12;

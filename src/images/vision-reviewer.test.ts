@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DefaultImageVisionReviewer } from './vision-reviewer.js';
 
-vi.mock('../agent/stream-adapter.js', () => ({
+vi.mock('../core/agent/stream-adapter.js', () => ({
   resolveModel: vi.fn(() => ({
     id: 'vision-model',
     provider: 'openrouter',

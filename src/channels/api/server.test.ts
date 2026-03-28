@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { EventBus } from '../../shared/event-bus.js';
 import { ContactStore } from '../../contacts/store.js';
 import { ApiServer } from './server.js';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ApiServerHealthChecks } from './types.js';

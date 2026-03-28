@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { LLMContext, TurnRecord } from '../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { MemoryScopeQuery } from '../memory/types.js';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 import type {
   SessionStore,
   SessionActivitySummary,
@@ -14,7 +14,7 @@ import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
 import type { SessionSearchHit } from './search-index.js';
 import type { EventBus } from '../shared/event-bus.js';
-import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
+import type { InternalRoleEnvelopeLedger } from '../core/internal-role-envelopes/types.js';
 import { classifyChannel, type ChannelMeta } from '../trust/policy.js';
 import { countTokens } from '../llm/tokens.js';
 import { createComponentLogger } from '../shared/logger.js';
@@ -96,7 +96,7 @@ import {
   CompressionGuidelineStore,
   type CompressionGuidelineUpdateResult,
 } from './compression-guideline.js';
-import { resolveRoleEnvelopeRef } from '../internal-role-envelopes/projections.js';
+import { resolveRoleEnvelopeRef } from '../core/internal-role-envelopes/projections.js';
 
 export type {
   ImportedHistoryBootstrapChunk,

@@ -6,15 +6,15 @@ import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { ShardExecutionPort } from '../../shards/port.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { EmbeddingService } from '../../agent/contracts.js';
+import type { EmbeddingService } from '../../core/agent/contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { SkillsRuntime } from '../../skills/runtime.js';
-import type { AdaptiveToolRuntimeState } from '../../agent/adaptive-tools-telemetry.js';
-import type { RuntimeToolCatalogSnapshot } from '../../agent/tool-catalog.js';
+import type { AdaptiveToolRuntimeState } from '../../core/agent/adaptive-tools-telemetry.js';
+import type { RuntimeToolCatalogSnapshot } from '../../core/agent/tool-catalog.js';
 import type {
   ConfirmationListResult,
   ConfirmationResolveParams,

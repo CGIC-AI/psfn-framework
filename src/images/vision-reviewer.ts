@@ -5,8 +5,8 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
-import type { LLMProvider } from '../agent/contracts.js';
-import { resolveModel } from '../agent/stream-adapter.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
+import { resolveModel } from '../core/agent/stream-adapter.js';
 import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,

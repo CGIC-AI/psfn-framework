@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runRLMLoop } from './loop.js';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 import type { REPLDeps, REPLConfig } from './types.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../shared/contracts/runtime.js';

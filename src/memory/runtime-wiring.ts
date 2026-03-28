@@ -1,4 +1,4 @@
-import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import type { ToolRegistrar } from '../core/agent/tool-registrar.js';
 import type { MemoryStore } from './store.js';
 import type { MemoryWriter } from './writer.js';
 import {

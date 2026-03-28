@@ -1,4 +1,4 @@
-import type { EmbeddingService } from '../../../agent/contracts.js';
+import type { EmbeddingService } from '../../../core/agent/contracts.js';
 import {
   TextEmotionClassifier,
   type TextEmotionClassifierConfig,

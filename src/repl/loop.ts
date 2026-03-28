@@ -3,7 +3,7 @@
 
 import type { CapabilityTier } from '../system/config/runtime-config-contracts.js';
 import type { ContextMessage, CorrelationMetadata, LLMContext, LLMResponse } from '../shared/contracts/runtime.js';
-import type { LLMRequestMetadata } from '../agent/contracts.js';
+import type { LLMRequestMetadata } from '../core/agent/contracts.js';
 import type {
   BudgetStatus,
   NestedThinkOptions,

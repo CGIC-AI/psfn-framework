@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProvider } from '../../core/agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../llm/tokens.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';

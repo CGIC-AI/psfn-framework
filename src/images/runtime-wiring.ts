@@ -1,6 +1,6 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type { ToolRegistrar } from '../agent/tool-registrar.js';
-import type { ToolWiringMeta, WirableTool } from '../agent/tool-wiring-validator.js';
+import type { ToolRegistrar } from '../core/agent/tool-registrar.js';
+import type { ToolWiringMeta, WirableTool } from '../core/agent/tool-wiring-validator.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { ImageOperations } from './ops.js';
 import { ImageService } from './service.js';

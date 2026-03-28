@@ -1,6 +1,6 @@
 import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage, type WyomingRoutingMetadata } from '../shared/contracts/runtime.js';
 import type { ShardSourceContext } from './types.js';
-import { normalizePresenceMetadata, type CompanionPresenceMetadata } from '../agent/presence-metadata.js';
+import { normalizePresenceMetadata, type CompanionPresenceMetadata } from '../core/agent/presence-metadata.js';
 
 export interface ShardResultLineageSourceMessage {
   id: string;

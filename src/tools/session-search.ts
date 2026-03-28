@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 import type { SessionManager } from '../session/manager.js';
 import type { SessionEntry, JournalEntry } from '../session/types.js';
 import { getRequestContext } from '../llm/request-context.js';

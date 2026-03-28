@@ -1,4 +1,4 @@
-import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
+import type { EmbeddingService, LLMProvider } from '../core/agent/contracts.js';
 import type { EventBus } from '../shared/event-bus.js';
 import type { PromptRegistryStore } from '../core/identity/prompt-registry.js';
 import type { ContactStore } from '../contacts/store.js';

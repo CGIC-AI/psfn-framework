@@ -6,11 +6,11 @@ import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage, WyomingRoutingMetadata } from '../shared/contracts/runtime.js';
-import { resolvePresenceSubjectId } from '../agent/presence-metadata.js';
+import { resolvePresenceSubjectId } from '../core/agent/presence-metadata.js';
 import type { EventBus } from '../shared/event-bus.js';
-import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent/contracts.js';
-import { SubstrateAgent } from '../agent/substrate-agent.js';
-import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
+import type { LLMProvider, EmbeddingService, MemoryProvider } from '../core/agent/contracts.js';
+import { SubstrateAgent } from '../core/agent/substrate-agent.js';
+import type { RuntimeMode } from '../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../system/capabilities/tiers.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import type { SessionStore } from '../session/store.js';
@@ -35,7 +35,7 @@ import type {
 import { buildShardLineageEnvelope } from './result-lineage.js';
 import { buildShardReturnedArtifacts, type ShardReturnedArtifact } from './artifact-policy.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
-import { resolveCanonicalEmbodimentContext } from '../agent/active-emanation-state.js';
+import { resolveCanonicalEmbodimentContext } from '../core/agent/active-emanation-state.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;

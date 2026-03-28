@@ -4,7 +4,7 @@ import {
   normalizePresenceMetadata,
   resolvePresenceSubjectId,
   resolvePresenceMetadataResult,
-} from '../../../agent/presence-metadata.js';
+} from '../../../core/agent/presence-metadata.js';
 import {
   isRecord,
   type WyomingFrame,

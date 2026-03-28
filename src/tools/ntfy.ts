@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { NotifyNtfyParams, NotifyNtfyResult } from '../boundary/gateway/protocol.js';
-import type { WirableTool } from '../agent/tool-wiring-validator.js';
+import type { WirableTool } from '../core/agent/tool-wiring-validator.js';
 import type {
   ExternalCommunicationChannel,
   ExternalCommunicationRateLimiter,

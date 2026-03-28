@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { SubstrateConfig } from './config/runtime-config-contracts.js';
-import type { PromotedToolMutationResult } from '../agent/substrate-agent.js';
+import type { PromotedToolMutationResult } from '../core/agent/substrate-agent.js';
 import {
   RUNTIME_SETTINGS_KEYS,
   getRuntimeSettingsSnapshot,

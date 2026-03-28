@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProvider } from '../../core/agent/contracts.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import {

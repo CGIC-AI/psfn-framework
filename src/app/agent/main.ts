@@ -48,7 +48,7 @@ import {
 import {
   loadRuntimeChannelsConfig,
 } from '../../channels/config.js';
-import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../agent/tool-wiring-validator.js';
+import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from '../../agent-main/gateway-message-handlers.js';
 import {
   buildRuntimeChannelsConfigOverrides,

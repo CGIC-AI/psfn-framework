@@ -10,7 +10,7 @@ import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../llm/client.js';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { MemoryStore } from '../../memory/store.js';
 import { SalienceDecay } from '../../memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../repl/types.js';

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { EmbeddingService } from '../agent/contracts.js';
+import type { EmbeddingService } from '../core/agent/contracts.js';
 import { toErrorMessage } from '../shared/utils/errors.js';
 
 interface MemoryTextRow {

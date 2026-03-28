@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 import type { SessionManager } from './manager.js';
 import type { SessionEntry } from './types.js';
 import { classifyChannel, getAllowedSensitivities } from '../trust/policy.js';

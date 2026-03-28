@@ -1,4 +1,4 @@
-import type { EmbeddingService } from '../agent/contracts.js';
+import type { EmbeddingService } from '../core/agent/contracts.js';
 import path from 'node:path';
 import { createComponentLogger } from '../shared/logger.js';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';

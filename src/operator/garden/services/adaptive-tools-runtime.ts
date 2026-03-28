@@ -1,6 +1,6 @@
-import type { AdaptiveToolRuntimeState } from '../../../agent/adaptive-tools-telemetry.js';
-import type { RuntimeToolCatalogEntry, RuntimeToolCatalogSnapshot } from '../../../agent/tool-catalog.js';
-import { cloneToolWiringMeta } from '../../../agent/tool-wiring-validator.js';
+import type { AdaptiveToolRuntimeState } from '../../../core/agent/adaptive-tools-telemetry.js';
+import type { RuntimeToolCatalogEntry, RuntimeToolCatalogSnapshot } from '../../../core/agent/tool-catalog.js';
+import { cloneToolWiringMeta } from '../../../core/agent/tool-wiring-validator.js';
 import type {
   RuntimeServiceHealth,
   RuntimeServiceHealthSnapshot,

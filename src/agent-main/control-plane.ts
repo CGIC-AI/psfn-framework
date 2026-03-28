@@ -13,7 +13,7 @@ import type { MemoryExtractor } from '../memory/extraction.js';
 import type { GatewayClient } from '../boundary/gateway/client.js';
 import type { CapabilityRuntime } from '../system/capabilities/runtime.js';
 import type { LifecycleRestartSafeguard, ExternalCommunicationRateLimiter } from '../system/capabilities/safeguards.js';
-import type { SubstrateAgent } from '../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../core/agent/substrate-agent.js';
 import type { ApiServer } from '../channels/api/server.js';
 import type { AdminServer } from '../operator/garden/server.js';
 

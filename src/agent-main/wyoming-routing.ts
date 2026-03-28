@@ -4,7 +4,7 @@ import {
   buildSatellitePresenceMetadata,
   resolvePresenceMetadataResult,
   resolvePresenceSubjectId,
-} from '../agent/presence-metadata.js';
+} from '../core/agent/presence-metadata.js';
 
 export interface WyomingDelegationDecision {
   isWyoming: boolean;

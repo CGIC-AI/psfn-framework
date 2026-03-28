@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProvider } from '../core/agent/contracts.js';
 import type { CompletionPurpose, LLMContext, LLMResponse, StreamCallbacks } from '../shared/contracts/runtime.js';
 import { runDeliberation } from './deliberation.js';
 

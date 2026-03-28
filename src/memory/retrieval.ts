@@ -3,7 +3,7 @@ import type {
   EmbeddingService,
   LLMProvider,
   RetrievalVADInput,
-} from '../agent/contracts.js';
+} from '../core/agent/contracts.js';
 import type { ContactProfileArtifact, MemoryStore } from './store.js';
 import type { PurrMemory, MemoryPrivacyRiskBreakdown, MemoryScopeQuery } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';

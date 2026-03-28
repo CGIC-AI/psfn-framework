@@ -6,7 +6,7 @@ import {
   __retrieval_internals,
 } from './retrieval.js';
 import type { MemoryStore } from './store.js';
-import type { EmbeddingService, LLMProvider } from '../agent/contracts.js';
+import type { EmbeddingService, LLMProvider } from '../core/agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../trust/types.js';
 import type { ConsentFlags } from '../trust/types.js';

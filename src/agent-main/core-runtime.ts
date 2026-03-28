@@ -4,7 +4,7 @@ import type { EventBus } from '../shared/event-bus.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryJournal } from '../memory/journal.js';
 import type { GatewayClient } from '../boundary/gateway/client.js';
-import type { EmotionRuntimeWiring } from '../agent/substrate-agent.js';
+import type { EmotionRuntimeWiring } from '../core/agent/substrate-agent.js';
 import type { PromptRegistryStore } from '../core/identity/prompt-registry.js';
 import type { CoreMemoryStore } from '../core-memory/store.js';
 import type { MemoryExtractor } from '../memory/extraction.js';
@@ -32,7 +32,7 @@ import { createIdentityCoolingOffManagerFromEnv } from '../system/capabilities/s
 import { composeSystemPromptTemplate } from '../core/identity/loader.js';
 import type { PromptLayerStore } from '../core/identity/prompt-store.js';
 import type { CharacterCardVersionStore } from '../core/identity/card-versioning.js';
-import type { SubstrateAgent } from '../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../core/agent/substrate-agent.js';
 import { createPromptGenerationFailureAlertHandler } from '../app/startup/support/operator-alerts.js';
 import type { NtfyNotifier } from '../tools/ntfy.js';
 import {

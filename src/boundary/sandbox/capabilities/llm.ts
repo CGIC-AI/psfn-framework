@@ -1,4 +1,4 @@
-import type { LLMProvider, LLMRequestMetadata } from '../../../agent/contracts.js';
+import type { LLMProvider, LLMRequestMetadata } from '../../../core/agent/contracts.js';
 import type { ThinkEvidence } from '../../../repl/types.js';
 import type { SandboxBudgetRef } from './contracts.js';
 import { addEvidence, BUDGET_EXCEEDED_MESSAGE } from './common.js';

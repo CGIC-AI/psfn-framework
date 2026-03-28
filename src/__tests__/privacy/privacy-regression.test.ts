@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import type { EmbeddingService } from '../../agent/contracts.js';
+import type { EmbeddingService } from '../../core/agent/contracts.js';
 import { ContactStore } from '../../contacts/store.js';
 import { createContactSetTrustTool } from '../../contacts/tools.js';
 import { MemoryRetriever } from '../../memory/retrieval.js';

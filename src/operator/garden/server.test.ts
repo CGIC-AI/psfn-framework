@@ -17,7 +17,7 @@ import { ShardManager } from '../../shards/manager.js';
 import { formatPossessiveCompanionName } from '../../core/identity/companion-naming.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProvider } from '../../core/agent/contracts.js';
 import { resetRuntimeTrustPolicy } from '../../trust/runtime-policy.js';
 
 function request(

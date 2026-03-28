@@ -1,4 +1,4 @@
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import {
   createApiServerChannelAdapterFactoryEntry,
   createOpenHomeChannelAdapterFactoryEntry,

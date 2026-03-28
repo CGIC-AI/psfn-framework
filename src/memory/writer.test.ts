@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
-import type { EmbeddingService } from '../agent/contracts.js';
+import type { EmbeddingService } from '../core/agent/contracts.js';
 import { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';

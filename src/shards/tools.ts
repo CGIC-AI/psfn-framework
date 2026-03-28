@@ -9,7 +9,7 @@ import {
   BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
   buildBoundedSubagentLaunchEnvelope,
   normalizeBoundedSubagentLaunchRequest,
-} from '../agent/substrate-agent/bounded-subagent-contract.js';
+} from '../core/agent/substrate-agent/bounded-subagent-contract.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../shared/utils/errors.js';

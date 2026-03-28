@@ -1,9 +1,9 @@
 import type { TurnID } from '../shared/contracts/runtime.js';
-import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
+import type { SessionRoleEnvelopePreview } from '../core/internal-role-envelopes/projections.js';
 import {
   parseSessionRoleEnvelopePreview,
   normalizeSessionRoleEnvelopePreview,
-} from '../internal-role-envelopes/projections.js';
+} from '../core/internal-role-envelopes/projections.js';
 import type { SessionEntry } from './types.js';
 import { backfillLegacyTurnId, parseTurnId } from '../core/turns/id.js';
 

@@ -1,5 +1,5 @@
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
-import type { LLMProvider, EmbeddingService } from '../../../agent/contracts.js';
+import type { LLMProvider, EmbeddingService } from '../../../core/agent/contracts.js';
 import type { ChannelOutboundDock } from '../../../channels/types.js';
 import type { GitOperations } from '../../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../../images/types.js';

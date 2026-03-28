@@ -1,4 +1,4 @@
-import type { EmbodimentPresenceMetadata } from '../agent/presence-metadata.js';
+import type { EmbodimentPresenceMetadata } from '../core/agent/presence-metadata.js';
 import type { SessionEntry } from '../session/types.js';
 import type { ShardResultLineageEnvelope } from './result-lineage.js';
 import type { ShardReturnedArtifact } from './artifact-policy.js';

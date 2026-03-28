@@ -398,7 +398,7 @@ run_cutover() {
       SYSTEM_DATA_DIR="${RUNTIME_ROOT}/system-data" \
       COMPANION_DATA_DIR="${RUNTIME_ROOT}/companion-data" \
       DATABASE_PATH="${RUNTIME_ROOT}/companion-data/${legacy_database_basename}" \
-      "${bundled_node_bin}" ./node_modules/.bin/tsx ./src/migrate-persistence-layout.ts --apply --legacy-data-dir "${LEGACY_DATA_DIR}"
+      "${bundled_node_bin}" ./node_modules/.bin/tsx ./src/app/maintenance/migrate-persistence-layout.ts --apply --legacy-data-dir "${LEGACY_DATA_DIR}"
   )
 }
 

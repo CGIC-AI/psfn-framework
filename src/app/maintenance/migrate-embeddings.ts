@@ -6,13 +6,13 @@
 // Usage: npm run migrate:embeddings [-- --batch-size 64 --parallelism 4]
 
 import 'dotenv/config';
-import { initDatabase } from './persistence/sqlite-utils.js';
+import { initDatabase } from '../../persistence/sqlite-utils.js';
 import * as sqliteVec from 'sqlite-vec';
-import { createEmbeddingProviderFromEnv } from './memory/embedding.js';
-import { migrateMemoryEmbeddings } from './memory/migration.js';
-import type { ReembedMigrationProgress } from './memory/migration.js';
-import { loadConfig } from './types.js';
-import { toErrorMessage } from './shared/utils/errors.js';
+import { createEmbeddingProviderFromEnv } from '../../memory/embedding.js';
+import { migrateMemoryEmbeddings } from '../../memory/migration.js';
+import type { ReembedMigrationProgress } from '../../memory/migration.js';
+import { loadConfig } from '../../types.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface CliOptions {
   batchSize?: number;

@@ -1,13 +1,13 @@
 #!/usr/bin/env tsx
 
 import 'dotenv/config';
-import { loadConfig } from './types.js';
+import { loadConfig } from '../../types.js';
 import {
   buildPersistenceCutoverOptionsFromConfig,
   buildPersistenceCutoverPlan,
   executePersistenceCutover,
-} from './persistence/cutover.js';
-import { toErrorMessage } from './shared/utils/errors.js';
+} from '../../persistence/cutover.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface CliOptions {
   apply: boolean;

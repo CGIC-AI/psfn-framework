@@ -150,7 +150,7 @@ src/
 ### Persistence and layout
 
 - system-owned state lives under `system-data`; companion artifacts live under `companion-data`; cutover helpers and path guards enforce the topology
-- key files: `src/persistence/layout.ts`, `src/migrate-persistence-layout.ts`, `src/config/runtime-config.ts`, `src/runtime/bootstrap-helpers.ts`
+- key files: `src/persistence/layout.ts`, `src/app/maintenance/migrate-persistence-layout.ts`, `src/config/runtime-config.ts`, `src/runtime/bootstrap-helpers.ts`
 
 ### Cognition and context
 

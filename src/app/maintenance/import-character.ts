@@ -1,7 +1,7 @@
 import 'dotenv/config';
-import { loadConfig } from './types.js';
-import { importCharacterCardToPath } from './identity/importer.js';
-import { toErrorMessage } from './shared/utils/errors.js';
+import { loadConfig } from '../../types.js';
+import { importCharacterCardToPath } from '../../identity/importer.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 function usage(): void {
   console.error('Usage: npm run import-character <source-path>');

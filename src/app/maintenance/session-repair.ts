@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import { join, resolve } from 'node:path';
-import { runSessionRepairScan } from './session/repair.js';
-import { loadConfig } from './types.js';
-import { toErrorMessage } from './shared/utils/errors.js';
+import { runSessionRepairScan } from '../../session/repair.js';
+import { loadConfig } from '../../types.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface CliOptions {
   sessionsDir?: string;

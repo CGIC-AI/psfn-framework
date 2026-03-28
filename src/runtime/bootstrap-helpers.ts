@@ -60,10 +60,8 @@ import { loadTrustPolicyConfig, type TrustPolicyConfig } from '../config/trust-p
 import { resolveRuntimeSchedulerConfig } from '../config/scheduler-runtime.js';
 import { setRuntimeTrustPolicy } from '../trust/runtime-policy.js';
 import {
-  resolveConfiguredCompanionDataDir,
-  resolveConfiguredSystemDataDir,
-  resolveRuntimePathLayout,
-  type RuntimePathLayout,
+  resolveRuntimePathSnapshotFromConfig,
+  type RuntimePathSnapshot,
 } from '../persistence/layout.js';
 import {
   assertPersistenceCutoverReady,
@@ -113,7 +111,8 @@ export interface StartupConfigHydrationDiagnostics {
 export interface StartupConfigHydrationResult {
   systemDataDir: string;
   companionDataDir: string;
-  runtimePathLayout: RuntimePathLayout;
+  runtimePathLayout: RuntimePathSnapshot['runtimePathLayout'];
+  pathSnapshot: RuntimePathSnapshot;
   settingsDomains: SettingsDomainSplit;
   modelsLoadResult: ModelsLoadResult;
   providersLoadResult: ProvidersLoadResult;
@@ -370,25 +369,17 @@ export function hydrateCanonicalStartupConfig(
   options: StartupConfigHydrationOptions = {},
 ): StartupConfigHydrationResult {
   const env = options.env ?? process.env;
-  const systemDataDir = resolveConfiguredSystemDataDir(config);
-  const companionDataDir = resolveConfiguredCompanionDataDir(config);
-  const usesLegacySharedDataDir = systemDataDir === companionDataDir;
-  const runtimePathLayout = resolveRuntimePathLayout({
+  const pathSnapshot = resolveRuntimePathSnapshotFromConfig(config, {
     mode: env.PSFN_RUNTIME_LAYOUT_MODE,
     nodeEnv: env.NODE_ENV,
     runtimeRootDir: env.PSFN_RUNTIME_ROOT,
-    ...(usesLegacySharedDataDir
-      ? { legacyDataDir: systemDataDir }
-      : {
-        systemDataDir,
-        companionDataDir,
-        legacyDataDir: env.DATA_DIR,
-      }),
+    legacyDataDir: env.DATA_DIR,
     workspacePath: env.WORKSPACE_PATH,
     logsDir: env.PSFN_LOGS_DIR,
     tempDir: env.PSFN_TEMP_DIR,
     backupsDir: env.BACKUP_ROOT_DIR,
   });
+  const { systemDataDir, companionDataDir, runtimePathLayout } = pathSnapshot;
   assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config, env));
 
   const savedSettings = loadSettings(systemDataDir);
@@ -508,6 +499,7 @@ export function hydrateCanonicalStartupConfig(
     systemDataDir,
     companionDataDir,
     runtimePathLayout,
+    pathSnapshot,
     settingsDomains,
     modelsLoadResult,
     providersLoadResult,

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import { readJournalFirstEntry } from '../session/journal-utils.js';
 import { sanitizeChannelId } from '../session/store-primitives.js';
@@ -58,6 +58,12 @@ export interface RuntimePathLayout extends PersistenceRoots {
   logsDir: string;
   tempDir: string;
   backupsDir: string;
+}
+
+export interface RuntimePathSnapshot extends PersistenceRoots {
+  runtimePathLayout: RuntimePathLayout;
+  workspacePath: string;
+  workspaceRoot: string;
 }
 
 const DEFAULT_CONTINUOUS_WORKSPACE_PATH = './workspace';
@@ -294,6 +300,37 @@ export function resolveRuntimePathLayout(
     backupsDir,
     usesLegacySharedDataDir,
   };
+}
+
+export function resolveRuntimePathSnapshot(
+  options: RuntimePathLayoutOptions = {},
+): RuntimePathSnapshot {
+  const runtimePathLayout = resolveRuntimePathLayout(options);
+  return {
+    systemDataDir: runtimePathLayout.systemDataDir,
+    companionDataDir: runtimePathLayout.companionDataDir,
+    usesLegacySharedDataDir: runtimePathLayout.usesLegacySharedDataDir,
+    runtimePathLayout,
+    workspacePath: runtimePathLayout.workspacePath,
+    workspaceRoot: resolve(normalize(runtimePathLayout.workspacePath)),
+  };
+}
+
+export function resolveRuntimePathSnapshotFromConfig(
+  config: ConfiguredPersistenceDirs,
+  options: RuntimePathLayoutOptions = {},
+): RuntimePathSnapshot {
+  const systemDataDir = resolveConfiguredSystemDataDir(config);
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  return resolveRuntimePathSnapshot({
+    ...options,
+    ...(systemDataDir === companionDataDir
+      ? { legacyDataDir: systemDataDir }
+      : {
+        systemDataDir,
+        companionDataDir,
+      }),
+  });
 }
 
 export function resolvePersistenceRoots(

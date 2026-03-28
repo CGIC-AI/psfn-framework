@@ -42,6 +42,7 @@ import {
   resolveReflectionJournalPath,
   resolveReflectionNotesDir,
   resolveRuntimeLayoutMode,
+  resolveRuntimePathSnapshotFromConfig,
   resolveRuntimePathLayout,
   resolveSafeguardAuditTrailPath,
   resolveShardSessionMemorySyncAuditPath,
@@ -171,6 +172,27 @@ describe('persistence layout', () => {
       backupsDir: resolveBackupsDir('./data'),
       usesLegacySharedDataDir: true,
     });
+  });
+
+  it('resolves a runtime path snapshot once from config-owned roots', () => {
+    const snapshot = resolveRuntimePathSnapshotFromConfig(
+      {
+        systemDataDir: '/srv/psfn/system-data',
+        companionDataDir: '/srv/psfn/companion-data',
+      },
+      {
+        mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
+        runtimeRootDir: '/srv/psfn/runtime',
+        workspacePath: '/srv/psfn/runtime/workspace',
+      },
+    );
+
+    expect(snapshot.systemDataDir).toBe('/srv/psfn/system-data');
+    expect(snapshot.companionDataDir).toBe('/srv/psfn/companion-data');
+    expect(snapshot.runtimePathLayout.systemDataDir).toBe('/srv/psfn/system-data');
+    expect(snapshot.runtimePathLayout.companionDataDir).toBe('/srv/psfn/companion-data');
+    expect(snapshot.workspacePath).toBe('/srv/psfn/runtime/workspace');
+    expect(snapshot.workspaceRoot).toBe('/srv/psfn/runtime/workspace');
   });
 
   it('resolves production-mode defaults with isolated roots', () => {

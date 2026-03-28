@@ -38,6 +38,7 @@ import type {
   ShardSourceContext,
 } from './types.js';
 import { buildShardLineageEnvelope } from './result-lineage.js';
+import { buildShardReturnedArtifacts, type ShardReturnedArtifact } from './artifact-policy.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { resolveCanonicalEmbodimentContext } from '../agent/active-emanation-state.js';
 
@@ -381,6 +382,7 @@ export class ShardManager implements ShardExecutionPort {
       let lastModel = '';
       let lastContent = '';
       let turns = 0;
+      const returnedArtifacts: ShardReturnedArtifact[] = [];
 
       for (let turn = 0; turn < maxTurns; turn++) {
         this.refreshShardHealth();
@@ -393,6 +395,21 @@ export class ShardManager implements ShardExecutionPort {
         };
 
         const response = await agentLoop.handleMessage(turnMessage);
+        const shardArtifacts = buildShardReturnedArtifacts({
+          lineage,
+          turnIndex: turn + 1,
+          turnMessageId: turnMessage.id,
+          attachments: response.attachments,
+        });
+        if (shardArtifacts.length > 0) {
+          returnedArtifacts.push(...shardArtifacts);
+          this.auditTrail?.append('shard.artifact.return', {
+            shardId,
+            turnIndex: turn + 1,
+            artifactIds: shardArtifacts.map(artifact => artifact.artifactId),
+            mergePolicy: 'review_required',
+          });
+        }
 
         totalInput += response.metadata.inputTokens;
         totalOutput += response.metadata.outputTokens;
@@ -424,6 +441,7 @@ export class ShardManager implements ShardExecutionPort {
         capabilities: [...capabilities],
         requiredCapabilities: [...requiredCapabilities],
         lineage,
+        ...(returnedArtifacts.length > 0 ? { artifacts: returnedArtifacts } : {}),
       };
       this.auditTrail?.append('shard.spawn.end', {
         shardId,

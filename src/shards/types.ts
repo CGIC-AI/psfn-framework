@@ -1,6 +1,7 @@
 import type { EmbodimentPresenceMetadata } from '../agent/presence-metadata.js';
 import type { SessionEntry } from '../session/types.js';
 import type { ShardResultLineageEnvelope } from './result-lineage.js';
+import type { ShardReturnedArtifact } from './artifact-policy.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
@@ -59,6 +60,7 @@ export interface ShardResult {
   capabilities: string[];
   requiredCapabilities: string[];
   lineage: ShardResultLineageEnvelope;
+  artifacts?: ShardReturnedArtifact[];
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';

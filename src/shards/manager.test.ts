@@ -9,6 +9,7 @@ import { SessionStore } from '../session/store.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 import { buildSessionMetadataWithTurn } from '../session/turn-provenance.js';
 import { buildFocusMemoryScopeQuery } from '../session/focus-knowledge.js';
+import { SubstrateAgent } from '../agent/substrate-agent.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createSpawnShardTool } from './tools.js';
 import type { LLMProvider, MemoryProvider } from '../agent/contracts.js';
@@ -995,6 +996,93 @@ describe('ShardManager', () => {
         isDirectMessage: false,
       }),
     }));
+  });
+
+  it('returns accepted shard artifacts with explicit merge policy and lineage provenance', async () => {
+    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce({
+      content: 'artifact response',
+      channelId: 'shard:result',
+      attachments: [{
+        url: 'https://images.example.test/fold-back.png',
+        contentType: 'image/png',
+        name: 'fold-back.png',
+        localPath: '/tmp/fold-back.png',
+      }],
+      metadata: {
+        model: 'mock-model',
+        inputTokens: 3,
+        outputTokens: 4,
+        durationMs: 8,
+      },
+    } as any);
+
+    try {
+      const manager = new ShardManager({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config: TEST_CONFIG,
+        parentSystemPrompt: 'test',
+      });
+
+      const result = await manager.spawn({ name: 'artifact', task: 'emit an image artifact' });
+
+      expect(result.artifacts).toEqual([expect.objectContaining({
+        schemaVersion: 1,
+        kind: 'attachment',
+        mergePolicy: 'review_required',
+        artifactId: `artifact-${result.shardId}-1-1`,
+        url: 'https://images.example.test/fold-back.png',
+        contentType: 'image/png',
+        name: 'fold-back.png',
+        localPath: '/tmp/fold-back.png',
+        provenance: {
+          lineage: result.lineage,
+          turnIndex: 1,
+          turnMessageId: result.shardId,
+        },
+      })]);
+    } finally {
+      handleMessageSpy.mockRestore();
+    }
+  });
+
+  it('rejects ambiguous shard artifact returns', async () => {
+    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce({
+      content: 'artifact response',
+      channelId: 'shard:result',
+      attachments: [{
+        url: 'https://images.example.test/fold-back.json',
+        contentType: 'application/json',
+        name: 'fold-back.json',
+      }],
+      metadata: {
+        model: 'mock-model',
+        inputTokens: 3,
+        outputTokens: 4,
+        durationMs: 8,
+      },
+    } as any);
+
+    try {
+      const manager = new ShardManager({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config: TEST_CONFIG,
+        parentSystemPrompt: 'test',
+      });
+
+      await expect(manager.spawn({ name: 'artifact', task: 'emit an ambiguous artifact' }))
+        .rejects
+        .toThrow('ambiguous');
+    } finally {
+      handleMessageSpy.mockRestore();
+    }
   });
 
   it('denies disallowed shard-to-prime memory sync operations and audits the denial', async () => {

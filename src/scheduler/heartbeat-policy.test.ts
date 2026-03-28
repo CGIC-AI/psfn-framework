@@ -26,7 +26,7 @@ describe('HeartbeatPolicyStore', () => {
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
-    expect(ids).toContain('whisper');
+    expect(ids).toContain('musing');
     expect(ids).toContain('daily-review');
     expect(ids).toContain('emotional-check');
     expect(ids).toContain('goal-update');
@@ -52,13 +52,13 @@ describe('HeartbeatPolicyStore', () => {
 
   it('musing template sends to Discord', () => {
     const policy = store.load();
-    const whisper = policy.templates.find(t => t.id === 'whisper');
-    expect(whisper).toBeDefined();
-    expect(whisper!.name).toBe('Musing');
-    expect(whisper!.sendToDiscord).toBe(true);
-    expect(whisper!.intervalMs).toBe(3_600_000); // 1 hour
-    expect(whisper!.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
-    expect(whisper!.enabled).toBe(true);
+    const musing = policy.templates.find(t => t.id === 'musing');
+    expect(musing).toBeDefined();
+    expect(musing!.name).toBe('Musing');
+    expect(musing!.sendToDiscord).toBe(true);
+    expect(musing!.intervalMs).toBe(3_600_000); // 1 hour
+    expect(musing!.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
+    expect(musing!.enabled).toBe(true);
   });
 
   it('daily-review template defaults to local 06:00 cadence', () => {
@@ -70,9 +70,9 @@ describe('HeartbeatPolicyStore', () => {
 
   it('non-musing templates do not send to Discord', () => {
     const policy = store.load();
-    const nonWhispers = policy.templates.filter(t => t.id !== 'whisper');
-    expect(nonWhispers.length).toBe(5);
-    for (const t of nonWhispers) {
+    const nonMusings = policy.templates.filter(t => t.id !== 'musing');
+    expect(nonMusings.length).toBe(5);
+    for (const t of nonMusings) {
       expect(t.sendToDiscord).toBe(false);
     }
   });
@@ -106,7 +106,7 @@ describe('HeartbeatPolicyStore', () => {
       JSON.stringify({
         templates: [
           {
-            id: 'whisper',
+            id: 'musing',
             name: 'Whisper',
             prompt: 'This prompt is long enough to pass prompt validation.',
             intervalMs: 0,
@@ -133,7 +133,7 @@ describe('HeartbeatPolicyStore', () => {
       JSON.stringify({
         templates: [
           {
-            id: 'whisper',
+            id: 'musing',
             name: 'Whisper',
             prompt: 'This prompt is long enough to pass prompt validation.',
             intervalMs: 3_600_000,
@@ -162,7 +162,7 @@ describe('HeartbeatPolicyStore', () => {
       JSON.stringify({
         templates: [
           {
-            id: 'whisper',
+            id: 'musing',
             name: 'Whisper',
             prompt: 'This prompt is long enough to pass prompt validation.',
             intervalMs: 3_600_000,
@@ -186,15 +186,15 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const loaded = store.load();
-    const whisper = loaded.templates.find(t => t.id === 'whisper');
+    const musing = loaded.templates.find(t => t.id === 'musing');
     const dailyReview = loaded.templates.find(t => t.id === 'daily-review');
-    expect(whisper?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
+    expect(musing?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
     expect(dailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
 
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
-    const persistedWhisper = persisted.templates.find(t => t.id === 'whisper');
+    const persistedMusing = persisted.templates.find(t => t.id === 'musing');
     const persistedDailyReview = persisted.templates.find(t => t.id === 'daily-review');
-    expect(persistedWhisper?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
+    expect(persistedMusing?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
     expect(persistedDailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
   });
 
@@ -222,14 +222,14 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const loaded = store.load();
-    const whisper = loaded.templates.find(t => t.id === 'whisper');
-    expect(whisper?.name).toBe('Musing');
-    expect(whisper?.prompt).toContain('little musing from your inner world');
+    const musing = loaded.templates.find(t => t.id === 'musing');
+    expect(musing?.name).toBe('Musing');
+    expect(musing?.prompt).toContain('little musing from your inner world');
 
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
-    const persistedWhisper = persisted.templates.find(t => t.id === 'whisper');
-    expect(persistedWhisper?.name).toBe('Musing');
-    expect(persistedWhisper?.prompt).toContain('little musing from your inner world');
+    const persistedMusing = persisted.templates.find(t => t.id === 'musing');
+    expect(persistedMusing?.name).toBe('Musing');
+    expect(persistedMusing?.prompt).toContain('little musing from your inner world');
   });
 });
 
@@ -313,10 +313,15 @@ describe('validateTemplate', () => {
   });
 
   it('accepts valid slugs', () => {
-    for (const id of ['whisper', 'daily-review', 'a-b-c', 'test123', 'x']) {
+    for (const id of ['musing', 'daily-review', 'a-b-c', 'test123', 'x']) {
       const errors = validateTemplate({ ...validTemplate, id }, true);
       expect(errors.filter(e => e.field === 'id')).toHaveLength(0);
     }
+  });
+
+  it('rejects the legacy whisper template id for new outward templates', () => {
+    const errors = validateTemplate({ ...validTemplate, id: 'whisper' }, true);
+    expect(errors.some(e => e.field === 'id')).toBe(true);
   });
 
   it('skips id validation in update mode when id not provided', () => {

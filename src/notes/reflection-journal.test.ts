@@ -54,16 +54,16 @@ describe('ReflectionJournalStore', () => {
 
   it('appends baseline reflection entries', () => {
     const entry = store.append({
-      templateId: 'whisper',
+      templateId: 'musing',
       templateName: 'Musing',
       prompt: 'Share a brief reflection.',
       reflection: 'I felt grounded today.',
-      channelId: 'internal:reflection:whisper',
+      channelId: 'internal:reflection:musing',
       mode: 'agent',
       createdAt: '2026-03-02T00:00:00.000Z',
     });
 
-    expect(entry.templateId).toBe('whisper');
+    expect(entry.templateId).toBe('musing');
     expect(entry.templateName).toBe('Musing');
     const lines = readFileSync(filePath, 'utf-8').trim().split('\n');
     expect(lines).toHaveLength(1);

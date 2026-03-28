@@ -17,7 +17,7 @@ describe('VaultAutoPublisher', () => {
     const publisher = new VaultAutoPublisher(ops);
 
     await publisher.publishReflection({
-      templateId: 'whisper',
+      templateId: 'musing',
       templateName: 'Musing',
       reflection: 'A quiet thought about the day.',
       mode: 'agent',
@@ -32,7 +32,7 @@ describe('VaultAutoPublisher', () => {
 
     // Verify frontmatter
     expect(content).toContain('---');
-    expect(content).toContain('template: whisper');
+    expect(content).toContain('template: musing');
     expect(content).toContain('mode: agent');
     expect(content).toContain('date: 2026-03-02T14:30:00.000Z');
     expect(content).toContain('A quiet thought about the day.');
@@ -62,7 +62,7 @@ describe('VaultAutoPublisher', () => {
     const date = new Date('2026-01-01T12:00:00Z');
 
     const cases: Array<[string, string]> = [
-      ['whisper', 'Reflections/musings/'],
+      ['musing', 'Reflections/musings/'],
       ['daily-review', 'Reflections/daily/'],
       ['emotional-check', 'Reflections/emotional/'],
       ['goal-update', 'Reflections/goals/'],

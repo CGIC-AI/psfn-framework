@@ -11,6 +11,11 @@ import type { ValuesDeliberationMetadata } from '../values/store.js';
 const log = createComponentLogger('ReflectionJournal');
 const REFLECTION_JOURNAL_ERROR_PREFIX = 'Reflection journal';
 
+function normalizeTemplateId(templateId: string): string {
+  const normalized = templateId.trim();
+  return /^whisper$/i.test(normalized) ? 'musing' : normalized;
+}
+
 export interface ReflectionJournalEntryInput {
   templateId: string;
   templateName: string;
@@ -64,7 +69,7 @@ export class ReflectionJournalStore {
     }
     const entry: ReflectionJournalEntry = {
       id: `reflection-${Date.now()}-${Math.floor(Math.random() * 1_000_000).toString().padStart(6, '0')}`,
-      templateId: input.templateId.trim(),
+      templateId: normalizeTemplateId(input.templateId),
       templateName: input.templateName.trim(),
       prompt: input.prompt.trim(),
       reflection: input.reflection.trim(),

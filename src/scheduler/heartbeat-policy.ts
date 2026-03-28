@@ -13,7 +13,7 @@ const log = createComponentLogger('HeartbeatPolicy');
 // ── Types ──
 
 export interface ReflectionTemplate {
-  id: string;           // slug, e.g. 'whisper', 'daily-review'
+  id: string;           // slug, e.g. 'musing', 'daily-review'
   name: string;         // display name
   prompt: string;       // text sent to agentLoop.handleMessage
   intervalMs: number;   // how often (validated: 5min – 7d)
@@ -40,6 +40,8 @@ const MIN_PROMPT_LENGTH = 10;
 const MAX_PROMPT_LENGTH = 2000;
 const MAX_TEMPLATES = 20;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const MUSING_TEMPLATE_ID = 'musing';
+const LEGACY_WHISPER_TEMPLATE_ID = 'whisper';
 const LEGACY_WHISPER_TEMPLATE_NAME = 'Whisper';
 const LEGACY_WHISPER_TEMPLATE_PROMPT = 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.';
 const MUSING_TEMPLATE_NAME = 'Musing';
@@ -189,6 +191,11 @@ export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean)
   if (isNew || t.id !== undefined) {
     if (typeof t.id !== 'string' || !SLUG_RE.test(t.id)) {
       errors.push({ field: 'id', message: 'id must be a lowercase slug (a-z0-9, hyphens)' });
+    } else if (isNew && t.id === LEGACY_WHISPER_TEMPLATE_ID) {
+      errors.push({
+        field: 'id',
+        message: 'id "whisper" is reserved for internal whisper traffic; use "musing" for outward heartbeat templates',
+      });
     }
   }
 
@@ -234,7 +241,7 @@ export function validateTemplate(t: Partial<ReflectionTemplate>, isNew: boolean)
 }
 
 function getKnownTemplateCadence(templateId: string): RecurringCadence | undefined {
-  if (templateId === 'whisper') {
+  if (templateId === MUSING_TEMPLATE_ID || templateId === LEGACY_WHISPER_TEMPLATE_ID) {
     return { kind: 'hourly', minute: 0, timezone: 'local' };
   }
   if (templateId === 'daily-review') {
@@ -270,20 +277,19 @@ function normalizeTemplateCadence(policy: HeartbeatPolicy): { policy: HeartbeatP
 
 function normalizeMusingPresentation(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
   const templates = policy.templates.map(template => {
-    if (template.id !== 'whisper') {
-      return template;
-    }
+    const nextId = template.id === LEGACY_WHISPER_TEMPLATE_ID ? MUSING_TEMPLATE_ID : template.id;
     const nextName = template.name === LEGACY_WHISPER_TEMPLATE_NAME
       ? MUSING_TEMPLATE_NAME
       : template.name;
     const nextPrompt = template.prompt === LEGACY_WHISPER_TEMPLATE_PROMPT
       ? MUSING_TEMPLATE_PROMPT
       : template.prompt;
-    if (nextName === template.name && nextPrompt === template.prompt) {
+    if (nextId === template.id && nextName === template.name && nextPrompt === template.prompt) {
       return template;
     }
     return {
       ...template,
+      id: nextId,
       name: nextName,
       prompt: nextPrompt,
     };
@@ -307,7 +313,7 @@ function getDefaults(): HeartbeatPolicy {
   return {
     templates: [
       {
-        id: 'whisper',
+        id: MUSING_TEMPLATE_ID,
         name: MUSING_TEMPLATE_NAME,
         prompt: MUSING_TEMPLATE_PROMPT,
         intervalMs: 60 * 60_000, // 1 hour

@@ -153,7 +153,10 @@ import {
   stopChannelAdapters,
 } from './runtime/channel-lifecycle.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
-import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
+import {
+  runShutdownSequence,
+  type ShutdownSequenceStep,
+} from './runtime/shutdown-helpers.js';
 import {
   createApiServerChannelAdapterFactoryEntry,
   createDiscordChannelAdapterFactoryEntry,
@@ -1323,32 +1326,11 @@ export class SubstrateRuntime implements Lifecycle {
 
     const shutdownReason = options.shutdownReason?.trim();
     log.info('Shutting down...');
-    if (options.notifyShutdown ?? true) {
-      await this.runShutdownStep('send graceful shutdown notification', () => this.lifecycleNotifier?.notifyShutdown(
-        shutdownReason && shutdownReason.length > 0 ? shutdownReason : undefined,
-      ));
-    }
-    await this.runShutdownStep('emit system.shutdown event', () => this.eventBus.emit('system.shutdown', {}));
-    await this.runShutdownStep('stop voice observers', () => {
-      this.stopVoiceObservers?.();
-      this.stopVoiceObservers = undefined;
-    });
-    await this.runShutdownStep('stop debug observer', () => {
-      this.stopDebugObserver?.();
-      this.stopDebugObserver = undefined;
-    });
-    await this.runShutdownStep('stop scheduler', () => this.scheduler.stop());
 
     const timeoutMs = parseExtractionDrainTimeoutMs(
       process.env,
       DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
     );
-    await this.runShutdownStep('drain memory extractor', async () => {
-      const drained = await this.memoryExtractor.stop({ timeoutMs });
-      if (drained === false) {
-        log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
-      }
-    });
 
     const unresolvedCrashRecoveryChannels = this.resolveUnresolvedCrashRecoveryChannels();
     if (unresolvedCrashRecoveryChannels.size > 0) {
@@ -1357,31 +1339,66 @@ export class SubstrateRuntime implements Lifecycle {
       });
     }
 
-    await this.runShutdownStep('write graceful shutdown markers', () => {
-      const markedChannels = this.sessionStore.markGracefulShutdownForActiveChannels(
-        Date.now(),
-        { skipChannels: unresolvedCrashRecoveryChannels },
-      );
-      if (markedChannels.length > 0) {
-        log.info('Wrote graceful shutdown markers', { channels: markedChannels });
-      }
-    });
-    await this.runShutdownStep('stop Wyoming runtime', () => this.wyomingRuntime?.stop());
-    await this.runShutdownStep('stop Wyoming TCP server', () => this.wyomingTcpServer?.stop());
-    await this.runShutdownStep('stop admin server', () => this.adminServer?.stop());
-    await this.runShutdownStep('shutdown modules', () => this.moduleLoader?.shutdown());
-    await this.runShutdownStep('stop channel adapters', () => this.stopChannels());
-    await this.runShutdownStep('close database', () => {
-      this.db.close();
-    });
-    log.info('Stopped');
-  }
+    const shutdownSteps: ShutdownSequenceStep[] = [
+      ...(options.notifyShutdown ?? true
+        ? [{
+            step: 'send graceful shutdown notification',
+            action: () => this.lifecycleNotifier?.notifyShutdown(
+              shutdownReason && shutdownReason.length > 0 ? shutdownReason : undefined,
+            ),
+          }]
+        : []),
+      { step: 'emit system.shutdown event', action: () => this.eventBus.emit('system.shutdown', {}) },
+      {
+        step: 'stop voice observers',
+        action: () => {
+          this.stopVoiceObservers?.();
+          this.stopVoiceObservers = undefined;
+        },
+      },
+      {
+        step: 'stop debug observer',
+        action: () => {
+          this.stopDebugObserver?.();
+          this.stopDebugObserver = undefined;
+        },
+      },
+      { step: 'stop scheduler', action: () => this.scheduler.stop() },
+      {
+        step: 'drain memory extractor',
+        action: async () => {
+          const drained = await this.memoryExtractor.stop({ timeoutMs });
+          if (drained === false) {
+            log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+          }
+        },
+      },
+      {
+        step: 'write graceful shutdown markers',
+        action: () => {
+          const markedChannels = this.sessionStore.markGracefulShutdownForActiveChannels(
+            Date.now(),
+            { skipChannels: unresolvedCrashRecoveryChannels },
+          );
+          if (markedChannels.length > 0) {
+            log.info('Wrote graceful shutdown markers', { channels: markedChannels });
+          }
+        },
+      },
+      { step: 'stop Wyoming runtime', action: () => this.wyomingRuntime?.stop() },
+      { step: 'stop Wyoming TCP server', action: () => this.wyomingTcpServer?.stop() },
+      { step: 'stop admin server', action: () => this.adminServer?.stop() },
+      { step: 'shutdown modules', action: () => this.moduleLoader?.shutdown() },
+      { step: 'stop channel adapters', action: () => this.stopChannels() },
+      {
+        step: 'close database',
+        action: () => {
+          this.db.close();
+        },
+      },
+    ];
 
-  private async runShutdownStep(
-    step: string,
-    action: () => void | Promise<void>,
-    maxAttempts = 2,
-  ): Promise<void> {
-    await runShutdownStepWithRetry(step, action, log, maxAttempts);
+    await runShutdownSequence(shutdownSteps, log);
+    log.info('Stopped');
   }
 }

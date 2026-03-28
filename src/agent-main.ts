@@ -149,7 +149,7 @@ import {
 import { createPromptGenerationFailureAlertHandler } from './runtime/operator-alerts.js';
 import { resolveApiCorsAllowedOrigins } from './channels/api/http-policy.js';
 import { emitEligibilityDecisionTelemetry } from './runtime/eligibility-telemetry.js';
-import { runShutdownStep as runShutdownStepWithRetry } from './runtime/shutdown-helpers.js';
+import { runShutdownSequence } from './runtime/shutdown-helpers.js';
 import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Agent');
@@ -221,14 +221,6 @@ function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagn
       });
     }
   }
-}
-
-async function runShutdownStep(
-  step: string,
-  action: () => void | Promise<void>,
-  maxAttempts = 2,
-): Promise<void> {
-  await runShutdownStepWithRetry(step, action, log, maxAttempts);
 }
 
 async function enforceNetworkIsolationOnStartup(): Promise<void> {
@@ -1010,35 +1002,44 @@ async function main(): Promise<void> {
 
     shuttingDown = true;
     stopPromise = (async () => {
-      await runShutdownStep('unregister gateway disconnect hook', () => unregisterGatewayDisconnect());
-      await runShutdownStep('emit system.shutdown event', () => eventBus.emit('system.shutdown', {}));
-      await runShutdownStep('stop debug observer', () => stopDebugObserver());
-      await runShutdownStep('stop scheduler', () => scheduler.stop());
-
       const timeoutMs = parsePositiveIntEnv(
         process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
         DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
       );
-      await runShutdownStep('drain memory extractor', async () => {
-        const drained = await memoryExtractor.stop({ timeoutMs });
-        if (!drained) {
-          log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
-        }
-      });
-
-      await runShutdownStep('write graceful shutdown markers', () => {
-        const markedChannels = sessionStore.markGracefulShutdownForActiveChannels();
-        if (markedChannels.length > 0) {
-          log.info('Wrote graceful shutdown markers', { channels: markedChannels });
-        }
-      });
-      await runShutdownStep('shutdown module loader', () => moduleLoader.shutdown());
-      await runShutdownStep('stop API server', () => apiServer?.stop());
-      await runShutdownStep('stop admin server', () => adminServer?.stop());
-      await runShutdownStep('destroy gateway client', () => gateway.destroy());
-      await runShutdownStep('close database', () => {
-        db.close();
-      });
+      await runShutdownSequence([
+        { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
+        { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
+        { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop scheduler', action: () => scheduler.stop() },
+        {
+          step: 'drain memory extractor',
+          action: async () => {
+            const drained = await memoryExtractor.stop({ timeoutMs });
+            if (!drained) {
+              log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+            }
+          },
+        },
+        {
+          step: 'write graceful shutdown markers',
+          action: () => {
+            const markedChannels = sessionStore.markGracefulShutdownForActiveChannels();
+            if (markedChannels.length > 0) {
+              log.info('Wrote graceful shutdown markers', { channels: markedChannels });
+            }
+          },
+        },
+        { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
+        { step: 'stop API server', action: () => apiServer?.stop() },
+        { step: 'stop admin server', action: () => adminServer?.stop() },
+        { step: 'destroy gateway client', action: () => gateway.destroy() },
+        {
+          step: 'close database',
+          action: () => {
+            db.close();
+          },
+        },
+      ], log);
       log.info('Stopped');
     })();
 

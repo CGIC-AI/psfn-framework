@@ -56,6 +56,7 @@ import {
   buildChannelAdapterFactoryManifest,
   loadChannelAdaptersFromManifest,
 } from './runtime/channel-lifecycle.js';
+import { runShutdownSequence } from './runtime/shutdown-helpers.js';
 import { createSignalShutdownHandler } from './runtime/signal-shutdown.js';
 
 const log = createComponentLogger('Gateway');
@@ -201,43 +202,6 @@ function createDiscordReverseRpcVoiceModule(): GatewayVoiceModule {
       });
     },
   };
-}
-
-async function runShutdownStep(
-  step: string,
-  action: () => void | Promise<void>,
-  maxAttempts = 2,
-): Promise<void> {
-  const attempts = Math.max(1, Math.floor(maxAttempts));
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      await action();
-      if (attempt > 1) {
-        log.info('Shutdown step recovered after retry', {
-          step,
-          attempt,
-          maxAttempts: attempts,
-        });
-      }
-      return;
-    } catch (error) {
-      if (attempt < attempts) {
-        log.warn('Shutdown step failed; retrying', {
-          step,
-          attempt,
-          maxAttempts: attempts,
-          error: String(error),
-        });
-        continue;
-      }
-      log.error('Shutdown step failed; continuing shutdown', {
-        step,
-        attempt,
-        maxAttempts: attempts,
-        error: String(error),
-      });
-    }
-  }
 }
 
 async function main(): Promise<void> {
@@ -622,16 +586,22 @@ async function main(): Promise<void> {
     }
 
     stopPromise = (async () => {
-      await runShutdownStep('stop debug observer', () => stopDebugObserver());
-      await runShutdownStep('stop Wyoming runtime', () => wyomingRuntime?.stop());
-      await runShutdownStep('stop Wyoming TCP server', () => wyomingTcpServer?.stop());
-      await runShutdownStep('stop voice modules', () => voiceModuleHost.stopAll());
-      await runShutdownStep('stop gateway server', () => gateway.stop());
-      await runShutdownStep('stop Telegram adapter', () => telegram?.stop());
-      await runShutdownStep('stop Discord adapter', () => discord.stop());
-      await runShutdownStep('close audit database', () => {
-        auditDb.close();
-      });
+      await runShutdownSequence([
+        { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop Wyoming runtime', action: () => wyomingRuntime?.stop() },
+        { step: 'stop Wyoming TCP server', action: () => wyomingTcpServer?.stop() },
+        { step: 'stop voice modules', action: () => voiceModuleHost.stopAll() },
+        { step: 'stop gateway server', action: () => gateway.stop() },
+        { step: 'stop Telegram adapter', action: () => telegram?.stop() },
+        { step: 'stop Discord adapter', action: () => discord.stop() },
+        {
+          step: 'close audit database',
+          action: () => {
+            auditDb.close();
+          },
+        },
+      ], log);
+      log.info('Stopped');
     })();
 
     await stopPromise;

@@ -4,6 +4,12 @@ export interface ShutdownLogger {
   error: (message: string, meta?: Record<string, unknown>) => void;
 }
 
+export interface ShutdownSequenceStep {
+  step: string;
+  action: () => void | Promise<void>;
+  maxAttempts?: number;
+}
+
 export async function runShutdownStep(
   step: string,
   action: () => void | Promise<void>,
@@ -39,5 +45,19 @@ export async function runShutdownStep(
         error: String(error),
       });
     }
+  }
+}
+
+export async function runShutdownSequence(
+  steps: readonly ShutdownSequenceStep[],
+  logger: ShutdownLogger,
+): Promise<void> {
+  for (const shutdownStep of steps) {
+    await runShutdownStep(
+      shutdownStep.step,
+      shutdownStep.action,
+      logger,
+      shutdownStep.maxAttempts,
+    );
   }
 }

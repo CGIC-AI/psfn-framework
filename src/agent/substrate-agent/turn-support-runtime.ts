@@ -329,6 +329,29 @@ export class TurnSupportRuntime {
     });
   }
 
+  recordSystemMessage(
+    message: SubstrateMessage,
+    turnId: TurnID,
+    requestId: string,
+    content: string,
+    continuityUserId?: string,
+  ): number | null {
+    return this.sessionManager.recordSystemMessage(
+      message.channelId,
+      content,
+      message.authorId,
+      message.authorName,
+      message.isDirectMessage,
+      continuityUserId,
+      {
+        turnId,
+        requestId,
+        sourceMessageId: message.id,
+        channelMeta: resolveSessionChannelMeta(message),
+      },
+    );
+  }
+
   recordAssistantMessage(
     message: SubstrateMessage,
     turnId: TurnID,
@@ -348,28 +371,6 @@ export class TurnSupportRuntime {
       continuityUserId,
       emotionSnapshot,
     });
-  }
-
-  recordSystemMessage(
-    message: SubstrateMessage,
-    turnId: TurnID,
-    requestId: string,
-    content: string,
-  ): number | null {
-    return this.sessionManager.recordSystemMessage(
-      message.channelId,
-      content,
-      message.authorId,
-      message.authorName,
-      message.isDirectMessage,
-      undefined,
-      {
-        turnId,
-        requestId,
-        sourceMessageId: message.id,
-        channelMeta: resolveSessionChannelMeta(message),
-      },
-    );
   }
 
   recordToolObservations(
@@ -404,6 +405,7 @@ export class TurnSupportRuntime {
     contextMessageCount: number;
     memoryContextChars: number;
     trustLevel: TrustLevel;
+    speakerRole: 'user' | 'system';
     canonicalContactKey?: string;
     retrievalProvenanceRefs: string[];
     turnSnapshot?: TurnSnapshot;

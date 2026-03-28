@@ -155,6 +155,13 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
   ) => number | null;
+  recordSystemMessage: (
+    message: SubstrateMessage,
+    turnId: TurnID,
+    requestId: string,
+    content: string,
+    continuityUserId?: string,
+  ) => number | null;
   resolveSessionChannelId: (channelId: string) => string;
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
@@ -282,6 +289,7 @@ export interface TurnExecutionRuntime {
     contextMessageCount: number;
     memoryContextChars: number;
     trustLevel: TrustLevel;
+    speakerRole: 'user' | 'system';
     canonicalContactKey?: string;
     retrievalProvenanceRefs: string[];
     turnSnapshot?: TurnSnapshot;
@@ -447,13 +455,21 @@ export async function handleMessageForTurn(
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
   await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
-  const userSessionEntryId = runtime.recordUserMessage(
-    message,
-    turnId,
-    requestId,
-    authorContext.trustLevel,
-    continuityUserId,
-  );
+  const userSessionEntryId = authorContext.speakerRole === 'system'
+    ? runtime.recordSystemMessage(
+      message,
+      turnId,
+      requestId,
+      message.content,
+      continuityUserId,
+    )
+    : runtime.recordUserMessage(
+      message,
+      turnId,
+      requestId,
+      authorContext.trustLevel,
+      continuityUserId,
+    );
   const emotionSessionId = runtime.resolveSessionChannelId(message.channelId);
 
   try {
@@ -1133,6 +1149,7 @@ export async function handleMessageForTurn(
         contextMessageCount: context.messages.length,
         memoryContextChars: memoryContextBlock.length,
         trustLevel: authorContext.trustLevel,
+        speakerRole: authorContext.speakerRole,
         canonicalContactKey: authorContext.canonicalContactKey,
         retrievalProvenanceRefs,
         turnSnapshot,

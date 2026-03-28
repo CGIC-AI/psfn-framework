@@ -107,11 +107,12 @@ function repairMetadataRole(metadata: string | undefined, role: 'user' | 'assist
   }
 
   const turn = turnValue as Record<string, unknown>;
-  if (turn.role === role) {
+  if (turn.role === role && turn.speakerRole === role) {
     return metadata;
   }
 
   turn.role = role;
+  turn.speakerRole = role;
   parsed.turn = turn;
   return serializeMetadataObject(parsed, metadata);
 }

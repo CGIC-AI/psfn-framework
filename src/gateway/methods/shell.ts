@@ -318,6 +318,12 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'shell.exec',
     handler: async (params: ShellExecParams, runtime) => {
       const policy = runtime.policyConfig.shellExec ?? {};
+      if (policy.enabled !== true) {
+        throw new JSONRPCErrorException(
+          'shell.exec policy is disabled',
+          GatewayErrors.POLICY_DENIED,
+        );
+      }
 
       const command = resolveCommand(params.command);
       assertCommandAllowed(command, policy.allowlist ?? []);

@@ -91,6 +91,25 @@ describe('registerShellMethods', () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it('denies shell.exec when policy is disabled at the runner boundary', async () => {
+    const harness = createHarness({
+      workspacePath: process.cwd(),
+      shellExec: {
+        enabled: false,
+        allowlist: ['node'],
+        allowedCwd: [process.cwd()],
+      },
+    });
+
+    await expect(harness.invoke({
+      command: 'node',
+      args: ['-v'],
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('policy is disabled'),
+    });
+  });
+
   it('denies command outside allowlist', async () => {
     const harness = createHarness({
       workspacePath: process.cwd(),

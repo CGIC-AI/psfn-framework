@@ -67,6 +67,21 @@ function normalizeBoundedInteger(
   return Math.min(parsed, max);
 }
 
+function isShellExecView(value: unknown): value is ShellExecView {
+  if (!value || typeof value !== 'object') return false;
+  const view = value as Partial<ShellExecView>;
+  return typeof view.command === 'string'
+    && Array.isArray(view.args) && view.args.every(arg => typeof arg === 'string')
+    && typeof view.cwd === 'string'
+    && (typeof view.exitCode === 'number' || view.exitCode === null)
+    && typeof view.stdout === 'string'
+    && typeof view.stderr === 'string'
+    && typeof view.timedOut === 'boolean'
+    && typeof view.truncated === 'boolean'
+    && typeof view.durationMs === 'number'
+    && Number.isFinite(view.durationMs);
+}
+
 export function createShellCapabilities(
   options: CreateShellCapabilitiesOptions,
 ): ShellCapabilities {
@@ -189,6 +204,21 @@ export function createShellCapabilities(
           ...(maxOutputChars !== undefined ? { maxOutputChars } : {}),
         },
       );
+      if (!isShellExecView(result)) {
+        return {
+          ok: false,
+          error: 'shell_exec returned invalid result shape',
+          command: normalizedCommand,
+          args: normalizedArgs.value,
+          cwd: normalizedCwd ?? '',
+          exitCode: null,
+          stdout: '',
+          stderr: '',
+          timedOut: false,
+          truncated: false,
+          durationMs: 0,
+        };
+      }
       return {
         ok: true,
         ...result,

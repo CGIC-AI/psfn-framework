@@ -401,6 +401,22 @@ describe('REPLSandbox', () => {
     expect(executionPort.shellExec).toHaveBeenCalledWith('node', ['-v'], {});
   });
 
+  it('fails closed when the execution port returns an invalid shell result shape', async () => {
+    const executionPort = {
+      shellExec: vi.fn(async () => ({ exitCode: 0 })),
+    };
+    const sandbox = new REPLSandbox(nullDeps(mockLLM(), executionPort));
+
+    const result = await sandbox.execute(
+      'const r = await shell_exec("node", ["-v"]); print(r.ok, r.error);',
+      5000,
+      8192,
+    );
+
+    expect(result.output).toContain('false shell_exec returned invalid result shape');
+    expect(executionPort.shellExec).toHaveBeenCalledWith('node', ['-v'], {});
+  });
+
   it('omits shell_exec helper when execution port is unavailable', async () => {
     const sandbox = new REPLSandbox({
       ...nullDeps(),

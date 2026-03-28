@@ -42,6 +42,7 @@ import {
   type GatewayConfirmationConfig,
 } from './approval-boundary.js';
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
+import { evaluatePolicy } from './policy.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS = 90_000;

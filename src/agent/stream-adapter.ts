@@ -1,17 +1,21 @@
 // ── pi-agent-core Stream Adapter ──
-// Bridges our LLM configuration into pi-agent-core's StreamFn interface.
-// Single-process: wraps streamSimple with LiteLLM proxy / direct provider apiKey.
-// Gateway mode: would use GatewayClient (future, PSFN-d5n).
+// Bridges our model-routing configuration into pi-agent-core's StreamFn interface.
+// Single-process callers can still use direct provider transport, while split-mode
+// callers can inject a gateway-backed transport port so core never resolves secrets.
 
 import { streamSimple } from '@mariozechner/pi-ai';
 import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type {
+  LLMContext,
+  LLMResponse,
   ModelBudgetBlockedEvent,
   MessageModelOverride,
   ModelPurpose,
   CorrelationMetadata,
+  StreamCallbacks,
   SubstrateConfig,
+  ToolCall,
 } from '../types.js';
 import { createModel, resolveRegisteredModel } from '../llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../llm/routing.js';
@@ -59,9 +63,14 @@ export interface StreamTerminalFailureEvent {
   process: string;
 }
 
+export interface SubstrateStreamTransport {
+  stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
+}
+
 export interface SubstrateStreamRuntimeOptions {
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   onTerminalFailure?: (event: StreamTerminalFailureEvent) => void | Promise<void>;
+  transport?: SubstrateStreamTransport;
 }
 
 /**
@@ -110,6 +119,7 @@ export function createSubstrateStreamFn(
           candidate: candidateTarget,
           attempt,
           config,
+          transport: runtimeOptions.transport,
           litellmBaseUrl,
           model,
           context,
@@ -164,6 +174,7 @@ interface ExecuteStreamCandidateParams {
   candidate: RoutingCandidate;
   attempt: number;
   config: SubstrateConfig;
+  transport?: SubstrateStreamTransport;
   litellmBaseUrl: string | null;
   model: Model<any>;
   context: unknown;
@@ -193,17 +204,26 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     throw new ModelBudgetExceededError(preflight.blockedEvent);
   }
 
-  const { model: candidateModel, apiKey } = getModelAndKey(
-    params.config,
-    params.litellmBaseUrl,
-    candidate,
-  );
   const requestOptions = buildStreamRequestOptions(
     candidate,
     params.options,
-    apiKey,
+    undefined,
     params.litellmBaseUrl,
   );
+  const transport = params.transport;
+  const { model: candidateModel, apiKey } = transport
+    ? {
+      model: params.model,
+      apiKey: undefined,
+    }
+    : getModelAndKey(
+      params.config,
+      params.litellmBaseUrl,
+      candidate,
+    );
+  if (!transport) {
+    requestOptions.apiKey = apiKey;
+  }
   const retryConfig = llmRetryConfig(params.config);
   const maxRetries = Number.isFinite(retryConfig.maxRetries)
     ? Math.max(0, Math.floor(retryConfig.maxRetries!))
@@ -218,7 +238,16 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
       const bufferedEvents: AssistantMessageEvent[] = [];
 
       try {
-        const stream = streamSimple(candidateModel, params.context as any, requestOptions as any);
+        const stream = transport
+          ? createTransportEventStream({
+            candidate,
+            model: params.model,
+            context: params.context,
+            requestContext: params.requestContext,
+            requestOptions,
+            transport,
+          })
+          : streamSimple(candidateModel, params.context as any, requestOptions as any);
 
         for await (const rawEvent of stream) {
           const event = rawEvent as AssistantMessageEvent;
@@ -303,6 +332,396 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
       }
     }
   })();
+}
+
+interface TransportEventStreamParams {
+  candidate: RoutingCandidate;
+  model: Model<any>;
+  context: unknown;
+  requestContext: Partial<CorrelationMetadata> | undefined;
+  requestOptions: Record<string, unknown>;
+  transport: SubstrateStreamTransport;
+}
+
+function createTransportEventStream(
+  params: TransportEventStreamParams,
+): AsyncGenerator<AssistantMessageEvent, void, unknown> {
+  return (async function* transportEventStream() {
+    const queue = new AsyncEventQueue<AssistantMessageEvent>();
+    const api = typeof (params.model as { api?: unknown }).api === 'string'
+      ? (params.model as { api: string }).api
+      : 'chat';
+    const state = createTransportMessageState({
+      api,
+      provider: params.candidate.provider,
+      model: String(params.model.id),
+    });
+
+    yield {
+      type: 'start',
+      partial: cloneAssistantMessage(state.partial),
+    } as AssistantMessageEvent;
+
+    const runTransport = (async () => {
+      try {
+        const response = await params.transport.stream(
+          buildTransportContext(params.candidate, params.context, params.requestContext, params.requestOptions),
+          {
+            onText: (delta) => {
+              enqueueTextDelta(queue, state, delta);
+            },
+          },
+        );
+
+        applyTerminalResponse(state, response);
+        enqueueThinkingEvents(queue, state, response.reasoning);
+        enqueueMissingTextEvents(queue, state, response.content);
+        enqueueToolCallEvents(queue, state, response.toolCalls);
+        queue.push({
+          type: 'done',
+          reason: response.stopReason,
+          message: cloneAssistantMessage(state.partial),
+        } as AssistantMessageEvent);
+        queue.close();
+      } catch (error) {
+        queue.fail(error instanceof Error ? error : new Error(String(error)));
+      }
+    })();
+
+    try {
+      for (;;) {
+        const next = await queue.next();
+        if (next === null) {
+          break;
+        }
+        yield next;
+      }
+      await runTransport;
+    } catch (error) {
+      await runTransport.catch(() => undefined);
+      throw error;
+    }
+  })();
+}
+
+function buildTransportContext(
+  candidate: RoutingCandidate,
+  context: unknown,
+  requestContext: Partial<CorrelationMetadata> | undefined,
+  requestOptions: Record<string, unknown>,
+): LLMContext {
+  const llmContext = context as LLMContext;
+  return {
+    systemPrompt: llmContext.systemPrompt,
+    messages: llmContext.messages,
+    ...(llmContext.tools?.length ? { tools: llmContext.tools } : {}),
+    modelHint: buildTransportModelHint(candidate, requestOptions),
+    ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
+  };
+}
+
+function buildTransportModelHint(
+  candidate: RoutingCandidate,
+  requestOptions: Record<string, unknown>,
+): NonNullable<LLMContext['modelHint']> {
+  const reasoning = requestOptions.reasoning;
+  return {
+    model: candidate.model,
+    provider: candidate.provider,
+    maxTokens: candidate.maxTokens,
+    ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
+    ...(candidate.temperature !== undefined ? { temperature: candidate.temperature } : {}),
+    ...(candidate.topP !== undefined ? { topP: candidate.topP } : {}),
+    ...(candidate.topK !== undefined ? { topK: candidate.topK } : {}),
+    ...(candidate.frequencyPenalty !== undefined ? { frequencyPenalty: candidate.frequencyPenalty } : {}),
+    ...(candidate.repetitionPenalty !== undefined ? { repetitionPenalty: candidate.repetitionPenalty } : {}),
+    ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
+    ...(typeof reasoning === 'string' ? { thinkingEffort: reasoning as ThinkingLevel } : {}),
+  };
+}
+
+type TransportMessageState = {
+  partial: AssistantMessage;
+  textContentIndex: number | null;
+  thinkingContentIndex: number | null;
+};
+
+function createTransportMessageState(input: {
+  api: string;
+  provider: string;
+  model: string;
+}): TransportMessageState {
+  return {
+    partial: {
+      role: 'assistant',
+      content: [],
+      api: input.api,
+      provider: input.provider,
+      model: input.model,
+      usage: zeroUsage(),
+      stopReason: 'stop',
+      timestamp: Date.now(),
+    } as AssistantMessage,
+    textContentIndex: null,
+    thinkingContentIndex: null,
+  };
+}
+
+function enqueueTextDelta(
+  queue: AsyncEventQueue<AssistantMessageEvent>,
+  state: TransportMessageState,
+  delta: string,
+): void {
+  if (!delta) {
+    return;
+  }
+  const contentIndex = ensureTextContentIndex(state);
+  if (state.partial.content[contentIndex]?.type !== 'text') {
+    throw new Error('Transport text content index did not resolve to a text block');
+  }
+  state.partial.content[contentIndex] = {
+    type: 'text',
+    text: `${state.partial.content[contentIndex].text}${delta}`,
+  };
+  queue.push({
+    type: state.partial.content[contentIndex].text.length === delta.length ? 'text_start' : 'text_delta',
+    contentIndex,
+    ...(state.partial.content[contentIndex].text.length === delta.length ? {} : { delta }),
+    partial: cloneAssistantMessage(state.partial),
+  } as AssistantMessageEvent);
+}
+
+function enqueueMissingTextEvents(
+  queue: AsyncEventQueue<AssistantMessageEvent>,
+  state: TransportMessageState,
+  content: string,
+): void {
+  if (!content || state.textContentIndex !== null) {
+    return;
+  }
+  const contentIndex = ensureTextContentIndex(state);
+  state.partial.content[contentIndex] = {
+    type: 'text',
+    text: content,
+  };
+  queue.push({
+    type: 'text_start',
+    contentIndex,
+    partial: cloneAssistantMessage(state.partial),
+  } as AssistantMessageEvent);
+  queue.push({
+    type: 'text_delta',
+    contentIndex,
+    delta: content,
+    partial: cloneAssistantMessage(state.partial),
+  } as AssistantMessageEvent);
+}
+
+function enqueueThinkingEvents(
+  queue: AsyncEventQueue<AssistantMessageEvent>,
+  state: TransportMessageState,
+  reasoning: string | undefined,
+): void {
+  if (!reasoning) {
+    return;
+  }
+  const contentIndex = ensureThinkingContentIndex(state);
+  state.partial.content[contentIndex] = {
+    type: 'thinking',
+    thinking: reasoning,
+  };
+  queue.push({
+    type: 'thinking_start',
+    contentIndex,
+    partial: cloneAssistantMessage(state.partial),
+  } as AssistantMessageEvent);
+  queue.push({
+    type: 'thinking_delta',
+    contentIndex,
+    delta: reasoning,
+    partial: cloneAssistantMessage(state.partial),
+  } as AssistantMessageEvent);
+  queue.push({
+    type: 'thinking_end',
+    contentIndex,
+    partial: cloneAssistantMessage(state.partial),
+  } as AssistantMessageEvent);
+}
+
+function enqueueToolCallEvents(
+  queue: AsyncEventQueue<AssistantMessageEvent>,
+  state: TransportMessageState,
+  toolCalls: ToolCall[],
+): void {
+  for (const toolCall of toolCalls) {
+    const contentIndex = state.partial.content.length;
+    state.partial.content.push({
+      type: 'toolCall',
+      id: toolCall.id,
+      name: toolCall.name,
+      arguments: toolCall.input,
+    });
+    queue.push({
+      type: 'toolcall_end',
+      contentIndex,
+      partial: cloneAssistantMessage(state.partial),
+      toolCall: {
+        type: 'toolCall',
+        id: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.input,
+      },
+    } as AssistantMessageEvent);
+  }
+}
+
+function applyTerminalResponse(
+  state: TransportMessageState,
+  response: LLMResponse,
+): void {
+  state.partial.model = response.model;
+  state.partial.stopReason = response.stopReason;
+  state.partial.timestamp = Date.now();
+  state.partial.usage = buildUsage(response);
+  if (response.content) {
+    const index = ensureTextContentIndex(state);
+    state.partial.content[index] = {
+      type: 'text',
+      text: response.content,
+    };
+  }
+}
+
+function ensureTextContentIndex(state: TransportMessageState): number {
+  if (state.textContentIndex !== null) {
+    return state.textContentIndex;
+  }
+  const contentIndex = state.partial.content.length;
+  state.partial.content.push({ type: 'text', text: '' });
+  state.textContentIndex = contentIndex;
+  return contentIndex;
+}
+
+function ensureThinkingContentIndex(state: TransportMessageState): number {
+  if (state.thinkingContentIndex !== null) {
+    return state.thinkingContentIndex;
+  }
+  const contentIndex = state.partial.content.length;
+  state.partial.content.push({ type: 'thinking', thinking: '' });
+  state.thinkingContentIndex = contentIndex;
+  return contentIndex;
+}
+
+function buildUsage(response: LLMResponse): AssistantMessage['usage'] {
+  const input = toUsageCount(response.inputTokens);
+  const output = toUsageCount(response.outputTokens);
+  const totalTokens = input + output;
+  return {
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
+function zeroUsage(): AssistantMessage['usage'] {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
+function cloneAssistantMessage(message: AssistantMessage): AssistantMessage {
+  return {
+    ...message,
+    content: message.content.map((entry) => {
+      if (entry.type === 'text') {
+        return { ...entry };
+      }
+      if (entry.type === 'thinking') {
+        return { ...entry };
+      }
+      return {
+        ...entry,
+        arguments: { ...entry.arguments },
+      };
+    }),
+    usage: {
+      ...message.usage,
+      cost: { ...message.usage.cost },
+    },
+  };
+}
+
+class AsyncEventQueue<T> {
+  private items: T[] = [];
+  private pending: Array<{
+    resolve: (value: T | null) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  private done = false;
+  private error: Error | null = null;
+
+  push(item: T): void {
+    if (this.done || this.error) {
+      return;
+    }
+    const waiter = this.pending.shift();
+    if (waiter) {
+      waiter.resolve(item);
+      return;
+    }
+    this.items.push(item);
+  }
+
+  close(): void {
+    this.done = true;
+    while (this.pending.length > 0) {
+      const waiter = this.pending.shift();
+      waiter?.resolve(null);
+    }
+  }
+
+  fail(error: Error): void {
+    this.error = error;
+    while (this.pending.length > 0) {
+      const waiter = this.pending.shift();
+      waiter?.reject(error);
+    }
+  }
+
+  async next(): Promise<T | null> {
+    if (this.items.length > 0) {
+      return this.items.shift()!;
+    }
+    if (this.error) {
+      throw this.error;
+    }
+    if (this.done) {
+      return null;
+    }
+    return await new Promise<T | null>((resolve, reject) => {
+      this.pending.push({ resolve, reject });
+    });
+  }
 }
 
 function resolveCallerMaxTokens(optionsMaxTokens: unknown): number | undefined {

@@ -178,6 +178,79 @@ describe('createSubstrateStreamFn', () => {
     expect(agent.state.isStreaming).toBe(false);
   });
 
+  it('supports a transport-backed stream contract without direct streamSimple calls', async () => {
+    const config = makeConfig();
+    const transport = {
+      stream: vi.fn(async (_context, callbacks) => {
+        callbacks?.onText?.('hello');
+        callbacks?.onText?.(' world');
+        return {
+          content: 'hello world',
+          reasoning: 'step by step',
+          toolCalls: [
+            {
+              id: 'call-1',
+              name: 'memory_lookup',
+              input: { query: 'hello world' },
+            },
+          ],
+          model: 'gateway-model',
+          inputTokens: 11,
+          outputTokens: 7,
+          stopReason: 'stop',
+        };
+      }),
+    };
+    const streamFn = createSubstrateStreamFn(config, {
+      transport,
+    });
+    const model = resolveModel(config, 'chat');
+
+    const stream = await streamFn(model, {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'hello' }],
+    } as any, {});
+    const events = await collectStreamEvents(stream);
+
+    expect(streamAdapterMocks.streamSimple).not.toHaveBeenCalled();
+    expect(transport.stream).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: 'System',
+        modelHint: expect.objectContaining({
+          model: 'deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          maxTokens: 16384,
+        }),
+      }),
+      expect.objectContaining({
+        onText: expect.any(Function),
+      }),
+    );
+    expect(events.map((event: any) => event.type)).toEqual([
+      'start',
+      'text_start',
+      'text_delta',
+      'thinking_start',
+      'thinking_delta',
+      'thinking_end',
+      'toolcall_end',
+      'done',
+    ]);
+    const doneEvent = events.at(-1) as { type: string; message: { content: unknown[]; model: string } };
+    expect(doneEvent.type).toBe('done');
+    expect(doneEvent.message.model).toBe('gateway-model');
+    expect(doneEvent.message.content).toEqual([
+      { type: 'text', text: 'hello world' },
+      { type: 'thinking', thinking: 'step by step' },
+      {
+        type: 'toolCall',
+        id: 'call-1',
+        name: 'memory_lookup',
+        arguments: { query: 'hello world' },
+      },
+    ]);
+  });
+
   it('fails closed and emits budget-block event when stream candidate exceeds budget', async () => {
     const baseConfig = makeConfig();
     const baseRegistry = baseConfig.modelRegistry!;

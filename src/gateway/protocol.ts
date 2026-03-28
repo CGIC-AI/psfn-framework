@@ -339,6 +339,7 @@ export interface ConfirmationResolveResult {
 
 export interface LLMChatResult {
   content: string;
+  reasoning?: string;
   toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
   model: string;
   inputTokens: number;
@@ -349,6 +350,7 @@ export interface LLMChatResult {
 
 export interface LLMCompleteResult {
   content: string;
+  reasoning?: string;
   model: string;
   inputTokens: number;
   outputTokens: number;

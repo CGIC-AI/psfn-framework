@@ -10,9 +10,8 @@ import { loadConfig } from './types.js';
 import { createComponentLogger } from './logger.js';
 import type { DiscordAdapter } from './channels/discord/adapter.js';
 import type { TelegramAdapter } from './channels/telegram/adapter.js';
-import { EventBus } from './event-bus.js';
-import { GatewayServer } from './gateway/server.js';
-import { AuditStore } from './gateway/audit.js';
+import type { EventBus } from './event-bus.js';
+import type { GatewayServer } from './gateway/server.js';
 import { ensureRegistryFile } from './modules/registry.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
@@ -25,14 +24,10 @@ import { createWyomingAsrServiceAdapter } from './channels/wyoming/services/asr.
 import { createWyomingTtsServiceAdapter } from './channels/wyoming/services/tts.js';
 import type { ChannelAdapter } from './channels/types.js';
 import type { WyomingInfoData } from './channels/wyoming/protocol.js';
-import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
-  createEligibilityGate,
   EligibilityDeniedError,
   type EligibilityDecision,
 } from './capabilities/eligibility.js';
-import { GitOps } from './git/ops.js';
-import { initDatabase } from './persistence/sqlite-utils.js';
 import { resolveGatewayBootstrapInput } from './gateway/bootstrap-input.js';
 import {
   createRuntimeVoiceSttConnector,
@@ -43,7 +38,7 @@ import {
 import { RUNTIME_MODE } from './lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from './gateway/tls.js';
 import { startDiscordWithRetry } from './gateway/discord-startup.js';
-import { createGatewayPrivilegedServiceRegistry } from './gateway/privileged-services.js';
+import { buildGatewayPrivilegedCore } from './gateway/privileged-core.js';
 import { resolveStartupPreflightBundle } from './runtime/startup-preflight.js';
 import {
   createDiscordChannelAdapterFactoryEntry,
@@ -134,7 +129,7 @@ function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecisi
     missingTokens: decision.missingTokens,
     ...(decision.minimumTier ? { minimumTier: decision.minimumTier } : {}),
     timestamp: Date.now(),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     log.warn('Failed to emit capability eligibility telemetry', { error: String(error) });
   });
 }
@@ -239,7 +234,21 @@ async function main(): Promise<void> {
     rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
   });
 
-  const eventBus = new EventBus();
+  const privilegedCore = buildGatewayPrivilegedCore({
+    config,
+    bootstrap,
+    startupHydration,
+    logger: log,
+    onEligibilityDecision: emitEligibilityDecision,
+  });
+  const {
+    eventBus,
+    capabilityRuntime,
+    eligibilityGate,
+    privilegedServices,
+    auditDb,
+    createGatewayServer,
+  } = privilegedCore;
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
 
   log.info('Initializing...');
@@ -281,18 +290,6 @@ async function main(): Promise<void> {
   // ENOENT when the REPL sandbox or ModuleLoader reads it for the first time.
   ensureRegistryFile(bootstrap.moduleRegistryAbsolute);
 
-  // ── Create providers (these hold secrets / have network access) ──
-  const gitOps = new GitOps({
-    repoRoot: bootstrap.gitRepoRoot,
-  });
-  const capabilityRuntime = new CapabilityRuntime({
-    dataDir: startupHydration.systemDataDir,
-  });
-  const eligibilityGate = createEligibilityGate(
-    () => capabilityRuntime,
-    (decision) => emitEligibilityDecision(eventBus, decision),
-  );
-
   const gatewayChannelRegistry = new Map<string, ChannelAdapter>();
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([
     createDiscordChannelAdapterFactoryEntry({
@@ -306,24 +303,6 @@ async function main(): Promise<void> {
       eventBus,
     }),
   ]);
-  const privilegedServices = createGatewayPrivilegedServiceRegistry({
-    config,
-    providerEnv: bootstrap.providerEnv,
-    llmOptions: {
-      eligibilityGate,
-      onBudgetBlocked: (event) => {
-        eventBus.emit('model.budget.blocked', event).catch((error) => {
-          log.error('Failed to emit model budget blocked telemetry', {
-            error: error instanceof Error ? error.message : String(error),
-            provider: event.provider,
-            model: event.model,
-            reason: event.reason,
-          });
-        });
-      },
-    },
-    vaultPolicyConfig: bootstrap.policyConfig.vault,
-  });
   log.info('Embedding provider initialized', {
     provider: privilegedServices.embeddingProvider.kind,
     dims: privilegedServices.embeddingProvider.dims,
@@ -338,39 +317,11 @@ async function main(): Promise<void> {
   const discord = requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord');
   const telegram = getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram');
 
-  // ── Audit database (separate from agent's runtime DB) ──
-
-  const auditDb = initDatabase(bootstrap.auditDbPath, { foreignKeys: false });
-  const auditStore = new AuditStore(auditDb);
   log.info(`Audit log: ${bootstrap.auditDbPath}`);
 
   // ── Create gateway server ──
 
-  const gateway = new GatewayServer({
-    socketPath: bootstrap.socketPath,
-    llmProvider: privilegedServices.llmClient,
-    embeddingService: privilegedServices.embeddingProvider,
-    discordAdapter: discord,
-    gitOps,
-    imageConfig: config,
-    policyConfig: {
-      ...bootstrap.policyConfig,
-      ...(privilegedServices.vaultOps
-        ? {
-            vault: {
-              ...bootstrap.policyConfig.vault,
-              ops: privilegedServices.vaultOps,
-            },
-          }
-        : {}),
-    },
-    ntfy: bootstrap.server.ntfy,
-    confirmation: bootstrap.server.confirmation,
-    capabilityTierProvider: () => capabilityRuntime.getTier(),
-    auditStore,
-    sessionHmacKeyring: bootstrap.server.sessionHmacKeyring,
-    wyomingShardRouting: bootstrap.server.wyomingShardRouting,
-  });
+  const gateway = createGatewayServer({ discordAdapter: discord });
 
   const voiceModuleHost = new GatewayVoiceModuleHost({
     gateway,

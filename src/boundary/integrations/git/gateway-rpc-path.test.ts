@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GatewayServer, type GatewayServerOptions } from '../../gateway/server.js';
 import { GatewayClient } from '../../gateway/client.js';
+import { createGatewayOpsPortFromClient } from '../../gateway/gateway-ops-port.js';
 import { GatewayGitOps } from './gateway-ops.js';
 import { GitOps } from './ops.js';
 
@@ -91,7 +92,7 @@ describe('Gateway git RPC path', () => {
     server = new GatewayServer(createServerOptions(socketPath, gitOps));
     server.start();
     client = await GatewayClient.connect(socketPath, 1024);
-    const gatewayOps = new GatewayGitOps(client);
+    const gatewayOps = new GatewayGitOps(createGatewayOpsPortFromClient(client));
 
     await expect(gatewayOps.status()).resolves.toMatchObject({ branch: 'main' });
     await expect(gatewayOps.diff({ staged: false })).resolves.toEqual({
@@ -129,7 +130,7 @@ describe('Gateway git RPC path', () => {
       server.start();
 
       client = await GatewayClient.connect(socketPath, 1024);
-      const gatewayOps = new GatewayGitOps(client);
+      const gatewayOps = new GatewayGitOps(createGatewayOpsPortFromClient(client));
 
       const status = await gatewayOps.status();
       expect(status.branch.length).toBeGreaterThan(0);

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GatewayClient } from '../../gateway/client.js';
 import { GatewayWebFetchOps } from './gateway-ops.js';
 import { registerWebTools, type WebRuntimeTarget } from './runtime-wiring.js';
 
@@ -24,11 +23,13 @@ describe('web runtime wiring', () => {
 
   it('attaches gateway wiring metadata in gateway mode', () => {
     const target = createMockTarget();
-    const gateway = {
-      webFetch: vi.fn(async () => 'content'),
-    } as unknown as GatewayClient;
+    const gatewayOps = {
+      web: {
+        fetch: vi.fn(async () => 'content'),
+      },
+    };
 
-    registerWebTools(target, new GatewayWebFetchOps(gateway), { gatewayMode: true });
+    registerWebTools(target, new GatewayWebFetchOps(gatewayOps), { gatewayMode: true });
 
     expect(target.registerTool.mock.calls[0][0].wiringMeta?.requiredGatewayMethods).toEqual(['web.fetch']);
   });

@@ -2,7 +2,6 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
-import type { GatewayClient } from '../../gateway/client.js';
 import { GatewayFilesystemOps } from './gateway-ops.js';
 import { WorkspaceFilesystemOps } from './local-ops.js';
 import { registerFilesystemTools, wireFilesystemRuntime, type FilesystemRuntimeTarget } from './runtime-wiring.js';
@@ -29,12 +28,14 @@ describe('filesystem runtime wiring', () => {
 
   it('attaches gateway wiring metadata in gateway mode', () => {
     const target = createMockTarget();
-    const gateway = {
-      fsRead: vi.fn(async () => 'content'),
-      fsList: vi.fn(async () => []),
-    } as unknown as GatewayClient;
+    const gatewayOps = {
+      filesystem: {
+        read: vi.fn(async () => 'content'),
+        list: vi.fn(async () => []),
+      },
+    };
 
-    registerFilesystemTools(target, new GatewayFilesystemOps(gateway), { gatewayMode: true });
+    registerFilesystemTools(target, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
 
     const methodsByTool = new Map(
       target.registerTool.mock.calls.map((call: any[]) => [call[0].name, call[0].wiringMeta?.requiredGatewayMethods]),

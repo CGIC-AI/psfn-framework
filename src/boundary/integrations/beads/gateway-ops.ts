@@ -1,4 +1,4 @@
-import type { GatewayClient } from '../../gateway/client.js';
+import type { GatewayOpsPort } from '../../gateway/gateway-ops-port.js';
 import type {
   BeadsActionResult,
   BeadsCloseParams,
@@ -11,33 +11,33 @@ import type {
 import type { BeadsOperations } from './ops.js';
 
 export class GatewayBeadsOps implements BeadsOperations {
-  private readonly gateway: GatewayClient;
+  private readonly beadsOps: BeadsOperations;
 
-  constructor(gateway: GatewayClient) {
-    this.gateway = gateway;
+  constructor(gatewayOps: Pick<GatewayOpsPort, 'beads'> | BeadsOperations) {
+    this.beadsOps = 'beads' in gatewayOps ? gatewayOps.beads : gatewayOps;
   }
 
   async ready(params: BeadsReadyParams = {}): Promise<BeadsActionResult> {
-    return this.gateway.beadsReady(params);
+    return this.beadsOps.ready(params);
   }
 
   async show(params: BeadsShowParams): Promise<BeadsActionResult> {
-    return this.gateway.beadsShow(params);
+    return this.beadsOps.show(params);
   }
 
   async create(params: BeadsCreateParams): Promise<BeadsActionResult> {
-    return this.gateway.beadsCreate(params);
+    return this.beadsOps.create(params);
   }
 
   async update(params: BeadsUpdateParams): Promise<BeadsActionResult> {
-    return this.gateway.beadsUpdate(params);
+    return this.beadsOps.update(params);
   }
 
   async close(params: BeadsCloseParams): Promise<BeadsActionResult> {
-    return this.gateway.beadsClose(params);
+    return this.beadsOps.close(params);
   }
 
   async sync(params: BeadsSyncParams = {}): Promise<BeadsActionResult> {
-    return this.gateway.beadsSync(params);
+    return this.beadsOps.sync(params);
   }
 }

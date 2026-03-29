@@ -36,6 +36,7 @@ import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
+import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import {
   bootstrapAgentCoreRuntime,
 } from './core-bootstrap.js';
@@ -94,6 +95,7 @@ async function main(): Promise<void> {
   log.info(`Connecting to gateway at ${socketPath}...`);
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
   const llmProvider = createLLMProviderPort(gateway);
+  const gatewayOps = createGatewayOpsPortFromClient(gateway);
   log.info('Connected to gateway');
   let shuttingDown = false;
   let stopFn: () => Promise<void> = async () => {};
@@ -242,14 +244,14 @@ async function main(): Promise<void> {
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
   // Git tools — parent turns stay read-only; mutation must return through shard outputs.
-  registerGitTools(agentLoop, new GatewayGitOps(gateway), {
+  registerGitTools(agentLoop, new GatewayGitOps(gatewayOps), {
     gatewayMode: true,
     access: 'read_only',
   });
   log.info('Git repository inspection tools enabled for parent agent');
 
   // Beads issue-management tools — policy-scoped gateway RPC access (no shell passthrough)
-  registerBeadsTools(agentLoop, new GatewayBeadsOps(gateway), { gatewayMode: true });
+  registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
   log.info('Beads issue-management tools enabled');
 
   // Vault tools — Obsidian note read/write via gateway shell.exec

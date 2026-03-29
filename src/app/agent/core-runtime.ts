@@ -9,6 +9,7 @@ import {
   type MemoryStorePort,
 } from '../../faculties/memory/memory-store-port.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
+import { createGatewayOpsPortFromClient } from '../../boundary/gateway/gateway-ops-port.js';
 import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import type { EmotionRuntimeWiring } from '../../core/agent/substrate-agent.js';
 import type { MemoryExtractor } from '../../faculties/memory/extraction.js';
@@ -105,6 +106,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
 
   const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
   const llmProvider = createLLMProviderPort(gateway);
+  const gatewayOps = createGatewayOpsPortFromClient(gateway);
   const sessionComposition = composeSessionRuntime({
     config,
     eventBus,
@@ -148,8 +150,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
   });
-  registerWebTools(agentLoop, new GatewayWebFetchOps(gateway), { gatewayMode: true });
-  registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
+  registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), { gatewayMode: true });
+  registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,

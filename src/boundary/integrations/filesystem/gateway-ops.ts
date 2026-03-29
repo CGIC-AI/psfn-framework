@@ -1,18 +1,18 @@
-import type { GatewayClient } from '../../gateway/client.js';
+import type { GatewayOpsPort } from '../../gateway/gateway-ops-port.js';
 import type { FilesystemReadOperations } from './ops.js';
 
 export class GatewayFilesystemOps implements FilesystemReadOperations {
-  private readonly gateway: GatewayClient;
+  private readonly filesystemOps: FilesystemReadOperations;
 
-  constructor(gateway: GatewayClient) {
-    this.gateway = gateway;
+  constructor(gatewayOps: Pick<GatewayOpsPort, 'filesystem'> | FilesystemReadOperations) {
+    this.filesystemOps = 'filesystem' in gatewayOps ? gatewayOps.filesystem : gatewayOps;
   }
 
   async read(path: string): Promise<string> {
-    return this.gateway.fsRead(path);
+    return this.filesystemOps.read(path);
   }
 
   async list(glob = '**/*', maxEntries = 200): Promise<string[]> {
-    return this.gateway.fsList(glob, maxEntries);
+    return this.filesystemOps.list(glob, maxEntries);
   }
 }

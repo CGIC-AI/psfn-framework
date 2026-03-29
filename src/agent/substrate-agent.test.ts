@@ -4133,9 +4133,8 @@ describe('SubstrateAgent.handleMessage', () => {
     await agent.handleMessage(makeMessage());
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
-    expect(buildCall[1]).toContain('skill_view(name)');
     expect(buildCall[1]).toContain('<skills_index>');
-    expect(buildCall[1]).toContain('conversation');
+    expect(buildCall[1]).toContain('<skill name="conversation" />');
   });
 
   it('injects active concerns into runtime context when concern provider is wired', async () => {
@@ -4172,7 +4171,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(prompt).toContain('high');
   });
 
-  it('does not inject behavioral notes into runtime context when provider is wired', async () => {
+  it('injects behavioral notes into runtime context when provider is wired', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const getBehavioralNotes = vi.fn().mockReturnValue([
@@ -4197,8 +4196,9 @@ describe('SubstrateAgent.handleMessage', () => {
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
     expect(getBehavioralNotes).toHaveBeenCalled();
-    expect(prompt).not.toContain('[Behavioral Notes]');
-    expect(prompt).not.toContain('empathy: avg +0.42');
+    expect(prompt).toContain('<behavioral_notes>');
+    expect(prompt).toContain('[Behavioral Notes]');
+    expect(prompt).toContain('empathy: avg +0.42');
   });
 
   it('injects bounded scratchpad notes into system context when scratchpad provider is wired', async () => {
@@ -4569,7 +4569,7 @@ describe('SubstrateAgent.handleMessage', () => {
     );
 
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-    expect(secondPrompt).toContain('[Emotion Appraisal Chain]');
+    expect(secondPrompt).toContain('<emotion_appraisal_chain>');
     expect(secondPrompt).toContain('Appraisal summary: she feels guarded but recovering composure.');
   });
 

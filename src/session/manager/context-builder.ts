@@ -53,6 +53,8 @@ import { buildPromptSectionTelemetryList } from '../../prompt/sections.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
+export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 3 * 60 * 60 * 1000;
+const ORIENTATION_SUMMARY_MAX_CHARS = 180;
 const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
 
 function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
@@ -67,6 +69,183 @@ function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayo
 
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
+}
+
+export type OrientationNoteReason =
+  | 'idle_gap_exceeded'
+  | 'below_threshold'
+  | 'no_previous_activity'
+  | 'internal_channel';
+
+export interface OrientationNoteTelemetry {
+  fired: boolean;
+  reason: OrientationNoteReason;
+  observedAt: number;
+  idleThresholdMs: number;
+  lastActivityAt?: number;
+  idleGapMs?: number;
+  noteText?: string;
+  sessionSummary?: string;
+  continuitySummary?: string;
+  openThreadSummary?: string;
+  sourceCounts: {
+    session: number;
+    continuity: number;
+    focusKnowledge: number;
+  };
+}
+
+function compactPromptText(value: string, maxChars = ORIENTATION_SUMMARY_MAX_CHARS): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
+function summarizeConversationEntries(
+  entries: SessionEntry[],
+  characterName?: string,
+  maxItems = 2,
+): string {
+  const relevant = entries.filter(entry => entry.role === 'user' || entry.role === 'assistant');
+  if (relevant.length === 0) return '';
+
+  const recent = relevant.slice(-maxItems);
+  const roleNames = { charName: characterName };
+  return recent.map((entry) => {
+    const speaker = entry.role === 'assistant'
+      ? resolveRoleName('assistant', roleNames)
+      : entry.authorName ?? resolveRoleName('user', roleNames);
+    return `${speaker}: ${compactPromptText(entry.content)}`;
+  }).join(' / ');
+}
+
+function summarizeTextList(values: readonly string[], maxItems = 2): string {
+  return values
+    .slice(-maxItems)
+    .map(value => compactPromptText(value))
+    .filter(value => value.length > 0)
+    .join(' / ');
+}
+
+function formatIdleGap(idleGapMs: number): string {
+  const normalized = Math.max(0, Math.floor(idleGapMs));
+  const totalMinutes = Math.max(0, Math.floor(normalized / 60_000));
+  if (totalMinutes < 60) {
+    return `${totalMinutes} minute${totalMinutes === 1 ? '' : 's'}`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) {
+    return minutes > 0
+      ? `${hours} hour${hours === 1 ? '' : 's'} ${minutes} minute${minutes === 1 ? '' : 's'}`
+      : `${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours > 0
+    ? `${days} day${days === 1 ? '' : 's'} ${remainingHours} hour${remainingHours === 1 ? '' : 's'}`
+    : `${days} day${days === 1 ? '' : 's'}`;
+}
+
+export function buildOrientationNoteTelemetry(params: {
+  channelId: string;
+  recentActivityEntries: SessionEntry[];
+  continuityEntries: SessionEntry[];
+  focusKnowledgeTexts: string[];
+  characterName?: string;
+  nowMs?: number;
+  idleThresholdMs?: number;
+}): OrientationNoteTelemetry {
+  const observedAt = params.nowMs ?? Date.now();
+  const idleThresholdMs = Math.max(
+    0,
+    Math.floor(params.idleThresholdMs ?? DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS),
+  );
+  const sourceCounts = {
+    session: params.recentActivityEntries.filter(entry => entry.role === 'user' || entry.role === 'assistant').length,
+    continuity: params.continuityEntries.filter(entry => entry.role === 'user' || entry.role === 'assistant').length,
+    focusKnowledge: params.focusKnowledgeTexts.filter(text => text.trim().length > 0).length,
+  };
+
+  if (isInternalJournalChannel(params.channelId)) {
+    return {
+      fired: false,
+      reason: 'internal_channel',
+      observedAt,
+      idleThresholdMs,
+      sourceCounts,
+    };
+  }
+
+  const relevantRecentEntries = params.recentActivityEntries.filter(
+    entry => entry.role === 'user' || entry.role === 'assistant',
+  );
+  if (relevantRecentEntries.length <= 1) {
+    return {
+      fired: false,
+      reason: 'no_previous_activity',
+      observedAt,
+      idleThresholdMs,
+      sourceCounts,
+    };
+  }
+
+  const priorEntries = relevantRecentEntries.slice(0, -1);
+  const lastActivityAt = priorEntries.at(-1)?.timestamp;
+  if (!lastActivityAt || !Number.isFinite(lastActivityAt) || lastActivityAt <= 0) {
+    return {
+      fired: false,
+      reason: 'no_previous_activity',
+      observedAt,
+      idleThresholdMs,
+      sourceCounts,
+    };
+  }
+
+  const idleGapMs = Math.max(0, observedAt - lastActivityAt);
+  if (idleGapMs < idleThresholdMs) {
+    return {
+      fired: false,
+      reason: 'below_threshold',
+      observedAt,
+      idleThresholdMs,
+      lastActivityAt,
+      idleGapMs,
+      sourceCounts,
+    };
+  }
+
+  const sessionSummary = summarizeConversationEntries(priorEntries, params.characterName);
+  const continuitySummary = summarizeConversationEntries(params.continuityEntries, params.characterName);
+  const openThreadSummary = summarizeTextList(params.focusKnowledgeTexts);
+
+  const noteParts = [
+    '[Welcome back]',
+    `It has been about ${formatIdleGap(idleGapMs)} since this channel was last active.`,
+  ];
+  if (sessionSummary) {
+    noteParts.push(`Last time here: ${sessionSummary}.`);
+  }
+  if (openThreadSummary) {
+    noteParts.push(`Open threads: ${openThreadSummary}.`);
+  }
+  if (continuitySummary) {
+    noteParts.push(`Recent continuity: ${continuitySummary}.`);
+  }
+
+  return {
+    fired: true,
+    reason: 'idle_gap_exceeded',
+    observedAt,
+    idleThresholdMs,
+    lastActivityAt,
+    idleGapMs,
+    noteText: noteParts.join('\n').trim(),
+    sessionSummary,
+    continuitySummary,
+    openThreadSummary,
+    sourceCounts,
+  };
 }
 
 interface BuildSessionContextParams {
@@ -237,8 +416,18 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       })
       : [];
   const crossChannel = rawCrossChannel.filter(entry => !isInternalJournalChannel(entry.originChannelId ?? entry.channelId));
+  const orientationTelemetry = params.turnSnapshot?.orientation ?? buildOrientationNoteTelemetry({
+    channelId: params.channelId,
+    recentActivityEntries: params.store.getRecent(params.channelId, 6),
+    continuityEntries: crossChannel,
+    focusKnowledgeTexts,
+    characterName: params.characterName,
+  });
 
   let continuitySectionText = '';
+  if (orientationTelemetry.fired && orientationTelemetry.noteText) {
+    continuitySectionText = orientationTelemetry.noteText;
+  }
   if (crossChannel.length > 0) {
     const roleNames = { charName: params.characterName };
     const continuityBlock = crossChannel
@@ -257,7 +446,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         return wrapUntrustedContext(rawContent);
       })
       .join('\n');
-    continuitySectionText = '[Recent activity from other channels]\n' + continuityBlock;
+    continuitySectionText = continuitySectionText.length > 0
+      ? `${continuitySectionText}\n\n[Recent activity from other channels]\n${continuityBlock}`
+      : '[Recent activity from other channels]\n' + continuityBlock;
   }
 
   const promptRuntimeLayout = getPromptRuntimeLayoutStore(params.config);

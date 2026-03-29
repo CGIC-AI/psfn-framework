@@ -971,6 +971,15 @@ export async function handleMessageForTurn(
       assembledPromptChars: fullPrompt.length,
       assembledPromptTokens: countTokens(fullPrompt),
       promptMode: promptOverride.mode,
+      ...(turnSnapshot.sessionContext?.orientation
+        ? {
+          orientationFired: turnSnapshot.sessionContext.orientation.fired,
+          orientationReason: turnSnapshot.sessionContext.orientation.reason,
+          orientationIdleGapMs: turnSnapshot.sessionContext.orientation.idleGapMs,
+          orientationThresholdMs: turnSnapshot.sessionContext.orientation.idleThresholdMs,
+          orientationNoteChars: turnSnapshot.sessionContext.orientation.noteText?.length ?? 0,
+        }
+        : {}),
     });
 
     const promptStageStart = Date.now();

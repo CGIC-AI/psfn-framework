@@ -104,6 +104,122 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Memory block');
   });
 
+  it('adds a wake orientation note after a meaningful idle gap and captures telemetry', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const mgr = new SessionManager(store, config);
+    const previousAt = 1_700_000_000_000;
+    const currentAt = previousAt + (4 * 60 * 60 * 1000);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity-orientation'));
+    mgr.continuityStore = continuityStore;
+
+    try {
+      store.append({
+        channelId: 'api:main',
+        role: 'assistant',
+        content: 'We were still tuning the prompt order.',
+        authorId: 'u1',
+        authorName: 'Companion',
+        timestamp: previousAt,
+      });
+      store.append({
+        channelId: 'api:main',
+        role: 'user',
+        content: 'Please keep the visibility work focused.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: currentAt,
+      });
+      continuityStore.append('u1', {
+        channelId: 'api:side',
+        originChannelId: 'api:side',
+        role: 'assistant',
+        content: 'The visibility audit is still open in the side thread.',
+        timestamp: currentAt - 1_000,
+        channelVisibility: 'private',
+      });
+      (mgr as unknown as {
+        focusKnowledgeStore: {
+          append: (input: {
+            channelId: string;
+            focusId: string;
+            scope: string;
+            knowledge: string;
+            startedAt: number;
+            completedAt: number;
+          }) => void;
+        };
+      }).focusKnowledgeStore.append({
+        channelId: 'api:main',
+        focusId: 'focus-visibility',
+        scope: 'Prompt visibility',
+        knowledge: 'Keep the prompt stack visible and sortable.',
+        startedAt: previousAt,
+        completedAt: currentAt,
+      });
+
+      const snapshot = mgr.captureTurnContextSnapshot('api:main', 'u1');
+      expect(snapshot.orientation).toMatchObject({
+        fired: true,
+        reason: 'idle_gap_exceeded',
+        idleGapMs: currentAt - previousAt,
+        idleThresholdMs: expect.any(Number),
+      });
+      expect(snapshot.orientation?.noteText).toContain('Welcome back');
+      expect(snapshot.orientation?.noteText).toContain('Last time here');
+      expect(snapshot.orientation?.noteText).toContain('Recent continuity');
+      expect(snapshot.orientation?.noteText).toContain('Open threads');
+
+      const ctx = await mgr.buildContext('api:main', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
+      expect(ctx.systemPrompt).toContain('[Welcome back]');
+      expect(ctx.systemPrompt).toContain('Open threads');
+      expect(ctx.systemPrompt).toContain('Recent continuity');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('skips the wake orientation note when the idle gap is below threshold', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const previousAt = 1_700_000_000_000;
+    const currentAt = previousAt + (15 * 60 * 1000);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
+
+    try {
+      store.append({
+        channelId: 'ch1',
+        role: 'assistant',
+        content: 'Still here.',
+        authorId: 'u1',
+        authorName: 'Companion',
+        timestamp: previousAt,
+      });
+      store.append({
+        channelId: 'ch1',
+        role: 'user',
+        content: 'Quick follow-up before I go.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: currentAt,
+      });
+
+      const snapshot = mgr.captureTurnContextSnapshot('ch1', 'u1');
+      expect(snapshot.orientation).toMatchObject({
+        fired: false,
+        reason: 'below_threshold',
+        idleGapMs: currentAt - previousAt,
+        idleThresholdMs: expect.any(Number),
+      });
+      expect(snapshot.orientation?.noteText).toBeUndefined();
+
+      const ctx = await mgr.buildContext('ch1', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
+      expect(ctx.systemPrompt).not.toContain('[Welcome back]');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('injects core memory into system prompt before retrieved memory block', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

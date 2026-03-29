@@ -54,6 +54,7 @@ import {
   buildSessionContext,
   DEFAULT_OBSERVATION_MASKING_WINDOW,
   applyObservationMasking,
+  buildOrientationNoteTelemetry,
 } from './manager/context-builder.js';
 import {
   buildSessionMetadataWithTurn,
@@ -992,12 +993,23 @@ export class SessionManager {
         channelMeta,
       })
       : [];
+    const orientationContinuityEntries = continuityEntries.filter(entry => !(
+      (entry.originChannelId ?? entry.channelId) === 'internal:heartbeat'
+      || (entry.originChannelId ?? entry.channelId).startsWith('internal:reflection:')
+    ));
     const compactionSummaryTexts = this.compactionBoundaryStore
       .getCompactionSummaries(resolvedChannelId)
       .map(summary => summary.summary);
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
     const compactionPromptText = this.resolveCompactionPromptText(baseCompactionPrompt);
+    const orientation = buildOrientationNoteTelemetry({
+      channelId: resolvedChannelId,
+      recentActivityEntries: this.store.getRecent(resolvedChannelId, 6),
+      continuityEntries: orientationContinuityEntries,
+      focusKnowledgeTexts,
+      characterName: this.characterName,
+    });
 
     return {
       channelId: resolvedChannelId,
@@ -1005,6 +1017,7 @@ export class SessionManager {
       compactionSummaryTexts: [...compactionSummaryTexts],
       focusKnowledgeTexts: [...focusKnowledgeTexts],
       continuityEntries: continuityEntries.map(cloneSessionEntry),
+      orientation,
       intentionAppraisalArtifactCount,
       compactionPromptText,
       versionPointer: buildSnapshotVersionPointer([
@@ -1017,6 +1030,10 @@ export class SessionManager {
         continuityEntries.at(-1)?.id,
         continuityEntries.at(-1)?.timestamp,
         compactionPromptText,
+        orientation.fired ? 'orientation:fired' : `orientation:${orientation.reason}`,
+        orientation.idleGapMs,
+        orientation.lastActivityAt,
+        orientation.noteText,
       ]),
     };
   }

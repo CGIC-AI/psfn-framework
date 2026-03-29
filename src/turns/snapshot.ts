@@ -27,9 +27,28 @@ export interface TurnSessionContextSnapshot {
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  orientation?: TurnOrientationSnapshot;
   intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
   versionPointer: string;
+}
+
+export interface TurnOrientationSnapshot {
+  fired: boolean;
+  reason: 'idle_gap_exceeded' | 'below_threshold' | 'no_previous_activity' | 'internal_channel';
+  observedAt: number;
+  idleThresholdMs: number;
+  lastActivityAt?: number;
+  idleGapMs?: number;
+  noteText?: string;
+  sessionSummary?: string;
+  continuitySummary?: string;
+  openThreadSummary?: string;
+  sourceCounts: {
+    session: number;
+    continuity: number;
+    focusKnowledge: number;
+  };
 }
 
 export interface TurnMemorySnapshot {
@@ -102,6 +121,13 @@ export function buildSnapshotVersionPointer(parts: ReadonlyArray<string | number
 
 export function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return { ...entry };
+}
+
+export function cloneOrientationSnapshot(snapshot: TurnOrientationSnapshot): TurnOrientationSnapshot {
+  return {
+    ...snapshot,
+    sourceCounts: { ...snapshot.sourceCounts },
+  };
 }
 
 export function cloneContactProfileArtifact(profile: ContactProfileArtifact): ContactProfileArtifact {

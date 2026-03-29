@@ -366,7 +366,7 @@ function isRedirectStatus(status: number): boolean {
   return REDIRECT_STATUS_CODES.has(status);
 }
 
-function recordRedirectChainAudit(
+async function recordRedirectChainAudit(
   runtime: GatewayMethodRuntime,
   event: {
     rpcMethod: WebFetchMethodName;
@@ -379,8 +379,8 @@ function recordRedirectChainAudit(
   },
   durationMs: number,
   error?: string,
-): void {
-  runtime.recordAuditEvent?.({
+): Promise<void> {
+  await runtime.recordAuditEvent?.({
     method: 'web.fetch.redirect_chain',
     decision: event.outcome === 'success' ? 'ALLOW' : 'DENY',
     params: event,
@@ -422,7 +422,7 @@ async function fetchWithValidatedRedirectChain(
       );
       if (!isRedirectStatus(response.status)) {
         if (redirectHopCount > 0) {
-          recordRedirectChainAudit(runtime, {
+          await recordRedirectChainAudit(runtime, {
             rpcMethod,
             lane,
             originUrl,
@@ -478,7 +478,7 @@ async function fetchWithValidatedRedirectChain(
     }
   } catch (err) {
     if (redirectHopCount > 0) {
-      recordRedirectChainAudit(runtime, {
+      await recordRedirectChainAudit(runtime, {
         rpcMethod,
         lane,
         originUrl,

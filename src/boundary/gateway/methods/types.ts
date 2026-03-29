@@ -45,7 +45,7 @@ export interface GatewayMethodRuntime {
     params?: Record<string, unknown>;
     durationMs?: number;
     error?: string;
-  }): void;
+  }): Promise<void>;
   audited<P, R>(
     method: string,
     handler: (params: P) => Promise<R>,

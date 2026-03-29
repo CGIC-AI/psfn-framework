@@ -3,8 +3,8 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { PolicyDecision } from './protocol.js';
 
 interface QueuedActionAuditHooks {
-  audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number;
-  auditComplete(id: number, startTime: number, error?: string): void;
+  audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number>;
+  auditComplete(id: number, startTime: number, error?: string): Promise<void>;
 }
 
 export interface ExecuteQueuedActionOptions<P, R> extends QueuedActionAuditHooks {
@@ -43,15 +43,15 @@ export async function executeQueuedAction<P, R>({
     confirmationId: entry.id,
     confirmationDecision: 'approve',
   };
-  const queuedAuditId = audit(method, 'ALLOW', queuedSummary);
+  const queuedAuditId = await audit(method, 'ALLOW', queuedSummary);
   const queuedStart = Date.now();
   try {
     const result = await handler(params);
-    auditComplete(queuedAuditId, queuedStart);
+    await auditComplete(queuedAuditId, queuedStart);
     return result;
   } catch (error) {
     const message = toErrorMessage(error);
-    auditComplete(queuedAuditId, queuedStart, message);
+    await auditComplete(queuedAuditId, queuedStart, message);
     throw error;
   }
 }

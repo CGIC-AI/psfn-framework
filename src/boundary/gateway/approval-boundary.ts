@@ -19,8 +19,8 @@ import {
 import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
 
 interface ApprovalBoundaryAuditHooks {
-  audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number;
-  auditComplete(id: number, startTime: number, error?: string): void;
+  audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number>;
+  auditComplete(id: number, startTime: number, error?: string): Promise<void>;
   recordMethodSuccess(method: string): void;
   recordMethodFailure(method: string, error: unknown): void;
 }
@@ -83,7 +83,7 @@ export function createGatewayApprovalBoundaryService(
           options.policyConfig,
         );
         const summary = gateOptions.paramsSummary(params);
-        const auditId = options.audit(gateOptions.method, decision, summary);
+        const auditId = await options.audit(gateOptions.method, decision, summary);
         const startTime = Date.now();
 
         try {
@@ -136,12 +136,12 @@ export function createGatewayApprovalBoundaryService(
 
           const result = await gateOptions.handler(params);
           options.recordMethodSuccess(gateOptions.method);
-          options.auditComplete(auditId, startTime);
+          await options.auditComplete(auditId, startTime);
           return result;
         } catch (error) {
           options.recordMethodFailure(gateOptions.method, error);
           const message = toErrorMessage(error);
-          options.auditComplete(auditId, startTime, message);
+          await options.auditComplete(auditId, startTime, message);
           throw error;
         }
       };

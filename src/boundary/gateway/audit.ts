@@ -28,17 +28,17 @@ export interface AuditSummaryEntry {
   error?: string;
 }
 
-export type AuditSummaryHook = (entry: AuditSummaryEntry) => void;
+export type AuditSummaryHook = (entry: AuditSummaryEntry) => void | Promise<void>;
 
 export interface GatewayAuditStorePort {
-  log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number;
-  complete(id: number, durationMs: number, error?: string): void;
-  recordSummary(entry: AuditSummaryEntry): number;
+  log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number>;
+  complete(id: number, durationMs: number, error?: string): Promise<void>;
+  recordSummary(entry: AuditSummaryEntry): Promise<number>;
   createSummaryHook(): AuditSummaryHook;
-  getRecent(limit?: number): AuditEntry[];
-  getByMethod(method: string, limit?: number): AuditEntry[];
-  getApprovalEvents(limit?: number): AuditEntry[];
-  count(): number;
+  getRecent(limit?: number): Promise<AuditEntry[]>;
+  getByMethod(method: string, limit?: number): Promise<AuditEntry[]>;
+  getApprovalEvents(limit?: number): Promise<AuditEntry[]>;
+  count(): Promise<number>;
 }
 
 const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
@@ -122,7 +122,7 @@ export class AuditStore implements GatewayAuditStorePort {
     `);
   }
 
-  log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number {
+  async log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number> {
     const timestamp = Date.now();
     const paramsJson = params ? summarizeParams(params) : null;
     const result = this.insertStmt.run(timestamp, method, decision, paramsJson, null, null);
@@ -130,19 +130,19 @@ export class AuditStore implements GatewayAuditStorePort {
     return Number(result.lastInsertRowid);
   }
 
-  complete(id: number, durationMs: number, error?: string): void {
+  async complete(id: number, durationMs: number, error?: string): Promise<void> {
     this.updateDurationStmt.run(durationMs, error ?? null, id);
   }
 
-  recordSummary(entry: AuditSummaryEntry): number {
-    const id = this.log(entry.method, entry.decision, entry.params);
-    this.complete(id, normalizeDurationMs(entry.durationMs), entry.error);
+  async recordSummary(entry: AuditSummaryEntry): Promise<number> {
+    const id = await this.log(entry.method, entry.decision, entry.params);
+    await this.complete(id, normalizeDurationMs(entry.durationMs), entry.error);
     return id;
   }
 
   createSummaryHook(): AuditSummaryHook {
-    return (entry) => {
-      this.recordSummary(entry);
+    return async (entry) => {
+      await this.recordSummary(entry);
     };
   }
 
@@ -152,7 +152,7 @@ export class AuditStore implements GatewayAuditStorePort {
     duration_ms AS durationMs,
     error`;
 
-  getRecent(limit: number = 50): AuditEntry[] {
+  async getRecent(limit: number = 50): Promise<AuditEntry[]> {
     const stmt = this.db.prepare(`
       SELECT ${AuditStore.SELECT_COLS}
       FROM gateway_audit
@@ -162,7 +162,7 @@ export class AuditStore implements GatewayAuditStorePort {
     return stmt.all(limit) as AuditEntry[];
   }
 
-  getByMethod(method: string, limit: number = 50): AuditEntry[] {
+  async getByMethod(method: string, limit: number = 50): Promise<AuditEntry[]> {
     const stmt = this.db.prepare(`
       SELECT ${AuditStore.SELECT_COLS}
       FROM gateway_audit
@@ -173,7 +173,7 @@ export class AuditStore implements GatewayAuditStorePort {
     return stmt.all(method, limit) as AuditEntry[];
   }
 
-  getApprovalEvents(limit: number = 50): AuditEntry[] {
+  async getApprovalEvents(limit: number = 50): Promise<AuditEntry[]> {
     const stmt = this.db.prepare(`
       SELECT ${AuditStore.SELECT_COLS}
       FROM gateway_audit
@@ -184,7 +184,7 @@ export class AuditStore implements GatewayAuditStorePort {
     return stmt.all(limit) as AuditEntry[];
   }
 
-  count(): number {
+  async count(): Promise<number> {
     const row = this.countStmt.get() as { cnt: number };
     return row.cnt;
   }
@@ -198,7 +198,7 @@ export class AuditStore implements GatewayAuditStorePort {
   private pruneBySize(): void {
     let currentSize = this.getApproximatePayloadSizeBytes();
     while (currentSize > this.rotation.maxSizeBytes) {
-      const removableRows = this.count() - 1;
+      const removableRows = this.countRows() - 1;
       if (removableRows <= 0) {
         break;
       }
@@ -214,6 +214,11 @@ export class AuditStore implements GatewayAuditStorePort {
   private getApproximatePayloadSizeBytes(): number {
     const row = this.estimateSizeStmt.get() as { bytes: number };
     return row.bytes;
+  }
+
+  private countRows(): number {
+    const row = this.countStmt.get() as { cnt: number };
+    return row.cnt;
   }
 }
 

@@ -146,17 +146,17 @@ export class GatewayServer {
   ): (params: P) => Promise<R> {
     return async (params: P) => {
       const summary = paramsSummary ? paramsSummary(params) : undefined;
-      const auditId = this.audit(method, 'ALLOW', summary);
+      const auditId = await this.audit(method, 'ALLOW', summary);
       const startTime = Date.now();
       try {
         const result = await handler(params);
         this.runtimeHealthTracker.recordMethodSuccess(method);
-        this.auditComplete(auditId, startTime);
+        await this.auditComplete(auditId, startTime);
         return result;
       } catch (err) {
         this.runtimeHealthTracker.recordMethodFailure(method, err);
         const msg = toErrorMessage(err);
-        this.auditComplete(auditId, startTime, msg);
+        await this.auditComplete(auditId, startTime, msg);
         throw err;
       }
     };
@@ -182,9 +182,9 @@ export class GatewayServer {
       sendNtfy: (params) => this.ntfyNotifier.send(params),
       getRuntimeHealth: () => this.getRuntimeHealth(),
       nextStreamRequestId: () => `gw-${++this.streamRequestCounter}`,
-      recordAuditEvent: (entry) => {
+      recordAuditEvent: async (entry) => {
         if (this.options.auditStore) {
-          this.options.auditStore.recordSummary(entry);
+          await this.options.auditStore.recordSummary(entry);
         }
       },
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
@@ -218,9 +218,9 @@ export class GatewayServer {
       this.rpcClients.set(conn, serverAndClient);
       this.transitionConnectionState(conn, 'ready', 'rpc_registered');
 
-      conn.on('frameError', (error: unknown) => {
+      conn.on('frameError', async (error: unknown) => {
         const frameError = normalizeNdjsonFrameError(error);
-        this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
+        await this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
       });
 
       conn.onMessage(async (message) => {
@@ -231,7 +231,7 @@ export class GatewayServer {
         this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
         const validationError = validateJsonRpcFrame(message);
         if (validationError) {
-          this.handleMalformedFrame(
+          await this.handleMalformedFrame(
             conn,
             'jsonrpc',
             validationError,
@@ -245,7 +245,7 @@ export class GatewayServer {
           await serverAndClient.receiveAndSend(message as any);
         } catch (error) {
           const messageText = toErrorMessage(error);
-          this.handleMalformedFrame(
+          await this.handleMalformedFrame(
             conn,
             'jsonrpc',
             `JSON-RPC receive/send failed: ${messageText}`,
@@ -297,12 +297,12 @@ export class GatewayServer {
     this.connectionStatuses.delete(conn);
   }
 
-  private handleMalformedFrame(
+  private async handleMalformedFrame(
     conn: NdjsonConnection,
     frameKind: MalformedFrameKind,
     reason: string,
     preview?: string,
-  ): void {
+  ): Promise<void> {
     if (!this.connectionStatuses.has(conn)) {
       return;
     }
@@ -313,8 +313,8 @@ export class GatewayServer {
       reason,
       ...(preview ? { preview } : {}),
     };
-    const auditId = this.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
-    this.auditComplete(auditId, startedAt, reason);
+    const auditId = await this.audit(INVALID_FRAME_AUDIT_METHOD, 'DENY', params);
+    await this.auditComplete(auditId, startedAt, reason);
     log.error('Malformed IPC frame received; disconnecting agent connection', params);
     this.transitionConnectionState(conn, 'degraded', 'malformed_frame', reason);
     this.transitionConnectionState(conn, 'offline', 'malformed_frame', reason);
@@ -508,7 +508,7 @@ export class GatewayServer {
     log.info('Stopped');
   }
 
-  private audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number {
+  private async audit(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number> {
     const correlation = extractGatewayCorrelation(params);
     if (decision !== 'ALLOW') {
       log.info(`${method} → ${decision}`, {
@@ -516,14 +516,14 @@ export class GatewayServer {
       });
     }
     if (this.options.auditStore) {
-      return this.options.auditStore.log(method, decision, params);
+      return await this.options.auditStore.log(method, decision, params);
     }
     return 0;
   }
 
-  private auditComplete(id: number, startTime: number, error?: string): void {
+  private async auditComplete(id: number, startTime: number, error?: string): Promise<void> {
     if (this.options.auditStore && id > 0) {
-      this.options.auditStore.complete(id, Date.now() - startTime, error);
+      await this.options.auditStore.complete(id, Date.now() - startTime, error);
     }
   }
 }

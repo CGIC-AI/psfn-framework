@@ -15,84 +15,84 @@ describe('AuditStore', () => {
     db.close();
   });
 
-  it('logs an audit entry and returns its id', () => {
-    const id = store.log('llm.chat', 'ALLOW', { model: 'test' });
+  it('logs an audit entry and returns its id', async () => {
+    const id = await store.log('llm.chat', 'ALLOW', { model: 'test' });
     expect(id).toBeGreaterThan(0);
   });
 
-  it('retrieves recent entries', () => {
-    store.log('llm.chat', 'ALLOW');
-    store.log('fs.read', 'NEEDS_APPROVAL', { path: '/etc/passwd' });
-    store.log('discord.send', 'ALLOW');
+  it('retrieves recent entries', async () => {
+    await store.log('llm.chat', 'ALLOW');
+    await store.log('fs.read', 'NEEDS_APPROVAL', { path: '/etc/passwd' });
+    await store.log('discord.send', 'ALLOW');
 
-    const entries = store.getRecent(10);
+    const entries = await store.getRecent(10);
     expect(entries).toHaveLength(3);
     // Most recent first
     expect(entries[0].method).toBe('discord.send');
     expect(entries[2].method).toBe('llm.chat');
   });
 
-  it('completes an entry with duration and error', () => {
-    const id = store.log('web.fetch', 'ALLOW', { url: 'https://example.com' });
-    store.complete(id, 150);
+  it('completes an entry with duration and error', async () => {
+    const id = await store.log('web.fetch', 'ALLOW', { url: 'https://example.com' });
+    await store.complete(id, 150);
 
-    const entries = store.getRecent(1);
+    const entries = await store.getRecent(1);
     expect(entries[0].durationMs).toBe(150);
     expect(entries[0].error).toBeNull();
   });
 
-  it('records errors on completion', () => {
-    const id = store.log('fs.write', 'NEEDS_APPROVAL');
-    store.complete(id, 50, 'Approval denied');
+  it('records errors on completion', async () => {
+    const id = await store.log('fs.write', 'NEEDS_APPROVAL');
+    await store.complete(id, 50, 'Approval denied');
 
-    const entries = store.getRecent(1);
+    const entries = await store.getRecent(1);
     expect(entries[0].error).toBe('Approval denied');
   });
 
-  it('filters by method', () => {
-    store.log('llm.chat', 'ALLOW');
-    store.log('fs.read', 'NEEDS_APPROVAL');
-    store.log('llm.chat', 'ALLOW');
+  it('filters by method', async () => {
+    await store.log('llm.chat', 'ALLOW');
+    await store.log('fs.read', 'NEEDS_APPROVAL');
+    await store.log('llm.chat', 'ALLOW');
 
-    const llmEntries = store.getByMethod('llm.chat');
+    const llmEntries = await store.getByMethod('llm.chat');
     expect(llmEntries).toHaveLength(2);
     expect(llmEntries.every(e => e.method === 'llm.chat')).toBe(true);
   });
 
-  it('filters approval events (non-ALLOW)', () => {
-    store.log('llm.chat', 'ALLOW');
-    store.log('fs.read', 'NEEDS_APPROVAL');
-    store.log('fs.write', 'DENY');
-    store.log('discord.send', 'ALLOW');
+  it('filters approval events (non-ALLOW)', async () => {
+    await store.log('llm.chat', 'ALLOW');
+    await store.log('fs.read', 'NEEDS_APPROVAL');
+    await store.log('fs.write', 'DENY');
+    await store.log('discord.send', 'ALLOW');
 
-    const events = store.getApprovalEvents();
+    const events = await store.getApprovalEvents();
     expect(events).toHaveLength(2);
     expect(events.map(e => e.decision)).toEqual(['DENY', 'NEEDS_APPROVAL']);
   });
 
-  it('counts entries', () => {
-    expect(store.count()).toBe(0);
-    store.log('llm.chat', 'ALLOW');
-    store.log('llm.embed', 'ALLOW');
-    expect(store.count()).toBe(2);
+  it('counts entries', async () => {
+    expect(await store.count()).toBe(0);
+    await store.log('llm.chat', 'ALLOW');
+    await store.log('llm.embed', 'ALLOW');
+    expect(await store.count()).toBe(2);
   });
 
-  it('summarizes large params', () => {
-    store.log('llm.chat', 'ALLOW', {
+  it('summarizes large params', async () => {
+    await store.log('llm.chat', 'ALLOW', {
       systemPrompt: 'x'.repeat(500),
       messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }],
       content: 'y'.repeat(300),
     });
 
-    const entries = store.getRecent(1);
+    const entries = await store.getRecent(1);
     const params = entries[0].paramsJson;
     expect(params).toContain('500 chars');
     expect(params).toContain('2 messages');
     expect(params).toContain('300 chars');
   });
 
-  it('summarizes shard sync envelope and decision fields in audit params', () => {
-    store.log('shard.sync.policy', 'DENY', {
+  it('summarizes shard sync envelope and decision fields in audit params', async () => {
+    await store.log('shard.sync.policy', 'DENY', {
       syncEnvelope: {
         version: 1,
         syncClass: 'derived_memory',
@@ -113,7 +113,7 @@ describe('AuditStore', () => {
       },
     });
 
-    const entries = store.getRecent(1);
+    const entries = await store.getRecent(1);
     const params = JSON.parse(entries[0].paramsJson) as Record<string, Record<string, unknown>>;
     expect(params.syncEnvelope).toMatchObject({
       version: 1,
@@ -134,8 +134,8 @@ describe('AuditStore', () => {
     });
   });
 
-  it('preserves correlation fields in stored audit summaries', () => {
-    store.log('llm.complete', 'ALLOW', {
+  it('preserves correlation fields in stored audit summaries', async () => {
+    await store.log('llm.complete', 'ALLOW', {
       turnId: 'turn-77',
       requestId: 'req-77',
       channelId: 'internal:heartbeat',
@@ -144,7 +144,7 @@ describe('AuditStore', () => {
       purpose: 'deliberation.aggregator',
     });
 
-    const entries = store.getRecent(1);
+    const entries = await store.getRecent(1);
     const parsed = JSON.parse(entries[0].paramsJson) as Record<string, string>;
     expect(parsed.turnId).toBe('turn-77');
     expect(parsed.requestId).toBe('req-77');
@@ -154,22 +154,22 @@ describe('AuditStore', () => {
     expect(parsed.purpose).toBe('deliberation.aggregator');
   });
 
-  it('prunes oldest rows when maxCount is exceeded', () => {
+  it('prunes oldest rows when maxCount is exceeded', async () => {
     store = new AuditStore(db, {
       maxCount: 2,
       maxAgeMs: 60_000,
       maxSizeBytes: 10_000,
     });
 
-    store.log('first', 'ALLOW');
-    store.log('second', 'ALLOW');
-    store.log('third', 'ALLOW');
+    await store.log('first', 'ALLOW');
+    await store.log('second', 'ALLOW');
+    await store.log('third', 'ALLOW');
 
-    expect(store.count()).toBe(2);
-    expect(store.getRecent(10).map(entry => entry.method)).toEqual(['third', 'second']);
+    expect(await store.count()).toBe(2);
+    expect((await store.getRecent(10)).map(entry => entry.method)).toEqual(['third', 'second']);
   });
 
-  it('prunes rows older than maxAgeMs', () => {
+  it('prunes rows older than maxAgeMs', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       store = new AuditStore(db, {
@@ -179,30 +179,30 @@ describe('AuditStore', () => {
       });
 
       nowSpy.mockReturnValueOnce(1_000);
-      store.log('old', 'ALLOW');
+      await store.log('old', 'ALLOW');
 
       nowSpy.mockReturnValueOnce(3_000);
-      store.log('fresh', 'ALLOW');
+      await store.log('fresh', 'ALLOW');
 
-      expect(store.count()).toBe(1);
-      expect(store.getRecent(10)[0].method).toBe('fresh');
+      expect(await store.count()).toBe(1);
+      expect((await store.getRecent(10))[0].method).toBe('fresh');
     } finally {
       nowSpy.mockRestore();
     }
   });
 
-  it('prunes oldest rows when approximate payload size exceeds maxSizeBytes', () => {
+  it('prunes oldest rows when approximate payload size exceeds maxSizeBytes', async () => {
     store = new AuditStore(db, {
       maxCount: 100,
       maxAgeMs: 60_000,
       maxSizeBytes: 220,
     });
 
-    store.log('first', 'ALLOW', { note: 'a'.repeat(140) });
-    store.log('second', 'ALLOW', { note: 'b'.repeat(140) });
+    await store.log('first', 'ALLOW', { note: 'a'.repeat(140) });
+    await store.log('second', 'ALLOW', { note: 'b'.repeat(140) });
 
-    expect(store.count()).toBe(1);
-    expect(store.getRecent(10)[0].method).toBe('second');
+    expect(await store.count()).toBe(1);
+    expect((await store.getRecent(10))[0].method).toBe('second');
   });
 
   it('rejects invalid rotation configuration', () => {
@@ -211,30 +211,30 @@ describe('AuditStore', () => {
     expect(() => new AuditStore(db, { maxSizeBytes: 0 })).toThrow('maxSizeBytes');
   });
 
-  it('records summary entries with immediate completion', () => {
-    store.recordSummary({
+  it('records summary entries with immediate completion', async () => {
+    await store.recordSummary({
       method: 'wyoming.session.start',
       decision: 'ALLOW',
       params: { connectionId: 'conn-1', sessionId: 's-1' },
       durationMs: 12.8,
     });
 
-    const entries = store.getRecent(1);
+    const entries = await store.getRecent(1);
     expect(entries[0].method).toBe('wyoming.session.start');
     expect(entries[0].durationMs).toBe(12);
     expect(entries[0].error).toBeNull();
   });
 
-  it('creates summary hooks for Wyoming/audit telemetry wiring', () => {
+  it('creates summary hooks for Wyoming/audit telemetry wiring', async () => {
     const hook = store.createSummaryHook();
-    hook({
+    await hook({
       method: 'wyoming.policy.violation',
       decision: 'DENY',
       params: { code: 'RATE_LIMIT_EXCEEDED' },
       error: 'Session exceeded event rate',
     });
 
-    const entries = store.getRecent(1);
+    const entries = await store.getRecent(1);
     expect(entries[0].method).toBe('wyoming.policy.violation');
     expect(entries[0].decision).toBe('DENY');
     expect(entries[0].error).toContain('event rate');

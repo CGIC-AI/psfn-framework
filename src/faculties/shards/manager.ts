@@ -37,8 +37,8 @@ import { buildShardReturnedArtifacts, type ShardReturnedArtifact } from './artif
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCanonicalEmbodimentContext } from '../../core/agent/active-emanation-state.js';
 import {
-  type BoundedSubagentLaunchPort,
   type BoundedSubagentLaunchSummary,
+  type SubagentExecutionPort,
 } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import {
   resolveCompanionIdFromConfig,
@@ -136,7 +136,7 @@ export interface ActiveShard {
   failureReason?: string;
 }
 
-export class ShardManager implements ShardExecutionPort, BoundedSubagentLaunchPort {
+export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   private deps: ShardManagerDeps;
   private auditTrail: ShardAuditTrail | null;
   private activeCount = 0;
@@ -200,7 +200,7 @@ export class ShardManager implements ShardExecutionPort, BoundedSubagentLaunchPo
     return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig);
   }
 
-  async launchBoundedSubagent(shardConfig: ShardConfig): Promise<BoundedSubagentLaunchSummary> {
+  async executeSubagent(shardConfig: ShardConfig): Promise<BoundedSubagentLaunchSummary> {
     const result = await this.spawn(shardConfig);
     return {
       subagentId: result.shardId,

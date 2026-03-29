@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { BoundedSubagentLaunchPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
+import type { SubagentExecutionPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import { createBoundedSubagentLaunchTool } from './tools.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 describe('createBoundedSubagentLaunchTool', () => {
   it('returns a bounded subagent launch envelope in details', async () => {
-    const launchBoundedSubagent = vi.fn(async () => ({
+    const executeSubagent = vi.fn(async () => ({
       subagentId: 'subagent-123',
       name: 'research',
       content: 'result text',
@@ -20,7 +20,7 @@ describe('createBoundedSubagentLaunchTool', () => {
       capabilities: ['general'],
       requiredCapabilities: ['must-read'],
     }));
-    const tool = createBoundedSubagentLaunchTool({ launchBoundedSubagent } as unknown as BoundedSubagentLaunchPort);
+    const tool = createBoundedSubagentLaunchTool({ executeSubagent } as unknown as SubagentExecutionPort);
 
     await runWithRequestContext(
       {
@@ -45,7 +45,7 @@ describe('createBoundedSubagentLaunchTool', () => {
           requiredCapabilities: ['must-read', 'must-read'],
         });
 
-        expect(launchBoundedSubagent).toHaveBeenCalledWith(expect.objectContaining({
+        expect(executeSubagent).toHaveBeenCalledWith(expect.objectContaining({
           name: 'research',
           task: 'explore',
           systemPrompt: 'prompt',

@@ -4,7 +4,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { BoundedSubagentLaunchPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
+import type { SubagentExecutionPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import {
   BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
   buildBoundedSubagentLaunchEnvelope,
@@ -14,7 +14,7 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
-export function createBoundedSubagentLaunchTool(manager: BoundedSubagentLaunchPort): AgentTool<any> {
+export function createBoundedSubagentLaunchTool(manager: SubagentExecutionPort): AgentTool<any> {
   return {
     name: BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME,
     description:
@@ -70,7 +70,7 @@ export function createBoundedSubagentLaunchTool(manager: BoundedSubagentLaunchPo
             }
             : undefined,
         });
-        const result = await manager.launchBoundedSubagent(launchRequest);
+        const result = await manager.executeSubagent(launchRequest);
         const boundedSubagent = buildBoundedSubagentLaunchEnvelope(
           launchRequest,
           {

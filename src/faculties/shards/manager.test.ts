@@ -12,7 +12,7 @@ import { buildFocusMemoryScopeQuery } from '../../core/session/focus-knowledge.j
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createBoundedSubagentLaunchTool } from './tools.js';
-import type { BoundedSubagentLaunchPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
+import type { SubagentExecutionPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMResponse } from '../../shared/contracts/runtime.js';
@@ -1581,7 +1581,7 @@ describe('createBoundedSubagentLaunchTool', () => {
   });
 
   it('surfaces explicit lifecycle failure diagnostics from bounded subagent results', async () => {
-    const launchBoundedSubagent = vi.fn(async () => ({
+    const executeSubagent = vi.fn(async () => ({
       subagentId: 'subagent-failure',
       name: 'degraded-shard',
       content: 'partial output',
@@ -1597,7 +1597,7 @@ describe('createBoundedSubagentLaunchTool', () => {
       capabilities: ['general'],
       requiredCapabilities: [],
     }));
-    const tool = createBoundedSubagentLaunchTool({ launchBoundedSubagent } as unknown as BoundedSubagentLaunchPort);
+    const tool = createBoundedSubagentLaunchTool({ executeSubagent } as unknown as SubagentExecutionPort);
 
     const result = await tool.execute('call-failure', {
       name: 'degraded-shard',
@@ -1610,7 +1610,7 @@ describe('createBoundedSubagentLaunchTool', () => {
   });
 
   it('passes source request context into bounded subagent launches', async () => {
-    const launchBoundedSubagent = vi.fn(async () => ({
+    const executeSubagent = vi.fn(async () => ({
       subagentId: 'subagent-test',
       name: 'ctx',
       content: 'ok',
@@ -1625,7 +1625,7 @@ describe('createBoundedSubagentLaunchTool', () => {
       capabilities: ['general'],
       requiredCapabilities: [],
     }));
-    const tool = createBoundedSubagentLaunchTool({ launchBoundedSubagent } as unknown as BoundedSubagentLaunchPort);
+    const tool = createBoundedSubagentLaunchTool({ executeSubagent } as unknown as SubagentExecutionPort);
 
     await runWithRequestContext(
       {
@@ -1641,7 +1641,7 @@ describe('createBoundedSubagentLaunchTool', () => {
       },
     );
 
-    expect(launchBoundedSubagent).toHaveBeenCalledWith(expect.objectContaining({
+    expect(executeSubagent).toHaveBeenCalledWith(expect.objectContaining({
       name: 'ctx',
       task: 'Inspect source context',
       sourceContext: {

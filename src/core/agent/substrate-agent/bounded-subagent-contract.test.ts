@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildBoundedSubagentLaunchEnvelope,
+  createBoundedSubagentLaunchPort,
+  createSubagentExecutionPort,
   isBoundedSubagentLaunchToolName,
   normalizeBoundedSubagentLaunchRequest,
 } from './bounded-subagent-contract.js';
@@ -108,5 +110,36 @@ describe('bounded subagent contract', () => {
         } as any,
       },
     })).toThrow('non-empty sourceContext.embodimentContext.embodimentId');
+  });
+
+  it('adapts between bounded launch and subagent execution ports', async () => {
+    const summary = {
+      subagentId: 'subagent-1',
+      name: 'research',
+      content: 'ok',
+      model: 'mock-model',
+      inputTokens: 10,
+      outputTokens: 20,
+      durationMs: 33,
+      turns: 2,
+      lifecycleState: 'ready' as const,
+      health: 'healthy' as const,
+      stateReason: 'completed',
+      capabilities: ['general'],
+      requiredCapabilities: ['analysis'],
+    };
+    const request = normalizeBoundedSubagentLaunchRequest({
+      name: 'research',
+      task: 'explore',
+    });
+    const launchPort = createBoundedSubagentLaunchPort({
+      executeSubagent: async () => summary,
+    });
+    const executionPort = createSubagentExecutionPort({
+      launchBoundedSubagent: async () => summary,
+    });
+
+    await expect(launchPort.launchBoundedSubagent(request)).resolves.toEqual(summary);
+    await expect(executionPort.executeSubagent(request)).resolves.toEqual(summary);
   });
 });

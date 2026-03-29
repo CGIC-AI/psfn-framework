@@ -70,8 +70,39 @@ export interface BoundedSubagentLaunchEnvelope {
   diagnostics: BoundedSubagentLaunchDiagnostics;
 }
 
+export type SubagentExecutionRequestInput = BoundedSubagentLaunchRequestInput;
+export type SubagentExecutionRequest = BoundedSubagentLaunchRequest;
+export type SubagentExecutionResult = BoundedSubagentLaunchResult;
+export type SubagentExecutionSummary = BoundedSubagentLaunchSummary;
+export type SubagentExecutionDiagnostics = BoundedSubagentLaunchDiagnostics;
+export type SubagentExecutionEnvelope = BoundedSubagentLaunchEnvelope;
+
+export interface SubagentExecutionPort {
+  executeSubagent(request: SubagentExecutionRequest): Promise<SubagentExecutionSummary>;
+}
+
 export interface BoundedSubagentLaunchPort {
   launchBoundedSubagent(request: BoundedSubagentLaunchRequest): Promise<BoundedSubagentLaunchSummary>;
+}
+
+export function createSubagentExecutionPort(
+  port: BoundedSubagentLaunchPort,
+): SubagentExecutionPort {
+  return {
+    executeSubagent(request) {
+      return port.launchBoundedSubagent(request);
+    },
+  };
+}
+
+export function createBoundedSubagentLaunchPort(
+  port: SubagentExecutionPort,
+): BoundedSubagentLaunchPort {
+  return {
+    launchBoundedSubagent(request) {
+      return port.executeSubagent(request);
+    },
+  };
 }
 
 function normalizeText(value: unknown, fieldName: string): string {

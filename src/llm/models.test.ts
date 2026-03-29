@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createLiteLLMModel, createModel } from './models.js';
+import { createLiteLLMModel, createModel, resolveSystemRoleCapabilityMetadata } from './models.js';
 import { normalizeContent } from './client.js';
 
 describe('createLiteLLMModel', () => {
@@ -72,6 +72,38 @@ describe('createModel', () => {
     expect(model.api).toBe('openai-completions');
     expect(model.contextWindow).toBe(128_000);
     expect(model.maxTokens).toBe(4096);
+  });
+});
+
+describe('resolveSystemRoleCapabilityMetadata', () => {
+  it('marks LiteLLM OpenAI-compatible proxies as developer-role capable when reasoning is enabled', () => {
+    const model = createLiteLLMModel({
+      baseUrl: 'http://localhost:4000/v1',
+      modelId: 'test-model',
+      reasoning: true,
+    });
+
+    expect(resolveSystemRoleCapabilityMetadata(model)).toEqual({
+      transport: 'openai_developer',
+      supportsSystemRole: true,
+      supportsDeveloperRole: true,
+      usesOutOfBandSystemPrompt: false,
+    });
+  });
+
+  it('keeps non-reasoning OpenAI-compatible models on the system role', () => {
+    const model = createLiteLLMModel({
+      baseUrl: 'http://localhost:4000/v1',
+      modelId: 'test-model',
+      reasoning: false,
+    });
+
+    expect(resolveSystemRoleCapabilityMetadata(model)).toEqual({
+      transport: 'openai_system',
+      supportsSystemRole: true,
+      supportsDeveloperRole: true,
+      usesOutOfBandSystemPrompt: false,
+    });
   });
 });
 

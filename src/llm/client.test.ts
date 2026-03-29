@@ -262,6 +262,112 @@ describe('LLMClient import-processing routing policy', () => {
   });
 });
 
+describe('LLMClient provider observability', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+      reasoning: true,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockImplementation((provider: string) => [
+      {
+        id: 'z-ai/glm-5',
+        provider,
+        name: 'z-ai/glm-5',
+        api: 'openai-completions',
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 8192,
+        reasoning: true,
+      },
+    ]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('attaches provider observability and reasoning to streaming responses', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield { type: 'thinking_delta', delta: 'trace' };
+      yield { type: 'text_delta', delta: 'hello' };
+      yield {
+        type: 'done',
+        reason: 'stop',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 11, output: 7 },
+          content: [{ type: 'text', text: 'hello' }],
+        },
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System prompt',
+      messages: [{ role: 'user', content: 'Hi' }],
+    });
+
+    expect(response.reasoning).toBe('trace');
+    expect(response.providerObservability).toMatchObject({
+      routeKind: 'registered_model',
+      requestedProvider: 'openrouter',
+      backendApi: 'openai-completions',
+      systemRole: {
+        transport: 'openai_developer',
+      },
+      providerWireMessages: [
+        { role: 'developer', source: 'system_prompt', content: 'System prompt' },
+        { role: 'user', source: 'message', content: 'Hi' },
+      ],
+    });
+  });
+
+  it('attaches provider observability and reasoning to completion responses', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.completeSimple.mockResolvedValue({
+      model: 'z-ai/glm-5',
+      usage: { input: 13, output: 5 },
+      stopReason: 'stop',
+      content: [
+        { type: 'thinking', thinking: 'chain' },
+        { type: 'text', text: 'done' },
+      ],
+    });
+
+    const response = await client.complete({
+      systemPrompt: 'System prompt',
+      messages: [{ role: 'user', content: 'Hi' }],
+    }, 'summary', { disableRetry: true });
+
+    expect(response.reasoning).toBe('chain');
+    expect(response.providerObservability).toMatchObject({
+      routeKind: 'registered_model',
+      requestedProvider: 'openrouter',
+      backendApi: 'openai-completions',
+      systemRole: {
+        transport: 'openai_developer',
+      },
+      providerWireMessages: [
+        { role: 'developer', source: 'system_prompt', content: 'System prompt' },
+        { role: 'user', source: 'message', content: 'Hi' },
+      ],
+    });
+  });
+});
+
 describe('LLMClient completion model hints', () => {
   beforeEach(() => {
     mocks.getModel.mockReset();

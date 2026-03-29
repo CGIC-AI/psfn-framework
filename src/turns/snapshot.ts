@@ -5,7 +5,14 @@ import type { MemoryWithheldSummary } from '../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../memory/store.js';
 import type { PurrMemory } from '../memory/types.js';
 import type { SessionEntry } from '../session/types.js';
-import type { ContextMessage, PromptSectionTelemetry, ToolSchema, TurnID } from '../types.js';
+<<<<<<< HEAD
+import type {
+  ContextMessage,
+  LLMProviderObservability,
+  PromptSectionTelemetry,
+  ToolSchema,
+  TurnID,
+} from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
 
 export interface TurnPromptSnapshot {
@@ -48,6 +55,8 @@ export interface TurnPromptContextSnapshot {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: ContextMessage[];
+<<<<<<< HEAD
+  providerObservability?: LLMProviderObservability;
   inputSections?: PromptSectionTelemetry[];
   runtimeContextSections?: PromptSectionTelemetry[];
   finalSystemSections?: PromptSectionTelemetry[];
@@ -99,6 +108,16 @@ export function cloneEmotionalSnapshot(snapshot: EmotionalSnapshot): EmotionalSn
 
 export function cloneContextMessage(message: ContextMessage): ContextMessage {
   return { ...message };
+}
+
+export function cloneProviderObservability(
+  observability: LLMProviderObservability,
+): LLMProviderObservability {
+  return {
+    ...observability,
+    systemRole: { ...observability.systemRole },
+    providerWireMessages: observability.providerWireMessages.map(message => ({ ...message })),
+  };
 }
 
 function cloneUnknownSchemaValue<T>(value: T): T {

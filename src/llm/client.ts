@@ -11,8 +11,10 @@ import type {
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
+  LLMProviderObservability,
   LLMModelHint,
   LLMResponse,
+  LLMProviderWireMessage,
   ModelBudgetBlockedEvent,
   StreamCallbacks,
   SubstrateConfig,
@@ -31,7 +33,7 @@ import { createComponentLogger } from '../logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
-import { resolveRegisteredModel } from './models.js';
+import { resolveRegisteredModel, resolveSystemRoleCapabilityMetadata } from './models.js';
 import {
   EligibilityDeniedError,
   type EligibilityDecision,
@@ -451,6 +453,56 @@ export class LLMClient {
     };
   }
 
+  private resolveRouteKind(candidate: RoutingCandidate): LLMProviderObservability['routeKind'] {
+    if (candidate.requestBaseUrl) return 'request_base_url';
+    if (this.litellmBaseUrl) return 'configured_litellm_proxy';
+    return 'registered_model';
+  }
+
+  private toProviderWireMessages(context: PiContext, systemTransport: ReturnType<typeof resolveSystemRoleCapabilityMetadata>): LLMProviderWireMessage[] {
+    const messages: LLMProviderWireMessage[] = [];
+    if (context.systemPrompt) {
+      messages.push({
+        role: systemTransport.transport === 'openai_developer'
+          ? 'developer'
+          : systemTransport.transport === 'google_system_instruction'
+            ? 'system_instruction'
+            : 'system',
+        source: 'system_prompt',
+        content: context.systemPrompt,
+      });
+    }
+    for (const message of context.messages) {
+      messages.push({
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        source: 'message',
+        content: typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content),
+      });
+    }
+    return messages;
+  }
+
+  private buildProviderObservability(
+    candidate: RoutingCandidate,
+    model: Model<any>,
+    context: PiContext,
+  ): LLMProviderObservability {
+    const systemRole = resolveSystemRoleCapabilityMetadata(model);
+    return {
+      routeKind: this.resolveRouteKind(candidate),
+      requestedProvider: candidate.provider,
+      requestedModel: candidate.model,
+      backendProvider: model.provider,
+      backendModel: model.id,
+      backendApi: model.api,
+      ...(model.baseUrl ? { backendBaseUrl: model.baseUrl } : {}),
+      systemRole,
+      providerWireMessages: this.toProviderWireMessages(context, systemRole),
+    };
+  }
+
   private estimateContextInputTokens(context: PiContext): number {
     const collectChars = (value: unknown): number => {
       if (typeof value === 'string') return value.length;
@@ -528,6 +580,7 @@ export class LLMClient {
         async (candidateTarget) => {
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
           const requestOptions = this.buildRequestOptions(candidateTarget, apiKey);
+          const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext);
 
           return withRetry(async () => {
             const eventStream = streamSimple(
@@ -580,6 +633,7 @@ export class LLMClient {
                     response = {
                       content,
                       ...(reasoning ? { reasoning } : {}),
+                      providerObservability,
                       toolCalls,
                       model: event.message.model,
                       inputTokens: event.message.usage.input,
@@ -614,6 +668,7 @@ export class LLMClient {
             return {
               content,
               ...(reasoning ? { reasoning } : {}),
+              providerObservability,
               toolCalls,
               model: String(model.id),
               inputTokens: 0,
@@ -685,6 +740,7 @@ export class LLMClient {
         const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
           signal: options.signal,
         });
+        const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext);
 
         const request = async () => {
           try {
@@ -703,10 +759,13 @@ export class LLMClient {
         };
 
         if (options.disableRetry) {
-          return request();
+          return {
+            response: await request(),
+            providerObservability,
+          };
         }
 
-        return withRetry(request, llmRetryConfig(this.config), {
+        const response = await withRetry(request, llmRetryConfig(this.config), {
           onRetry: ({ attempt, maxRetries, delayMs, error }) => {
             log.warn('LLM complete failed, retrying', {
               model: String(model.id),
@@ -721,6 +780,7 @@ export class LLMClient {
             });
           },
         });
+        return { response, providerObservability };
       },
       {
         modelHint,
@@ -739,10 +799,10 @@ export class LLMClient {
       routingPurpose,
     });
 
-    const content = extractTextContent(response.content as unknown[]);
-    const reasoning = extractReasoningContent(response.content as unknown[]);
-    const inputTokens = response.usage.input;
-    const outputTokens = response.usage.output;
+    const content = extractTextContent(response.response.content as unknown[]);
+    const reasoning = extractReasoningContent(response.response.content as unknown[]);
+    const inputTokens = response.response.usage.input;
+    const outputTokens = response.response.usage.output;
 
     this.recordUsage(
       routingPurpose,
@@ -755,11 +815,12 @@ export class LLMClient {
     return {
       content: normalizeContent(content),
       ...(reasoning ? { reasoning } : {}),
+      providerObservability: response.providerObservability,
       toolCalls: [],
-      model: response.model,
+      model: response.response.model,
       inputTokens,
       outputTokens,
-      stopReason: response.stopReason,
+      stopReason: response.response.stopReason,
     };
   }
 

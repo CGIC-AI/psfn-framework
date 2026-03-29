@@ -6,6 +6,24 @@ function createHarness() {
   const methods = new Map<string, (params: any) => Promise<any>>();
   const stream = vi.fn(async () => ({
     content: 'streamed',
+    reasoning: 'stream-thinking',
+    providerObservability: {
+      routeKind: 'registered_model',
+      requestedProvider: 'openrouter',
+      requestedModel: 'mock-model',
+      backendProvider: 'openrouter',
+      backendModel: 'mock-model',
+      backendApi: 'openai-completions',
+      systemRole: {
+        transport: 'openai_developer',
+        supportsSystemRole: true,
+        supportsDeveloperRole: true,
+        usesOutOfBandSystemPrompt: false,
+      },
+      providerWireMessages: [
+        { role: 'developer', source: 'system_prompt', content: 'system' },
+      ],
+    },
     toolCalls: [],
     model: 'mock-model',
     inputTokens: 5,
@@ -14,6 +32,24 @@ function createHarness() {
   }));
   const complete = vi.fn(async () => ({
     content: 'completed',
+    reasoning: 'complete-thinking',
+    providerObservability: {
+      routeKind: 'registered_model',
+      requestedProvider: 'openrouter',
+      requestedModel: 'mock-model',
+      backendProvider: 'openrouter',
+      backendModel: 'mock-model',
+      backendApi: 'openai-completions',
+      systemRole: {
+        transport: 'openai_system',
+        supportsSystemRole: true,
+        supportsDeveloperRole: false,
+        usesOutOfBandSystemPrompt: false,
+      },
+      providerWireMessages: [
+        { role: 'system', source: 'system_prompt', content: 'system' },
+      ],
+    },
     model: 'mock-model',
     inputTokens: 4,
     outputTokens: 2,
@@ -136,6 +172,25 @@ describe('registerLLMMethods', () => {
     });
   });
 
+  it('returns reasoning and provider observability from llm.chat', async () => {
+    const harness = createHarness();
+
+    const result = await harness.invoke('llm.chat', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+    });
+
+    expect(result.reasoning).toBe('stream-thinking');
+    expect(result.providerObservability).toMatchObject({
+      backendApi: 'openai-completions',
+      systemRole: {
+        transport: 'openai_developer',
+      },
+    });
+  });
+
   it('preserves model knob fields from llm.complete params into provider context hints', async () => {
     const harness = createHarness();
 
@@ -170,6 +225,26 @@ describe('registerLLMMethods', () => {
       topK: 16,
       frequencyPenalty: -0.3,
       repetitionPenalty: 1.2,
+    });
+  });
+
+  it('returns reasoning and provider observability from llm.complete', async () => {
+    const harness = createHarness();
+
+    const result = await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'summarize' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+    });
+
+    expect(result.reasoning).toBe('complete-thinking');
+    expect(result.providerObservability).toMatchObject({
+      backendApi: 'openai-completions',
+      systemRole: {
+        transport: 'openai_system',
+      },
     });
   });
 });

@@ -14,6 +14,7 @@ import type {
 import {
   cloneAdaptiveToolSnapshotTelemetry,
   cloneContextMessage,
+  cloneProviderObservability,
   cloneToolSchema,
 } from './snapshot.js';
 
@@ -200,6 +201,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+          ...(snapshot.promptContext.providerObservability
+            ? { providerObservability: cloneProviderObservability(snapshot.promptContext.providerObservability) }
+            : {}),
         },
       }
       : {}),
@@ -272,6 +276,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+          ...(snapshot.promptContext.providerObservability
+            ? { providerObservability: cloneProviderObservability(snapshot.promptContext.providerObservability) }
+            : {}),
         },
       }
       : {}),

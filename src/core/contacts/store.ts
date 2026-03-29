@@ -108,7 +108,7 @@ import type {
 
 const log = createComponentLogger('ContactStore');
 
-interface ContactStoreOptions {
+export interface ContactStoreOptions {
   exportDir?: string;
 }
 

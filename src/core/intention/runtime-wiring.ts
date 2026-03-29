@@ -4,14 +4,10 @@ import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import {
-  ActiveConcernStore,
-  createConcernStorePort,
   type ActiveConcernContextProvider,
   type ConcernStorePort,
 } from './concerns.js';
 import {
-  PendingFollowUpStore,
-  createPendingFollowUpStorePort,
   type PendingFollowUpContextProvider,
   type PendingFollowUpStorePort,
 } from './pending-follow-ups.js';
@@ -20,12 +16,14 @@ import type {
   IntentionActionDecision,
 } from './appraisal.js';
 import {
-  BehavioralPatternTracker,
-  createBehavioralPatternStorePort,
   scoreBehavioralOutcomeFromEmotion,
   type BehavioralPatternContextProvider,
   type BehavioralPatternStorePort,
 } from './patterns.js';
+import {
+  createSQLiteIntentionRuntimeStores,
+  type SQLiteIntentionRuntimeStores,
+} from './sqlite-adapters.js';
 import {
   createCreateConcernTool,
   createListConcernsTool,
@@ -324,12 +322,14 @@ export function wireIntentionRuntime(
   target: IntentionRuntimeTarget,
   db: Database.Database,
 ): IntentionRuntimeWiring {
-  const concernProvider = new ActiveConcernStore(db);
-  const pendingFollowUpProvider = new PendingFollowUpStore(db);
-  const behavioralPatternProvider = new BehavioralPatternTracker(db);
-  const concernStore = createConcernStorePort(concernProvider);
-  const pendingFollowUpStore = createPendingFollowUpStorePort(pendingFollowUpProvider);
-  const behavioralPatternTracker = createBehavioralPatternStorePort(behavioralPatternProvider);
+  const {
+    concernProvider,
+    pendingFollowUpProvider,
+    behavioralPatternProvider,
+    concernStore,
+    pendingFollowUpStore,
+    behavioralPatternTracker,
+  }: SQLiteIntentionRuntimeStores = createSQLiteIntentionRuntimeStores(db);
   const behavioralHooks = createIntentionBehavioralPatternHooks(behavioralPatternTracker);
 
   if (typeof target.setActiveConcernProvider === 'function') {

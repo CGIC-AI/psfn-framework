@@ -217,6 +217,13 @@ export class AuditStore implements GatewayAuditStorePort {
   }
 }
 
+export function createSQLiteGatewayAuditStore(
+  db: Database.Database,
+  rotationConfig?: Partial<AuditRotationConfig>,
+): GatewayAuditStorePort {
+  return new AuditStore(db, rotationConfig);
+}
+
 // Summarize params for logging — redact content fields that could be large
 function summarizeParams(params: Record<string, unknown>): string {
   const summary: Record<string, unknown> = {};

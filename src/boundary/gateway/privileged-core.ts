@@ -9,7 +9,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import { GitOps } from '../integrations/git/ops.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { AuditStore } from './audit.js';
+import { createSQLiteGatewayAuditStore } from './audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
 import { GatewayServer } from './server.js';
@@ -72,7 +72,7 @@ export function buildGatewayPrivilegedCore(
     vaultPolicyConfig: input.bootstrap.policyConfig.vault,
   });
   const auditDb = initDatabase(input.bootstrap.auditDbPath, { foreignKeys: false });
-  const auditStore = new AuditStore(auditDb);
+  const auditStore = createSQLiteGatewayAuditStore(auditDb);
 
   return {
     eventBus,

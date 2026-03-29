@@ -1,8 +1,8 @@
 import type Database from 'better-sqlite3';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { ContactStorePort } from './contact-store-port.js';
-import { ContactStore } from './store.js';
 import type { ChannelPrivacyLevel } from './types.js';
+import { createSQLiteContactStore } from './sqlite-adapter.js';
 import {
   createContactLinkIdentityTool,
   createContactListTool,
@@ -34,7 +34,7 @@ export function wireContactRuntime(
   primaryUserId?: string,
   options: ContactRuntimeOptions = {},
 ): ContactStorePort {
-  const contactStore = new ContactStore(db, primaryUserId, {
+  const contactStore = createSQLiteContactStore(db, primaryUserId, {
     exportDir: options.exportDir,
   });
   target.contactStore = contactStore;

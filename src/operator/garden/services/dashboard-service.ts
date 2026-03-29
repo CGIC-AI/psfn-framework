@@ -1,5 +1,5 @@
 import type { EventBus } from '../../../shared/event-bus.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
@@ -43,7 +43,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
   private thinkTraces: ThinkTraceView[] = [];
 
   constructor(private readonly deps: {
-    memoryStore: MemoryStore;
+    memoryStore: MemoryStorePort;
     sessionStore: SessionStore;
     sessionManager?: SessionManager;
     scheduler: Scheduler;

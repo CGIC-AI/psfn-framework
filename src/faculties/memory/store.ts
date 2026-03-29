@@ -9,6 +9,22 @@ import {
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { MemoryJournal } from './journal.js';
+import type {
+  ContactProfileArtifact,
+  MemoryAbstractionLink,
+  MemoryAbstractionLinkInput,
+  MemoryBulkUpdatePatch,
+  MemoryDeleteVersion,
+  MemoryListOptions,
+  MemoryLink,
+  MemorySoftDeleteOptions,
+  MemoryStoreUpdatePatch,
+  MemoryUndoSoftDeleteOptions,
+  ScratchpadAddResult,
+  ScratchpadEntry,
+  ScratchpadEntryCreateOptions,
+  ScratchpadEntryReplaceOptions,
+} from './memory-store-port.js';
 import {
   normalizeMemoryScopeQuery,
   normalizeMemoryScopeRef,
@@ -134,55 +150,6 @@ interface ScratchpadRow {
   content: string;
   created_at: number;
   updated_at: number;
-}
-
-export interface ContactProfileArtifact {
-  contactId: string;
-  summary: string;
-  sourceMemoryIds: string[];
-  confidenceScore: number;
-  noveltyScore: number;
-  updatedAt: number;
-}
-
-export interface MemoryDeleteVersion {
-  deleteId: string;
-  memoryId: string;
-  snapshot: PurrMemory;
-  deletedAt: number;
-  deletedBy: string;
-  deleteReason?: string;
-  restoredAt?: number;
-  restoredBy?: string;
-}
-
-export interface MemoryLink {
-  id1: string;
-  id2: string;
-  linkType: string;
-  createdAt: number;
-}
-
-export interface MemoryAbstractionLink {
-  id: string;
-  sourceMemoryId: string;
-  abstractedMemoryId: string;
-  externalRef: string;
-  createdAt: number;
-  createdBy?: string;
-  reason?: string;
-}
-
-export interface ScratchpadEntry {
-  id: string;
-  content: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface ScratchpadAddResult {
-  entry: ScratchpadEntry;
-  evictedIds: string[];
 }
 
 interface MemoryStoreOptions {
@@ -815,7 +782,7 @@ export class MemoryStore {
       .slice(0, normalizedLimit);
   }
 
-  updateMemory(id: string, updates: Partial<Pick<PurrMemory, 'salience' | 'lastAccessed' | 'accessCount' | 'supersededBy' | 'sensitivity' | 'consentFlags' | 'tags' | 'scopeRef' | 'scopeTags' | 'provenanceRefs' | 'contactId' | 'deletedAt' | 'deletedBy' | 'deleteReason'>>): void {
+  updateMemory(id: string, updates: MemoryStoreUpdatePatch): void {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -900,12 +867,7 @@ export class MemoryStore {
     return rows.map(mapMemoryRow);
   }
 
-  listActiveMemories(
-    options: {
-      limit?: number;
-      offset?: number;
-    } = {},
-  ): PurrMemory[] {
+  listActiveMemories(options: MemoryListOptions = {}): PurrMemory[] {
     const limit = this.normalizeListLimit(options.limit ?? 50, 50, 1, 500);
     const offset = this.normalizeListOffset(options.offset ?? 0);
     const rows = this.db.prepare(`
@@ -936,12 +898,7 @@ export class MemoryStore {
 
   softDeleteMemory(
     id: string,
-    options: {
-      deletedBy?: string;
-      reason?: string;
-      deletedAt?: number;
-      deleteId?: string;
-    } = {},
+    options: MemorySoftDeleteOptions = {},
   ): MemoryDeleteVersion | null {
     const deleteId = options.deleteId ?? randomUUID();
     const deletedAt = options.deletedAt ?? Date.now();
@@ -1010,10 +967,7 @@ export class MemoryStore {
 
   undoSoftDelete(
     deleteId: string,
-    options: {
-      restoredBy?: string;
-      restoredAt?: number;
-    } = {},
+    options: MemoryUndoSoftDeleteOptions = {},
   ): MemoryDeleteVersion | null {
     const restoredAt = options.restoredAt ?? Date.now();
     const restoredBy = options.restoredBy?.trim() || 'agent';
@@ -1067,17 +1021,7 @@ export class MemoryStore {
     return mapMemoryDeleteVersionRow(row);
   }
 
-  recordAbstractionLink(
-    input: {
-      sourceMemoryId: string;
-      abstractedMemoryId: string;
-      externalRef: string;
-      createdAt?: number;
-      createdBy?: string;
-      reason?: string;
-      linkId?: string;
-    },
-  ): MemoryAbstractionLink {
+  recordAbstractionLink(input: MemoryAbstractionLinkInput): MemoryAbstractionLink {
     const sourceMemoryId = input.sourceMemoryId.trim();
     const abstractedMemoryId = input.abstractedMemoryId.trim();
     const externalRef = input.externalRef.trim();
@@ -1291,10 +1235,7 @@ export class MemoryStore {
     return count;
   }
 
-  bulkUpdate(
-    ids: string[],
-    fields: Partial<Pick<PurrMemory, 'type' | 'sensitivity'>>,
-  ): number {
+  bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): number {
     if (!ids.length) return 0;
 
     const setClauses: string[] = [];
@@ -1410,10 +1351,7 @@ export class MemoryStore {
 
   addScratchpadEntry(
     content: string,
-    options: {
-      id?: string;
-      now?: number;
-    } = {},
+    options: ScratchpadEntryCreateOptions = {},
   ): ScratchpadAddResult {
     const normalizedContent = this.normalizeScratchpadContent(content);
     const id = options.id?.trim() || randomUUID();
@@ -1461,9 +1399,7 @@ export class MemoryStore {
   replaceScratchpadEntry(
     id: string,
     content: string,
-    options: {
-      now?: number;
-    } = {},
+    options: ScratchpadEntryReplaceOptions = {},
   ): ScratchpadEntry | null {
     const normalizedId = id.trim();
     if (!normalizedId) return null;

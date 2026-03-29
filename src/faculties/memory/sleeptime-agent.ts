@@ -3,7 +3,7 @@ import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage 
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import type { CoreMemoryStore } from '../core-memory/store.js';
+import type { CoreMemoryStorePort } from './memory-store-port.js';
 import type { MemoryWriteOptions, MemoryWriter } from './writer.js';
 import {
   VALID_MEMORY_TYPES,
@@ -21,7 +21,7 @@ const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MAX_MEMORY_WRITES = 4;
 const MAX_TRANSCRIPT_ENTRY_CHARS = 600;
 
-type CoreMemoryRewriter = Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
+type CoreMemoryRewriter = Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
 type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 

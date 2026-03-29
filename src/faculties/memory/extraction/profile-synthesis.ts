@@ -6,7 +6,7 @@ import {
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
-import type { MemoryStore } from '../store.js';
+import type { MemoryStorePort } from '../memory-store-port.js';
 import { computeProfileNovelty } from './signals.js';
 import type {
   AcceptedFactWrite,
@@ -18,26 +18,10 @@ import type {
 
 const log = createComponentLogger('Extraction');
 
-type ProfileStoreView = {
-  getContactProfile?: (contactId: string) => {
-    summary: string;
-    updatedAt: number;
-  } | undefined;
-  getMemoriesByContact?: (contactId: string, limit: number) => ProfileSourceMemory[];
-  upsertContactProfile?: (profile: {
-    contactId: string;
-    summary: string;
-    sourceMemoryIds: string[];
-    confidenceScore: number;
-    noveltyScore: number;
-    updatedAt: number;
-  }) => void;
-};
-
 export interface RefreshContactProfileOptions {
   llmClient: LLMProvider;
   promptRegistry: PromptRegistryStatePort | null;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId: string;
@@ -49,18 +33,8 @@ export interface RefreshContactProfileOptions {
 export async function refreshContactProfile(
   options: RefreshContactProfileOptions,
 ): Promise<void> {
-  const profileStore = options.memoryStore as unknown as ProfileStoreView;
-
-  if (
-    typeof profileStore.getContactProfile !== 'function'
-    || typeof profileStore.getMemoriesByContact !== 'function'
-    || typeof profileStore.upsertContactProfile !== 'function'
-  ) {
-    return;
-  }
-
   const now = Date.now();
-  const existingProfile = profileStore.getContactProfile(options.canonicalContactId);
+  const existingProfile = options.memoryStore.getContactProfile(options.canonicalContactId);
   const intervalElapsed = !existingProfile
     || (now - existingProfile.updatedAt) >= options.config.refreshIntervalMs;
   const withinCooldown = !!existingProfile
@@ -105,7 +79,7 @@ export async function refreshContactProfile(
     return;
   }
 
-  const sourceMemories = profileStore.getMemoriesByContact(
+  const sourceMemories = options.memoryStore.getMemoriesByContact(
     options.canonicalContactId,
     options.config.sourceMemoryLimit,
   );
@@ -195,7 +169,7 @@ export async function refreshContactProfile(
       ? 'memory_update'
       : 'interval';
 
-  profileStore.upsertContactProfile({
+  options.memoryStore.upsertContactProfile({
     contactId: options.canonicalContactId,
     summary,
     sourceMemoryIds: sourceMemories.map(memory => memory.id),

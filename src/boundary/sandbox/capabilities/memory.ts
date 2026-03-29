@@ -1,6 +1,6 @@
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
 import type { EmbeddingProviderPort, LLMProvider } from '../../../core/agent/contracts.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { MemoryType, MemoryRedactionOperation } from '../../../faculties/memory/types.js';
 import {
@@ -66,7 +66,7 @@ export interface MemoryCapabilities {
 interface CreateMemoryCapabilitiesOptions {
   llmProvider: LLMProvider;
   embeddingService: EmbeddingProviderPort | null;
-  memoryStore: MemoryStore | null;
+  memoryStore: MemoryStorePort | null;
   sessionManager: SessionManager | null;
   pushEvidence: (entry: ThinkEvidence) => void;
 }

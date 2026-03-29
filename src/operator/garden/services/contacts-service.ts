@@ -1,5 +1,8 @@
 import type { ContactStore } from '../../../core/contacts/store.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type {
+  ContactProfileArtifact,
+  MemoryStorePort,
+} from '../../../faculties/memory/memory-store-port.js';
 import {
   CHANNEL_PRIVACY_LEVELS,
   CONTACT_MUTATION_AUDIT_FIELDS,
@@ -18,7 +21,6 @@ import type {
 } from '../../../core/contacts/types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { TRUST_LEVELS } from '../../../system/trust/types.js';
-import type { ContactProfileArtifact } from '../../../faculties/memory/store.js';
 import {
   buildRelatedConversationChannelMap,
 } from './contact-session-linker.js';
@@ -70,7 +72,7 @@ function isMentionOnlyContact(contact: Contact | undefined): boolean {
 export class AdminContactsDataService implements AdminContactsService {
   constructor(private readonly deps: {
     contactStore?: ContactStore | null;
-    memoryStore: MemoryStore;
+    memoryStore: MemoryStorePort;
     sessionStore: SessionStore;
   }) {}
 

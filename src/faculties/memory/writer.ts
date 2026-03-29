@@ -3,7 +3,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import type { MemoryStore } from './store.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import { abstractMemoryText } from './abstraction.js';
 import type {
   PurrMemory,
@@ -334,7 +334,7 @@ function evaluateSensitivityWritePolicy(input: {
 
 export class MemoryWriter {
   constructor(
-    private memoryStore: MemoryStore,
+    private memoryStore: MemoryStorePort,
     private embeddingService: EmbeddingProviderPort,
   ) {}
 

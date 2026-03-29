@@ -29,7 +29,7 @@ import {
 } from '../../../system/settings-tools.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
 import type { SessionManager } from '../../../core/session/manager.js';
-import type { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
+import type { CoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../../../core/tools/session.js';
 import { createSessionGrepTool, createSessionSearchTool } from '../../../core/tools/session-search.js';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
@@ -215,7 +215,7 @@ interface HeartbeatRuntimeOptions {
     emotionSnapshot: EmotionStateSnapshot;
     observedAtMs?: number;
   }) => Promise<void> | void;
-  coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
+  coreMemoryStore?: Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;

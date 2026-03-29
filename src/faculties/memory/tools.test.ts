@@ -9,13 +9,16 @@ import {
   createScratchpadWriteTool,
 } from './tools.js';
 import type {
+  MemoryDeleteVersion,
+  MemoryStorePort,
+} from './memory-store-port.js';
+import type {
   MemoryWriter,
   WriteResult,
   BatchImportResult,
   MemoryRedactionResult,
 } from './writer.js';
 import type { PurrMemory } from './types.js';
-import type { MemoryStore, MemoryDeleteVersion } from './store.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -683,7 +686,7 @@ describe('memory_delete and undo_memory_delete tools', () => {
       memoryId: 'mem-abc',
     }));
 
-    const tool = createMemoryDeleteTool(store as unknown as MemoryStore);
+    const tool = createMemoryDeleteTool(store as unknown as MemoryStorePort);
     const result = await tool.execute('call-1', {
       memory_id: 'mem-abc',
       reason: 'stale',
@@ -699,7 +702,7 @@ describe('memory_delete and undo_memory_delete tools', () => {
 
   it('returns error when memory_id is missing', async () => {
     const store = mockStore();
-    const tool = createMemoryDeleteTool(store as unknown as MemoryStore);
+    const tool = createMemoryDeleteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-2', {
       memory_id: '   ',
@@ -713,7 +716,7 @@ describe('memory_delete and undo_memory_delete tools', () => {
   it('returns error when memory is missing/already deleted', async () => {
     const store = mockStore();
     store.softDeleteMemory.mockReturnValue(null);
-    const tool = createMemoryDeleteTool(store as unknown as MemoryStore);
+    const tool = createMemoryDeleteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-3', { memory_id: 'missing' });
     expect(resultText(result as any)).toContain('not found or already deleted');
@@ -728,7 +731,7 @@ describe('memory_delete and undo_memory_delete tools', () => {
       restoredAt: Date.now(),
       restoredBy: 'tool:undo_memory_delete',
     }));
-    const tool = createUndoMemoryDeleteTool(store as unknown as MemoryStore);
+    const tool = createUndoMemoryDeleteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-4', { delete_id: 'del-restore' });
     expect(resultText(result as any)).toContain('Memory restored');
@@ -741,7 +744,7 @@ describe('memory_delete and undo_memory_delete tools', () => {
   it('returns error when delete checkpoint is missing', async () => {
     const store = mockStore();
     store.undoSoftDelete.mockReturnValue(null);
-    const tool = createUndoMemoryDeleteTool(store as unknown as MemoryStore);
+    const tool = createUndoMemoryDeleteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-5', { delete_id: 'unknown' });
     expect(resultText(result as any)).toContain('Delete checkpoint not found');
@@ -767,7 +770,7 @@ describe('scratchpad tools', () => {
   it('scratchpad_read returns empty-state message', async () => {
     const store = mockScratchpadStore();
     store.listScratchpadEntries.mockReturnValue([]);
-    const tool = createScratchpadReadTool(store as unknown as MemoryStore);
+    const tool = createScratchpadReadTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-1', {});
     expect(resultText(result as any)).toContain('Scratchpad is empty');
@@ -784,7 +787,7 @@ describe('scratchpad tools', () => {
         updatedAt: 1_700_000_100_000,
       },
     ]);
-    const tool = createScratchpadReadTool(store as unknown as MemoryStore);
+    const tool = createScratchpadReadTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-2', { limit: 3 });
     const text = resultText(result as any);
@@ -805,7 +808,7 @@ describe('scratchpad tools', () => {
       },
       evictedIds: [],
     });
-    const tool = createScratchpadWriteTool(store as unknown as MemoryStore);
+    const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-3', {
       operation: 'add',
@@ -823,7 +826,7 @@ describe('scratchpad tools', () => {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
-    const tool = createScratchpadWriteTool(store as unknown as MemoryStore);
+    const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-4', {
       operation: 'replace',
@@ -837,7 +840,7 @@ describe('scratchpad tools', () => {
   it('scratchpad_write remove deletes note', async () => {
     const store = mockScratchpadStore();
     store.removeScratchpadEntry.mockReturnValue(true);
-    const tool = createScratchpadWriteTool(store as unknown as MemoryStore);
+    const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
 
     const result = await tool.execute('call-5', {
       operation: 'remove',
@@ -849,7 +852,7 @@ describe('scratchpad tools', () => {
 
   it('scratchpad_write validates required params per operation', async () => {
     const store = mockScratchpadStore();
-    const tool = createScratchpadWriteTool(store as unknown as MemoryStore);
+    const tool = createScratchpadWriteTool(store as unknown as MemoryStorePort);
 
     const missingAddContent = await tool.execute('call-6', { operation: 'add' });
     expect(resultText(missingAddContent as any)).toContain('content is required for add');

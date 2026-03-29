@@ -10,7 +10,10 @@ import type {
 import type { PromptHistoryEntry, PromptLayer } from '../../../core/identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { EditableSettings } from '../../../system/settings.js';
-import type { ContactProfileArtifact, MemoryLink } from '../../../faculties/memory/store.js';
+import type {
+  ContactProfileArtifact,
+  MemoryLink,
+} from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';

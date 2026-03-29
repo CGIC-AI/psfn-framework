@@ -4,6 +4,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
@@ -81,7 +82,7 @@ describe('MemoryWriter', () => {
   beforeEach(() => {
     store = mockMemoryStore();
     embeddings = mockEmbeddingService();
-    writer = new MemoryWriter(store as unknown as MemoryStore, embeddings);
+    writer = new MemoryWriter(store as unknown as MemoryStorePort, embeddings);
   });
 
   describe('write()', () => {

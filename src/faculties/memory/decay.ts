@@ -1,4 +1,4 @@
-import type { MemoryStore } from './store.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import { DECAY_HALFLIFE, MEMORY_CONFIG, getMemoryDecayProfile } from './types.js';
 import type { MemoryType } from './types.js';
 
@@ -7,11 +7,11 @@ interface SalienceDecayOptions {
 }
 
 export class SalienceDecay {
-  private memoryStore: MemoryStore;
+  private memoryStore: MemoryStorePort;
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly batchSize: number;
 
-  constructor(memoryStore: MemoryStore, options: SalienceDecayOptions = {}) {
+  constructor(memoryStore: MemoryStorePort, options: SalienceDecayOptions = {}) {
     this.memoryStore = memoryStore;
     this.batchSize = Math.max(1, Math.floor(options.batchSize ?? 500));
   }

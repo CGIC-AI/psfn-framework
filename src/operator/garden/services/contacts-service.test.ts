@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { ContactStore } from '../../../core/contacts/store.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { AdminContactsDataService } from './contacts-service.js';
 
@@ -23,7 +23,7 @@ function createServiceHarness() {
   const memoryStore = {
     listContactProfiles: () => [...profiles.values()],
     getContactProfile: (contactId: string) => profiles.get(contactId),
-  } as unknown as MemoryStore;
+  } as unknown as MemoryStorePort;
   const service = new AdminContactsDataService({
     contactStore,
     memoryStore,

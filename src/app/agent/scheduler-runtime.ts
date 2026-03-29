@@ -4,7 +4,7 @@ import { registerScheduledBackupTask } from '../../persistence/backups/service.j
 import { wirePostTurnActionRuntime, type PostTurnActionRuntime } from '../startup/composition/post-turn-actions.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
-import type { MemoryStore } from '../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -36,7 +36,7 @@ export interface BuildAgentSchedulerRuntimeOptions {
   schedulerConfig: SchedulerRuntimeConfig;
   sessionManager: SessionManager;
   gateway: GatewayClient;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   agentLoop: SubstrateAgent;
   db: Database.Database;
   backupConfig: BackupRuntimeConfig;

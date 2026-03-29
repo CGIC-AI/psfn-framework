@@ -10,7 +10,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
-import type { MemoryStore } from './store.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import type { ExtractedFact, MemoryFormationVAD } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
@@ -66,7 +66,7 @@ export interface MemoryExtractorFormationOptions {
 export class MemoryExtractor {
   private llmClient: LLMProvider;
   private sessionManager: SessionManager;
-  private memoryStore: MemoryStore;
+  private memoryStore: MemoryStorePort;
   private writer: MemoryWriter;
   private eventBus: EventBus;
   private runtimeConfig: SubstrateConfig | null;
@@ -90,7 +90,7 @@ export class MemoryExtractor {
   constructor(
     llmClient: LLMProvider,
     sessionManager: SessionManager,
-    memoryStore: MemoryStore,
+    memoryStore: MemoryStorePort,
     embeddingService: EmbeddingProviderPort,
     eventBus: EventBus,
     config?: MemoryExtractorConfig | SubstrateConfig,

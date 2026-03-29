@@ -7,7 +7,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { PurrMemory } from './types.js';
-import type { MemoryDeleteVersion } from './store.js';
+import type { MemoryDeleteVersion } from './memory-store-port.js';
 
 const log = createComponentLogger('MemoryJournal');
 

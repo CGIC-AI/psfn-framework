@@ -5,7 +5,7 @@ import {
   RetrievalIntegrityError,
   __retrieval_internals,
 } from './retrieval.js';
-import type { MemoryStore } from './store.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import type { EmbeddingProviderPort, LLMProvider } from '../../core/agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
@@ -42,7 +42,7 @@ function makeMemory(overrides: Partial<PurrMemory> & { similarity: number }): Pu
   };
 }
 
-function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): MemoryStore {
+function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): MemoryStorePort {
   return {
     searchByEmbedding: vi.fn().mockReturnValue(memories),
     searchByText: vi.fn().mockReturnValue([]),
@@ -51,7 +51,7 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     getMemoriesByContact: vi.fn().mockReturnValue([]),
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
-  } as unknown as MemoryStore;
+  } as unknown as MemoryStorePort;
 }
 
 function makeMockEmbedding(): EmbeddingProviderPort {

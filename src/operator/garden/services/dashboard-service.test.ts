@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../shared/event-bus.js';
 import { AdminDashboardDataService } from './dashboard-service.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { ShardExecutionPort } from '../../../faculties/shards/port.js';
@@ -14,7 +14,7 @@ describe('AdminDashboardDataService', () => {
         avgSalience: 0,
         byType: {},
       }),
-    } as MemoryStore;
+    } as MemoryStorePort;
     const sessionStore = {
       listChannels: () => [],
       getLatestSessionByTimestamp: () => null,

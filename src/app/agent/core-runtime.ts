@@ -3,9 +3,13 @@ import type { CoreSubstrateConfig } from '../../system/config/runtime-config-con
 import type { EventBus } from '../../shared/event-bus.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryJournal } from '../../faculties/memory/journal.js';
+import {
+  createMemoryStorePort,
+  type CoreMemoryStorePort,
+  type MemoryStorePort,
+} from '../../faculties/memory/memory-store-port.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { EmotionRuntimeWiring } from '../../core/agent/substrate-agent.js';
-import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
 import type { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
@@ -50,7 +54,7 @@ export interface AgentCoreRuntimeOptions {
   eventBus: EventBus;
   gateway: GatewayClient;
   db: Database.Database;
-  memoryStore?: MemoryStore;
+  memoryStore?: MemoryStorePort;
   card: CharacterCardV2;
   systemPrompt: string;
   capabilityRuntime: CapabilityRuntime;
@@ -69,9 +73,9 @@ export interface AgentCoreRuntime {
   sessionManager: SessionManager;
   promptState: PromptStatePort;
   skillsRuntime: SkillsRuntime;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   contactStore: ReturnType<typeof wireContactRuntime>;
-  coreMemoryStore: CoreMemoryStore;
+  coreMemoryStore: CoreMemoryStorePort;
   intentionRuntime: IntentionRuntimeWiring;
   intentionAppraisalHooks: IntentionAppraisalHooks;
   intentionBehavioralHooks: IntentionBehavioralPatternHooks;
@@ -109,11 +113,13 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
 
-  const memoryStore = options.memoryStore ?? new MemoryStore(db, gateway.dims, {
-    notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
-    scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
-    journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
-  });
+  const memoryStore = createMemoryStorePort(
+    options.memoryStore ?? new MemoryStore(db, gateway.dims, {
+      notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
+      journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
+    }),
+  );
 
   const agentLoop = composeSubstrateAgent({
     eventBus,

@@ -2,7 +2,7 @@ import type { ContactStore } from '../../../core/contacts/store.js';
 import { resolvePreferredContactName } from '../../../core/contacts/preferred-name.js';
 import { looksLikeOpaqueIdentifier } from '../../../core/contacts/store/identity-utils.js';
 import type { Contact, RelationshipType } from '../../../core/contacts/types.js';
-import type { MemoryStore } from '../store.js';
+import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact, PurrMemory } from '../types.js';
 
 const NAME_PATTERN = String.raw`([A-Z][\p{L}'’-]+(?:\s+[A-Z][\p{L}'’-]+){0,2})`;
@@ -61,7 +61,7 @@ interface ResolveMentionOnlyContactParams {
   canonicalContactName?: string;
   companionName?: string;
   contactStore: Pick<ContactStore, 'listAll' | 'upsert' | 'updateRelationshipType'> | null;
-  memoryStore: Pick<MemoryStore, 'getMemoriesByChannel' | 'updateMemory'>;
+  memoryStore: Pick<MemoryStorePort, 'getMemoriesByChannel' | 'updateMemory'>;
 }
 
 function normalizeNameKey(value: string): string {
@@ -258,7 +258,7 @@ function candidateMatchesMemory(
 }
 
 function relinkRecurringMemories(params: {
-  memoryStore: Pick<MemoryStore, 'updateMemory'>;
+  memoryStore: Pick<MemoryStorePort, 'updateMemory'>;
   candidate: MentionOnlyContactCandidate;
   contactId: string;
   canonicalContactId?: string;

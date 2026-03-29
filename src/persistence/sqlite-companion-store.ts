@@ -1,5 +1,9 @@
 import type Database from 'better-sqlite3';
 import { MemoryJournal } from '../faculties/memory/journal.js';
+import {
+  createMemoryStorePort,
+  type MemoryStorePort,
+} from '../faculties/memory/memory-store-port.js';
 import { MemoryStore } from '../faculties/memory/store.js';
 import {
   resolveMemoryJournalPath,
@@ -17,7 +21,7 @@ export interface SqliteCompanionStoreOptions {
 
 export interface SqliteCompanionStore {
   db: Database.Database;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
 }
 
 export function createSqliteCompanionStore(
@@ -25,11 +29,13 @@ export function createSqliteCompanionStore(
 ): SqliteCompanionStore {
   const db = initDatabase(options.databasePath, options.databaseOptions);
   const companionDataDir = options.companionDataDir.trim();
-  const memoryStore = new MemoryStore(db, options.embeddingDims, {
-    notesDir: resolveNotesDir(companionDataDir),
-    scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
-    journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
-  });
+  const memoryStore = createMemoryStorePort(
+    new MemoryStore(db, options.embeddingDims, {
+      notesDir: resolveNotesDir(companionDataDir),
+      scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
+      journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
+    }),
+  );
 
   return {
     db,

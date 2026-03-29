@@ -20,7 +20,7 @@ import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { MemoryStore } from '../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 
 const log = createComponentLogger('Agent');
 
@@ -44,7 +44,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   eventBus: EventBus;
   gateway: GatewayClient;
   db: Database.Database;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   capabilityRuntime: CapabilityRuntime;
 }
 

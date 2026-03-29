@@ -24,7 +24,11 @@ import {
 } from '../../../core/agent/substrate-agent.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import { MemoryExtractor } from '../../../faculties/memory/extraction.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type {
+  CoreMemoryStorePort,
+  MemoryStorePort,
+} from '../../../faculties/memory/memory-store-port.js';
+import { createCoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { ContactStore } from '../../../core/contacts/store.js';
 import { ShardManager } from '../../../faculties/shards/manager.js';
 import {
@@ -177,9 +181,11 @@ export interface CoreMemoryRuntimeOptions {
   config: SubstrateConfig;
 }
 
-export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMemoryStore {
+export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMemoryStorePort {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
-  const store = new CoreMemoryStore(resolveCoreMemoryPath(companionDataDir));
+  const store = createCoreMemoryStorePort(
+    new CoreMemoryStore(resolveCoreMemoryPath(companionDataDir)),
+  );
   options.sessionManager.setCoreMemoryProvider(store);
   options.agentLoop.registerTool(createCoreMemoryAppendTool(store));
   options.agentLoop.registerTool(createCoreMemoryReplaceTool(store));
@@ -192,7 +198,7 @@ export interface MemoryRuntimeOptions {
   llmProvider: LLMProvider;
   sessionManager: SessionManager;
   sessionStore?: SessionStore | null;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   embeddingService: EmbeddingProviderPort;
   eventBus: EventBus;
   config?: SubstrateConfig;
@@ -263,7 +269,7 @@ export interface ToolRuntimeOptions {
   llmProvider: LLMProvider;
   sessionStore: SessionStore;
   embeddingService: EmbeddingProviderPort;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   sessionManager: SessionManager;
   config: SubstrateConfig;
   parentSystemPrompt: string;

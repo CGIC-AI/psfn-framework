@@ -1,6 +1,6 @@
 import type vm from 'node:vm';
 import type { LLMProvider, EmbeddingProviderPort, LLMRequestMetadata } from '../../../core/agent/contracts.js';
-import type { MemoryStore } from '../../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { TaskState, TaskType } from '../../../core/scheduler/types.js';
@@ -103,7 +103,7 @@ export interface SandboxDeps {
   llmProvider: LLMProvider;
   executionPort?: SandboxExecutionPort | null;
   embeddingService: EmbeddingProviderPort | null;
-  memoryStore: MemoryStore | null;
+  memoryStore: MemoryStorePort | null;
   sessionManager: SessionManager | null;
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;

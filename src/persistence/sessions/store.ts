@@ -140,7 +140,7 @@ export class SessionStore implements TranscriptSearchPort {
           options.searchIndexPath ?? join(this.sessionsDir, DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME),
         );
       } catch (error) {
-        log.warn('Transcript projection unavailable; keyword search disabled', {
+        log.warn('Transcript projection unavailable; canonical archive remains authoritative and keyword search is disabled', {
           error: toErrorMessage(error),
         });
         this.transcriptProjection = null;

@@ -217,7 +217,7 @@ export class SessionJournalRuntime {
         params.transcriptProjection.markProjectionDrift(channelId, toErrorMessage(error));
         if (!this.transcriptProjectionFailureLogged) {
           this.transcriptProjectionFailureLogged = true;
-          log.warn('Transcript projection backfill failed; continuing without interruption', {
+          log.warn('Transcript projection backfill failed; canonical archive remains authoritative', {
             channelId,
             error: toErrorMessage(error),
           });
@@ -235,7 +235,7 @@ export class SessionJournalRuntime {
       transcriptProjection.markProjectionDrift(entry.channelId, toErrorMessage(error));
       if (!this.transcriptProjectionFailureLogged) {
         this.transcriptProjectionFailureLogged = true;
-        log.warn('Transcript projection write failed; continuing without interruption', {
+        log.warn('Transcript projection write failed; canonical archive append remains authoritative', {
           channelId: entry.channelId,
           messageId: entry.id,
           error: toErrorMessage(error),

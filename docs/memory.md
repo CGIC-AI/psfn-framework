@@ -92,7 +92,7 @@ Extraction can also run in crash recovery and pre-compaction paths, not only aft
 - contact profile inclusion
 - optional compositional reranking when policy and runtime allow it
 
-The searchable copy of L0 should be treated as a projection that can be rebuilt from the archive if drift or corruption is detected.
+The searchable copy of L0 should be treated as a projection that can be rebuilt from canonical archive truth if drift or corruption is detected.
 
 When memories are withheld, the retriever can return withheld summaries instead of silently dropping context.
 

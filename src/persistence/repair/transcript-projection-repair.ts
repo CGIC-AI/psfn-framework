@@ -35,6 +35,7 @@ function toErrorMessage(error: unknown): string {
 export function runTranscriptProjectionRepair(
   options: TranscriptProjectionRepairOptions,
 ): TranscriptProjectionRepairReport {
+  // Rebuild the projection from canonical L0 archive files, never from the projection itself.
   const driftBeforeEntries = options.transcriptProjection.listProjectionDrift();
   const driftBefore = driftBeforeEntries.length;
   if (!existsSync(options.sessionsDir)) {

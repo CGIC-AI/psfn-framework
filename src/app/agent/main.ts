@@ -27,7 +27,7 @@ import {
   buildReplConfig,
   wireHeartbeatRuntime,
 } from '../startup/composition/parity.js';
-import { createSqliteCompanionStore } from '../../persistence/sqlite-companion-store.js';
+import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
@@ -114,14 +114,20 @@ async function main(): Promise<void> {
     }
   });
 
-  const companionStore = createSqliteCompanionStore({
-    databasePath: config.databasePath,
-    companionDataDir: pathSnapshot.companionDataDir,
+  const persistenceRuntime = await createAgentPersistenceRuntime({
+    config,
+    pathSnapshot,
     embeddingDims,
   });
-  const { db, memoryStore: companionMemoryStore } = companionStore;
-  runDatabaseIntegrityCheck(db);
-  log.info('SQLite integrity check passed');
+  const { backend: persistenceBackend, db, memoryStore: companionMemoryStore } = persistenceRuntime;
+  if (db) {
+    runDatabaseIntegrityCheck(db);
+    log.info('SQLite integrity check passed');
+  } else {
+    log.info('Non-sqlite persistence backend selected; skipping SQLite startup checks', {
+      persistenceBackend,
+    });
+  }
 
   // ── Load identity (mounted read-only in container) ──
 
@@ -171,16 +177,18 @@ async function main(): Promise<void> {
     config.sessionRestartBehavior ?? 'reuse_latest_session',
   );
 
-  const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
-  const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
-    embeddingDimensionCheck,
-  );
-  if (embeddingDimensionWarning) {
-    log.warn(embeddingDimensionWarning.message, {
-      configuredDims: embeddingDimensionWarning.configuredDims,
-      storedDims: embeddingDimensionWarning.storedDims,
-      recommendation: embeddingDimensionWarning.recommendation,
-    });
+  if (db) {
+    const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
+    const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
+      embeddingDimensionCheck,
+    );
+    if (embeddingDimensionWarning) {
+      log.warn(embeddingDimensionWarning.message, {
+        configuredDims: embeddingDimensionWarning.configuredDims,
+        storedDims: embeddingDimensionWarning.storedDims,
+        recommendation: embeddingDimensionWarning.recommendation,
+      });
+    }
   }
 
   const { scheduler, postTurnActions } = buildAgentSchedulerRuntime({
@@ -344,7 +352,7 @@ async function main(): Promise<void> {
       }
     },
     closeDatabase: () => {
-      db.close();
+      db?.close();
     },
     scheduler,
     moduleLoader,

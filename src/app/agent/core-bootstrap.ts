@@ -25,6 +25,8 @@ import {
 } from '../../system/capabilities/approval-queue-port.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { IntentionRuntimeWiring } from '../../core/intention/runtime-wiring.js';
 
 const log = createComponentLogger('Agent');
 
@@ -47,8 +49,10 @@ export interface BootstrapAgentCoreRuntimeOptions {
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
-  db: Database.Database;
+  db?: Database.Database | null;
   memoryStore: MemoryStorePort;
+  contactStore?: ContactStorePort;
+  intentionRuntime?: IntentionRuntimeWiring;
   capabilityRuntime: CapabilityRuntime;
 }
 
@@ -62,6 +66,8 @@ export async function bootstrapAgentCoreRuntime(
     gateway,
     db,
     memoryStore,
+    contactStore,
+    intentionRuntime,
     capabilityRuntime,
   } = options;
 
@@ -108,6 +114,7 @@ export async function bootstrapAgentCoreRuntime(
     gateway,
     db,
     memoryStore,
+    contactStore,
     card,
     systemPrompt,
     capabilityRuntime,
@@ -119,6 +126,7 @@ export async function bootstrapAgentCoreRuntime(
       requireWiring: true,
     },
     operatorNotifier,
+    intentionRuntime,
     identityCoolingOff,
     primaryUserId: config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID,
     primaryTelegramUserId: (

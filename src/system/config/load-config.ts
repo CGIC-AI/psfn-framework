@@ -18,6 +18,7 @@ import {
   type CapabilityTier,
   createDefaultCompositionalPolicyConfig,
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
+  type PersistenceBackend,
   DEFAULT_UI_THEME_ID,
   type SubstrateConfig,
   sanitizeCoreSubstrateConfig,
@@ -62,6 +63,19 @@ const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
 const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
 const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
 type LoadConfigMode = 'gateway' | 'agent';
+
+function parsePersistenceBackendEnv(value: string | undefined): PersistenceBackend {
+  const normalized = value?.trim().toLowerCase() ?? '';
+  if (!normalized || normalized === 'sqlite') {
+    return 'sqlite';
+  }
+  if (normalized === 'postgres' || normalized === 'postgresql' || normalized === 'pg') {
+    return 'postgres';
+  }
+  throw new Error(
+    `Unsupported PERSISTENCE_BACKEND "${value}". Expected "sqlite" or "postgres".`,
+  );
+}
 
 function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
   const includeSecretBearingConfig = mode === 'gateway';
@@ -194,6 +208,11 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   const characterCardPath = env.CHARACTER_CARD_PATH ?? `${companionDataDir}/character.json`;
   const databaseBasename = sanitizeDatabaseBasename(env.DATABASE_BASENAME);
   const databasePath = env.DATABASE_PATH ?? `${companionDataDir}/${databaseBasename}.db`;
+  const persistenceBackend = parsePersistenceBackendEnv(env.PERSISTENCE_BACKEND);
+  const postgresDatabaseUrl = parseOptionalStringEnv(env.POSTGRES_DATABASE_URL);
+  if (persistenceBackend === 'postgres' && !postgresDatabaseUrl) {
+    throw new Error('POSTGRES_DATABASE_URL is required when PERSISTENCE_BACKEND=postgres');
+  }
 
   return {
     primaryModel,
@@ -214,6 +233,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     companionDataDir,
     dataDir,
     databasePath,
+    persistenceBackend,
+    ...(postgresDatabaseUrl ? { postgresDatabaseUrl } : {}),
     sessionMessageLimit: 30,
     sessionRestartBehavior: 'reuse_latest_session',
     continuityMessageLimit: runtimeSeedDefaults.continuityMessageLimit,

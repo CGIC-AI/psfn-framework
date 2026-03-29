@@ -30,6 +30,8 @@ function clearRuntimePathEnv(): void {
   delete process.env.BACKUP_ROOT_DIR;
   delete process.env.DISCORD_TOKEN;
   delete process.env.DISCORD_BOT_ID;
+  delete process.env.PERSISTENCE_BACKEND;
+  delete process.env.POSTGRES_DATABASE_URL;
 }
 
 afterEach(() => {
@@ -94,6 +96,35 @@ describe('loadConfig path defaults', () => {
     expect(config.dataDir).toBe('./system-data');
     expect(config.characterCardPath).toBe('./companion-data/character.json');
     expect(config.databasePath).toBe('./companion-data/companion.db');
+  });
+
+  it('defaults persistence backend to sqlite', () => {
+    clearRuntimePathEnv();
+
+    const config = loadConfig();
+
+    expect(config.persistenceBackend).toBe('sqlite');
+    expect(config.postgresDatabaseUrl).toBeUndefined();
+  });
+
+  it('loads postgres backend wiring when explicitly configured', () => {
+    clearRuntimePathEnv();
+    process.env.PERSISTENCE_BACKEND = 'postgres';
+    process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn';
+
+    const config = loadConfig();
+
+    expect(config.persistenceBackend).toBe('postgres');
+    expect(config.postgresDatabaseUrl).toBe('postgres://postgres:secret@localhost:5432/psfn');
+  });
+
+  it('fails closed when postgres backend is selected without a database url', () => {
+    clearRuntimePathEnv();
+    process.env.PERSISTENCE_BACKEND = 'postgres';
+
+    expect(() => loadConfig()).toThrow(
+      'POSTGRES_DATABASE_URL is required when PERSISTENCE_BACKEND=postgres',
+    );
   });
 
   it('resolves isolated production-mode defaults when runtime layout mode is production', () => {

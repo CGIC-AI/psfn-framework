@@ -38,7 +38,7 @@ export interface BuildAgentSchedulerRuntimeOptions {
   gateway: GatewayClient;
   memoryStore: MemoryStorePort;
   agentLoop: SubstrateAgent;
-  db: Database.Database;
+  db?: Database.Database | null;
   backupConfig: BackupRuntimeConfig;
   pathSnapshot: RuntimePathSnapshot;
 }
@@ -92,25 +92,31 @@ export function buildAgentSchedulerRuntime(
     state: 'idle',
   });
 
-  registerScheduledBackupTask({
-    scheduler,
-    db: options.db,
-    databasePath: options.config.databasePath,
-    sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
-    memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
-    characterCardPath: options.config.characterCardPath,
-    characterCardHistoryPath: resolveCharacterCardHistoryPath(options.pathSnapshot.companionDataDir),
-    config: options.backupConfig,
-  });
-  log.info('Scheduled backups enabled', {
-    intervalMs: options.backupConfig.intervalMs,
-    maxRotatingBackups: options.backupConfig.maxRotatingBackups,
-    maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
-    maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
-    backupRootDir: options.backupConfig.rootDir,
-    mirrorDir: options.backupConfig.mirrorDir || '(none)',
-    verifyRestore: options.backupConfig.verifyRestore,
-  });
+  if (options.db) {
+    registerScheduledBackupTask({
+      scheduler,
+      db: options.db,
+      databasePath: options.config.databasePath,
+      sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
+      memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
+      characterCardPath: options.config.characterCardPath,
+      characterCardHistoryPath: resolveCharacterCardHistoryPath(options.pathSnapshot.companionDataDir),
+      config: options.backupConfig,
+    });
+    log.info('Scheduled backups enabled', {
+      intervalMs: options.backupConfig.intervalMs,
+      maxRotatingBackups: options.backupConfig.maxRotatingBackups,
+      maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
+      maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
+      backupRootDir: options.backupConfig.rootDir,
+      mirrorDir: options.backupConfig.mirrorDir || '(none)',
+      verifyRestore: options.backupConfig.verifyRestore,
+    });
+  } else {
+    log.info('Scheduled SQLite backup task disabled for non-sqlite persistence backend', {
+      persistenceBackend: options.config.persistenceBackend ?? 'sqlite',
+    });
+  }
 
   scheduler.registerHeartbeat(async () => {
     const now = Date.now();

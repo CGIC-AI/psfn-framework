@@ -528,7 +528,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     this.syncScratchpadMirror();
   }
 
-  private async upsertContactProfile(profile: ContactProfileArtifact): Promise<void> {
+  private async persistContactProfile(profile: ContactProfileArtifact): Promise<void> {
     await executeQuery(this.pool, `
       INSERT INTO contact_profiles (
         contact_id, summary_text, source_memory_ids, confidence_score, novelty_score, updated_at
@@ -865,7 +865,7 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async upsertContactProfile(profile: ContactProfileArtifact): Promise<void> {
     this.contactProfiles.set(profile.contactId, profile);
-    this.enqueuePersist(() => this.upsertContactProfile(profile));
+    this.enqueuePersist(() => this.persistContactProfile(profile));
   }
 
   async getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined> {
@@ -957,4 +957,3 @@ class PostgresMemoryStore implements MemoryStorePort {
     return evicted;
   }
 }
-

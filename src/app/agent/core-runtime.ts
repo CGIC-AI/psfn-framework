@@ -21,9 +21,10 @@ import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { RuntimePathSnapshot } from '../../persistence/layout.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type { IntentionRuntimeWiring, IntentionAppraisalHooks, IntentionBehavioralPatternHooks } from '../../core/intention/runtime-wiring.js';
-import { composeSessionRuntime, composeSubstrateAgent, wireCoreMemoryRuntime, wireMemoryRuntime, wireSelfModelRuntime } from '../startup/composition/composition.js';
+import { composeSessionRuntimeAsync, composeSubstrateAgent, wireCoreMemoryRuntime, wireMemoryRuntime, wireSelfModelRuntime } from '../startup/composition/composition.js';
 import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../startup/composition/parity.js';
 import { wireContactRuntime } from '../../core/contacts/runtime-wiring.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
 import { registerFilesystemTools } from '../../boundary/integrations/filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from '../../boundary/integrations/filesystem/gateway-ops.js';
@@ -55,8 +56,9 @@ export interface AgentCoreRuntimeOptions {
   pathSnapshot: RuntimePathSnapshot;
   eventBus: EventBus;
   gateway: GatewayClient;
-  db: Database.Database;
+  db?: Database.Database | null;
   memoryStore?: MemoryStorePort;
+  contactStore?: ContactStorePort;
   card: CharacterCardV2;
   systemPrompt: string;
   capabilityRuntime: CapabilityRuntime;
@@ -64,6 +66,7 @@ export interface AgentCoreRuntimeOptions {
   cardProposalQueue: ApprovalQueuePort;
   emotionRuntime: EmotionRuntimeWiring;
   operatorNotifier: NotificationPort;
+  intentionRuntime?: IntentionRuntimeWiring;
   identityCoolingOff?: ReturnType<typeof createIdentityCoolingOffManagerFromEnv>;
   primaryUserId?: string;
   primaryTelegramUserId?: string;
@@ -76,7 +79,7 @@ export interface AgentCoreRuntime {
   promptState: PromptStatePort;
   skillsRuntime: SkillsRuntime;
   memoryStore: MemoryStorePort;
-  contactStore: import('../../core/contacts/contact-store-port.js').ContactStorePort;
+  contactStore: ContactStorePort;
   coreMemoryStore: CoreMemoryStorePort;
   intentionRuntime: IntentionRuntimeWiring;
   intentionAppraisalHooks: IntentionAppraisalHooks;
@@ -91,7 +94,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     pathSnapshot,
     eventBus,
     gateway,
-    db,
     card,
     systemPrompt,
     capabilityRuntime,
@@ -103,11 +105,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     primaryUserId,
     primaryTelegramUserId,
   } = options;
+  const db = options.db ?? null;
 
   const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
-  const sessionComposition = composeSessionRuntime({
+  const sessionComposition = await composeSessionRuntimeAsync({
     config,
     eventBus,
     enableContinuity: true,
@@ -117,13 +120,18 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
 
-  const memoryStore = createMemoryStorePort(
-    options.memoryStore ?? new MemoryStore(db, gateway.dims, {
-      notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
-      scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
-      journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
-    }),
-  );
+  const memoryStore = options.memoryStore
+    ? createMemoryStorePort(options.memoryStore)
+    : (() => {
+      if (!db) {
+        throw new Error('SQLite memory fallback requires an initialized database handle');
+      }
+      return createMemoryStorePort(new MemoryStore(db, gateway.dims, {
+        notesDir: resolveNotesDir(pathSnapshot.companionDataDir),
+        scratchpadMirrorPath: resolveScratchpadMirrorPath(pathSnapshot.companionDataDir),
+        journal: new MemoryJournal(resolveMemoryJournalPath(pathSnapshot.companionDataDir)),
+      }));
+    })();
 
   const agentLoop = composeSubstrateAgent({
     eventBus,
@@ -181,24 +189,34 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionManager,
     config,
   });
-  const contactStore = await wireContactRuntime(
-    agentLoop,
-    db,
-    primaryUserId,
-    {
-      exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
-      ...(primaryTelegramUserId
-        ? {
-            bootstrapPrimaryIdentityLinks: [{
-              channel: 'telegram',
-              userId: primaryTelegramUserId,
-              privacyLevel: 'private',
-            }],
-          }
-        : {}),
-    },
-  );
-  const intentionRuntime = wireIntentionRuntime(agentLoop, db);
+  const contactStore = options.contactStore ?? await (() => {
+    if (!db) {
+      throw new Error('Contact runtime requires an injected ContactStorePort for non-sqlite backends');
+    }
+    return wireContactRuntime(
+      agentLoop,
+      db,
+      primaryUserId,
+      {
+        exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
+        ...(primaryTelegramUserId
+          ? {
+              bootstrapPrimaryIdentityLinks: [{
+                channel: 'telegram',
+                userId: primaryTelegramUserId,
+                privacyLevel: 'private',
+              }],
+            }
+          : {}),
+      },
+    );
+  })();
+  const intentionRuntime = options.intentionRuntime ?? (() => {
+    if (!db) {
+      throw new Error('Intention runtime requires injected persistence stores for non-sqlite backends');
+    }
+    return wireIntentionRuntime(agentLoop, db);
+  })();
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,

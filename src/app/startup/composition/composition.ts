@@ -68,6 +68,7 @@ import {
   resolveSessionsDir,
 } from '../../../persistence/layout.js';
 import { createDefaultSQLiteSessionAdapters } from '../../../persistence/sessions/sqlite-adapters.js';
+import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -85,13 +86,12 @@ export interface SessionCompositionOptions {
   sessionIntegrityProvider?: SessionIntegrityProvider | null;
 }
 
-export function composeSessionRuntime(options: SessionCompositionOptions): SessionComposition {
+function createSessionComposition(
+  options: SessionCompositionOptions,
+  sessionAdapters: ReturnType<typeof createDefaultSQLiteSessionAdapters> | Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>,
+  sessionsDir: string,
+): SessionComposition {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
-  ensurePersistenceLayout(companionDataDir);
-  migrateLegacyPersistenceLayout(companionDataDir);
-
-  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
-  const sessionAdapters = createDefaultSQLiteSessionAdapters(sessionsDir);
   const sessionStore = new SessionStore(sessionsDir, {
     integrityProvider: options.sessionIntegrityProvider ?? null,
     sessionArchivePort: sessionAdapters.sessionArchivePort,
@@ -113,6 +113,45 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
   }
 
   return { sessionStore, sessionManager, continuityStore, internalRoleEnvelopeLedger };
+}
+
+export function composeSessionRuntime(options: SessionCompositionOptions): SessionComposition {
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  ensurePersistenceLayout(companionDataDir);
+  migrateLegacyPersistenceLayout(companionDataDir);
+
+  if ((options.config.persistenceBackend ?? 'sqlite') !== 'sqlite') {
+    throw new Error(
+      'composeSessionRuntime() only supports sqlite-backed session composition. Use composeSessionRuntimeAsync() for postgres-backed runtime composition.',
+    );
+  }
+
+  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
+  const sessionAdapters = createDefaultSQLiteSessionAdapters(sessionsDir);
+  return createSessionComposition(options, sessionAdapters, sessionsDir);
+}
+
+export async function composeSessionRuntimeAsync(
+  options: SessionCompositionOptions,
+): Promise<SessionComposition> {
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  ensurePersistenceLayout(companionDataDir);
+  migrateLegacyPersistenceLayout(companionDataDir);
+
+  const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
+  if ((options.config.persistenceBackend ?? 'sqlite') === 'postgres') {
+    const databaseUrl = options.config.postgresDatabaseUrl?.trim();
+    if (!databaseUrl) {
+      throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
+    }
+    const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
+      sessionsDir,
+    });
+    return createSessionComposition(options, sessionAdapters, sessionsDir);
+  }
+
+  const sessionAdapters = createDefaultSQLiteSessionAdapters(sessionsDir);
+  return createSessionComposition(options, sessionAdapters, sessionsDir);
 }
 
 export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {

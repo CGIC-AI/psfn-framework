@@ -1,0 +1,483 @@
+import { describe, expect, it } from 'vitest';
+import { createPostgresIntentionPortsFromPool } from './postgres-adapters.js';
+
+interface QueryResult<Row> {
+  rows: Row[];
+}
+
+interface ActiveConcernRow {
+  id: string;
+  text: string;
+  priority: string;
+  source: string;
+  created_at: string;
+  expires_at: string;
+  resolved_at: string | null;
+  resolution_outcome: string | null;
+  contact_id: string | null;
+  formation_vad: unknown;
+}
+
+interface PendingFollowUpRow {
+  id: string;
+  content: string;
+  priority: string;
+  timing: string;
+  created_at: string;
+  channel_id: string;
+  channel_type: string;
+  author_id: string;
+  author_name: string;
+  due_at: string | null;
+  contact_id: string | null;
+  source_message_id: string | null;
+  activated_at: string | null;
+  activation_reason: string | null;
+}
+
+interface BehavioralPatternRow {
+  id: string;
+  contact_id: string;
+  source_message_id: string;
+  strategy: string;
+  response_excerpt: string;
+  created_at: string;
+  outcome_score: number | null;
+  outcome_observed_at: string | null;
+  outcome_source_message_id: string | null;
+  promoted_at: string | null;
+  promoted_memory_id: string | null;
+}
+
+class FakeIntentionPool {
+  private activeConcerns = new Map<string, ActiveConcernRow>();
+  private pendingFollowUps = new Map<string, PendingFollowUpRow>();
+  private behavioralPatternEvents = new Map<string, BehavioralPatternRow>();
+  private ids = 1;
+
+  async query<Row>(text: string, values: readonly unknown[] = []): Promise<QueryResult<Row>> {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+
+    if (normalized.startsWith('INSERT INTO active_concerns')) {
+      const [id, textValue, priority, source, createdAt, expiresAt, contactId, formationVAD] = values as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        unknown,
+      ];
+      this.activeConcerns.set(id, {
+        id,
+        text: textValue,
+        priority,
+        source,
+        created_at: createdAt,
+        expires_at: expiresAt,
+        resolved_at: null,
+        resolution_outcome: null,
+        contact_id: contactId,
+        formation_vad: formationVAD,
+      });
+      return { rows: [this.activeConcerns.get(id)! as Row] };
+    }
+
+    if (normalized.includes('FROM active_concerns') && normalized.includes('WHERE id = $1')) {
+      const [id] = values as [string];
+      const row = this.activeConcerns.get(id);
+      return { rows: row ? [row as Row] : [] };
+    }
+
+    if (normalized.includes('FROM active_concerns') && normalized.includes('ORDER BY resolved_at DESC')) {
+      const [resolvedAfter, maybeContactId, maybeLimit] = values as [string, string | number, number | undefined];
+      const contactId = typeof maybeLimit === 'number' ? (typeof maybeContactId === 'string' ? maybeContactId : undefined) : undefined;
+      const limit = typeof maybeLimit === 'number' ? maybeLimit : Number(maybeContactId);
+      const rows = [...this.activeConcerns.values()]
+        .filter((row) => row.resolved_at !== null)
+        .filter((row) => row.resolved_at !== null && row.resolved_at >= resolvedAfter)
+        .filter((row) => !contactId || row.contact_id === null || row.contact_id === contactId)
+        .sort((left, right) => (right.resolved_at ?? '').localeCompare(left.resolved_at ?? '') || (right.created_at.localeCompare(left.created_at)) || right.id.localeCompare(left.id))
+        .slice(0, Number(limit))
+        .map(row => row as Row);
+      return { rows };
+    }
+
+    if (normalized.includes('FROM active_concerns') && normalized.includes('ORDER BY CASE priority')) {
+      const [asOf, maybeContactId, maybeLimit] = values as [string, string | number, number | undefined];
+      const contactId = typeof maybeLimit === 'number' ? (typeof maybeContactId === 'string' ? maybeContactId : undefined) : undefined;
+      const limit = typeof maybeLimit === 'number' ? maybeLimit : Number(maybeContactId);
+      const rows = [...this.activeConcerns.values()]
+        .filter((row) => row.resolved_at === null)
+        .filter((row) => row.expires_at > asOf)
+        .filter((row) => !contactId || row.contact_id === null || row.contact_id === contactId)
+        .sort((left, right) => concernSort(left, right))
+        .slice(0, Number(limit))
+        .map(row => row as Row);
+      return { rows };
+    }
+
+    if (normalized.startsWith('UPDATE active_concerns')) {
+      const [id, resolvedAt, resolutionOutcome] = values as [string, string, string | null];
+      const row = this.activeConcerns.get(id);
+      if (!row || row.resolved_at !== null) {
+        return { rows: [] };
+      }
+      row.resolved_at = resolvedAt;
+      row.resolution_outcome = resolutionOutcome;
+      return { rows: [row as Row] };
+    }
+
+    if (normalized.startsWith('INSERT INTO intention_pending_follow_ups')) {
+      const [id, content, priority, timing, createdAt, channelId, channelType, authorId, authorName, dueAt, contactId, sourceMessageId] = values as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+      ];
+      this.pendingFollowUps.set(id, {
+        id,
+        content,
+        priority,
+        timing,
+        created_at: createdAt,
+        channel_id: channelId,
+        channel_type: channelType,
+        author_id: authorId,
+        author_name: authorName,
+        due_at: dueAt,
+        contact_id: contactId,
+        source_message_id: sourceMessageId,
+        activated_at: null,
+        activation_reason: null,
+      });
+      return { rows: [this.pendingFollowUps.get(id)! as Row] };
+    }
+
+    if (normalized.includes('FROM intention_pending_follow_ups') && normalized.includes('WHERE id = $1')) {
+      const [id] = values as [string];
+      const row = this.pendingFollowUps.get(id);
+      return { rows: row ? [row as Row] : [] };
+    }
+
+    if (normalized.includes('FROM intention_pending_follow_ups') && normalized.includes('ORDER BY created_at ASC, id ASC')) {
+      const [maybeContactId, maybeLimit] = values as [string | number, number | undefined];
+      const contactId = typeof maybeLimit === 'number' ? (typeof maybeContactId === 'string' ? maybeContactId : undefined) : undefined;
+      const limit = typeof maybeLimit === 'number' ? maybeLimit : Number(maybeContactId);
+      const rows = [...this.pendingFollowUps.values()]
+        .filter(row => row.activated_at === null)
+        .filter(row => !contactId || row.contact_id === null || row.contact_id === contactId)
+        .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
+        .slice(0, Number(limit))
+        .map(row => row as Row);
+      return { rows };
+    }
+
+    if (normalized.startsWith('UPDATE intention_pending_follow_ups')) {
+      const [id, activatedAt, activationReason] = values as [string, string, string | null];
+      const row = this.pendingFollowUps.get(id);
+      if (!row || row.activated_at !== null) {
+        return { rows: [] };
+      }
+      row.activated_at = activatedAt;
+      row.activation_reason = activationReason;
+      return { rows: [row as Row] };
+    }
+
+    if (normalized.startsWith('INSERT INTO behavioral_pattern_events')) {
+      const [id, contactId, sourceMessageId, strategy, responseExcerpt, createdAt] = values as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+      ];
+      const key = `${contactId}:${sourceMessageId}:${strategy}`;
+      const existing = this.behavioralPatternEvents.get(key);
+      const row = existing ?? {
+        id,
+        contact_id: contactId,
+        source_message_id: sourceMessageId,
+        strategy,
+        response_excerpt: responseExcerpt,
+        created_at: createdAt,
+        outcome_score: null,
+        outcome_observed_at: null,
+        outcome_source_message_id: null,
+        promoted_at: null,
+        promoted_memory_id: null,
+      };
+      row.response_excerpt = responseExcerpt;
+      this.behavioralPatternEvents.set(key, row);
+      return { rows: [row as Row] };
+    }
+
+    if (normalized.includes('FROM behavioral_pattern_events') && normalized.includes('WHERE contact_id = $1 AND source_message_id = $2')) {
+      const [contactId, sourceMessageId, maybeStrategy] = values as [string, string, string | undefined];
+      const rows = [...this.behavioralPatternEvents.values()]
+        .filter(row => row.contact_id === contactId && row.source_message_id === sourceMessageId)
+        .filter(row => !maybeStrategy || row.strategy === maybeStrategy)
+        .map(row => row as Row);
+      return { rows };
+    }
+
+    if (normalized.includes('FROM behavioral_pattern_events') && normalized.includes('WHERE contact_id = $1 AND outcome_score IS NULL')) {
+      const [contactId, maybeStrategy] = values as [string, string | undefined];
+      const rows = [...this.behavioralPatternEvents.values()]
+        .filter(row => row.contact_id === contactId && row.outcome_score === null)
+        .filter(row => !maybeStrategy || row.strategy === maybeStrategy)
+        .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id))
+        .map(row => row as Row);
+      return { rows: rows.slice(0, 1) };
+    }
+
+    if (normalized.startsWith('UPDATE behavioral_pattern_events SET outcome_score')) {
+      const [id, outcomeScore, observedAt, outcomeSourceMessageId] = values as [string, number, string, string | null];
+      const row = [...this.behavioralPatternEvents.values()].find(event => event.id === id);
+      if (!row) {
+        return { rows: [] };
+      }
+      row.outcome_score = outcomeScore;
+      row.outcome_observed_at = observedAt;
+      row.outcome_source_message_id = outcomeSourceMessageId;
+      return { rows: [row as Row] };
+    }
+
+    if (normalized.includes('GROUP BY strategy') && normalized.includes('FROM behavioral_pattern_events')) {
+      const [contactId, minResolvedCount, limit] = values as [string, number, number];
+      const grouped = groupBehavioralEvents([...this.behavioralPatternEvents.values()].filter(row => row.contact_id === contactId));
+      const rows = grouped
+        .filter(row => row.resolved_count >= Number(minResolvedCount))
+        .sort((left, right) => right.average_outcome - left.average_outcome || right.resolved_count - left.resolved_count || left.strategy.localeCompare(right.strategy))
+        .slice(0, Number(limit))
+        .map(row => row as Row);
+      return { rows };
+    }
+
+    if (normalized.includes('SELECT promoted_memory_id') && normalized.includes('FROM behavioral_pattern_events')) {
+      return { rows: [] };
+    }
+
+    if (normalized.includes('FROM behavioral_pattern_events') && normalized.includes('WHERE contact_id = $1 AND strategy = $2')) {
+      const [contactId, strategy] = values as [string, string];
+      const rows = groupBehavioralEvents([...this.behavioralPatternEvents.values()].filter(row => row.contact_id === contactId && row.strategy === strategy));
+      return { rows: rows.length > 0 ? [rows[0] as Row] : [] };
+    }
+
+    throw new Error(`Unhandled SQL in FakeIntentionPool: ${normalized}`);
+  }
+}
+
+function concernSort(left: ActiveConcernRow, right: ActiveConcernRow): number {
+  const priorityRank = (value: string): number => {
+    if (value === 'high') return 0;
+    if (value === 'medium') return 1;
+    return 2;
+  };
+  return (
+    priorityRank(left.priority) - priorityRank(right.priority)
+    || left.expires_at.localeCompare(right.expires_at)
+    || left.created_at.localeCompare(right.created_at)
+    || left.id.localeCompare(right.id)
+  );
+}
+
+function groupBehavioralEvents(rows: BehavioralPatternRow[]): Array<{
+  strategy: string;
+  sample_count: number;
+  resolved_count: number;
+  pending_count: number;
+  average_outcome: number | null;
+  positive_count: number;
+  negative_count: number;
+  last_outcome_at: string | null;
+}> {
+  const summaries = new Map<string, {
+    strategy: string;
+    sample_count: number;
+    resolved_count: number;
+    pending_count: number;
+    total_outcome: number;
+    outcome_samples: number;
+    positive_count: number;
+    negative_count: number;
+    last_outcome_at: string | null;
+  }>();
+
+  for (const row of rows) {
+    const summary = summaries.get(row.strategy) ?? {
+      strategy: row.strategy,
+      sample_count: 0,
+      resolved_count: 0,
+      pending_count: 0,
+      total_outcome: 0,
+      outcome_samples: 0,
+      positive_count: 0,
+      negative_count: 0,
+      last_outcome_at: null,
+    };
+    summary.sample_count += 1;
+    if (row.outcome_score === null) {
+      summary.pending_count += 1;
+    } else {
+      summary.resolved_count += 1;
+      summary.total_outcome += row.outcome_score;
+      summary.outcome_samples += 1;
+      if (row.outcome_score > 0.1) summary.positive_count += 1;
+      if (row.outcome_score < -0.1) summary.negative_count += 1;
+      if (!summary.last_outcome_at || row.outcome_observed_at > summary.last_outcome_at) {
+        summary.last_outcome_at = row.outcome_observed_at;
+      }
+    }
+    summaries.set(row.strategy, summary);
+  }
+
+  return [...summaries.values()].map(summary => ({
+    strategy: summary.strategy,
+    sample_count: summary.sample_count,
+    resolved_count: summary.resolved_count,
+    pending_count: summary.pending_count,
+    average_outcome: summary.outcome_samples > 0 ? summary.total_outcome / summary.outcome_samples : null,
+    positive_count: summary.positive_count,
+    negative_count: summary.negative_count,
+    last_outcome_at: summary.last_outcome_at,
+  }));
+}
+
+describe('postgres intention adapters', () => {
+  it('persists concerns and resolves similar follow-up lookups', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never);
+
+    const created = await ports.concernStore.create({
+      text: 'Check hydration reminder',
+      contactId: 'contact-a',
+      source: 'agent',
+    });
+    expect(created.id).toBeTruthy();
+
+    const active = await ports.concernStore.getActiveConcerns('contact-a');
+    expect(active).toHaveLength(1);
+    expect(active[0]).toMatchObject({
+      text: 'Check hydration reminder',
+      contactId: 'contact-a',
+      priority: 'medium',
+      source: 'agent',
+    });
+
+    const resolved = await ports.concernStore.resolveConcern(created.id, {
+      outcome: 'Handled already',
+      resolvedAt: '2026-03-28T01:00:00.000Z',
+    });
+    expect(resolved?.resolutionOutcome).toBe('Handled already');
+
+    const recent = await ports.concernStore.listRecentlyResolvedConcerns('contact-a', {
+      asOf: '2026-03-28T02:00:00.000Z',
+      withinMs: 4 * 60 * 60 * 1000,
+    });
+    expect(recent).toHaveLength(1);
+    expect(recent[0]).toMatchObject({
+      id: created.id,
+      resolvedAt: '2026-03-28T01:00:00.000Z',
+    });
+
+    const match = await ports.concernStore.findRecentlyResolvedSimilarConcern({
+      text: 'Check the hydration reminder',
+      contactId: 'contact-a',
+      asOf: '2026-03-28T02:00:00.000Z',
+      withinMs: 4 * 60 * 60 * 1000,
+    });
+    expect(match?.id).toBe(created.id);
+  });
+
+  it('persists pending follow-ups and activation state', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never);
+
+    const followUp = await ports.pendingFollowUpStore.create({
+      content: 'Check in tomorrow about medication.',
+      priority: 'medium',
+      timing: 'scheduled',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-3',
+      dueAt: '2026-03-28T03:00:00.000Z',
+    });
+    expect(followUp).toMatchObject({
+      content: 'Check in tomorrow about medication.',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-3',
+    });
+
+    const pending = await ports.pendingFollowUpStore.getPendingFollowUps('contact-a');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.id).toBe(followUp.id);
+
+    const activated = await ports.pendingFollowUpStore.markActivated(followUp.id, {
+      activationReason: 'post_turn_action',
+      activatedAt: '2026-03-28T04:00:00.000Z',
+    });
+    expect(activated?.activatedAt).toBe('2026-03-28T04:00:00.000Z');
+    expect(activated?.activationReason).toBe('post_turn_action');
+  });
+
+  it('tracks behavioral samples and summaries', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never);
+
+    const sample = await ports.behavioralPatternTracker.recordResponseStrategy({
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-1',
+      responseContent: 'I hear you. Let us focus on the next step.',
+    });
+    expect(sample.strategy).toBe('empathy');
+
+    const pending = await ports.behavioralPatternTracker.tryRecordOutcomeForLatestPending({
+      contactId: 'contact-a',
+      outcomeScore: 0.6,
+      observedAt: '2026-03-28T05:00:00.000Z',
+    });
+    expect(pending?.outcomeScore).toBe(0.6);
+
+    await ports.behavioralPatternTracker.recordResponseStrategy({
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-2',
+      responseContent: '```ts\nconst value = 1;\n```',
+      strategy: 'technical',
+    });
+    await ports.behavioralPatternTracker.recordOutcomeForSample({
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-2',
+      strategy: 'technical',
+      outcomeScore: 0.8,
+      observedAt: '2026-03-28T06:00:00.000Z',
+    });
+
+    const summaries = await ports.behavioralPatternTracker.listStrategySummaries('contact-a');
+    expect(summaries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        strategy: 'empathy',
+        resolvedCount: 1,
+        pendingCount: 0,
+      }),
+      expect.objectContaining({
+        strategy: 'technical',
+        resolvedCount: 1,
+        pendingCount: 0,
+      }),
+    ]));
+  });
+});

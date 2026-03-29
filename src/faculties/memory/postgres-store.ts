@@ -5,9 +5,7 @@ import {
   createPostgresPool,
   ensurePostgresSchema,
   executeQuery,
-  queryOne,
   queryRows,
-  withPostgresClient,
 } from '../../persistence/postgres.js';
 import {
   POSTGRES_MEMORY_MIGRATIONS,
@@ -166,12 +164,6 @@ function encodeEmbedding(embedding: Float32Array): number[] {
 function decodeEmbedding(value: unknown): Float32Array | undefined {
   if (!Array.isArray(value)) return undefined;
   return new Float32Array(value.flatMap((entry) => (typeof entry === 'number' ? [entry] : [])));
-}
-
-function normalizeText(value: string | undefined): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function memoryKey(id1: string, id2: string): string {

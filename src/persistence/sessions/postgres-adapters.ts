@@ -368,7 +368,7 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
       timestamp: normalizeTimestamp(row.timestamp),
       channelVisibility: normalizeChannelVisibility(row.channel_visibility, row.channel_id),
       score: Number(row.score) || 0,
-      snippet: row.snippet?.trim() || row.content,
+      snippet: row.snippet.trim() || row.content,
     }));
   }
 }

@@ -36,9 +36,12 @@ describe('wireIntentionRuntime', () => {
 
     const runtime = wireIntentionRuntime(target, db);
 
-    expect(target.activeConcernProvider).toBe(runtime.concernStore);
-    expect(target.pendingFollowUpProvider).toBe(runtime.pendingFollowUpStore);
-    expect(target.behavioralPatternProvider).toBe(runtime.behavioralPatternTracker);
+    expect(target.activeConcernProvider).not.toBeNull();
+    expect(target.pendingFollowUpProvider).not.toBeNull();
+    expect(target.behavioralPatternProvider).not.toBeNull();
+    expect(runtime.concernStore).not.toBe(target.activeConcernProvider);
+    expect(runtime.pendingFollowUpStore).not.toBe(target.pendingFollowUpProvider);
+    expect(runtime.behavioralPatternTracker).not.toBe(target.behavioralPatternProvider);
     expect(target.tools.map(tool => tool.name).sort()).toEqual([
       'create_concern',
       'list_concerns',
@@ -75,27 +78,33 @@ describe('wireIntentionRuntime', () => {
 
     const runtime = wireIntentionRuntime(target, db);
 
-    expect(setActiveConcernProvider).toHaveBeenCalledWith(runtime.concernStore);
-    expect(setPendingFollowUpProvider).toHaveBeenCalledWith(runtime.pendingFollowUpStore);
-    expect(setBehavioralPatternProvider).toHaveBeenCalledWith(runtime.behavioralPatternTracker);
+    const [activeProvider] = setActiveConcernProvider.mock.calls[0] ?? [];
+    const [pendingProvider] = setPendingFollowUpProvider.mock.calls[0] ?? [];
+    const [behavioralProvider] = setBehavioralPatternProvider.mock.calls[0] ?? [];
+    expect(activeProvider).toBeTruthy();
+    expect(pendingProvider).toBeTruthy();
+    expect(behavioralProvider).toBeTruthy();
+    expect(activeProvider).not.toBe(runtime.concernStore);
+    expect(pendingProvider).not.toBe(runtime.pendingFollowUpStore);
+    expect(behavioralProvider).not.toBe(runtime.behavioralPatternTracker);
     expect(target.activeConcernProvider).toBeNull();
     expect(target.pendingFollowUpProvider).toBeNull();
     expect(target.behavioralPatternProvider).toBeNull();
   });
 
-  it('builds appraisal hooks that expose active concerns and persist concern decisions', () => {
+  it('builds appraisal hooks that expose active concerns and persist concern decisions', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
     const hooks = createIntentionAppraisalHooks(runtime.concernStore, runtime.pendingFollowUpStore);
 
-    runtime.concernStore.create({
+    await runtime.concernStore.create({
       text: 'Check hydration reminder',
       contactId: 'contact-a',
       source: 'agent',
     });
 
-    const active = hooks.getActiveConcerns({
+    const active = await hooks.getActiveConcerns({
       channelId: 'api:test',
       canonicalContactKey: 'contact-a',
     });
@@ -107,16 +116,16 @@ describe('wireIntentionRuntime', () => {
     });
     expect(typeof active[0]?.dueAt).toBe('number');
 
-    const resolved = runtime.concernStore.create({
+    const resolved = await runtime.concernStore.create({
       text: 'Recently resolved cleanup',
       contactId: 'contact-a',
       source: 'heartbeat',
     });
-    runtime.concernStore.resolveConcern(resolved.id, {
+    await runtime.concernStore.resolveConcern(resolved.id, {
       outcome: 'Handled already',
       resolvedAt: new Date().toISOString(),
     });
-    const recentResolved = hooks.getRecentResolvedConcerns({
+    const recentResolved = await hooks.getRecentResolvedConcerns({
       channelId: 'api:test',
       canonicalContactKey: 'contact-a',
     });
@@ -127,7 +136,7 @@ describe('wireIntentionRuntime', () => {
     });
     expect(typeof recentResolved[0]?.resolvedAt).toBe('number');
 
-    hooks.onIntentionConcernDecision({
+    await hooks.onIntentionConcernDecision({
       decision: {
         type: 'concern',
         priority: 'high',
@@ -145,7 +154,7 @@ describe('wireIntentionRuntime', () => {
       sourceMessageId: 'msg-1',
     });
 
-    const concerns = runtime.concernStore.list({
+    const concerns = await runtime.concernStore.list({
       contactId: 'contact-a',
       includeExpired: false,
       includeResolved: false,
@@ -160,7 +169,7 @@ describe('wireIntentionRuntime', () => {
       text: 'Follow up on medication: Ping tomorrow morning',
     });
 
-    const pendingFollowUpId = hooks.onIntentionFollowUpDecision({
+    const pendingFollowUpId = await hooks.onIntentionFollowUpDecision({
       decision: {
         type: 'followUp',
         priority: 'medium',
@@ -179,7 +188,7 @@ describe('wireIntentionRuntime', () => {
     });
     expect(pendingFollowUpId).toBeTruthy();
 
-    const pending = runtime.pendingFollowUpStore.getPendingFollowUps('contact-a');
+    const pending = await runtime.pendingFollowUpStore.getPendingFollowUps('contact-a');
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({
       id: pendingFollowUpId,
@@ -190,32 +199,32 @@ describe('wireIntentionRuntime', () => {
       sourceMessageId: 'msg-3',
     });
 
-    hooks.onIntentionFollowUpActivated({
+    await hooks.onIntentionFollowUpActivated({
       pendingFollowUpId: pendingFollowUpId!,
       activationReason: 'post_turn_action',
     });
-    const activated = runtime.pendingFollowUpStore.getById(pendingFollowUpId!);
+    const activated = await runtime.pendingFollowUpStore.getById(pendingFollowUpId!);
     expect(activated?.activatedAt).toBeTruthy();
     expect(activated?.activationReason).toBe('post_turn_action');
   });
 
-  it('includes recently resolved concerns in appraisal snapshots and suppresses near-duplicate recreation', () => {
+  it('includes recently resolved concerns in appraisal snapshots and suppresses near-duplicate recreation', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
     const hooks = createIntentionAppraisalHooks(runtime.concernStore);
 
-    const resolved = runtime.concernStore.create({
+    const resolved = await runtime.concernStore.create({
       text: 'Clean up the profile synthesis reminder',
       contactId: 'contact-a',
       source: 'heartbeat',
     });
-    runtime.concernStore.resolveConcern(resolved.id, {
+    await runtime.concernStore.resolveConcern(resolved.id, {
       outcome: 'Fixed during this session',
       resolvedAt: new Date(Date.now() - (10 * 60 * 1000)).toISOString(),
     });
 
-    const snapshots = hooks.getRecentResolvedConcerns({
+    const snapshots = await hooks.getRecentResolvedConcerns({
       channelId: 'api:test',
       canonicalContactKey: 'contact-a',
     });
@@ -228,7 +237,7 @@ describe('wireIntentionRuntime', () => {
       }),
     ]));
 
-    hooks.onIntentionConcernDecision({
+    await hooks.onIntentionConcernDecision({
       decision: {
         type: 'concern',
         priority: 'medium',
@@ -244,7 +253,7 @@ describe('wireIntentionRuntime', () => {
       sourceMessageId: 'msg-suppress-1',
     });
 
-    const concerns = runtime.concernStore.list({
+    const concerns = await runtime.concernStore.list({
       contactId: 'contact-a',
       includeResolved: true,
       includeExpired: true,
@@ -254,23 +263,23 @@ describe('wireIntentionRuntime', () => {
     expect(concerns[0]?.resolvedAt).toBeDefined();
   });
 
-  it('allows concern recreation when the prior resolution is outside the suppression window', () => {
+  it('allows concern recreation when the prior resolution is outside the suppression window', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
     const hooks = createIntentionAppraisalHooks(runtime.concernStore);
 
-    const resolved = runtime.concernStore.create({
+    const resolved = await runtime.concernStore.create({
       text: 'Check back on the deployment cleanup',
       contactId: 'contact-a',
       source: 'heartbeat',
     });
-    runtime.concernStore.resolveConcern(resolved.id, {
+    await runtime.concernStore.resolveConcern(resolved.id, {
       outcome: 'Handled long ago',
       resolvedAt: '2026-01-01T00:00:00.000Z',
     });
 
-    hooks.onIntentionConcernDecision({
+    await hooks.onIntentionConcernDecision({
       decision: {
         type: 'concern',
         priority: 'medium',
@@ -286,7 +295,7 @@ describe('wireIntentionRuntime', () => {
       sourceMessageId: 'msg-allow-1',
     });
 
-    const concerns = runtime.concernStore.list({
+    const concerns = await runtime.concernStore.list({
       contactId: 'contact-a',
       includeResolved: true,
       includeExpired: true,
@@ -296,13 +305,13 @@ describe('wireIntentionRuntime', () => {
     expect(concerns.some(concern => concern.source === 'appraisal' && !concern.resolvedAt)).toBe(true);
   });
 
-  it('fails closed when concern decision payload omits title and summary', () => {
+  it('fails closed when concern decision payload omits title and summary', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
     const hooks = createIntentionAppraisalHooks(runtime.concernStore, runtime.pendingFollowUpStore);
 
-    expect(() => hooks.onIntentionConcernDecision({
+    await expect(hooks.onIntentionConcernDecision({
       decision: {
         type: 'concern',
         priority: 'medium',
@@ -312,26 +321,26 @@ describe('wireIntentionRuntime', () => {
       } as any,
       channelId: 'api:test',
       sourceMessageId: 'msg-2',
-    })).toThrow('Concern decision must include title or summary');
+    })).rejects.toThrow('Concern decision must include title or summary');
   });
 
-  it('suppresses concern creation when a similar concern was just resolved', () => {
+  it('suppresses concern creation when a similar concern was just resolved', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
     const hooks = createIntentionAppraisalHooks(runtime.concernStore);
 
-    const resolved = runtime.concernStore.create({
+    const resolved = await runtime.concernStore.create({
       text: 'Clean up the profile synthesis follow-up',
       contactId: 'contact-a',
       source: 'heartbeat',
     });
-    runtime.concernStore.resolveConcern(resolved.id, {
+    await runtime.concernStore.resolveConcern(resolved.id, {
       outcome: 'Handled during the current run',
       resolvedAt: new Date().toISOString(),
     });
 
-    hooks.onIntentionConcernDecision({
+    await hooks.onIntentionConcernDecision({
       decision: {
         type: 'concern',
         priority: 'medium',
@@ -346,7 +355,7 @@ describe('wireIntentionRuntime', () => {
       sourceMessageId: 'msg-3',
     });
 
-    const concerns = runtime.concernStore.list({
+    const concerns = await runtime.concernStore.list({
       contactId: 'contact-a',
       includeResolved: true,
       includeExpired: true,
@@ -377,7 +386,7 @@ describe('wireIntentionRuntime', () => {
       canonicalContactKey: 'contact-a',
     } as any);
 
-    const samples = runtime.behavioralPatternTracker.listSamples({
+    const samples = await runtime.behavioralPatternTracker.listSamples({
       contactId: 'contact-a',
       includePending: true,
       limit: 5,
@@ -393,7 +402,7 @@ describe('wireIntentionRuntime', () => {
     const db = new Database(':memory:');
     const runtime = wireIntentionRuntime(new FakeTarget(), db);
     const behavioralHooks = createIntentionBehavioralPatternHooks(runtime.behavioralPatternTracker);
-    runtime.behavioralPatternTracker.recordResponseStrategy({
+    await runtime.behavioralPatternTracker.recordResponseStrategy({
       contactId: 'contact-a',
       sourceMessageId: 'msg-turn-1',
       responseContent: 'I hear you, and I am here with you.',
@@ -413,7 +422,7 @@ describe('wireIntentionRuntime', () => {
       observedAtMs: Date.parse('2026-03-06T12:01:00.000Z'),
     });
 
-    const samples = runtime.behavioralPatternTracker.listSamples({
+    const samples = await runtime.behavioralPatternTracker.listSamples({
       contactId: 'contact-a',
       includePending: true,
       limit: 5,

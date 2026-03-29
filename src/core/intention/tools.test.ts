@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ActiveConcernStore } from './concerns.js';
+import { ActiveConcernStore, createConcernStorePort } from './concerns.js';
 import {
   createCreateConcernTool,
   createListConcernsTool,
@@ -13,11 +13,11 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
 
 describe('intention tools', () => {
   let db: Database.Database;
-  let store: ActiveConcernStore;
+  let store: ReturnType<typeof createConcernStorePort>;
 
   beforeEach(() => {
     db = new Database(':memory:');
-    store = new ActiveConcernStore(db);
+    store = createConcernStorePort(new ActiveConcernStore(db));
   });
 
   it('create_concern writes a new concern', async () => {
@@ -40,7 +40,7 @@ describe('intention tools', () => {
   });
 
   it('list_concerns returns serialized concern rows', async () => {
-    const created = store.create({
+    const created = await store.create({
       text: 'Follow up on Thursday project discussion.',
       priority: 'medium',
     });
@@ -57,7 +57,7 @@ describe('intention tools', () => {
   });
 
   it('resolve_concern resolves an unresolved concern and errors for missing id', async () => {
-    const created = store.create({
+    const created = await store.create({
       text: 'Resolve this concern.',
       priority: 'low',
     });

@@ -59,6 +59,29 @@ export interface PendingFollowUpContextProvider {
   getPendingFollowUps(contactId?: string): PendingFollowUp[];
 }
 
+type Awaitable<T> = T | Promise<T>;
+
+interface PendingFollowUpStorePortBackend extends PendingFollowUpContextProvider {
+  create(input: PendingFollowUpCreateInput): Awaitable<PendingFollowUp>;
+  getById(id: string): Awaitable<PendingFollowUp | null>;
+  list(options?: PendingFollowUpListOptions): Awaitable<PendingFollowUp[]>;
+  markActivated(
+    id: string,
+    options?: PendingFollowUpActivateOptions,
+  ): Awaitable<PendingFollowUp | null>;
+}
+
+export interface PendingFollowUpStorePort {
+  create(input: PendingFollowUpCreateInput): Promise<PendingFollowUp>;
+  getById(id: string): Promise<PendingFollowUp | null>;
+  getPendingFollowUps(contactId?: string): Promise<PendingFollowUp[]>;
+  list(options?: PendingFollowUpListOptions): Promise<PendingFollowUp[]>;
+  markActivated(
+    id: string,
+    options?: PendingFollowUpActivateOptions,
+  ): Promise<PendingFollowUp | null>;
+}
+
 interface PendingFollowUpRow {
   id: string;
   content: string;
@@ -184,6 +207,18 @@ function mapRow(row: PendingFollowUpRow): PendingFollowUp {
     ...(sourceMessageId ? { sourceMessageId } : {}),
     ...(activatedAt ? { activatedAt } : {}),
     ...(activationReason ? { activationReason } : {}),
+  };
+}
+
+export function createPendingFollowUpStorePort(
+  store: PendingFollowUpStorePortBackend,
+): PendingFollowUpStorePort {
+  return {
+    create: async (input) => await store.create(input),
+    getById: async (id) => await store.getById(id),
+    getPendingFollowUps: async (contactId) => await store.getPendingFollowUps(contactId),
+    list: async (options) => await store.list(options),
+    markActivated: async (id, options) => await store.markActivated(id, options),
   };
 }
 

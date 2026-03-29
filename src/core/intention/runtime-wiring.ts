@@ -5,11 +5,15 @@ import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import {
   ActiveConcernStore,
+  createConcernStorePort,
   type ActiveConcernContextProvider,
+  type ConcernStorePort,
 } from './concerns.js';
 import {
   PendingFollowUpStore,
+  createPendingFollowUpStorePort,
   type PendingFollowUpContextProvider,
+  type PendingFollowUpStorePort,
 } from './pending-follow-ups.js';
 import type {
   ActiveConcernSnapshot,
@@ -17,8 +21,10 @@ import type {
 } from './appraisal.js';
 import {
   BehavioralPatternTracker,
+  createBehavioralPatternStorePort,
   scoreBehavioralOutcomeFromEmotion,
   type BehavioralPatternContextProvider,
+  type BehavioralPatternStorePort,
 } from './patterns.js';
 import {
   createCreateConcernTool,
@@ -41,37 +47,37 @@ export interface IntentionRuntimeTarget {
 }
 
 export interface IntentionRuntimeWiring {
-  concernStore: ActiveConcernStore;
-  pendingFollowUpStore: PendingFollowUpStore;
-  behavioralPatternTracker: BehavioralPatternTracker;
+  concernStore: ConcernStorePort;
+  pendingFollowUpStore: PendingFollowUpStorePort;
+  behavioralPatternTracker: BehavioralPatternStorePort;
 }
 
 export interface IntentionAppraisalHooks {
   getActiveConcerns(input: {
     channelId: string;
     canonicalContactKey?: string;
-  }): readonly ActiveConcernSnapshot[];
+  }): Promise<readonly ActiveConcernSnapshot[]>;
   getRecentResolvedConcerns(input: {
     channelId: string;
     canonicalContactKey?: string;
-  }): readonly ActiveConcernSnapshot[];
+  }): Promise<readonly ActiveConcernSnapshot[]>;
   onIntentionConcernDecision(input: {
     decision: IntentionActionDecision;
     channelId: string;
     canonicalContactKey?: string;
     sourceMessageId: string;
-  }): void;
+  }): Promise<void>;
   onIntentionFollowUpDecision(input: {
     decision: IntentionActionDecision;
     channelId: string;
     channelType: ChannelType;
     canonicalContactKey?: string;
     sourceMessageId: string;
-  }): string | undefined;
+  }): Promise<string | undefined>;
   onIntentionFollowUpActivated(input: {
     pendingFollowUpId: string;
     activationReason?: string;
-  }): void;
+  }): Promise<void>;
 }
 
 export interface IntentionBehavioralPatternHooks {
@@ -87,7 +93,7 @@ export interface IntentionBehavioralPatternHooks {
     sourceMessageId: string;
     responseContent: string;
     completedAtMs?: number;
-  }): void;
+  }): Promise<void>;
 }
 
 function normalizeOptionalText(value: string | undefined): string | undefined {
@@ -137,7 +143,9 @@ function normalizeFutureIsoTimestamp(value: number | undefined): string | undefi
   return new Date(normalized).toISOString();
 }
 
-function toActiveConcernSnapshot(concern: ReturnType<ActiveConcernStore['getActiveConcerns']>[number]): ActiveConcernSnapshot {
+function toActiveConcernSnapshot(
+  concern: Awaited<ReturnType<ConcernStorePort['getActiveConcerns']>>[number],
+): ActiveConcernSnapshot {
   const dueAtMs = Date.parse(concern.expiresAt);
   return {
     id: concern.id,
@@ -149,7 +157,7 @@ function toActiveConcernSnapshot(concern: ReturnType<ActiveConcernStore['getActi
 }
 
 function toRecentlyResolvedConcernSnapshot(
-  concern: ReturnType<ActiveConcernStore['listRecentlyResolvedConcerns']>[number],
+  concern: Awaited<ReturnType<ConcernStorePort['listRecentlyResolvedConcerns']>>[number],
 ): ActiveConcernSnapshot {
   const resolvedAtMs = concern.resolvedAt ? Date.parse(concern.resolvedAt) : Number.NaN;
   return {
@@ -172,24 +180,22 @@ function normalizeObservedAtIso(value: number | undefined): string | undefined {
 }
 
 export function createIntentionAppraisalHooks(
-  concernStore: ActiveConcernStore,
-  pendingFollowUpStore: PendingFollowUpStore,
+  concernStore: ConcernStorePort,
+  pendingFollowUpStore?: PendingFollowUpStorePort,
 ): IntentionAppraisalHooks {
   return {
-    getActiveConcerns: ({ canonicalContactKey }) => (
-      concernStore
-        .getActiveConcerns(canonicalContactKey)
+    getActiveConcerns: async ({ canonicalContactKey }) => (
+      (await concernStore.getActiveConcerns(canonicalContactKey))
         .map(concern => toActiveConcernSnapshot(concern))
     ),
-    getRecentResolvedConcerns: ({ canonicalContactKey }) => (
-      concernStore
-        .listRecentlyResolvedConcerns(canonicalContactKey, {
-          withinMs: RECENT_RESOLVED_CONCERN_WINDOW_MS,
-          limit: RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT,
-        })
+    getRecentResolvedConcerns: async ({ canonicalContactKey }) => (
+      (await concernStore.listRecentlyResolvedConcerns(canonicalContactKey, {
+        withinMs: RECENT_RESOLVED_CONCERN_WINDOW_MS,
+        limit: RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT,
+      }))
         .map(concern => toRecentlyResolvedConcernSnapshot(concern))
     ),
-    onIntentionConcernDecision: ({
+    onIntentionConcernDecision: async ({
       decision,
       canonicalContactKey,
     }) => {
@@ -200,14 +206,14 @@ export function createIntentionAppraisalHooks(
       const expiresAt = normalizeFutureIsoTimestamp(
         decision.concern?.dueAt ?? decision.dueAt,
       );
-      const recentMatch = concernStore.findRecentlyResolvedSimilarConcern({
+      const recentMatch = await concernStore.findRecentlyResolvedSimilarConcern({
         text,
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
       });
       if (recentMatch) {
         return;
       }
-      concernStore.create({
+      await concernStore.create({
         text,
         priority: decision.concern?.priority ?? decision.priority,
         source: 'appraisal',
@@ -215,7 +221,7 @@ export function createIntentionAppraisalHooks(
         ...(expiresAt ? { expiresAt } : {}),
       });
     },
-    onIntentionFollowUpDecision: ({
+    onIntentionFollowUpDecision: async ({
       decision,
       channelId,
       channelType,
@@ -225,8 +231,11 @@ export function createIntentionAppraisalHooks(
       if (decision.type !== 'followUp') {
         return undefined;
       }
+      if (!pendingFollowUpStore) {
+        throw new Error('PendingFollowUpStorePort is required for follow-up decisions');
+      }
       const content = resolveFollowUpDecisionContent(decision);
-      const followUp = pendingFollowUpStore.create({
+      const followUp = await pendingFollowUpStore.create({
         content,
         priority: decision.priority,
         timing: decision.timing === 'none' ? 'immediate' : decision.timing,
@@ -240,11 +249,14 @@ export function createIntentionAppraisalHooks(
       });
       return followUp.id;
     },
-    onIntentionFollowUpActivated: ({
+    onIntentionFollowUpActivated: async ({
       pendingFollowUpId,
       activationReason,
     }) => {
-      pendingFollowUpStore.markActivated(pendingFollowUpId, {
+      if (!pendingFollowUpStore) {
+        throw new Error('PendingFollowUpStorePort is required for follow-up activation');
+      }
+      await pendingFollowUpStore.markActivated(pendingFollowUpId, {
         ...(activationReason ? { activationReason } : {}),
       });
     },
@@ -252,7 +264,7 @@ export function createIntentionAppraisalHooks(
 }
 
 export function createIntentionBehavioralPatternHooks(
-  patternTracker: BehavioralPatternTracker,
+  patternTracker: BehavioralPatternStorePort,
 ): IntentionBehavioralPatternHooks {
   return {
     onBehavioralPatternOutcome: async ({
@@ -278,7 +290,7 @@ export function createIntentionBehavioralPatternHooks(
         outcomeSourceMessageId: sourceId,
       });
     },
-    onTurnResponseRecorded: ({
+    onTurnResponseRecorded: async ({
       canonicalContactKey,
       sourceMessageId,
       responseContent,
@@ -298,7 +310,7 @@ export function createIntentionBehavioralPatternHooks(
       }
       const createdAt = normalizeObservedAtIso(completedAtMs);
 
-      patternTracker.recordResponseStrategy({
+      await patternTracker.recordResponseStrategy({
         contactId,
         sourceMessageId: sourceId,
         responseContent: normalizedResponse,
@@ -312,32 +324,35 @@ export function wireIntentionRuntime(
   target: IntentionRuntimeTarget,
   db: Database.Database,
 ): IntentionRuntimeWiring {
-  const concernStore = new ActiveConcernStore(db);
-  const pendingFollowUpStore = new PendingFollowUpStore(db);
-  const behavioralPatternTracker = new BehavioralPatternTracker(db);
+  const concernProvider = new ActiveConcernStore(db);
+  const pendingFollowUpProvider = new PendingFollowUpStore(db);
+  const behavioralPatternProvider = new BehavioralPatternTracker(db);
+  const concernStore = createConcernStorePort(concernProvider);
+  const pendingFollowUpStore = createPendingFollowUpStorePort(pendingFollowUpProvider);
+  const behavioralPatternTracker = createBehavioralPatternStorePort(behavioralPatternProvider);
   const behavioralHooks = createIntentionBehavioralPatternHooks(behavioralPatternTracker);
 
   if (typeof target.setActiveConcernProvider === 'function') {
-    target.setActiveConcernProvider(concernStore);
+    target.setActiveConcernProvider(concernProvider);
   } else {
-    target.activeConcernProvider = concernStore;
+    target.activeConcernProvider = concernProvider;
   }
 
   if (typeof target.setPendingFollowUpProvider === 'function') {
-    target.setPendingFollowUpProvider(pendingFollowUpStore);
+    target.setPendingFollowUpProvider(pendingFollowUpProvider);
   } else {
-    target.pendingFollowUpProvider = pendingFollowUpStore;
+    target.pendingFollowUpProvider = pendingFollowUpProvider;
   }
 
   if (typeof target.setBehavioralPatternProvider === 'function') {
-    target.setBehavioralPatternProvider(behavioralPatternTracker);
+    target.setBehavioralPatternProvider(behavioralPatternProvider);
   } else {
-    target.behavioralPatternProvider = behavioralPatternTracker;
+    target.behavioralPatternProvider = behavioralPatternProvider;
   }
 
   if (typeof target.registerIntentionPostTurnHook === 'function') {
-    target.registerIntentionPostTurnHook((context) => {
-      behavioralHooks.onTurnResponseRecorded({
+    target.registerIntentionPostTurnHook(async (context) => {
+      await behavioralHooks.onTurnResponseRecorded({
         canonicalContactKey: context.canonicalContactKey,
         sourceMessageId: context.message.id,
         responseContent: context.response.content,

@@ -2,8 +2,8 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import {
   ACTIVE_CONCERN_PRIORITIES,
-  ActiveConcernStore,
   type ActiveConcernPriority,
+  type ConcernStorePort,
 } from './concerns.js';
 import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -34,7 +34,7 @@ function textResult(text: string): AgentToolResult<{ isError?: boolean }> {
   };
 }
 
-export function createListConcernsTool(store: ActiveConcernStore): AgentTool<any> {
+export function createListConcernsTool(store: ConcernStorePort): AgentTool<any> {
   return {
     name: 'list_concerns',
     label: 'list_concerns',
@@ -58,7 +58,7 @@ export function createListConcernsTool(store: ActiveConcernStore): AgentTool<any
       params: ListConcernsParams,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const concerns = store.list({
+        const concerns = await store.list({
           contactId: params.contactId,
           includeResolved: params.includeResolved,
           includeExpired: params.includeExpired,
@@ -76,7 +76,7 @@ export function createListConcernsTool(store: ActiveConcernStore): AgentTool<any
   };
 }
 
-export function createResolveConcernTool(store: ActiveConcernStore): AgentTool<any> {
+export function createResolveConcernTool(store: ConcernStorePort): AgentTool<any> {
   return {
     name: 'resolve_concern',
     label: 'resolve_concern',
@@ -96,7 +96,7 @@ export function createResolveConcernTool(store: ActiveConcernStore): AgentTool<a
       params: ResolveConcernParams,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const resolved = store.resolveConcern(params.concernId, {
+        const resolved = await store.resolveConcern(params.concernId, {
           outcome: params.outcome,
         });
         if (!resolved) {
@@ -114,7 +114,7 @@ export function createResolveConcernTool(store: ActiveConcernStore): AgentTool<a
   };
 }
 
-export function createCreateConcernTool(store: ActiveConcernStore): AgentTool<any> {
+export function createCreateConcernTool(store: ConcernStorePort): AgentTool<any> {
   return {
     name: 'create_concern',
     label: 'create_concern',
@@ -146,7 +146,7 @@ export function createCreateConcernTool(store: ActiveConcernStore): AgentTool<an
       params: CreateConcernParams,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const created = store.create({
+        const created = await store.create({
           text: params.text,
           priority: params.priority,
           contactId: params.contactId,

@@ -7,6 +7,7 @@ import {
   type SessionHmacKeyring,
 } from '../journals/journal-utils.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+import type { TurnRecordStorePort } from './turn-records.js';
 
 export interface ChannelCache {
   channelId: string;
@@ -54,6 +55,7 @@ export interface SessionStoreOptions {
   searchIndexPath?: string;
   disableSearchIndex?: boolean;
   transcriptProjection?: TranscriptProjectionPort | null;
+  turnRecordStore?: TurnRecordStorePort | null;
 }
 
 export interface SessionIntegrityProvider {

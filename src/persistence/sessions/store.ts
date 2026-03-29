@@ -35,6 +35,7 @@ import {
   supportsKeywordSearch,
   type TranscriptProjectionPort,
 } from './transcript-projection-port.js';
+import { createFilesystemTurnRecordStorePort, type TurnRecordStorePort } from './turn-records.js';
 import {
   getCrashRecoveryExtractionCandidates,
   getUncleanShutdownChannels,
@@ -58,7 +59,6 @@ import {
   readImportManifests,
   runLegacyChatImport,
 } from './store/legacy-import.js';
-import { appendTurnRecord, readRecentTurnRecords } from './turn-records.js';
 import { SessionJournalRuntime } from './store/journal-runtime.js';
 import { resolveSessionEntryTurnContext } from '../../core/session/turn-provenance.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
@@ -113,6 +113,7 @@ export class SessionStore {
   private channelIndexPath: string;
   private importManifestPath: string;
   private transcriptProjection: TranscriptProjectionPort | null = null;
+  private turnRecordStore: TurnRecordStorePort;
   private journalRuntime: SessionJournalRuntime;
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
@@ -139,6 +140,7 @@ export class SessionStore {
         this.transcriptProjection = null;
       }
     }
+    this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
@@ -378,14 +380,13 @@ export class SessionStore {
     return id;
   }
   appendTurnRecord(record: TurnRecord): void {
-    appendTurnRecord(this.sessionsDir, record);
+    this.turnRecordStore.appendTurnRecord(record);
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
     const hasTombstones = (cached?.activeTurnTombstoneCount ?? 0) > 0;
-    const records = readRecentTurnRecords(
-      this.sessionsDir,
+    const records = this.turnRecordStore.readRecentTurnRecords(
       sessionId,
       hasTombstones ? Number.MAX_SAFE_INTEGER : limit,
     );

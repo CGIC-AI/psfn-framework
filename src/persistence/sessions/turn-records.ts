@@ -446,19 +446,17 @@ function turnRecordPath(sessionsDir: string, channelId: string): string {
   return join(sessionsDir, TURN_RECORDS_DIR, `${sanitizeChannelId(channelId)}.jsonl`);
 }
 
-export function appendTurnRecord(sessionsDir: string, record: TurnRecord): void {
-  const normalized = normalizeTurnRecord(record, record.channelId);
-  appendJsonLine(turnRecordPath(sessionsDir, record.channelId), normalized);
+export interface TurnRecordStorePort {
+  appendTurnRecord(record: TurnRecord): void;
+  readRecentTurnRecords(channelId: string, limit: number): TurnRecord[];
 }
 
-export function readRecentTurnRecords(
-  sessionsDir: string,
+function readRecentTurnRecordsFromPath(
+  path: string,
   channelId: string,
   limit: number,
 ): TurnRecord[] {
   if (limit <= 0) return [];
-
-  const path = turnRecordPath(sessionsDir, channelId);
   if (!existsSync(path)) return [];
 
   const lines = readFileSync(path, 'utf-8')
@@ -478,4 +476,16 @@ export function readRecentTurnRecords(
 
   if (records.length <= limit) return records;
   return records.slice(-limit);
+}
+
+export function createFilesystemTurnRecordStorePort(sessionsDir: string): TurnRecordStorePort {
+  return {
+    appendTurnRecord: (record) => {
+      const normalized = normalizeTurnRecord(record, record.channelId);
+      appendJsonLine(turnRecordPath(sessionsDir, record.channelId), normalized);
+    },
+    readRecentTurnRecords: (channelId, limit) => (
+      readRecentTurnRecordsFromPath(turnRecordPath(sessionsDir, channelId), channelId, limit)
+    ),
+  };
 }

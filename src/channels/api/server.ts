@@ -11,6 +11,10 @@ import type { ChannelType, MessageModelOverride, MessagePromptOverride, MessageR
 import type { ContactStore } from '../../core/contacts/store.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
+import {
+  createEventBusSensorIngestPort,
+  type SensorIngestPort,
+} from '../../shared/telemetry/sensor-ingest-port.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import { isChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
 import type {
@@ -181,6 +185,7 @@ export interface ApiServerConfig {
   healthChecks?: ApiServerHealthChecks;
   schedulerHeartbeatStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
+  sensorIngest?: SensorIngestPort;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -208,6 +213,7 @@ export class ApiServer implements ChannelAdapterPort {
   private host: string;
   private agentLoop: SubstrateAgent;
   private eventBus: EventBus;
+  private sensorIngest: SensorIngestPort;
   private sessionManager: SessionManager;
   private contactStore: ContactStore | null;
   private apiKey?: string;
@@ -231,6 +237,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.host = config.host ?? '127.0.0.1';
     this.agentLoop = config.agentLoop;
     this.eventBus = config.eventBus;
+    this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(this.eventBus);
     this.sessionManager = config.sessionManager;
     this.contactStore = config.contactStore ?? null;
     this.apiKey = clampHeaderValue(config.apiKey, 512);
@@ -1002,12 +1009,12 @@ export class ApiServer implements ChannelAdapterPort {
       scope: telemetry.scope,
     };
 
-    await this.eventBus.emit('external.telemetry.ingested', { event: normalizedEvent });
+    const receipt = await this.sensorIngest.ingestTelemetry(normalizedEvent);
 
     const response: TelemetryIngestResponse = {
       ok: true,
-      id: normalizedEvent.id,
-      acceptedEventType: normalizedEvent.eventType,
+      id: receipt.id,
+      acceptedEventType: receipt.acceptedEventType,
     };
     sendJson(res, 202, response);
   }

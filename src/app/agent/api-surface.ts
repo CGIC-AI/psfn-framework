@@ -22,6 +22,7 @@ import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import { createEventBusSensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from '../../shared/utils/env.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
@@ -260,6 +261,7 @@ export async function startOptionalApiServer(
       corsAllowedOrigins,
       modelName: env.API_MODEL_NAME,
       externalChannelProfiles: buildExternalChannelProfiles(options.channelsConfig),
+      sensorIngest: createEventBusSensorIngestPort(options.eventBus),
       requestTimeoutMs: parsePositiveIntEnv(
         env.API_REQUEST_TIMEOUT_MS,
         DEFAULT_API_REQUEST_TIMEOUT_MS,

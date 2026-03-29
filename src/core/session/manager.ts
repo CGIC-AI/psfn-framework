@@ -10,6 +10,11 @@ import type {
   LegacyChatImportResult,
   LegacyChatImportRange,
 } from '../../persistence/sessions/store.js';
+import {
+  createUserContinuityPort,
+  createNullCrossChannelContinuityPort,
+  type CrossChannelContinuityPort,
+} from './cross-channel-continuity-port.js';
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
 import type { SessionSearchHit } from '../../persistence/sessions/search-index.js';
@@ -67,7 +72,6 @@ import {
 } from '../turns/snapshot.js';
 import {
   countIntentionAppraisalArtifacts,
-  getMergedContinuity,
 } from './manager/context-support.js';
 import {
   buildToolObservationMetadata,
@@ -251,7 +255,8 @@ export class SessionManager {
   private activeContextSessionId: string | null = null;
   private activeFocusSessions: Map<string, ActiveFocusSession> = new Map();
   private pendingAutoCompactions = new Map<string, Promise<void>>();
-  continuityStore: UserContinuityStore | null = null;
+  private continuityStoreRef: UserContinuityStore | null = null;
+  crossChannelContinuity: CrossChannelContinuityPort = createNullCrossChannelContinuityPort();
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
 
@@ -275,6 +280,15 @@ export class SessionManager {
     this.preCompactionExtractionHandler = null;
     this.coreMemoryProvider = null;
     this.internalRoleEnvelopeLedger = null;
+  }
+
+  get continuityStore(): UserContinuityStore | null {
+    return this.continuityStoreRef;
+  }
+
+  set continuityStore(store: UserContinuityStore | null) {
+    this.continuityStoreRef = store;
+    this.crossChannelContinuity = createUserContinuityPort(store);
   }
 
   private resolveCompactionPromptText(basePrompt: string): string {
@@ -529,20 +543,22 @@ export class SessionManager {
 
     if (!shouldPersistSessionChannel(resolvedChannelId)) {
       if (
-        this.continuityStore
-        && continuityKey
+        continuityKey
         && resolvedChannelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX)
       ) {
-        this.continuityStore.append(continuityKey, {
-          channelId: resolvedChannelId,
-          role: 'user',
-          content,
-          authorId,
-          authorName,
-          timestamp,
-          originChannelId: resolvedChannelId,
-          channelVisibility,
-          ...(metadata ? { metadata } : {}),
+        this.crossChannelContinuity.append({
+          continuityUserId: continuityKey,
+          entry: {
+            channelId: resolvedChannelId,
+            role: 'user',
+            content,
+            authorId,
+            authorName,
+            timestamp,
+            originChannelId: resolvedChannelId,
+            channelVisibility,
+            ...(metadata ? { metadata } : {}),
+          },
         });
       }
       return null;
@@ -559,17 +575,20 @@ export class SessionManager {
       ...(metadata ? { metadata } : {}),
     });
 
-    if (this.continuityStore && continuityKey) {
-      this.continuityStore.append(continuityKey, {
-        channelId: resolvedChannelId,
-        role: 'user',
-        content,
-        authorId,
-        authorName,
-        timestamp,
-        originChannelId: resolvedChannelId,
-        channelVisibility,
-        ...(metadata ? { metadata } : {}),
+    if (continuityKey) {
+      this.crossChannelContinuity.append({
+        continuityUserId: continuityKey,
+        entry: {
+          channelId: resolvedChannelId,
+          role: 'user',
+          content,
+          authorId,
+          authorName,
+          timestamp,
+          originChannelId: resolvedChannelId,
+          channelVisibility,
+          ...(metadata ? { metadata } : {}),
+        },
       });
     }
 
@@ -614,18 +633,20 @@ export class SessionManager {
 
     if (!shouldPersistSessionChannel(resolvedChannelId)) {
       if (
-        this.continuityStore
-        && continuityKey
+        continuityKey
         && resolvedChannelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX)
       ) {
-        this.continuityStore.append(continuityKey, {
-          channelId: resolvedChannelId,
-          role: 'assistant',
-          content,
-          timestamp,
-          originChannelId: resolvedChannelId,
-          channelVisibility,
-          ...(metadata ? { metadata } : {}),
+        this.crossChannelContinuity.append({
+          continuityUserId: continuityKey,
+          entry: {
+            channelId: resolvedChannelId,
+            role: 'assistant',
+            content,
+            timestamp,
+            originChannelId: resolvedChannelId,
+            channelVisibility,
+            ...(metadata ? { metadata } : {}),
+          },
         });
       }
       return null;
@@ -640,15 +661,18 @@ export class SessionManager {
       ...(metadata ? { metadata } : {}),
     });
 
-    if (this.continuityStore && continuityKey) {
-      this.continuityStore.append(continuityKey, {
-        channelId: resolvedChannelId,
-        role: 'assistant',
-        content,
-        timestamp,
-        originChannelId: resolvedChannelId,
-        channelVisibility,
-        ...(metadata ? { metadata } : {}),
+    if (continuityKey) {
+      this.crossChannelContinuity.append({
+        continuityUserId: continuityKey,
+        entry: {
+          channelId: resolvedChannelId,
+          role: 'assistant',
+          content,
+          timestamp,
+          originChannelId: resolvedChannelId,
+          channelVisibility,
+          ...(metadata ? { metadata } : {}),
+        },
       });
     }
 
@@ -702,17 +726,20 @@ export class SessionManager {
     });
 
     const continuityKey = continuityUserId ?? authorId;
-    if (this.continuityStore && continuityKey) {
-      this.continuityStore.append(continuityKey, {
-        channelId: resolvedChannelId,
-        role: 'system',
-        content,
-        authorId,
-        authorName,
-        timestamp,
-        originChannelId: resolvedChannelId,
-        channelVisibility,
-        ...(metadata ? { metadata } : {}),
+    if (continuityKey) {
+      this.crossChannelContinuity.append({
+        continuityUserId: continuityKey,
+        entry: {
+          channelId: resolvedChannelId,
+          role: 'system',
+          content,
+          authorId,
+          authorName,
+          timestamp,
+          originChannelId: resolvedChannelId,
+          channelVisibility,
+          ...(metadata ? { metadata } : {}),
+        },
       });
     }
 
@@ -882,7 +909,7 @@ export class SessionManager {
     mirrorMessageToActiveSessions({
       config: this.config,
       store: this.store,
-      continuityStore: this.continuityStore,
+      crossChannelContinuity: this.crossChannelContinuity,
       characterName: this.characterName,
       ...params,
     });
@@ -937,7 +964,7 @@ export class SessionManager {
           capturedAt,
         });
       },
-      continuityStore: this.continuityStore,
+      crossChannelContinuity: this.crossChannelContinuity,
       characterName: this.characterName,
       turnSnapshot,
       focusKnowledgeTexts,
@@ -977,9 +1004,8 @@ export class SessionManager {
     const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
     const focusKnowledgeTexts = this.getFocusKnowledgeTexts(resolvedChannelId);
 
-    const continuityEntries = userId && this.continuityStore
-      ? getMergedContinuity({
-        continuityStore: this.continuityStore,
+    const continuityEntries = userId
+      ? this.crossChannelContinuity.getMerged({
         canonicalUserId: userId,
         limit: this.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
         fallbackUserIds: continuityFallbackUserIds,

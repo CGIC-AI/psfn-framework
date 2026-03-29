@@ -1,7 +1,7 @@
 import type { ContactStore } from '../../../core/contacts/store.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { sessionEntryToMessage } from '../../../core/agent/messages.js';
-import { parseContinuityEntryProvenance } from '../../../core/session/continuity.js';
+import { parseCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { CompactionSummary } from '../../../core/session/types.js';
@@ -252,7 +252,7 @@ function buildContinuityProvenanceViews(
   const provenance: AdminContinuityProvenanceView[] = [];
 
   for (const entry of continuityEntries) {
-    const continuity = parseContinuityEntryProvenance(entry.metadata);
+    const continuity = parseCrossChannelContinuityProvenance(entry.metadata);
     if (!continuity) continue;
 
     const carriedAcrossChannels = continuity.sourceChannelId !== currentChannelId;

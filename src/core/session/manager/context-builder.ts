@@ -21,7 +21,7 @@ import {
   type ChannelMeta,
 } from '../../../system/trust/policy.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
-import type { UserContinuityStore } from '../continuity.js';
+import type { CrossChannelContinuityPort } from '../cross-channel-continuity-port.js';
 import type {
   ContextManifest,
   ContextManifestMemorySeed,
@@ -38,7 +38,6 @@ import type { PreCompactionExtractionHandler } from './contracts.js';
 import {
   countIntentionAppraisalArtifacts,
   entriesToMessages,
-  getMergedContinuity,
 } from './context-support.js';
 import { runAutoCompaction } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
@@ -73,7 +72,7 @@ interface BuildSessionContextParams {
     compressedContext: string;
     capturedAt: number;
   }) => void;
-  continuityStore: UserContinuityStore | null;
+  crossChannelContinuity: CrossChannelContinuityPort;
   /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
   turnSnapshot?: TurnSessionContextSnapshot;
@@ -217,9 +216,8 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   // Cross-channel continuity: include recent activity from other channels
   const rawCrossChannel = params.turnSnapshot
     ? params.turnSnapshot.continuityEntries.map(cloneSessionEntry)
-    : params.continuityStore && params.userId
-      ? getMergedContinuity({
-        continuityStore: params.continuityStore,
+    : params.userId
+      ? params.crossChannelContinuity.getMerged({
         canonicalUserId: params.userId,
         limit: params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
         fallbackUserIds: params.continuityFallbackUserIds,

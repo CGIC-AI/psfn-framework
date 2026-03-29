@@ -11,6 +11,7 @@ import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
 import { SessionManager } from '../../../core/session/manager.js';
 import { UserContinuityStore } from '../../../core/session/continuity.js';
+import { createUserContinuityPort } from '../../../core/session/cross-channel-continuity-port.js';
 import { InternalRoleEnvelopeLedgerStore } from '../../../core/internal-role-envelopes/store.js';
 import { wireInternalRoleEnvelopeRuntime } from '../../../core/internal-role-envelopes/runtime-wiring.js';
 import {
@@ -103,7 +104,7 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
   let continuityStore: UserContinuityStore | null = null;
   if (options.enableContinuity) {
     continuityStore = new UserContinuityStore(resolveContinuityDir(companionDataDir));
-    sessionManager.continuityStore = continuityStore;
+    sessionManager.crossChannelContinuity = createUserContinuityPort(continuityStore);
   }
 
   return { sessionStore, sessionManager, continuityStore, internalRoleEnvelopeLedger };

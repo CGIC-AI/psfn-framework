@@ -1,6 +1,6 @@
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
-import type { UserContinuityStore } from '../continuity.js';
+import type { CrossChannelContinuityPort } from '../cross-channel-continuity-port.js';
 import {
   evaluateMemoryPolicy,
   getVisibilityDisclosureCeiling,
@@ -49,7 +49,7 @@ export function isSessionMirroringEnabledForChannel(config: SubstrateConfig, cha
 export function mirrorMessageToActiveSessions(params: {
   config: SubstrateConfig;
   store: SessionStore;
-  continuityStore: UserContinuityStore | null;
+  crossChannelContinuity: CrossChannelContinuityPort;
   continuityKey?: string;
   sourceChannelId: string;
   sourceVisibility: ChannelVisibility;
@@ -63,7 +63,7 @@ export function mirrorMessageToActiveSessions(params: {
   characterName?: string;
 }): void {
   if (!params.mirrorEnabled) return;
-  if (!params.continuityStore || !params.continuityKey) return;
+  if (!params.continuityKey) return;
   if (!isSessionMirroringEnabledForChannel(params.config, params.sourceChannelId)) return;
   if (!isSessionMirroringGloballyEnabled(params.config)) return;
 
@@ -75,7 +75,7 @@ export function mirrorMessageToActiveSessions(params: {
     1_000,
     params.config.sessionMirrorActiveWindowMs ?? DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS,
   );
-  const targets = params.continuityStore.getActiveChannels(params.continuityKey, {
+  const targets = params.crossChannelContinuity.getActiveChannels(params.continuityKey, {
     excludeChannelId: params.sourceChannelId,
     withinMs: activeWindowMs,
     nowMs: params.timestamp,

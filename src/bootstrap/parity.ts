@@ -766,40 +766,6 @@ export function wireHeartbeatRuntime(
     durationMs: result.durationMs,
   });
 
-  const persistDeliberationMemory = async (
-    template: ReflectionTemplate,
-    reflection: string,
-    metadata: ValuesDeliberationMetadata,
-  ): Promise<void> => {
-    if (!runtimeOptions.memoryWriter) return;
-    await runtimeOptions.memoryWriter.write({
-      text: reflection,
-      type: 'reflection',
-      importance: 0.72,
-      confidence: 0.78,
-      emotionalValence: 0,
-      sourceRef:
-        `source:heartbeat|template:${template.id}|mode:deliberation`
-        + `|session:${metadata.sessionId}|tokens:${metadata.totalTokens}`
-        + `|cost_usd:${metadata.estimatedCostUsd.toFixed(6)}`,
-      sourceType: 'heartbeat',
-      provenance: {
-        templateId: template.id,
-        templateName: template.name,
-        sessionId: metadata.sessionId,
-        mode: 'deliberation',
-        actor: 'companion',
-      },
-      tags: [
-        'heartbeat',
-        'reflection',
-        'deliberation',
-        template.id,
-        `stop:${metadata.stopReason}`,
-      ],
-    });
-  };
-
   const shouldUseDeliberation = (template: ReflectionTemplate): boolean => {
     if (template.mode !== 'deliberation') return false;
     return Boolean(runtimeOptions.llmProvider);
@@ -865,13 +831,6 @@ export function wireHeartbeatRuntime(
       reflectionText = deliberationResult.reflection;
       deliberationMetadata = deliberationResult.metadata;
       reflectionMode = 'deliberation';
-      try {
-        await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
-      } catch (error) {
-        log.warn(`Reflection "${template.id}" memory persistence skipped`, {
-          error: String(error),
-        });
-      }
     } else {
       const response = await agentLoop.handleMessage({
         id: `reflection-${template.id}-${Date.now()}`,
@@ -898,12 +857,18 @@ export function wireHeartbeatRuntime(
         reflection: reflectionText,
         channelId: reflectionChannelId,
         mode: reflectionMode,
-        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(persistenceContext ? {
-          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-          internalState: persistenceContext.internalState,
-          metacognitiveFlags: persistenceContext.metacognitiveFlags,
-        } : {}),
+        telemetry: {
+          ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+          ...(persistenceContext ? {
+            narrativeContext: {
+              internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+              internalState: persistenceContext.internalState,
+              ...(persistenceContext.metacognitiveFlags.length > 0
+                ? { metacognitiveFlags: persistenceContext.metacognitiveFlags }
+                : {}),
+            },
+          } : {}),
+        },
       });
       reflectionJournalEntryId = reflectionEntry.id;
     } catch (error) {
@@ -918,12 +883,18 @@ export function wireHeartbeatRuntime(
         templateName: template.name,
         prompt: reflectionPrompt,
         reflection: reflectionText,
-        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(persistenceContext ? {
-          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-          internalState: persistenceContext.internalState,
-          metacognitiveFlags: persistenceContext.metacognitiveFlags,
-        } : {}),
+        telemetry: {
+          ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+          ...(persistenceContext ? {
+            narrativeContext: {
+              internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+              internalState: persistenceContext.internalState,
+              ...(persistenceContext.metacognitiveFlags.length > 0
+                ? { metacognitiveFlags: persistenceContext.metacognitiveFlags }
+                : {}),
+            },
+          } : {}),
+        },
         provenance: {
           source: 'companion_reflection',
           templateId: template.id,

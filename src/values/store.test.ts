@@ -120,22 +120,24 @@ describe('ValuesJournalStore', () => {
       templateName: 'Values Reflection',
       prompt: 'P',
       reflection: 'R',
-      deliberation: {
-        sessionId: 'delib-1',
-        stopReason: 'fatigue_taper',
-        rounds: 2,
-        totalInputTokens: 111,
-        totalOutputTokens: 222,
-        totalTokens: 333,
-        estimatedCostUsd: 0.00123,
-        durationMs: 4567,
+      telemetry: {
+        deliberation: {
+          sessionId: 'delib-1',
+          stopReason: 'fatigue_taper',
+          rounds: 2,
+          totalInputTokens: 111,
+          totalOutputTokens: 222,
+          totalTokens: 333,
+          estimatedCostUsd: 0.00123,
+          durationMs: 4567,
+        },
       },
       createdAt: '2026-02-26T00:00:00.000Z',
     });
 
     const entries = store.list();
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.deliberation).toEqual({
+    expect(entries[0]?.telemetry?.deliberation).toEqual({
       sessionId: 'delib-1',
       stopReason: 'fatigue_taper',
       rounds: 2,
@@ -154,19 +156,23 @@ describe('ValuesJournalStore', () => {
       templateName: 'Values Reflection',
       prompt: 'P',
       reflection: 'R',
-      internalStateSnapshotRef: sample.snapshotRef,
-      internalState: sample.state,
-      metacognitiveFlags: [
-        { flag: 'uncertainty', confidence: 0.62, evidence: 'conflicting prior reflections' },
-      ],
+      telemetry: {
+        narrativeContext: {
+          internalStateSnapshotRef: sample.snapshotRef,
+          internalState: sample.state,
+          metacognitiveFlags: [
+            { flag: 'uncertainty', confidence: 0.62, evidence: 'conflicting prior reflections' },
+          ],
+        },
+      },
       createdAt: '2026-02-26T00:00:00.000Z',
     });
 
     const entries = store.list();
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.internalStateSnapshotRef).toBe(sample.snapshotRef);
-    expect(entries[0]?.internalState).toEqual(cloneInternalState(sample.state));
-    expect(entries[0]?.metacognitiveFlags).toEqual([
+    expect(entries[0]?.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(sample.snapshotRef);
+    expect(entries[0]?.telemetry?.narrativeContext?.internalState).toEqual(cloneInternalState(sample.state));
+    expect(entries[0]?.telemetry?.narrativeContext?.metacognitiveFlags).toEqual([
       { flag: 'uncertainty', confidence: 0.62, evidence: 'conflicting prior reflections' },
     ]);
   });

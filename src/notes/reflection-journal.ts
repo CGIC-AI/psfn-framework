@@ -11,6 +11,17 @@ import type { ValuesDeliberationMetadata } from '../values/store.js';
 const log = createComponentLogger('ReflectionJournal');
 const REFLECTION_JOURNAL_ERROR_PREFIX = 'Reflection journal';
 
+interface ReflectionJournalNarrativeContext {
+  internalStateSnapshotRef: string;
+  internalState: InternalState;
+  metacognitiveFlags?: ValuesMetacognitiveFlag[];
+}
+
+export interface ReflectionJournalTelemetry {
+  deliberation?: ValuesDeliberationMetadata;
+  narrativeContext?: ReflectionJournalNarrativeContext;
+}
+
 export interface ReflectionJournalEntryInput {
   templateId: string;
   templateName: string;
@@ -19,6 +30,7 @@ export interface ReflectionJournalEntryInput {
   channelId: string;
   mode: 'agent' | 'deliberation';
   createdAt?: string;
+  telemetry?: ReflectionJournalTelemetry;
   deliberation?: ValuesDeliberationMetadata;
   internalStateSnapshotRef?: string;
   internalState?: InternalState;
@@ -34,10 +46,66 @@ interface ReflectionJournalEntry {
   channelId: string;
   mode: 'agent' | 'deliberation';
   createdAt: string;
-  deliberation?: ValuesDeliberationMetadata;
-  internalStateSnapshotRef?: string;
-  internalState?: InternalState;
-  metacognitiveFlags?: ValuesMetacognitiveFlag[];
+  telemetry?: ReflectionJournalTelemetry;
+}
+
+function normalizeReflectionTelemetry(
+  input: ReflectionJournalEntryInput,
+): ReflectionJournalTelemetry | undefined {
+  const telemetryInput = input.telemetry;
+  const deliberation = telemetryInput?.deliberation ?? input.deliberation;
+
+  const narrativeInput = telemetryInput?.narrativeContext
+    ?? ((input.internalStateSnapshotRef !== undefined
+      || input.internalState !== undefined
+      || input.metacognitiveFlags !== undefined)
+      ? {
+          internalStateSnapshotRef: input.internalStateSnapshotRef,
+          internalState: input.internalState,
+          metacognitiveFlags: input.metacognitiveFlags,
+        }
+      : undefined);
+
+  if (!narrativeInput && !deliberation) {
+    return undefined;
+  }
+
+  let narrativeContext: ReflectionJournalNarrativeContext | undefined;
+  if (narrativeInput) {
+    const internalStateSnapshotRef = normalizeNarrativeSnapshotRef(
+      narrativeInput.internalStateSnapshotRef,
+      { contextPrefix: REFLECTION_JOURNAL_ERROR_PREFIX },
+    );
+    const internalState = narrativeInput.internalState === undefined
+      ? undefined
+      : cloneInternalState(narrativeInput.internalState);
+    const metacognitiveFlags = normalizeNarrativeMetacognitiveFlags(
+      narrativeInput.metacognitiveFlags,
+      { contextPrefix: REFLECTION_JOURNAL_ERROR_PREFIX },
+    );
+    if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
+      throw new Error(
+        'Reflection journal entry requires both internalStateSnapshotRef and internalState when narrative context is provided',
+      );
+    }
+
+    if (internalStateSnapshotRef && internalState) {
+      narrativeContext = {
+        internalStateSnapshotRef,
+        internalState,
+        ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
+      };
+    }
+  }
+
+  if (!narrativeContext && !deliberation) {
+    return undefined;
+  }
+
+  return {
+    ...(deliberation ? { deliberation } : {}),
+    ...(narrativeContext ? { narrativeContext } : {}),
+  };
 }
 
 export class ReflectionJournalStore {
@@ -48,20 +116,7 @@ export class ReflectionJournalStore {
   }
 
   append(input: ReflectionJournalEntryInput): ReflectionJournalEntry {
-    const internalStateSnapshotRef = normalizeNarrativeSnapshotRef(
-      input.internalStateSnapshotRef,
-      { contextPrefix: REFLECTION_JOURNAL_ERROR_PREFIX },
-    );
-    const internalState = input.internalState === undefined ? undefined : cloneInternalState(input.internalState);
-    const metacognitiveFlags = normalizeNarrativeMetacognitiveFlags(
-      input.metacognitiveFlags,
-      { contextPrefix: REFLECTION_JOURNAL_ERROR_PREFIX },
-    );
-    if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
-      throw new Error(
-        'Reflection journal entry requires both internalStateSnapshotRef and internalState when narrative context is provided',
-      );
-    }
+    const telemetry = normalizeReflectionTelemetry(input);
     const entry: ReflectionJournalEntry = {
       id: `reflection-${Date.now()}-${Math.floor(Math.random() * 1_000_000).toString().padStart(6, '0')}`,
       templateId: input.templateId.trim(),
@@ -71,10 +126,7 @@ export class ReflectionJournalStore {
       channelId: input.channelId.trim(),
       mode: input.mode,
       createdAt: input.createdAt ?? new Date().toISOString(),
-      ...(input.deliberation ? { deliberation: input.deliberation } : {}),
-      ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
-      ...(internalState ? { internalState } : {}),
-      ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
+      ...(telemetry ? { telemetry } : {}),
     };
 
     if (!entry.templateId || !entry.templateName || !entry.prompt || !entry.channelId) {

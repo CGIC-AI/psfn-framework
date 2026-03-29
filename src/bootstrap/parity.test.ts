@@ -431,17 +431,21 @@ describe('wireHeartbeatRuntime', () => {
         templateId: string;
         templateName: string;
         reflection: string;
-        internalStateSnapshotRef?: string;
-        internalState?: unknown;
-        metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
+        telemetry?: {
+          narrativeContext?: {
+            internalStateSnapshotRef?: string;
+            internalState?: unknown;
+            metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
+          };
+        };
       };
       expect(entry.version).toBe(1);
       expect(entry.templateId).toBe('values-reflection');
       expect(entry.templateName).toBe('Values Reflection');
       expect(entry.reflection).toContain('Values reflection body');
-      expect(entry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
-      expect(entry.internalState).toEqual(narrative.internalState);
-      expect(entry.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
+      expect(entry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+      expect(entry.telemetry?.narrativeContext?.internalState).toEqual(narrative.internalState);
+      expect(entry.telemetry?.narrativeContext?.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
 
       const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
         (call) => call[0]?.channelId === 'internal:reflection:values-reflection',
@@ -453,7 +457,7 @@ describe('wireHeartbeatRuntime', () => {
     }
   });
 
-  it('runs deliberation mode and persists journal/memory metadata', async () => {
+  it('runs deliberation mode and persists journal telemetry metadata', async () => {
     const store = new HeartbeatPolicyStore(join(tempDir, 'heartbeat-policy.json'));
     const policy = store.load();
     const values = policy.templates.find(template => template.id === 'values-reflection');
@@ -579,27 +583,31 @@ describe('wireHeartbeatRuntime', () => {
       );
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain('<internal_state_input>');
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
-      expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+      expect(memoryWriter.write).not.toHaveBeenCalled();
 
       const raw = readFileSync(join(tempDir, 'notes', 'values.jsonl'), 'utf-8').trim();
       const entry = JSON.parse(raw) as {
         reflection: string;
-        internalStateSnapshotRef?: string;
-        internalState?: unknown;
-        metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
-        deliberation?: {
-          rounds: number;
-          totalTokens: number;
-          estimatedCostUsd: number;
+        telemetry?: {
+          deliberation?: {
+            rounds: number;
+            totalTokens: number;
+            estimatedCostUsd: number;
+          };
+          narrativeContext?: {
+            internalStateSnapshotRef?: string;
+            internalState?: unknown;
+            metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
+          };
         };
       };
       expect(entry.reflection).toContain('synthesized values reflection');
-      expect(entry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
-      expect(entry.internalState).toEqual(narrative.internalState);
-      expect(entry.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
-      expect(entry.deliberation?.rounds).toBe(1);
-      expect(entry.deliberation?.totalTokens).toBe(190);
-      expect(entry.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
+      expect(entry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+      expect(entry.telemetry?.narrativeContext?.internalState).toEqual(narrative.internalState);
+      expect(entry.telemetry?.narrativeContext?.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
+      expect(entry.telemetry?.deliberation?.rounds).toBe(1);
+      expect(entry.telemetry?.deliberation?.totalTokens).toBe(190);
+      expect(entry.telemetry?.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
 
       const reflectionRaw = readFileSync(join(tempDir, 'notes', 'reflections', 'journal.jsonl'), 'utf-8').trim();
       const reflectionLines = reflectionRaw.split('\n').filter(line => line.trim().length > 0);
@@ -607,11 +615,15 @@ describe('wireHeartbeatRuntime', () => {
       const reflectionEntry = JSON.parse(reflectionLines[reflectionLines.length - 1] ?? '{}') as {
         mode: string;
         templateId: string;
-        internalStateSnapshotRef?: string;
+        telemetry?: {
+          narrativeContext?: {
+            internalStateSnapshotRef?: string;
+          };
+        };
       };
       expect(reflectionEntry.templateId).toBe('values-reflection');
       expect(reflectionEntry.mode).toBe('deliberation');
-      expect(reflectionEntry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+      expect(reflectionEntry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(narrative.snapshotRef);
     } finally {
       nowSpy.mockRestore();
     }

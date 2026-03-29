@@ -508,6 +508,98 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(startCall?.[1]?.triggerReason).toBe('context_threshold');
   });
 
+  it('ignores internal lane system notes when evaluating context-threshold triggers', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(1),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          role: 'system',
+          content: 'Admin updated prompt order and heartbeat settings.',
+          metadata: JSON.stringify({
+            sessionLane: {
+              schemaVersion: 1,
+              kind: 'internal',
+              source: 'appendSystemNote',
+            },
+          }),
+        },
+        {
+          role: 'user',
+          content: 'Hi',
+          authorName: 'user',
+        },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        primaryModel: 'test-model',
+        primaryProvider: 'test-provider',
+        extractionModel: 'test-model',
+        extractionProvider: 'test-provider',
+        primaryMaxTokens: 4096,
+        extractionMaxTokens: 4096,
+        discordToken: '',
+        discordBotId: '',
+        characterCardPath: '',
+        dataDir: '',
+        databasePath: '',
+        sessionMessageLimit: 30,
+        memoryRetrievalLimit: 15,
+        extractionInterval: 10,
+        maintenanceIntervalMs: 60_000,
+        defaultContextWindow: 100,
+        extractionThresholdPct: 13,
+        compactionThresholdPct: 70,
+        memoryExtractionTelemetryEnabled: true,
+        modelRoster: {
+          chat: {
+            model: 'test-model',
+            provider: 'test-provider',
+            maxTokens: 4096,
+            contextWindow: 100,
+          },
+        },
+      } as any,
+    );
+
+    await extractor.maybeExtract('api:threshold-filter-callsite');
+
+    expect(llmClient.complete).not.toHaveBeenCalled();
+    const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.find(([name]) => name === 'memory.extraction.start')).toBeUndefined();
+  });
+
   it('injects runtime datetime tokens in extraction prompts', async () => {
     const llmClient = {
       complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),

@@ -2,6 +2,7 @@ import type { EventBus } from '../../event-bus.js';
 import { createComponentLogger } from '../../logger.js';
 import { countMessageTokens } from '../../llm/tokens.js';
 import type { SessionManager } from '../../session/manager.js';
+import { isNonConversationalSessionEntry } from '../../session/manager-primitives.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionEntry } from '../../session/types.js';
 import type { SubstrateConfig, TurnID } from '../../types.js';
@@ -24,6 +25,10 @@ export function resetLastExtractionCount(): void {
 
 function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } {
   return { role: entry.role, content: entry.content };
+}
+
+function isCountableExtractionEntry(entry: SessionEntry): boolean {
+  return !isNonConversationalSessionEntry(entry);
 }
 
 export interface ExtractionTriggerResult {
@@ -66,7 +71,9 @@ export function evaluateExtractionTrigger(
     tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
 
     const recent = sessionManager.getRecentMessages(channelId);
-    totalTokens = countMessageTokens(recent.map(toTokenMessage));
+    totalTokens = countMessageTokens(
+      recent.filter(isCountableExtractionEntry).map(toTokenMessage),
+    );
     thresholdMet = totalTokens > tokenBudget;
   }
 

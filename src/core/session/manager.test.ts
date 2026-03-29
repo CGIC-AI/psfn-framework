@@ -10,6 +10,10 @@ import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import {
+  createDisabledCrossChannelContinuityPort,
+  createMissingCrossChannelContinuityPort,
+} from './cross-channel-continuity-port.js';
+import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   EXTRACTION_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
@@ -983,6 +987,45 @@ describe('SessionManager', () => {
 
     expect(mgr.continuityStore.count('discord-user-1')).toBe(0);
     expect(mgr.continuityStore.count('contact-canonical-1')).toBe(1);
+  });
+
+  it('reports missing wiring until continuity is explicitly configured', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+
+    expect(mgr.getCrossChannelContinuityHealth()).toEqual(expect.objectContaining({
+      status: 'missing_wiring',
+    }));
+
+    mgr.crossChannelContinuity = createDisabledCrossChannelContinuityPort();
+    expect(mgr.getCrossChannelContinuityHealth()).toEqual(expect.objectContaining({
+      status: 'disabled',
+    }));
+
+    mgr.continuityStore = new UserContinuityStore(join(dir, 'wired'));
+    expect(mgr.getCrossChannelContinuityHealth()).toEqual(expect.objectContaining({
+      status: 'wired',
+    }));
+  });
+
+  it('keeps missing wiring observable when continuity is cleared', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+
+    const missing = createMissingCrossChannelContinuityPort();
+    expect(missing.getHealth()).toEqual(expect.objectContaining({
+      status: 'missing_wiring',
+    }));
+
+    mgr.continuityStore = new UserContinuityStore(join(dir, 'wired-then-cleared'));
+    expect(mgr.getCrossChannelContinuityHealth()).toEqual(expect.objectContaining({
+      status: 'wired',
+    }));
+
+    mgr.continuityStore = null;
+    expect(mgr.getCrossChannelContinuityHealth()).toEqual(expect.objectContaining({
+      status: 'missing_wiring',
+    }));
   });
 
   it('buildContext merges continuity from canonical and fallback ids', async () => {

@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { UserContinuityStore } from './continuity.js';
 import {
-  createNullCrossChannelContinuityPort,
+  createDisabledCrossChannelContinuityPort,
+  createMissingCrossChannelContinuityPort,
   createUserContinuityPort,
 } from './cross-channel-continuity-port.js';
 
@@ -64,7 +65,7 @@ describe('createUserContinuityPort', () => {
   });
 
   it('fails closed to empty results when no continuity store is wired', () => {
-    const continuity = createNullCrossChannelContinuityPort();
+    const continuity = createMissingCrossChannelContinuityPort();
 
     expect(continuity.append({
       continuityUserId: 'contact-1',
@@ -84,5 +85,33 @@ describe('createUserContinuityPort', () => {
       channelId: 'api:private-main',
     })).toEqual([]);
     expect(continuity.getActiveChannels('contact-1')).toEqual([]);
+    expect(continuity.getHealth()).toEqual(expect.objectContaining({
+      status: 'missing_wiring',
+    }));
+  });
+
+  it('reports disabled state when continuity is intentionally turned off', () => {
+    const continuity = createDisabledCrossChannelContinuityPort();
+
+    expect(continuity.append({
+      continuityUserId: 'contact-1',
+      entry: {
+        channelId: 'api:private-main',
+        role: 'user',
+        content: 'disabled',
+        authorId: 'contact-1',
+        authorName: 'Alice',
+        timestamp: Date.now(),
+      },
+    })).toBeNull();
+    expect(continuity.getMerged({
+      canonicalUserId: 'contact-1',
+      fallbackUserIds: [],
+      limit: 10,
+      channelId: 'api:private-main',
+    })).toEqual([]);
+    expect(continuity.getHealth()).toEqual(expect.objectContaining({
+      status: 'disabled',
+    }));
   });
 });

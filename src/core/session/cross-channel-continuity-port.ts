@@ -17,6 +17,13 @@ export interface CrossChannelContinuityQuery {
   channelMeta?: ChannelMeta;
 }
 
+export type CrossChannelContinuityStatus = 'wired' | 'disabled' | 'missing_wiring';
+
+export interface CrossChannelContinuityHealth {
+  status: CrossChannelContinuityStatus;
+  detail: string;
+}
+
 export interface CrossChannelContinuityPort {
   append(request: CrossChannelContinuityAppendRequest): number | null;
   getMerged(params: CrossChannelContinuityQuery): SessionEntry[];
@@ -25,6 +32,7 @@ export interface CrossChannelContinuityPort {
     query?: ActiveChannelQuery,
   ): ActiveContinuityChannel[];
   parseProvenance(metadata?: string): ContinuityEntryProvenance | null;
+  getHealth(): CrossChannelContinuityHealth;
 }
 
 export function parseCrossChannelContinuityProvenance(
@@ -33,7 +41,7 @@ export function parseCrossChannelContinuityProvenance(
   return parseContinuityEntryProvenance(metadata);
 }
 
-export function createNullCrossChannelContinuityPort(): CrossChannelContinuityPort {
+export function createMissingCrossChannelContinuityPort(): CrossChannelContinuityPort {
   return {
     append() {
       return null;
@@ -47,6 +55,35 @@ export function createNullCrossChannelContinuityPort(): CrossChannelContinuityPo
     parseProvenance(metadata) {
       return parseCrossChannelContinuityProvenance(metadata);
     },
+    getHealth() {
+      return {
+        status: 'missing_wiring',
+        detail: 'Cross-channel continuity store is not wired',
+      };
+    },
+  };
+}
+
+export function createDisabledCrossChannelContinuityPort(): CrossChannelContinuityPort {
+  return {
+    append() {
+      return null;
+    },
+    getMerged() {
+      return [];
+    },
+    getActiveChannels() {
+      return [];
+    },
+    parseProvenance(metadata) {
+      return parseCrossChannelContinuityProvenance(metadata);
+    },
+    getHealth() {
+      return {
+        status: 'disabled',
+        detail: 'Cross-channel continuity is intentionally disabled',
+      };
+    },
   };
 }
 
@@ -54,7 +91,7 @@ export function createUserContinuityPort(
   continuityStore: UserContinuityStore | null,
 ): CrossChannelContinuityPort {
   if (!continuityStore) {
-    return createNullCrossChannelContinuityPort();
+    return createMissingCrossChannelContinuityPort();
   }
 
   return {
@@ -76,6 +113,12 @@ export function createUserContinuityPort(
     },
     parseProvenance(metadata) {
       return parseCrossChannelContinuityProvenance(metadata);
+    },
+    getHealth() {
+      return {
+        status: 'wired',
+        detail: 'Cross-channel continuity store is wired',
+      };
     },
   };
 }

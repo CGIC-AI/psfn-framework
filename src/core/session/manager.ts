@@ -12,7 +12,8 @@ import type {
 } from '../../persistence/sessions/store.js';
 import {
   createUserContinuityPort,
-  createNullCrossChannelContinuityPort,
+  createMissingCrossChannelContinuityPort,
+  type CrossChannelContinuityHealth,
   type CrossChannelContinuityPort,
 } from './cross-channel-continuity-port.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
@@ -258,7 +259,7 @@ export class SessionManager {
   private activeFocusSessions: Map<string, ActiveFocusSession> = new Map();
   private pendingAutoCompactions = new Map<string, Promise<void>>();
   private continuityStoreRef: UserContinuityStore | null = null;
-  crossChannelContinuity: CrossChannelContinuityPort = createNullCrossChannelContinuityPort();
+  crossChannelContinuity: CrossChannelContinuityPort = createMissingCrossChannelContinuityPort();
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
   characterName: string | undefined;
 
@@ -292,7 +293,13 @@ export class SessionManager {
 
   set continuityStore(store: UserContinuityStore | null) {
     this.continuityStoreRef = store;
-    this.crossChannelContinuity = createUserContinuityPort(store);
+    this.crossChannelContinuity = store
+      ? createUserContinuityPort(store)
+      : createMissingCrossChannelContinuityPort();
+  }
+
+  getCrossChannelContinuityHealth(): CrossChannelContinuityHealth {
+    return this.crossChannelContinuity.getHealth();
   }
 
   private resolveCompactionPromptText(basePrompt: string): string {

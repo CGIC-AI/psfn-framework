@@ -39,3 +39,6 @@ admin-ui/.svelte-kit/
 
 # Local beads upgrade backup
 .beads.backup-pre-upgrade-20260306/
+
+# Local Firecrawl cache/workdir
+.firecrawl/

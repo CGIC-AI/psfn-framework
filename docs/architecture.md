@@ -54,12 +54,14 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 ### Sessions and context
 
 - L0 session history is append-only JSONL under `sessions/`.
+- The archive/projection split is intentional: archive truth stays in JSONL, while fast-search copies belong behind projection/search ports.
 - `SessionManager` handles compaction, token budgeting, continuity, internal role envelopes, and prompt-aware context assembly.
 - Session integrity can be HMAC-backed in split mode through the gateway-provided integrity provider.
 
 ### Memory
 
 - `MemoryStore` uses SQLite plus `sqlite-vec`.
+- The intended backend shape is port-driven so SQLite can remain the default while PostgreSQL or future backends swap behind `MemoryStorePort`.
 - `MemoryRetriever` combines semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.
 - `MemoryExtractor` runs post-turn extraction, crash-recovery extraction, compaction extraction, and profile refresh flows.
 
@@ -96,6 +98,16 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 - Production mode forbids overlapping mutable roots and fails closed on partial split-root configuration.
 
 The path contract is defined in `src/persistence/layout.ts` and summarized in [`docs/specifications.md`](./specifications.md).
+
+## Persistence Ports
+
+Persistence is shaped around domain ports, not raw database adapters.
+
+- L0 archive operations belong to `SessionArchivePort` and continue to use JSONL as the canonical backing format.
+- Searchable transcript mirrors belong to `TranscriptProjectionPort` and `TranscriptSearchPort`.
+- Durable state that may move across SQLite or PostgreSQL belongs behind async-safe domain ports such as `MemoryStorePort`, `ContactStorePort`, `ConcernStorePort`, `PendingFollowUpStorePort`, `BehavioralPatternStorePort`, `GatewayAuditStorePort`, and `TurnRecordStorePort`.
+- Raw SQLite or PostgreSQL adapter code stays behind those ports and is not a composition-root seam.
+- Backend choice happens in composition/runtime wiring so callers only see the port contracts.
 
 ## Extension Surfaces
 

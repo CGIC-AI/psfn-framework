@@ -54,6 +54,18 @@ The cutover tooling:
 
 Production startup should not proceed until the cutover plan is clean.
 
+## Persistence Backends
+
+SQLite remains the default backend for the repo-owned runtime, but the architecture is expected to support PostgreSQL behind ports without changing callers.
+
+Operational rules:
+
+- JSONL L0 remains authoritative even when a database mirror is enabled.
+- Fast-search tables and indices are projections that can be rebuilt from archive truth.
+- Backend-specific adapter code stays behind the port/composition layer.
+- If a backend or projection strategy changes, run `npm run lint`, `npm run build`, and targeted parity tests for the affected domains before treating the change as safe.
+- If projection drift is suspected, repair from the archive before trusting search results or operator views.
+
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.

@@ -9,6 +9,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - Per-channel append-only JSONL in `sessions/`
 - Built and compacted by `SessionStore` and `SessionManager`
 - Remains the canonical turn history
+- The archive seam should be `SessionArchivePort`; DB mirrors and searches belong behind projection/search ports, not as alternate archive truth.
 
 ### L1: Active context assembly
 
@@ -22,6 +23,8 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - Embedded with the configured embeddings provider and indexed with `sqlite-vec`
 - Retrieved by `MemoryRetriever`
 - Written through `MemoryWriter` and `MemoryExtractor`
+- The storage contract should stay async-safe at the port level so a PostgreSQL implementation can use the same `MemoryStorePort` surface later.
+- Backends may optimize the internal implementation differently, but the caller contract must not assume SQLite-specific transaction or vector-index behavior.
 
 ### Parallel memory/state artifacts
 
@@ -88,6 +91,8 @@ Extraction can also run in crash recovery and pre-compaction paths, not only aft
 - emotional continuity injection
 - contact profile inclusion
 - optional compositional reranking when policy and runtime allow it
+
+The searchable copy of L0 should be treated as a projection that can be rebuilt from the archive if drift or corruption is detected.
 
 When memories are withheld, the retriever can return withheld summaries instead of silently dropping context.
 

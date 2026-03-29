@@ -65,6 +65,7 @@ import type {
   TurnStageTelemetryRecord,
 } from '../../../core/turns/observability.js';
 import type { SessionRoleEnvelopePreview } from '../../../core/internal-role-envelopes/projections.js';
+import type { MessageClass } from '../../../core/agent/message-classes.js';
 import type {
   AdminMemoryManagedScopeKind,
   AdminMemoryScopeEvidenceItem,
@@ -253,10 +254,21 @@ export interface AdminSessionListData {
   channels: ChannelInfo[];
 }
 
+export interface AdminSessionMessageOntologyView {
+  sessionEntryId: number;
+  transportRole: SessionEntry['role'];
+  promptRole: 'user' | 'assistant' | 'toolResult' | 'custom';
+  semanticType: 'outwardSpeech' | 'toolResult' | 'systemNote' | 'mirror';
+  messageClass: MessageClass | null;
+  promptVisibility: 'prompt_visible' | 'operator_only';
+  displayLabel: string;
+}
+
 export interface AdminSessionMessagesData {
   sessionId: string;
   channelId: string;
   messages: SessionEntry[];
+  messageOntologyViews: AdminSessionMessageOntologyView[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
   compactionAuditViews: CompactionAuditView[];
   turns: AdminSessionTurnData[];

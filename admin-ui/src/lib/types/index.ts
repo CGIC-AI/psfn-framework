@@ -463,10 +463,21 @@ export interface AdminSessionRoleEnvelopePreview {
   preview: SessionRoleEnvelopePreview;
 }
 
+export interface AdminSessionMessageOntologyView {
+  sessionEntryId: number;
+  transportRole: SessionEntry['role'];
+  promptRole: 'user' | 'assistant' | 'toolResult' | 'custom';
+  semanticType: 'outwardSpeech' | 'toolResult' | 'systemNote' | 'mirror';
+  messageClass: 'outwardSpeech' | 'systemNote' | 'internalWhisper' | 'compaction' | 'continuity' | 'mirror' | null;
+  promptVisibility: 'prompt_visible' | 'operator_only';
+  displayLabel: string;
+}
+
 export interface AdminSessionMessagesData {
   sessionId: string;
   channelId: string;
   messages: SessionEntry[];
+  messageOntologyViews: AdminSessionMessageOntologyView[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
   compactionAuditViews: CompactionAuditView[];
   turns: AdminSessionTurnData[];

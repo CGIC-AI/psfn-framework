@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { EmbeddingService } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface MemoryTextRow {
@@ -209,7 +209,7 @@ function createSkippedValidationReport(): RetrievalValidationReport {
 
 export async function runRetrievalValidation(
   db: Database.Database,
-  embeddingService: EmbeddingService,
+  embeddingService: EmbeddingProviderPort,
   queries: readonly RetrievalValidationQuery[],
   topK: number = DEFAULT_VALIDATION_TOP_K,
 ): Promise<RetrievalValidationReport> {
@@ -284,7 +284,7 @@ export async function runRetrievalValidation(
 
 async function runValidationSafely(
   db: Database.Database,
-  embeddingService: EmbeddingService,
+  embeddingService: EmbeddingProviderPort,
   queries: readonly RetrievalValidationQuery[] | undefined,
   topK: number,
 ): Promise<RetrievalValidationReport | undefined> {
@@ -298,7 +298,7 @@ async function runValidationSafely(
 
 export async function migrateMemoryEmbeddings(
   db: Database.Database,
-  embeddingService: EmbeddingService,
+  embeddingService: EmbeddingProviderPort,
   options: EmbeddingMigrationOptions = {},
 ): Promise<EmbeddingMigrationResult> {
   const batchSize = normalizePositiveInt(

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { EmbeddingService } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { ContactStore } from '../../../core/contacts/store.js';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import { isInternalMemoryArtifact } from '../../../faculties/memory/internal-artifacts.js';
@@ -108,7 +108,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
   constructor(private readonly deps: {
     memoryStore: MemoryStore;
     contactStore?: ContactStore | null;
-    embeddingService?: EmbeddingService | null;
+    embeddingService?: EmbeddingProviderPort | null;
     resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
       actionType: 'memory_mutation',

@@ -46,7 +46,7 @@ import type { CapabilityTier } from '../../../system/config/runtime-config-contr
 import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
-import type { LLMProvider, EmbeddingService } from '../../../core/agent/contracts.js';
+import type { LLMProvider, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
 import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
@@ -193,7 +193,7 @@ export interface MemoryRuntimeOptions {
   sessionManager: SessionManager;
   sessionStore?: SessionStore | null;
   memoryStore: MemoryStore;
-  embeddingService: EmbeddingService;
+  embeddingService: EmbeddingProviderPort;
   eventBus: EventBus;
   config?: SubstrateConfig;
   promptRegistry?: PromptRegistryStore | null;
@@ -262,7 +262,7 @@ export interface ToolRuntimeOptions {
   eventBus: EventBus;
   llmProvider: LLMProvider;
   sessionStore: SessionStore;
-  embeddingService: EmbeddingService;
+  embeddingService: EmbeddingProviderPort;
   memoryStore: MemoryStore;
   sessionManager: SessionManager;
   config: SubstrateConfig;

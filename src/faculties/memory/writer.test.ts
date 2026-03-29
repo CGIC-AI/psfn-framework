@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
-import type { EmbeddingService } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
@@ -19,7 +19,7 @@ function makeEmbedding(seed = 0): Float32Array {
   return arr;
 }
 
-function mockEmbeddingService(): EmbeddingService {
+function mockEmbeddingService(): EmbeddingProviderPort {
   return {
     embed: vi.fn(async () => makeEmbedding()),
     embedBatch: vi.fn(async (texts: string[]) => texts.map((_, i) => makeEmbedding(i))),
@@ -75,7 +75,7 @@ function makeExistingMemory(overrides: Partial<PurrMemory & { similarity: number
 
 describe('MemoryWriter', () => {
   let store: ReturnType<typeof mockMemoryStore>;
-  let embeddings: EmbeddingService;
+  let embeddings: EmbeddingProviderPort;
   let writer: MemoryWriter;
 
   beforeEach(() => {
@@ -718,7 +718,7 @@ describe('MemoryWriter', () => {
       });
       realStore.insertMemory(existing, makeEmbedding(1));
 
-      const embeddingService: EmbeddingService = {
+      const embeddingService: EmbeddingProviderPort = {
         embed: vi.fn(async () => makeEmbedding(2)),
         embedBatch: vi.fn(async (texts: string[]) => texts.map(() => makeEmbedding(2))),
         dims: 4,

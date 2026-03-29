@@ -2,7 +2,7 @@
 // Shared write/dedup/contradiction logic used by both MemoryExtractor and tools.
 
 import { v4 as uuidv4 } from 'uuid';
-import type { EmbeddingService } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { MemoryStore } from './store.js';
 import { abstractMemoryText } from './abstraction.js';
 import type {
@@ -335,7 +335,7 @@ function evaluateSensitivityWritePolicy(input: {
 export class MemoryWriter {
   constructor(
     private memoryStore: MemoryStore,
-    private embeddingService: EmbeddingService,
+    private embeddingService: EmbeddingProviderPort,
   ) {}
 
   /**

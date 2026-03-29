@@ -16,7 +16,7 @@ export interface LLMProvider {
 
 export type { LLMRequestMetadata };
 
-export interface EmbeddingService {
+export interface EmbeddingProviderPort {
   embed(text: string): Promise<Float32Array>;
   embedBatch(texts: string[]): Promise<Float32Array[]>;
   readonly dims: number;

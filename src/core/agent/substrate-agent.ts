@@ -4,7 +4,7 @@
 // calling/execution/looping
 // internally — we just configure it and subscribe to events for streaming.
 //
-// Provider interfaces (LLMProvider, EmbeddingService, MemoryProvider,
+// Provider interfaces (LLMProvider, EmbeddingProviderPort, MemoryProvider,
 // MemoryExtractor) are re-exported here for callers that import contracts
 // from the SubstrateAgent module.
 
@@ -141,7 +141,7 @@ const log = createComponentLogger('SubstrateAgent');
 
 export type {
   LLMProvider,
-  EmbeddingService,
+  EmbeddingProviderPort,
   MemoryProvider,
   MemoryExtractor,
   ScratchpadProvider,

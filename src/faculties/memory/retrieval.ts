@@ -1,6 +1,6 @@
 import type {
   MemoryProvider,
-  EmbeddingService,
+  EmbeddingProviderPort,
   LLMProvider,
   RetrievalVADInput,
 } from '../../core/agent/contracts.js';
@@ -361,7 +361,7 @@ type ProactiveRecallRuntimeConfig = SubstrateConfig & {
 
 export class MemoryRetriever implements MemoryProvider {
   private memoryStore: MemoryStore;
-  private embeddingService: EmbeddingService;
+  private embeddingService: EmbeddingProviderPort;
   private runtimeConfig: SubstrateConfig | null;
   private fallbackBudgetConfig: ContextBudgetConfigLike | null;
   private retrievalThreshold: number;
@@ -377,7 +377,7 @@ export class MemoryRetriever implements MemoryProvider {
 
   constructor(
     memoryStore: MemoryStore,
-    embeddingService: EmbeddingService,
+    embeddingService: EmbeddingProviderPort,
     config?: MemoryRetrieverConfig | SubstrateConfig,
     eventBus?: EventBus,
     contactStore?: ContactStore | null,

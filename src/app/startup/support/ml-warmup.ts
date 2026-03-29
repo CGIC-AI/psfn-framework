@@ -1,9 +1,9 @@
-import type { EmbeddingService } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import {
   TextEmotionClassifier,
   type TextEmotionClassifierConfig,
 } from '../../../core/emotion/text-classifier.js';
-import { warmupEmbeddingService } from '../../../faculties/memory/embedding.js';
+import { warmupEmbeddingProvider } from '../../../faculties/memory/embedding.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const DEFAULT_WARMUP_TEXT = '__psfn_startup_ml_warmup__';
@@ -15,7 +15,7 @@ interface MlWarmupLogger {
 
 interface RuntimeMlWarmupOptions {
   textClassifier: TextEmotionClassifier;
-  embeddingService: EmbeddingService & { readonly kind?: string };
+  embeddingService: EmbeddingProviderPort & { readonly kind?: string };
   textEmotionModel: string;
   logger: MlWarmupLogger;
   warmupText?: string;
@@ -58,7 +58,7 @@ export async function warmRuntimeMlServices(options: RuntimeMlWarmupOptions): Pr
     options.textClassifier.preload(warmupText).catch((error) => {
       throw new Error(`text emotion classifier warmup failed: ${toErrorMessage(error)}`);
     }),
-    warmupEmbeddingService(options.embeddingService, warmupText),
+    warmupEmbeddingProvider(options.embeddingService, warmupText),
   ]);
   const failures = results.flatMap((result) => (
     result.status === 'rejected' ? [toErrorMessage(result.reason)] : []

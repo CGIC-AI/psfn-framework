@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
-import type { EmbeddingService } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { ContactStore } from '../../core/contacts/store.js';
 import { createContactSetTrustTool } from '../../core/contacts/tools.js';
 import { MemoryRetriever } from '../../faculties/memory/retrieval.js';
@@ -68,7 +68,7 @@ function makeMockStore(memories: ScenarioMemory[]): MemoryStore {
   } as unknown as MemoryStore;
 }
 
-function makeEmbedding(): EmbeddingService {
+function makeEmbedding(): EmbeddingProviderPort {
   return {
     embed: vi.fn().mockResolvedValue(new Float32Array(1024)),
     embedBatch: vi.fn(),

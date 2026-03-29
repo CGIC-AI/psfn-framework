@@ -31,7 +31,7 @@ import { saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
-import type { EmbeddingService, LLMProvider } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort, LLMProvider } from '../../core/agent/contracts.js';
 import type { ScheduledTask } from '../../core/scheduler/types.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
@@ -406,7 +406,7 @@ const testCard: CharacterCardV2 = {
   },
 };
 
-const testEmbeddingService: EmbeddingService = {
+const testEmbeddingService: EmbeddingProviderPort = {
   dims: 3,
   embed: async (text: string) => {
     const normalized = text.trim().toLowerCase();

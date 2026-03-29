@@ -6,7 +6,7 @@ import {
   __retrieval_internals,
 } from './retrieval.js';
 import type { MemoryStore } from './store.js';
-import type { EmbeddingService, LLMProvider } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort, LLMProvider } from '../../core/agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
 import type { ConsentFlags } from '../../system/trust/types.js';
@@ -54,7 +54,7 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
   } as unknown as MemoryStore;
 }
 
-function makeMockEmbedding(): EmbeddingService {
+function makeMockEmbedding(): EmbeddingProviderPort {
   return {
     embed: vi.fn().mockResolvedValue(new Float32Array(1024)),
     embedBatch: vi.fn(),

@@ -1,4 +1,4 @@
-import type { EmbeddingService } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import path from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -43,7 +43,7 @@ interface FeatureExtractionPipelineType {
   dispose?(): Promise<void>;
 }
 
-export interface EmbeddingRuntimeProvider extends EmbeddingService {
+export interface EmbeddingRuntimeProvider extends EmbeddingProviderPort {
   readonly kind: EmbeddingProviderKind;
 }
 
@@ -415,8 +415,8 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
   }
 }
 
-export async function warmupEmbeddingService(
-  embeddingService: EmbeddingService,
+export async function warmupEmbeddingProvider(
+  embeddingProvider: EmbeddingProviderPort,
   text: string = STARTUP_EMBEDDING_WARMUP_TEXT,
 ): Promise<void> {
   const normalizedText = text.trim();
@@ -425,20 +425,20 @@ export async function warmupEmbeddingService(
   }
 
   try {
-    const embedding = await embeddingService.embed(normalizedText);
+    const embedding = await embeddingProvider.embed(normalizedText);
     if (!(embedding instanceof Float32Array)) {
       throw new Error('embedding warmup must return a Float32Array');
     }
 
-    if (Number.isFinite(embeddingService.dims) && embeddingService.dims > 0) {
-      if (embedding.length !== embeddingService.dims) {
+    if (Number.isFinite(embeddingProvider.dims) && embeddingProvider.dims > 0) {
+      if (embedding.length !== embeddingProvider.dims) {
         throw new Error(
-          `embedding warmup dimension mismatch: expected ${embeddingService.dims}, got ${embedding.length}`,
+          `embedding warmup dimension mismatch: expected ${embeddingProvider.dims}, got ${embedding.length}`,
         );
       }
     }
   } catch (error) {
-    throw new Error(`embedding service startup warmup failed: ${toErrorMessage(error)}`);
+    throw new Error(`embedding provider startup warmup failed: ${toErrorMessage(error)}`);
   }
 }
 

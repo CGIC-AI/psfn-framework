@@ -6,7 +6,7 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { EmbeddingService } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PromptLayerStore } from '../../core/identity/prompt-store.js';
@@ -52,7 +52,7 @@ export interface AdminServerConfig {
   eventBus: EventBus;
   characterCard: CharacterCardV2;
   config: SubstrateConfig;
-  embeddingService: EmbeddingService | null;
+  embeddingService: EmbeddingProviderPort | null;
   modelDiscovery?: AdminModelDiscoveryBackend | null;
   promptStore?: PromptLayerStore | null;
   promptRegistry?: PromptRegistryStore | null;

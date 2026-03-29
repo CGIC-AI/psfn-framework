@@ -1,4 +1,4 @@
-import type { EmbeddingService, LLMProvider } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort, LLMProvider } from '../../core/agent/contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import type { ContactStore } from '../../core/contacts/store.js';
@@ -91,7 +91,7 @@ export class MemoryExtractor {
     llmClient: LLMProvider,
     sessionManager: SessionManager,
     memoryStore: MemoryStore,
-    embeddingService: EmbeddingService,
+    embeddingService: EmbeddingProviderPort,
     eventBus: EventBus,
     config?: MemoryExtractorConfig | SubstrateConfig,
     promptRegistry?: PromptRegistryStore | null,

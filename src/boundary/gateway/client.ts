@@ -1,10 +1,10 @@
 // ── Gateway Client ──
-// Agent-side typed RPC wrapper. Implements LLMProvider and EmbeddingService
+// Agent-side typed RPC wrapper. Implements LLMProvider and EmbeddingProviderPort
 // so it can be used as a drop-in replacement for direct clients.
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
-import type { LLMProvider, EmbeddingService } from '../../core/agent/contracts.js';
+import type { LLMProvider, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketClient } from './transport.js';
@@ -289,7 +289,7 @@ export interface GatewayConnectionCloseEvent {
   error?: Error;
 }
 
-export class GatewayClient implements LLMProvider, EmbeddingService {
+export class GatewayClient implements LLMProvider, EmbeddingProviderPort {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: NdjsonConnection;
   private embeddingDims: number;
@@ -517,7 +517,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
     };
   }
 
-  // ── EmbeddingService interface ──
+  // ── EmbeddingProviderPort interface ──
 
   get dims(): number {
     return this.embeddingDims;

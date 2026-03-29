@@ -1,5 +1,5 @@
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
-import type { LLMProvider, EmbeddingService } from '../../../core/agent/contracts.js';
+import type { LLMProvider, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
 import type { GitOperations } from '../../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../../primitives/images/types.js';
@@ -20,7 +20,7 @@ import type { PolicyConfig } from '../policy.js';
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
   llmProvider: LLMProvider;
-  embeddingService: EmbeddingService;
+  embeddingService: EmbeddingProviderPort;
   modelDiscovery?: {
     getAvailableModels(): Promise<unknown[]>;
     invalidateCache(): void;

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
-import type { LLMProvider, EmbeddingService } from '../../agent/contracts.js';
+import type { LLMProvider, EmbeddingProviderPort } from '../../agent/contracts.js';
 import type { MemoryStore } from '../../../faculties/memory/store.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
@@ -619,7 +619,7 @@ describe('REPLSandbox', () => {
       embed: vi.fn(async () => embedding),
       embedBatch: vi.fn(),
       dims: 3,
-    } as unknown as EmbeddingService;
+    } as unknown as EmbeddingProviderPort;
 
     const memoryStore = {
       searchByEmbedding: vi.fn(() => [
@@ -655,7 +655,7 @@ describe('REPLSandbox', () => {
       embed: vi.fn(async () => embedding),
       embedBatch: vi.fn(),
       dims: 3,
-    } as unknown as EmbeddingService;
+    } as unknown as EmbeddingProviderPort;
 
     const memoryStore = {
       searchByEmbedding: vi.fn(() => []),
@@ -753,7 +753,7 @@ describe('REPLSandbox', () => {
       embed: vi.fn(async () => embedding),
       embedBatch: vi.fn(),
       dims: 3,
-    } as unknown as EmbeddingService;
+    } as unknown as EmbeddingProviderPort;
 
     const memoryStore = {
       searchByEmbedding: vi.fn(() => []),
@@ -781,7 +781,7 @@ describe('REPLSandbox', () => {
       embed: vi.fn(async () => embedding),
       embedBatch: vi.fn(),
       dims: 3,
-    } as unknown as EmbeddingService;
+    } as unknown as EmbeddingProviderPort;
 
     const now = Date.now();
     const memoryStore = {
@@ -1115,7 +1115,7 @@ describe('evidence collection', () => {
       embed: vi.fn(async () => embedding),
       embedBatch: vi.fn(),
       dims: 3,
-    } as unknown as EmbeddingService;
+    } as unknown as EmbeddingProviderPort;
     const memoryStore = {
       searchByEmbedding: vi.fn(() => [
         { text: 'found memory', type: 'semantic', importance: 0.8, similarity: 0.9 },

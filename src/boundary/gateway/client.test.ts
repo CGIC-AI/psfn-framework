@@ -249,6 +249,62 @@ describe('GatewayClient streaming', () => {
     });
     await expect(invalidatePromise).resolves.toBeUndefined();
   });
+
+  it('routes embedding calls through gateway RPC and returns typed vectors', async () => {
+    const batchPromise = client.embedBatch(['alpha', 'beta']);
+    const batchReq = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: { texts: string[] };
+    };
+    expect(batchReq.method).toBe('llm.embed');
+    expect(batchReq.params.texts).toEqual(['alpha', 'beta']);
+    conn._emit({
+      id: batchReq.id,
+      jsonrpc: '2.0',
+      result: {
+        embeddings: [
+          [0.1, 0.2, 0.3],
+          [0.4, 0.5, 0.6],
+        ],
+      },
+    });
+    const batch = await batchPromise;
+    expect(batch).toHaveLength(2);
+    expect(batch[0]).toBeInstanceOf(Float32Array);
+    expect(Array.from(batch[0] ?? [])).toEqual([
+      expect.closeTo(0.1, 5),
+      expect.closeTo(0.2, 5),
+      expect.closeTo(0.3, 5),
+    ]);
+    expect(Array.from(batch[1] ?? [])).toEqual([
+      expect.closeTo(0.4, 5),
+      expect.closeTo(0.5, 5),
+      expect.closeTo(0.6, 5),
+    ]);
+
+    const singlePromise = client.embed('gamma');
+    const singleReq = conn.sent[1] as {
+      id: number;
+      method: string;
+      params: { texts: string[] };
+    };
+    expect(singleReq.method).toBe('llm.embed');
+    expect(singleReq.params.texts).toEqual(['gamma']);
+    conn._emit({
+      id: singleReq.id,
+      jsonrpc: '2.0',
+      result: {
+        embeddings: [
+          [0.7, 0.8, 0.9],
+        ],
+      },
+    });
+    await expect(singlePromise).resolves.toBeInstanceOf(Float32Array);
+    await expect(singlePromise).resolves.toSatisfy((value) => (
+      Array.from(value).every((entry, index) => Math.abs(entry - [0.7, 0.8, 0.9][index]!) < 1e-5)
+    ));
+  });
 });
 
 describe('GatewayClient reverse RPC (onHandleMessage)', () => {

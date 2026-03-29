@@ -8,7 +8,7 @@ import {
   TransformersEmbeddingProvider,
   createEmbeddingProviderFromConfig,
   createEmbeddingProviderFromEnv,
-  warmupEmbeddingService,
+  warmupEmbeddingProvider,
 } from './embedding.js';
 
 const fetchMock = vi.fn();
@@ -392,7 +392,7 @@ describe('embedding providers', () => {
       embed: vi.fn().mockResolvedValue(new Float32Array([1, 2, 3])),
     };
 
-    await warmupEmbeddingService(embeddingService);
+    await warmupEmbeddingProvider(embeddingService);
 
     expect(embeddingService.embed).toHaveBeenCalledWith(STARTUP_EMBEDDING_WARMUP_TEXT);
   });
@@ -404,8 +404,8 @@ describe('embedding providers', () => {
       embed: vi.fn().mockResolvedValue(new Float32Array([1, 2])),
     };
 
-    await expect(warmupEmbeddingService(embeddingService)).rejects.toThrow(
-      'embedding service startup warmup failed: embedding warmup dimension mismatch: expected 3, got 2',
+    await expect(warmupEmbeddingProvider(embeddingService)).rejects.toThrow(
+      'embedding provider startup warmup failed: embedding warmup dimension mismatch: expected 3, got 2',
     );
   });
 });

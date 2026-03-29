@@ -14,7 +14,6 @@ import {
   type PromptRuntimeSystemPromptBlockId,
 } from '../../../identity/prompt-runtime.js';
 import {
-  PromptComposer,
   IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
   buildImmutableHumanSafetySection,
 } from '../../../identity/prompt-composer.js';

@@ -398,6 +398,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       versionPointer: 'prompt-v1',
     }));
     runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
     (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mockImplementation(() => {

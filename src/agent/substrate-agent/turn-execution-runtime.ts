@@ -820,12 +820,6 @@ export async function handleMessageForTurn(
       );
       const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
         || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
-      const personaHint = runtime.getPersonaAdaptation(
-        trustLevel,
-        preTurnInternalState,
-        preTurnMetacognitiveFlags,
-        templateVariables,
-      );
       renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
         now: runtimeNow,
         variables: promptRuntimeVariables,

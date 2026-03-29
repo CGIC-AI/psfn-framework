@@ -389,7 +389,7 @@ describe('SessionManager', () => {
     )).toEqual(['turn_record_summary:env_refs_1']);
   });
 
-  it('delegates transcript search to the injected transcript search port', () => {
+  it('delegates transcript search to the injected transcript search port', async () => {
     const transcriptSearch: TranscriptSearchPort = {
       searchByKeywords: vi.fn(() => [
         {
@@ -406,7 +406,7 @@ describe('SessionManager', () => {
     };
     const mgr = new SessionManager(store, makeConfig(), undefined, undefined, transcriptSearch);
 
-    const hits = mgr.searchTranscripts('Transcript', 3);
+    const hits = await mgr.searchTranscripts('Transcript', 3);
 
     expect(transcriptSearch.searchByKeywords).toHaveBeenCalledWith('Transcript', 3);
     expect(hits).toHaveLength(1);

@@ -76,7 +76,7 @@ export interface AgentCoreRuntime {
   promptState: PromptStatePort;
   skillsRuntime: SkillsRuntime;
   memoryStore: MemoryStorePort;
-  contactStore: ReturnType<typeof wireContactRuntime>;
+  contactStore: import('../../core/contacts/contact-store-port.js').ContactStorePort;
   coreMemoryStore: CoreMemoryStorePort;
   intentionRuntime: IntentionRuntimeWiring;
   intentionAppraisalHooks: IntentionAppraisalHooks;
@@ -181,7 +181,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionManager,
     config,
   });
-  const contactStore = wireContactRuntime(
+  const contactStore = await wireContactRuntime(
     agentLoop,
     db,
     primaryUserId,

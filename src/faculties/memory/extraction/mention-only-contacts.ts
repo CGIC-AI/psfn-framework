@@ -291,7 +291,7 @@ export async function resolveMentionOnlyContactForFact(
   });
   if (!candidate) return undefined;
 
-  const contacts = params.contactStore.listAll();
+  const contacts = await params.contactStore.listAll();
   const existing = findExistingMentionOnlyContact(contacts, candidate);
   const channelMemories = await params.memoryStore.getMemoriesByChannel(params.channelId, 50);
 
@@ -300,7 +300,7 @@ export async function resolveMentionOnlyContactForFact(
       typeof params.contactStore.updateRelationshipType === 'function'
       && shouldPromoteRelationship(existing.relationshipType, candidate.relationshipType)
     ) {
-      params.contactStore.updateRelationshipType(
+      await params.contactStore.updateRelationshipType(
         existing.id,
         candidate.relationshipType,
         'system:memory_extraction:mention_contact',
@@ -323,7 +323,7 @@ export async function resolveMentionOnlyContactForFact(
     return undefined;
   }
 
-  const created = params.contactStore.upsert(
+  const created = await params.contactStore.upsert(
     {
       displayName: candidate.name,
       relationshipType: candidate.relationshipType,

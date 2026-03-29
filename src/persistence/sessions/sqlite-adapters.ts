@@ -3,6 +3,7 @@ import type { SessionArchivePort } from '../journals/journal/port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { createSqliteTranscriptProjection } from './transcript-projection.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+import type { TranscriptSearchPort } from './transcript-search-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 import type { TurnRecordStorePort } from './turn-records.js';
 
@@ -11,6 +12,7 @@ export const DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME = 'session-search.sqli
 export interface SQLiteSessionAdapters {
   sessionArchivePort: SessionArchivePort;
   transcriptProjection: TranscriptProjectionPort | null;
+  transcriptSearch: TranscriptSearchPort | null;
   turnRecordStore: TurnRecordStorePort;
 }
 
@@ -50,6 +52,7 @@ export function createDefaultSQLiteSessionAdapters(
   return {
     sessionArchivePort,
     transcriptProjection,
+    transcriptSearch: transcriptProjection,
     turnRecordStore: createDefaultSQLiteTurnRecordStorePort(sessionsDir),
   };
 }

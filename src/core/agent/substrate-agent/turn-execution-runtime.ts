@@ -144,7 +144,7 @@ export interface TurnExecutionRuntime {
     correlation: CorrelationMetadata,
     purpose: string,
   ) => CorrelationMetadata;
-  resolveAuthorContext: (message: SubstrateMessage) => ResolvedAuthorContext;
+  resolveAuthorContext: (message: SubstrateMessage) => Promise<ResolvedAuthorContext>;
   emitTurnStage: (
     message: SubstrateMessage,
     turnStartMs: number,
@@ -522,7 +522,7 @@ export async function handleMessageForTurn(
     }
     message.routing = nextRouting;
   }
-  const authorContext = runtime.resolveAuthorContext(message);
+  const authorContext = await runtime.resolveAuthorContext(message);
   const resolvedChannelPrivacy = normalizeChannelVisibility(message.routing?.channelPrivacy)
     ?? authorContext.channelPrivacyLevel;
   if (resolvedChannelPrivacy && message.routing?.channelPrivacy !== resolvedChannelPrivacy) {
@@ -705,7 +705,7 @@ export async function handleMessageForTurn(
       authorContext.subjectIdentityKey,
       runtimeNow,
     );
-    const preTurnInternalState = runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
+    const preTurnInternalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
       message,
       responseText: '',
       trustLevel,
@@ -1221,7 +1221,7 @@ export async function handleMessageForTurn(
       log.info('Broadcast provenance', provenancePayload);
     }
 
-    const internalState = runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
+    const internalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
       message,
       responseText,
       trustLevel: authorContext.trustLevel,

@@ -471,7 +471,7 @@ export class MemoryRetriever implements MemoryProvider {
       ? await this.memoryStore.getContactProfile(canonicalContactId)
       : undefined;
     const emotionalSnapshot = canonicalContactId
-      ? this.resolveEmotionalSnapshot(canonicalContactId)
+      ? await this.resolveEmotionalSnapshot(canonicalContactId)
       : undefined;
     const contactEmotionalMemories = canonicalContactId
       ? this.collectContactEmotionalMemories(canonicalContactId)
@@ -566,7 +566,7 @@ export class MemoryRetriever implements MemoryProvider {
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
     const socialContext = canonicalContactId
-      ? this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelVisibility)
+      ? await this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelVisibility)
       : undefined;
     const telemetry: RetrievalTelemetry = {
       channelId,
@@ -601,7 +601,7 @@ export class MemoryRetriever implements MemoryProvider {
     const emotionalSnapshot = turnSnapshot?.emotionalSnapshot
       ? cloneEmotionalSnapshot(turnSnapshot.emotionalSnapshot)
       : canonicalContactId
-        ? this.resolveEmotionalSnapshot(canonicalContactId)
+        ? await this.resolveEmotionalSnapshot(canonicalContactId)
         : undefined;
     telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
     const contactEmotionalSource = turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
@@ -835,7 +835,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelId,
         allScored,
       );
-      const scoredCandidates = this.applySocialContextRankingAdjustments(
+      const scoredCandidates = await this.applySocialContextRankingAdjustments(
         rerankDecision.ranked ?? allScored,
         contextText,
         socialContext,
@@ -988,7 +988,7 @@ export class MemoryRetriever implements MemoryProvider {
         selected,
         telemetry.retrievalSource,
       );
-      const selectedContactContextById = this.buildSelectedContactContext(selected, socialContext);
+      const selectedContactContextById = await this.buildSelectedContactContext(selected, socialContext);
 
       // Update access stats; fail closed if persistence fails.
       for (const s of selected) {
@@ -1120,13 +1120,13 @@ export class MemoryRetriever implements MemoryProvider {
     return renderProactiveRecall(selected);
   }
 
-  private resolveEmotionalSnapshot(contactId: string): EmotionalSnapshot | undefined {
+  private async resolveEmotionalSnapshot(contactId: string): Promise<EmotionalSnapshot | undefined> {
     if (!this.contactStore) return undefined;
 
-    const directSnapshot = this.contactStore.getEmotionalSnapshot(contactId);
+    const directSnapshot = await this.contactStore.getEmotionalSnapshot(contactId);
     if (directSnapshot) return directSnapshot;
 
-    const contact = this.contactStore.getById(contactId);
+    const contact = await this.contactStore.getById(contactId);
     if (!contact?.emotionalBaseline) return undefined;
 
     const baselineRaw = contact.emotionalBaseline;
@@ -1160,17 +1160,17 @@ export class MemoryRetriever implements MemoryProvider {
     };
   }
 
-  private resolveRetrievalSocialContext(
+  private async resolveRetrievalSocialContext(
     canonicalContactId: string,
     trustLevel: TrustLevel,
     channelVisibility: ChannelVisibility,
-  ): RetrievalSocialContext | undefined {
+  ): Promise<RetrievalSocialContext | undefined> {
     if (!this.contactStore) return undefined;
 
-    const canonicalContact = this.contactStore.getById(canonicalContactId);
+    const canonicalContact = await this.contactStore.getById(canonicalContactId);
     if (!canonicalContact) return undefined;
 
-    const canonicalEntity = this.contactStore.getSocialGraphEntityByContactId(canonicalContactId);
+    const canonicalEntity = await this.contactStore.getSocialGraphEntityByContactId(canonicalContactId);
     if (!canonicalEntity) {
       return {
         canonicalContactId,
@@ -1179,14 +1179,14 @@ export class MemoryRetriever implements MemoryProvider {
       };
     }
 
-    const edges = this.contactStore.listSocialRelationshipEdges({
+    const edges = await this.contactStore.listSocialRelationshipEdges({
       contactId: canonicalContactId,
       viewerTrustLevel: trustLevel,
       viewerChannelVisibility: channelVisibility,
     });
     const relatedContactsById = new Map<string, RetrievalContactContext>();
     for (const edge of edges) {
-      const relatedContact = this.resolveRelatedContactFromEdge(
+      const relatedContact = await this.resolveRelatedContactFromEdge(
         canonicalEntity.id,
         edge,
       );
@@ -1209,16 +1209,16 @@ export class MemoryRetriever implements MemoryProvider {
     };
   }
 
-  private resolveRelatedContactFromEdge(
+  private async resolveRelatedContactFromEdge(
     canonicalEntityId: string,
     edge: SocialRelationshipEdge,
-  ): Contact | undefined {
+  ): Promise<Contact | undefined> {
     if (!this.contactStore) return undefined;
 
     const otherEntityId = edge.sourceEntityId === canonicalEntityId
       ? edge.targetEntityId
       : edge.sourceEntityId;
-    const otherEntity = this.contactStore.getSocialGraphEntityById(otherEntityId);
+    const otherEntity = await this.contactStore.getSocialGraphEntityById(otherEntityId);
     if (!otherEntity?.contactId) return undefined;
     return this.contactStore.getById(otherEntity.contactId);
   }
@@ -1237,10 +1237,10 @@ export class MemoryRetriever implements MemoryProvider {
     };
   }
 
-  private buildSelectedContactContext(
+  private async buildSelectedContactContext(
     selected: readonly ScoredMemory[],
     socialContext?: RetrievalSocialContext,
-  ): ReadonlyMap<string, RetrievalContactContext> | undefined {
+  ): Promise<ReadonlyMap<string, RetrievalContactContext> | undefined> {
     if (!this.contactStore) {
       return socialContext?.relatedContactsById;
     }
@@ -1251,7 +1251,7 @@ export class MemoryRetriever implements MemoryProvider {
       if (!contactId || contactId === socialContext?.canonicalContactId || contexts.has(contactId)) {
         continue;
       }
-      const contact = this.contactStore.getById(contactId);
+      const contact = await this.contactStore.getById(contactId);
       if (!contact) continue;
       contexts.set(contactId, {
         contactId,
@@ -1266,31 +1266,30 @@ export class MemoryRetriever implements MemoryProvider {
     return contexts.size > 0 ? contexts : undefined;
   }
 
-  private applySocialContextRankingAdjustments(
+  private async applySocialContextRankingAdjustments(
     candidates: readonly ScoredMemory[],
     contextText: string,
     socialContext?: RetrievalSocialContext,
-  ): ScoredMemory[] {
+  ): Promise<ScoredMemory[]> {
     if (!socialContext) return [...candidates];
 
     const queryTokens = new Set(tokenizeForExplicitMatch(contextText));
-    return candidates
-      .map((candidate) => ({
-        ...candidate,
-        score: candidate.score * this.resolveSocialContextScoreMultiplier(
-          candidate.memory,
-          queryTokens,
-          socialContext,
-        ),
-      }))
-      .sort((left, right) => right.score - left.score);
+    const adjusted = await Promise.all(candidates.map(async candidate => ({
+      ...candidate,
+      score: candidate.score * await this.resolveSocialContextScoreMultiplier(
+        candidate.memory,
+        queryTokens,
+        socialContext,
+      ),
+    })));
+    return adjusted.sort((left, right) => right.score - left.score);
   }
 
-  private resolveSocialContextScoreMultiplier(
+  private async resolveSocialContextScoreMultiplier(
     memory: Pick<PurrMemory, 'contactId'>,
     queryTokens: ReadonlySet<string>,
     socialContext: RetrievalSocialContext,
-  ): number {
+  ): Promise<number> {
     const contactId = memory.contactId?.trim();
     if (!contactId) return 1;
     if (contactId === socialContext.canonicalContactId) return 1.1;
@@ -1300,7 +1299,7 @@ export class MemoryRetriever implements MemoryProvider {
       return querySuggestsContactFocus(queryTokens, related) ? 1.05 : 0.85;
     }
 
-    const contact = this.contactStore?.getById(contactId);
+    const contact = this.contactStore ? await this.contactStore.getById(contactId) : undefined;
     if (contact && querySuggestsContactFocus(queryTokens, {
       contactId,
       displayName: contact.displayName,

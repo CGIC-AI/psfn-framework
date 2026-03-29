@@ -118,15 +118,15 @@ export interface AdminModelDiscoveryApi {
 }
 
 export interface AdminChatBootstrapApi {
-  buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): unknown;
+  buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): Promise<unknown>;
   updateSelection(
     input: AdminChatBootstrapUpdateInput,
     options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
-  ): unknown;
+  ): Promise<unknown>;
   buildModelRoomBootstrap(
     config: SubstrateConfig,
     options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
-  ): unknown;
+  ): Promise<unknown>;
 }
 
 export interface AdminApiRoute {
@@ -318,11 +318,19 @@ export function buildAdminApiRoutes(options: {
       }
 
       try {
-        const bootstrap = chatBootstrapService.updateSelection(
+        chatBootstrapService.updateSelection(
           (parsed.value ?? {}) as AdminChatBootstrapUpdateInput,
           { requestOrigin: resolveRequestOrigin(req) },
+        ).then(
+          (bootstrap) => {
+            sendJson(res, 200, { ok: true, bootstrap });
+          },
+          (error) => {
+            sendJson(res, 400, {
+              error: toSanitizedMessage(error, 'Failed to update chat bootstrap'),
+            });
+          },
         );
-        sendJson(res, 200, { ok: true, bootstrap });
       } catch (error) {
         sendJson(res, 400, {
           error: toSanitizedMessage(error, 'Failed to update chat bootstrap'),
@@ -386,15 +394,16 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath(ADMIN_CHAT_BOOTSTRAP_API_PATH),
       handle: (req, res) => {
-        try {
-          sendJson(res, 200, chatBootstrapService.buildBootstrap({
-            requestOrigin: resolveRequestOrigin(req),
-          }));
-        } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to build chat bootstrap'),
-          });
-        }
+        chatBootstrapService.buildBootstrap({
+          requestOrigin: resolveRequestOrigin(req),
+        }).then(
+          (payload) => sendJson(res, 200, payload),
+          (error) => {
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to build chat bootstrap'),
+            });
+          },
+        );
       },
     },
     {
@@ -415,15 +424,16 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath(ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH),
       handle: (req, res) => {
-        try {
-          sendJson(res, 200, chatBootstrapService.buildModelRoomBootstrap(config, {
-            requestOrigin: resolveRequestOrigin(req),
-          }));
-        } catch (error) {
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to build model room bootstrap'),
-          });
-        }
+        chatBootstrapService.buildModelRoomBootstrap(config, {
+          requestOrigin: resolveRequestOrigin(req),
+        }).then(
+          (payload) => sendJson(res, 200, payload),
+          (error) => {
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to build model room bootstrap'),
+            });
+          },
+        );
       },
     },
     {
@@ -797,7 +807,16 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/sessions'),
       handle: (_req, res) => {
-        sendJson(res, 200, sessionService.listSessions());
+        sessionService.listSessions().then(
+          (payload) => {
+            sendJson(res, 200, payload);
+          },
+          (error) => {
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to load sessions'),
+            });
+          },
+        );
       },
     },
     {
@@ -842,14 +861,20 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const result = contactsService.createContact(JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 201, result);
-        });
-      },
+        contactsService.createContact(JSON.stringify(parsed.value)).then(
+          (result) => {
+            if (!result.ok) {
+              sendJson(res, 400, { error: result.message });
+              return;
+            }
+            sendJson(res, 201, result);
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to create contact') });
+          },
+        );
+      });
+    },
     },
     // Sub-path routes MUST come before generic prefixed param route for contacts
     {
@@ -862,12 +887,18 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const result = contactsService.mergeContacts(id, JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 200, result);
+          contactsService.mergeContacts(id, JSON.stringify(parsed.value)).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => {
+              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to merge contacts') });
+            },
+          );
         });
       },
     },
@@ -881,12 +912,18 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const result = contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 200, result);
+          contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value)).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => {
+              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to unlink contact identity') });
+            },
+          );
         });
       },
     },
@@ -900,12 +937,18 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const result = contactsService.deleteConversationChannel(id, JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 200, result);
+          contactsService.deleteConversationChannel(id, JSON.stringify(parsed.value)).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => {
+              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to delete conversation channel') });
+            },
+          );
         });
       },
     },
@@ -931,12 +974,18 @@ export function buildAdminApiRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }) => {
-        const result = contactsService.deleteContact(id);
-        if (!result.ok) {
-          sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
-          return;
-        }
-        sendJson(res, 200, result);
+        contactsService.deleteContact(id).then(
+          (result) => {
+            if (!result.ok) {
+              sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+              return;
+            }
+            sendJson(res, 200, result);
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to delete contact') });
+          },
+        );
       },
     },
     {

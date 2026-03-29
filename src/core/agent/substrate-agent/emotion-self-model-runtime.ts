@@ -144,7 +144,7 @@ export class EmotionSelfModelRuntime {
     return snapshot;
   }
 
-  computeInternalStateForTurn(input: {
+  async computeInternalStateForTurn(input: {
     message: SubstrateMessage;
     responseText: string;
     trustLevel: TrustLevel;
@@ -152,15 +152,17 @@ export class EmotionSelfModelRuntime {
     emotionSnapshot: EmotionStateSnapshot | null;
     toolCallCount: number;
     sessionChannelId: string;
-  }): InternalState {
+  }): Promise<InternalState> {
     const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
     const pendingFollowUps = this.resolveInternalStatePendingFollowUps(input.canonicalContactKey);
-    const contactEmotionalSnapshot = this.resolveContactEmotionalSnapshot(input.canonicalContactKey);
+    const [contactEmotionalSnapshot, lastSeenDeltaSeconds] = await Promise.all([
+      this.resolveContactEmotionalSnapshot(input.canonicalContactKey),
+      this.resolveContactLastSeenDeltaSeconds(
+        input.canonicalContactKey,
+        Date.now(),
+      ),
+    ]);
     const recentTurnCount = this.resolveRecentTurnCount(input.sessionChannelId);
-    const lastSeenDeltaSeconds = this.resolveContactLastSeenDeltaSeconds(
-      input.canonicalContactKey,
-      Date.now(),
-    );
     const emotionState = input.emotionSnapshot ?? INTERNAL_STATE_NEUTRAL_EMOTION;
 
     return this.internalStateComputer.computeState({
@@ -334,21 +336,21 @@ export class EmotionSelfModelRuntime {
     return followUps;
   }
 
-  private resolveContactEmotionalSnapshot(canonicalContactKey?: string): EmotionalSnapshot | null {
+  private async resolveContactEmotionalSnapshot(canonicalContactKey?: string): Promise<EmotionalSnapshot | null> {
     if (!canonicalContactKey) return null;
     const contactStore = this.getContactStore();
     if (!contactStore) return null;
-    return contactStore.getEmotionalSnapshot(canonicalContactKey) ?? null;
+    return (await contactStore.getEmotionalSnapshot(canonicalContactKey)) ?? null;
   }
 
-  private resolveContactLastSeenDeltaSeconds(
+  private async resolveContactLastSeenDeltaSeconds(
     canonicalContactKey: string | undefined,
     nowMs: number,
-  ): number | null {
+  ): Promise<number | null> {
     if (!canonicalContactKey) return null;
     const contactStore = this.getContactStore();
     if (!contactStore) return null;
-    const contact = contactStore.getById(canonicalContactKey);
+    const contact = await contactStore.getById(canonicalContactKey);
     if (!contact?.lastSeen) return null;
     const lastSeenMs = Date.parse(contact.lastSeen);
     if (!Number.isFinite(lastSeenMs)) {

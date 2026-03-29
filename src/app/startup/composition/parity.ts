@@ -112,7 +112,7 @@ import {
   SLEEPTIME_MEMORY_ACTION_KIND,
 } from '../../../faculties/memory/sleeptime-agent.js';
 import type { EmotionStateSnapshot } from '../../../core/emotion/state.js';
-import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
@@ -179,10 +179,7 @@ interface HeartbeatRuntimeOptions {
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
   emotionState?: { getState(): EmotionStateSnapshot };
-  contactStore?: {
-    getEmotionalSnapshot?(id: string): EmotionalSnapshot | undefined;
-    getById?(id: string): { trustLevel?: string } | undefined;
-  };
+  contactStore?: Pick<ContactStorePort, 'getEmotionalSnapshot' | 'getById'>;
   getActiveConcerns?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -1236,10 +1233,10 @@ export function wireHeartbeatRuntime(
           context.canonicalContactKey
           && runtimeOptions.contactStore?.getEmotionalSnapshot
         )
-          ? runtimeOptions.contactStore.getEmotionalSnapshot(context.canonicalContactKey) ?? null
+          ? (await runtimeOptions.contactStore.getEmotionalSnapshot(context.canonicalContactKey)) ?? null
           : null;
         const isPrimaryContact = context.canonicalContactKey
-          ? runtimeOptions.contactStore?.getById?.(context.canonicalContactKey)?.trustLevel === 'primary'
+          ? (await runtimeOptions.contactStore?.getById?.(context.canonicalContactKey))?.trustLevel === 'primary'
           : false;
         const motivationAssessment = motivationBridge?.assess({
           sessionId: resolvedSessionId,

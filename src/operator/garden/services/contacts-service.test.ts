@@ -33,14 +33,14 @@ function createServiceHarness() {
 }
 
 describe('AdminContactsDataService', () => {
-  it('deletes a persisted conversation channel from a contact', () => {
+  it('deletes a persisted conversation channel from a contact', async () => {
     const { db, contactStore, service } = createServiceHarness();
     try {
       const contact = contactStore.upsert({ displayName: 'Primary User' });
       contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:test:stale-channel', 'semi_private');
       contactStore.recordChannelActivity(contact.id, 'psfn-amica', 'psfn-amica:test:active-channel', 'private');
 
-      const result = service.deleteConversationChannel(
+      const result = await service.deleteConversationChannel(
         contact.id,
         JSON.stringify({
           channel: 'psfn-amica',
@@ -66,12 +66,12 @@ describe('AdminContactsDataService', () => {
     }
   });
 
-  it('fails closed when the conversation channel is not on the contact', () => {
+  it('fails closed when the conversation channel is not on the contact', async () => {
     const { db, contactStore, service } = createServiceHarness();
     try {
       const contact = contactStore.upsert({ displayName: 'Primary User' });
 
-      const result = service.deleteConversationChannel(
+      const result = await service.deleteConversationChannel(
         contact.id,
         JSON.stringify({
           channel: 'psfn-amica',

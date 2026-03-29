@@ -443,7 +443,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
           waitMs,
         });
         log.debug('Steering message into active stream', { channelId });
-        this.agent.steer(substrateMsg);
+        void this.agent.steer(substrateMsg);
       } else {
         // Gateway mode has no direct agent instance, so keep latest message queued
         // instead of dropping it during lock contention.

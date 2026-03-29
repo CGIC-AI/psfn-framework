@@ -15,7 +15,7 @@ describe('sqlite session adapters', () => {
     dirs.length = 0;
   });
 
-  it('wires the default JSONL archive, sqlite projection/search, and turn records together', () => {
+  it('wires the default JSONL archive, sqlite projection/search, and turn records together', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-sqlite-session-adapters-'));
     dirs.push(sessionsDir);
     const adapters = createDefaultSQLiteSessionAdapters(sessionsDir);
@@ -51,7 +51,9 @@ describe('sqlite session adapters', () => {
       content: 'sqlite projection search needle',
       timestamp: 1_000,
     });
-    const hits = adapters.transcriptProjection?.searchByKeywords('projection needle') ?? [];
+    const hits = adapters.transcriptProjection
+      ? await adapters.transcriptProjection.searchByKeywords('projection needle')
+      : [];
     expect(hits).toHaveLength(1);
     expect(hits[0].channelId).toBe('api:default-session-stack');
 

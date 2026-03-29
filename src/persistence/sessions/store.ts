@@ -118,6 +118,7 @@ export class SessionStore implements TranscriptSearchPort {
   private channelIndexPath: string;
   private importManifestPath: string;
   private transcriptProjection: TranscriptProjectionPort | null = null;
+  private transcriptSearch: TranscriptSearchPort | null = null;
   private turnRecordStore: TurnRecordStorePort;
   private journalRuntime: SessionJournalRuntime;
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
@@ -144,6 +145,11 @@ export class SessionStore implements TranscriptSearchPort {
         });
         this.transcriptProjection = null;
       }
+    }
+    if (options.transcriptSearch !== undefined) {
+      this.transcriptSearch = options.transcriptSearch;
+    } else if (supportsKeywordSearch(this.transcriptProjection)) {
+      this.transcriptSearch = this.transcriptProjection;
     }
     this.turnRecordStore = options.turnRecordStore ?? createDefaultSQLiteTurnRecordStorePort(this.sessionsDir);
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
@@ -409,9 +415,9 @@ export class SessionStore implements TranscriptSearchPort {
     if (filtered.length <= limit) return filtered;
     return filtered.slice(-limit);
   }
-  searchByKeywords(query: string, limit = 10): SessionSearchHit[] {
-    if (!supportsKeywordSearch(this.transcriptProjection)) return [];
-    return this.transcriptProjection.searchByKeywords(query, limit);
+  async searchByKeywords(query: string, limit = 10): Promise<SessionSearchHit[]> {
+    if (!this.transcriptSearch) return [];
+    return await this.transcriptSearch.searchByKeywords(query, limit);
   }
   rebuildSearchIndex(): void {
     this.backfillTranscriptProjectionFromDisk();

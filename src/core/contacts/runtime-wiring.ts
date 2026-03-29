@@ -28,12 +28,12 @@ export interface ContactRuntimeOptions {
   exportDir?: string;
 }
 
-export function wireContactRuntime(
+export async function wireContactRuntime(
   target: ContactRuntimeTarget,
   db: Database.Database,
   primaryUserId?: string,
   options: ContactRuntimeOptions = {},
-): ContactStorePort {
+): Promise<ContactStorePort> {
   const contactStore = createSQLiteContactStore(db, primaryUserId, {
     exportDir: options.exportDir,
   });
@@ -41,12 +41,12 @@ export function wireContactRuntime(
 
   const trimmedPrimaryUserId = primaryUserId?.trim();
   if (trimmedPrimaryUserId && options.bootstrapPrimaryIdentityLinks?.length) {
-    const primaryContact = contactStore.resolveUserId(trimmedPrimaryUserId);
+    const primaryContact = await contactStore.resolveUserId(trimmedPrimaryUserId);
     for (const link of options.bootstrapPrimaryIdentityLinks) {
       const channel = link.channel.trim();
       const userId = link.userId.trim();
       if (!channel || !userId) continue;
-      contactStore.linkChannelIdentity(
+      await contactStore.linkChannelIdentity(
         primaryContact.id,
         channel,
         userId,

@@ -182,12 +182,12 @@ export function sessionMatchesIdentity(
   return normalizedSession.startsWith(`${normalizedChannel}:`) && normalizedSession.endsWith(`:${normalizedUserId}`);
 }
 
-export function getLinkedContactForSession(options: {
+export async function getLinkedContactForSession(options: {
   channelId: string;
   contacts: Contact[];
   sessionStore: SessionStore;
   contactStore?: ContactStorePort | null;
-}): Contact | undefined {
+}): Promise<Contact | undefined> {
   const {
     channelId,
     contacts,
@@ -200,7 +200,7 @@ export function getLinkedContactForSession(options: {
   const channelType = normalizeSessionChannelType(channelId);
   const lastEntry = sessionStore.getLastEntry(channelId);
   if (channelType !== 'session' && lastEntry?.authorId) {
-    const contactByAuthor = contactStore.getByChannelIdentity(channelType, lastEntry.authorId);
+    const contactByAuthor = await contactStore.getByChannelIdentity(channelType, lastEntry.authorId);
     if (contactByAuthor) return contactByAuthor;
   }
 
@@ -220,7 +220,7 @@ export function getLinkedContactForSession(options: {
   if (channelType !== 'session') {
     const userIdHint = parsed.channelId.split(':').pop();
     if (userIdHint) {
-      const contactByHint = contactStore.getByChannelIdentity(channelType, userIdHint);
+      const contactByHint = await contactStore.getByChannelIdentity(channelType, userIdHint);
       if (contactByHint) return contactByHint;
     }
   }

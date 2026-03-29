@@ -1154,12 +1154,12 @@ export class SessionManager {
     return this.store.count(resolvedChannelId);
   }
 
-  searchByKeywords(query: string, limit?: number): SessionSearchHit[] {
-    return this.transcriptSearch.searchByKeywords(query, limit);
+  async searchByKeywords(query: string, limit?: number): Promise<SessionSearchHit[]> {
+    return await this.transcriptSearch.searchByKeywords(query, limit);
   }
 
-  searchTranscripts(query: string, limit?: number): SessionSearchHit[] {
-    return this.searchByKeywords(query, limit);
+  async searchTranscripts(query: string, limit?: number): Promise<SessionSearchHit[]> {
+    return await this.searchByKeywords(query, limit);
   }
 
   resolveStartupSessionMetadata(

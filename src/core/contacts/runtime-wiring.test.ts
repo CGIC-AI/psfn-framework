@@ -13,11 +13,11 @@ class FakeTarget implements ContactRuntimeTarget {
 }
 
 describe('wireContactRuntime', () => {
-  it('injects ContactStore and registers all contact tools', () => {
+  it('injects ContactStore and registers all contact tools', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
 
-    const contactStore = wireContactRuntime(target, db, 'primary-user-123');
+    const contactStore = await wireContactRuntime(target, db, 'primary-user-123');
 
     expect(target.contactStore).toBe(contactStore);
     expect(target.tools.map(t => t.name).sort()).toEqual([
@@ -30,20 +30,20 @@ describe('wireContactRuntime', () => {
     ]);
   });
 
-  it('threads primary user id into ContactStore behavior', () => {
+  it('threads primary user id into ContactStore behavior', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
 
-    wireContactRuntime(target, db, 'primary-user-123');
-    const contact = target.contactStore!.resolveUserId('primary-user-123');
+    await wireContactRuntime(target, db, 'primary-user-123');
+    const contact = await target.contactStore!.resolveUserId('primary-user-123');
     expect(contact.trustLevel).toBe('primary');
   });
 
-  it('links bootstrap identities onto the primary contact', () => {
+  it('links bootstrap identities onto the primary contact', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
 
-    wireContactRuntime(target, db, 'primary-user-123', {
+    await wireContactRuntime(target, db, 'primary-user-123', {
       bootstrapPrimaryIdentityLinks: [{
         channel: 'telegram',
         userId: '5635268079',
@@ -51,8 +51,8 @@ describe('wireContactRuntime', () => {
       }],
     });
 
-    const primary = target.contactStore!.resolveUserId('primary-user-123');
-    const linked = target.contactStore!.getByChannelIdentity('telegram', '5635268079');
+    const primary = await target.contactStore!.resolveUserId('primary-user-123');
+    const linked = await target.contactStore!.getByChannelIdentity('telegram', '5635268079');
     expect(linked?.id).toBe(primary.id);
   });
 });

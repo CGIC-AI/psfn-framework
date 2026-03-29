@@ -8,6 +8,7 @@ import {
 } from '../journals/journal-utils.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+import type { TranscriptSearchPort } from './transcript-search-port.js';
 import type { TurnRecordStorePort } from './turn-records.js';
 
 export interface ChannelCache {
@@ -57,6 +58,7 @@ export interface SessionStoreOptions {
   searchIndexPath?: string;
   disableSearchIndex?: boolean;
   transcriptProjection?: TranscriptProjectionPort | null;
+  transcriptSearch?: TranscriptSearchPort | null;
   turnRecordStore?: TurnRecordStorePort | null;
 }
 

@@ -35,6 +35,8 @@ export interface ContactUpsertMutationOptions extends ContactTrustMutationOption
   actor?: string;
 }
 
+type Awaitable<T> = T | Promise<T>;
+
 export interface ContactTrustDriftSuggestion extends LowTierTrustDriftSuggestion {
   contactId: string;
   createdAt: string;
@@ -49,44 +51,44 @@ export interface ContactStorePort {
   upsert(
     partial: Partial<Contact> & { displayName: string },
     options?: ContactUpsertMutationOptions,
-  ): Contact;
-  getById(id: string): Contact | undefined;
-  getByDiscordUserId(discordUserId: string): Contact | undefined;
-  getByChannelIdentity(channel: ContactChannel, channelUserId: string): Contact | undefined;
-  getByTrustLevel(trustLevel: TrustLevel): Contact[];
-  getSocialGraphEntityById(entityId: string): SocialGraphEntity | undefined;
-  getSocialGraphEntityByContactId(contactId: string): SocialGraphEntity | undefined;
-  listSocialGraphEntities(query?: SocialGraphEntityQuery): SocialGraphEntity[];
-  upsertSocialGraphEntity(input: SocialGraphEntityUpsertInput): SocialGraphEntity;
-  upsertSocialRelationshipEdge(input: SocialRelationshipEdgeUpsertInput): SocialRelationshipEdge;
-  listSocialRelationshipEdges(query?: SocialRelationshipEdgeQuery): SocialRelationshipEdge[];
-  listRelatedContacts(contactId: string, query?: SocialRelationshipEdgeQuery): Contact[];
+  ): Awaitable<Contact>;
+  getById(id: string): Awaitable<Contact | undefined>;
+  getByDiscordUserId(discordUserId: string): Awaitable<Contact | undefined>;
+  getByChannelIdentity(channel: ContactChannel, channelUserId: string): Awaitable<Contact | undefined>;
+  getByTrustLevel(trustLevel: TrustLevel): Awaitable<Contact[]>;
+  getSocialGraphEntityById(entityId: string): Awaitable<SocialGraphEntity | undefined>;
+  getSocialGraphEntityByContactId(contactId: string): Awaitable<SocialGraphEntity | undefined>;
+  listSocialGraphEntities(query?: SocialGraphEntityQuery): Awaitable<SocialGraphEntity[]>;
+  upsertSocialGraphEntity(input: SocialGraphEntityUpsertInput): Awaitable<SocialGraphEntity>;
+  upsertSocialRelationshipEdge(input: SocialRelationshipEdgeUpsertInput): Awaitable<SocialRelationshipEdge>;
+  listSocialRelationshipEdges(query?: SocialRelationshipEdgeQuery): Awaitable<SocialRelationshipEdge[]>;
+  listRelatedContacts(contactId: string, query?: SocialRelationshipEdgeQuery): Awaitable<Contact[]>;
   suggestLowTierTrustDrift(
     id: string,
     signals: TrustDriftBehaviorSignals,
     actor?: string,
-  ): ContactTrustDriftSuggestion | null;
+  ): Awaitable<ContactTrustDriftSuggestion | null>;
   applyLowTierTrustDriftSuggestion(
     id: string,
     suggestion: ContactTrustDriftSuggestion,
     actor?: string,
-  ): ContactTrustDriftApplyResult;
+  ): Awaitable<ContactTrustDriftApplyResult>;
   setTrustLevel(
     id: string,
     trustLevel: TrustLevel,
     actor?: string,
     options?: ContactTrustMutationOptions,
-  ): boolean;
-  updateLastSeen(id: string): void;
-  updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): boolean;
+  ): Awaitable<boolean>;
+  updateLastSeen(id: string): Awaitable<void>;
+  updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Awaitable<boolean>;
   recordChannelActivity(
     contactId: string,
     channel: ContactChannel,
     channelId: string,
     privacyLevel?: ChannelPrivacyLevel,
-  ): void;
-  mergeContacts(sourceContactId: string, targetContactId: string): boolean;
-  updateNotes(id: string, notes: string, actor?: string): boolean;
+  ): Awaitable<void>;
+  mergeContacts(sourceContactId: string, targetContactId: string): Awaitable<boolean>;
+  updateNotes(id: string, notes: string, actor?: string): Awaitable<boolean>;
   updateEmotionalBaseline(
     id: string,
     observation: {
@@ -94,52 +96,52 @@ export interface ContactStorePort {
       confidence?: number;
       observedAtMs?: number;
     },
-  ): Contact | undefined;
-  getEmotionalSnapshot(id: string): EmotionalSnapshot | undefined;
-  updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): boolean;
+  ): Awaitable<Contact | undefined>;
+  getEmotionalSnapshot(id: string): Awaitable<EmotionalSnapshot | undefined>;
+  updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): Awaitable<boolean>;
   setChannelPrivacy(
     contactId: string,
     channel: ContactChannel,
     channelUserId: string,
     privacyLevel: ChannelPrivacyLevel,
     actor?: string,
-  ): boolean;
+  ): Awaitable<boolean>;
   setConversationChannelPrivacy(
     contactId: string,
     channel: ContactChannel,
     channelId: string,
     privacyLevel: ChannelPrivacyLevel,
     actor?: string,
-  ): boolean;
+  ): Awaitable<boolean>;
   getConversationChannelPrivacy(
     contactId: string,
     channel: ContactChannel,
     channelId: string,
-  ): ChannelPrivacyLevel | undefined;
-  deleteConversationChannel(contactId: string, channel: ContactChannel, channelId: string, actor?: string): boolean;
+  ): Awaitable<ChannelPrivacyLevel | undefined>;
+  deleteConversationChannel(contactId: string, channel: ContactChannel, channelId: string, actor?: string): Awaitable<boolean>;
   createIdentityLinkChallenge(
     input: ContactIdentityLinkChallengeInput,
-  ): ContactIdentityLinkChallengeResult;
+  ): Awaitable<ContactIdentityLinkChallengeResult>;
   verifyIdentityLinkChallenge(
     input: ContactIdentityLinkVerificationInput,
-  ): ContactIdentityLinkVerificationResult;
+  ): Awaitable<ContactIdentityLinkVerificationResult>;
   linkChannelIdentity(
     contactId: string,
     channel: ContactChannel,
     channelUserId: string,
     options?: ContactIdentityLinkOptions,
     actor?: string,
-  ): ContactIdentityLinkResult;
-  listAll(): Contact[];
-  listIdentityLinkVerifications(limit?: number): ContactIdentityLinkVerification[];
-  listMutationAuditEntries(query?: ContactMutationAuditQuery): ContactMutationAuditEntry[];
+  ): Awaitable<ContactIdentityLinkResult>;
+  listAll(): Awaitable<Contact[]>;
+  listIdentityLinkVerifications(limit?: number): Awaitable<ContactIdentityLinkVerification[]>;
+  listMutationAuditEntries(query?: ContactMutationAuditQuery): Awaitable<ContactMutationAuditEntry[]>;
   resolveChannelIdentity(
     channel: ContactChannel,
     channelUserId: string,
     displayName?: string,
-  ): Contact;
-  resolveUserId(discordUserId: string): Contact;
-  getCanonicalContactKey(channel: ContactChannel, channelUserId: string): string | undefined;
-  deleteContact(id: string): boolean;
-  unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): boolean;
+  ): Awaitable<Contact>;
+  resolveUserId(discordUserId: string): Awaitable<Contact>;
+  getCanonicalContactKey(channel: ContactChannel, channelUserId: string): Awaitable<string | undefined>;
+  deleteContact(id: string): Awaitable<boolean>;
+  unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): Awaitable<boolean>;
 }

@@ -248,7 +248,7 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
     }));
   }
 
-  searchByKeywords(query: string, limit = DEFAULT_SEARCH_LIMIT): SessionSearchHit[] {
+  async searchByKeywords(query: string, limit = DEFAULT_SEARCH_LIMIT): Promise<SessionSearchHit[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) return [];
 

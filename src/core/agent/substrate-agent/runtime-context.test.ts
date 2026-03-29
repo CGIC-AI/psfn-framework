@@ -21,8 +21,8 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
 }
 
 describe('runtime subject identity', () => {
-  it('resolves internal reflection turns to the companion subject instead of the scheduler', () => {
-    const authorContext = resolveAuthorContext({
+  it('resolves internal reflection turns to the companion subject instead of the scheduler', async () => {
+    const authorContext = await resolveAuthorContext({
       message: makeMessage(),
       contactStore: null,
       logger: {
@@ -102,8 +102,8 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
   });
 
-  it('marks ordinary external turns as user speakers', () => {
-    const authorContext = resolveAuthorContext({
+  it('marks ordinary external turns as user speakers', async () => {
+    const authorContext = await resolveAuthorContext({
       message: makeMessage({
         channelId: 'api:general',
         channelType: 'api',
@@ -122,8 +122,8 @@ describe('runtime subject identity', () => {
     expect(authorContext.speakerRole).toBe('user');
   });
 
-  it('uses the canonical contact key as the continuity subject when contact resolution succeeds', () => {
-    const authorContext = resolveAuthorContext({
+  it('uses the canonical contact key as the continuity subject when contact resolution succeeds', async () => {
+    const authorContext = await resolveAuthorContext({
       message: makeMessage({
         channelId: 'discord:dm:alex',
         channelType: 'discord',
@@ -379,14 +379,14 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('Relationship baseline: primary trust');
   });
 
-  it('uses persisted conversation-channel privacy and records it on activity', () => {
+  it('uses persisted conversation-channel privacy and records it on activity', async () => {
     const recordedCalls: Array<{
       contactId: string;
       channel: string;
       channelId: string;
       privacyLevel?: string;
     }> = [];
-    const authorContext = resolveAuthorContext({
+    const authorContext = await resolveAuthorContext({
       message: makeMessage({
         channelId: '1313001762793197678',
         channelType: 'discord',

@@ -30,7 +30,7 @@ interface TurnExecutionAdapterCallbacks {
     message: SubstrateMessage,
     taskKind?: string,
   ) => ContextBudgetTurnCharacteristics;
-  resolveAuthorContext: (message: SubstrateMessage) => ResolvedAuthorContext;
+  resolveAuthorContext: (message: SubstrateMessage) => Promise<ResolvedAuthorContext>;
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../turns/snapshot.js').TurnPromptSnapshot;

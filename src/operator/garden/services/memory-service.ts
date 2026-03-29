@@ -125,11 +125,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
   }
 
-  private buildContactSummaryMap(): Map<string, { id: string; displayName: string }> {
+  private async buildContactSummaryMap(): Promise<Map<string, { id: string; displayName: string }>> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return new Map();
     const map = new Map<string, { id: string; displayName: string }>();
-    for (const contact of contactStore.listAll()) {
+    for (const contact of await contactStore.listAll()) {
       map.set(contact.id, { id: contact.id, displayName: contact.displayName });
     }
     return map;
@@ -191,7 +191,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const memories = filtered.slice(offset, offset + limit);
     return {
       memories,
-      contactsById: this.buildContactSummaryMap(),
+      contactsById: await this.buildContactSummaryMap(),
       pagination: {
         limit,
         offset,
@@ -206,7 +206,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const memory = await this.deps.memoryStore.getById(id);
     if (!memory) return null;
     const linkedContact = memory.contactId
-      ? this.buildContactSummaryMap().get(memory.contactId)
+      ? (await this.buildContactSummaryMap()).get(memory.contactId)
       : undefined;
     return {
       memory,
@@ -311,7 +311,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return {
         query,
         results: [],
-        contactsById: this.buildContactSummaryMap(),
+        contactsById: await this.buildContactSummaryMap(),
       };
     }
     const embedding = await embeddingService.embed(query);
@@ -320,7 +320,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       results: (await this.deps.memoryStore
         .searchByEmbedding(embedding, 0.1, 50))
         .filter(memory => !isInternalMemoryArtifact(memory)),
-      contactsById: this.buildContactSummaryMap(),
+      contactsById: await this.buildContactSummaryMap(),
     };
   }
 

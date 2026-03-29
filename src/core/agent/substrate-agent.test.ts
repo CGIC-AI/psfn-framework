@@ -2120,15 +2120,24 @@ describe('SubstrateAgent.handleMessage', () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const mockContactStore = {
-      resolveChannelIdentity: vi.fn().mockReturnValue({
+      getById: vi.fn().mockResolvedValue(undefined),
+      resolveChannelIdentity: vi.fn().mockResolvedValue({
         id: 'contact-canonical-1',
+        displayName: 'TestUser',
         trustLevel: 'trusted',
+        relationshipType: 'friend',
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-01-01T00:00:00.000Z',
         discordUserId: 'discord-user-1',
         channelIdentities: [
           { channel: 'api', userId: 'api-user-1' },
           { channel: 'discord', userId: 'discord-user-1' },
         ],
       }),
+      updateLastSeen: vi.fn().mockResolvedValue(undefined),
+      getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
+      recordChannelActivity: vi.fn().mockResolvedValue(undefined),
+      getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactStore;
 
     const agent = new SubstrateAgent(
@@ -3204,7 +3213,19 @@ describe('SubstrateAgent.handleMessage', () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const mockContactStore = {
-      resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
+      getById: vi.fn().mockResolvedValue(undefined),
+      resolveChannelIdentity: vi.fn().mockResolvedValue({
+        id: 'contact-primary',
+        displayName: 'TestUser',
+        trustLevel: 'primary',
+        relationshipType: 'friend',
+        firstSeen: '2025-01-01T00:00:00.000Z',
+        lastSeen: '2026-01-01T00:00:00.000Z',
+      }),
+      updateLastSeen: vi.fn().mockResolvedValue(undefined),
+      getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
+      recordChannelActivity: vi.fn().mockResolvedValue(undefined),
+      getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactStore;
 
     const agent = new SubstrateAgent(
@@ -3393,13 +3414,21 @@ describe('SubstrateAgent.handleMessage', () => {
       displayName: 'PrimaryUser',
       nickname: 'V',
       trustLevel: 'primary',
+      relationshipType: 'friend',
+      firstSeen: '2025-01-01T00:00:00.000Z',
+      lastSeen: '2026-01-01T00:00:00.000Z',
       channelIdentities: [
         { channel: 'discord', userId: 'discord-user' },
         { channel: 'telegram', userId: '5635268079' },
       ],
     };
     const mockContactStore = {
-      resolveChannelIdentity: vi.fn().mockImplementation((_channel: string, _userId: string) => sharedContact),
+      getById: vi.fn().mockResolvedValue(undefined),
+      resolveChannelIdentity: vi.fn().mockImplementation(async (_channel: string, _userId: string) => sharedContact),
+      updateLastSeen: vi.fn().mockResolvedValue(undefined),
+      getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
+      recordChannelActivity: vi.fn().mockResolvedValue(undefined),
+      getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactStore;
     const agent = new SubstrateAgent(
       new EventBus(),
@@ -4355,7 +4384,7 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
 
     agent.contactStore = {
-      resolveUserId: vi.fn().mockReturnValue({
+      resolveChannelIdentity: vi.fn().mockResolvedValue({
         id: 'contact-123',
         displayName: 'Test Contact',
         trustLevel: 'trusted',
@@ -4363,7 +4392,7 @@ describe('SubstrateAgent.handleMessage', () => {
         firstSeen: '2025-01-01T00:00:00.000Z',
         lastSeen: '2026-01-01T00:00:00.000Z',
       }),
-      getById: vi.fn().mockReturnValue({
+      getById: vi.fn().mockResolvedValue({
         id: 'contact-123',
         displayName: 'Test Contact',
         trustLevel: 'trusted',
@@ -4371,7 +4400,10 @@ describe('SubstrateAgent.handleMessage', () => {
         firstSeen: '2025-01-01T00:00:00.000Z',
         lastSeen: '2026-01-01T00:00:00.000Z',
       }),
-      getEmotionalSnapshot: vi.fn().mockReturnValue({
+      updateLastSeen: vi.fn().mockResolvedValue(undefined),
+      getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
+      recordChannelActivity: vi.fn().mockResolvedValue(undefined),
+      getEmotionalSnapshot: vi.fn().mockResolvedValue({
         baselineValence: 0.3,
         moodValence: 0.35,
         moodDrift: 0.05,
@@ -4583,7 +4615,19 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     );
     primaryAgent.contactStore = {
-      resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
+      getById: vi.fn().mockResolvedValue(undefined),
+      resolveChannelIdentity: vi.fn().mockResolvedValue({
+        id: 'contact-primary',
+        displayName: 'TestUser',
+        trustLevel: 'primary',
+        relationshipType: 'friend',
+        firstSeen: '2025-01-01T00:00:00.000Z',
+        lastSeen: '2026-01-01T00:00:00.000Z',
+      }),
+      updateLastSeen: vi.fn().mockResolvedValue(undefined),
+      getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
+      recordChannelActivity: vi.fn().mockResolvedValue(undefined),
+      getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactStore;
 
     const publicSessionManager = makeMockSessionManager();
@@ -4601,7 +4645,19 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     );
     publicAgent.contactStore = {
-      resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'public' }),
+      getById: vi.fn().mockResolvedValue(undefined),
+      resolveChannelIdentity: vi.fn().mockResolvedValue({
+        id: 'contact-public',
+        displayName: 'TestUser',
+        trustLevel: 'public',
+        relationshipType: 'friend',
+        firstSeen: '2025-01-01T00:00:00.000Z',
+        lastSeen: '2026-01-01T00:00:00.000Z',
+      }),
+      updateLastSeen: vi.fn().mockResolvedValue(undefined),
+      getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
+      recordChannelActivity: vi.fn().mockResolvedValue(undefined),
+      getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
     } as unknown as ContactStore;
 
     await primaryAgent.handleMessage(makeMessage({ id: 'affect-primary-turn' }));
@@ -5004,7 +5060,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     expect(agent.isStreaming).toBe(false);
   });
 
-  it('steer records user message and calls agent.steer', () => {
+  it('steer records user message and calls agent.steer', async () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -5014,13 +5070,13 @@ describe('SubstrateAgent steering + follow-up', () => {
     const steerSpy = vi.spyOn(Agent.prototype, 'steer');
 
     // steer is a no-op when agent isn't streaming
-    agent.steer(makeMessage({ content: 'actually...' }));
+    await agent.steer(makeMessage({ content: 'actually...' }));
     expect(steerSpy).not.toHaveBeenCalled();
 
     steerSpy.mockRestore();
   });
 
-  it('followUp records user message and calls agent.followUp', () => {
+  it('followUp records user message and calls agent.followUp', async () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -5028,7 +5084,7 @@ describe('SubstrateAgent steering + follow-up', () => {
 
     const followUpSpy = vi.spyOn(Agent.prototype, 'followUp').mockImplementation(() => {});
 
-    agent.followUp(makeMessage({ content: 'ps: one more thing' }));
+    await agent.followUp(makeMessage({ content: 'ps: one more thing' }));
 
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
       'test-channel',
@@ -5048,7 +5104,7 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
-  it('routes intention appraisal follow-ups as internal whispers instead of persisted chat messages', () => {
+  it('routes intention appraisal follow-ups as internal whispers instead of persisted chat messages', async () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
@@ -5056,7 +5112,7 @@ describe('SubstrateAgent steering + follow-up', () => {
 
     const followUpSpy = vi.spyOn(Agent.prototype, 'followUp').mockImplementation(() => {});
 
-    agent.followUp(makeMessage({
+    await agent.followUp(makeMessage({
       authorId: 'system:intention',
       authorName: 'Whisper',
       content: 'Keep the answer concrete and grounded.',

@@ -812,13 +812,13 @@ export function resolvePromptUserName(message: SubstrateMessage, contact?: Conta
   return 'User';
 }
 
-export function resolveAuthorContext(input: {
+export async function resolveAuthorContext(input: {
   message: SubstrateMessage;
   contactStore: ContactStorePort | null | undefined;
   logger: RuntimeContextLogger;
   companionIdentityKey: string;
   companionDisplayName?: string;
-}): ResolvedAuthorContext {
+}): Promise<ResolvedAuthorContext> {
   if (input.message.channelId.startsWith('internal:')) {
     const isSelfSubjectChannel = (
       input.message.channelId === 'internal:heartbeat'
@@ -873,18 +873,18 @@ export function resolveAuthorContext(input: {
     // by the Garden admin chat), resolve directly by ID so the correct contact (with nickname
     // etc.) is used regardless of which API auth principal is making the request.
     const canonicalHint = input.message.routing?.canonicalContactId?.trim();
-    const hintedContact = canonicalHint ? input.contactStore.getById(canonicalHint) : undefined;
+    const hintedContact = canonicalHint ? await input.contactStore.getById(canonicalHint) : undefined;
     const contact = hintedContact
-      ?? input.contactStore.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName);
+      ?? await input.contactStore.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName);
     if (hintedContact) {
       // Still update last seen so the contact record stays fresh.
-      input.contactStore.updateLastSeen(hintedContact.id);
+      await input.contactStore.updateLastSeen(hintedContact.id);
     }
     const canonicalContactKey = contact.id;
     const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
     const channelPrivacyLevel = explicitChannelPrivacy
       ?? normalizeChannelVisibility(
-        input.contactStore.getConversationChannelPrivacy(
+        await input.contactStore.getConversationChannelPrivacy(
           canonicalContactKey,
           channel,
           input.message.channelId,
@@ -892,7 +892,7 @@ export function resolveAuthorContext(input: {
       );
 
     if (canonicalContactKey) {
-      input.contactStore.recordChannelActivity(
+      await input.contactStore.recordChannelActivity(
         canonicalContactKey,
         channel,
         input.message.channelId,

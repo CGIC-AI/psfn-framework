@@ -307,10 +307,8 @@ export class MemoryExtractor {
       this.runtimeConfig,
       this.emotionalIntensityImportanceWeight,
     );
-    const canonicalContactName = canonicalContactId
-      && this.contactStore
-      && typeof this.contactStore.getById === 'function'
-      ? resolvePreferredContactName(this.contactStore.getById(canonicalContactId))
+    const canonicalContactName = canonicalContactId && this.contactStore
+      ? resolvePreferredContactName(await this.contactStore.getById(canonicalContactId))
       : undefined;
 
     await runExtractionOrchestration({

@@ -16,6 +16,7 @@ function makeTempDir(): string {
 
 function makeRuntimeConfig(characterCardPath: string, overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   const baseConfig: SubstrateConfig = {
+    companionId: 'test-companion',
     primaryModel: 'test-primary',
     primaryProvider: 'test-provider',
     extractionModel: 'test-extraction',
@@ -97,7 +98,7 @@ describe('AdminChatBootstrapService', () => {
     }
   });
 
-  it('uses global latest session id for default transport when available', () => {
+  it('uses global latest session id for default transport when available', async () => {
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
     } as unknown as ContactStore;
@@ -106,7 +107,7 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => '123456789012345678',
     });
 
-    const payload = service.buildBootstrap();
+    const payload = await service.buildBootstrap();
 
     expect(payload.defaultSessionId).toBe('123456789012345678');
     expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('123456789012345678');
@@ -118,7 +119,7 @@ describe('AdminChatBootstrapService', () => {
     expect(payload.onboarding.required).toBe(false);
   });
 
-  it('falls back to selected identity session id when no global default exists', () => {
+  it('falls back to selected identity session id when no global default exists', async () => {
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
     } as unknown as ContactStore;
@@ -127,14 +128,14 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    const payload = service.buildBootstrap();
+    const payload = await service.buildBootstrap();
 
     expect(payload.defaultSessionId).toBe('api:admin-user');
     expect(payload.runtime.transportHeaders['X-Session-ID']).toBe('api:admin-user');
     expect(payload.runtime.transportHeaders['X-Channel-Privacy']).toBe('private');
   });
 
-  it('keeps explicit operator-selected identity as default session', () => {
+  it('keeps explicit operator-selected identity as default session', async () => {
     const linkChannelIdentity = vi.fn(() => 'linked');
     const operatorContact = makeContact('contact-operator', 'Operator Contact');
     operatorContact.channels = [{
@@ -153,7 +154,7 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => '123456789012345678',
     });
 
-    const payload = service.updateSelection({
+    const payload = await service.updateSelection({
       channel: 'api',
       userId: 'operator-7',
     });
@@ -163,7 +164,7 @@ describe('AdminChatBootstrapService', () => {
     expect(payload.runtime.transportHeaders['X-Channel-Privacy']).toBe('private');
   });
 
-  it('switches to conversation-channel targets without forcing identity links', () => {
+  it('switches to conversation-channel targets without forcing identity links', async () => {
     const contact = makeContact('contact-dm', 'DM Contact');
     contact.conversationChannels = [{
       channel: 'discord',
@@ -197,7 +198,7 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    const payload = service.updateSelection({
+    const payload = await service.updateSelection({
       canonicalContactId: contact.id,
       channel: 'discord',
       channelId: '1313001762793197678',
@@ -222,7 +223,7 @@ describe('AdminChatBootstrapService', () => {
     expect(linkChannelIdentity).not.toHaveBeenCalled();
   });
 
-  it('does not expose raw api keys in bootstrap payloads', () => {
+  it('does not expose raw api keys in bootstrap payloads', async () => {
     const contactStore = {
       listAll: () => [makeContact('contact-primary', 'Primary Contact')],
     } as unknown as ContactStore;
@@ -232,8 +233,8 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    const payload = service.buildBootstrap();
-    const modelRoomPayload = service.buildModelRoomBootstrap(makeRuntimeConfig('/tmp/unused-card.json'));
+    const payload = await service.buildBootstrap();
+    const modelRoomPayload = await service.buildModelRoomBootstrap(makeRuntimeConfig('/tmp/unused-card.json'));
 
     expect(payload.api.apiKey).toBeUndefined();
     expect(payload.runtime.apiKey).toBeUndefined();
@@ -242,7 +243,7 @@ describe('AdminChatBootstrapService', () => {
     expect(JSON.stringify(modelRoomPayload)).not.toContain('bootstrap-test-secret');
   });
 
-  it('fails closed when no contacts are available for admin bootstrap', () => {
+  it('fails closed when no contacts are available for admin bootstrap', async () => {
     const contactStore = {
       listAll: () => [],
     } as unknown as ContactStore;
@@ -251,26 +252,26 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    expect(() => service.buildBootstrap()).toThrow('no contacts are available');
+    await expect(service.buildBootstrap()).rejects.toThrow('no contacts are available');
   });
 
-  it('fails closed when model room bootstrap has no direct participants', () => {
+  it('fails closed when model room bootstrap has no direct participants', async () => {
     const service = new AdminChatBootstrapService(null, {
       config: makeRuntimeConfig('/tmp/unused-card.json'),
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    expect(() => service.buildModelRoomBootstrap(makeRuntimeConfig('/tmp/unused-card.json', {
+    await expect(service.buildModelRoomBootstrap(makeRuntimeConfig('/tmp/unused-card.json', {
       modelCatalog: {
         primary: {
           model: 'test-model-room',
           provider: 'openrouter',
         },
       },
-    }))).toThrow('no direct model-room participants are configured');
+    }))).rejects.toThrow('no direct model-room participants are configured');
   });
 
-  it('resets default author identity when switching contacts without explicit overrides', () => {
+  it('resets default author identity when switching contacts without explicit overrides', async () => {
     const contactStore = {
       listAll: () => [
         makeContact('contact-api-principal', 'API Principal'),
@@ -282,10 +283,10 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    const initial = service.buildBootstrap();
+    const initial = await service.buildBootstrap();
     expect(initial.defaultAuthorName).toBe('API Principal');
 
-    const updated = service.updateSelection({
+    const updated = await service.updateSelection({
       canonicalContactId: 'contact-v',
       channel: 'api',
       userId: 'admin-user',
@@ -295,7 +296,7 @@ describe('AdminChatBootstrapService', () => {
     expect(updated.defaultAuthorId).toBe('admin-user');
   });
 
-  it('reports onboarding required when starter bootstrap card is active', () => {
+  it('reports onboarding required when starter bootstrap card is active', async () => {
     const root = makeTempDir();
     const characterCardPath = join(root, 'character.json');
     writeFileSync(characterCardPath, JSON.stringify({
@@ -323,14 +324,14 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    const payload = service.buildBootstrap();
+    const payload = await service.buildBootstrap();
 
     expect(payload.assistantName).toBe('Companion');
     expect(payload.onboarding.required).toBe(true);
     expect(payload.onboarding.message).toContain('Starter identity is active');
   });
 
-  it('prefers character card name over configured characterName', () => {
+  it('prefers character card name over configured characterName', async () => {
     const root = makeTempDir();
     const characterCardPath = join(root, 'character.json');
     writeFileSync(characterCardPath, JSON.stringify({
@@ -358,7 +359,7 @@ describe('AdminChatBootstrapService', () => {
       resolveGlobalDefaultSessionId: () => null,
     });
 
-    const payload = service.buildBootstrap();
+    const payload = await service.buildBootstrap();
 
     expect(payload.assistantName).toBe('Aimi');
   });

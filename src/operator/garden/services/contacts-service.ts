@@ -99,21 +99,21 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  listMutationAuditEntries(query: ContactMutationAuditQuery): ContactMutationAuditEntry[] {
+  async listMutationAuditEntries(query: ContactMutationAuditQuery): Promise<ContactMutationAuditEntry[]> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return [];
     return contactStore.listMutationAuditEntries(query);
   }
 
-  private buildSocialGraphMap(
+  private async buildSocialGraphMap(
     contacts: Contact[],
     profileMap: Map<string, ContactProfileArtifact>,
-  ): Map<string, AdminContactSocialGraphView> {
+  ): Promise<Map<string, AdminContactSocialGraphView>> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return new Map();
 
     const contactById = new Map(contacts.map(contact => [contact.id, contact] as const));
-    const entities = contactStore.listSocialGraphEntities({
+    const entities = await contactStore.listSocialGraphEntities({
       viewerTrustLevel: 'primary',
       viewerChannelVisibility: 'private',
       limit: Math.max(contacts.length * 4, 100),
@@ -124,7 +124,7 @@ export class AdminContactsDataService implements AdminContactsService {
         .filter((entity): entity is SocialGraphEntity & { contactId: string } => typeof entity.contactId === 'string')
         .map(entity => [entity.contactId, entity] as const),
     );
-    const edges = contactStore.listSocialRelationshipEdges({
+    const edges = await contactStore.listSocialRelationshipEdges({
       viewerTrustLevel: 'primary',
       viewerChannelVisibility: 'private',
       limit: Math.max(contacts.length * 8, 200),
@@ -257,7 +257,7 @@ export class AdminContactsDataService implements AdminContactsService {
       };
     }
 
-    const contacts = contactStore.listAll();
+    const contacts = await contactStore.listAll();
     const profileMap = new Map(
       (await this.deps.memoryStore.listContactProfiles()).map(profile => [profile.contactId, profile] as const),
     );
@@ -265,11 +265,11 @@ export class AdminContactsDataService implements AdminContactsService {
       contacts,
       sessionStore: this.deps.sessionStore,
     });
-    const socialGraphMap = this.buildSocialGraphMap(contacts, profileMap);
+    const socialGraphMap = await this.buildSocialGraphMap(contacts, profileMap);
 
-    const verifications = contactStore.listIdentityLinkVerifications(20);
+    const verifications = await contactStore.listIdentityLinkVerifications(20);
     const mutationAuditQuery = this.parseContactMutationAuditQuery(params);
-    const mutationAudits = this.listMutationAuditEntries(mutationAuditQuery);
+    const mutationAudits = await this.listMutationAuditEntries(mutationAuditQuery);
 
     return {
       contacts,
@@ -285,7 +285,7 @@ export class AdminContactsDataService implements AdminContactsService {
   async getContactDetail(contactId: string): Promise<AdminContactDetailData | null> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return null;
-    const contact = contactStore.getById(contactId);
+    const contact = await contactStore.getById(contactId);
     if (!contact) return null;
 
     const relatedChannels = buildRelatedConversationChannelMap({
@@ -300,19 +300,19 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  private updateIdentityProfile(
+  private async updateIdentityProfile(
     contact: Contact,
     displayName: string,
     nickname?: string,
     actor?: string,
-  ): boolean {
+  ): Promise<boolean> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return false;
 
     return contactStore.updateIdentityProfile(contact.id, displayName, nickname, actor);
   }
 
-  createContact(body: string): ContactUpdateResult {
+  async createContact(body: string): Promise<ContactUpdateResult> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -343,7 +343,7 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: `Invalid relationship type: ${payload.relationshipType}` };
     }
 
-    const contact = contactStore.upsert({
+    const contact = await contactStore.upsert({
       displayName,
       trustLevel: payload.trustLevel ?? 'regular',
       relationshipType: payload.relationshipType ?? 'acquaintance',
@@ -358,13 +358,13 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  deleteContact(contactId: string): ContactUpdateResult {
+  async deleteContact(contactId: string): Promise<ContactUpdateResult> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
     }
 
-    const contact = contactStore.getById(contactId);
+    const contact = await contactStore.getById(contactId);
     if (!contact) {
       return { ok: false, message: 'Contact not found' };
     }
@@ -373,14 +373,14 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Cannot delete the primary contact' };
     }
 
-    if (!contactStore.deleteContact(contactId)) {
+    if (!await contactStore.deleteContact(contactId)) {
       return { ok: false, message: 'Failed to delete contact' };
     }
 
     return { ok: true, message: 'Contact deleted' };
   }
 
-  mergeContacts(targetId: string, body: string): ContactUpdateResult {
+  async mergeContacts(targetId: string, body: string): Promise<ContactUpdateResult> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -402,21 +402,21 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Cannot merge a contact with itself' };
     }
 
-    const target = contactStore.getById(targetId);
+    const target = await contactStore.getById(targetId);
     if (!target) {
       return { ok: false, message: 'Target contact not found' };
     }
 
-    const source = contactStore.getById(sourceId);
+    const source = await contactStore.getById(sourceId);
     if (!source) {
       return { ok: false, message: 'Source contact not found' };
     }
 
-    if (!contactStore.mergeContacts(sourceId, targetId)) {
+    if (!await contactStore.mergeContacts(sourceId, targetId)) {
       return { ok: false, message: 'Merge failed' };
     }
 
-    const merged = contactStore.getById(targetId);
+    const merged = await contactStore.getById(targetId);
     if (!merged) {
       return { ok: false, message: 'Merge succeeded but target not found after merge' };
     }
@@ -432,7 +432,7 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  unlinkChannelIdentity(contactId: string, body: string): ContactUpdateResult {
+  async unlinkChannelIdentity(contactId: string, body: string): Promise<ContactUpdateResult> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -451,16 +451,16 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'channel and userId are required' };
     }
 
-    const contact = contactStore.getById(contactId);
+    const contact = await contactStore.getById(contactId);
     if (!contact) {
       return { ok: false, message: 'Contact not found' };
     }
 
-    if (!contactStore.unlinkChannelIdentity(contactId, channel, userId, 'admin:api')) {
+    if (!await contactStore.unlinkChannelIdentity(contactId, channel, userId, 'admin:api')) {
       return { ok: false, message: 'Channel identity not found or already unlinked' };
     }
 
-    const updated = contactStore.getById(contactId);
+    const updated = await contactStore.getById(contactId);
     return {
       ok: true,
       message: 'Channel identity unlinked',
@@ -474,7 +474,7 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  deleteConversationChannel(contactId: string, body: string): ContactUpdateResult {
+  async deleteConversationChannel(contactId: string, body: string): Promise<ContactUpdateResult> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -493,16 +493,16 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'channel and channelId are required' };
     }
 
-    const contact = contactStore.getById(contactId);
+    const contact = await contactStore.getById(contactId);
     if (!contact) {
       return { ok: false, message: 'Contact not found' };
     }
 
-    if (!contactStore.deleteConversationChannel(contactId, channel, channelId, 'admin:api')) {
+    if (!await contactStore.deleteConversationChannel(contactId, channel, channelId, 'admin:api')) {
       return { ok: false, message: 'Conversation channel not found on contact' };
     }
 
-    const updated = contactStore.getById(contactId);
+    const updated = await contactStore.getById(contactId);
     return {
       ok: true,
       message: 'Conversation channel deleted',
@@ -516,13 +516,13 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  updateContact(contactId: string, body: string): ContactUpdateResult {
+  async updateContact(contactId: string, body: string): Promise<ContactUpdateResult> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
     }
 
-    const contact = contactStore.getById(contactId);
+    const contact = await contactStore.getById(contactId);
     if (!contact) {
       return { ok: false, message: 'Contact not found' };
     }
@@ -539,7 +539,7 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!displayName) {
         return { ok: false, message: 'displayName cannot be empty' };
       }
-      if (!this.updateIdentityProfile(contact, displayName, payload.nickname, 'admin:api')) {
+      if (!await this.updateIdentityProfile(contact, displayName, payload.nickname, 'admin:api')) {
         return { ok: false, message: 'Unable to update identity profile' };
       }
     }
@@ -548,7 +548,7 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!TRUST_LEVELS.includes(payload.trustLevel)) {
         return { ok: false, message: `Invalid trust level: ${payload.trustLevel}` };
       }
-      if (!contactStore.setTrustLevel(contactId, payload.trustLevel, 'admin:api')) {
+      if (!await contactStore.setTrustLevel(contactId, payload.trustLevel, 'admin:api')) {
         return { ok: false, message: 'Unable to update trust level' };
       }
     }
@@ -557,13 +557,13 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!VALID_RELATIONSHIP_TYPES.includes(payload.relationshipType)) {
         return { ok: false, message: `Invalid relationship type: ${payload.relationshipType}` };
       }
-      if (!contactStore.updateRelationshipType(contactId, payload.relationshipType, 'admin:api')) {
+      if (!await contactStore.updateRelationshipType(contactId, payload.relationshipType, 'admin:api')) {
         return { ok: false, message: 'Unable to update relationship type' };
       }
     }
 
     if (payload.notes !== undefined) {
-      contactStore.updateNotes(contactId, payload.notes, 'admin:api');
+      await contactStore.updateNotes(contactId, payload.notes, 'admin:api');
     }
 
     // Apply channel privacy updates
@@ -577,7 +577,7 @@ export class AdminContactsDataService implements AdminContactsService {
         const normalizedUserId = cp.userId?.trim();
         const normalizedChannelId = cp.channelId?.trim();
         const updated = normalizedChannelId
-          ? contactStore.setConversationChannelPrivacy(
+          ? await contactStore.setConversationChannelPrivacy(
             contactId,
             normalizedChannel,
             normalizedChannelId,
@@ -585,7 +585,7 @@ export class AdminContactsDataService implements AdminContactsService {
             'admin:api',
           )
           : normalizedUserId
-              ? contactStore.setChannelPrivacy(
+              ? await contactStore.setChannelPrivacy(
                 contactId,
                 normalizedChannel,
                 normalizedUserId,
@@ -609,7 +609,7 @@ export class AdminContactsDataService implements AdminContactsService {
       if (ch.privacyLevel && !CHANNEL_PRIVACY_LEVELS.includes(ch.privacyLevel)) {
         return { ok: false, message: `Invalid privacy level for new channel: ${ch.privacyLevel}` };
       }
-      const linkResult = contactStore.linkChannelIdentity(
+      const linkResult = await contactStore.linkChannelIdentity(
         contactId,
         ch.channel.trim(),
         ch.userId.trim(),
@@ -624,7 +624,7 @@ export class AdminContactsDataService implements AdminContactsService {
       }
     }
 
-    const updated = contactStore.getById(contactId);
+    const updated = await contactStore.getById(contactId);
     if (!updated) {
       return { ok: false, message: 'Update failed' };
     }

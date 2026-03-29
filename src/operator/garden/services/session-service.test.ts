@@ -704,7 +704,7 @@ describe('AdminSessionDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const listed = service.listSessions().channels.filter(channel => channel.channelId === channelId);
+    const listed = (await service.listSessions()).channels.filter(channel => channel.channelId === channelId);
     expect(listed).toHaveLength(2);
     expect(new Set(listed.map(channel => channel.sessionId)).size).toBe(2);
 

@@ -524,7 +524,7 @@ describe('SessionStore', () => {
     ]);
   });
 
-  it('indexes appended messages for FTS keyword search across channels', () => {
+  it('indexes appended messages for FTS keyword search across channels', async () => {
     store.append({
       channelId: 'api:alpha',
       role: 'user',
@@ -538,7 +538,7 @@ describe('SessionStore', () => {
       timestamp: 2_000,
     });
 
-    const hits = store.searchByKeywords('Kyoto', 10);
+    const hits = await store.searchByKeywords('Kyoto', 10);
     expect(hits).toHaveLength(2);
 
     const channels = new Set(hits.map(hit => hit.channelId));
@@ -547,7 +547,7 @@ describe('SessionStore', () => {
     expect(hits[0].snippet.toLowerCase()).toContain('kyoto');
   });
 
-  it('ranks denser FTS matches above sparse matches', () => {
+  it('ranks denser FTS matches above sparse matches', async () => {
     store.append({
       channelId: 'rank:strong',
       role: 'assistant',
@@ -561,14 +561,14 @@ describe('SessionStore', () => {
       timestamp: 2_000,
     });
 
-    const hits = store.searchByKeywords('nebula launch', 5);
+    const hits = await store.searchByKeywords('nebula launch', 5);
     expect(hits).toHaveLength(2);
     expect(hits[0].channelId).toBe('rank:strong');
     expect(hits[1].channelId).toBe('rank:weak');
     expect(hits[0].score).toBeLessThanOrEqual(hits[1].score);
   });
 
-  it('backfills existing JSONL transcripts into FTS index on startup', () => {
+  it('backfills existing JSONL transcripts into FTS index on startup', async () => {
     const noIndexStore = new SessionStore(dir, { disableSearchIndex: true });
     noIndexStore.append({
       channelId: 'api:legacy-search',
@@ -578,7 +578,7 @@ describe('SessionStore', () => {
     });
 
     const reloaded = new SessionStore(dir);
-    const hits = reloaded.searchByKeywords('aurora protocol', 5);
+    const hits = await reloaded.searchByKeywords('aurora protocol', 5);
     expect(hits).toHaveLength(1);
     expect(hits[0].channelId).toBe('api:legacy-search');
   });

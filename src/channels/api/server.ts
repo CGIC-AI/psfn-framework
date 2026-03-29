@@ -1347,11 +1347,11 @@ export class ApiServer implements ChannelAdapterPort {
     };
   }
 
-  private enforceIdentityClaim(
+  private async enforceIdentityClaim(
     req: IncomingMessage,
     res: ServerResponse,
     authorId: string,
-  ): boolean {
+  ): Promise<boolean> {
     const claim = this.readIdentityClaimHeaders(req);
     if (!claim) return true;
 
@@ -1376,7 +1376,7 @@ export class ApiServer implements ChannelAdapterPort {
     }
 
     const hasCompleteVerificationHeaders = Boolean(claim.nonce && claim.expiresAt && claim.signature);
-    const existingApiIdentity = this.contactStore.getByChannelIdentity('api', authorId);
+    const existingApiIdentity = await this.contactStore.getByChannelIdentity('api', authorId);
     if (existingApiIdentity?.id === claim.canonicalContactId && !hasCompleteVerificationHeaders) {
       return true;
     }
@@ -1392,7 +1392,7 @@ export class ApiServer implements ChannelAdapterPort {
 
     const requiresChallenge = !claim.nonce || !claim.expiresAt || !claim.signature;
     if (requiresChallenge) {
-      const challengeResult = this.contactStore.createIdentityLinkChallenge({
+      const challengeResult = await this.contactStore.createIdentityLinkChallenge({
         contactId: claim.canonicalContactId,
         sourceChannel: claim.sourceChannel,
         sourceUserId: claim.sourceUserId,
@@ -1454,7 +1454,7 @@ export class ApiServer implements ChannelAdapterPort {
       return false;
     }
 
-    const verificationResult = this.contactStore.verifyIdentityLinkChallenge({
+    const verificationResult = await this.contactStore.verifyIdentityLinkChallenge({
       contactId: claim.canonicalContactId,
       sourceChannel: claim.sourceChannel,
       sourceUserId: claim.sourceUserId,
@@ -1564,7 +1564,7 @@ export class ApiServer implements ChannelAdapterPort {
       channelPrivacy: claimedChannelPrivacy,
       canonicalContactId: claimedCanonicalContactId,
     } = turnIdentity.value;
-    if (!this.enforceIdentityClaim(req, res, authorId)) {
+    if (!(await this.enforceIdentityClaim(req, res, authorId))) {
       return null;
     }
 

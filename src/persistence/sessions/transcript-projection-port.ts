@@ -29,7 +29,7 @@ export interface TranscriptProjectionPort {
 }
 
 export interface KeywordSearchableTranscriptProjection extends TranscriptProjectionPort {
-  searchByKeywords(query: string, limit?: number): SessionSearchHit[];
+  searchByKeywords(query: string, limit?: number): Promise<SessionSearchHit[]>;
 }
 
 export function supportsKeywordSearch(

@@ -586,9 +586,9 @@ export class SubstrateAgent {
    * remaining tool calls are skipped, and the message is added to context
    * before the next LLM call. No-op if agent isn't streaming.
    */
-  steer(message: SubstrateMessage): void {
+  async steer(message: SubstrateMessage): Promise<void> {
     if (!this.agent.state.isStreaming) return;
-    const authorContext = this.resolveAuthorContext(message);
+    const authorContext = await this.resolveAuthorContext(message);
     this.turnSupportRuntime.recordUserMessage(
       message,
       createTurnId(),
@@ -611,7 +611,7 @@ export class SubstrateAgent {
    * Intention appraisal follow-ups are injected as internal Whisper notes to self
    * and are never persisted into the external session journal.
    */
-  followUp(message: SubstrateMessage): void {
+  async followUp(message: SubstrateMessage): Promise<void> {
     if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
       this.agent.followUp({
         role: 'custom',
@@ -641,7 +641,7 @@ export class SubstrateAgent {
         systemContent,
       );
     } else {
-      const authorContext = this.resolveAuthorContext(message);
+      const authorContext = await this.resolveAuthorContext(message);
       this.turnSupportRuntime.recordUserMessage(
         message,
         turnId,
@@ -1100,7 +1100,7 @@ export class SubstrateAgent {
     });
   }
 
-  private resolveAuthorContext(message: SubstrateMessage): ResolvedAuthorContext {
+  private async resolveAuthorContext(message: SubstrateMessage): Promise<ResolvedAuthorContext> {
     return resolveAuthorContextForTurn({
       message,
       contactStore: this.contactStore,

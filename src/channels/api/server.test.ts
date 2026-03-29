@@ -220,6 +220,13 @@ async function stopServer(server: ApiServer): Promise<void> {
   }
 }
 
+function createApiServer(config: ConstructorParameters<typeof ApiServer>[0]): ApiServer {
+  return new ApiServer({
+    companionId: DEFAULT_COMPANION_ID,
+    ...config,
+  });
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error?: unknown) => void;
@@ -317,7 +324,7 @@ describe('ApiServer', () => {
   beforeEach(async () => {
     eventBus = new EventBus();
     port = await allocatePort();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -352,7 +359,7 @@ describe('ApiServer', () => {
 
     it('routes outbound text through session manager without mutating API routes', async () => {
       const mockSessionMgr = createMockSessionManager();
-      const localServer = new ApiServer({
+      const localServer = createApiServer({
         port: await allocatePort(),
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -388,7 +395,7 @@ describe('ApiServer', () => {
 
     it('returns custom model name', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -408,7 +415,7 @@ describe('ApiServer', () => {
   describe('GET /health', () => {
     it('returns structured healthy subsystem status', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -441,7 +448,7 @@ describe('ApiServer', () => {
 
     it('returns degraded health when any subsystem check fails', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -476,7 +483,7 @@ describe('ApiServer', () => {
 
     it('degrades health when scheduler heartbeat is stale beyond threshold', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -504,7 +511,7 @@ describe('ApiServer', () => {
 
     it('uses fresh schedule.heartbeat events for scheduler continuity health', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -555,7 +562,7 @@ describe('ApiServer', () => {
     it('binds author identity to the local insecure principal and ignores spoofed headers', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -582,7 +589,7 @@ describe('ApiServer', () => {
     it('passes direct-provider, prompt, and style overrides to substrate messages', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -615,7 +622,7 @@ describe('ApiServer', () => {
     it('passes explicit channel privacy to substrate messages', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -700,7 +707,7 @@ describe('ApiServer', () => {
       });
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -741,7 +748,7 @@ describe('ApiServer', () => {
       });
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -809,7 +816,7 @@ describe('ApiServer', () => {
       });
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -921,7 +928,7 @@ describe('ApiServer', () => {
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -978,7 +985,7 @@ describe('ApiServer', () => {
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -1044,7 +1051,7 @@ describe('ApiServer', () => {
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -1095,7 +1102,7 @@ describe('ApiServer', () => {
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -1130,7 +1137,7 @@ describe('ApiServer', () => {
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -1269,7 +1276,7 @@ describe('ApiServer', () => {
 
     it('allows preflight when origin is in API_CORS_ALLOWLIST', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1294,7 +1301,7 @@ describe('ApiServer', () => {
 
     it('allows preflight for split-mode admin origin derived from admin host/port', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1323,7 +1330,7 @@ describe('ApiServer', () => {
 
     it('allows preflight for split-mode admin origin when admin host is wildcard bind', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1350,7 +1357,7 @@ describe('ApiServer', () => {
 
     it('rejects wildcard-bind split-mode preflight when origin host differs from request host', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1376,7 +1383,7 @@ describe('ApiServer', () => {
 
     it('allows wildcard LAN preflight when configured origin host matches', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1399,7 +1406,7 @@ describe('ApiServer', () => {
 
     it('rejects wildcard LAN preflight when origin does not match configured port', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1424,7 +1431,7 @@ describe('ApiServer', () => {
       const voice = createVoiceHooksProbe();
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1458,7 +1465,7 @@ describe('ApiServer', () => {
       const voice = createVoiceHooksProbe();
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1497,7 +1504,7 @@ describe('ApiServer', () => {
     it('seeds prior messages into session for new channel', async () => {
       const mockSessionMgr = createMockSessionManager();
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1532,7 +1539,7 @@ describe('ApiServer', () => {
     it('ignores spoofed author headers when seeding prior user messages', async () => {
       const mockSessionMgr = createMockSessionManager();
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1585,7 +1592,7 @@ describe('ApiServer startup auth guard', () => {
   it('fails startup without API key unless insecure local mode is explicit', async () => {
     const eventBus = new EventBus();
     const port = await allocatePort();
-    const server = new ApiServer({
+    const server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1601,7 +1608,7 @@ describe('ApiServer startup auth guard', () => {
   it('rejects insecure local mode when API_HOST is not loopback', async () => {
     const eventBus = new EventBus();
     const port = await allocatePort();
-    const server = new ApiServer({
+    const server = createApiServer({
       port,
       host: '0.0.0.0',
       agentLoop: createMockAgentLoop(eventBus),
@@ -1625,7 +1632,7 @@ describe('ApiServer with auth', () => {
   beforeEach(async () => {
     eventBus = new EventBus();
     port = await allocatePort();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1663,7 +1670,7 @@ describe('ApiServer with auth', () => {
 
   it('accepts requests with admin token when configured as alternate auth token', async () => {
     await server.stop();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1682,7 +1689,7 @@ describe('ApiServer with auth', () => {
 
   it('accepts requests with admin auth cookie when configured as alternate auth token', async () => {
     await server.stop();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1717,7 +1724,7 @@ describe('ApiServer with auth', () => {
   it('binds message identity to authenticated principal and ignores spoofed user headers', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: mockAgent,
       eventBus,
@@ -1754,7 +1761,7 @@ describe('ApiServer with auth', () => {
   it('routes authenticated PSFN Amica claims into psfn-amica channel sessions', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: mockAgent,
       eventBus,
@@ -1795,7 +1802,7 @@ describe('ApiServer with auth', () => {
   it('applies configured psfn-amica defaults when the caller only claims channel type and id', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: mockAgent,
       eventBus,
@@ -1835,7 +1842,7 @@ describe('ApiServer with auth', () => {
 
   it('fails closed for psfn-amica claims when the PSFN-side profile is missing', async () => {
     await server.stop();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1867,7 +1874,7 @@ describe('ApiServer with auth', () => {
     });
 
     await server.stop();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,

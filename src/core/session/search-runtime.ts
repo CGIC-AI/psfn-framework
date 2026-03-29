@@ -216,7 +216,7 @@ export async function runSessionSearch(params: {
   const scopedChannelId = typeof params.targetChannelId === 'string' && params.targetChannelId.trim().length > 0
     ? params.targetChannelId.trim()
     : undefined;
-  const rawHits = params.transcriptSearch.searchByKeywords(
+  const rawHits = await params.transcriptSearch.searchByKeywords(
     normalizedQuery,
     requestedLimit * SESSION_SEARCH_OVERSAMPLE_FACTOR,
   );

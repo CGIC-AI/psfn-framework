@@ -278,7 +278,7 @@ export interface AdminSessionMessagesData {
 }
 
 export interface AdminSessionService {
-  listSessions(): AdminSessionListData;
+  listSessions(): Promise<AdminSessionListData>;
   getSessionMessages(sessionId: string): AdminSessionMessagesData;
 }
 
@@ -509,12 +509,12 @@ export interface AdminContactSocialGraphView {
 export interface AdminContactsService {
   listContacts(params?: URLSearchParams): Promise<AdminContactListData>;
   getContactDetail(contactId: string): Promise<AdminContactDetailData | null>;
-  updateContact(contactId: string, body: string): ContactUpdateResult;
-  createContact(body: string): ContactUpdateResult;
-  deleteContact(contactId: string): ContactUpdateResult;
-  mergeContacts(targetId: string, body: string): ContactUpdateResult;
-  unlinkChannelIdentity(contactId: string, body: string): ContactUpdateResult;
-  deleteConversationChannel(contactId: string, body: string): ContactUpdateResult;
+  updateContact(contactId: string, body: string): Promise<ContactUpdateResult>;
+  createContact(body: string): Promise<ContactUpdateResult>;
+  deleteContact(contactId: string): Promise<ContactUpdateResult>;
+  mergeContacts(targetId: string, body: string): Promise<ContactUpdateResult>;
+  unlinkChannelIdentity(contactId: string, body: string): Promise<ContactUpdateResult>;
+  deleteConversationChannel(contactId: string, body: string): Promise<ContactUpdateResult>;
 }
 
 export interface AdminPromptListData {

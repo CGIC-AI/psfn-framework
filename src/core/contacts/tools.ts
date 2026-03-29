@@ -70,7 +70,7 @@ export function createContactSetTrustTool(contactStore: ContactStorePort): Agent
         }
 
         if (behaviorSignals) {
-          const suggestion = contactStore.suggestLowTierTrustDrift(
+          const suggestion = await contactStore.suggestLowTierTrustDrift(
             contactId,
             behaviorSignals,
             'agent:tool:contact_set_trust',
@@ -89,7 +89,7 @@ export function createContactSetTrustTool(contactStore: ContactStorePort): Agent
             );
           }
 
-          const applied = contactStore.applyLowTierTrustDriftSuggestion(
+          const applied = await contactStore.applyLowTierTrustDriftSuggestion(
             contactId,
             suggestion,
             'agent:tool:contact_set_trust',
@@ -114,12 +114,12 @@ export function createContactSetTrustTool(contactStore: ContactStorePort): Agent
           );
         }
 
-        const contact = contactStore.getById(contactId);
+        const contact = await contactStore.getById(contactId);
         if (!contact) {
           return textResultWithError(`Contact ${contactId} not found`, true);
         }
 
-        const success = contactStore.setTrustLevel(
+        const success = await contactStore.setTrustLevel(
           contactId,
           trustLevel,
           'agent:tool:contact_set_trust',
@@ -166,7 +166,7 @@ export function createContactNoteTool(contactStore: ContactStorePort): AgentTool
       try {
         const { contactId, notes } = params;
 
-        const success = contactStore.updateNotes(contactId, notes, 'agent:tool:contact_note');
+        const success = await contactStore.updateNotes(contactId, notes, 'agent:tool:contact_note');
         if (!success) {
           return textResultWithError(`Contact ${contactId} not found`, true);
         }
@@ -212,7 +212,7 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStorePor
           );
         }
 
-        const updated = contactStore.setChannelPrivacy(
+        const updated = await contactStore.setChannelPrivacy(
           params.contactId,
           params.channel,
           params.channelUserId,
@@ -254,9 +254,9 @@ export function createContactLookupTool(contactStore: ContactStorePort): AgentTo
         const id = params.contactId;
 
         // Try canonical ID first, then Discord user ID.
-        let contact = contactStore.getById(id);
+        let contact = await contactStore.getById(id);
         if (!contact) {
-          contact = contactStore.getByDiscordUserId(id);
+          contact = await contactStore.getByDiscordUserId(id);
         }
         if (!contact) {
           const idx = id.indexOf(':');
@@ -264,7 +264,7 @@ export function createContactLookupTool(contactStore: ContactStorePort): AgentTo
             const channel = id.slice(0, idx).trim();
             const channelUserId = id.slice(idx + 1).trim();
             if (channel && channelUserId) {
-              contact = contactStore.getByChannelIdentity(channel, channelUserId);
+              contact = await contactStore.getByChannelIdentity(channel, channelUserId);
             }
           }
         }
@@ -333,7 +333,7 @@ export function createContactLinkIdentityTool(contactStore: ContactStorePort): A
           );
         }
 
-        const result = contactStore.linkChannelIdentity(
+        const result = await contactStore.linkChannelIdentity(
           params.contactId,
           params.channel,
           params.channelUserId,
@@ -373,7 +373,7 @@ export function createContactListTool(contactStore: ContactStorePort): AgentTool
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const contacts = contactStore.listAll();
+        const contacts = await contactStore.listAll();
 
         if (contacts.length === 0) {
           return textResult('No contacts in address book.');

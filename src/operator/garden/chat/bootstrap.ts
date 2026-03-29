@@ -143,14 +143,14 @@ export class AdminChatBootstrapService {
     this.resolveGlobalDefaultSessionIdFn = options.resolveGlobalDefaultSessionId ?? null;
   }
 
-  buildBootstrap(options: AdminChatBootstrapRuntimeOptions = {}): AdminChatBootstrapResponse {
+  async buildBootstrap(options: AdminChatBootstrapRuntimeOptions = {}): Promise<AdminChatBootstrapResponse> {
     return this.composeBootstrap(options);
   }
 
-  updateSelection(
+  async updateSelection(
     input: AdminChatBootstrapUpdateInput,
     options: AdminChatBootstrapRuntimeOptions = {},
-  ): AdminChatBootstrapResponse {
+  ): Promise<AdminChatBootstrapResponse> {
     this.applySelectionInput(input);
     if (
       input.canonicalContactId !== undefined
@@ -160,14 +160,14 @@ export class AdminChatBootstrapService {
     ) {
       this.selectionPinnedByUser = true;
     }
-    this.persistSelectionMapping(input);
+    await this.persistSelectionMapping(input);
     return this.composeBootstrap(options);
   }
 
-  buildModelRoomBootstrap(
+  async buildModelRoomBootstrap(
     config: SubstrateConfig,
     options: AdminChatBootstrapRuntimeOptions = {},
-  ): AdminModelRoomBootstrapResponse {
+  ): Promise<AdminModelRoomBootstrapResponse> {
     const apiBaseUrl = resolveAdminChatApiBaseUrl({
       explicitApiBaseUrl: options.settingsApiBaseUrl ?? this.configuredApiBaseUrl,
       apiHost: this.configuredApiHost,
@@ -278,19 +278,19 @@ export class AdminChatBootstrapService {
     }
   }
 
-  private persistSelectionMapping(input: AdminChatBootstrapUpdateInput): void {
+  private async persistSelectionMapping(input: AdminChatBootstrapUpdateInput): Promise<void> {
     if (!this.contactStore) return;
     const selectedChannel = this.selection.channel;
     const selectedUserId = this.selection.userId;
     const selectedChannelId = this.selection.channelId;
     if (!selectedChannel || (!selectedUserId && !selectedChannelId)) return;
 
-    const contacts = this.loadContacts();
+    const contacts = await this.loadContacts();
     const selectedContact = this.resolveSelectedContact(contacts, this.selection.canonicalContactId);
 
     if (selectedChannelId) {
       if (!input.privacyLevel) return;
-      const updated = this.contactStore.setConversationChannelPrivacy(
+      const updated = await this.contactStore.setConversationChannelPrivacy(
         selectedContact.canonicalContactId,
         selectedChannel,
         selectedChannelId,
@@ -309,7 +309,7 @@ export class AdminChatBootstrapService {
     ));
 
     if (!existingIdentity) {
-      const linkResult = this.contactStore.linkChannelIdentity(
+      const linkResult = await this.contactStore.linkChannelIdentity(
         selectedContact.canonicalContactId,
         selectedChannel,
         selectedUserId,
@@ -326,7 +326,7 @@ export class AdminChatBootstrapService {
     }
 
     if (input.privacyLevel) {
-      const updated = this.contactStore.setChannelPrivacy(
+      const updated = await this.contactStore.setChannelPrivacy(
         selectedContact.canonicalContactId,
         selectedChannel,
         selectedUserId,
@@ -339,8 +339,8 @@ export class AdminChatBootstrapService {
     }
   }
 
-  private composeBootstrap(options: AdminChatBootstrapRuntimeOptions): AdminChatBootstrapResponse {
-    const contacts = this.loadContacts();
+  private async composeBootstrap(options: AdminChatBootstrapRuntimeOptions): Promise<AdminChatBootstrapResponse> {
+    const contacts = await this.loadContacts();
     const selectedContact = this.resolveSelectedContact(contacts, this.selection.canonicalContactId);
     const selectedTarget = this.resolveSelectedTarget(
       selectedContact,
@@ -618,12 +618,12 @@ export class AdminChatBootstrapService {
     return selectedTarget.channelId ?? selectedContact.canonicalContactId;
   }
 
-  private loadContacts(): ContactCandidate[] {
+  private async loadContacts(): Promise<ContactCandidate[]> {
     if (!this.contactStore) {
       throwBootstrapSetupError('contact store is not configured');
     }
 
-    const contacts = this.contactStore.listAll();
+    const contacts = await this.contactStore.listAll();
     if (contacts.length === 0) {
       throwBootstrapSetupError('no contacts are available for admin chat bootstrap');
     }

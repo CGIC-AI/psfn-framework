@@ -165,11 +165,11 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  listSessions(): AdminSessionListData {
+  async listSessions(): Promise<AdminSessionListData> {
     const channels = this.deps.sessionStore.listChannels();
-    const contacts = this.deps.contactStore?.listAll() ?? [];
+    const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
     return {
-      channels: channels.map(channel => {
+      channels: await Promise.all(channels.map(async (channel) => {
         const lastEntry = this.deps.sessionStore.getLastEntry(channel.sessionId);
         const lastActivityAt = lastEntry
           ? (typeof lastEntry.timestamp === 'number'
@@ -182,7 +182,7 @@ export class AdminSessionDataService implements AdminSessionService {
           ? { ...channel, lastActivityAt }
           : channel;
 
-        const linkedContact = getLinkedContactForSession({
+        const linkedContact = await getLinkedContactForSession({
           channelId: channel.channelId,
           contacts,
           sessionStore: this.deps.sessionStore,
@@ -194,7 +194,7 @@ export class AdminSessionDataService implements AdminSessionService {
           linkedContactId: linkedContact.id,
           linkedContactName: linkedContact.displayName,
         };
-      }),
+      })),
     };
   }
 

@@ -623,9 +623,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
 
     const genericResult = await retriever.retrieve('general checkin question', 'api:test', 'primary');
-    expect(genericResult.indexOf('Stable corroborated memory')).toBeLessThan(
-      genericResult.indexOf('Nebularkite protocol keyphrase marker'),
-    );
+    expect(genericResult).toContain('Stable corroborated memory');
+    expect(genericResult).not.toContain('Nebularkite protocol keyphrase marker');
 
     const explicitResult = await retriever.retrieve(
       'can you recall nebularkite protocol keyphrase?',

@@ -912,7 +912,14 @@ export class MemoryRetriever implements MemoryProvider {
         });
       }
 
-      const selection = selectWithinRelevanceAndTokenBudget(ranked, budget.tokenBudget);
+      const guaranteedSelectionFloor = scoreGuaranteedCount > 0
+        ? Math.min(ranked.length, Math.max(MEMORY_RETRIEVAL_MIN_ITEMS, SCORE_GUARANTEE_MIN_K))
+        : Math.min(ranked.length, MEMORY_RETRIEVAL_MIN_ITEMS);
+      const selection = selectWithinRelevanceAndTokenBudget(
+        ranked,
+        budget.tokenBudget,
+        guaranteedSelectionFloor,
+      );
       const selected = selection.selected;
 
       telemetry.returnedCount = selected.length;
@@ -1830,7 +1837,10 @@ const RELEVANCE_TERMINATION_RELATIVE_FLOOR = 0.25;
 function selectWithinRelevanceAndTokenBudget(
   scored: ScoredMemory[],
   tokenBudget: number,
+  minimumSelectedCount = MEMORY_RETRIEVAL_MIN_ITEMS,
 ): RetrievalSelectionDecision {
+  const selectionFloor = Math.max(1, Math.min(minimumSelectedCount, scored.length));
+
   if (scored.length === 0) {
     return {
       selected: [],
@@ -1842,7 +1852,7 @@ function selectWithinRelevanceAndTokenBudget(
   }
 
   if (tokenBudget <= 0) {
-    const selected = scored.slice(0, MEMORY_RETRIEVAL_MIN_ITEMS);
+    const selected = scored.slice(0, selectionFloor);
     return {
       selected,
       stopReason: scored.length > selected.length ? 'budget' : 'exhausted',
@@ -1869,7 +1879,7 @@ function selectWithinRelevanceAndTokenBudget(
     const item = scored[index];
     const itemTokens = estimateMemoryPromptTokens(item.memory);
 
-    if (selected.length >= MEMORY_RETRIEVAL_MIN_ITEMS) {
+    if (selected.length >= selectionFloor) {
       if (item.score < relevanceScoreFloor) {
         stopReason = 'relevance';
         relevanceStoppedCount = scored.length - index;

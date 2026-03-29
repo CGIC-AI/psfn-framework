@@ -104,7 +104,7 @@ describe('createBoundedSubagentLaunchTool', () => {
             },
           },
           mutationWorkflow: 'artifact_return_only',
-          returnedArtifacts: [],
+          artifactReturn: null,
         });
       },
     );

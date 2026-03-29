@@ -111,7 +111,7 @@ export function createBoundedSubagentLaunchTool(manager: SubagentExecutionPort):
           details: {
             boundedSubagent,
             mutationWorkflow: 'artifact_return_only',
-            returnedArtifacts: result.returnedArtifacts ?? [],
+            artifactReturn: result.artifactReturn ?? null,
           },
         };
       } catch (error) {

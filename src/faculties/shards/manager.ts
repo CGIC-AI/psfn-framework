@@ -33,7 +33,11 @@ import type {
   ShardSourceContext,
 } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
-import { buildShardReturnedArtifacts, type ShardReturnedArtifact } from './artifact-policy.js';
+import {
+  createArtifactReturnPort,
+  type ArtifactReturnBatch,
+  type ArtifactReturnPort,
+} from './artifact-policy.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCanonicalEmbodimentContext } from '../../core/agent/active-emanation-state.js';
 import {
@@ -110,6 +114,7 @@ export interface ShardManagerDeps {
   auditTrail?: ShardAuditTrail;
   runtimeMode?: RuntimeMode;
   shardSessionMemorySyncAuditPath?: string;
+  artifactReturnPort?: ArtifactReturnPort;
 }
 
 export interface WyomingShardDelegationRequest {
@@ -139,6 +144,7 @@ export interface ActiveShard {
 export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   private deps: ShardManagerDeps;
   private auditTrail: ShardAuditTrail | null;
+  private artifactReturnPort: ArtifactReturnPort;
   private activeCount = 0;
   private maxConcurrent: number;
   private heartbeatStaleAfterMs: number;
@@ -159,6 +165,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       this.heartbeatStaleAfterMs * DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER,
     );
     this.auditTrail = deps.auditTrail ?? null;
+    this.artifactReturnPort = deps.artifactReturnPort ?? createArtifactReturnPort();
     this.installAuditHooks();
   }
 
@@ -217,7 +224,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       ...(result.failureReason ? { failureReason: result.failureReason } : {}),
       capabilities: [...result.capabilities],
       requiredCapabilities: [...result.requiredCapabilities],
-      ...(result.artifacts ? { returnedArtifacts: result.artifacts } : {}),
+      ...(result.artifactReturn ? { artifactReturn: result.artifactReturn } : {}),
     };
   }
 
@@ -422,7 +429,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       let lastModel = '';
       let lastContent = '';
       let turns = 0;
-      const returnedArtifacts: ShardReturnedArtifact[] = [];
+      let artifactReturn: ArtifactReturnBatch | null = null;
 
       for (let turn = 0; turn < maxTurns; turn++) {
         this.refreshShardHealth();
@@ -435,19 +442,28 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         };
 
         const response = await agentLoop.handleMessage(turnMessage);
-        const shardArtifacts = buildShardReturnedArtifacts({
+        const shardArtifactReturn = this.artifactReturnPort.collectArtifactReturn({
           lineage,
           turnIndex: turn + 1,
           turnMessageId: turnMessage.id,
           attachments: response.attachments,
         });
-        if (shardArtifacts.length > 0) {
-          returnedArtifacts.push(...shardArtifacts);
+        if (shardArtifactReturn) {
+          const shardArtifacts = shardArtifactReturn.artifacts;
+          artifactReturn = artifactReturn
+            ? {
+              mergePolicy: artifactReturn.mergePolicy,
+              artifacts: [...artifactReturn.artifacts, ...shardArtifacts],
+            }
+            : {
+              mergePolicy: shardArtifactReturn.mergePolicy,
+              artifacts: [...shardArtifacts],
+            };
           this.auditTrail?.append('shard.artifact.return', {
             shardId,
             turnIndex: turn + 1,
             artifactIds: shardArtifacts.map(artifact => artifact.artifactId),
-            mergePolicy: 'review_required',
+            mergePolicy: shardArtifactReturn.mergePolicy,
           });
         }
 
@@ -481,7 +497,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         capabilities: [...capabilities],
         requiredCapabilities: [...requiredCapabilities],
         lineage,
-        ...(returnedArtifacts.length > 0 ? { artifacts: returnedArtifacts } : {}),
+        ...(artifactReturn ? { artifactReturn } : {}),
       };
       this.auditTrail?.append('shard.spawn.end', {
         shardId,

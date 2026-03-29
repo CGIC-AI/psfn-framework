@@ -1,4 +1,5 @@
 import type { EmbodimentPresenceMetadata } from '../presence-metadata.js';
+import type { ArtifactReturnBatch } from '../../../faculties/shards/artifact-policy.js';
 
 export const BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME = 'spawn_subagent' as const;
 export const DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL = 5;
@@ -54,7 +55,7 @@ export interface BoundedSubagentLaunchSummary extends BoundedSubagentLaunchResul
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
-  returnedArtifacts?: readonly Record<string, unknown>[];
+  artifactReturn?: ArtifactReturnBatch;
 }
 
 export interface BoundedSubagentLaunchDiagnostics {

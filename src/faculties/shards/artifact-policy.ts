@@ -21,6 +21,22 @@ export interface ShardReturnedArtifact {
   provenance: ShardArtifactReturnProvenance;
 }
 
+export interface ArtifactReturnRequest {
+  lineage: ShardResultLineageEnvelope;
+  turnIndex: number;
+  turnMessageId: string;
+  attachments: readonly unknown[] | undefined;
+}
+
+export interface ArtifactReturnBatch {
+  mergePolicy: ShardArtifactMergePolicy;
+  artifacts: ShardReturnedArtifact[];
+}
+
+export interface ArtifactReturnPort {
+  collectArtifactReturn(input: ArtifactReturnRequest): ArtifactReturnBatch | null;
+}
+
 function normalizeNonEmptyString(value: string, fieldName: string): string {
   const normalized = value.trim();
   if (!normalized) {
@@ -83,12 +99,7 @@ function normalizeArtifactAttachment(
   };
 }
 
-export function buildShardReturnedArtifacts(input: {
-  lineage: ShardResultLineageEnvelope;
-  turnIndex: number;
-  turnMessageId: string;
-  attachments: readonly unknown[] | undefined;
-}): ShardReturnedArtifact[] {
+export function buildShardReturnedArtifacts(input: ArtifactReturnRequest): ShardReturnedArtifact[] {
   if (!input.attachments || input.attachments.length === 0) {
     return [];
   }
@@ -110,4 +121,19 @@ export function buildShardReturnedArtifacts(input: {
       turnMessageId,
     });
   });
+}
+
+export function createArtifactReturnPort(): ArtifactReturnPort {
+  return {
+    collectArtifactReturn(input) {
+      const artifacts = buildShardReturnedArtifacts(input);
+      if (artifacts.length === 0) {
+        return null;
+      }
+      return {
+        mergePolicy: 'review_required',
+        artifacts,
+      };
+    },
+  };
 }

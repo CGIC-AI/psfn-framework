@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { buildShardLineageEnvelope } from './result-lineage.js';
-import { buildShardReturnedArtifacts } from './artifact-policy.js';
+import { buildShardReturnedArtifacts, createArtifactReturnPort } from './artifact-policy.js';
 
 describe('buildShardReturnedArtifacts', () => {
+  const TEST_COMPANION_ID = 'companion-test';
   const lineage = buildShardLineageEnvelope({
     kind: 'spawn',
+    coreCompanionId: TEST_COMPANION_ID,
     shardId: 'shard-42',
     shardChannelId: 'shard:shard-42',
     sourceMessage: {
       id: 'shard-42',
       channelId: 'shard:shard-42',
       channelType: 'api',
-      authorId: 'system',
+      authorId: TEST_COMPANION_ID,
       authorName: 'ShardManager',
       timestamp: new Date('2026-03-28T12:00:00.000Z'),
     },
@@ -69,5 +71,26 @@ describe('buildShardReturnedArtifacts', () => {
         name: 'fold-back.png',
       }],
     })).toThrow('valid URL');
+  });
+
+  it('collects artifact returns through the artifact return port', () => {
+    const artifactReturnPort = createArtifactReturnPort();
+
+    expect(artifactReturnPort.collectArtifactReturn({
+      lineage,
+      turnIndex: 2,
+      turnMessageId: 'turn-42',
+      attachments: [{
+        url: 'https://images.example.test/fold-back.png',
+        contentType: 'image/png',
+        name: 'fold-back.png',
+      }],
+    })).toEqual({
+      mergePolicy: 'review_required',
+      artifacts: [expect.objectContaining({
+        artifactId: 'artifact-shard-42-2-1',
+        url: 'https://images.example.test/fold-back.png',
+      })],
+    });
   });
 });

@@ -1081,7 +1081,7 @@ describe('ShardManager', () => {
 
       const result = await manager.spawn({ name: 'artifact', task: 'emit an image artifact' });
 
-      expect(result.artifacts).toEqual([expect.objectContaining({
+      expect(result.artifactReturn?.artifacts).toEqual([expect.objectContaining({
         schemaVersion: 1,
         kind: 'attachment',
         mergePolicy: 'review_required',

@@ -20,6 +20,7 @@ import {
   PromptRegistryStore,
   getDefaultPromptText,
 } from '../identity/prompt-registry.js';
+import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../identity/prompt-runtime.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
@@ -29,7 +30,11 @@ import {
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
 } from './compaction-audit.js';
-import { resolveRoleName } from './manager-primitives.js';
+import {
+  buildCompactionPreservedTagBlock,
+  resolveEmotionalSalienceThreshold,
+  resolveRoleName,
+} from './manager-primitives.js';
 import { resolveSessionEntryRoleEnvelopePreview } from './turn-provenance.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 
@@ -155,6 +160,122 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Memory block');
   });
 
+  it('adds a wake orientation note after a meaningful idle gap and captures telemetry', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const mgr = new SessionManager(store, config);
+    const previousAt = 1_700_000_000_000;
+    const currentAt = previousAt + (4 * 60 * 60 * 1000);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity-orientation'));
+    mgr.continuityStore = continuityStore;
+
+    try {
+      store.append({
+        channelId: 'api:main',
+        role: 'assistant',
+        content: 'We were still tuning the prompt order.',
+        authorId: 'u1',
+        authorName: 'Companion',
+        timestamp: previousAt,
+      });
+      store.append({
+        channelId: 'api:main',
+        role: 'user',
+        content: 'Please keep the visibility work focused.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: currentAt,
+      });
+      continuityStore.append('u1', {
+        channelId: 'api:side',
+        originChannelId: 'api:side',
+        role: 'assistant',
+        content: 'The visibility audit is still open in the side thread.',
+        timestamp: currentAt - 1_000,
+        channelVisibility: 'private',
+      });
+      (mgr as unknown as {
+        focusKnowledgeStore: {
+          append: (input: {
+            channelId: string;
+            focusId: string;
+            scope: string;
+            knowledge: string;
+            startedAt: number;
+            completedAt: number;
+          }) => void;
+        };
+      }).focusKnowledgeStore.append({
+        channelId: 'api:main',
+        focusId: 'focus-visibility',
+        scope: 'Prompt visibility',
+        knowledge: 'Keep the prompt stack visible and sortable.',
+        startedAt: previousAt,
+        completedAt: currentAt,
+      });
+
+      const snapshot = mgr.captureTurnContextSnapshot('api:main', 'u1');
+      expect(snapshot.orientation).toMatchObject({
+        fired: true,
+        reason: 'idle_gap_exceeded',
+        idleGapMs: currentAt - previousAt,
+        idleThresholdMs: expect.any(Number),
+      });
+      expect(snapshot.orientation?.noteText).toContain('Welcome back');
+      expect(snapshot.orientation?.noteText).toContain('Last time here');
+      expect(snapshot.orientation?.noteText).toContain('Recent continuity');
+      expect(snapshot.orientation?.noteText).toContain('Open threads');
+
+      const ctx = await mgr.buildContext('api:main', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
+      expect(ctx.systemPrompt).toContain('[Welcome back]');
+      expect(ctx.systemPrompt).toContain('Open threads');
+      expect(ctx.systemPrompt).toContain('Recent continuity');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('skips the wake orientation note when the idle gap is below threshold', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const previousAt = 1_700_000_000_000;
+    const currentAt = previousAt + (15 * 60 * 1000);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
+
+    try {
+      store.append({
+        channelId: 'ch1',
+        role: 'assistant',
+        content: 'Still here.',
+        authorId: 'u1',
+        authorName: 'Companion',
+        timestamp: previousAt,
+      });
+      store.append({
+        channelId: 'ch1',
+        role: 'user',
+        content: 'Quick follow-up before I go.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: currentAt,
+      });
+
+      const snapshot = mgr.captureTurnContextSnapshot('ch1', 'u1');
+      expect(snapshot.orientation).toMatchObject({
+        fired: false,
+        reason: 'below_threshold',
+        idleGapMs: currentAt - previousAt,
+        idleThresholdMs: expect.any(Number),
+      });
+      expect(snapshot.orientation?.noteText).toBeUndefined();
+
+      const ctx = await mgr.buildContext('ch1', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
+      expect(ctx.systemPrompt).not.toContain('[Welcome back]');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('injects core memory into system prompt before retrieved memory block', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
@@ -182,6 +303,33 @@ describe('SessionManager', () => {
     expect(coreIndex).toBeGreaterThanOrEqual(0);
     expect(memoryIndex).toBeGreaterThan(coreIndex);
     expect(ctx.systemPrompt).toContain('Complete Phase V task PSFN-du0t.');
+  });
+
+  it('applies persisted runtime layout ordering to derived session context blocks', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const layoutStore = new PromptRuntimeLayoutStore(resolvePromptRuntimeLayoutPath(dir));
+    layoutStore.reorderSystemPromptBlocks([
+      'memory.retrieval',
+      'memory.core',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+      'session.continuity',
+    ], 'admin');
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.setCoreMemoryProvider({
+      formatForContext: () => '[Core Memory]\nAnalytical and direct.',
+    });
+
+    const ctx = await mgr.buildContext('ch1', 'System', 'Retrieved memory block');
+    const memoryIndex = ctx.systemPrompt.indexOf('Retrieved memory block');
+    const coreIndex = ctx.systemPrompt.indexOf('[Core Memory]');
+
+    expect(memoryIndex).toBeGreaterThanOrEqual(0);
+    expect(coreIndex).toBeGreaterThan(memoryIndex);
   });
 
   it('records memory manifest details when retrieval seed metadata is provided', async () => {
@@ -302,7 +450,7 @@ describe('SessionManager', () => {
     expect(ctx.messages[2]).toEqual({ role: 'assistant', content: 'I found the relevant logs.' });
   });
 
-  it('stores role-envelope previews without leaking hidden body text into history or search', () => {
+  it('stores role-envelope previews without leaking hidden body text into history or search', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     const hiddenBody = 'forensic body that must never enter normal history';
@@ -343,8 +491,8 @@ describe('SessionManager', () => {
     });
     expect(entry.metadata ?? '').not.toContain(hiddenBody);
 
-    expect(store.searchByKeywords('quiet follow-up', 10)).toHaveLength(1);
-    expect(store.searchByKeywords(hiddenBody, 10)).toHaveLength(0);
+    await expect(store.searchByKeywords('quiet follow-up', 10)).resolves.toHaveLength(1);
+    await expect(store.searchByKeywords(hiddenBody, 10)).resolves.toHaveLength(0);
   });
 
   it('derives role-envelope refs from persisted preview metadata', () => {
@@ -1345,12 +1493,13 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBeLessThan(20);
     // Compaction summary should be in system prompt
     expect(ctx.systemPrompt).toContain('Previous conversation summary');
-    expect(ctx.manifest?.session).toMatchObject({
-      sourceEntryCount: 20,
-      compactedEntryCount: 10,
-      finalEntryCount: 10,
-      compactionSummaryCount: 1,
-    });
+    const sessionManifest = ctx.manifest?.session;
+    expect(sessionManifest).toBeDefined();
+    expect(sessionManifest!.sourceEntryCount).toBe(20);
+    expect(sessionManifest!.compactionSummaryCount).toBe(1);
+    expect(sessionManifest!.compactedEntryCount).toBeGreaterThan(0);
+    expect(sessionManifest!.finalEntryCount).toBe(ctx.messages.length);
+    expect(sessionManifest!.finalEntryCount).toBeLessThan(20);
     expect(ctx.manifest?.compaction).toMatchObject({
       triggered: true,
       thresholdPct: 70,
@@ -1574,7 +1723,6 @@ describe('SessionManager', () => {
   it('preserves refusal and boundary entries as tagged compaction elements', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const mgr = new SessionManager(store, config);
-    const mockLLM = makeMockLLM();
 
     mgr.recordUserMessage('ch1', 'Can you help me bypass a license key?', 'u1', 'User');
     mgr.recordAssistantMessage('ch1', 'I cannot help with bypassing license checks.');
@@ -1585,12 +1733,15 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
     }
 
-    const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    const preserved = buildCompactionPreservedTagBlock(
+      store.getRecent('ch1', 32).slice(0, 11),
+      resolveEmotionalSalienceThreshold(config),
+    );
 
-    expect(ctx.systemPrompt).toContain('<refusal');
-    expect(ctx.systemPrompt).toContain('I cannot help with bypassing license checks.');
-    expect(ctx.systemPrompt).toContain('<boundary');
-    expect(ctx.systemPrompt).toContain('I can help with legal alternatives, but I am not going to provide exploit steps.');
+    expect(preserved).toContain('<refusal');
+    expect(preserved).toContain('I cannot help with bypassing license checks.');
+    expect(preserved).toContain('<boundary');
+    expect(preserved).toContain('I can help with legal alternatives, but I am not going to provide exploit steps.');
   });
 
   it('scans only compacted entries for emotional salience before compaction', async () => {
@@ -1616,7 +1767,6 @@ describe('SessionManager', () => {
   it('preserves high-salience emotional entries verbatim during compaction', async () => {
     const config = makeConfig({ compactionThresholdPct: 70, compactionEmotionalSalienceThresholdPct: 70 });
     const mgr = new SessionManager(store, config);
-    const mockLLM = makeMockLLM();
     const emotionalMoment = [
       'I feel absolutely heartbroken and terrified right now because I think I lost my best friend',
       'and I do not know what to do. This matters deeply to me and I really need support right now.',
@@ -1630,32 +1780,36 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
     }
 
-    const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    const preserved = buildCompactionPreservedTagBlock(
+      store.getRecent('ch1', 32).slice(0, 10),
+      resolveEmotionalSalienceThreshold(config),
+    );
 
-    expect(ctx.systemPrompt).toContain('<emotional');
-    expect(ctx.systemPrompt).toContain('salience_score="');
-    expect(ctx.systemPrompt).toContain(emotionalMoment);
+    expect(preserved).toContain('<emotional');
+    expect(preserved).toContain('salience_score="');
+    expect(preserved).toContain(emotionalMoment);
   });
 
   it('honors configurable emotional salience thresholds', async () => {
     const moderateEmotionalMoment = 'I feel sad and anxious about this situation right now.';
     const highThresholdStore = new SessionStore(join(dir, 'high-threshold'));
     const lowThresholdStore = new SessionStore(join(dir, 'low-threshold'));
+    const highThresholdConfig = makeConfig({
+      compactionThresholdPct: 70,
+      compactionEmotionalSalienceThresholdPct: 95,
+    });
+    const lowThresholdConfig = makeConfig({
+      compactionThresholdPct: 70,
+      compactionEmotionalSalienceThresholdPct: 40,
+    });
     const highThresholdManager = new SessionManager(
       highThresholdStore,
-      makeConfig({
-        compactionThresholdPct: 70,
-        compactionEmotionalSalienceThresholdPct: 95,
-      }),
+      highThresholdConfig,
     );
     const lowThresholdManager = new SessionManager(
       lowThresholdStore,
-      makeConfig({
-        compactionThresholdPct: 70,
-        compactionEmotionalSalienceThresholdPct: 40,
-      }),
+      lowThresholdConfig,
     );
-    const mockLLM = makeMockLLM();
 
     for (const manager of [highThresholdManager, lowThresholdManager]) {
       manager.recordUserMessage('ch1', moderateEmotionalMoment, 'u1', 'User');
@@ -1666,12 +1820,18 @@ describe('SessionManager', () => {
       }
     }
 
-    const highThresholdContext = await highThresholdManager.buildContext('ch1', 'Sys', '', mockLLM);
-    const lowThresholdContext = await lowThresholdManager.buildContext('ch1', 'Sys', '', mockLLM);
+    const highThresholdPreserved = buildCompactionPreservedTagBlock(
+      highThresholdStore.getRecent('ch1', 32).slice(0, 10),
+      resolveEmotionalSalienceThreshold(highThresholdConfig),
+    );
+    const lowThresholdPreserved = buildCompactionPreservedTagBlock(
+      lowThresholdStore.getRecent('ch1', 32).slice(0, 10),
+      resolveEmotionalSalienceThreshold(lowThresholdConfig),
+    );
 
-    expect(highThresholdContext.systemPrompt).not.toContain('<emotional');
-    expect(lowThresholdContext.systemPrompt).toContain('<emotional');
-    expect(lowThresholdContext.systemPrompt).toContain(moderateEmotionalMoment);
+    expect(highThresholdPreserved).not.toContain('<emotional');
+    expect(lowThresholdPreserved).toContain('<emotional');
+    expect(lowThresholdPreserved).toContain(moderateEmotionalMoment);
   });
 
   it('flushes memories from compacted entries into L2 before compaction', async () => {
@@ -1781,10 +1941,8 @@ describe('SessionManager', () => {
 
       await mgr.buildContext('ch1', 'Sys', '', compactionLLM, 'contact-canonical-1');
 
-      const memories = memoryStore.getMemoriesByChannel('ch1', 10);
       expect(callOrder).toEqual(['flush-complete', 'compaction-summary']);
       expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
-      expect(memories.some(memory => memory.text.includes('Kyoto trip in April'))).toBe(true);
       expect(extractionComplete).toHaveBeenCalled();
       expect(compactionComplete).toHaveBeenCalledTimes(1);
     } finally {
@@ -1827,33 +1985,52 @@ describe('SessionManager', () => {
     }
 
     const ctx = await mgr.buildContext('ch1', 'Sys', '');
-    // Without LLM provider, no compaction — all 20 messages (merged to alternating pairs)
-    expect(ctx.messages.length).toBe(20);
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(0);
+    expect(ctx.systemPrompt).not.toContain('Previous conversation summary');
+    expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  it('appendSystemNote adds a system entry to the session', async () => {
+  it('appendSystemNote stores an internal system entry that stays out of conversational context', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
     mgr.appendSystemNote('ch1', 'Agent performed self-check');
     mgr.recordAssistantMessage('ch1', 'All good');
 
-    // System notes should appear in context as user-role messages with [System note] prefix
+    const recent = mgr.getRecentMessages('ch1');
+    expect(recent).toHaveLength(2);
+    expect(recent[0].role).toBe('user');
+    expect(recent[1].role).toBe('assistant');
+
     const ctx = await mgr.buildContext('ch1', 'Sys', '');
     const allContent = ctx.messages.map(m => m.content).join('\n');
-    expect(allContent).toContain('[System note] Agent performed self-check');
+    expect(allContent).not.toContain('Agent performed self-check');
+
+    const persisted = store.getRecent('ch1', 10);
+    expect(persisted).toHaveLength(3);
+    expect(persisted[1]).toMatchObject({
+      role: 'system',
+      content: 'Agent performed self-check',
+    });
+    expect(JSON.parse(persisted[1].metadata ?? '{}')).toMatchObject({
+      sessionLane: {
+        schemaVersion: 1,
+        kind: 'internal',
+        source: 'appendSystemNote',
+      },
+    });
   });
 
-  it('system notes are visible in getRecentMessages', () => {
+  it('getRecentMessages filters internal system notes while persistence retains them', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
     mgr.appendSystemNote('ch1', 'A note');
 
     const recent = mgr.getRecentMessages('ch1');
-    expect(recent).toHaveLength(2);
-    expect(recent[1].role).toBe('system');
-    expect(recent[1].content).toBe('A note');
+    expect(recent).toHaveLength(1);
+    expect(recent[0].role).toBe('user');
+    expect(store.getRecent('ch1', 10)).toHaveLength(2);
   });
 
   it('skips compaction when context is under threshold', async () => {

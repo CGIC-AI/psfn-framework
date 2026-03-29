@@ -172,12 +172,14 @@ describe('convertToLlm', () => {
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.compaction);
   });
 
-  it('converts system note to user message with prefix', () => {
+  it('converts system note to an assistant-side internal note with prefix', () => {
     const messages: AgentMessage[] = [makeSystemNote('Agent restarted')];
     const result = convertToLlm(messages);
     expect(result).toHaveLength(1);
-    expect(result[0].role).toBe('user');
-    expect((result[0] as UserMessage).content).toBe('[System note] Agent restarted');
+    expect(result[0].role).toBe('assistant');
+    expect((result[0] as AssistantMessage).content).toEqual([
+      { type: 'text', text: '[System note] Agent restarted' },
+    ]);
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.systemNote);
   });
 
@@ -215,7 +217,10 @@ describe('convertToLlm', () => {
     expect(result).toHaveLength(5);
     expect((result[0] as UserMessage).content).toContain('[Previous conversation summary]');
     expect((result[1] as UserMessage).content).toBe('hello');
-    expect((result[2] as UserMessage).content).toContain('[System note]');
+    expect(result[2].role).toBe('assistant');
+    expect((result[2] as AssistantMessage).content).toEqual([
+      { type: 'text', text: '[System note] config changed' },
+    ]);
     expect((result[3] as UserMessage).content).toContain('[Mirror note from api:other]');
     expect(result[4].role).toBe('assistant');
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.compaction);

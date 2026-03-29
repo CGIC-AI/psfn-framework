@@ -6,6 +6,7 @@ import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../core/identity/prompt-composer.js';
 import { composeDefaultFoundationTemplate } from '../../../core/identity/foundation-sections.js';
 import { createPromptStatePort } from '../../../core/identity/prompt-state-port.js';
+import { PromptRuntimeLayoutStore } from '../../../core/identity/prompt-runtime.js';
 import { NorthStarStore } from '../../../faculties/north-star/store.js';
 import { AdminPromptsDataService } from './prompts-service.js';
 
@@ -135,6 +136,117 @@ describe('AdminPromptsDataService', () => {
     expect(nonNullSnapshot.preview.text).not.toContain('seeded foundation');
   });
 
+  it('lists runtime-derived prompt blocks with persisted effective order', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+    );
+    promptRuntimeLayoutStore.reorderSystemPromptBlocks([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ], 'admin');
+
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const listed = service.listPrompts();
+    expect(listed.runtimeBlocks.map(block => block.id)).toEqual([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+      'session.current_messages',
+      'tools.active_schemas',
+    ]);
+    expect(listed.runtimeBlocks.find(block => block.id === 'session.current_messages')).toMatchObject({
+      reorderable: false,
+      placement: 'context_messages',
+    });
+  });
+
+  it('lists and saves companion-editable runtime guidance blocks without exposing immutable blocks', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+    );
+    promptRuntimeLayoutStore.setEditableBlockContent(
+      'runtime.persona_adaptation',
+      'Companion personality override.',
+      'admin',
+    );
+
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const listed = service.listPrompts();
+    const editable = listed.runtimeBlocks.find(block => block.id === 'runtime.persona_adaptation');
+    const locked = listed.runtimeBlocks.find(block => block.id === 'session.current_messages');
+
+    expect(editable).toMatchObject({
+      companionEditable: true,
+      customContent: 'Companion personality override.',
+    });
+    expect(locked).toMatchObject({
+      companionEditable: false,
+      customContent: undefined,
+    });
+
+    const saveResult = service.saveRuntimePromptBlocks(JSON.stringify({
+      blocks: [
+        {
+          id: 'runtime.context',
+          content: 'Companion runtime context override.',
+        },
+      ],
+    }));
+
+    expect(saveResult.ok).toBe(true);
+    expect(saveResult.updated).toEqual(['runtime.context']);
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.context')).toBe(
+      'Companion runtime context override.',
+    );
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.persona_adaptation')).toBe(
+      'Companion personality override.',
+    );
+
+    const blockedResult = service.saveRuntimePromptBlocks(JSON.stringify({
+      blocks: [
+        {
+          id: 'session.current_messages',
+          content: 'forbidden edit',
+        },
+      ],
+    }));
+
+    expect(blockedResult.ok).toBe(false);
+    expect(blockedResult.message).toContain('not companion-editable');
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.context')).toBe(
+      'Companion runtime context override.',
+    );
+  });
+
   it('fails closed when immutable constitution layer edits are attempted', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(
@@ -226,6 +338,47 @@ describe('AdminPromptsDataService', () => {
     expect(foundation.content).toContain('<identity>');
     expect(foundation.content).toContain('held together by prompt soil');
     expect(foundation.content).not.toContain('<description>');
+  });
+
+  it('reorders runtime-derived system-prompt blocks through the Garden API service', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+    );
+
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const result = service.reorderPromptLayers(JSON.stringify({
+      runtimeBlockIds: [
+        'session.continuity',
+        'memory.core',
+        'memory.retrieval',
+        'runtime.persona_adaptation',
+        'runtime.context',
+        'runtime.scratchpad',
+        'session.compaction_summary',
+        'session.focus_knowledge',
+      ],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(promptRuntimeLayoutStore.getSystemPromptBlockOrder()).toEqual([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ]);
   });
 
   it('returns a North Star snapshot and saves bounded ordered items', () => {

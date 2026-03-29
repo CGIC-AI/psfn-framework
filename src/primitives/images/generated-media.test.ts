@@ -25,7 +25,7 @@ describe('collectGeneratedImageAttachments', () => {
       turnMessages: [
         {
           role: 'toolResult',
-          toolName: 'image_create',
+          toolName: 'selfie_create',
           content: [{
             type: 'text',
             text: JSON.stringify({

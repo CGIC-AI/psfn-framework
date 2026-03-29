@@ -7,6 +7,7 @@ import type {
   AcceptedFactCandidate,
   EmotionalSignal,
   ExtractionGateConfig,
+  ExtractionPreLlmGateReason,
   FactAcceptanceDecision,
 } from './types.js';
 import { TRANSCRIPT_EMOTIONAL_SIGNAL_LIMIT } from './types.js';
@@ -97,6 +98,69 @@ const NEGATIVE_EMOTION_HINTS = new Set([
   'grieving',
 ]);
 
+const MEANINGFUL_SIGNAL_HINTS = new Set([
+  'favorite',
+  'favourite',
+  'prefer',
+  'prefers',
+  'preferred',
+  'plan',
+  'plans',
+  'planning',
+  'moved',
+  'move',
+  'moving',
+  'job',
+  'work',
+  'career',
+  'school',
+  'class',
+  'project',
+  'deadline',
+  'promotion',
+  'house',
+  'home',
+  'apartment',
+  'travel',
+  'trip',
+  'vacation',
+  'birthday',
+  'doctor',
+  'medication',
+  'health',
+  'relationship',
+  'breakup',
+  'divorce',
+  'engaged',
+  'married',
+  'cat',
+  'dog',
+  'kid',
+  'kids',
+]);
+
+const LOW_SIGNAL_TURN_PATTERNS = [
+  /\bplease\s+summarize\b/,
+  /\bplease\s+recap\b/,
+  /\bplease\s+explain\b/,
+  /\bcan\s+you\s+summarize\b/,
+  /\bcould\s+you\s+summarize\b/,
+  /\bwhat\s+are\s+the\s+findings\b/,
+  /\bthanks?\b/,
+  /\bthank\s+you\b/,
+  /\bgood\s+(morning|afternoon|evening)\b/,
+  /\bhello\b/,
+  /\bhi\b/,
+  /\bhey\b/,
+  /\bbye\b/,
+  /\bgoodbye\b/,
+  /\bsee\s+you\b/,
+  /\bsmall\s+talk\b/,
+  /\bpleasantries\b/,
+];
+
+const MEANINGFUL_ENTRY_SCORE_THRESHOLD = 1.25;
+
 export function evaluateFactAcceptance(
   fact: ExtractedFact,
   existingTexts: string[],
@@ -120,6 +184,104 @@ export function evaluateFactAcceptance(
   }
 
   return { accepted: true, novelty };
+}
+
+export interface ExtractionPreLlmGateDecision {
+  allowed: boolean;
+  reason?: ExtractionPreLlmGateReason;
+  signalScore: number;
+  signalCount: number;
+  recentEntryCount: number;
+  userEntryCount: number;
+}
+
+export function evaluateExtractionPreLlmGate(
+  recentEntries: readonly SessionEntry[],
+): ExtractionPreLlmGateDecision {
+  const recent = recentEntries
+    .filter(entry => typeof entry.content === 'string' && entry.content.trim().length > 0);
+  const userEntries = recent.filter(entry => entry.role === 'user');
+  if (recent.length === 0) {
+    return {
+      allowed: false,
+      reason: 'empty_transcript',
+      signalScore: 0,
+      signalCount: 0,
+      recentEntryCount: 0,
+      userEntryCount: 0,
+    };
+  }
+
+  let signalScore = 0;
+  let signalCount = 0;
+  let explicitLowSignalEntryCount = 0;
+  for (const entry of userEntries) {
+    const entryScore = scoreExtractionEntrySignal(entry.content);
+    signalScore += entryScore;
+    if (entryScore >= MEANINGFUL_ENTRY_SCORE_THRESHOLD) {
+      signalCount++;
+    }
+    if (isExplicitLowSignalTurn(entry.content)) {
+      explicitLowSignalEntryCount++;
+    }
+  }
+
+  const allowed = signalCount > 0 || explicitLowSignalEntryCount === 0;
+  return {
+    allowed,
+    ...(allowed ? {} : { reason: 'low_signal' }),
+    signalScore: Number(signalScore.toFixed(4)),
+    signalCount,
+    recentEntryCount: recent.length,
+    userEntryCount: userEntries.length,
+  };
+}
+
+function scoreExtractionEntrySignal(content: string): number {
+  const normalized = normalizeForSimilarity(content);
+  if (!normalized) return 0;
+
+  const tokens = tokenizeForSimilarity(normalized);
+  let score = 0;
+
+  if (LOW_SIGNAL_EXACT_TEXT.has(normalized) || LOW_SIGNAL_TURN_PATTERNS.some(pattern => pattern.test(normalized))) {
+    score -= 1.4;
+  }
+
+  if (tokens.some(token => RELATIONSHIP_SIGNAL_HINTS.has(token))) {
+    score += 1.3;
+  }
+
+  if (tokens.some(token => POSITIVE_EMOTION_HINTS.has(token) || NEGATIVE_EMOTION_HINTS.has(token))) {
+    score += 1.1;
+  }
+
+  if (tokens.some(token => MEANINGFUL_SIGNAL_HINTS.has(token))) {
+    score += 0.9;
+  }
+
+  if (/\b(i['’`]?m|i was|i have|i had|my|we are|we were)\b/.test(normalized)) {
+    score += 0.35;
+  }
+
+  if (normalized.length >= 12) {
+    score += 0.55;
+  } else if (normalized.length <= 8) {
+    score -= 0.2;
+  }
+
+  if (/[.!?]/.test(normalized)) {
+    score += 0.1;
+  }
+
+  return score;
+}
+
+function isExplicitLowSignalTurn(content: string): boolean {
+  const normalized = normalizeForSimilarity(content);
+  if (!normalized) return true;
+  if (LOW_SIGNAL_EXACT_TEXT.has(normalized)) return true;
+  return LOW_SIGNAL_TURN_PATTERNS.some(pattern => pattern.test(normalized));
 }
 
 function isLowSignalFact(text: string): boolean {
@@ -337,12 +499,14 @@ export function buildExtractionSourceRef(
   channelId: string,
   entries: SessionEntry[],
   channelVisibility: ChannelVisibility,
+  triggerReason?: string,
   turnId?: TurnID,
 ): string {
   const source = resolveExtractionSource(channelId);
   const lineRange = resolveExtractionLineRange(entries);
   const turnToken = turnId ? `|turn:${turnId}` : '';
-  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}${turnToken}|visibility:${channelVisibility}|operation:extract`;
+  const triggerToken = triggerReason ? `|trigger:${triggerReason}` : '';
+  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}${turnToken}${triggerToken}|visibility:${channelVisibility}|operation:extract`;
 }
 
 function resolveExtractionSource(channelId: string): string {

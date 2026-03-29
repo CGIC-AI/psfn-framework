@@ -15,6 +15,17 @@ const DEFAULT_COMPANION_LAYER_HISTORY_LIMIT = 6;
 const MAX_COMPANION_LAYER_HISTORY_LIMIT = 24;
 const VALUES_JOURNAL_ERROR_PREFIX = 'values journal';
 
+interface ValuesJournalNarrativeContext {
+  internalStateSnapshotRef: string;
+  internalState: InternalState;
+  metacognitiveFlags?: ValuesMetacognitiveFlag[];
+}
+
+export interface ValuesJournalTelemetry {
+  deliberation?: ValuesDeliberationMetadata;
+  narrativeContext?: ValuesJournalNarrativeContext;
+}
+
 export interface ValuesJournalEntry {
   id: string;
   version: number;
@@ -23,10 +34,7 @@ export interface ValuesJournalEntry {
   prompt: string;
   reflection: string;
   createdAt: string;
-  deliberation?: ValuesDeliberationMetadata;
-  internalStateSnapshotRef?: string;
-  internalState?: InternalState;
-  metacognitiveFlags?: ValuesMetacognitiveFlag[];
+  telemetry?: ValuesJournalTelemetry;
   provenance?: ValuesEntryProvenance;
 }
 
@@ -36,6 +44,7 @@ export interface ValuesJournalAppendInput {
   prompt: string;
   reflection: string;
   createdAt?: string;
+  telemetry?: ValuesJournalTelemetry;
   deliberation?: ValuesDeliberationMetadata;
   internalStateSnapshotRef?: string;
   internalState?: InternalState;
@@ -216,6 +225,71 @@ function normalizeProvenance(
   };
 }
 
+function normalizeValuesTelemetry(
+  input: {
+    telemetry?: ValuesJournalTelemetry;
+    deliberation?: ValuesDeliberationMetadata;
+    internalStateSnapshotRef?: string;
+    internalState?: InternalState;
+    metacognitiveFlags?: ValuesMetacognitiveFlag[];
+  },
+): ValuesJournalTelemetry | undefined {
+  const telemetryInput = input.telemetry;
+  const deliberationInput = telemetryInput?.deliberation ?? input.deliberation;
+  const deliberation = normalizeDeliberationMetadata(deliberationInput);
+  if (deliberationInput !== undefined && deliberation === undefined) {
+    throw new Error('values journal telemetry.deliberation is invalid');
+  }
+  const narrativeInput = telemetryInput?.narrativeContext
+    ?? ((input.internalStateSnapshotRef !== undefined
+      || input.internalState !== undefined
+      || input.metacognitiveFlags !== undefined)
+      ? {
+          internalStateSnapshotRef: input.internalStateSnapshotRef,
+          internalState: input.internalState,
+          metacognitiveFlags: input.metacognitiveFlags,
+        }
+      : undefined);
+
+  if (!narrativeInput && !deliberation) {
+    return undefined;
+  }
+
+  let narrativeContext: ValuesJournalNarrativeContext | undefined;
+  if (narrativeInput) {
+    const internalStateSnapshotRef = normalizeNarrativeSnapshotRef(
+      narrativeInput.internalStateSnapshotRef,
+      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
+    );
+    const internalState = normalizeInternalStateSnapshot(narrativeInput.internalState);
+    const metacognitiveFlags = normalizeNarrativeMetacognitiveFlags(
+      narrativeInput.metacognitiveFlags,
+      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
+    );
+    if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
+      const message = 'values journal append requires both internalStateSnapshotRef and internalState when narrative context is provided';
+      throw new Error(message);
+    }
+
+    if (internalStateSnapshotRef && internalState) {
+      narrativeContext = {
+        internalStateSnapshotRef,
+        internalState,
+        ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
+      };
+    }
+  }
+
+  if (!narrativeContext && !deliberation) {
+    return undefined;
+  }
+
+  return {
+    ...(deliberation ? { deliberation } : {}),
+    ...(narrativeContext ? { narrativeContext } : {}),
+  };
+}
+
 function normalizeCompanionLayerHistoryLimit(raw: unknown): number {
   if (raw === undefined) return DEFAULT_COMPANION_LAYER_HISTORY_LIMIT;
   if (typeof raw !== 'number' || !Number.isFinite(raw) || !Number.isInteger(raw)) {
@@ -278,20 +352,14 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
     ? entry.id
     : `values-${entry.version}`;
   try {
-    const deliberation = normalizeDeliberationMetadata(entry.deliberation);
-    const internalStateSnapshotRef = normalizeNarrativeSnapshotRef(
-      (entry as { internalStateSnapshotRef?: unknown }).internalStateSnapshotRef,
-      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
-    );
-    const internalState = normalizeInternalStateSnapshot((entry as { internalState?: unknown }).internalState);
-    const metacognitiveFlags = normalizeNarrativeMetacognitiveFlags(
-      (entry as { metacognitiveFlags?: unknown }).metacognitiveFlags,
-      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
-    );
+    const telemetry = normalizeValuesTelemetry({
+      telemetry: (entry as { telemetry?: ValuesJournalTelemetry }).telemetry,
+      deliberation: (entry as { deliberation?: ValuesDeliberationMetadata }).deliberation,
+      internalStateSnapshotRef: (entry as { internalStateSnapshotRef?: unknown }).internalStateSnapshotRef as string | undefined,
+      internalState: (entry as { internalState?: unknown }).internalState as InternalState | undefined,
+      metacognitiveFlags: (entry as { metacognitiveFlags?: unknown }).metacognitiveFlags as ValuesMetacognitiveFlag[] | undefined,
+    });
     const provenance = normalizeProvenance((entry as { provenance?: unknown }).provenance);
-    if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
-      return null;
-    }
 
     return {
       id,
@@ -301,10 +369,7 @@ function normalizeEntry(raw: unknown): ValuesJournalEntry | null {
       prompt: entry.prompt,
       reflection: entry.reflection,
       createdAt: entry.createdAt,
-      ...(deliberation ? { deliberation } : {}),
-      ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
-      ...(internalState ? { internalState } : {}),
-      ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
+      ...(telemetry ? { telemetry } : {}),
       ...(provenance ? { provenance } : {}),
     };
   } catch {
@@ -337,21 +402,14 @@ export class ValuesJournalStore {
 
     const entries = this.readAll();
     const nextVersion = entries.length > 0 ? entries[entries.length - 1]!.version + 1 : 1;
-    const internalStateSnapshotRef = normalizeNarrativeSnapshotRef(
-      input.internalStateSnapshotRef,
-      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
-    );
-    const internalState = normalizeInternalStateSnapshot(input.internalState);
-    const metacognitiveFlags = normalizeNarrativeMetacognitiveFlags(
-      input.metacognitiveFlags,
-      { contextPrefix: VALUES_JOURNAL_ERROR_PREFIX },
-    );
+    const telemetry = normalizeValuesTelemetry({
+      telemetry: input.telemetry,
+      deliberation: input.deliberation,
+      internalStateSnapshotRef: input.internalStateSnapshotRef,
+      internalState: input.internalState,
+      metacognitiveFlags: input.metacognitiveFlags,
+    });
     const provenance = normalizeProvenance(input.provenance, { strict: true });
-    if ((internalStateSnapshotRef || internalState || metacognitiveFlags) && (!internalStateSnapshotRef || !internalState)) {
-      throw new Error(
-        'values journal append requires both internalStateSnapshotRef and internalState when narrative context is provided',
-      );
-    }
     const entry: ValuesJournalEntry = {
       id: `values-${nextVersion}`,
       version: nextVersion,
@@ -360,10 +418,7 @@ export class ValuesJournalStore {
       prompt,
       reflection,
       createdAt: input.createdAt ?? new Date().toISOString(),
-      ...(input.deliberation ? { deliberation: input.deliberation } : {}),
-      ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
-      ...(internalState ? { internalState } : {}),
-      ...(metacognitiveFlags ? { metacognitiveFlags } : {}),
+      ...(telemetry ? { telemetry } : {}),
       ...(provenance ? { provenance } : {}),
     };
 

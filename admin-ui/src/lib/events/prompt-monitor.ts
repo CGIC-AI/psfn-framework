@@ -84,6 +84,23 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
               finalSystemSections: snapshot.promptContext.finalSystemSections.map(section => ({ ...section })),
             }
             : {}),
+          ...(snapshot.promptContext.providerObservability
+            ? {
+              providerObservability: {
+                ...snapshot.promptContext.providerObservability,
+                systemRole: { ...snapshot.promptContext.providerObservability.systemRole },
+                providerWireMessages: snapshot.promptContext.providerObservability.providerWireMessages
+                  .map(message => ({ ...message })),
+              },
+            }
+            : {}),
+          ...(snapshot.promptContext.response
+            ? {
+              response: {
+                ...snapshot.promptContext.response,
+              },
+            }
+            : {}),
         },
       }
       : {}),

@@ -4,6 +4,7 @@ import { countMessageTokens } from '../../../primitives/llm/tokens.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
 import type {
@@ -23,10 +24,16 @@ export function resetLastExtractionCount(): void {
   lastExtractionCount.clear();
 }
 
-function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } {
-  if (entry.role === 'assistant') return { role: 'assistant', content: entry.content };
-  if (entry.role === 'system') return { role: 'user', content: `[System note] ${entry.content}` };
-  return { role: 'user', content: entry.content };
+function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } | null {
+  if (entry.role !== 'assistant' && entry.role !== 'user') {
+    return null;
+  }
+  return { role: entry.role, content: entry.content };
+}
+
+function isCountableExtractionEntry(entry: SessionEntry): boolean {
+  return !isNonConversationalSessionEntry(entry)
+    && (entry.role === 'assistant' || entry.role === 'user');
 }
 
 export interface ExtractionTriggerResult {
@@ -69,7 +76,12 @@ export function evaluateExtractionTrigger(
     tokenBudget = Math.floor(contextWindow * (thresholdPct / 100));
 
     const recent = sessionManager.getRecentMessages(channelId);
-    totalTokens = countMessageTokens(recent.map(toTokenMessage));
+    totalTokens = countMessageTokens(
+      recent
+        .filter(isCountableExtractionEntry)
+        .map(toTokenMessage)
+        .filter((message): message is { role: string; content: string } => message !== null),
+    );
     thresholdMet = totalTokens > tokenBudget;
   }
 

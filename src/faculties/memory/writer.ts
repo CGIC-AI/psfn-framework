@@ -15,11 +15,14 @@ import type {
   MemoryRetentionClass,
   MemoryFormationVAD,
   MemoryScopeRef,
+  MemorySourceType,
+  MemoryProvenance,
 } from './types.js';
 import {
   DEDUP_THRESHOLD,
   DURABLE_RETENTION_TAG,
   MEMORY_CONFIG,
+  inferMemorySourceTypeFromSourceRef,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   VALID_MEMORY_TYPES,
@@ -28,6 +31,8 @@ import {
   isDurableMemory,
   normalizeFormationVAD,
   normalizeMemoryTags,
+  normalizeMemoryProvenance,
+  normalizeMemorySourceType,
   resolveConsentRedactionBehavior,
 } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -44,6 +49,8 @@ export interface MemoryWriteOptions {
   confidence?: number;       // default 0.8
   tags?: string[];
   sourceRef?: string;        // default 'tool:memory_write'
+  sourceType?: MemorySourceType;
+  provenance?: MemoryProvenance;
   provenanceRefs?: string[];
   sensitivity?: SensitivityLevel;    // default 'personal'
   consentFlags?: ConsentFlags;       // default {}
@@ -58,6 +65,28 @@ export interface WriteResult {
   memory: PurrMemory;
   /** If deduplicated, the existing memory that was bumped */
   existingId?: string;
+}
+
+export interface MemoryPatchOptions {
+  memoryId: string;
+  text?: string;
+  importance?: number;
+  confidence?: number;
+  emotionalValence?: number;
+  formationVAD?: MemoryFormationVAD;
+  clearFormationVAD?: boolean;
+  tags?: string[];
+  appendTags?: string[];
+  reason?: string;
+  sourceRef?: string;
+  sourceType?: MemorySourceType;
+  provenance?: MemoryProvenance;
+}
+
+export interface MemoryPatchResult {
+  memory: PurrMemory;
+  patchEventId: string;
+  updatedFields: string[];
 }
 
 export interface BatchImportResult {
@@ -154,6 +183,27 @@ function applyRetentionSemantics(input: {
 function normalizeSourceRef(sourceRef: string | undefined, fallback: string): string {
   const trimmed = sourceRef?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+function normalizeSourceContext(input: {
+  sourceRef: string | undefined;
+  sourceType: MemorySourceType | undefined;
+  provenance: MemoryProvenance | undefined;
+  fallbackRef: string;
+}): {
+  sourceRef: string;
+  sourceType: MemorySourceType;
+  provenance?: MemoryProvenance;
+} {
+  const normalizedSourceRef = normalizeSourceRef(input.sourceRef, input.fallbackRef);
+  return {
+    sourceRef: normalizedSourceRef,
+    sourceType: normalizeMemorySourceType(
+      input.sourceType,
+      inferMemorySourceTypeFromSourceRef(normalizedSourceRef),
+    ),
+    provenance: normalizeMemoryProvenance(input.provenance),
+  };
 }
 
 function clampUnit(value: number, fallback = 0.5): number {
@@ -365,6 +415,8 @@ export class MemoryWriter {
       confidence = 0.8,
       tags = [],
       sourceRef,
+      sourceType,
+      provenance,
       provenanceRefs,
       sensitivity = 'personal',
       consentFlags,
@@ -389,7 +441,13 @@ export class MemoryWriter {
       ? undefined
       : normalizeConsentFlags(consentFlags);
     const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
-    const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_write');
+    const normalizedSource = normalizeSourceContext({
+      sourceRef,
+      sourceType,
+      provenance,
+      fallbackRef: 'tool:memory_write',
+    });
+    const normalizedSourceRef = normalizedSource.sourceRef;
     const incomingProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
     const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
     const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
@@ -563,6 +621,8 @@ export class MemoryWriter {
       formationVAD: normalizedFormationVAD,
       salience: targetSalience,
       sourceRef: normalizedSourceRef,
+      sourceType: normalizedSource.sourceType,
+      ...(normalizedSource.provenance ? { provenance: normalizedSource.provenance } : {}),
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,
@@ -609,6 +669,8 @@ export class MemoryWriter {
       confidence = 0.8,
       tags = [],
       sourceRef,
+      sourceType,
+      provenance,
       provenanceRefs,
       sensitivity = 'personal',
       consentFlags,
@@ -629,7 +691,13 @@ export class MemoryWriter {
       retentionClass,
     });
     const normalizedFormationVAD = normalizeFormationVAD(formationVAD);
-    const normalizedSourceRef = normalizeSourceRef(sourceRef, 'tool:memory_upsert');
+    const normalizedSource = normalizeSourceContext({
+      sourceRef,
+      sourceType,
+      provenance,
+      fallbackRef: 'tool:memory_upsert',
+    });
+    const normalizedSourceRef = normalizedSource.sourceRef;
     const normalizedProvenanceRefs = normalizeProvenanceRefs(provenanceRefs, normalizedSourceRef);
     const normalizedScopeRef = normalizeMemoryScopeRef(scopeRef);
     const normalizedScopeTags = normalizeMemoryScopeTags(scopeTags);
@@ -708,6 +776,8 @@ export class MemoryWriter {
       formationVAD: normalizedFormationVAD,
       salience: targetSalience,
       sourceRef: normalizedSourceRef,
+      sourceType: normalizedSource.sourceType,
+      ...(normalizedSource.provenance ? { provenance: normalizedSource.provenance } : {}),
       extractedAt: now,
       lastAccessed: now,
       accessCount: 1,
@@ -734,6 +804,169 @@ export class MemoryWriter {
     return {
       action: didSupersede ? 'superseded' : 'created',
       memory,
+    };
+  }
+
+  async patchMemory(opts: MemoryPatchOptions): Promise<MemoryPatchResult | null> {
+    const memoryId = opts.memoryId.trim();
+    if (!memoryId) {
+      throw new Error('memoryId is required');
+    }
+    if (opts.tags && opts.appendTags) {
+      throw new Error('patchMemory accepts either tags or appendTags, not both');
+    }
+
+    const existing = await this.memoryStore.getById(memoryId);
+    if (!existing || existing.deletedAt !== undefined) {
+      return null;
+    }
+
+    const updates: Partial<PurrMemory> = {};
+    const previousValues: Record<string, unknown> = {};
+    const nextValues: Record<string, unknown> = {};
+    const patch: Record<string, unknown> = {};
+    const updatedFields: string[] = [];
+
+    if (opts.text !== undefined) {
+      const text = opts.text.trim();
+      if (!text) throw new Error('patchMemory text cannot be empty');
+      if (text !== existing.text) {
+        updates.text = text;
+        previousValues.text = existing.text;
+        nextValues.text = text;
+        patch.text = text;
+        updatedFields.push('text');
+      }
+    }
+    if (opts.importance !== undefined) {
+      const importance = clampUnit(opts.importance);
+      if (importance !== existing.importance) {
+        updates.importance = importance;
+        previousValues.importance = existing.importance;
+        nextValues.importance = importance;
+        patch.importance = importance;
+        updatedFields.push('importance');
+      }
+    }
+    if (opts.confidence !== undefined) {
+      const confidence = clampUnit(opts.confidence);
+      if (confidence !== existing.confidence) {
+        updates.confidence = confidence;
+        previousValues.confidence = existing.confidence;
+        nextValues.confidence = confidence;
+        patch.confidence = confidence;
+        updatedFields.push('confidence');
+      }
+    }
+    if (opts.emotionalValence !== undefined) {
+      const emotionalValence = clampSigned(opts.emotionalValence);
+      if (emotionalValence !== existing.emotionalValence) {
+        updates.emotionalValence = emotionalValence;
+        previousValues.emotionalValence = existing.emotionalValence;
+        nextValues.emotionalValence = emotionalValence;
+        patch.emotionalValence = emotionalValence;
+        updatedFields.push('emotionalValence');
+      }
+    }
+    if (opts.clearFormationVAD) {
+      if (existing.formationVAD !== undefined) {
+        updates.formationVAD = undefined;
+        previousValues.formationVAD = existing.formationVAD;
+        nextValues.formationVAD = null;
+        patch.clearFormationVAD = true;
+        updatedFields.push('formationVAD');
+      }
+    } else if (opts.formationVAD !== undefined) {
+      const formationVAD = normalizeFormationVAD(opts.formationVAD);
+      const currentSerialized = JSON.stringify(existing.formationVAD ?? null);
+      const nextSerialized = JSON.stringify(formationVAD ?? null);
+      if (currentSerialized !== nextSerialized) {
+        updates.formationVAD = formationVAD;
+        previousValues.formationVAD = existing.formationVAD ?? null;
+        nextValues.formationVAD = formationVAD ?? null;
+        patch.formationVAD = formationVAD ?? null;
+        updatedFields.push('formationVAD');
+      }
+    }
+
+    const replacementTags = opts.tags ? normalizeMemoryTags(opts.tags) : undefined;
+    const appendedTags = opts.appendTags ? normalizeMemoryTags(opts.appendTags) : undefined;
+    if (replacementTags || appendedTags) {
+      const nextTagInput = replacementTags ?? [...existing.tags, ...(appendedTags ?? [])];
+      const retention = applyRetentionSemantics({
+        type: existing.type,
+        importance: updates.importance ?? existing.importance,
+        tags: nextTagInput,
+        retentionClass: existing.retentionClass,
+      });
+      const currentSerialized = JSON.stringify(existing.tags);
+      const nextSerialized = JSON.stringify(retention.tags);
+      if (currentSerialized !== nextSerialized) {
+        updates.tags = retention.tags;
+        previousValues.tags = existing.tags;
+        nextValues.tags = retention.tags;
+        patch.tags = retention.tags;
+        if (appendedTags?.length) {
+          patch.appendTags = appendedTags;
+        }
+        updatedFields.push('tags');
+      }
+    }
+
+    if (updatedFields.length === 0) {
+      throw new Error('patchMemory produced no changes');
+    }
+
+    let embedding: Float32Array | undefined;
+    if (updates.text !== undefined) {
+      embedding = await this.embeddingService.embed(updates.text);
+      updates.embedding = embedding;
+    }
+
+    const auditContext = normalizeSourceContext({
+      sourceRef: opts.sourceRef,
+      sourceType: opts.sourceType,
+      provenance: opts.provenance,
+      fallbackRef: 'tool:memory_patch',
+    });
+    if (opts.reason?.trim()) {
+      patch.reason = opts.reason.trim();
+    }
+
+    const updatedMemory: PurrMemory = {
+      ...existing,
+      ...updates,
+      text: updates.text ?? existing.text,
+      importance: updates.importance ?? existing.importance,
+      confidence: updates.confidence ?? existing.confidence,
+      emotionalValence: updates.emotionalValence ?? existing.emotionalValence,
+      formationVAD: Object.prototype.hasOwnProperty.call(updates, 'formationVAD')
+        ? updates.formationVAD
+        : existing.formationVAD,
+      tags: updates.tags ?? existing.tags,
+    };
+    const patchEventId = uuidv4();
+
+    this.memoryStore.runInTransaction(() => {
+      this.memoryStore.updateMemory(memoryId, updates);
+      this.memoryStore.recordPatchEvent({
+        id: patchEventId,
+        memoryId,
+        sourceRef: auditContext.sourceRef,
+        sourceType: auditContext.sourceType,
+        provenance: auditContext.provenance,
+        reason: opts.reason?.trim() || undefined,
+        patch,
+        previousValues,
+        nextValues,
+        createdAt: Date.now(),
+      });
+    });
+
+    return {
+      memory: updatedMemory,
+      patchEventId,
+      updatedFields,
     };
   }
 

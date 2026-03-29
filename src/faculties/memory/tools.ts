@@ -10,6 +10,7 @@ import type {
   SensitivityLevel,
   MemoryRedactionOperation,
   MemoryFormationVAD,
+  MemorySourceType,
 } from './types.js';
 import {
   VALID_MEMORY_TYPES,
@@ -51,6 +52,33 @@ function buildToolSourceRef(
 ): string {
   if (!shardSource) return `source:tool:${toolName}|invocation:${toolCallId}`;
   return `source:${shardSource}|tool:${toolName}|invocation:${toolCallId}`;
+}
+
+function buildToolSourceContext(
+  toolName: string,
+  toolCallId: string,
+  shardSource: string | null,
+): {
+  sourceRef: string;
+  sourceType: MemorySourceType;
+  provenance: {
+    toolName: string;
+    toolCallId: string;
+    shardId?: string;
+    actor?: 'shard';
+  };
+} {
+  const sourceRef = buildToolSourceRef(toolName, toolCallId, shardSource);
+  const shardId = shardSource?.startsWith('shard:') ? shardSource.slice('shard:'.length) : undefined;
+  return {
+    sourceRef,
+    sourceType: shardId ? 'shard' : 'tool_write',
+    provenance: {
+      toolName,
+      toolCallId,
+      ...(shardId ? { shardId, actor: 'shard' as const } : {}),
+    },
+  };
 }
 
 function formatScratchpadList(
@@ -143,6 +171,7 @@ export function createMemoryWriteTool(
           ? params.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
           : undefined;
         const formationVAD = options.getFormationVAD?.();
+        const sourceContext = buildToolSourceContext('memory_write', toolCallId, internalSource);
 
         const result = await writer.write({
           text: text.trim(),
@@ -152,7 +181,9 @@ export function createMemoryWriteTool(
           formationVAD,
           confidence,
           tags,
-          sourceRef: buildToolSourceRef('memory_write', toolCallId, internalSource),
+          sourceRef: sourceContext.sourceRef,
+          sourceType: sourceContext.sourceType,
+          provenance: sourceContext.provenance,
           sensitivity: params.sensitivity,
         });
 
@@ -236,6 +267,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
             return textResultWithError(`Error: record[${i}] has invalid type "${type}"`, true);
           }
 
+          const sourceContext = buildToolSourceContext(`memory_import:${source}`, toolCallId, internalSource);
           records.push({
             text: text.trim(),
             type,
@@ -243,7 +275,9 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
             emotionalValence: r.emotional_valence !== undefined ? clamp(Number(r.emotional_valence), -1, 1) : undefined,
             confidence: r.confidence !== undefined ? clamp(Number(r.confidence), 0, 1) : undefined,
             tags: r.tags ? r.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
-            sourceRef: buildToolSourceRef(`memory_import:${source}`, toolCallId, internalSource),
+            sourceRef: sourceContext.sourceRef,
+            sourceType: sourceContext.sourceType,
+            provenance: sourceContext.provenance,
             sensitivity: r.sensitivity,
           });
         }
@@ -256,6 +290,90 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
         );
       } catch (error) {
         return textResultWithError(`Error importing memories: ${errorMessage(error)}`, true);
+      }
+    },
+  };
+}
+
+export function createMemoryPatchTool(writer: MemoryWriter): AgentTool<any> {
+  return {
+    name: 'memory_patch',
+    description:
+      'Patch specific fields on an existing memory without deleting or superseding it. '
+      + 'Use for surgical belief correction, emotional-weight adjustment, or tag/provenance correction.',
+    label: 'memory_patch',
+    parameters: Type.Object({
+      memory_id: Type.String({ description: 'Memory ID to patch.' }),
+      text: Type.Optional(Type.String({ description: 'Replacement memory text. Re-embeds the memory.' })),
+      importance: Type.Optional(Type.Number({ description: '0-1 replacement importance.' })),
+      confidence: Type.Optional(Type.Number({ description: '0-1 replacement confidence.' })),
+      emotional_valence: Type.Optional(Type.Number({ description: '-1 to 1 replacement emotional valence.' })),
+      formation_vad: Type.Optional(Type.Object({
+        valence: Type.Number(),
+        arousal: Type.Number(),
+        dominance: Type.Number(),
+      })),
+      clear_formation_vad: Type.Optional(Type.Boolean({ description: 'Clear any existing formation VAD metadata.' })),
+      tags: Type.Optional(Type.String({ description: 'Full replacement tag list as comma-separated values.' })),
+      append_tags: Type.Optional(Type.String({ description: 'Tags to append as comma-separated values.' })),
+      reason: Type.Optional(Type.String({ description: 'Audit reason for the patch.' })),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: {
+        memory_id: string;
+        text?: string;
+        importance?: number;
+        confidence?: number;
+        emotional_valence?: number;
+        formation_vad?: MemoryFormationVAD;
+        clear_formation_vad?: boolean;
+        tags?: string;
+        append_tags?: string;
+        reason?: string;
+      },
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const internalSource = extractInternalSource(params as Record<string, unknown>);
+        const memoryId = params.memory_id.trim();
+        if (!memoryId) {
+          return textResultWithError('Error: memory_id is required', true);
+        }
+        if (params.tags && params.append_tags) {
+          return textResultWithError('Error: provide either tags or append_tags, not both', true);
+        }
+
+        const sourceContext = buildToolSourceContext('memory_patch', toolCallId, internalSource);
+        const result = await writer.patchMemory({
+          memoryId,
+          ...(params.text !== undefined ? { text: params.text } : {}),
+          ...(params.importance !== undefined ? { importance: clamp(Number(params.importance), 0, 1) } : {}),
+          ...(params.confidence !== undefined ? { confidence: clamp(Number(params.confidence), 0, 1) } : {}),
+          ...(params.emotional_valence !== undefined
+            ? { emotionalValence: clamp(Number(params.emotional_valence), -1, 1) }
+            : {}),
+          ...(params.formation_vad !== undefined ? { formationVAD: params.formation_vad } : {}),
+          ...(params.clear_formation_vad !== undefined ? { clearFormationVAD: params.clear_formation_vad } : {}),
+          ...(params.tags ? { tags: params.tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean) } : {}),
+          ...(params.append_tags
+            ? { appendTags: params.append_tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean) }
+            : {}),
+          ...(params.reason ? { reason: params.reason.trim() } : {}),
+          sourceRef: sourceContext.sourceRef,
+          sourceType: sourceContext.sourceType,
+          provenance: sourceContext.provenance,
+        });
+
+        if (!result) {
+          return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
+        }
+
+        return textResult(
+          `Memory patched (id: ${result.memory.id}, event: ${result.patchEventId}, fields: ${result.updatedFields.join(', ')}).`,
+        );
+      } catch (error) {
+        return textResultWithError(`Error patching memory: ${errorMessage(error)}`, true);
       }
     },
   };

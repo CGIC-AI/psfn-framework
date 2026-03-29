@@ -25,14 +25,26 @@ describe('contextMessagesToPiMessages', () => {
     expect((result[1] as any).content).toEqual([{ type: 'text', text: 'world' }]);
   });
 
-  it('maps system context messages to user messages without discarding them', () => {
+  it('maps system context messages to assistant-side internal notes without discarding them', () => {
     const result = contextMessagesToPiMessages([
       { role: 'system', content: '[SYSTEM: Scheduler] heartbeat prompt' },
     ], () => 1000);
 
     expect(result).toEqual([{
-      role: 'user',
-      content: '[SYSTEM: Scheduler] heartbeat prompt',
+      role: 'assistant',
+      content: [{ type: 'text', text: '[SYSTEM: Scheduler] heartbeat prompt' }],
+      api: '',
+      provider: '',
+      model: '',
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop',
       timestamp: 1000,
     }]);
   });

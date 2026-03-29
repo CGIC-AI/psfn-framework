@@ -1,7 +1,16 @@
 // ── JSON-RPC 2.0 method definitions ──
 // The contract between gateway (host) and agent (container).
 
-import type { Attachment, CompletionPurpose, ContextMessage, ModelThinkingEffort, ObservabilityCallType, SubstrateMessage, ToolSchema } from '../../shared/contracts/runtime.js';
+import type {
+  Attachment,
+  CompletionPurpose,
+  ContextMessage,
+  LLMProviderObservability,
+  ModelThinkingEffort,
+  ObservabilityCallType,
+  SubstrateMessage,
+  ToolSchema,
+} from '../../shared/contracts/runtime.js';
 import type {
   FalCreateModel,
   FalEditModel,
@@ -335,6 +344,7 @@ export interface ConfirmationResolveResult {
 export interface LLMChatResult {
   content: string;
   reasoning?: string;
+  providerObservability?: LLMProviderObservability;
   toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
   model: string;
   inputTokens: number;
@@ -346,6 +356,7 @@ export interface LLMChatResult {
 export interface LLMCompleteResult {
   content: string;
   reasoning?: string;
+  providerObservability?: LLMProviderObservability;
   model: string;
   inputTokens: number;
   outputTokens: number;

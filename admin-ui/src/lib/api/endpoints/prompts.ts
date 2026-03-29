@@ -10,6 +10,7 @@ import type {
   AdminPromptDetailData,
   PromptUpdateResult,
   PromptDiffResult,
+  RuntimePromptUpdateResult,
 } from '$lib/types';
 
 export interface PromptCreateParams {
@@ -73,6 +74,15 @@ export function saveNorthStarItems(body: {
   }>;
 }): Promise<NorthStarUpdateResult> {
   return apiPut<NorthStarUpdateResult>('/api/admin/prompts/north-star', body);
+}
+
+export function saveRuntimePromptBlocks(body: {
+  blocks: Array<{
+    id: string;
+    content: string;
+  }>;
+}): Promise<RuntimePromptUpdateResult> {
+  return apiPut<RuntimePromptUpdateResult>('/api/admin/prompts/runtime-blocks', body);
 }
 
 export function createPromptLayer(

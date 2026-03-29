@@ -17,6 +17,7 @@ import type {
   MemoryDeleteVersion,
   MemoryListOptions,
   MemoryLink,
+  MemoryPatchEvent,
   MemorySoftDeleteOptions,
   MemoryStoreUpdatePatch,
   MemoryUndoSoftDeleteOptions,
@@ -32,12 +33,16 @@ import {
   normalizeMemoryScopeTags,
   normalizeConsentFlags,
   normalizeFormationVAD,
+  normalizeMemorySourceType,
+  normalizeMemoryProvenance,
+  inferMemorySourceTypeFromSourceRef,
   type MemoryScopeQuery,
   type MemoryScopeRef,
   type PurrMemory,
   type SensitivityLevel,
   type ConsentFlags,
   type MemoryFormationVAD,
+  type MemoryProvenance,
 } from './types.js';
 
 const SCRATCHPAD_MAX_ENTRIES = 64;
@@ -91,6 +96,8 @@ interface MemoryRow {
   formation_vad: string | null;
   salience: number;
   source_ref: string;
+  source_type: string | null;
+  provenance_json: string | null;
   extracted_at: number;
   last_accessed: number;
   access_count: number;
@@ -128,6 +135,19 @@ interface MemoryAbstractionLinkRow {
   created_at: number;
   created_by: string | null;
   reason: string | null;
+}
+
+interface MemoryPatchEventRow {
+  id: string;
+  memory_id: string;
+  source_ref: string;
+  source_type: string;
+  provenance_json: string | null;
+  reason: string | null;
+  patch_json: string;
+  previous_json: string;
+  next_json: string;
+  created_at: number;
 }
 
 interface MemoryLinkRow {
@@ -214,12 +234,39 @@ function mapMemoryAbstractionLinkRow(row: MemoryAbstractionLinkRow): MemoryAbstr
   };
 }
 
+function parseJsonRecord(value: string | null, fallback: Record<string, unknown> = {}): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value ?? '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function mapMemoryPatchEventRow(row: MemoryPatchEventRow): MemoryPatchEvent {
+  return {
+    id: row.id,
+    memoryId: row.memory_id,
+    sourceRef: row.source_ref,
+    sourceType: normalizeMemorySourceType(row.source_type),
+    provenance: normalizeMemoryProvenance(parseJsonRecord(row.provenance_json, {})),
+    reason: row.reason ?? undefined,
+    patch: parseJsonRecord(row.patch_json),
+    previousValues: parseJsonRecord(row.previous_json),
+    nextValues: parseJsonRecord(row.next_json),
+    createdAt: row.created_at,
+  };
+}
+
 function mapMemoryRow(row: MemoryRow): PurrMemory {
   let tags: string[] = [];
   let scopeTags: string[] = [];
   let provenanceRefs: string[] = [];
   let consentFlags: ConsentFlags = {};
   let formationVAD: MemoryFormationVAD | undefined;
+  let provenance: MemoryProvenance | undefined;
   let scopeRef: MemoryScopeRef | undefined;
   try {
     tags = JSON.parse(row.tags) as string[];
@@ -253,6 +300,11 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
   } catch {
     formationVAD = undefined;
   }
+  try {
+    provenance = normalizeMemoryProvenance(JSON.parse(row.provenance_json ?? '{}'));
+  } catch {
+    provenance = undefined;
+  }
   scopeRef = normalizeMemoryScopeRef({
     kind: row.scope_ref_kind ?? '',
     id: row.scope_ref_id ?? '',
@@ -269,6 +321,8 @@ function mapMemoryRow(row: MemoryRow): PurrMemory {
     formationVAD,
     salience: row.salience,
     sourceRef: row.source_ref,
+    sourceType: normalizeMemorySourceType(row.source_type, inferMemorySourceTypeFromSourceRef(row.source_ref)),
+    ...(provenance ? { provenance } : {}),
     extractedAt: row.extracted_at,
     lastAccessed: row.last_accessed,
     accessCount: row.access_count,
@@ -439,6 +493,8 @@ export class MemoryStore {
         formation_vad TEXT,
         salience REAL NOT NULL DEFAULT 0.5,
         source_ref TEXT NOT NULL,
+        source_type TEXT NOT NULL DEFAULT 'unknown',
+        provenance_json TEXT NOT NULL DEFAULT '{}',
         extracted_at INTEGER NOT NULL,
         last_accessed INTEGER NOT NULL,
         access_count INTEGER NOT NULL DEFAULT 1,
@@ -491,6 +547,20 @@ export class MemoryStore {
       );
       CREATE INDEX IF NOT EXISTS idx_l2_abstraction_source ON l2_memory_abstraction_links(source_memory_id);
       CREATE INDEX IF NOT EXISTS idx_l2_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id);
+
+      CREATE TABLE IF NOT EXISTS l2_memory_patch_events (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        provenance_json TEXT NOT NULL DEFAULT '{}',
+        reason TEXT,
+        patch_json TEXT NOT NULL,
+        previous_json TEXT NOT NULL,
+        next_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_l2_patch_events_memory ON l2_memory_patch_events(memory_id, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS memory_links (
         id1 TEXT NOT NULL,
@@ -557,6 +627,13 @@ export class MemoryStore {
     if (!hasColumn(this.db, 'l2_memories', 'formation_vad')) {
       this.db.exec(`ALTER TABLE l2_memories ADD COLUMN formation_vad TEXT`);
     }
+    if (!hasColumn(this.db, 'l2_memories', 'source_type')) {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN source_type TEXT NOT NULL DEFAULT 'unknown'`);
+    }
+    if (!hasColumn(this.db, 'l2_memories', 'provenance_json')) {
+      this.db.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'`);
+    }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_source_type ON l2_memories(source_type)`);
 
     // Add soft-delete columns for reversible destructive operations
     try {
@@ -585,6 +662,21 @@ export class MemoryStore {
     `);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_memory ON l2_memory_delete_versions(memory_id)`);
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_delete_versions_active ON l2_memory_delete_versions(restored_at, deleted_at)`);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS l2_memory_patch_events (
+        id TEXT PRIMARY KEY,
+        memory_id TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        provenance_json TEXT NOT NULL DEFAULT '{}',
+        reason TEXT,
+        patch_json TEXT NOT NULL,
+        previous_json TEXT NOT NULL,
+        next_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_patch_events_memory ON l2_memory_patch_events(memory_id, created_at DESC)`);
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS l2_memory_abstraction_links (
@@ -629,10 +721,10 @@ export class MemoryStore {
   insertMemory(memory: PurrMemory, embedding: Float32Array): void {
     const insertMem = this.db.prepare(`
       INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence, formation_vad,
-        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,
+        salience, source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count, superseded_by, tags,
         scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs, sensitivity,
         consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const insertVec = this.db.prepare(`
@@ -651,6 +743,8 @@ export class MemoryStore {
         memory.formationVAD ? JSON.stringify(memory.formationVAD) : null,
         memory.salience,
         memory.sourceRef,
+        normalizeMemorySourceType(memory.sourceType, inferMemorySourceTypeFromSourceRef(memory.sourceRef)),
+        JSON.stringify(normalizeMemoryProvenance(memory.provenance) ?? {}),
         memory.extractedAt,
         memory.lastAccessed,
         memory.accessCount,
@@ -794,6 +888,26 @@ export class MemoryStore {
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
+    if (updates.text !== undefined) {
+      setClauses.push('text = ?');
+      values.push(updates.text);
+    }
+    if (updates.importance !== undefined) {
+      setClauses.push('importance = ?');
+      values.push(updates.importance);
+    }
+    if (updates.confidence !== undefined) {
+      setClauses.push('confidence = ?');
+      values.push(updates.confidence);
+    }
+    if (updates.emotionalValence !== undefined) {
+      setClauses.push('emotional_valence = ?');
+      values.push(updates.emotionalValence);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'formationVAD')) {
+      setClauses.push('formation_vad = ?');
+      values.push(updates.formationVAD ? JSON.stringify(normalizeFormationVAD(updates.formationVAD)) : null);
+    }
     if (updates.salience !== undefined) {
       setClauses.push('salience = ?');
       values.push(updates.salience);
@@ -839,6 +953,14 @@ export class MemoryStore {
       setClauses.push('provenance_refs = ?');
       values.push(JSON.stringify(updates.provenanceRefs));
     }
+    if (updates.sourceType !== undefined) {
+      setClauses.push('source_type = ?');
+      values.push(normalizeMemorySourceType(updates.sourceType));
+    }
+    if (updates.provenance !== undefined) {
+      setClauses.push('provenance_json = ?');
+      values.push(JSON.stringify(normalizeMemoryProvenance(updates.provenance) ?? {}));
+    }
     if (updates.contactId !== undefined) {
       setClauses.push('contact_id = ?');
       values.push(updates.contactId);
@@ -857,12 +979,62 @@ export class MemoryStore {
     }
 
     if (setClauses.length === 0) return;
+    if (updates.text !== undefined && !(updates.embedding instanceof Float32Array)) {
+      throw new Error('updateMemory requires embedding when text is updated');
+    }
 
-    values.push(id);
-    const stmt = this.db.prepare(
+    const updateMem = this.db.prepare(
       `UPDATE l2_memories SET ${setClauses.join(', ')} WHERE id = ?`,
     );
-    stmt.run(...values);
+    const updateVec = this.db.prepare(`
+      UPDATE l2_memory_embeddings
+      SET embedding = ?
+      WHERE memory_id = ?
+    `);
+
+    const transaction = this.db.transaction(() => {
+      updateMem.run(...values, id);
+      if (updates.embedding instanceof Float32Array) {
+        updateVec.run(embeddingToBuffer(updates.embedding), id);
+      }
+    });
+    transaction();
+  }
+
+  runInTransaction<T>(handler: () => T): T {
+    return runSqliteTransaction(this.db, handler);
+  }
+
+  recordPatchEvent(event: MemoryPatchEvent): void {
+    this.db.prepare(`
+      INSERT INTO l2_memory_patch_events (
+        id, memory_id, source_ref, source_type, provenance_json, reason, patch_json, previous_json, next_json, created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.id,
+      event.memoryId,
+      event.sourceRef,
+      normalizeMemorySourceType(event.sourceType),
+      JSON.stringify(normalizeMemoryProvenance(event.provenance) ?? {}),
+      event.reason ?? null,
+      JSON.stringify(event.patch),
+      JSON.stringify(event.previousValues),
+      JSON.stringify(event.nextValues),
+      event.createdAt,
+    );
+  }
+
+  getPatchEvents(memoryId: string): MemoryPatchEvent[] {
+    const normalized = memoryId.trim();
+    if (!normalized) return [];
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM l2_memory_patch_events
+      WHERE memory_id = ?
+      ORDER BY created_at DESC
+    `).all(normalized) as MemoryPatchEventRow[];
+    return rows.map(mapMemoryPatchEventRow);
   }
 
   getAllActiveMemories(limit: number = 10_000): PurrMemory[] {

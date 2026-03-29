@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
-import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool } from './tools.js';
+import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createSelfieTool } from './tools.js';
 import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer } from './types.js';
 
 function resultText(result: AgentToolResult<any>): string {
@@ -79,6 +79,52 @@ describe('image tools', () => {
     expect(result.details.imageResult?.requestId).toBe('req-vision-1');
     expect(result.details.visionReview?.summary).toContain('matches the companion look');
     expect(resultText(result)).toContain('"requestId": "req-vision-1"');
+    expect(resultText(result)).toContain('Vision review:');
+  });
+
+  it('exposes a dedicated selfie tool that uses the same image pipeline', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal',
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-selfie-1',
+        images: [{
+          url: 'https://images.example.test/selfie-explicit.png',
+          contentType: 'image/png',
+          fileName: 'selfie-explicit.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'Describe the generated image.',
+        summary: 'The selfie reads as a consistent companion portrait.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+
+    const tool = createSelfieTool(ops, reviewer);
+    const result = await tool.execute('tool-call-selfie', {
+      prompt: 'a candid mirror selfie of me, soft morning light, cozy bedroom, natural expression',
+      aspect_ratio: '3:4',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(tool.name).toBe('selfie_create');
+    expect(ops.create).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'a candid mirror selfie of me, soft morning light, cozy bedroom, natural expression',
+      aspectRatio: '3:4',
+    }));
+    expect(reviewer.analyze).toHaveBeenCalledWith({
+      imageUrls: ['https://images.example.test/selfie-explicit.png'],
+      prompt: 'a candid mirror selfie of me, soft morning light, cozy bedroom, natural expression',
+      mode: 'create',
+    });
+    expect(result.details.visionReview?.summary).toContain('consistent companion portrait');
+    expect(resultText(result)).toContain('"requestId": "req-selfie-1"');
     expect(resultText(result)).toContain('Vision review:');
   });
 

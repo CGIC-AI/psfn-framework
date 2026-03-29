@@ -9,6 +9,12 @@ import {
   type PromptLayerRole,
 } from '../../../core/identity/prompt-types.js';
 import {
+  getPromptRuntimeBlockDefinitions,
+  PromptRuntimeLayoutStore,
+  type PromptRuntimeEditableBlockId,
+  type PromptRuntimeSystemPromptBlockId,
+} from '../../../core/identity/prompt-runtime.js';
+import {
   IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
   buildImmutableHumanSafetySection,
 } from '../../../core/identity/prompt-composer.js';
@@ -49,11 +55,13 @@ import type {
   AdminNorthStarSnapshotData,
   AdminPromptDetailData,
   AdminPromptListData,
+  AdminPromptRuntimeBlock,
   AdminPromptsService,
   ConstitutionUpdateResult,
   FoundationUpdateResult,
   NorthStarUpdateResult,
   PromptUpdateResult,
+  RuntimePromptUpdateResult,
 } from './types.js';
 
 const CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX = 'constitution:immutable:';
@@ -85,7 +93,7 @@ interface NorthStarItemInput {
 export class AdminPromptsDataService implements AdminPromptsService {
   constructor(private readonly deps: {
     promptStore: PromptLayerStatePort;
-    promptRegistry: PromptRegistryStatePort;
+    promptRegistry?: PromptRegistryStatePort | null;
     northStarStore?: NorthStarStore | null;
     sessionStore?: SessionStore | null;
     sessionManager?: SessionManager | null;
@@ -97,6 +105,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
       details?: Array<string | null | undefined>,
     ) => void;
     companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
+    promptRuntimeLayoutStore?: PromptRuntimeLayoutStore | null;
   }) {}
 
   private resolveCompanionName(): string {
@@ -208,10 +217,111 @@ export class AdminPromptsDataService implements AdminPromptsService {
     return { metadata };
   }
 
+  private getPromptRegistry(): PromptRegistryStatePort {
+    const registry = this.deps.promptRegistry;
+    if (!registry) {
+      throw new Error('Prompt registry is not configured');
+    }
+    return registry;
+  }
+
   listPrompts(): AdminPromptListData {
+    const runtimeBlocks = this.listRuntimeBlocks();
     return {
       layers: this.deps.promptStore.getAll(),
-      staticPrompts: this.deps.promptRegistry.list(),
+      staticPrompts: this.deps.promptRegistry?.list() ?? [],
+      runtimeBlocks,
+    };
+  }
+
+  private listRuntimeBlocks(): AdminPromptRuntimeBlock[] {
+    const defaultSystemOrder = getPromptRuntimeBlockDefinitions()
+      .filter(block => block.placement === 'system_prompt')
+      .map(block => block.id as PromptRuntimeSystemPromptBlockId);
+    const runtimeLayout = this.deps.promptRuntimeLayoutStore?.getLayout();
+    const systemOrder = runtimeLayout?.systemPromptBlockOrder ?? defaultSystemOrder;
+    const systemOrderIndex = new Map(systemOrder.map((id, index) => [id, index]));
+    const customContentByBlockId = runtimeLayout?.editableBlockContent ?? {};
+
+    return getPromptRuntimeBlockDefinitions()
+      .map((block): AdminPromptRuntimeBlock => ({
+        ...block,
+        companionEditable: block.companionEditable === true,
+        effectiveOrder: block.placement === 'system_prompt'
+          ? (systemOrderIndex.get(block.id as PromptRuntimeSystemPromptBlockId) ?? Number.MAX_SAFE_INTEGER)
+          : (
+              block.placement === 'context_messages'
+                ? systemOrder.length
+                : systemOrder.length + 1
+          ),
+        customContent: block.companionEditable === true
+          ? (customContentByBlockId[block.id as PromptRuntimeEditableBlockId] ?? '')
+          : undefined,
+      }))
+      .sort((left, right) => {
+        if (left.effectiveOrder !== right.effectiveOrder) {
+          return left.effectiveOrder - right.effectiveOrder;
+        }
+        return left.label.localeCompare(right.label);
+      });
+  }
+
+  saveRuntimePromptBlocks(body: string): RuntimePromptUpdateResult {
+    const promptRuntimeLayoutStore = this.deps.promptRuntimeLayoutStore;
+    if (!promptRuntimeLayoutStore) {
+      return { ok: false, message: 'Runtime prompt layout store is not configured' };
+    }
+
+    const params = this.parseBody(body);
+    const rawBlocks = params.get('blocks');
+    if (!rawBlocks) {
+      return { ok: false, message: 'blocks is required' };
+    }
+
+    let parsedBlocks: unknown;
+    try {
+      parsedBlocks = JSON.parse(rawBlocks);
+    } catch {
+      return { ok: false, message: 'blocks must be a JSON array' };
+    }
+
+    if (!Array.isArray(parsedBlocks)) {
+      return { ok: false, message: 'blocks must be a JSON array' };
+    }
+
+    const updated: PromptRuntimeEditableBlockId[] = [];
+    for (const entry of parsedBlocks) {
+      if (!entry || typeof entry !== 'object') {
+        return { ok: false, message: 'blocks entries must be objects' };
+      }
+      const block = entry as Record<string, unknown>;
+      if (typeof block.id !== 'string' || !block.id.trim()) {
+        return { ok: false, message: 'blocks entries require a valid block id' };
+      }
+      if (typeof block.content !== 'string') {
+        return { ok: false, message: `block "${block.id}" content must be a string` };
+      }
+      if (block.id !== 'runtime.persona_adaptation' && block.id !== 'runtime.context') {
+        return { ok: false, message: `block "${block.id}" is not companion-editable` };
+      }
+      promptRuntimeLayoutStore.setEditableBlockContent(
+        block.id as PromptRuntimeEditableBlockId,
+        block.content,
+        'admin',
+      );
+      updated.push(block.id as PromptRuntimeEditableBlockId);
+    }
+
+    if (updated.length > 0) {
+      this.injectPromptEditSystemNote(`Admin updated ${updated.length} companion runtime guidance block${updated.length === 1 ? '' : 's'}.`);
+    }
+
+    return {
+      ok: true,
+      message: updated.length > 0
+        ? `Updated ${updated.length} runtime guidance block${updated.length === 1 ? '' : 's'}`
+        : 'No runtime guidance blocks updated',
+      updated,
     };
   }
 
@@ -969,11 +1079,11 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   getStaticPromptDetail(key: string): AdminPromptDetailData | null {
-    const staticPrompt = this.deps.promptRegistry.getByKey(key);
+    const staticPrompt = this.getPromptRegistry().getByKey(key);
     if (!staticPrompt) return null;
     return {
       staticPrompt,
-      staticPromptHistory: this.deps.promptRegistry.getPromptHistory(key),
+      staticPromptHistory: this.getPromptRegistry().getPromptHistory(key),
     };
   }
 
@@ -1041,48 +1151,95 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   reorderPromptLayers(body: string): PromptUpdateResult {
+    const promptStore = this.deps.promptStore;
+    const promptRuntimeLayoutStore = this.deps.promptRuntimeLayoutStore ?? null;
     const params = this.parseBody(body);
     const rawLayerIds = params.get('layerIds');
-    if (!rawLayerIds) {
-      return { ok: false, message: 'layerIds is required' };
-    }
+    const rawRuntimeBlockIds = params.get('runtimeBlockIds');
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawLayerIds);
-    } catch {
-      return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
-    }
-    if (!Array.isArray(parsed)) {
-      return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
-    }
-
-    const layerIds: string[] = [];
-    for (const entry of parsed) {
-      if (typeof entry !== 'string' || !entry.trim()) {
-        return { ok: false, message: 'layerIds entries must be non-empty strings' };
+    let layerIds: string[] = [];
+    if (rawLayerIds) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawLayerIds);
+      } catch {
+        return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
       }
-      layerIds.push(entry.trim());
+      if (!Array.isArray(parsed)) {
+        return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
+      }
+
+      for (const entry of parsed) {
+        if (typeof entry !== 'string' || !entry.trim()) {
+          return { ok: false, message: 'layerIds entries must be non-empty strings' };
+        }
+        layerIds.push(entry.trim());
+      }
+    }
+
+    let runtimeBlockIds: PromptRuntimeSystemPromptBlockId[] = [];
+    if (rawRuntimeBlockIds) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawRuntimeBlockIds);
+      } catch {
+        return { ok: false, message: 'runtimeBlockIds must be a JSON array of runtime block IDs' };
+      }
+      if (!Array.isArray(parsed)) {
+        return { ok: false, message: 'runtimeBlockIds must be a JSON array of runtime block IDs' };
+      }
+      for (const entry of parsed) {
+        if (typeof entry !== 'string' || !entry.trim()) {
+          return { ok: false, message: 'runtimeBlockIds entries must be non-empty strings' };
+        }
+        runtimeBlockIds.push(entry.trim() as PromptRuntimeSystemPromptBlockId);
+      }
+    }
+
+    if (layerIds.length === 0 && runtimeBlockIds.length === 0) {
+      return { ok: false, message: 'layerIds or runtimeBlockIds is required' };
     }
 
     try {
-      const touched = this.deps.promptStore.reorderByLayerIds(
-        layerIds,
-        'admin',
-        'Admin prompt-layer reorder via Garden API',
-      );
+      const touched = layerIds.length > 0
+        ? promptStore.reorderByLayerIds(
+          layerIds,
+          'admin',
+          'Admin prompt-layer reorder via Garden API',
+        )
+        : [];
+      const runtimeLayoutTouched = promptRuntimeLayoutStore && runtimeBlockIds.length > 0
+        ? promptRuntimeLayoutStore.reorderSystemPromptBlocks(runtimeBlockIds, 'admin')
+        : null;
 
-      if (touched.length > 0) {
+      if (touched.length > 0 || runtimeLayoutTouched) {
+        const noteParts = [
+          touched.length > 0
+            ? `${touched.length} prompt layer${touched.length === 1 ? '' : 's'}`
+            : null,
+          runtimeLayoutTouched
+            ? `${runtimeLayoutTouched.systemPromptBlockOrder.length} runtime prompt block${runtimeLayoutTouched.systemPromptBlockOrder.length === 1 ? '' : 's'}`
+            : null,
+        ].filter((entry): entry is string => entry != null);
         this.injectPromptEditSystemNote(
-          `Admin reordered ${touched.length} prompt layer${touched.length === 1 ? '' : 's'}.`,
+          `Admin reordered ${noteParts.join(' and ')}.`,
         );
       }
 
+      const summaryParts = [
+        touched.length > 0
+          ? `Reordered ${touched.length} prompt layer${touched.length === 1 ? '' : 's'}`
+          : null,
+        runtimeLayoutTouched
+          ? 'updated runtime prompt block order'
+          : null,
+      ].filter((entry): entry is string => entry != null);
+
       return {
         ok: true,
-        message: touched.length > 0
-          ? `Reordered ${touched.length} prompt layer${touched.length === 1 ? '' : 's'}`
-          : 'Prompt layers already in requested order',
+        message: summaryParts.length > 0
+          ? summaryParts.join('; ')
+          : 'Prompt stack already in requested order',
       };
     } catch (error) {
       return {
@@ -1097,7 +1254,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     const key = params.get('key') ?? '';
     const content = params.get('content') ?? '';
     try {
-      const staticPrompt = this.deps.promptRegistry.update(key, content, 'admin');
+      const staticPrompt = this.getPromptRegistry().update(key, content, 'admin');
       return {
         ok: true,
         message: `Updated "${staticPrompt.key}" to v${staticPrompt.version}`,
@@ -1159,7 +1316,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     const version = parseInt(params.get('version') ?? '0', 10);
 
     try {
-      const staticPrompt = this.deps.promptRegistry.rollback(key, version);
+      const staticPrompt = this.getPromptRegistry().rollback(key, version);
       return {
         ok: true,
         message: `Rolled back "${staticPrompt.key}" to content from v${version}`,

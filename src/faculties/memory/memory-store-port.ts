@@ -56,6 +56,19 @@ export interface MemoryAbstractionLink {
   reason?: string;
 }
 
+export interface MemoryPatchEvent {
+  id: string;
+  memoryId: string;
+  sourceRef: string;
+  sourceType: import('./types.js').MemorySourceType;
+  provenance?: import('./types.js').MemoryProvenance;
+  reason?: string;
+  patch: Record<string, unknown>;
+  previousValues: Record<string, unknown>;
+  nextValues: Record<string, unknown>;
+  createdAt: number;
+}
+
 export interface ScratchpadEntry {
   id: string;
   content: string;
@@ -78,6 +91,11 @@ export interface MemoryStoreStats {
 
 export type MemoryStoreUpdatePatch = Partial<Pick<
   PurrMemory,
+  | 'text'
+  | 'importance'
+  | 'confidence'
+  | 'emotionalValence'
+  | 'formationVAD'
   | 'salience'
   | 'lastAccessed'
   | 'accessCount'
@@ -88,10 +106,13 @@ export type MemoryStoreUpdatePatch = Partial<Pick<
   | 'scopeRef'
   | 'scopeTags'
   | 'provenanceRefs'
+  | 'sourceType'
+  | 'provenance'
   | 'contactId'
   | 'deletedAt'
   | 'deletedBy'
   | 'deleteReason'
+  | 'embedding'
 >>;
 
 export interface MemoryListOptions {
@@ -146,6 +167,7 @@ type Awaitable<T> = T | Promise<T>;
 interface MemoryStorePortBackend extends ScratchpadProvider {
   insertMemory(memory: PurrMemory, embedding: Float32Array): Awaitable<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Awaitable<void>;
+  runInTransaction<T>(handler: () => T): Awaitable<T>;
   searchByEmbedding(
     embedding: Float32Array,
     threshold: number,
@@ -158,6 +180,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
     scopeQuery?: MemoryScopeQuery,
   ): Awaitable<MemorySearchResult[]>;
   updateMemory(id: string, updates: MemoryStoreUpdatePatch): Awaitable<void>;
+  recordPatchEvent(event: MemoryPatchEvent): Awaitable<void>;
   getAllActiveMemories(limit?: number): Awaitable<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
   countActiveMemories(): Awaitable<number>;
@@ -203,6 +226,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
 export interface MemoryStorePort extends ScratchpadProvider {
   insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void>;
   persistMemoryWrite(input: MemoryWriteCommit): Promise<void>;
+  runInTransaction<T>(handler: () => T): Promise<T>;
   searchByEmbedding(
     embedding: Float32Array,
     threshold: number,
@@ -215,6 +239,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
     scopeQuery?: MemoryScopeQuery,
   ): Promise<MemorySearchResult[]>;
   updateMemory(id: string, updates: MemoryStoreUpdatePatch): Promise<void>;
+  recordPatchEvent(event: MemoryPatchEvent): Promise<void>;
   getAllActiveMemories(limit?: number): Promise<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
   countActiveMemories(): Promise<number>;

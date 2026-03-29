@@ -193,6 +193,9 @@ interface RetrievalTelemetry {
   topScore?: number;
   bottomScore?: number;
   budgetCappedCount?: number;
+  relevanceStoppedCount?: number;
+  selectionStopReason?: 'budget' | 'relevance' | 'exhausted';
+  selectionScoreFloor?: number;
   selectedTypes?: Record<string, number>;
   compositionalMode?: 'disabled_policy' | 'llm_unavailable' | 'insufficient_candidates' | 'malformed_or_failed' | 'applied';
   compositionalCandidateCount?: number;
@@ -920,10 +923,21 @@ export class MemoryRetriever implements MemoryProvider {
         });
       }
 
-      const selected = selectWithinTokenBudget(ranked, budget.tokenBudget);
+      const guaranteedSelectionFloor = scoreGuaranteedCount > 0
+        ? Math.min(ranked.length, Math.max(MEMORY_RETRIEVAL_MIN_ITEMS, SCORE_GUARANTEE_MIN_K))
+        : Math.min(ranked.length, MEMORY_RETRIEVAL_MIN_ITEMS);
+      const selection = selectWithinRelevanceAndTokenBudget(
+        ranked,
+        budget.tokenBudget,
+        guaranteedSelectionFloor,
+      );
+      const selected = selection.selected;
 
       telemetry.returnedCount = selected.length;
-      telemetry.budgetCappedCount = Math.max(0, ranked.length - selected.length);
+      telemetry.selectionStopReason = selection.stopReason;
+      telemetry.selectionScoreFloor = selection.relevanceScoreFloor;
+      telemetry.relevanceStoppedCount = selection.relevanceStoppedCount;
+      telemetry.budgetCappedCount = selection.budgetCappedCount;
       telemetry.selectedTypes = countSelectedMemoryTypes(selected);
       diagnostics.selectedCount = selected.length;
       diagnostics.topSelected = selected.slice(0, 3).map((item) => ({
@@ -949,6 +963,10 @@ export class MemoryRetriever implements MemoryProvider {
         semanticCandidates: telemetry.semanticCandidateCount,
         lexicalCandidates: telemetry.lexicalCandidateCount,
         pipeline: `${diagnostics.candidateCount} candidates -> ${diagnostics.policyAllowedCount} policy-allowed -> ${scored.length} scored -> ${ranked.length} ranked -> ${selected.length} selected`,
+        selectionStopReason: telemetry.selectionStopReason,
+        selectionScoreFloor: telemetry.selectionScoreFloor,
+        relevanceStoppedCount: telemetry.relevanceStoppedCount,
+        budgetCappedCount: telemetry.budgetCappedCount,
         rejectedByContactScope: diagnostics.rejectedByContactScope,
         rejectedBySensitivity: diagnostics.rejectedBySensitivity,
         rejectedByPolicy: diagnostics.rejectedByPolicy,
@@ -1810,21 +1828,87 @@ function estimateMemoryPromptTokens(memory: PurrMemory): number {
   return Math.max(1, countTokens(`[${memory.type}] ${memory.text}`));
 }
 
-function selectWithinTokenBudget(scored: ScoredMemory[], tokenBudget: number): ScoredMemory[] {
-  if (scored.length === 0) return [];
-  if (tokenBudget <= 0) return scored.slice(0, MEMORY_RETRIEVAL_MIN_ITEMS);
+interface RetrievalSelectionDecision {
+  selected: ScoredMemory[];
+  stopReason: 'budget' | 'relevance' | 'exhausted';
+  relevanceStoppedCount: number;
+  budgetCappedCount: number;
+  relevanceScoreFloor: number;
+}
 
+const RELEVANCE_TERMINATION_ABSOLUTE_FLOOR = 0.12;
+const RELEVANCE_TERMINATION_RELATIVE_FLOOR = 0.25;
+
+function selectWithinRelevanceAndTokenBudget(
+  scored: ScoredMemory[],
+  tokenBudget: number,
+  minimumSelectedCount = MEMORY_RETRIEVAL_MIN_ITEMS,
+): RetrievalSelectionDecision {
+  const selectionFloor = Math.max(1, Math.min(minimumSelectedCount, scored.length));
+
+  if (scored.length === 0) {
+    return {
+      selected: [],
+      stopReason: 'exhausted',
+      relevanceStoppedCount: 0,
+      budgetCappedCount: 0,
+      relevanceScoreFloor: RELEVANCE_TERMINATION_ABSOLUTE_FLOOR,
+    };
+  }
+
+  if (tokenBudget <= 0) {
+    const selected = scored.slice(0, selectionFloor);
+    return {
+      selected,
+      stopReason: scored.length > selected.length ? 'budget' : 'exhausted',
+      relevanceStoppedCount: 0,
+      budgetCappedCount: Math.max(0, scored.length - selected.length),
+      relevanceScoreFloor: Math.max(
+        RELEVANCE_TERMINATION_ABSOLUTE_FLOOR,
+        scored[0].score * RELEVANCE_TERMINATION_RELATIVE_FLOOR,
+      ),
+    };
+  }
+
+  const relevanceScoreFloor = Math.max(
+    RELEVANCE_TERMINATION_ABSOLUTE_FLOOR,
+    scored[0].score * RELEVANCE_TERMINATION_RELATIVE_FLOOR,
+  );
   let usedTokens = 0;
   const selected: ScoredMemory[] = [];
-  for (const item of scored) {
+  let stopReason: RetrievalSelectionDecision['stopReason'] = 'exhausted';
+  let relevanceStoppedCount = 0;
+  let budgetCappedCount = 0;
+
+  for (let index = 0; index < scored.length; index++) {
+    const item = scored[index];
     const itemTokens = estimateMemoryPromptTokens(item.memory);
-    if (selected.length >= MEMORY_RETRIEVAL_MIN_ITEMS && usedTokens + itemTokens > tokenBudget) {
-      break;
+
+    if (selected.length >= selectionFloor) {
+      if (item.score < relevanceScoreFloor) {
+        stopReason = 'relevance';
+        relevanceStoppedCount = scored.length - index;
+        break;
+      }
+
+      if (usedTokens + itemTokens > tokenBudget) {
+        stopReason = 'budget';
+        budgetCappedCount = scored.length - index;
+        break;
+      }
     }
+
     selected.push(item);
     usedTokens += itemTokens;
   }
-  return selected;
+
+  return {
+    selected,
+    stopReason,
+    relevanceStoppedCount,
+    budgetCappedCount,
+    relevanceScoreFloor,
+  };
 }
 
 function renderPromptBlock(

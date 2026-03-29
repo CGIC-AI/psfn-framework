@@ -275,12 +275,18 @@ export function buildAdminApiRoutes(options: {
         sendJson(res, 400, { error: parsed.error });
         return;
       }
-      const result = contactsService.updateContact(id, JSON.stringify(parsed.value));
-      if (!result.ok) {
-        sendJson(res, result.message === 'Contact not found' ? 404 : 400, { error: result.message });
-        return;
-      }
-      sendJson(res, 200, result);
+      contactsService.updateContact(id, JSON.stringify(parsed.value)).then(
+        (result) => {
+          if (!result.ok) {
+            sendJson(res, result.message === 'Contact not found' ? 404 : 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        },
+        (error) => {
+          sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to update contact') });
+        },
+      );
     });
   };
 
@@ -1477,6 +1483,34 @@ export function buildAdminApiRoutes(options: {
           }
 
           const result = reorderablePromptsService.reorderPromptLayers(JSON.stringify(parsed.value));
+          if (!result.ok) {
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'PUT',
+      match: exactPath('/api/admin/prompts/runtime-blocks'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+
+          const runtimeBlocksService = promptsService as AdminPromptsService & {
+            saveRuntimePromptBlocks?: (payload: string) => { ok: boolean; message: string };
+          };
+          if (typeof runtimeBlocksService.saveRuntimePromptBlocks !== 'function') {
+            sendJson(res, 400, { error: 'Runtime prompt block editing not available' });
+            return;
+          }
+
+          const result = runtimeBlocksService.saveRuntimePromptBlocks(JSON.stringify(parsed.value));
           if (!result.ok) {
             sendJson(res, 400, { error: result.message });
             return;

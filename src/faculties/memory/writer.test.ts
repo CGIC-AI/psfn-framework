@@ -33,6 +33,8 @@ function mockMemoryStore(): {
   persistMemoryWrite: ReturnType<typeof vi.fn>;
   searchByEmbedding: ReturnType<typeof vi.fn>;
   updateMemory: ReturnType<typeof vi.fn>;
+  recordPatchEvent: ReturnType<typeof vi.fn>;
+  runInTransaction: ReturnType<typeof vi.fn>;
   softDeleteMemory: ReturnType<typeof vi.fn>;
   recordAbstractionLink: ReturnType<typeof vi.fn>;
   getAllActiveMemories: ReturnType<typeof vi.fn>;
@@ -50,6 +52,8 @@ function mockMemoryStore(): {
     }),
     searchByEmbedding: vi.fn(() => []),
     updateMemory: vi.fn(),
+    recordPatchEvent: vi.fn(),
+    runInTransaction: vi.fn((handler: () => unknown) => handler()),
     softDeleteMemory: vi.fn(),
     recordAbstractionLink: vi.fn(),
     getAllActiveMemories: vi.fn(() => []),
@@ -113,6 +117,7 @@ describe('MemoryWriter', () => {
       expect(result.memory.confidence).toBe(0.9);
       expect(result.memory.tags).toEqual(['identity', 'preference']);
       expect(result.memory.sourceRef).toBe('test:manual');
+      expect(result.memory.sourceType).toBe('unknown');
       expect(result.memory.salience).toBe(0.8); // Initial salience = importance
       expect(result.memory.accessCount).toBe(1);
       expect(result.memory.id).toBeDefined();
@@ -123,6 +128,25 @@ describe('MemoryWriter', () => {
       const [insertedMemory, insertedEmbedding] = store.insertMemory.mock.calls[0];
       expect(insertedMemory.text).toBe('V loves cats');
       expect(insertedEmbedding).toBeInstanceOf(Float32Array);
+    });
+
+    it('stores explicit structured source provenance on new writes', async () => {
+      const result = await writer.write({
+        text: 'Structured provenance memory',
+        type: 'semantic',
+        sourceRef: 'source:tool:memory_write|invocation:call-99',
+        sourceType: 'tool_write',
+        provenance: {
+          toolName: 'memory_write',
+          toolCallId: 'call-99',
+        },
+      });
+
+      expect(result.memory.sourceType).toBe('tool_write');
+      expect(result.memory.provenance).toEqual({
+        toolName: 'memory_write',
+        toolCallId: 'call-99',
+      });
     });
 
     it('uses default values for optional fields', async () => {
@@ -979,6 +1003,62 @@ describe('MemoryWriter', () => {
       expect(result.written).toBe(1); // superseded counts as written
       expect(result.superseded).toBe(1);
       expect(result.results[0].action).toBe('superseded');
+    });
+  });
+
+  describe('patchMemory()', () => {
+    it('patches selected fields and records an audit event', async () => {
+      const existing = makeExistingMemory({
+        id: 'memory-patch-1',
+        text: 'Original memory text',
+        importance: 0.4,
+        confidence: 0.6,
+        emotionalValence: -0.4,
+        tags: ['old'],
+      });
+      store.getById.mockReturnValue(existing);
+
+      const result = await writer.patchMemory({
+        memoryId: 'memory-patch-1',
+        confidence: 0.9,
+        appendTags: ['belief-corrected', 'source-retracted'],
+        reason: 'corrected belief provenance',
+      });
+
+      expect(result).not.toBeNull();
+      expect(store.updateMemory).toHaveBeenCalledWith('memory-patch-1', expect.objectContaining({
+        confidence: 0.9,
+        tags: expect.arrayContaining(['old', 'belief-corrected', 'source-retracted']),
+      }));
+      expect(store.recordPatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+        memoryId: 'memory-patch-1',
+        sourceRef: 'tool:memory_patch',
+        patch: expect.objectContaining({
+          confidence: 0.9,
+          appendTags: ['belief-corrected', 'source-retracted'],
+          reason: 'corrected belief provenance',
+        }),
+      }));
+    });
+
+    it('re-embeds when patching memory text', async () => {
+      const existing = makeExistingMemory({
+        id: 'memory-patch-2',
+        text: 'Old text',
+      });
+      store.getById.mockReturnValue(existing);
+
+      const result = await writer.patchMemory({
+        memoryId: 'memory-patch-2',
+        text: 'New corrected text',
+      });
+
+      expect(result?.memory.text).toBe('New corrected text');
+      expect(embeddings.embed).toHaveBeenCalledWith('New corrected text');
+      expect(store.updateMemory).toHaveBeenCalledWith('memory-patch-2', expect.objectContaining({
+        text: 'New corrected text',
+        embedding: expect.any(Float32Array),
+      }));
     });
   });
 });

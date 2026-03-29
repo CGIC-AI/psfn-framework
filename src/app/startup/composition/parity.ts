@@ -38,7 +38,6 @@ import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { PromptComposer } from '../../../core/identity/prompt-composer.js';
 import { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
 import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt-layers.js';
-import { wrapPromptSectionXml } from '../../../core/identity/prompt-sections.js';
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { DeliberationResult } from '../../../primitives/llm/deliberation.js';
 import {
@@ -686,7 +685,6 @@ export function wireHeartbeatRuntime(
   const formatNarrativePromptInput = (
     prompt: string,
     context: ReflectionInternalStateContext | null,
-    appearanceContext?: string,
   ): string => {
     const sections: string[] = [prompt];
     if (context) {
@@ -716,12 +714,6 @@ export function wireHeartbeatRuntime(
           '</open_threads>',
         ].join('\n'),
       );
-    }
-    if (appearanceContext) {
-      sections.push(wrapPromptSectionXml({
-        id: 'appearance_context',
-        content: appearanceContext,
-      }));
     }
     return sections.join('\n\n');
   };
@@ -772,60 +764,9 @@ export function wireHeartbeatRuntime(
     durationMs: result.durationMs,
   });
 
-  const persistDeliberationMemory = async (
-    template: ReflectionTemplate,
-    reflection: string,
-    metadata: ValuesDeliberationMetadata,
-  ): Promise<void> => {
-    if (!runtimeOptions.memoryWriter) return;
-    await runtimeOptions.memoryWriter.write({
-      text: reflection,
-      type: 'reflection',
-      importance: 0.72,
-      confidence: 0.78,
-      emotionalValence: 0,
-      sourceRef:
-        `source:heartbeat|template:${template.id}|mode:deliberation`
-        + `|session:${metadata.sessionId}|tokens:${metadata.totalTokens}`
-        + `|cost_usd:${metadata.estimatedCostUsd.toFixed(6)}`,
-      tags: [
-        'heartbeat',
-        'reflection',
-        'deliberation',
-        template.id,
-        `stop:${metadata.stopReason}`,
-      ],
-    });
-  };
-
   const shouldUseDeliberation = (template: ReflectionTemplate): boolean => {
     if (template.mode !== 'deliberation') return false;
     return Boolean(runtimeOptions.llmProvider);
-  };
-
-  const resolveDeliberationAppearanceContext = (): string | undefined => {
-    const provider = runtimeOptions.characterPromptVariablesProvider;
-    if (!provider) return undefined;
-    try {
-      const variables = provider();
-      const candidates = [
-        variables['character.visual_description'],
-        variables.visual_description,
-        variables.extensions_visual_description,
-      ];
-      for (const candidate of candidates) {
-        if (typeof candidate !== 'string') continue;
-        const trimmed = candidate.trim();
-        if (trimmed.length > 0) {
-          return trimmed;
-        }
-      }
-    } catch (error) {
-      log.warn('Failed to resolve appearance context for deliberation heartbeat', {
-        error: String(error),
-      });
-    }
-    return undefined;
   };
 
   const runTemplateDeliberation = async (
@@ -877,8 +818,7 @@ export function wireHeartbeatRuntime(
 
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
-    const appearanceContext = shouldUseDeliberation(template) ? resolveDeliberationAppearanceContext() : undefined;
-    const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext, appearanceContext);
+    const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext);
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
@@ -889,13 +829,6 @@ export function wireHeartbeatRuntime(
       reflectionText = deliberationResult.reflection;
       deliberationMetadata = deliberationResult.metadata;
       reflectionMode = 'deliberation';
-      try {
-        await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
-      } catch (error) {
-        log.warn(`Reflection "${template.id}" memory persistence skipped`, {
-          error: String(error),
-        });
-      }
     } else {
       const response = await agentLoop.handleMessage({
         id: `reflection-${template.id}-${Date.now()}`,
@@ -922,12 +855,18 @@ export function wireHeartbeatRuntime(
         reflection: reflectionText,
         channelId: reflectionChannelId,
         mode: reflectionMode,
-        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(persistenceContext ? {
-          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-          internalState: persistenceContext.internalState,
-          metacognitiveFlags: persistenceContext.metacognitiveFlags,
-        } : {}),
+        telemetry: {
+          ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+          ...(persistenceContext ? {
+            narrativeContext: {
+              internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+              internalState: persistenceContext.internalState,
+              ...(persistenceContext.metacognitiveFlags.length > 0
+                ? { metacognitiveFlags: persistenceContext.metacognitiveFlags }
+                : {}),
+            },
+          } : {}),
+        },
       });
       reflectionJournalEntryId = reflectionEntry.id;
     } catch (error) {
@@ -942,12 +881,18 @@ export function wireHeartbeatRuntime(
         templateName: template.name,
         prompt: reflectionPrompt,
         reflection: reflectionText,
-        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(persistenceContext ? {
-          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-          internalState: persistenceContext.internalState,
-          metacognitiveFlags: persistenceContext.metacognitiveFlags,
-        } : {}),
+        telemetry: {
+          ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+          ...(persistenceContext ? {
+            narrativeContext: {
+              internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+              internalState: persistenceContext.internalState,
+              ...(persistenceContext.metacognitiveFlags.length > 0
+                ? { metacognitiveFlags: persistenceContext.metacognitiveFlags }
+                : {}),
+            },
+          } : {}),
+        },
         provenance: {
           source: 'companion_reflection',
           templateId: template.id,

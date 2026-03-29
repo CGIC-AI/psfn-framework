@@ -5,7 +5,13 @@ import type { MemoryWithheldSummary } from '../../faculties/memory/withheld-summ
 import type { ContactProfileArtifact } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
 import type { SessionEntry } from '../session/types.js';
-import type { ContextMessage, PromptSectionTelemetry, ToolSchema, TurnID } from '../../shared/contracts/runtime.js';
+import type {
+  ContextMessage,
+  LLMProviderObservability,
+  PromptSectionTelemetry,
+  ToolSchema,
+  TurnID,
+} from '../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 
 export interface TurnPromptSnapshot {
@@ -21,9 +27,28 @@ export interface TurnSessionContextSnapshot {
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  orientation?: TurnOrientationSnapshot;
   intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
   versionPointer: string;
+}
+
+export interface TurnOrientationSnapshot {
+  fired: boolean;
+  reason: 'idle_gap_exceeded' | 'below_threshold' | 'no_previous_activity' | 'internal_channel';
+  observedAt: number;
+  idleThresholdMs: number;
+  lastActivityAt?: number;
+  idleGapMs?: number;
+  noteText?: string;
+  sessionSummary?: string;
+  continuitySummary?: string;
+  openThreadSummary?: string;
+  sourceCounts: {
+    session: number;
+    continuity: number;
+    focusKnowledge: number;
+  };
 }
 
 export interface TurnMemorySnapshot {
@@ -39,6 +64,15 @@ export interface TurnMemorySnapshot {
   versionPointer: string;
 }
 
+export interface TurnPromptResponseSnapshot {
+  content: string;
+  reasoning?: string;
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  toolCallCount?: number;
+}
+
 export interface TurnPromptContextSnapshot {
   renderedStaticPrefix: string;
   renderedDynamicSuffix: string;
@@ -48,6 +82,9 @@ export interface TurnPromptContextSnapshot {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: ContextMessage[];
+  currentTurnInput?: string;
+  providerObservability?: LLMProviderObservability;
+  response?: TurnPromptResponseSnapshot;
   inputSections?: PromptSectionTelemetry[];
   runtimeContextSections?: PromptSectionTelemetry[];
   finalSystemSections?: PromptSectionTelemetry[];
@@ -86,6 +123,13 @@ export function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return { ...entry };
 }
 
+export function cloneOrientationSnapshot(snapshot: TurnOrientationSnapshot): TurnOrientationSnapshot {
+  return {
+    ...snapshot,
+    sourceCounts: { ...snapshot.sourceCounts },
+  };
+}
+
 export function cloneContactProfileArtifact(profile: ContactProfileArtifact): ContactProfileArtifact {
   return {
     ...profile,
@@ -99,6 +143,24 @@ export function cloneEmotionalSnapshot(snapshot: EmotionalSnapshot): EmotionalSn
 
 export function cloneContextMessage(message: ContextMessage): ContextMessage {
   return { ...message };
+}
+
+export function cloneProviderObservability(
+  observability: LLMProviderObservability,
+): LLMProviderObservability {
+  return {
+    ...observability,
+    systemRole: { ...observability.systemRole },
+    providerWireMessages: observability.providerWireMessages.map(message => ({ ...message })),
+  };
+}
+
+export function cloneTurnPromptResponseSnapshot(
+  response: TurnPromptResponseSnapshot,
+): TurnPromptResponseSnapshot {
+  return {
+    ...response,
+  };
 }
 
 function cloneUnknownSchemaValue<T>(value: T): T {

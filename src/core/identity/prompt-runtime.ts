@@ -1,9 +1,16 @@
 import {
+  existsSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
+import { join } from 'node:path';
+import {
   formatActiveDate,
   formatActiveDateTimeIso,
   formatActiveTime,
   resolveActiveTimezone,
 } from '../../shared/time/active-timezone.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
 export interface PromptRuntimeContext {
   now?: Date;
@@ -169,6 +176,405 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
 export const PROMPT_RUNTIME_TOKEN_HINT = `Runtime tokens: ${PROMPT_RUNTIME_MACRO_HINTS
   .map(entry => entry.token)
   .join(', ')}`;
+
+export type PromptRuntimeBlockPlacement =
+  | 'system_prompt'
+  | 'context_messages'
+  | 'tool_schemas';
+
+export type PromptRuntimeBlockVisibility =
+  | 'hidden'
+  | 'runtime_generated'
+  | 'provider_managed';
+
+export type PromptRuntimeBlockId =
+  | 'runtime.persona_adaptation'
+  | 'runtime.context'
+  | 'runtime.scratchpad'
+  | 'memory.core'
+  | 'memory.retrieval'
+  | 'session.compaction_summary'
+  | 'session.focus_knowledge'
+  | 'session.continuity'
+  | 'session.current_messages'
+  | 'tools.active_schemas';
+
+export interface PromptRuntimeBlockDefinition {
+  id: PromptRuntimeBlockId;
+  label: string;
+  description: string;
+  source: string;
+  placement: PromptRuntimeBlockPlacement;
+  visibility: PromptRuntimeBlockVisibility;
+  reorderable: boolean;
+  contentVisible: boolean;
+  companionEditable?: boolean;
+  lockedReason?: string;
+}
+
+export type PromptRuntimeSystemPromptBlockId = Extract<
+  PromptRuntimeBlockId,
+  | 'runtime.persona_adaptation'
+  | 'runtime.context'
+  | 'runtime.scratchpad'
+  | 'memory.core'
+  | 'memory.retrieval'
+  | 'session.compaction_summary'
+  | 'session.focus_knowledge'
+  | 'session.continuity'
+>;
+
+export interface PromptRuntimeLayout {
+  version: number;
+  systemPromptBlockOrder: PromptRuntimeSystemPromptBlockId[];
+  editableBlockContent: Partial<Record<PromptRuntimeEditableBlockId, string>>;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export type PromptRuntimeEditableBlockId =
+  | 'runtime.persona_adaptation'
+  | 'runtime.context';
+
+const PROMPT_RUNTIME_LAYOUT_VERSION = 1;
+
+const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.freeze([
+  {
+    id: 'runtime.persona_adaptation',
+    label: 'Persona Adaptation',
+    description: 'Trust-tier and internal-state persona hint appended at turn time.',
+    source: 'turn-execution-runtime:getPersonaAdaptation',
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: true,
+    companionEditable: true,
+  },
+  {
+    id: 'runtime.context',
+    label: 'Runtime Context',
+    description: 'Datetime, channel, trust, model, and runtime metadata block.',
+    source: 'turn-execution-runtime:buildRuntimeContext',
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: true,
+    companionEditable: true,
+  },
+  {
+    id: 'runtime.scratchpad',
+    label: 'Scratchpad Context',
+    description: 'Scratchpad-derived notes included when available.',
+    source: 'turn-execution-runtime:buildScratchpadContextBlock',
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: false,
+  },
+  {
+    id: 'memory.core',
+    label: 'Core Memory',
+    description: 'Core persona and durable operator-maintained memory injected into context.',
+    source: 'session-manager:coreMemoryProvider',
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: false,
+  },
+  {
+    id: 'memory.retrieval',
+    label: 'Retrieved Memory',
+    description: 'L2 retrieval and proactive recall block selected for the turn.',
+    source: 'turn-execution-runtime:memoryProvider.retrieve',
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: false,
+  },
+  {
+    id: 'session.compaction_summary',
+    label: 'Previous Conversation Summary',
+    description: 'Compaction summaries surfaced from prior context windows.',
+    source: 'session-context:compaction summaries',
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: false,
+  },
+  {
+    id: 'session.focus_knowledge',
+    label: 'Focus Knowledge',
+    description: 'Focus session knowledge block derived from prior work.',
+    source: 'session-context:focus knowledge store',
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: false,
+  },
+  {
+    id: 'session.continuity',
+    label: 'Cross-Channel Continuity',
+    description: 'Recent activity from other eligible channels.',
+    source: 'session-context:continuity store',
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: false,
+  },
+  {
+    id: 'session.current_messages',
+    label: 'Current Conversation Messages',
+    description: 'Current-session transcript passed as provider chat messages, not system prompt text.',
+    source: 'session-context:entriesToMessages',
+    placement: 'context_messages',
+    visibility: 'provider_managed',
+    reorderable: false,
+    contentVisible: false,
+    lockedReason: 'Provider message sequencing is fixed by the chat API boundary.',
+  },
+  {
+    id: 'tools.active_schemas',
+    label: 'Active Tool Schemas',
+    description: 'Tool schema payload attached to the provider request.',
+    source: 'tool-runtime:active turn tools',
+    placement: 'tool_schemas',
+    visibility: 'provider_managed',
+    reorderable: false,
+    contentVisible: false,
+    lockedReason: 'Tool schema delivery is provider-managed and not part of system prompt text.',
+  },
+]);
+
+const PROMPT_RUNTIME_BLOCK_MAP = new Map(
+  PROMPT_RUNTIME_BLOCKS.map(block => [block.id, block]),
+);
+
+const DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER: PromptRuntimeSystemPromptBlockId[] = PROMPT_RUNTIME_BLOCKS
+  .filter(
+    (block): block is PromptRuntimeBlockDefinition & { id: PromptRuntimeSystemPromptBlockId } =>
+      block.placement === 'system_prompt',
+  )
+  .map(block => block.id);
+
+function isPromptRuntimeSystemPromptBlockId(value: string): value is PromptRuntimeSystemPromptBlockId {
+  return DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.includes(value as PromptRuntimeSystemPromptBlockId);
+}
+
+function clonePromptRuntimeLayout(layout: PromptRuntimeLayout): PromptRuntimeLayout {
+  return {
+    ...layout,
+    systemPromptBlockOrder: [...layout.systemPromptBlockOrder],
+    editableBlockContent: { ...layout.editableBlockContent },
+  };
+}
+
+function normalizePromptRuntimeUpdatedBy(value: unknown): string {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : 'system';
+}
+
+function buildDefaultPromptRuntimeLayout(): PromptRuntimeLayout {
+  return {
+    version: PROMPT_RUNTIME_LAYOUT_VERSION,
+    systemPromptBlockOrder: [...DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER],
+    editableBlockContent: {},
+    updatedAt: new Date().toISOString(),
+    updatedBy: 'system',
+  };
+}
+
+function isPromptRuntimeEditableBlockId(value: string): value is PromptRuntimeEditableBlockId {
+  return value === 'runtime.persona_adaptation' || value === 'runtime.context';
+}
+
+function normalizeSystemPromptBlockOrder(value: unknown): PromptRuntimeSystemPromptBlockId[] {
+  if (!Array.isArray(value)) {
+    return [...DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER];
+  }
+
+  const seen = new Set<PromptRuntimeSystemPromptBlockId>();
+  const normalized: PromptRuntimeSystemPromptBlockId[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !isPromptRuntimeSystemPromptBlockId(entry) || seen.has(entry)) {
+      continue;
+    }
+    seen.add(entry);
+    normalized.push(entry);
+  }
+
+  if (normalized.length !== DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.length) {
+    return [...DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER];
+  }
+  return normalized;
+}
+
+function normalizeEditableBlockContent(value: unknown): Partial<Record<PromptRuntimeEditableBlockId, string>> {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  const parsed = value as Record<string, unknown>;
+  const normalized: Partial<Record<PromptRuntimeEditableBlockId, string>> = {};
+  for (const [key, rawContent] of Object.entries(parsed)) {
+    if (!isPromptRuntimeEditableBlockId(key) || typeof rawContent !== 'string') {
+      continue;
+    }
+    const trimmed = rawContent.trim();
+    if (trimmed.length > 0) {
+      normalized[key] = trimmed;
+    }
+  }
+  return normalized;
+}
+
+function parsePromptRuntimeLayout(raw: string): PromptRuntimeLayout {
+  const parsed = JSON.parse(raw) as Partial<PromptRuntimeLayout> | null;
+  return {
+    version: PROMPT_RUNTIME_LAYOUT_VERSION,
+    systemPromptBlockOrder: normalizeSystemPromptBlockOrder(parsed?.systemPromptBlockOrder),
+    editableBlockContent: normalizeEditableBlockContent(parsed?.editableBlockContent),
+    updatedAt: typeof parsed?.updatedAt === 'string' && parsed.updatedAt.trim().length > 0
+      ? parsed.updatedAt
+      : new Date().toISOString(),
+    updatedBy: normalizePromptRuntimeUpdatedBy(parsed?.updatedBy),
+  };
+}
+
+export function getPromptRuntimeBlockDefinitions(): PromptRuntimeBlockDefinition[] {
+  return PROMPT_RUNTIME_BLOCKS.map(block => ({ ...block }));
+}
+
+export class PromptRuntimeLayoutStore {
+  private readonly filePath: string;
+  private layout: PromptRuntimeLayout;
+  private lastLoadedMtimeMs: number;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+    this.layout = buildDefaultPromptRuntimeLayout();
+    this.lastLoadedMtimeMs = 0;
+    this.load();
+  }
+
+  getLayout(): PromptRuntimeLayout {
+    this.maybeReload();
+    return clonePromptRuntimeLayout(this.layout);
+  }
+
+  getSystemPromptBlockOrder(): PromptRuntimeSystemPromptBlockId[] {
+    this.maybeReload();
+    return [...this.layout.systemPromptBlockOrder];
+  }
+
+  getEditableBlockContent(blockId: PromptRuntimeEditableBlockId): string {
+    this.maybeReload();
+    return this.layout.editableBlockContent[blockId] ?? '';
+  }
+
+  getEditableBlockContentMap(): Partial<Record<PromptRuntimeEditableBlockId, string>> {
+    this.maybeReload();
+    return { ...this.layout.editableBlockContent };
+  }
+
+  reorderSystemPromptBlocks(
+    blockIds: PromptRuntimeSystemPromptBlockId[],
+    updatedBy: string,
+  ): PromptRuntimeLayout {
+    const normalized = normalizeSystemPromptBlockOrder(blockIds);
+    if (normalized.length !== blockIds.length) {
+      throw new Error('systemPromptBlockOrder must include each reorderable runtime block exactly once');
+    }
+
+    this.layout = {
+      version: PROMPT_RUNTIME_LAYOUT_VERSION,
+      systemPromptBlockOrder: normalized,
+      editableBlockContent: { ...this.layout.editableBlockContent },
+      updatedAt: new Date().toISOString(),
+      updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
+    };
+    this.save();
+    return this.getLayout();
+  }
+
+  setEditableBlockContent(
+    blockId: PromptRuntimeEditableBlockId,
+    content: string,
+    updatedBy: string,
+  ): PromptRuntimeLayout {
+    const trimmed = content.trim();
+    if (!isPromptRuntimeEditableBlockId(blockId)) {
+      throw new Error(`Prompt runtime block is not companion-editable: ${blockId}`);
+    }
+
+    const nextContent = { ...this.layout.editableBlockContent };
+    if (trimmed.length > 0) {
+      nextContent[blockId] = trimmed;
+    } else {
+      delete nextContent[blockId];
+    }
+
+    this.layout = {
+      version: PROMPT_RUNTIME_LAYOUT_VERSION,
+      systemPromptBlockOrder: [...this.layout.systemPromptBlockOrder],
+      editableBlockContent: nextContent,
+      updatedAt: new Date().toISOString(),
+      updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
+    };
+    this.save();
+    return this.getLayout();
+  }
+
+  private load(): void {
+    if (!existsSync(this.filePath)) {
+      this.layout = buildDefaultPromptRuntimeLayout();
+      return;
+    }
+
+    const raw = readFileSync(this.filePath, 'utf-8');
+    this.layout = parsePromptRuntimeLayout(raw);
+    this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
+  }
+
+  private maybeReload(): void {
+    if (!existsSync(this.filePath)) return;
+    const nextMtime = statSync(this.filePath).mtimeMs;
+    if (nextMtime <= this.lastLoadedMtimeMs) return;
+    this.load();
+  }
+
+  private save(): void {
+    writeJsonAtomic(this.filePath, this.layout, { trailingNewline: true });
+    if (existsSync(this.filePath)) {
+      this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
+    }
+  }
+}
+
+export function resolvePromptRuntimeLayoutPath(companionDataDir: string): string {
+  return join(companionDataDir, 'prompt-runtime-layout.json');
+}
+
+export function orderPromptRuntimeSystemPromptSections<T extends { id: PromptRuntimeSystemPromptBlockId }>(
+  sections: readonly T[],
+  layout: PromptRuntimeLayout | PromptRuntimeLayoutStore,
+): T[] {
+  const order = layout instanceof PromptRuntimeLayoutStore
+    ? layout.getSystemPromptBlockOrder()
+    : layout.systemPromptBlockOrder;
+  const orderMap = new Map(order.map((id, index) => [id, index]));
+  return [...sections].sort((left, right) => {
+    return (orderMap.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+      - (orderMap.get(right.id) ?? Number.MAX_SAFE_INTEGER);
+  });
+}
+
+export function getPromptRuntimeBlockDefinition(
+  id: PromptRuntimeBlockId,
+): PromptRuntimeBlockDefinition | null {
+  const block = PROMPT_RUNTIME_BLOCK_MAP.get(id);
+  return block ? { ...block } : null;
+}
 
 function toSnakeCase(value: string): string {
   return value

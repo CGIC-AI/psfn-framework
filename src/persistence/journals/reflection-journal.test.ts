@@ -96,21 +96,31 @@ describe('ReflectionJournalStore', () => {
       reflection: 'I noticed a focused but slightly uncertain processing pattern.',
       channelId: 'internal:reflection:experiential-review',
       mode: 'agent',
-      internalStateSnapshotRef: sample.snapshotRef,
-      internalState: sample.state,
-      metacognitiveFlags: [{ flag: 'uncertainty', confidence: 0.58 }],
+      telemetry: {
+        narrativeContext: {
+          internalStateSnapshotRef: sample.snapshotRef,
+          internalState: sample.state,
+          metacognitiveFlags: [{ flag: 'uncertainty', confidence: 0.58 }],
+        },
+      },
       createdAt: '2026-03-02T01:00:00.000Z',
     });
 
     const raw = readFileSync(filePath, 'utf-8').trim();
     const persisted = JSON.parse(raw) as {
-      internalStateSnapshotRef?: string;
-      internalState?: unknown;
-      metacognitiveFlags?: Array<{ flag: string; confidence: number }>;
+      telemetry?: {
+        narrativeContext?: {
+          internalStateSnapshotRef?: string;
+          internalState?: unknown;
+          metacognitiveFlags?: Array<{ flag: string; confidence: number }>;
+        };
+      };
     };
-    expect(persisted.internalStateSnapshotRef).toBe(sample.snapshotRef);
-    expect(persisted.internalState).toEqual(cloneInternalState(sample.state));
-    expect(persisted.metacognitiveFlags).toEqual([{ flag: 'uncertainty', confidence: 0.58 }]);
+    expect((persisted as Record<string, unknown>).internalStateSnapshotRef).toBeUndefined();
+    expect((persisted as Record<string, unknown>).metacognitiveFlags).toBeUndefined();
+    expect(persisted.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(sample.snapshotRef);
+    expect(persisted.telemetry?.narrativeContext?.internalState).toEqual(cloneInternalState(sample.state));
+    expect(persisted.telemetry?.narrativeContext?.metacognitiveFlags).toEqual([{ flag: 'uncertainty', confidence: 0.58 }]);
   });
 
   it('fails closed when internal-state context is partial', () => {
@@ -135,8 +145,12 @@ describe('ReflectionJournalStore', () => {
       reflection: 'I noticed a focused processing pattern.',
       channelId: 'internal:reflection:experiential-review',
       mode: 'agent',
-      internalStateSnapshotRef: '   ',
-      internalState: sample.state,
+      telemetry: {
+        narrativeContext: {
+          internalStateSnapshotRef: '   ',
+          internalState: sample.state,
+        },
+      },
     })).toThrow('Reflection journal internalStateSnapshotRef must be a non-empty string when provided');
 
     expect(() => store.append({
@@ -146,9 +160,13 @@ describe('ReflectionJournalStore', () => {
       reflection: 'I noticed a focused processing pattern.',
       channelId: 'internal:reflection:experiential-review',
       mode: 'agent',
-      internalStateSnapshotRef: sample.snapshotRef,
-      internalState: sample.state,
-      metacognitiveFlags: [{ flag: '', confidence: 0.5 }],
+      telemetry: {
+        narrativeContext: {
+          internalStateSnapshotRef: sample.snapshotRef,
+          internalState: sample.state,
+          metacognitiveFlags: [{ flag: '', confidence: 0.5 }],
+        },
+      },
     })).toThrow('Reflection journal metacognitiveFlags[0].flag must be a non-empty string');
   });
 });

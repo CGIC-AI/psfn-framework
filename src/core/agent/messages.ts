@@ -79,6 +79,31 @@ interface MirrorSessionMetadata {
 const MAX_MIRROR_RENDER_CHARS = 180;
 const LEGACY_OR_CANONICAL_MUSING_CHANNEL_PATTERN = /^internal:reflection:(musing|whisper)$/i;
 
+function createInternalAssistantMessage(
+  content: string,
+  timestamp: number,
+  messageClass: typeof MESSAGE_CLASSES.systemNote | typeof MESSAGE_CLASSES.internalWhisper,
+): ClassifiedAssistantMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text: content }],
+    api: '',
+    provider: '',
+    model: '',
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop',
+    timestamp,
+    messageClass,
+  };
+}
+
 // ── Declaration merging ──
 
 declare module '@mariozechner/pi-agent-core' {
@@ -144,7 +169,7 @@ function isMusingReflectionChannel(channelId: string): boolean {
  * Standard messages (user, assistant, toolResult) pass through.
  * Custom messages are converted:
  * - compaction → user message with summary prefix
- * - systemNote → user message with [System note] prefix
+ * - systemNote → assistant-side internal note with [System note] prefix
  * - internalWhisper → assistant-side internal note
  * - mirror → compact user-side mirror note
  * - continuity → filtered out (injected into system prompt instead)
@@ -161,31 +186,17 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         messageClass: MESSAGE_CLASSES.compaction,
       } satisfies ClassifiedUserMessage);
     } else if (isSystemNoteMessage(msg)) {
-      result.push({
-        role: 'user',
-        content: `[System note] ${msg.content}`,
-        timestamp: msg.timestamp,
-        messageClass: MESSAGE_CLASSES.systemNote,
-      } satisfies ClassifiedUserMessage);
+      result.push(createInternalAssistantMessage(
+        `[System note] ${msg.content}`,
+        msg.timestamp,
+        MESSAGE_CLASSES.systemNote,
+      ));
     } else if (isInternalWhisperMessage(msg)) {
-      result.push({
-        role: 'assistant',
-        content: [{ type: 'text', text: `[Internal note to self] ${msg.content}` }],
-        api: '',
-        provider: '',
-        model: '',
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: 'stop',
-        timestamp: msg.timestamp,
-        messageClass: MESSAGE_CLASSES.internalWhisper,
-      } satisfies ClassifiedAssistantMessage);
+      result.push(createInternalAssistantMessage(
+        `[Internal note to self] ${msg.content}`,
+        msg.timestamp,
+        MESSAGE_CLASSES.internalWhisper,
+      ));
     } else if (isContinuityMessage(msg)) {
       // Continuity messages are injected into system prompt, not as individual messages.
       // Skip in LLM conversion.

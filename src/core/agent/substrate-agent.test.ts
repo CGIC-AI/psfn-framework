@@ -4150,7 +4150,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[1]).toContain('<skills_index>');
-    expect(buildCall[1]).toContain('conversation');
+    expect(buildCall[1]).toContain('<skill name="conversation" />');
   });
 
   it('injects active concerns into runtime context when concern provider is wired', async () => {

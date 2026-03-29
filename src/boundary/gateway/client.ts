@@ -439,6 +439,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       const response: LLMResponse = {
         content: result.content,
         ...(result.reasoning ? { reasoning: result.reasoning } : {}),
+        ...(result.providerObservability ? { providerObservability: result.providerObservability } : {}),
         toolCalls: result.toolCalls,
         model: result.model,
         inputTokens: result.inputTokens,
@@ -509,6 +510,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
     return {
       content: result.content,
       ...(result.reasoning ? { reasoning: result.reasoning } : {}),
+      ...(result.providerObservability ? { providerObservability: result.providerObservability } : {}),
       toolCalls: [],
       model: result.model,
       inputTokens: result.inputTokens,

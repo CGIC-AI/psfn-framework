@@ -65,7 +65,7 @@ export interface ResolvedAuthorContext {
   continuityFallbackKeys: string[];
 }
 
-const SELF_IMAGE_TOOL_NAMES = ['image_create', 'image_edit', 'image_analyze'] as const;
+const SELF_IMAGE_TOOL_NAMES = ['selfie_create'] as const;
 
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
@@ -353,11 +353,12 @@ export function buildDynamicPromptTemplateVariables(input: {
   const appearanceContextBody = hasActiveSelfImageTool() ? resolveAppearanceContext() : '';
   const selfImageToolGuidanceBody = hasActiveSelfImageTool()
     ? [
-      'Use image_create for a brand new selfie, portrait, or scene featuring you.',
-      'Use image_edit when modifying an existing image while keeping your identity consistent.',
+      'Use selfie_create for a brand new selfie or self-portrait featuring you.',
+      'Use image_create for scenes, objects, or other non-self images.',
+      'Use image_edit when modifying an existing image while keeping its subject consistent.',
       'Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.',
       'If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.',
-      'Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
+      'When selfie_create is active, write the prompt as the full desired shot and combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
       'Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.',
     ].join('\n')
     : '';
@@ -383,7 +384,6 @@ export function buildDynamicPromptTemplateVariables(input: {
       }),
     ].join('\n')
     : '';
-
   const lastMessageReceivedAt = (
     typeof input.lastMessageReceivedAtMs === 'number' && Number.isFinite(input.lastMessageReceivedAtMs)
   )
@@ -493,6 +493,10 @@ export function buildRuntimeContext(input: {
     + (autoloadCount > 0 ? `, ${autoloadCount} autoload` : '')
     + (deferredCount > 0 ? `, ${deferredCount} deferred` : '')
     + ')';
+  const runtimeContextExtra = (() => {
+    const raw = input.templateVariables?.runtime_context_extra;
+    return typeof raw === 'string' ? raw.trim() : '';
+  })();
 
   const runtimeLines = [
     `It is ${formatPromptRuntimeDateTime(now)} ${resolveActiveTimezone()}.`,
@@ -522,18 +526,19 @@ export function buildRuntimeContext(input: {
         content: appearance,
       }));
     }
-    sections.push(wrapPromptSectionXml({
-      id: 'self_image_tool_guidance',
-      content: [
-        'Use image_create for a brand new selfie, portrait, or scene featuring you.',
-        'Use image_edit when modifying an existing image while keeping your identity consistent.',
-        'Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.',
-        'If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.',
-        'Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
-        'Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.',
-      ].join('\n'),
-    }));
-  }
+      sections.push(wrapPromptSectionXml({
+        id: 'self_image_tool_guidance',
+        content: [
+          'Use selfie_create for a brand new selfie or self-portrait featuring you.',
+          'Use image_create for scenes, objects, or other non-self images.',
+          'Use image_edit when modifying an existing image while keeping its subject consistent.',
+          'Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.',
+          'If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.',
+          'When selfie_create is active, write the prompt as the full desired shot and combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
+          'Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.',
+        ].join('\n'),
+      }));
+    }
 
   if (extendedCount > 0) {
     const extendedToolLines = [
@@ -604,6 +609,13 @@ export function buildRuntimeContext(input: {
           content: input.skillsContext,
         }),
     );
+  }
+
+  if (runtimeContextExtra) {
+    sections.push(wrapPromptSectionXml({
+      id: 'companion_runtime_context',
+      content: runtimeContextExtra,
+    }));
   }
 
   return sections.filter(section => section.trim().length > 0).join('\n\n');
@@ -743,6 +755,10 @@ export function getPersonaAdaptation(input: {
     config: input.config,
   });
   const metacognitiveHint = buildMetacognitivePersonaHint(input.metacognitiveFlags);
+  const runtimePersonaExtra = (() => {
+    const raw = input.templateVariables?.runtime_persona_adaptation_extra;
+    return typeof raw === 'string' ? raw.trim() : '';
+  })();
 
   const sections = [
     wrapPromptSectionXml({
@@ -753,6 +769,12 @@ export function getPersonaAdaptation(input: {
     metacognitiveHint,
   ]
     .filter((section): section is string => Boolean(section?.trim()));
+  if (runtimePersonaExtra) {
+    sections.push(wrapPromptSectionXml({
+      id: 'companion_persona_adaptation',
+      content: runtimePersonaExtra,
+    }));
+  }
   if (sections.length === 0) return null;
   return sections.join('\n\n');
 }

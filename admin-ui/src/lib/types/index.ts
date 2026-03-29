@@ -325,6 +325,40 @@ export interface AdminPromptSectionTelemetry {
   tokenCount: number;
 }
 
+export interface AdminTurnProviderWireMessage {
+  role: string;
+  source: string;
+  content: string;
+}
+
+export interface AdminTurnProviderSystemRoleData {
+  transport: string;
+  supportsSystemRole: boolean;
+  supportsDeveloperRole: boolean;
+  usesOutOfBandSystemPrompt: boolean;
+}
+
+export interface AdminTurnProviderObservabilityData {
+  routeKind: string;
+  requestedProvider: string;
+  requestedModel: string;
+  backendProvider: string;
+  backendModel: string;
+  backendApi: string;
+  backendBaseUrl?: string;
+  systemRole: AdminTurnProviderSystemRoleData;
+  providerWireMessages: AdminTurnProviderWireMessage[];
+}
+
+export interface AdminTurnPromptResponseSnapshotData {
+  content: string;
+  reasoning?: string;
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  toolCallCount?: number;
+}
+
 export interface AdminTurnPromptContextSnapshotData {
   renderedStaticPrefix: string;
   renderedDynamicSuffix: string;
@@ -334,6 +368,9 @@ export interface AdminTurnPromptContextSnapshotData {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: AdminTurnPromptContextMessage[];
+  currentTurnInput?: string;
+  providerObservability?: AdminTurnProviderObservabilityData;
+  response?: AdminTurnPromptResponseSnapshotData;
   inputSections?: AdminPromptSectionTelemetry[];
   runtimeContextSections?: AdminPromptSectionTelemetry[];
   finalSystemSections?: AdminPromptSectionTelemetry[];
@@ -868,9 +905,25 @@ export interface PromptRegistryEntry {
   identifier?: string;
 }
 
+export interface PromptRuntimeBlock {
+  id: string;
+  label: string;
+  description: string;
+  source: string;
+  placement: 'system_prompt' | 'context_messages' | 'tool_schemas';
+  visibility: 'hidden' | 'runtime_generated' | 'provider_managed';
+  reorderable: boolean;
+  contentVisible: boolean;
+  companionEditable: boolean;
+  customContent?: string;
+  lockedReason?: string;
+  effectiveOrder: number;
+}
+
 export interface AdminPromptListData {
   layers: PromptLayer[];
   staticPrompts: PromptRegistryEntry[];
+  runtimeBlocks: PromptRuntimeBlock[];
 }
 
 export interface ConstitutionImmutableBlock {
@@ -965,6 +1018,12 @@ export interface NorthStarUpdateResult {
   ok: boolean;
   message: string;
   snapshot?: NorthStarSnapshotData;
+}
+
+export interface RuntimePromptUpdateResult {
+  ok: boolean;
+  message: string;
+  updated?: string[];
 }
 
 export interface PromptUpdateResult {

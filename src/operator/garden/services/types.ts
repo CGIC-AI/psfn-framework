@@ -7,6 +7,12 @@ import type {
   PromptRegistryEntry,
   PromptRegistryHistoryEntry,
 } from '../../../core/identity/prompt-registry.js';
+import type {
+  PromptRuntimeBlockId,
+  PromptRuntimeBlockPlacement,
+  PromptRuntimeBlockVisibility,
+  PromptRuntimeEditableBlockId,
+} from '../../../core/identity/prompt-runtime.js';
 import type { PromptHistoryEntry, PromptLayer } from '../../../core/identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { EditableSettings } from '../../../system/settings.js';
@@ -520,6 +526,22 @@ export interface AdminContactsService {
 export interface AdminPromptListData {
   layers: PromptLayer[];
   staticPrompts: PromptRegistryEntry[];
+  runtimeBlocks: AdminPromptRuntimeBlock[];
+}
+
+export interface AdminPromptRuntimeBlock {
+  id: PromptRuntimeBlockId;
+  label: string;
+  description: string;
+  source: string;
+  placement: PromptRuntimeBlockPlacement;
+  visibility: PromptRuntimeBlockVisibility;
+  reorderable: boolean;
+  contentVisible: boolean;
+  companionEditable: boolean;
+  customContent?: string;
+  lockedReason?: string;
+  effectiveOrder: number;
 }
 
 export interface AdminConstitutionImmutableBlock {
@@ -625,6 +647,12 @@ export interface NorthStarUpdateResult {
   snapshot?: AdminNorthStarSnapshotData;
 }
 
+export interface RuntimePromptUpdateResult {
+  ok: boolean;
+  message: string;
+  updated?: PromptRuntimeEditableBlockId[];
+}
+
 export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
   getFoundationSnapshot(): AdminFoundationSnapshotData | null;
@@ -633,6 +661,7 @@ export interface AdminPromptsService {
   saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult;
   getNorthStarSnapshot(): AdminNorthStarSnapshotData | null;
   saveNorthStarItems(body: string): NorthStarUpdateResult;
+  saveRuntimePromptBlocks(body: string): RuntimePromptUpdateResult;
   getPromptDetail(layerId: string): AdminPromptDetailData | null;
   getStaticPromptDetail(key: string): AdminPromptDetailData | null;
   createPromptLayer(body: string): PromptUpdateResult;
@@ -643,4 +672,5 @@ export interface AdminPromptsService {
   rollbackPromptRegistry(body: string): PromptUpdateResult;
   previewPromptLayerDiff(body: string): { oldContent: string; newContent: string } | null;
   resolvePromptLayerMetadata(params: URLSearchParams): { metadata: PromptLayerMetadataUpdate } | { error: string };
+  reorderPromptLayers(body: string): PromptUpdateResult;
 }

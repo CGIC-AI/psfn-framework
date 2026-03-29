@@ -97,6 +97,25 @@ describe('GatewayClient streaming', () => {
       jsonrpc: '2.0',
       result: {
         content: 'hello-A world-A',
+        reasoning: 'thinking-a',
+        providerObservability: {
+          routeKind: 'registered_model',
+          requestedProvider: 'openrouter',
+          requestedModel: 'test',
+          backendProvider: 'openrouter',
+          backendModel: 'test',
+          backendApi: 'openai-completions',
+          systemRole: {
+            transport: 'openai_developer',
+            supportsSystemRole: true,
+            supportsDeveloperRole: true,
+            usesOutOfBandSystemPrompt: false,
+          },
+          providerWireMessages: [
+            { role: 'developer', source: 'system_prompt', content: 'test' },
+            { role: 'user', source: 'message', content: 'a' },
+          ],
+        },
         toolCalls: [],
         model: 'test',
         inputTokens: 10,
@@ -129,6 +148,8 @@ describe('GatewayClient streaming', () => {
 
     expect(resultA.content).toBe('hello-A world-A');
     expect(resultB.content).toBe('hello-B world-B');
+    expect(resultA.reasoning).toBe('thinking-a');
+    expect(resultA.providerObservability?.systemRole.transport).toBe('openai_developer');
   });
 
   it('cleans up chunk handler after stream completes', async () => {

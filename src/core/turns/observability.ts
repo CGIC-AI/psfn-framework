@@ -10,10 +10,14 @@ import type {
   TurnPromptContextSnapshot,
   TurnPromptSnapshot,
   TurnSnapshot,
+  TurnOrientationSnapshot,
 } from './snapshot.js';
 import {
   cloneAdaptiveToolSnapshotTelemetry,
   cloneContextMessage,
+  cloneProviderObservability,
+  cloneOrientationSnapshot,
+  cloneTurnPromptResponseSnapshot,
   cloneToolSchema,
 } from './snapshot.js';
 
@@ -37,6 +41,7 @@ export interface TurnSessionContextSnapshotRecord {
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  orientation?: TurnOrientationSnapshot;
   intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
   versionPointer: string;
@@ -200,6 +205,15 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+          ...(snapshot.promptContext.currentTurnInput !== undefined
+            ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
+            : {}),
+          ...(snapshot.promptContext.providerObservability
+            ? { providerObservability: cloneProviderObservability(snapshot.promptContext.providerObservability) }
+            : {}),
+          ...(snapshot.promptContext.response
+            ? { response: cloneTurnPromptResponseSnapshot(snapshot.promptContext.response) }
+            : {}),
         },
       }
       : {}),
@@ -221,6 +235,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
           compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
           focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
           continuityEntries: snapshot.sessionContext.continuityEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.orientation
+            ? { orientation: cloneOrientationSnapshot(snapshot.sessionContext.orientation) }
+            : {}),
           ...(snapshot.sessionContext.intentionAppraisalArtifactCount !== undefined
             ? { intentionAppraisalArtifactCount: snapshot.sessionContext.intentionAppraisalArtifactCount }
             : {}),
@@ -272,6 +289,15 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+          ...(snapshot.promptContext.currentTurnInput !== undefined
+            ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
+            : {}),
+          ...(snapshot.promptContext.providerObservability
+            ? { providerObservability: cloneProviderObservability(snapshot.promptContext.providerObservability) }
+            : {}),
+          ...(snapshot.promptContext.response
+            ? { response: cloneTurnPromptResponseSnapshot(snapshot.promptContext.response) }
+            : {}),
         },
       }
       : {}),
@@ -293,6 +319,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
           compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
           focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
           continuityEntries: snapshot.sessionContext.continuityEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.orientation
+            ? { orientation: cloneOrientationSnapshot(snapshot.sessionContext.orientation) }
+            : {}),
           ...(snapshot.sessionContext.intentionAppraisalArtifactCount !== undefined
             ? { intentionAppraisalArtifactCount: snapshot.sessionContext.intentionAppraisalArtifactCount }
             : {}),

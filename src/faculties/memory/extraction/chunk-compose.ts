@@ -1,4 +1,5 @@
 import type { SessionEntry } from '../../../core/session/types.js';
+import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
 import {
   normalizeMemoryTags,
   type ExtractedFact,
@@ -11,6 +12,11 @@ import {
 } from '../../../system/trust/types.js';
 
 export const EXTRACTION_COMPOSITION_CHUNK_SIZE = 10;
+
+export function isExtractionTranscriptEntry(entry: SessionEntry): boolean {
+  return !isNonConversationalSessionEntry(entry)
+    && (entry.role === 'assistant' || entry.role === 'user');
+}
 
 export function buildExtractionEntryChunks(
   entries: readonly SessionEntry[],
@@ -41,6 +47,7 @@ export function formatExtractionTranscript(
   roleNames: ExtractionTranscriptRoleNames = {},
 ): string {
   return entries
+    .filter(isExtractionTranscriptEntry)
     .map((entry) => {
       let speaker: string;
       if (entry.role === 'assistant') {

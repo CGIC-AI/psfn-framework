@@ -15,6 +15,10 @@ import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import {
+  PromptRuntimeLayoutStore,
+  resolvePromptRuntimeLayoutPath,
+} from '../../core/identity/prompt-runtime.js';
+import {
   resolveConfiguredCompanionDataDir,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
@@ -123,10 +127,14 @@ export class AdminServer implements Lifecycle {
       legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
     });
     const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      resolvePromptRuntimeLayoutPath(companionDataDir),
+    );
     this.promptsService = new AdminPromptsDataService({
       promptStore: promptState.layers,
       promptRegistry: promptState.registry,
       northStarStore,
+      promptRuntimeLayoutStore,
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
       resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),

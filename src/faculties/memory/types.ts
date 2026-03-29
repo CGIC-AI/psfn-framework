@@ -28,6 +28,15 @@ export type MemoryType =
   | 'reflection'
   | 'relational';
 export type MemoryRetentionClass = 'standard' | 'durable';
+export type MemorySourceType =
+  | 'unknown'
+  | 'turn'
+  | 'reflection'
+  | 'heartbeat'
+  | 'compaction_summary'
+  | 'shard'
+  | 'tool_write'
+  | 'autonomous_action';
 export type MemoryScopeKind =
   | 'conversation'
   | 'contact'
@@ -41,6 +50,20 @@ export interface MemoryFormationVAD {
   valence: number;
   arousal: number;
   dominance: number;
+}
+export interface MemoryProvenance {
+  channelId?: string;
+  turnId?: string;
+  requestId?: string;
+  toolName?: string;
+  toolCallId?: string;
+  templateId?: string;
+  templateName?: string;
+  sessionId?: string;
+  mode?: string;
+  shardId?: string;
+  actor?: 'companion' | 'operator' | 'system' | 'shard' | 'repl';
+  reason?: string;
 }
 export interface MemoryScopeRef {
   kind: MemoryScopeKind;
@@ -64,6 +87,16 @@ export const VALID_MEMORY_SCOPE_KINDS: MemoryScopeKind[] = [
 ];
 
 export const DURABLE_RETENTION_TAG = 'durable';
+export const VALID_MEMORY_SOURCE_TYPES: MemorySourceType[] = [
+  'unknown',
+  'turn',
+  'reflection',
+  'heartbeat',
+  'compaction_summary',
+  'shard',
+  'tool_write',
+  'autonomous_action',
+];
 export const CORE_DURABLE_MEMORY_TAGS = [
   'core_profile',
   'core_relationship',
@@ -126,6 +159,8 @@ export interface PurrMemory {
   salience: number;
   embedding?: Float32Array;
   sourceRef: string;
+  sourceType?: MemorySourceType;
+  provenance?: MemoryProvenance;
   extractedAt: number;
   lastAccessed: number;
   accessCount: number;
@@ -251,6 +286,60 @@ export function normalizeMemoryTags(tags: readonly string[]): string[] {
     if (tag.length > 0) out.add(tag);
   }
   return Array.from(out);
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+export function normalizeMemorySourceType(
+  value: unknown,
+  fallback: MemorySourceType = 'unknown',
+): MemorySourceType {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim() as MemorySourceType;
+  return VALID_MEMORY_SOURCE_TYPES.includes(normalized) ? normalized : fallback;
+}
+
+export function inferMemorySourceTypeFromSourceRef(sourceRef: string | undefined): MemorySourceType {
+  const normalized = sourceRef?.trim().toLowerCase() ?? '';
+  if (!normalized) return 'unknown';
+  if (normalized.includes('trigger:pre_compaction')) return 'compaction_summary';
+  if (normalized.includes('source:autonomous_action')) return 'autonomous_action';
+  if (normalized.includes('source:heartbeat')) return 'heartbeat';
+  if (normalized.includes('source:shard:') || normalized.startsWith('shard:')) return 'shard';
+  if (normalized.includes('operation:memory_') || normalized.includes('source:tool:') || normalized.includes('source:repl|operation:memory_')) {
+    return 'tool_write';
+  }
+  if (normalized.includes('|operation:extract') || normalized.includes('|source:session|')) {
+    return 'turn';
+  }
+  return 'unknown';
+}
+
+export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const provenance: MemoryProvenance = {
+    ...(normalizeOptionalString(record.channelId) ? { channelId: normalizeOptionalString(record.channelId) } : {}),
+    ...(normalizeOptionalString(record.turnId) ? { turnId: normalizeOptionalString(record.turnId) } : {}),
+    ...(normalizeOptionalString(record.requestId) ? { requestId: normalizeOptionalString(record.requestId) } : {}),
+    ...(normalizeOptionalString(record.toolName) ? { toolName: normalizeOptionalString(record.toolName) } : {}),
+    ...(normalizeOptionalString(record.toolCallId) ? { toolCallId: normalizeOptionalString(record.toolCallId) } : {}),
+    ...(normalizeOptionalString(record.templateId) ? { templateId: normalizeOptionalString(record.templateId) } : {}),
+    ...(normalizeOptionalString(record.templateName) ? { templateName: normalizeOptionalString(record.templateName) } : {}),
+    ...(normalizeOptionalString(record.sessionId) ? { sessionId: normalizeOptionalString(record.sessionId) } : {}),
+    ...(normalizeOptionalString(record.mode) ? { mode: normalizeOptionalString(record.mode) } : {}),
+    ...(normalizeOptionalString(record.shardId) ? { shardId: normalizeOptionalString(record.shardId) } : {}),
+    ...(normalizeOptionalString(record.reason) ? { reason: normalizeOptionalString(record.reason) } : {}),
+  };
+  const actor = normalizeOptionalString(record.actor);
+  if (actor && ['companion', 'operator', 'system', 'shard', 'repl'].includes(actor)) {
+    provenance.actor = actor as MemoryProvenance['actor'];
+  }
+  return Object.keys(provenance).length > 0 ? provenance : undefined;
 }
 
 export function normalizeMemoryScopeTags(tags: readonly string[] | undefined): string[] {

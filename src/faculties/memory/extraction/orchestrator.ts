@@ -19,6 +19,7 @@ import { parseFactsXml } from './parser.js';
 import {
   buildExtractionEntryChunks,
   formatExtractionTranscript,
+  isExtractionTranscriptEntry,
   mergeExtractedFactGroups,
 } from './chunk-compose.js';
 import {
@@ -32,7 +33,9 @@ import {
   compareAcceptedFactCandidates,
   computeFactValueScore,
   evaluateFactAcceptance,
+  evaluateExtractionPreLlmGate,
 } from './signals.js';
+import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
 import type {
   AcceptedFactCandidate,
   AcceptedFactWrite,
@@ -117,7 +120,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const recentEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
       ? options.recoveredEntries
       : options.sessionManager.getRecentMessages(options.channelId, 10)
-    ).slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+    )
+      .filter(entry => !isNonConversationalSessionEntry(entry))
+      .slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
     const latestTurnContext = resolveLatestTurnContext(recentEntries);
     const turnId = options.turnId ?? latestTurnContext?.turnId;
     resolvedTurnId = turnId;
@@ -125,7 +130,60 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
 
     const channelVisibility = classifyChannel(options.channelId);
-    const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility, turnId);
+    if (!options.canonicalContactId) {
+      const preLlmGate = evaluateExtractionPreLlmGate(recentEntries);
+      if (!preLlmGate.allowed) {
+        if (options.telemetryEnabled) {
+          log.debug('Skipping extraction LLM for low-signal turn', {
+            channelId: options.channelId,
+            triggerReason: options.triggerReason,
+            reason: preLlmGate.reason,
+            signalScore: preLlmGate.signalScore,
+            signalCount: preLlmGate.signalCount,
+            recentEntryCount: preLlmGate.recentEntryCount,
+            userEntryCount: preLlmGate.userEntryCount,
+          });
+        }
+
+        await options.emitExtractionEnd({
+          channelId: options.channelId,
+          count: 0,
+          ...(turnId ? { turnId } : {}),
+          triggerReason: options.triggerReason,
+          parsedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          writeCount: 0,
+          deduplicatedCount: 0,
+          supersededCount: 0,
+          rejectionBreakdown: {
+            low_importance: 0,
+            low_confidence: 0,
+            low_novelty: 0,
+            low_signal: 0,
+            write_cap: 0,
+          },
+          compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'legacy',
+          chunkCount: 0,
+          mergedFactCount: 0,
+          crossChunkDeduplicatedCount: 0,
+          boundaryFactCount: 0,
+          preLlmGateSkipped: true,
+          preLlmGateReason: preLlmGate.reason,
+          preLlmGateSignalScore: preLlmGate.signalScore,
+          preLlmGateSignalCount: preLlmGate.signalCount,
+        });
+        return;
+      }
+    }
+
+    const sourceRef = buildExtractionSourceRef(
+      options.channelId,
+      recentEntries,
+      channelVisibility,
+      options.triggerReason,
+      turnId,
+    );
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, options.canonicalContactId) ?? {};
 
@@ -137,9 +195,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
     const extractionPrompt = options.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
       ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
+    const transcriptEntries = recentEntries.filter(isExtractionTranscriptEntry);
     const entryChunks = options.useCompositionalExtraction
-      ? buildExtractionEntryChunks(recentEntries)
-      : [recentEntries];
+      ? buildExtractionEntryChunks(transcriptEntries)
+      : [transcriptEntries];
     const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'legacy';
     const parsedFactGroups: ExtractedFact[][] = [];
     for (const [index, chunkEntries] of entryChunks.entries()) {

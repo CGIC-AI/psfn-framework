@@ -30,6 +30,10 @@ export type ExtractionRejectionReason =
   | 'low_signal'
   | 'write_cap';
 
+export type ExtractionPreLlmGateReason =
+  | 'empty_transcript'
+  | 'low_signal';
+
 export type ProfileRefreshReason = 'memory_update' | 'interval' | 'memory_update_and_interval';
 
 export interface ExtractionGateConfig {
@@ -62,6 +66,10 @@ export interface ExtractionEndTelemetry {
   mergedFactCount: number;
   crossChunkDeduplicatedCount: number;
   boundaryFactCount: number;
+  preLlmGateSkipped?: boolean;
+  preLlmGateReason?: ExtractionPreLlmGateReason;
+  preLlmGateSignalScore?: number;
+  preLlmGateSignalCount?: number;
 }
 
 export interface ProfileSynthesisConfig {

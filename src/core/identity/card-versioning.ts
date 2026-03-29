@@ -9,9 +9,9 @@ import type { CapabilityTier } from '../../system/config/runtime-config-contract
 import { textResult, textResultWithError } from '../tools/results.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import type {
-  ConfirmationQueue,
+  ApprovalQueuePort,
   ConfirmationQueueEntry,
-} from '../../system/capabilities/confirmation-queue.js';
+} from '../../system/capabilities/approval-queue-port.js';
 import type { CharacterCardV2, CharacterData } from './types.js';
 import { assertValidCharacterCard, loadCharacterCard } from './loader.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
@@ -393,7 +393,7 @@ export class CharacterCardVersionStore {
 
 export interface PersonaUpdateToolOptions {
   getCapabilityTier?: () => CapabilityTier;
-  confirmationQueue?: ConfirmationQueue;
+  confirmationQueue?: ApprovalQueuePort;
 }
 
 function proposalScope(snapshot: CharacterCardSnapshot): string {
@@ -407,7 +407,7 @@ function proposalReason(reason: string | undefined, tier: CapabilityTier): strin
 
 function enqueueCharacterCardUpdateProposal(
   store: CharacterCardVersionStore,
-  confirmationQueue: ConfirmationQueue,
+  confirmationQueue: ApprovalQueuePort,
   patch: CharacterCardPatch,
   tier: CapabilityTier,
   reason?: string,

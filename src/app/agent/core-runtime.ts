@@ -18,7 +18,7 @@ import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { RuntimePathSnapshot } from '../../persistence/layout.js';
-import type { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
+import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type { IntentionRuntimeWiring, IntentionAppraisalHooks, IntentionBehavioralPatternHooks } from '../../core/intention/runtime-wiring.js';
 import { composeSessionRuntime, composeSubstrateAgent, wireCoreMemoryRuntime, wireMemoryRuntime, wireSelfModelRuntime } from '../startup/composition/composition.js';
 import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../startup/composition/parity.js';
@@ -60,7 +60,7 @@ export interface AgentCoreRuntimeOptions {
   systemPrompt: string;
   capabilityRuntime: CapabilityRuntime;
   cardVersionStore: CharacterCardVersionStore;
-  cardProposalQueue: ConfirmationQueue;
+  cardProposalQueue: ApprovalQueuePort;
   emotionRuntime: EmotionRuntimeWiring;
   operatorNotifier: NtfyNotifier;
   identityCoolingOff?: ReturnType<typeof createIdentityCoolingOffManagerFromEnv>;

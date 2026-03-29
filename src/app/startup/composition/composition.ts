@@ -53,7 +53,7 @@ import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
-import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { RuntimeMode } from '../../../core/agent/tool-wiring-validator.js';
 import {
@@ -280,7 +280,7 @@ export interface ToolRuntimeOptions {
   runtimeMode?: RuntimeMode;
   getCapabilityTier?: () => CapabilityTier;
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
-  moduleInstallConfirmationQueue?: ConfirmationQueue | null;
+  moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   executionPort?: SandboxExecutionPort | null;
 }

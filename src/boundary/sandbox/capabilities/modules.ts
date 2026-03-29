@@ -1,5 +1,5 @@
 import { resolveRequiredModuleRegistryPath } from '../../../system/security/policy-constants.js';
-import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { isModuleRecord } from '../../../system/modules/registry.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
@@ -30,7 +30,7 @@ interface CreateModuleCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
   pushEvidence: (entry: ThinkEvidence) => void;
   getCapabilityTier?: () => CapabilityTier;
-  confirmationQueue?: ConfirmationQueue | null;
+  confirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
 }
 

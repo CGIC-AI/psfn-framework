@@ -19,6 +19,10 @@ import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
+import {
+  createApprovalQueuePortFromConfirmationQueue,
+  type ApprovalQueuePort,
+} from '../../system/capabilities/approval-queue-port.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 
@@ -28,7 +32,7 @@ export interface BootstrappedAgentCoreRuntime {
   card: CharacterCardV2;
   systemPrompt: string;
   cardVersionStore: CharacterCardVersionStore;
-  cardProposalQueue: ConfirmationQueue;
+  cardProposalQueue: ApprovalQueuePort;
   coreRuntime: AgentCoreRuntime;
   emotionState: EmotionState;
   operatorNotifier: NtfyNotifier;
@@ -66,9 +70,9 @@ export async function bootstrapAgentCoreRuntime(
     config.characterCardPath,
     resolveCharacterCardHistoryPath(pathSnapshot.companionDataDir),
   );
-  const cardProposalQueue = new ConfirmationQueue({
+  const cardProposalQueue = createApprovalQueuePortFromConfirmationQueue(new ConfirmationQueue({
     idFactory: () => `card-${randomUUID()}`,
-  });
+  }));
   log.info(`Loaded character: ${card.data.name}`);
   config.characterName = card.data.name;
 

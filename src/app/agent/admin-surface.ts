@@ -9,7 +9,7 @@ import type { AgentCoreRuntime } from './core-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
+import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
 import { isExplicitTrue } from '../startup/support/env-parsing.js';
 
@@ -26,7 +26,7 @@ export interface StartOptionalAdminServerOptions {
   card: CharacterCardV2;
   shardManager: ShardExecutionPort;
   cardVersionStore: CharacterCardVersionStore;
-  cardProposalQueue: ConfirmationQueue;
+  cardProposalQueue: ApprovalQueuePort;
   coreRuntime: Pick<
     AgentCoreRuntime,
     'memoryStore'

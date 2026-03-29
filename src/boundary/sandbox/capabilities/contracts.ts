@@ -6,7 +6,7 @@ import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { TaskState, TaskType } from '../../../core/scheduler/types.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
-import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { NestedThinkRunner } from '../../../core/tools/think/types.js';
 
@@ -109,7 +109,7 @@ export interface SandboxDeps {
   eventBus?: EventBus | null;
   getCapabilityTier?: () => CapabilityTier;
   runNestedThink?: NestedThinkRunner;
-  moduleInstallConfirmationQueue?: ConfirmationQueue | null;
+  moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   requestMetadata?: Partial<LLMRequestMetadata>;
 }

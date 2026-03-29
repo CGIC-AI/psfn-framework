@@ -1,4 +1,4 @@
-import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ConfirmationQueueAdminApi } from '../../../operator/garden/types.js';
 import type {
   ConfirmationListResult,
@@ -6,8 +6,8 @@ import type {
   ConfirmationResolveResult,
 } from '../../../boundary/gateway/protocol.js';
 
-type LocalConfirmationQueue = Pick<ConfirmationQueue, 'listPending' | 'resolve'>;
-type LocalConfirmationQueueWithLookup = Pick<ConfirmationQueue, 'getPending' | 'listPending' | 'resolve'>;
+type LocalConfirmationQueue = Pick<ApprovalQueuePort, 'listPending' | 'resolve'>;
+type LocalConfirmationQueueWithLookup = Pick<ApprovalQueuePort, 'getPending' | 'listPending' | 'resolve'>;
 type GatewayConfirmationQueueClient = Pick<
   ConfirmationQueueAdminApi,
   'listConfirmationQueue' | 'resolveConfirmationQueue'

@@ -6,7 +6,7 @@ import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CapabilityTier, CompositionalPolicyConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 
@@ -132,7 +132,7 @@ export interface REPLDeps {
   eventBus?: EventBus | null;
   getCapabilityTier?: () => CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
-  moduleInstallConfirmationQueue?: ConfirmationQueue | null;
+  moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   requestMetadata?: Partial<LLMRequestMetadata>;
   config: REPLConfig;

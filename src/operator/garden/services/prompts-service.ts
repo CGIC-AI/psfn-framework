@@ -14,10 +14,12 @@ import {
 } from '../../../core/identity/prompt-composer.js';
 import type {
   PromptLayerMetadataUpdate,
-  PromptLayerStore,
   PromptLayerUpdatePatch,
 } from '../../../core/identity/prompt-store.js';
-import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
+import type {
+  PromptLayerStatePort,
+  PromptRegistryStatePort,
+} from '../../../core/identity/prompt-state-port.js';
 import {
   isCanonicalCharacterFoundationLayer,
 } from '../../../core/identity/canonical-foundation.js';
@@ -82,8 +84,8 @@ interface NorthStarItemInput {
 
 export class AdminPromptsDataService implements AdminPromptsService {
   constructor(private readonly deps: {
-    promptStore?: PromptLayerStore | null;
-    promptRegistry?: PromptRegistryStore | null;
+    promptStore?: PromptLayerStatePort | null;
+    promptRegistry?: PromptRegistryStatePort | null;
     northStarStore?: NorthStarStore | null;
     sessionStore?: SessionStore | null;
     sessionManager?: SessionManager | null;

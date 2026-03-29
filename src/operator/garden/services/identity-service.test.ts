@@ -15,6 +15,11 @@ function makeTempDir(): string {
   return tempDir;
 }
 
+function canonicalFoundationLayer(promptStore: PromptLayerStore, identifier: string) {
+  return promptStore.getByType('base')
+    .find(layer => layer.identifier === identifier);
+}
+
 afterEach(() => {
   if (tempDir) {
     rmSync(tempDir, { recursive: true, force: true });
@@ -72,12 +77,10 @@ describe('AdminIdentityDataService', () => {
     }));
 
     expect(result.ok).toBe(true);
-    const foundation = promptStore.getByType('base')[0];
-    expect(foundation.content).toContain('You are {{char}}.');
-    expect(foundation.content).toContain('{{description}}');
-    expect(foundation.content).toContain('{{personality}}');
-    expect(foundation.content).not.toContain('Companion Prime');
-    expect(foundation.updatedBy).toBe('admin:api');
+    expect(canonicalFoundationLayer(promptStore, 'main')?.content).toContain('You are {{char}}.');
+    expect(canonicalFoundationLayer(promptStore, 'charDescription')?.content).toContain('{{description}}');
+    expect(canonicalFoundationLayer(promptStore, 'charPersonality')?.content).toContain('{{personality}}');
+    expect(canonicalFoundationLayer(promptStore, 'main')?.content).not.toContain('Companion Prime');
   });
 
   it('fails closed when editing required identity fields to empty/placeholder values', () => {
@@ -155,12 +158,10 @@ describe('AdminIdentityDataService', () => {
     }));
 
     expect(result.ok).toBe(true);
-    const foundation = promptStore.getByType('base')[0];
-    expect(foundation.content).toContain('You are {{char}}.');
-    expect(foundation.content).toContain('{{description}}');
-    expect(foundation.content).toContain('{{personality}}');
-    expect(foundation.content).not.toContain('Imported Companion');
-    expect(foundation.updatedBy).toBe('admin:upload');
+    expect(canonicalFoundationLayer(promptStore, 'main')?.content).toContain('You are {{char}}.');
+    expect(canonicalFoundationLayer(promptStore, 'charDescription')?.content).toContain('{{description}}');
+    expect(canonicalFoundationLayer(promptStore, 'charPersonality')?.content).toContain('{{personality}}');
+    expect(canonicalFoundationLayer(promptStore, 'main')?.content).not.toContain('Imported Companion');
   });
 
   it('clears bootstrap onboarding marker when importing card payload data', async () => {

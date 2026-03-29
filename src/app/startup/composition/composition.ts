@@ -47,7 +47,7 @@ import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../../../cor
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProvider, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
-import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
@@ -74,7 +74,7 @@ export interface SessionCompositionOptions {
   eventBus?: EventBus;
   sessionsDir?: string;
   enableContinuity?: boolean;
-  promptRegistry?: PromptRegistryStore | null;
+  promptRegistry?: PromptRegistryStatePort | null;
   sessionIntegrityProvider?: SessionIntegrityProvider | null;
 }
 
@@ -196,7 +196,7 @@ export interface MemoryRuntimeOptions {
   embeddingService: EmbeddingProviderPort;
   eventBus: EventBus;
   config?: SubstrateConfig;
-  promptRegistry?: PromptRegistryStore | null;
+  promptRegistry?: PromptRegistryStatePort | null;
   contactStore?: ContactStore | null;
 }
 

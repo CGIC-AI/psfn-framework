@@ -10,7 +10,7 @@ import {
   type ContextBudgetTurnCharacteristics,
 } from '../../../shared/context-budget.js';
 import type { EventBus } from '../../../shared/event-bus.js';
-import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../identity/prompt-state-port.js';
 import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import { cloneSessionEntry } from '../../turns/snapshot.js';
@@ -65,7 +65,7 @@ interface BuildSessionContextParams {
   store: SessionStore;
   config: SubstrateConfig;
   eventBus: EventBus | null;
-  promptRegistry: PromptRegistryStore | null;
+  promptRegistry: PromptRegistryStatePort | null;
   preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   onCompactionComplete?: (event: {
     channelId: string;

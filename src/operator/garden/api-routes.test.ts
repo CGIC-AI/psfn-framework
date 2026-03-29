@@ -22,6 +22,7 @@ import {
   PROFILE_SYNTHESIS_PROMPT_KEY,
   PromptRegistryStore,
 } from '../../core/identity/prompt-registry.js';
+import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
@@ -641,8 +642,10 @@ describe('AdminServer JSON API routes', () => {
       config: testConfig,
       embeddingService: testEmbeddingService,
       contactStore,
-      promptStore,
-      promptRegistry,
+      promptState: createPromptStatePort({
+        layers: promptStore,
+        registry: promptRegistry,
+      }),
       cardVersionStore,
       adaptiveToolsStateProvider,
       toolHealthProvider,

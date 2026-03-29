@@ -5,7 +5,6 @@ import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryJournal } from '../../faculties/memory/journal.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { EmotionRuntimeWiring } from '../../core/agent/substrate-agent.js';
-import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
 import type { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -30,7 +29,10 @@ import { GatewayWebFetchOps } from '../../boundary/integrations/web/gateway-ops.
 import { createIntentionAppraisalHooks, createIntentionBehavioralPatternHooks, wireIntentionRuntime } from '../../core/intention/runtime-wiring.js';
 import { createIdentityCoolingOffManagerFromEnv } from '../../system/capabilities/safeguards.js';
 import { composeSystemPromptTemplate } from '../../core/identity/loader.js';
-import type { PromptLayerStore } from '../../core/identity/prompt-store.js';
+import {
+  createPromptStatePort,
+  type PromptStatePort,
+} from '../../core/identity/prompt-state-port.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { createPromptGenerationFailureAlertHandler } from '../startup/support/operator-alerts.js';
@@ -65,8 +67,7 @@ export interface AgentCoreRuntime {
   agentLoop: SubstrateAgent;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
-  promptRegistry: PromptRegistryStore;
-  promptStore: PromptLayerStore;
+  promptState: PromptStatePort;
   skillsRuntime: SkillsRuntime;
   memoryStore: MemoryStore;
   contactStore: ReturnType<typeof wireContactRuntime>;
@@ -208,13 +209,16 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     promptRegistry,
     contactStore,
   });
+  const promptState = createPromptStatePort({
+    layers: promptStore,
+    registry: promptRegistry,
+  });
 
   return {
     agentLoop,
     sessionStore,
     sessionManager,
-    promptRegistry,
-    promptStore,
+    promptState,
     skillsRuntime,
     memoryStore,
     contactStore,

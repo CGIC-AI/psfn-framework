@@ -564,6 +564,10 @@ export function resolvePromptHistoryPath(companionDataDir: string): string {
   return join(companionDataDir, 'prompt-history.jsonl');
 }
 
+export function resolvePromptLastKnownGoodPath(companionDataDir: string): string {
+  return join(companionDataDir, 'last-known-good.json');
+}
+
 export function resolvePromptRegistryPath(companionDataDir: string): string {
   return join(companionDataDir, 'prompt-registry.json');
 }

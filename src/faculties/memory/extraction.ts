@@ -1,6 +1,6 @@
 import type { EmbeddingProviderPort, LLMProvider } from '../../core/agent/contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { ContactStore } from '../../core/contacts/store.js';
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -77,7 +77,7 @@ export class MemoryExtractor {
   private maxWrites: number;
   private emotionalIntensityImportanceWeight: number;
   private telemetryEnabled: boolean;
-  private promptRegistry: PromptRegistryStore | null;
+  private promptRegistry: PromptRegistryStatePort | null;
   private sessionStore: SessionStore | null;
   private contactStore: ContactStore | null;
   private acceptingExtractions = true;
@@ -94,7 +94,7 @@ export class MemoryExtractor {
     embeddingService: EmbeddingProviderPort,
     eventBus: EventBus,
     config?: MemoryExtractorConfig | SubstrateConfig,
-    promptRegistry?: PromptRegistryStore | null,
+    promptRegistry?: PromptRegistryStatePort | null,
     sessionStore?: SessionStore | null,
     contactStore?: ContactStore | null,
     formationOptions?: MemoryExtractorFormationOptions,

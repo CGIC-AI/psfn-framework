@@ -4,7 +4,6 @@
 // Includes context-aware filtering (channelType, taskKind).
 
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
 import type {
   CompanionValuesLayerSnapshot,
   ComposeContext,
@@ -16,7 +15,7 @@ import type {
   PromptLayer,
 } from './prompt-types.js';
 import { LAYER_TYPE_ORDER } from './prompt-types.js';
-import type { PromptLayerStore } from './prompt-store.js';
+import type { PromptLayerStatePort } from './prompt-state-port.js';
 import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -25,7 +24,6 @@ import { wrapPromptSectionXml } from './prompt-sections.js';
 // Keep only identity/foundation + operator policy in the frozen prompt prefix.
 // Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.
 const STATIC_PREFIX_LAYER_TYPES = new Set<LayerType>(['base', 'operator']);
-const LAST_KNOWN_GOOD_FILENAME = 'last-known-good.json';
 const LAST_KNOWN_GOOD_VERSION = 1;
 const UNTRUSTED_COMPACTION_RECORD_TAG = 'untrusted_compaction_summary_record';
 const UNTRUSTED_COMPACTION_PROMPT_TAG = 'untrusted_compaction_summary';
@@ -235,17 +233,17 @@ function composeSplitResultsEqual(left: ComposeSplitResult, right: ComposeSplitR
 }
 
 export class PromptComposer {
-  private store: PromptLayerStore;
+  private store: PromptLayerStatePort;
   private manager: PromptManager;
   private readonly enableConstitution: boolean;
   private readonly companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
   private readonly northStarLayerProvider?: () => NorthStarLayerSnapshot | null;
   private readonly persistLastKnownGoodSnapshot: boolean;
   private lastKnownGood: ComposeSplitResult | null = null;
-  private lastKnownGoodPath: string;
+  private lastKnownGoodPath: string | null;
 
   constructor(
-    store: PromptLayerStore,
+    store: PromptLayerStatePort,
     manager: PromptManager = new PromptManager(),
     lastKnownGoodPath?: string,
     options: PromptComposerOptions = {},
@@ -255,8 +253,8 @@ export class PromptComposer {
     this.enableConstitution = options.enableConstitution === true;
     this.companionValuesLayerProvider = options.companionValuesLayerProvider;
     this.northStarLayerProvider = options.northStarLayerProvider;
-    this.persistLastKnownGoodSnapshot = options.persistLastKnownGood !== false;
-    this.lastKnownGoodPath = lastKnownGoodPath ?? join(dirname(this.store.layerFilePath), LAST_KNOWN_GOOD_FILENAME);
+    this.lastKnownGoodPath = lastKnownGoodPath?.trim() ? lastKnownGoodPath : null;
+    this.persistLastKnownGoodSnapshot = options.persistLastKnownGood !== false && this.lastKnownGoodPath !== null;
     this.lastKnownGood = null;
   }
 
@@ -364,6 +362,7 @@ export class PromptComposer {
   }
 
   private persistLastKnownGood(result: ComposeSplitResult): void {
+    if (!this.lastKnownGoodPath) return;
     const payload: PersistedLastKnownGood = {
       version: LAST_KNOWN_GOOD_VERSION,
       savedAt: new Date().toISOString(),

@@ -1,6 +1,6 @@
 import { composeSystemPromptTemplate } from './loader.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
-import type { PromptLayerStore } from './prompt-store.js';
+import type { PromptLayerStatePort } from './prompt-state-port.js';
 import type { CharacterCardV2 } from './types.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
 
@@ -38,7 +38,7 @@ const ALLOWED_RUNTIME_UNRESOLVED_TOKENS = new Set([
 const REQUIRED_CHARACTER_MACRO_FIELDS = ['name', 'personality'] as const;
 
 export function syncCharacterFoundationPromptFromCard(
-  promptStore: PromptLayerStore | null | undefined,
+  promptStore: PromptLayerStatePort | null | undefined,
   card: CharacterCardV2,
   _updatedBy: string,
   _reason = 'Sync Character Foundation prompt from imported character card',

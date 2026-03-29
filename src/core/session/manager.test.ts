@@ -9,7 +9,13 @@ import { SessionManager } from './manager.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
+import {
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  EXTRACTION_PROMPT_KEY,
+  PROFILE_SYNTHESIS_PROMPT_KEY,
+  PromptRegistryStore,
+  getDefaultPromptText,
+} from '../identity/prompt-registry.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryExtractor } from '../../faculties/memory/extraction.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
@@ -65,6 +71,47 @@ function makeMockLLM(): LLMProvider {
     stream: async () => ({ content: '', model: 'test', inputTokens: 0, outputTokens: 0, toolCalls: [], stopReason: 'end_turn' }),
     complete,
   };
+}
+
+function createPromptRegistryFixture(dir: string): PromptRegistryStore {
+  const filePath = join(dir, 'prompt-registry.json');
+  writeFileSync(filePath, JSON.stringify([
+    {
+      key: EXTRACTION_PROMPT_KEY,
+      text: getDefaultPromptText(EXTRACTION_PROMPT_KEY),
+      description: 'Memory extraction system prompt.',
+      consumers: ['src/faculties/memory/extraction.ts'],
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'system',
+      checksum: 'seed',
+    },
+    {
+      key: COMPACTION_SUMMARY_PROMPT_KEY,
+      text: getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY),
+      description: 'Session compaction system prompt used when conversation context exceeds budget.',
+      consumers: ['src/core/session/manager.ts'],
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'system',
+      checksum: 'seed',
+    },
+    {
+      key: PROFILE_SYNTHESIS_PROMPT_KEY,
+      text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
+      description: 'Canonical contact profile synthesis prompt.',
+      consumers: ['src/faculties/memory/extraction.ts'],
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'system',
+      checksum: 'seed',
+    },
+  ]), 'utf-8');
+
+  return new PromptRegistryStore(
+    filePath,
+    join(dir, 'prompt-registry-history.jsonl'),
+  );
 }
 
 describe('SessionManager', () => {
@@ -1835,10 +1882,7 @@ describe('SessionManager', () => {
 
   it('reads compaction prompt from prompt registry', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
-    const promptRegistry = new PromptRegistryStore(
-      join(dir, 'prompt-registry.json'),
-      join(dir, 'prompt-registry-history.jsonl'),
-    );
+    const promptRegistry = createPromptRegistryFixture(dir);
     const customPrompt = 'Compress this conversation excerpt into a compact timeline with key facts.';
     promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, customPrompt, 'test');
 
@@ -1860,10 +1904,7 @@ describe('SessionManager', () => {
 
   it('pins the compaction prompt inside a captured turn snapshot', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
-    const promptRegistry = new PromptRegistryStore(
-      join(dir, 'prompt-registry.json'),
-      join(dir, 'prompt-registry-history.jsonl'),
-    );
+    const promptRegistry = createPromptRegistryFixture(dir);
     promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, 'Snapshot prompt v1', 'test');
 
     const mgr = new SessionManager(store, config, undefined, promptRegistry);
@@ -1887,10 +1928,7 @@ describe('SessionManager', () => {
 
   it('injects runtime datetime tokens in compaction prompts', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
-    const promptRegistry = new PromptRegistryStore(
-      join(dir, 'prompt-registry.json'),
-      join(dir, 'prompt-registry-history.jsonl'),
-    );
+    const promptRegistry = createPromptRegistryFixture(dir);
     promptRegistry.update(
       COMPACTION_SUMMARY_PROMPT_KEY,
       'Summarize at {{current_datetime}} with key facts only.',

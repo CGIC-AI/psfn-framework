@@ -5,8 +5,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Duplex } from 'node:stream';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import type { ContactStore } from '../../core/contacts/store.js';
-import type { PromptLayerStore } from '../../core/identity/prompt-store.js';
-import type { PromptRegistryStore } from '../../core/identity/prompt-registry.js';
+import type { PromptStatePort } from '../../core/identity/prompt-state-port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -68,8 +67,7 @@ export class AdminServer implements Lifecycle {
 
   constructor(config: AdminServerConfig & {
     contactStore?: ContactStore | null;
-    promptStore?: PromptLayerStore | null;
-    promptRegistry?: PromptRegistryStore | null;
+    promptState?: PromptStatePort | null;
     allowInsecureWithoutToken?: boolean;
   }) {
     this.port = config.port;
@@ -115,7 +113,7 @@ export class AdminServer implements Lifecycle {
       characterCard: config.characterCard,
       config: config.config,
       cardVersionStore: config.cardVersionStore,
-      promptStore: config.promptStore,
+      promptStore: config.promptState?.layers ?? null,
     });
     const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
     this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
@@ -123,8 +121,8 @@ export class AdminServer implements Lifecycle {
     });
     const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
     this.promptsService = new AdminPromptsDataService({
-      promptStore: config.promptStore,
-      promptRegistry: config.promptRegistry,
+      promptStore: config.promptState?.layers ?? null,
+      promptRegistry: config.promptState?.registry ?? null,
       northStarStore,
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,

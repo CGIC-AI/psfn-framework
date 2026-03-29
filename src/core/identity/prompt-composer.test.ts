@@ -25,7 +25,7 @@ describe('PromptComposer', () => {
     historyPath = join(tmpDir, 'history.jsonl');
     lastKnownGoodPath = join(tmpDir, 'last-known-good.json');
     store = new PromptLayerStore(layersPath, historyPath);
-    composer = new PromptComposer(store);
+    composer = new PromptComposer(store, undefined, lastKnownGoodPath);
   });
 
   afterEach(() => {
@@ -270,7 +270,7 @@ describe('PromptComposer', () => {
 
       writeFileSync(layersPath, '[]', 'utf-8');
       const restartedStore = new PromptLayerStore(layersPath, historyPath);
-      const restartedComposer = new PromptComposer(restartedStore);
+      const restartedComposer = new PromptComposer(restartedStore, undefined, lastKnownGoodPath);
       const cold = restartedComposer.compose({ channelType: 'api' });
 
       expect(cold.text).toBe('');
@@ -284,7 +284,7 @@ describe('PromptComposer', () => {
 
       writeFileSync(layersPath, '{broken-json', 'utf-8');
       const restartedStore = new PromptLayerStore(layersPath, historyPath);
-      const restartedComposer = new PromptComposer(restartedStore);
+      const restartedComposer = new PromptComposer(restartedStore, undefined, lastKnownGoodPath);
       const fallback = restartedComposer.compose({ channelType: 'api' });
 
       expect(fallback.text).toBe('');

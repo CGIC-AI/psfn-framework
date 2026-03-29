@@ -1,4 +1,4 @@
-import type { PromptLayerStore } from './prompt-store.js';
+import type { PromptLayerStatePort } from './prompt-state-port.js';
 
 interface RuntimePromptLayerDefinition {
   identifier: string;
@@ -138,7 +138,7 @@ export function composeDefaultRuntimePromptTemplate(): string {
 }
 
 function findExistingRuntimeLayer(
-  promptStore: PromptLayerStore,
+  promptStore: PromptLayerStatePort,
   definition: RuntimePromptLayerDefinition,
 ) {
   return promptStore.getAll().find(layer => (
@@ -147,7 +147,7 @@ function findExistingRuntimeLayer(
   ));
 }
 
-export function ensureRuntimePromptLayers(promptStore: PromptLayerStore): void {
+export function ensureRuntimePromptLayers(promptStore: PromptLayerStatePort): void {
   for (const definition of RUNTIME_PROMPT_LAYER_DEFINITIONS) {
     const existing = findExistingRuntimeLayer(promptStore, definition);
     if (existing) {

@@ -21,8 +21,8 @@ import { createComponentLogger } from '../../shared/logger.js';
 import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   getDefaultPromptText,
-  type PromptRegistryStore,
 } from '../identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
 import {
   markCompactionSummaryAsUntrustedRecord,
   wrapCompactionSummaryAsUntrustedContext,
@@ -242,7 +242,7 @@ export class SessionManager {
   private compactionBoundaryStore: SessionStore;
   private config: SubstrateConfig;
   private eventBus: EventBus | null;
-  private promptRegistry: PromptRegistryStore | null;
+  private promptRegistry: PromptRegistryStatePort | null;
   private focusKnowledgeStore: FocusKnowledgeStore;
   private compressionGuidelineRuntime: CompressionGuidelineRuntime;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
@@ -259,7 +259,7 @@ export class SessionManager {
     store: SessionStore,
     config: SubstrateConfig,
     eventBus?: EventBus,
-    promptRegistry?: PromptRegistryStore | null,
+    promptRegistry?: PromptRegistryStatePort | null,
   ) {
     this.store = store;
     this.compactionBoundaryStore = createCompactionBoundaryStore(store);

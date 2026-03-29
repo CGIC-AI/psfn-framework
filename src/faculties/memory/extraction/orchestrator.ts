@@ -3,7 +3,7 @@ import type { LLMProvider } from '../../../core/agent/contracts.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { resolveLatestTurnContext } from '../../../core/session/turn-provenance.js';
-import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
 import {
   EXTRACTION_PROMPT_KEY,
@@ -82,7 +82,7 @@ export interface ExtractionRunOptions {
   llmClient: LLMProvider;
   sessionManager: SessionManager;
   memoryStore: MemoryStore;
-  promptRegistry: PromptRegistryStore | null;
+  promptRegistry: PromptRegistryStatePort | null;
   gateConfig: ExtractionGateConfig;
   maxWrites: number;
   telemetryEnabled: boolean;

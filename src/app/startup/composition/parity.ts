@@ -85,6 +85,7 @@ import {
   resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
+  resolvePromptLastKnownGoodPath,
   resolvePromptHistoryPath,
   resolvePromptLayersPath,
   resolvePromptRegistryHistoryPath,
@@ -285,11 +286,16 @@ export function wirePromptRuntime(
   promptStore.seedFromCharacterCard(baseSystemPrompt);
   ensureRuntimePromptLayers(promptStore);
 
-  target.promptComposer = new PromptComposer(promptStore, undefined, undefined, {
-    enableConstitution: true,
-    companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
-    northStarLayerProvider: () => northStarStore.buildPromptLayer(),
-  });
+  target.promptComposer = new PromptComposer(
+    promptStore,
+    undefined,
+    resolvePromptLastKnownGoodPath(dataDir),
+    {
+      enableConstitution: true,
+      companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
+      northStarLayerProvider: () => northStarStore.buildPromptLayer(),
+    },
+  );
   target.registerTool(createPromptLayerListTool(promptStore), 'core');
   target.registerTool(createPromptLayerGetTool(promptStore), 'core');
   target.registerTool(createIdentityDiffTool(promptStore), 'core');

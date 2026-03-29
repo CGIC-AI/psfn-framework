@@ -1,6 +1,6 @@
 import type { LLMProvider } from '../../../core/agent/contracts.js';
 import { createComponentLogger } from '../../../shared/logger.js';
-import type { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import {
   PROFILE_SYNTHESIS_PROMPT_KEY,
   getDefaultPromptText,
@@ -36,7 +36,7 @@ type ProfileStoreView = {
 
 export interface RefreshContactProfileOptions {
   llmClient: LLMProvider;
-  promptRegistry: PromptRegistryStore | null;
+  promptRegistry: PromptRegistryStatePort | null;
   memoryStore: MemoryStore;
   channelId: string;
   triggerReason: ExtractionTriggerReason;

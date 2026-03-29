@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
+import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
@@ -303,6 +304,7 @@ async function createHarness(options: {
     characterCard: testCard,
     config,
     embeddingService: null,
+    promptState: createPromptStatePort({}),
     modelDiscovery: options.modelDiscovery ?? null,
   });
   await server.init();

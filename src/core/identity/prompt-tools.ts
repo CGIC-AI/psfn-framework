@@ -4,7 +4,7 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { PromptLayerStore } from './prompt-store.js';
+import type { PromptLayerStatePort } from './prompt-state-port.js';
 import type { PromptLayer, PromptHistoryEntry } from './prompt-types.js';
 import {
   CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
@@ -35,14 +35,14 @@ function errorMessage(error: unknown): string {
   return toErrorMessage(error);
 }
 
-function resolvePromptLayerById(store: PromptLayerStore, layerId: string): PromptLayer | null {
+function resolvePromptLayerById(store: PromptLayerStatePort, layerId: string): PromptLayer | null {
   const normalized = layerId.trim();
   if (!normalized) return null;
   const layers = store.getAll();
   return layers.find(l => l.id === normalized || l.id.startsWith(normalized)) ?? null;
 }
 
-function resolvePromptLayerWriteCapability(store: PromptLayerStore, layerId: string): CapabilityToken {
+function resolvePromptLayerWriteCapability(store: PromptLayerStatePort, layerId: string): CapabilityToken {
   const layer = resolvePromptLayerById(store, layerId);
   if (!layer) return 'identity.write.runtime';
   if (layer.type === 'base') return 'identity.write.base';
@@ -51,7 +51,7 @@ function resolvePromptLayerWriteCapability(store: PromptLayerStore, layerId: str
 }
 
 function resolvePromptLayerWriteCapabilityForAction(
-  store: PromptLayerStore,
+  store: PromptLayerStatePort,
   identityCoolingOff: IdentityCoolingOffManager | undefined,
   params: {
     action?: unknown;
@@ -71,7 +71,7 @@ function resolvePromptLayerWriteCapabilityForAction(
 }
 
 function handlePromptLayerStagedAction(
-  store: PromptLayerStore,
+  store: PromptLayerStatePort,
   identityCoolingOff: IdentityCoolingOffManager | undefined,
   params: {
     action: 'commit' | 'cancel';
@@ -243,7 +243,7 @@ function resolveHistoricalPromptVersion(
   };
 }
 
-export function createPromptLayerListTool(store: PromptLayerStore): AgentTool<any> {
+export function createPromptLayerListTool(store: PromptLayerStatePort): AgentTool<any> {
   return {
     name: 'prompt_layer_list',
     description: 'List all prompt layers in the prompt stack, showing their type, name, enabled status, and priority.',
@@ -274,7 +274,7 @@ export function createPromptLayerListTool(store: PromptLayerStore): AgentTool<an
   };
 }
 
-export function createPromptLayerGetTool(store: PromptLayerStore): AgentTool<any> {
+export function createPromptLayerGetTool(store: PromptLayerStatePort): AgentTool<any> {
   return {
     name: 'prompt_layer_get',
     description: 'Get the full content and metadata of a specific prompt layer.',
@@ -313,7 +313,7 @@ export function createPromptLayerGetTool(store: PromptLayerStore): AgentTool<any
   };
 }
 
-export function createIdentityDiffTool(store: PromptLayerStore): AgentTool<any> {
+export function createIdentityDiffTool(store: PromptLayerStatePort): AgentTool<any> {
   return withCapabilityRequirement({
     name: 'identity_diff',
     description:
@@ -394,7 +394,7 @@ export function createIdentityDiffTool(store: PromptLayerStore): AgentTool<any> 
   }, 'identity.read');
 }
 
-export function createIdentityChangelogTool(store: PromptLayerStore): AgentTool<any> {
+export function createIdentityChangelogTool(store: PromptLayerStatePort): AgentTool<any> {
   return withCapabilityRequirement({
     name: 'identity_changelog',
     description:
@@ -485,7 +485,7 @@ export interface PromptLayerUpdateToolOptions {
 }
 
 export function createPromptLayerUpdateTool(
-  store: PromptLayerStore,
+  store: PromptLayerStatePort,
   options: PromptLayerUpdateToolOptions = {},
 ): AgentTool<any> {
   const identityCoolingOff = options.identityCoolingOff;
@@ -586,7 +586,7 @@ export function createPromptLayerUpdateTool(
 }
 
 export function createPromptLayerRollbackTool(
-  store: PromptLayerStore,
+  store: PromptLayerStatePort,
   options: PromptLayerUpdateToolOptions = {},
 ): AgentTool<any> {
   const identityCoolingOff = options.identityCoolingOff;
@@ -712,7 +712,7 @@ export function createPromptLayerRollbackTool(
   });
 }
 
-export function createPromptLayerToggleTool(store: PromptLayerStore): AgentTool<any> {
+export function createPromptLayerToggleTool(store: PromptLayerStatePort): AgentTool<any> {
   const tool: AgentTool<any> = {
     name: 'prompt_layer_toggle',
     description: 'Toggle a prompt layer on/off. Access is controlled by capability tier.',

@@ -6,7 +6,7 @@ import type { ChannelVisibility } from '../../../system/trust/types.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { COMPACTION_SUMMARY_PROMPT_KEY, getDefaultPromptText } from '../../identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
-import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../identity/prompt-state-port.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import {
   buildCompactionSourceBlock,
@@ -36,7 +36,7 @@ export interface CompactionParams {
   store: SessionStore;
   config: SubstrateConfig;
   eventBus: EventBus | null;
-  promptRegistry: PromptRegistryStore | null;
+  promptRegistry: PromptRegistryStatePort | null;
   preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   onCompactionComplete?: (event: {
     channelId: string;

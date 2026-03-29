@@ -33,8 +33,7 @@ export interface StartOptionalAdminServerOptions {
     | 'sessionStore'
     | 'sessionManager'
     | 'contactStore'
-    | 'promptStore'
-    | 'promptRegistry'
+    | 'promptState'
     | 'skillsRuntime'
     | 'agentLoop'
   >;
@@ -70,8 +69,7 @@ export async function startOptionalAdminServer(
     embeddingService: options.gateway,
     modelDiscovery,
     contactStore: options.coreRuntime.contactStore,
-    promptStore: options.coreRuntime.promptStore,
-    promptRegistry: options.coreRuntime.promptRegistry,
+    promptState: options.coreRuntime.promptState,
     skillsRuntime: options.coreRuntime.skillsRuntime,
     confirmationQueueApi: createGatewayConfirmationQueueAdminApi(
       options.gateway,

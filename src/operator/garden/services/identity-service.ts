@@ -6,7 +6,7 @@ import {
   normalizeImportedCard,
 } from '../../../core/identity/importer.js';
 import { buildCharacterMacroMap } from '../../../core/identity/character-macro-map.js';
-import type { PromptLayerStore } from '../../../core/identity/prompt-store.js';
+import type { PromptLayerStatePort } from '../../../core/identity/prompt-state-port.js';
 import { syncCharacterFoundationPromptFromCard } from '../../../core/identity/prompt-sync.js';
 import type { CCv3Data } from '@character-foundry/character-foundry/loader';
 import type {
@@ -111,7 +111,7 @@ export class AdminIdentityDataService implements AdminIdentityService {
     config: SubstrateConfig;
     cardVersionStore?: CharacterCardVersionStore | null;
     importIdentityCardHtml?: (body: string) => Promise<string>;
-    promptStore?: PromptLayerStore | null;
+    promptStore?: PromptLayerStatePort | null;
   }) {}
 
   private syncCharacterFoundationWithOutcome(

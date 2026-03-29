@@ -199,6 +199,33 @@ describe('injectPromptRuntimeTokens', () => {
     ]);
   });
 
+  it('persists companion-editable runtime block content across reloads and reorder operations', () => {
+    const root = makeTempDir();
+    const store = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
+
+    store.setEditableBlockContent(
+      'runtime.context',
+      'Companion-specific runtime guidance.',
+      'admin',
+    );
+    store.reorderSystemPromptBlocks([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ], 'admin');
+
+    const reloadedStore = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
+    expect(reloadedStore.getEditableBlockContent('runtime.context')).toBe('Companion-specific runtime guidance.');
+    expect(reloadedStore.getEditableBlockContentMap()).toMatchObject({
+      'runtime.context': 'Companion-specific runtime guidance.',
+    });
+  });
+
   it('rejects invalid runtime block orders that do not include the full reorderable set', () => {
     const root = makeTempDir();
     const store = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));

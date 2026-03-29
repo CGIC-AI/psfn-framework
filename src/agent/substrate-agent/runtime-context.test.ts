@@ -4,6 +4,7 @@ import type { SubstrateMessage } from '../../types.js';
 import {
   buildPromptTemplateVariables,
   buildRuntimeContext,
+  getPersonaAdaptation,
   resolveAuthorContext,
 } from './runtime-context.js';
 
@@ -219,8 +220,9 @@ describe('runtime subject identity', () => {
       formatTopEmotions: () => '',
     });
 
-    expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
-    expect(runtimeContext).toContain('[Self-Image Tool Guidance]');
+    expect(runtimeContext).toContain('<appearance_context>');
+    expect(runtimeContext).toContain('Silver eyes and a weathered jacket.');
+    expect(runtimeContext).toContain('<self_image_tool_guidance>');
     expect(runtimeContext).toContain('Use image_create for a brand new selfie, portrait, or scene featuring you.');
   });
 
@@ -317,6 +319,81 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('<internal_state>');
     expect(runtimeContext).toContain('Attention: deepening, 2 open threads, 1 pending follow-up.');
     expect(runtimeContext).toContain('Relationship baseline: primary trust');
+  });
+
+  it('appends companion runtime guidance overrides when present', () => {
+    const personaAdaptation = getPersonaAdaptation({
+      trustLevel: 'trusted',
+      internalState: {
+        emotional: {
+          vad: { valence: 0, arousal: 0, dominance: 0 },
+          mood: { valence: 0, arousal: 0, dominance: 0 },
+          discreteEmotions: {},
+          confidence: 0,
+        },
+        cognitive: {
+          certaintyLevel: 0,
+          topicEngagement: 0,
+          processingQuality: 'fluent',
+        },
+        attention: {
+          activeConcerns: [],
+          pendingFollowUps: [],
+          salientEntities: [],
+          conversationTrajectory: 'steady',
+        },
+        relational: {
+          contactId: DEFAULT_COMPANION_ID,
+          trustLevel: 'trusted',
+          baselineValence: 0,
+          moodDrift: 0,
+          recentInteractionFrequency: 0,
+          lastSeenDeltaSeconds: 0,
+        },
+      },
+      metacognitiveFlags: [],
+      templateVariables: {
+        runtime_persona_adaptation_extra: 'Companion personality override.',
+      },
+      config: {},
+    });
+
+    expect(personaAdaptation).toContain('<companion_persona_adaptation>');
+    expect(personaAdaptation).toContain('Companion personality override.');
+
+    const runtimeContext = buildRuntimeContext({
+      message: makeMessage(),
+      resolvedUserName: 'Companion',
+      trustLevel: 'trusted',
+      channelType: 'internal',
+      canonicalContactKey: undefined,
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      taskKind: 'reflection',
+      templateVariables: {
+        runtime_context_extra: 'Companion runtime context override.',
+      },
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 0,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).toContain('<companion_runtime_context>');
+    expect(runtimeContext).toContain('Companion runtime context override.');
   });
 
   it('uses persisted conversation-channel privacy and records it on activity', () => {

@@ -11,6 +11,7 @@ import type {
   PromptRuntimeBlockId,
   PromptRuntimeBlockPlacement,
   PromptRuntimeBlockVisibility,
+  PromptRuntimeEditableBlockId,
 } from '../../../identity/prompt-runtime.js';
 import type { PromptHistoryEntry, PromptLayer } from '../../../identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
@@ -507,6 +508,8 @@ export interface AdminPromptRuntimeBlock {
   visibility: PromptRuntimeBlockVisibility;
   reorderable: boolean;
   contentVisible: boolean;
+  companionEditable: boolean;
+  customContent?: string;
   lockedReason?: string;
   effectiveOrder: number;
 }
@@ -614,6 +617,12 @@ export interface NorthStarUpdateResult {
   snapshot?: AdminNorthStarSnapshotData;
 }
 
+export interface RuntimePromptUpdateResult {
+  ok: boolean;
+  message: string;
+  updated?: PromptRuntimeEditableBlockId[];
+}
+
 export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
   getFoundationSnapshot(): AdminFoundationSnapshotData | null;
@@ -622,6 +631,7 @@ export interface AdminPromptsService {
   saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult;
   getNorthStarSnapshot(): AdminNorthStarSnapshotData | null;
   saveNorthStarItems(body: string): NorthStarUpdateResult;
+  saveRuntimePromptBlocks(body: string): RuntimePromptUpdateResult;
   getPromptDetail(layerId: string): AdminPromptDetailData | null;
   getStaticPromptDetail(key: string): AdminPromptDetailData | null;
   createPromptLayer(body: string): PromptUpdateResult;

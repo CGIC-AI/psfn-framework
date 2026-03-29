@@ -380,7 +380,6 @@ export function buildDynamicPromptTemplateVariables(input: {
       }),
     ].join('\n')
     : '';
-
   const lastMessageReceivedAt = (
     typeof input.lastMessageReceivedAtMs === 'number' && Number.isFinite(input.lastMessageReceivedAtMs)
   )
@@ -490,6 +489,10 @@ export function buildRuntimeContext(input: {
     + (autoloadCount > 0 ? `, ${autoloadCount} autoload` : '')
     + (deferredCount > 0 ? `, ${deferredCount} deferred` : '')
     + ')';
+  const runtimeContextExtra = (() => {
+    const raw = input.templateVariables?.runtime_context_extra;
+    return typeof raw === 'string' ? raw.trim() : '';
+  })();
 
   const runtimeLines = [
     `It is ${formatPromptRuntimeDateTime(now)} ${resolveActiveTimezone()}.`,
@@ -601,6 +604,13 @@ export function buildRuntimeContext(input: {
           content: input.skillsContext,
         }),
     );
+  }
+
+  if (runtimeContextExtra) {
+    sections.push(wrapPromptSectionXml({
+      id: 'companion_runtime_context',
+      content: runtimeContextExtra,
+    }));
   }
 
   return sections.filter(section => section.trim().length > 0).join('\n\n');
@@ -740,6 +750,10 @@ export function getPersonaAdaptation(input: {
     config: input.config,
   });
   const metacognitiveHint = buildMetacognitivePersonaHint(input.metacognitiveFlags);
+  const runtimePersonaExtra = (() => {
+    const raw = input.templateVariables?.runtime_persona_adaptation_extra;
+    return typeof raw === 'string' ? raw.trim() : '';
+  })();
 
   const sections = [
     wrapPromptSectionXml({
@@ -750,6 +764,12 @@ export function getPersonaAdaptation(input: {
     metacognitiveHint,
   ]
     .filter((section): section is string => Boolean(section?.trim()));
+  if (runtimePersonaExtra) {
+    sections.push(wrapPromptSectionXml({
+      id: 'companion_persona_adaptation',
+      content: runtimePersonaExtra,
+    }));
+  }
   if (sections.length === 0) return null;
   return sections.join('\n\n');
 }

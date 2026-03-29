@@ -179,6 +179,68 @@ describe('AdminPromptsDataService', () => {
     });
   });
 
+  it('lists and saves companion-editable runtime guidance blocks without exposing immutable blocks', () => {
+    const root = makeTempDir();
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+    );
+    promptRuntimeLayoutStore.setEditableBlockContent(
+      'runtime.persona_adaptation',
+      'Companion personality override.',
+      'admin',
+    );
+
+    const service = new AdminPromptsDataService({
+      promptRuntimeLayoutStore,
+    });
+
+    const listed = service.listPrompts();
+    const editable = listed.runtimeBlocks.find(block => block.id === 'runtime.persona_adaptation');
+    const locked = listed.runtimeBlocks.find(block => block.id === 'session.current_messages');
+
+    expect(editable).toMatchObject({
+      companionEditable: true,
+      customContent: 'Companion personality override.',
+    });
+    expect(locked).toMatchObject({
+      companionEditable: false,
+      customContent: undefined,
+    });
+
+    const saveResult = service.saveRuntimePromptBlocks(JSON.stringify({
+      blocks: [
+        {
+          id: 'runtime.context',
+          content: 'Companion runtime context override.',
+        },
+      ],
+    }));
+
+    expect(saveResult.ok).toBe(true);
+    expect(saveResult.updated).toEqual(['runtime.context']);
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.context')).toBe(
+      'Companion runtime context override.',
+    );
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.persona_adaptation')).toBe(
+      'Companion personality override.',
+    );
+
+    const blockedResult = service.saveRuntimePromptBlocks(JSON.stringify({
+      blocks: [
+        {
+          id: 'session.current_messages',
+          content: 'forbidden edit',
+        },
+      ],
+    }));
+
+    expect(blockedResult.ok).toBe(false);
+    expect(blockedResult.message).toContain('not companion-editable');
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.context')).toBe(
+      'Companion runtime context override.',
+    );
+  });
+
   it('fails closed when immutable constitution layer edits are attempted', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(

@@ -5,6 +5,7 @@
     getConstitutionSnapshot,
     getNorthStarSnapshot,
     saveNorthStarItems,
+    saveRuntimePromptBlocks,
     createPromptLayer,
     getPromptDetail,
     updatePrompt,
@@ -77,6 +78,9 @@
   let layers = $state<PromptLayer[]>([]);
   let staticPrompts = $state<PromptRegistryEntry[]>([]);
   let runtimeBlocks = $state<PromptRuntimeBlock[]>([]);
+  let runtimeBlockDrafts = $state<Record<string, string>>({});
+  let runtimeBlockSaving = $state<Record<string, boolean>>({});
+  let runtimeBlockMessages = $state<Record<string, string>>({});
   let loading = $state(true);
   let error = $state('');
   let constitutionLoading = $state(true);
@@ -154,6 +158,16 @@
       return a.label.localeCompare(b.label);
     })
   );
+
+  function syncRuntimeBlockDrafts(blocks: PromptRuntimeBlock[]) {
+    runtimeBlockDrafts = Object.fromEntries(
+      blocks
+        .filter(block => block.companionEditable)
+        .map(block => [block.id, block.customContent ?? '']),
+    );
+    runtimeBlockSaving = {};
+    runtimeBlockMessages = {};
+  }
 
   let constitutionPreviewText = $derived.by(() => {
     const sections: string[] = [];
@@ -260,6 +274,11 @@
     return 'Hidden';
   }
 
+  function runtimeBlockStatusLabel(block: PromptRuntimeBlock): string {
+    if (!block.companionEditable) return block.contentVisible ? 'Built in' : 'Hidden';
+    return block.customContent?.trim() ? 'Companion override active' : 'Using built-in guidance';
+  }
+
   function runtimePlacementBadge(block: PromptRuntimeBlock): string {
     if (block.placement === 'system_prompt') return 'bg-[#4A5C8B] text-white';
     if (block.placement === 'context_messages') return 'bg-[#4A7C59] text-white';
@@ -289,6 +308,44 @@
 
   async function reorderRuntimeBlocks(runtimeBlockIds: string[]) {
     await apiPost<PromptUpdateResult>('/api/admin/prompts/reorder', { runtimeBlockIds });
+  }
+
+  async function saveRuntimeBlock(block: PromptRuntimeBlock) {
+    if (!block.companionEditable) return;
+    runtimeBlockSaving = { ...runtimeBlockSaving, [block.id]: true };
+    runtimeBlockMessages = { ...runtimeBlockMessages, [block.id]: '' };
+    error = '';
+    try {
+      const result = await saveRuntimePromptBlocks({
+        blocks: [
+          {
+            id: block.id,
+            content: runtimeBlockDrafts[block.id] ?? '',
+          },
+        ],
+      });
+      if (!result.ok) {
+        runtimeBlockMessages = {
+          ...runtimeBlockMessages,
+          [block.id]: result.message || 'Failed to save runtime guidance',
+        };
+        error = result.message || 'Failed to save runtime guidance';
+        return;
+      }
+      await refreshList();
+      error = '';
+      runtimeBlockMessages = {
+        ...runtimeBlockMessages,
+        [block.id]: result.message || 'Saved runtime guidance',
+      };
+      showToast(result.message || 'Runtime guidance saved');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Failed to save runtime guidance';
+      runtimeBlockMessages = { ...runtimeBlockMessages, [block.id]: message };
+      error = message;
+    } finally {
+      runtimeBlockSaving = { ...runtimeBlockSaving, [block.id]: false };
+    }
   }
 
   async function moveRuntimeBlock(blockId: string, direction: 'up' | 'down') {
@@ -377,6 +434,13 @@
     northStarLimit = snapshot.limit ?? 3;
     northStarServerPreview = snapshot.preview?.text ?? '';
     northStarSaveMessage = '';
+  }
+
+  function applyPromptListSnapshot(data: Awaited<ReturnType<typeof listPrompts>>) {
+    layers = data?.layers ?? [];
+    staticPrompts = data?.staticPrompts ?? [];
+    runtimeBlocks = data?.runtimeBlocks ?? [];
+    syncRuntimeBlockDrafts(runtimeBlocks);
   }
 
   async function refreshConstitution() {
@@ -508,9 +572,7 @@
     ]);
 
     if (promptsResult.status === 'fulfilled') {
-      layers = promptsResult.value?.layers ?? [];
-      staticPrompts = promptsResult.value?.staticPrompts ?? [];
-      runtimeBlocks = promptsResult.value?.runtimeBlocks ?? [];
+      applyPromptListSnapshot(promptsResult.value);
     } else {
       const reason = promptsResult.reason;
       error = reason instanceof Error ? reason.message : 'Failed to load prompts';
@@ -542,9 +604,7 @@
 
   async function refreshList() {
     const data = await listPrompts();
-    layers = data?.layers ?? [];
-    staticPrompts = data?.staticPrompts ?? [];
-    runtimeBlocks = data?.runtimeBlocks ?? [];
+    applyPromptListSnapshot(data);
     await Promise.all([refreshConstitution(), refreshNorthStar()]);
   }
 
@@ -1218,6 +1278,7 @@
                   <div class="flex flex-wrap items-center gap-3 text-sm text-shadow-600">
                     <span>Source: <span class="font-mono text-shadow-800">{block.source}</span></span>
                     <span>Content: <span class="text-shadow-800">{block.contentVisible ? 'visible' : 'hidden in /prompts'}</span></span>
+                    <span>Status: <span class="text-shadow-800">{runtimeBlockStatusLabel(block)}</span></span>
                     {#if block.lockedReason}
                       <span>{block.lockedReason}</span>
                     {/if}
@@ -1242,6 +1303,60 @@
                   </div>
                 {/if}
               </div>
+
+              {#if block.companionEditable}
+                <div class="border-t border-dashed border-bark-300 bg-white/70 px-3 py-3 space-y-3">
+                  <div class="flex items-center justify-between gap-3 flex-wrap">
+                    <div class="space-y-0.5">
+                      <p class="text-sm font-medium text-shadow-800">Companion override</p>
+                      <p class="text-xs text-shadow-600">
+                        This content is appended to the built-in runtime guidance for this block. Immutable safety content is not editable here.
+                      </p>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs text-shadow-600">
+                      <span class="px-1.5 py-0.5 rounded bg-bark-200 text-shadow-700 uppercase tracking-wider font-bold">
+                        Bounded
+                      </span>
+                      <span class="px-1.5 py-0.5 rounded bg-gold-100 text-shadow-700 uppercase tracking-wider font-bold">
+                        Companion-tunable
+                      </span>
+                    </div>
+                  </div>
+
+                  <label class="block">
+                    <span class="block text-sm font-medium text-shadow-700 mb-1">Override text</span>
+                    <textarea
+                      rows={5}
+                      value={runtimeBlockDrafts[block.id] ?? ''}
+                      oninput={(e) => {
+                        runtimeBlockDrafts = {
+                          ...runtimeBlockDrafts,
+                          [block.id]: (e.target as HTMLTextAreaElement).value,
+                        };
+                        runtimeBlockMessages = {
+                          ...runtimeBlockMessages,
+                          [block.id]: '',
+                        };
+                      }}
+                      class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                      placeholder="Add companion-specific guidance for this runtime block..."
+                    ></textarea>
+                  </label>
+
+                  <div class="flex items-center gap-3">
+                    <button
+                      onclick={() => saveRuntimeBlock(block)}
+                      disabled={runtimeBlockSaving[block.id]}
+                      class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+                    >
+                      {runtimeBlockSaving[block.id] ? 'Saving...' : 'Save block'}
+                    </button>
+                    {#if runtimeBlockMessages[block.id]}
+                      <span class="text-sm text-moss-700">{runtimeBlockMessages[block.id]}</span>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             </div>
           {:else}
             {@const layer = entry.layer}

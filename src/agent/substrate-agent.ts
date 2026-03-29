@@ -40,8 +40,13 @@ import type { ChannelPromptDock } from '../channels/types.js';
 import {
   type PromptComposer,
 } from '../identity/prompt-composer.js';
+import {
+  PromptRuntimeLayoutStore,
+  resolvePromptRuntimeLayoutPath,
+} from '../identity/prompt-runtime.js';
 import type { ComposeContext } from '../identity/prompt-types.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
+import { resolveConfiguredCompanionDataDir } from '../persistence/layout.js';
 import {
   createSubstrateStreamFn,
   type SubstrateStreamRuntimeOptions,
@@ -144,6 +149,25 @@ import {
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
+const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
+
+function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
+  const cached = promptRuntimeLayoutStoreCache.get(filePath);
+  if (cached) return cached;
+  const created = new PromptRuntimeLayoutStore(filePath);
+  promptRuntimeLayoutStoreCache.set(filePath, created);
+  return created;
+}
+
+function resolveRuntimePromptGuidanceVariables(config: SubstrateConfig): Record<string, string> {
+  const store = getPromptRuntimeLayoutStore(config);
+  return {
+    runtime_persona_adaptation_extra: store.getEditableBlockContent('runtime.persona_adaptation'),
+    runtime_context_extra: store.getEditableBlockContent('runtime.context'),
+  };
+}
 
 export type {
   LLMProvider,
@@ -927,6 +951,7 @@ export class SubstrateAgent {
     now: Date,
   ): Record<string, string> {
     const characterPromptVariables = this.resolveCharacterPromptVariables();
+    const runtimePromptGuidanceVariables = resolveRuntimePromptGuidanceVariables(this.config);
     const { templateVariables, runtimeCharacterName } = buildPromptTemplateVariablesForTurn({
       message,
       resolvedUserName,
@@ -940,7 +965,10 @@ export class SubstrateAgent {
       fallbackCharacterName: this.characterName,
     });
     this.characterName = runtimeCharacterName;
-    return templateVariables;
+    return {
+      ...templateVariables,
+      ...runtimePromptGuidanceVariables,
+    };
   }
 
   private buildDynamicPromptTemplateVariables(

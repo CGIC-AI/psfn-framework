@@ -895,6 +895,8 @@ export interface PromptRuntimeBlock {
   visibility: 'hidden' | 'runtime_generated' | 'provider_managed';
   reorderable: boolean;
   contentVisible: boolean;
+  companionEditable: boolean;
+  customContent?: string;
   lockedReason?: string;
   effectiveOrder: number;
 }
@@ -997,6 +999,12 @@ export interface NorthStarUpdateResult {
   ok: boolean;
   message: string;
   snapshot?: NorthStarSnapshotData;
+}
+
+export interface RuntimePromptUpdateResult {
+  ok: boolean;
+  message: string;
+  updated?: string[];
 }
 
 export interface PromptUpdateResult {

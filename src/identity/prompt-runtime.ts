@@ -208,6 +208,7 @@ export interface PromptRuntimeBlockDefinition {
   visibility: PromptRuntimeBlockVisibility;
   reorderable: boolean;
   contentVisible: boolean;
+  companionEditable?: boolean;
   lockedReason?: string;
 }
 
@@ -226,9 +227,14 @@ export type PromptRuntimeSystemPromptBlockId = Extract<
 export interface PromptRuntimeLayout {
   version: number;
   systemPromptBlockOrder: PromptRuntimeSystemPromptBlockId[];
+  editableBlockContent: Partial<Record<PromptRuntimeEditableBlockId, string>>;
   updatedAt: string;
   updatedBy: string;
 }
+
+export type PromptRuntimeEditableBlockId =
+  | 'runtime.persona_adaptation'
+  | 'runtime.context';
 
 const PROMPT_RUNTIME_LAYOUT_VERSION = 1;
 
@@ -241,7 +247,8 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
-    contentVisible: false,
+    contentVisible: true,
+    companionEditable: true,
   },
   {
     id: 'runtime.context',
@@ -251,7 +258,8 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
-    contentVisible: false,
+    contentVisible: true,
+    companionEditable: true,
   },
   {
     id: 'runtime.scratchpad',
@@ -356,6 +364,7 @@ function clonePromptRuntimeLayout(layout: PromptRuntimeLayout): PromptRuntimeLay
   return {
     ...layout,
     systemPromptBlockOrder: [...layout.systemPromptBlockOrder],
+    editableBlockContent: { ...layout.editableBlockContent },
   };
 }
 
@@ -369,9 +378,14 @@ function buildDefaultPromptRuntimeLayout(): PromptRuntimeLayout {
   return {
     version: PROMPT_RUNTIME_LAYOUT_VERSION,
     systemPromptBlockOrder: [...DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER],
+    editableBlockContent: {},
     updatedAt: new Date().toISOString(),
     updatedBy: 'system',
   };
+}
+
+function isPromptRuntimeEditableBlockId(value: string): value is PromptRuntimeEditableBlockId {
+  return value === 'runtime.persona_adaptation' || value === 'runtime.context';
 }
 
 function normalizeSystemPromptBlockOrder(value: unknown): PromptRuntimeSystemPromptBlockId[] {
@@ -395,11 +409,31 @@ function normalizeSystemPromptBlockOrder(value: unknown): PromptRuntimeSystemPro
   return normalized;
 }
 
+function normalizeEditableBlockContent(value: unknown): Partial<Record<PromptRuntimeEditableBlockId, string>> {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  const parsed = value as Record<string, unknown>;
+  const normalized: Partial<Record<PromptRuntimeEditableBlockId, string>> = {};
+  for (const [key, rawContent] of Object.entries(parsed)) {
+    if (!isPromptRuntimeEditableBlockId(key) || typeof rawContent !== 'string') {
+      continue;
+    }
+    const trimmed = rawContent.trim();
+    if (trimmed.length > 0) {
+      normalized[key] = trimmed;
+    }
+  }
+  return normalized;
+}
+
 function parsePromptRuntimeLayout(raw: string): PromptRuntimeLayout {
   const parsed = JSON.parse(raw) as Partial<PromptRuntimeLayout> | null;
   return {
     version: PROMPT_RUNTIME_LAYOUT_VERSION,
     systemPromptBlockOrder: normalizeSystemPromptBlockOrder(parsed?.systemPromptBlockOrder),
+    editableBlockContent: normalizeEditableBlockContent(parsed?.editableBlockContent),
     updatedAt: typeof parsed?.updatedAt === 'string' && parsed.updatedAt.trim().length > 0
       ? parsed.updatedAt
       : new Date().toISOString(),
@@ -433,6 +467,16 @@ export class PromptRuntimeLayoutStore {
     return [...this.layout.systemPromptBlockOrder];
   }
 
+  getEditableBlockContent(blockId: PromptRuntimeEditableBlockId): string {
+    this.maybeReload();
+    return this.layout.editableBlockContent[blockId] ?? '';
+  }
+
+  getEditableBlockContentMap(): Partial<Record<PromptRuntimeEditableBlockId, string>> {
+    this.maybeReload();
+    return { ...this.layout.editableBlockContent };
+  }
+
   reorderSystemPromptBlocks(
     blockIds: PromptRuntimeSystemPromptBlockId[],
     updatedBy: string,
@@ -445,6 +489,35 @@ export class PromptRuntimeLayoutStore {
     this.layout = {
       version: PROMPT_RUNTIME_LAYOUT_VERSION,
       systemPromptBlockOrder: normalized,
+      editableBlockContent: { ...this.layout.editableBlockContent },
+      updatedAt: new Date().toISOString(),
+      updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
+    };
+    this.save();
+    return this.getLayout();
+  }
+
+  setEditableBlockContent(
+    blockId: PromptRuntimeEditableBlockId,
+    content: string,
+    updatedBy: string,
+  ): PromptRuntimeLayout {
+    const trimmed = content.trim();
+    if (!isPromptRuntimeEditableBlockId(blockId)) {
+      throw new Error(`Prompt runtime block is not companion-editable: ${blockId}`);
+    }
+
+    const nextContent = { ...this.layout.editableBlockContent };
+    if (trimmed.length > 0) {
+      nextContent[blockId] = trimmed;
+    } else {
+      delete nextContent[blockId];
+    }
+
+    this.layout = {
+      version: PROMPT_RUNTIME_LAYOUT_VERSION,
+      systemPromptBlockOrder: [...this.layout.systemPromptBlockOrder],
+      editableBlockContent: nextContent,
       updatedAt: new Date().toISOString(),
       updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
     };

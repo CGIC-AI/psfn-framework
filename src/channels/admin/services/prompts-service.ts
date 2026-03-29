@@ -23,6 +23,9 @@ import type {
   PromptLayerUpdatePatch,
 } from '../../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../../identity/prompt-registry.js';
+import type {
+  PromptRuntimeEditableBlockId,
+} from '../../../identity/prompt-runtime.js';
 import {
   isCanonicalCharacterFoundationLayer,
 } from '../../../identity/canonical-foundation.js';
@@ -58,6 +61,7 @@ import type {
   FoundationUpdateResult,
   NorthStarUpdateResult,
   PromptUpdateResult,
+  RuntimePromptUpdateResult,
 } from './types.js';
 
 const CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX = 'constitution:immutable:';
@@ -229,17 +233,22 @@ export class AdminPromptsDataService implements AdminPromptsService {
     const runtimeLayout = this.deps.promptRuntimeLayoutStore?.getLayout();
     const systemOrder = runtimeLayout?.systemPromptBlockOrder ?? defaultSystemOrder;
     const systemOrderIndex = new Map(systemOrder.map((id, index) => [id, index]));
+    const customContentByBlockId = runtimeLayout?.editableBlockContent ?? {};
 
     return getPromptRuntimeBlockDefinitions()
       .map((block): AdminPromptRuntimeBlock => ({
         ...block,
+        companionEditable: block.companionEditable === true,
         effectiveOrder: block.placement === 'system_prompt'
           ? (systemOrderIndex.get(block.id as PromptRuntimeSystemPromptBlockId) ?? Number.MAX_SAFE_INTEGER)
           : (
-            block.placement === 'context_messages'
-              ? systemOrder.length
-              : systemOrder.length + 1
+              block.placement === 'context_messages'
+                ? systemOrder.length
+                : systemOrder.length + 1
           ),
+        customContent: block.companionEditable === true
+          ? (customContentByBlockId[block.id as PromptRuntimeEditableBlockId] ?? '')
+          : undefined,
       }))
       .sort((left, right) => {
         if (left.effectiveOrder !== right.effectiveOrder) {
@@ -247,6 +256,65 @@ export class AdminPromptsDataService implements AdminPromptsService {
         }
         return left.label.localeCompare(right.label);
       });
+  }
+
+  saveRuntimePromptBlocks(body: string): RuntimePromptUpdateResult {
+    const promptRuntimeLayoutStore = this.deps.promptRuntimeLayoutStore;
+    if (!promptRuntimeLayoutStore) {
+      return { ok: false, message: 'Runtime prompt layout store is not configured' };
+    }
+
+    const params = this.parseBody(body);
+    const rawBlocks = params.get('blocks');
+    if (!rawBlocks) {
+      return { ok: false, message: 'blocks is required' };
+    }
+
+    let parsedBlocks: unknown;
+    try {
+      parsedBlocks = JSON.parse(rawBlocks);
+    } catch {
+      return { ok: false, message: 'blocks must be a JSON array' };
+    }
+
+    if (!Array.isArray(parsedBlocks)) {
+      return { ok: false, message: 'blocks must be a JSON array' };
+    }
+
+    const updated: PromptRuntimeEditableBlockId[] = [];
+    for (const entry of parsedBlocks) {
+      if (!entry || typeof entry !== 'object') {
+        return { ok: false, message: 'blocks entries must be objects' };
+      }
+      const block = entry as Record<string, unknown>;
+      if (typeof block.id !== 'string' || !block.id.trim()) {
+        return { ok: false, message: 'blocks entries require a valid block id' };
+      }
+      if (typeof block.content !== 'string') {
+        return { ok: false, message: `block "${block.id}" content must be a string` };
+      }
+      if (block.id !== 'runtime.persona_adaptation' && block.id !== 'runtime.context') {
+        return { ok: false, message: `block "${block.id}" is not companion-editable` };
+      }
+      promptRuntimeLayoutStore.setEditableBlockContent(
+        block.id as PromptRuntimeEditableBlockId,
+        block.content,
+        'admin',
+      );
+      updated.push(block.id as PromptRuntimeEditableBlockId);
+    }
+
+    if (updated.length > 0) {
+      this.injectPromptEditSystemNote(`Admin updated ${updated.length} companion runtime guidance block${updated.length === 1 ? '' : 's'}.`);
+    }
+
+    return {
+      ok: true,
+      message: updated.length > 0
+        ? `Updated ${updated.length} runtime guidance block${updated.length === 1 ? '' : 's'}`
+        : 'No runtime guidance blocks updated',
+      updated,
+    };
   }
 
   private buildImmutableConstitutionBlocks(): AdminConstitutionImmutableBlock[] {

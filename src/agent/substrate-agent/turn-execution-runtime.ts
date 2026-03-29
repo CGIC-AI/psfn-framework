@@ -64,7 +64,11 @@ import {
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
 } from '../../turns/observability.js';
-import type { TurnPromptSnapshot, TurnSnapshot } from '../../turns/snapshot.js';
+import type {
+  TurnPromptResponseSnapshot,
+  TurnPromptSnapshot,
+  TurnSnapshot,
+} from '../../turns/snapshot.js';
 import {
   parseDeferredToolHandoffActionId,
 } from '../deferred-tool-handoff.js';
@@ -422,6 +426,53 @@ async function runWithVisionTurnTimeout<T>({
   }
 }
 
+function readAssistantReasoning(message: AssistantMessage | null): string | undefined {
+  if (!message || !Array.isArray(message.content)) return undefined;
+  const reasoning = message.content
+    .filter((block: unknown): block is { type: string; thinking?: string } => (
+      typeof block === 'object'
+      && block !== null
+      && (block as { type?: unknown }).type === 'thinking'
+      && typeof (block as { thinking?: unknown }).thinking === 'string'
+    ))
+    .map(block => block.thinking?.trim() ?? '')
+    .filter(block => block.length > 0)
+    .join('\n\n');
+  return reasoning.length > 0 ? reasoning : undefined;
+}
+
+function countAssistantToolCalls(message: AssistantMessage | null): number | undefined {
+  if (!message || !Array.isArray(message.content)) return undefined;
+  const count = message.content.filter((block: unknown) => (
+    typeof block === 'object'
+    && block !== null
+    && (block as { type?: unknown }).type === 'toolCall'
+  )).length;
+  return count > 0 ? count : undefined;
+}
+
+function buildPromptResponseSnapshot(input: {
+  assistantMessage: AssistantMessage | null;
+  content: string;
+  model: string | null;
+  stopReason?: string;
+}): TurnPromptResponseSnapshot {
+  const reasoning = readAssistantReasoning(input.assistantMessage);
+  const toolCallCount = countAssistantToolCalls(input.assistantMessage);
+  return {
+    content: input.content,
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.assistantMessage?.stopReason
+      ? { stopReason: input.assistantMessage.stopReason }
+      : input.stopReason
+        ? { stopReason: input.stopReason }
+        : {}),
+    ...(input.assistantMessage?.errorMessage ? { errorMessage: input.assistantMessage.errorMessage } : {}),
+    ...(reasoning ? { reasoning } : {}),
+    ...(toolCallCount !== undefined ? { toolCallCount } : {}),
+  };
+}
+
 export async function handleMessageForTurn(
   runtime: TurnExecutionRuntime,
   message: SubstrateMessage,
@@ -761,6 +812,12 @@ export async function handleMessageForTurn(
         now: runtimeNow,
         variables: templateVariables,
       });
+      const personaHint = runtime.getPersonaAdaptation(
+        trustLevel,
+        preTurnInternalState,
+        preTurnMetacognitiveFlags,
+        templateVariables,
+      );
       const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
         || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
       const personaHint = runtime.getPersonaAdaptation(
@@ -966,6 +1023,15 @@ export async function handleMessageForTurn(
       turnUsage = moaResult.turnUsage;
       responseModel = moaResult.model;
       responseText = moaResult.output;
+      if (turnSnapshot.promptContext) {
+        turnSnapshot.promptContext.response = {
+          content: moaResult.output,
+          model: moaResult.model,
+          stopReason: moaResult.stopReason,
+        };
+        turnSnapshot.capturedAt = Date.now();
+        await emitTurnSnapshot(turnSnapshot);
+      }
     } else {
       runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
       const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
@@ -1037,6 +1103,11 @@ export async function handleMessageForTurn(
           ? { currentTurnVisionReview: turnUserContentBuildResult.currentTurnVisionReview }
           : {}),
       };
+      if (turnSnapshot.promptContext) {
+        turnSnapshot.promptContext.currentTurnInput = turnUserContentBuildResult.content;
+        turnSnapshot.capturedAt = Date.now();
+        await emitTurnSnapshot(turnSnapshot);
+      }
       try {
         await runWithVisionTurnTimeout({
           channelId: message.channelId,
@@ -1205,6 +1276,15 @@ export async function handleMessageForTurn(
             model: runtime.agent.state.model.id,
           });
         }
+      }
+      if (turnSnapshot.promptContext) {
+        turnSnapshot.promptContext.response = buildPromptResponseSnapshot({
+          assistantMessage: runtime.getLatestAssistantMessage(),
+          content: responseText,
+          model: responseModel,
+        });
+        turnSnapshot.capturedAt = Date.now();
+        await emitTurnSnapshot(turnSnapshot);
       }
     }
     let safeResponseText = responseText;

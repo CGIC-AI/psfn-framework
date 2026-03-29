@@ -20,6 +20,7 @@ import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   EXTRACTION_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
+  getDefaultPromptText,
   PromptRegistryStore,
 } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
@@ -470,35 +471,38 @@ describe('AdminServer JSON API routes', () => {
       join(tempDir, 'prompt-history.jsonl'),
     );
     promptStore.seedFromCharacterCard('Base prompt');
-    writeFileSync(join(tempDir, 'prompt-registry.json'), `${JSON.stringify([
+    writeFileSync(join(tempDir, 'prompt-registry.json'), JSON.stringify([
       {
         key: EXTRACTION_PROMPT_KEY,
-        text: 'Extract facts.\n{existing_facts}\n{recent_messages}\n<response><fact></fact></response>',
-        description: 'test extraction prompt',
-        consumers: ['test'],
+        text: getDefaultPromptText(EXTRACTION_PROMPT_KEY),
+        description: 'Memory extraction system prompt.',
+        consumers: ['src/memory/extraction.ts'],
         version: 1,
         updatedAt: new Date().toISOString(),
-        updatedBy: 'test',
+        updatedBy: 'system',
+        checksum: 'seed',
       },
       {
         key: COMPACTION_SUMMARY_PROMPT_KEY,
-        text: 'Summarize this conversation excerpt concisely.',
-        description: 'test compaction prompt',
-        consumers: ['test'],
+        text: getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY),
+        description: 'Session compaction system prompt.',
+        consumers: ['src/session/manager.ts'],
         version: 1,
         updatedAt: new Date().toISOString(),
-        updatedBy: 'test',
+        updatedBy: 'system',
+        checksum: 'seed',
       },
       {
         key: PROFILE_SYNTHESIS_PROMPT_KEY,
-        text: 'Synthesize contact profile.\n{contact_id}\n{existing_profile}\n{memory_facts}\n<profile><summary></summary></profile>',
-        description: 'test profile prompt',
-        consumers: ['test'],
+        text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
+        description: 'Canonical contact profile synthesis prompt.',
+        consumers: ['src/memory/extraction.ts'],
         version: 1,
         updatedAt: new Date().toISOString(),
-        updatedBy: 'test',
+        updatedBy: 'system',
+        checksum: 'seed',
       },
-    ], null, 2)}\n`, 'utf-8');
+    ]), 'utf-8');
     promptRegistry = new PromptRegistryStore(
       join(tempDir, 'prompt-registry.json'),
       join(tempDir, 'prompt-registry-history.jsonl'),
@@ -1780,10 +1784,38 @@ describe('AdminServer JSON API routes', () => {
           scratchpadContext: 'Scratchpad block',
           assembledPrompt: 'Rendered static prefix\n\nRendered dynamic suffix',
           finalSystemPrompt: 'Final system prompt',
+          currentTurnInput: 'hello',
           messages: [
             { role: 'user', content: 'hello' },
             { role: 'assistant', content: 'world' },
           ],
+          providerObservability: {
+            routeKind: 'configured_litellm_proxy',
+            requestedProvider: 'openrouter',
+            requestedModel: 'openrouter/test-model',
+            backendProvider: 'litellm',
+            backendModel: 'openrouter/test-model',
+            backendApi: 'openai-responses',
+            backendBaseUrl: 'http://127.0.0.1:4000',
+            systemRole: {
+              transport: 'openai_developer',
+              supportsSystemRole: true,
+              supportsDeveloperRole: true,
+              usesOutOfBandSystemPrompt: false,
+            },
+            providerWireMessages: [
+              { role: 'developer', source: 'system_prompt', content: 'Final system prompt' },
+              { role: 'user', source: 'message', content: 'hello' },
+              { role: 'assistant', source: 'message', content: 'world' },
+            ],
+          },
+          response: {
+            content: 'world',
+            reasoning: 'The response is straightforward.',
+            model: 'openrouter/test-model',
+            stopReason: 'stop',
+            toolCallCount: 0,
+          },
         },
         toolContext: {
           activeTools: [
@@ -1971,7 +2003,18 @@ describe('AdminServer JSON API routes', () => {
         snapshot: {
           promptContext?: {
             finalSystemPrompt?: string;
+            currentTurnInput?: string;
             messages?: Array<{ role: string; content: string }>;
+            providerObservability?: {
+              routeKind?: string;
+              providerWireMessages?: Array<{ role?: string; source?: string; content?: string }>;
+            };
+            response?: {
+              content?: string;
+              reasoning?: string;
+              model?: string;
+              stopReason?: string;
+            };
           };
           toolContext?: {
             activeTools?: Array<{ name: string }>;
@@ -2015,10 +2058,25 @@ describe('AdminServer JSON API routes', () => {
     });
     expect(messagesPayload.turns[0]?.snapshot?.memory?.versionPointer).toBe('memory-v1');
     expect(messagesPayload.turns[0]?.snapshot?.promptContext?.finalSystemPrompt).toBe('Final system prompt');
+    expect(messagesPayload.turns[0]?.snapshot?.promptContext?.currentTurnInput).toBe('hello');
     expect(messagesPayload.turns[0]?.snapshot?.promptContext?.messages).toEqual([
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'world' },
     ]);
+    expect(messagesPayload.turns[0]?.snapshot?.promptContext?.providerObservability).toMatchObject({
+      routeKind: 'configured_litellm_proxy',
+      providerWireMessages: [
+        { role: 'developer', source: 'system_prompt', content: 'Final system prompt' },
+        { role: 'user', source: 'message', content: 'hello' },
+        { role: 'assistant', source: 'message', content: 'world' },
+      ],
+    });
+    expect(messagesPayload.turns[0]?.snapshot?.promptContext?.response).toMatchObject({
+      content: 'world',
+      reasoning: 'The response is straightforward.',
+      model: 'openrouter/test-model',
+      stopReason: 'stop',
+    });
     expect(messagesPayload.turns[0]?.snapshot?.toolContext?.activeTools).toEqual([
       expect.objectContaining({
         name: 'contact_lookup',

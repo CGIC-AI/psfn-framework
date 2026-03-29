@@ -325,6 +325,40 @@ export interface AdminPromptSectionTelemetry {
   tokenCount: number;
 }
 
+export interface AdminTurnProviderWireMessage {
+  role: string;
+  source: string;
+  content: string;
+}
+
+export interface AdminTurnProviderSystemRoleData {
+  transport: string;
+  supportsSystemRole: boolean;
+  supportsDeveloperRole: boolean;
+  usesOutOfBandSystemPrompt: boolean;
+}
+
+export interface AdminTurnProviderObservabilityData {
+  routeKind: string;
+  requestedProvider: string;
+  requestedModel: string;
+  backendProvider: string;
+  backendModel: string;
+  backendApi: string;
+  backendBaseUrl?: string;
+  systemRole: AdminTurnProviderSystemRoleData;
+  providerWireMessages: AdminTurnProviderWireMessage[];
+}
+
+export interface AdminTurnPromptResponseSnapshotData {
+  content: string;
+  reasoning?: string;
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  toolCallCount?: number;
+}
+
 export interface AdminTurnPromptContextSnapshotData {
   renderedStaticPrefix: string;
   renderedDynamicSuffix: string;
@@ -334,6 +368,9 @@ export interface AdminTurnPromptContextSnapshotData {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: AdminTurnPromptContextMessage[];
+  currentTurnInput?: string;
+  providerObservability?: AdminTurnProviderObservabilityData;
+  response?: AdminTurnPromptResponseSnapshotData;
   inputSections?: AdminPromptSectionTelemetry[];
   runtimeContextSections?: AdminPromptSectionTelemetry[];
   finalSystemSections?: AdminPromptSectionTelemetry[];

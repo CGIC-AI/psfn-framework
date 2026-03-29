@@ -5,7 +5,6 @@ import type { MemoryWithheldSummary } from '../memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../memory/store.js';
 import type { PurrMemory } from '../memory/types.js';
 import type { SessionEntry } from '../session/types.js';
-<<<<<<< HEAD
 import type {
   ContextMessage,
   LLMProviderObservability,
@@ -46,6 +45,15 @@ export interface TurnMemorySnapshot {
   versionPointer: string;
 }
 
+export interface TurnPromptResponseSnapshot {
+  content: string;
+  reasoning?: string;
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  toolCallCount?: number;
+}
+
 export interface TurnPromptContextSnapshot {
   renderedStaticPrefix: string;
   renderedDynamicSuffix: string;
@@ -55,8 +63,9 @@ export interface TurnPromptContextSnapshot {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: ContextMessage[];
-<<<<<<< HEAD
+  currentTurnInput?: string;
   providerObservability?: LLMProviderObservability;
+  response?: TurnPromptResponseSnapshot;
   inputSections?: PromptSectionTelemetry[];
   runtimeContextSections?: PromptSectionTelemetry[];
   finalSystemSections?: PromptSectionTelemetry[];
@@ -117,6 +126,14 @@ export function cloneProviderObservability(
     ...observability,
     systemRole: { ...observability.systemRole },
     providerWireMessages: observability.providerWireMessages.map(message => ({ ...message })),
+  };
+}
+
+export function cloneTurnPromptResponseSnapshot(
+  response: TurnPromptResponseSnapshot,
+): TurnPromptResponseSnapshot {
+  return {
+    ...response,
   };
 }
 

@@ -190,6 +190,27 @@
     return JSON.stringify(value, null, 2);
   }
 
+  function humanizeToken(value: string | null | undefined): string {
+    if (!value) return '—';
+    return value
+      .split('_')
+      .filter(part => part.length > 0)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
+  function formatCapability(value: boolean | null | undefined): string {
+    if (value == null) return '—';
+    return value ? 'Yes' : 'No';
+  }
+
+  function providerWireMessages(turn: PromptMonitorTurn | null): Array<{ role: string; content: string }> {
+    return turn?.snapshot?.promptContext?.providerObservability?.providerWireMessages.map(message => ({
+      role: `${humanizeToken(message.role)} · ${humanizeToken(message.source)}`,
+      content: message.content,
+    })) ?? [];
+  }
+
   function handlePromptEvent(event: Parameters<typeof mergePromptMonitorEvent>[1]): void {
     if (!selectedLogicalChannelId || event.correlation.channelId !== selectedLogicalChannelId) {
       return;
@@ -499,6 +520,14 @@
                       <p class="mt-1 text-shadow-900">{metrics?.firstTokenSource ?? '—'}</p>
                     </div>
                     <div>
+                      <p class="text-shadow-600">Provider Route</p>
+                      <p class="mt-1 text-shadow-900">{humanizeToken(selectedTurn.snapshot?.promptContext?.providerObservability?.routeKind)}</p>
+                    </div>
+                    <div>
+                      <p class="text-shadow-600">Backend Model</p>
+                      <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.providerObservability?.backendModel ?? '—'}</p>
+                    </div>
+                    <div>
                       <p class="text-shadow-600">Compaction Summaries</p>
                       <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.sessionContext?.compactionSummaryTexts?.length ?? 0}</p>
                     </div>
@@ -562,46 +591,95 @@
 
                 <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
                   <div class="rounded-xl border border-bark-200 bg-white p-4">
-                    <h3 class="font-medium text-shadow-900">Prompt Section Sizes</h3>
-                    <div class="mt-3 space-y-3">
+                    <h3 class="font-medium text-shadow-900">Turn Exchange</h3>
+                    <div class="mt-3 space-y-3 text-sm">
+                      <PromptMonitorTextBlock
+                        title="Current-Turn Input"
+                        value={selectedTurn.snapshot?.promptContext?.currentTurnInput}
+                        emptyText="No current-turn input snapshot recorded."
+                        maxHeightClass="max-h-[20rem]"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Assistant Response"
+                        value={selectedTurn.snapshot?.promptContext?.response?.content ?? selectedTurn.record?.assistantMessage?.content}
+                        emptyText="No assistant response snapshot recorded."
+                        maxHeightClass="max-h-[20rem]"
+                      />
+                      <PromptMonitorTextBlock
+                        title="Provider Reasoning"
+                        value={selectedTurn.snapshot?.promptContext?.response?.reasoning}
+                        emptyText="No provider reasoning snapshot recorded."
+                        maxHeightClass="max-h-[20rem]"
+                      />
+                    </div>
+                    <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
                       <div>
-                        <p class="text-sm font-medium text-shadow-800">Final System Prompt Sections</p>
-                        {#if selectedTurn.snapshot?.promptContext?.finalSystemSections?.length}
-                          <div class="mt-2 space-y-2">
-                            {#each selectedTurn.snapshot.promptContext.finalSystemSections as section}
-                              <div class="rounded-lg border border-bark-200 px-3 py-2 text-sm">
-                                <div class="flex items-center justify-between gap-3">
-                                  <span class="font-medium text-shadow-900">{section.title}</span>
-                                  <span class="text-shadow-600">{formatTokenCount(section.tokenCount)} tok · {section.charCount} ch</span>
-                                </div>
-                              </div>
-                            {/each}
-                          </div>
-                        {:else}
-                          <p class="mt-2 text-sm text-shadow-600">No final system section telemetry recorded.</p>
-                        {/if}
+                        <p class="text-shadow-600">Response Model</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.response?.model ?? '—'}</p>
                       </div>
-
                       <div>
-                        <p class="text-sm font-medium text-shadow-800">Runtime Context Sections</p>
-                        {#if selectedTurn.snapshot?.promptContext?.runtimeContextSections?.length}
-                          <div class="mt-2 space-y-2">
-                            {#each selectedTurn.snapshot.promptContext.runtimeContextSections as section}
-                              <div class="rounded-lg border border-bark-200 px-3 py-2 text-sm">
-                                <div class="flex items-center justify-between gap-3">
-                                  <span class="font-medium text-shadow-900">{section.title}</span>
-                                  <span class="text-shadow-600">{formatTokenCount(section.tokenCount)} tok · {section.charCount} ch</span>
-                                </div>
-                              </div>
-                            {/each}
-                          </div>
-                        {:else}
-                          <p class="mt-2 text-sm text-shadow-600">No runtime section telemetry recorded.</p>
-                        {/if}
+                        <p class="text-shadow-600">Stop Reason</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.response?.stopReason ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Tool Calls Requested</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.response?.toolCallCount ?? 0}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Provider Error</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.response?.errorMessage ?? '—'}</p>
                       </div>
                     </div>
                   </div>
 
+                  <div class="rounded-xl border border-bark-200 bg-white p-4">
+                    <h3 class="font-medium text-shadow-900">Provider Snapshot</h3>
+                    <div class="mt-3 grid grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p class="text-shadow-600">Requested Provider</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.providerObservability?.requestedProvider ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Requested Model</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.providerObservability?.requestedModel ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Backend Provider</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.providerObservability?.backendProvider ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Backend API</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.providerObservability?.backendApi ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Base URL</p>
+                        <p class="mt-1 break-all text-shadow-900">{selectedTurn.snapshot?.promptContext?.providerObservability?.backendBaseUrl ?? '—'}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">System Transport</p>
+                        <p class="mt-1 text-shadow-900">{humanizeToken(selectedTurn.snapshot?.promptContext?.providerObservability?.systemRole?.transport)}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Supports System Role</p>
+                        <p class="mt-1 text-shadow-900">{formatCapability(selectedTurn.snapshot?.promptContext?.providerObservability?.systemRole?.supportsSystemRole)}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Supports Developer Role</p>
+                        <p class="mt-1 text-shadow-900">{formatCapability(selectedTurn.snapshot?.promptContext?.providerObservability?.systemRole?.supportsDeveloperRole)}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Out-of-Band System Prompt</p>
+                        <p class="mt-1 text-shadow-900">{formatCapability(selectedTurn.snapshot?.promptContext?.providerObservability?.systemRole?.usesOutOfBandSystemPrompt)}</p>
+                      </div>
+                      <div>
+                        <p class="text-shadow-600">Provider Wire Messages</p>
+                        <p class="mt-1 text-shadow-900">{selectedTurn.snapshot?.promptContext?.providerObservability?.providerWireMessages?.length ?? 0}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
                   <div class="rounded-xl border border-bark-200 bg-white p-4">
                     <h3 class="font-medium text-shadow-900">Assembled Prompt</h3>
                     <div class="mt-3 space-y-3">
@@ -624,6 +702,32 @@
                     title="Model Context Messages"
                     messages={selectedTurn.snapshot?.promptContext?.messages ?? []}
                   />
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  <PromptMonitorMessageList
+                    title="Provider Wire Messages"
+                    messages={providerWireMessages(selectedTurn)}
+                    emptyText="No provider-wire message snapshot recorded."
+                  />
+
+                  <div class="rounded-xl border border-bark-200 bg-white p-4">
+                    <h3 class="font-medium text-shadow-900">Prompt Review Notes</h3>
+                    <div class="mt-3 space-y-3 text-sm text-shadow-700">
+                      <p>
+                        <span class="font-medium text-shadow-900">Assembled Prompt</span> shows the prompt before session-managed context folding.
+                      </p>
+                      <p>
+                        <span class="font-medium text-shadow-900">Final System Prompt</span> shows the system block after session assembly.
+                      </p>
+                      <p>
+                        <span class="font-medium text-shadow-900">Provider Wire Messages</span> shows the outbound payload shape after provider transport decisions.
+                      </p>
+                      <p>
+                        <span class="font-medium text-shadow-900">Turn Exchange</span> shows the exact current-turn input payload and the provider-visible response summary captured for this turn.
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
                 <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">

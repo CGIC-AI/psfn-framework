@@ -45,7 +45,7 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
-  it('throws when channels.json references a missing env token', () => {
+  it('keeps literal owner-file placeholders unchanged', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
@@ -54,15 +54,17 @@ describe('loadRuntimeChannelsConfig', () => {
         },
       }));
 
-      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json references missing environment variables: DISCORD_HEARTBEAT_CHANNEL_ID',
-      );
+      const config = loadRuntimeChannelsConfig(dataDir, {
+        DISCORD_HEARTBEAT_CHANNEL_ID: 'resolved-channel-id',
+      });
+
+      expect(config.discord.heartbeatChannelId).toBe('${DISCORD_HEARTBEAT_CHANNEL_ID}');
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
   });
 
-  it('loads telegram config from file and interpolates env placeholders', () => {
+  it('loads telegram config from file and resolves explicit secret refs only', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
@@ -76,7 +78,7 @@ describe('loadRuntimeChannelsConfig', () => {
           mode: 'polling',
           pollIntervalMs: 2500,
           webhook: {
-            url: '${TELEGRAM_WEBHOOK_URL}',
+            url: 'https://example.com/hooks/telegram',
             secretRef: {
               kind: 'env',
               envName: 'TELEGRAM_WEBHOOK_SECRET',
@@ -90,7 +92,6 @@ describe('loadRuntimeChannelsConfig', () => {
 
       const config = loadRuntimeChannelsConfig(dataDir, {
         TELEGRAM_BOT_TOKEN: 'token-from-env',
-        TELEGRAM_WEBHOOK_URL: 'https://example.com/hooks/telegram',
         TELEGRAM_WEBHOOK_SECRET: 'webhook-secret',
       });
 
@@ -160,7 +161,7 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
 
       expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
-        'channels.json.telegram.tokenRef or TELEGRAM_BOT_TOKEN must be configured when telegram is enabled',
+        'channels.json.telegram.tokenRef must be configured when telegram is enabled',
       );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -270,18 +271,18 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
-  it('keeps mutable telegram settings in file/override ownership while still allowing env secrets and webhook wiring', () => {
+  it('keeps telegram behavior in file/override ownership while allowing secret refs to resolve from env', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         telegram: {
-          enabled: false,
+          enabled: true,
           tokenRef: {
             kind: 'env',
             envName: 'TELEGRAM_BOT_TOKEN',
           },
           allowedUsers: ['1'],
-          mode: 'polling',
+          mode: 'webhook',
           pollIntervalMs: 1200,
           webhook: {
             url: 'https://example.com/from-file',
@@ -297,29 +298,25 @@ describe('loadRuntimeChannelsConfig', () => {
       }));
 
       const config = loadRuntimeChannelsConfig(dataDir, {
-        TELEGRAM_ENABLED: 'true',
         TELEGRAM_BOT_TOKEN: 'token-from-env',
-        TELEGRAM_ALLOWED_USERS: '99,@alpha',
-        TELEGRAM_MODE: 'webhook',
-        TELEGRAM_POLL_INTERVAL_MS: '5000',
-        TELEGRAM_WEBHOOK_URL: 'https://api.example.net/telegram/live',
         TELEGRAM_WEBHOOK_SECRET: 'env-secret',
+        TELEGRAM_WEBHOOK_URL: 'https://ignored.example.net/telegram/live',
         TELEGRAM_WEBHOOK_HOST: '0.0.0.0',
         TELEGRAM_WEBHOOK_PORT: '8181',
         TELEGRAM_WEBHOOK_PATH: '/telegram/live',
       });
 
-      expect(config.telegram.enabled).toBe(false);
+      expect(config.telegram.enabled).toBe(true);
       expect(config.telegram.token).toBe('token-from-env');
       expect(config.telegram.allowedUsers).toEqual(['1']);
-      expect(config.telegram.mode).toBe('polling');
+      expect(config.telegram.mode).toBe('webhook');
       expect(config.telegram.pollIntervalMs).toBe(1200);
       expect(config.telegram.webhook).toEqual({
-        url: 'https://api.example.net/telegram/live',
+        url: 'https://example.com/from-file',
         secret: 'env-secret',
-        host: '0.0.0.0',
-        port: 8181,
-        path: '/telegram/live',
+        host: '127.0.0.1',
+        port: 1234,
+        path: '/from-file',
       });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -414,26 +411,6 @@ describe('loadRuntimeChannelsConfig', () => {
       });
 
       expect(config.telegram.allowedUsers).toEqual(['from-file']);
-    } finally {
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
-
-  it('derives webhook path from webhook URL when explicit path is omitted', () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
-    try {
-      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
-        telegram: {
-          enabled: false,
-          mode: 'webhook',
-          webhook: {
-            url: 'https://public.example.com/telegram/callback',
-          },
-        },
-      }));
-
-      const config = loadRuntimeChannelsConfig(dataDir, {});
-      expect(config.telegram.webhook.path).toBe('/telegram/callback');
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

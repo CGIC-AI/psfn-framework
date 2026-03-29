@@ -21,7 +21,6 @@ import type { ChannelType } from '../../shared/contracts/runtime.js';
 const log = createComponentLogger('ChannelConfig');
 
 export const CHANNELS_FILE_NAME = 'channels.json';
-const ENV_TOKEN_PATTERN = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const ENV_CREDENTIAL_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const DEFAULT_TELEGRAM_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TELEGRAM_WEBHOOK_HOST = '0.0.0.0';
@@ -98,33 +97,6 @@ const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
 const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
   enabled: false,
 };
-
-function interpolateEnvTokens(
-  value: unknown,
-  env: NodeJS.ProcessEnv,
-  missingTokens: Set<string>,
-): unknown {
-  if (typeof value === 'string') {
-    return value.replace(ENV_TOKEN_PATTERN, (match, token: string) => {
-      const envValue = env[token];
-      if (envValue === undefined) {
-        missingTokens.add(token);
-        return match;
-      }
-      return envValue;
-    });
-  }
-  if (Array.isArray(value)) {
-    return value.map(item => interpolateEnvTokens(item, env, missingTokens));
-  }
-  if (!isRecord(value)) return value;
-
-  const mapped: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value)) {
-    mapped[key] = interpolateEnvTokens(nested, env, missingTokens);
-  }
-  return mapped;
-}
 
 function parseBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
@@ -342,13 +314,13 @@ function rejectInlineSecretField(
 
 function resolveCredentialValue(
   reference: CredentialReference | undefined,
-  defaultEnvName: string,
   env: NodeJS.ProcessEnv,
   credentialVault?: CredentialVaultPort,
 ): string {
+  if (!reference) return '';
   return resolveOptionalCredentialReference(
     credentialVault,
-    reference ?? envCredential(defaultEnvName),
+    reference,
     env,
   ) ?? '';
 }
@@ -367,12 +339,7 @@ export function loadRuntimeChannelsConfig(
   }
 
   const rawConfig = loadChannelsOwnerFile(dataDir);
-  const missingEnvTokens = new Set<string>();
-  const interpolated = interpolateEnvTokens(rawConfig, env, missingEnvTokens);
-  if (missingEnvTokens.size > 0) {
-    throw new Error(`channels.json references missing environment variables: ${Array.from(missingEnvTokens).sort().join(', ')}`);
-  }
-  const root = isRecord(interpolated) ? interpolated : {};
+  const root = isRecord(rawConfig) ? rawConfig : {};
   const scopedRoot = parseSectionObject(root, 'channels') ?? root;
   const discordConfig = parseSectionObject(scopedRoot, 'discord') ?? {};
   const psfnAmicaConfig = parseSectionObject(scopedRoot, 'psfnAmica') ?? {};
@@ -408,12 +375,11 @@ export function loadRuntimeChannelsConfig(
   );
   const token = resolveCredentialValue(
     tokenRef,
-    'TELEGRAM_BOT_TOKEN',
     env,
     options.credentialVault,
   ).trim();
   if (enabled && !token) {
-    throw new Error('channels.json.telegram.tokenRef or TELEGRAM_BOT_TOKEN must be configured when telegram is enabled');
+    throw new Error('channels.json.telegram.tokenRef must be configured when telegram is enabled');
   }
 
   const allowedUsers = allowedUsersOverride
@@ -440,52 +406,45 @@ export function loadRuntimeChannelsConfig(
     'secret',
     'channels.json.telegram.webhook.secretRef',
   );
-  const hasWebhookUrl = env.TELEGRAM_WEBHOOK_URL !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'url');
-  const hasWebhookSecret = env.TELEGRAM_WEBHOOK_SECRET !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'secretRef');
-  const hasWebhookHost = env.TELEGRAM_WEBHOOK_HOST !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'host');
-  const hasWebhookPort = env.TELEGRAM_WEBHOOK_PORT !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'port');
-  const hasWebhookPath = env.TELEGRAM_WEBHOOK_PATH !== undefined || Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'path');
-  const webhookUrl = (env.TELEGRAM_WEBHOOK_URL
-    ?? parseConfiguredString(webhookConfig.url, 'channels.json.telegram.webhook.url')
-    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.url).trim();
+  const hasWebhookUrl = Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'url');
+  const hasWebhookSecret = Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'secretRef');
+  const hasWebhookHost = Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'host');
+  const hasWebhookPort = Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'port');
+  const hasWebhookPath = Object.hasOwn(telegramConfig, 'webhook') && Object.hasOwn(webhookConfig, 'path');
+  const webhookUrl = parseConfiguredString(webhookConfig.url, 'channels.json.telegram.webhook.url')
+    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.url;
   const webhookSecretRef = parseConfiguredCredentialReference(
     webhookConfig.secretRef,
     'channels.json.telegram.webhook.secretRef',
   );
   const webhookSecret = resolveCredentialValue(
     webhookSecretRef,
-    'TELEGRAM_WEBHOOK_SECRET',
     env,
     options.credentialVault,
   ).trim();
-  const webhookHost = (env.TELEGRAM_WEBHOOK_HOST
-    ?? parseConfiguredString(webhookConfig.host, 'channels.json.telegram.webhook.host')
-    ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.host).trim();
-  const webhookPort = parseConfiguredPositiveInteger(env.TELEGRAM_WEBHOOK_PORT, 'TELEGRAM_WEBHOOK_PORT')
-    ?? parseConfiguredPositiveInteger(webhookConfig.port, 'channels.json.telegram.webhook.port')
+  const webhookHost = parseConfiguredString(webhookConfig.host, 'channels.json.telegram.webhook.host')
+    ?? DEFAULT_TELEGRAM_WEBHOOK_HOST;
+  const webhookPort = parseConfiguredPositiveInteger(webhookConfig.port, 'channels.json.telegram.webhook.port')
     ?? DEFAULT_TELEGRAM_WEBHOOK_PORT;
   const webhookPathFallback = deriveWebhookPathFromUrl(webhookUrl)
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.path;
-  const webhookPath = parseWebhookPath(
-    env.TELEGRAM_WEBHOOK_PATH ?? webhookConfig.path,
-    webhookPathFallback,
-  );
+  const webhookPath = parseWebhookPath(webhookConfig.path, webhookPathFallback);
 
   if (enabled && mode === 'webhook') {
     if (!hasWebhookUrl || !webhookUrl) {
-      throw new Error('channels.json.telegram.webhook.url or TELEGRAM_WEBHOOK_URL must be configured when telegram is enabled in webhook mode');
+      throw new Error('channels.json.telegram.webhook.url must be configured when telegram is enabled in webhook mode');
     }
     if (!hasWebhookSecret || !webhookSecret) {
-      throw new Error('channels.json.telegram.webhook.secretRef or TELEGRAM_WEBHOOK_SECRET must be configured when telegram is enabled in webhook mode');
+      throw new Error('channels.json.telegram.webhook.secretRef must be configured when telegram is enabled in webhook mode');
     }
     if (!hasWebhookHost || !webhookHost) {
-      throw new Error('channels.json.telegram.webhook.host or TELEGRAM_WEBHOOK_HOST must be configured when telegram is enabled in webhook mode');
+      throw new Error('channels.json.telegram.webhook.host must be configured when telegram is enabled in webhook mode');
     }
     if (!hasWebhookPort || !webhookPort) {
-      throw new Error('channels.json.telegram.webhook.port or TELEGRAM_WEBHOOK_PORT must be configured when telegram is enabled in webhook mode');
+      throw new Error('channels.json.telegram.webhook.port must be configured when telegram is enabled in webhook mode');
     }
     if (!hasWebhookPath || !webhookPath) {
-      throw new Error('channels.json.telegram.webhook.path or TELEGRAM_WEBHOOK_PATH must be configured when telegram is enabled in webhook mode');
+      throw new Error('channels.json.telegram.webhook.path must be configured when telegram is enabled in webhook mode');
     }
   }
 

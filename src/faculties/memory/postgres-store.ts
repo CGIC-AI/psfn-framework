@@ -149,6 +149,11 @@ function decodeStringArray(value: unknown): string[] {
   return decodeJsonArray(value).map(item => item.trim()).filter(Boolean);
 }
 
+function serializeJsonValue(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  return JSON.stringify(value);
+}
+
 function decodeFormationVAD(value: unknown): PurrMemory['formationVAD'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const candidate = value as Partial<NonNullable<PurrMemory['formationVAD']>>;
@@ -290,9 +295,19 @@ export async function createPostgresMemoryStore(
   options: PostgresMemoryStoreOptions = {},
 ): Promise<MemoryStorePort> {
   const pool = createPostgresPool(databaseUrl, { applicationName: 'psfn-memory', allowExitOnIdle: true });
+  return await createPostgresMemoryStoreFromPool(pool, embeddingDims, options);
+}
+
+export async function createPostgresMemoryStoreFromPool(
+  pool: Pool,
+  embeddingDims: number,
+  options: PostgresMemoryStoreOptions = {},
+): Promise<MemoryStorePort> {
   await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
   await validatePostgresMemorySchema(pool);
-  return new PostgresMemoryStore(pool, embeddingDims, options);
+  const store = new PostgresMemoryStore(pool, embeddingDims, options);
+  await store.waitUntilReady();
+  return store;
 }
 
 async function validatePostgresMemorySchema(pool: Pool): Promise<void> {
@@ -333,6 +348,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   private readonly journal: MemoryJournal | null;
   private readonly scratchpadMirrorPath: string | null;
   private persistChain: Promise<void> = Promise.resolve();
+  private readonly initialization: Promise<void>;
 
   private memories = new Map<string, PurrMemory>();
   private embeddings = new Map<string, Float32Array>();
@@ -347,7 +363,11 @@ class PostgresMemoryStore implements MemoryStorePort {
     this.embeddingDims = embeddingDims;
     this.journal = options.journal ?? null;
     this.scratchpadMirrorPath = options.scratchpadMirrorPath?.trim() ? options.scratchpadMirrorPath.trim() : null;
-    void this.initialize();
+    this.initialization = this.initialize();
+  }
+
+  async waitUntilReady(): Promise<void> {
+    await this.initialization;
   }
 
   private async initialize(): Promise<void> {
@@ -501,22 +521,22 @@ class PostgresMemoryStore implements MemoryStorePort {
       row.importance,
       row.confidence,
       row.emotional_valence,
-      row.formation_vad,
+      serializeJsonValue(row.formation_vad),
       row.salience,
       row.source_ref,
       row.extracted_at,
       row.last_accessed,
       row.access_count,
       row.superseded_by,
-      row.tags,
+      serializeJsonValue(row.tags),
       row.scope_ref_kind,
       row.scope_ref_id,
       row.scope_ref_label,
-      row.scope_tags,
-      row.provenance_refs,
+      serializeJsonValue(row.scope_tags),
+      serializeJsonValue(row.provenance_refs),
       row.retention_class,
       row.sensitivity,
-      row.consent_flags,
+      serializeJsonValue(row.consent_flags),
       row.contact_id,
       row.deleted_at,
       row.deleted_by,
@@ -540,7 +560,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     `, [
       deleteVersion.deleteId,
       deleteVersion.memoryId,
-      deleteVersion.snapshot,
+      serializeJsonValue(deleteVersion.snapshot),
       deleteVersion.deletedAt,
       deleteVersion.deletedBy,
       deleteVersion.deleteReason ?? null,
@@ -575,7 +595,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     `, [
       profile.contactId,
       profile.summary,
-      profile.sourceMemoryIds,
+      serializeJsonValue(profile.sourceMemoryIds),
       profile.confidenceScore,
       profile.noveltyScore,
       profile.updatedAt,

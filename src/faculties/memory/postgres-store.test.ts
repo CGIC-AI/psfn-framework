@@ -204,7 +204,7 @@ afterEach(() => {
   postgresMocks.queryRows.mockClear();
 });
 
-describe('postgres memory store', () => {
+describe('postgres memory store unit coverage', () => {
   it('keeps the supported postgres migration on l2_memories.embedding and omits the dead embeddings table', () => {
     const migrationSql = POSTGRES_MEMORY_MIGRATIONS.join('\n');
     expect(migrationSql).toContain('embedding DOUBLE PRECISION[]');

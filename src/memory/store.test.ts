@@ -449,6 +449,61 @@ describe('MemoryStore', () => {
       expect(mem?.provenanceRefs).toEqual(['legacy:source#0', 'backup:archive#3']);
     });
 
+    it('stores and retrieves structured source type and provenance', () => {
+      const emb = makeEmbedding(4);
+      store.insertMemory(
+        makeMemory('m-structured', 'Structured provenance memory', {
+          sourceRef: 'source:tool:memory_write|invocation:call-9',
+          sourceType: 'tool_write',
+          provenance: {
+            toolName: 'memory_write',
+            toolCallId: 'call-9',
+          },
+        }),
+        emb,
+      );
+
+      const mem = store.getById('m-structured');
+      expect(mem?.sourceType).toBe('tool_write');
+      expect(mem?.provenance).toEqual({
+        toolName: 'memory_write',
+        toolCallId: 'call-9',
+      });
+    });
+
+    it('records and retrieves memory patch events', () => {
+      const emb = makeEmbedding(5);
+      store.insertMemory(makeMemory('m-patch', 'Patch target'), emb);
+
+      store.recordPatchEvent({
+        id: 'patch-1',
+        memoryId: 'm-patch',
+        sourceRef: 'source:tool:memory_patch|invocation:call-77',
+        sourceType: 'tool_write',
+        provenance: {
+          toolName: 'memory_patch',
+          toolCallId: 'call-77',
+        },
+        reason: 'belief correction',
+        patch: { confidence: 0.9 },
+        previousValues: { confidence: 0.4 },
+        nextValues: { confidence: 0.9 },
+        createdAt: Date.now(),
+      });
+
+      const events = store.getPatchEvents('m-patch');
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        id: 'patch-1',
+        memoryId: 'm-patch',
+        sourceType: 'tool_write',
+        reason: 'belief correction',
+        patch: { confidence: 0.9 },
+        previousValues: { confidence: 0.4 },
+        nextValues: { confidence: 0.9 },
+      });
+    });
+
     it('records abstraction links with non-reversible external refs', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(makeMemory('m-source', 'Sensitive source memory'), emb);
@@ -611,6 +666,8 @@ describe('MemoryStore', () => {
       expect(columns.some(column => column.name === 'contact_id')).toBe(true);
       expect(columns.some(column => column.name === 'provenance_refs')).toBe(true);
       expect(columns.some(column => column.name === 'formation_vad')).toBe(true);
+      expect(columns.some(column => column.name === 'source_type')).toBe(true);
+      expect(columns.some(column => column.name === 'provenance_json')).toBe(true);
       expect(columns.some(column => column.name === 'scope_ref_kind')).toBe(true);
       expect(columns.some(column => column.name === 'scope_ref_id')).toBe(true);
       expect(columns.some(column => column.name === 'scope_tags')).toBe(true);

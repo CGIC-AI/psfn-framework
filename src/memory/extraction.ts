@@ -341,6 +341,8 @@ export class MemoryExtractor {
           channelId,
           canonicalContactName,
           this.sessionManager.characterName,
+          triggerReason,
+          turnId,
         )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
@@ -386,6 +388,8 @@ export class MemoryExtractor {
     channelId?: string,
     canonicalContactName?: string,
     companionName?: string,
+    triggerReason?: ExtractionTriggerReason,
+    turnId?: TurnID,
   ): Promise<WriteResult> {
     let factContactId = canonicalContactId;
     if (fact.type === 'relational' && this.contactStore && channelId) {
@@ -412,6 +416,14 @@ export class MemoryExtractor {
       confidence: fact.confidence,
       tags: fact.tags,
       sourceRef,
+      sourceType: triggerReason === 'pre_compaction' ? 'compaction_summary' : undefined,
+      provenance: channelId
+        ? {
+          channelId,
+          ...(turnId ? { turnId } : {}),
+          ...(triggerReason ? { reason: triggerReason } : {}),
+        }
+        : undefined,
       sensitivity: fact.sensitivity,
       contactId: factContactId,
     });

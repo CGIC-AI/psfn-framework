@@ -4,6 +4,7 @@ import type { MemoryWriter } from './writer.js';
 import {
   createMemoryDeleteTool,
   createMemoryImportTool,
+  createMemoryPatchTool,
   createMemoryRedactTool,
   createMemoryWriteTool,
   createScratchpadReadTool,
@@ -25,6 +26,7 @@ export function registerMemoryTools(
   target.registerTool(createMemoryWriteTool(options.writer), 'core');
   target.registerTool(createScratchpadReadTool(options.memoryStore), 'core');
   target.registerTool(createMemoryImportTool(options.writer), 'extended');
+  target.registerTool(createMemoryPatchTool(options.writer), 'extended');
   target.registerTool(createMemoryRedactTool(options.writer), 'extended');
   target.registerTool(createMemoryDeleteTool(options.memoryStore), 'extended');
   target.registerTool(createUndoMemoryDeleteTool(options.memoryStore), 'extended');

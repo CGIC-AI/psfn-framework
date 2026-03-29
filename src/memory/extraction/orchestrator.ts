@@ -176,7 +176,13 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       }
     }
 
-    const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility, turnId);
+    const sourceRef = buildExtractionSourceRef(
+      options.channelId,
+      recentEntries,
+      channelVisibility,
+      options.triggerReason,
+      turnId,
+    );
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, options.canonicalContactId) ?? {};
 

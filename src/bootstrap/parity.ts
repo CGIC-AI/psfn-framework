@@ -782,6 +782,14 @@ export function wireHeartbeatRuntime(
         `source:heartbeat|template:${template.id}|mode:deliberation`
         + `|session:${metadata.sessionId}|tokens:${metadata.totalTokens}`
         + `|cost_usd:${metadata.estimatedCostUsd.toFixed(6)}`,
+      sourceType: 'heartbeat',
+      provenance: {
+        templateId: template.id,
+        templateName: template.name,
+        sessionId: metadata.sessionId,
+        mode: 'deliberation',
+        actor: 'companion',
+      },
       tags: [
         'heartbeat',
         'reflection',

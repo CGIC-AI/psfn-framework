@@ -984,6 +984,8 @@ describe('MemoryExtractor refusal boundary extraction', () => {
       'api:boundary-memory-test',
       undefined,
       undefined,
+      'manual',
+      undefined,
     );
     expect(processFact.mock.calls[0][0].text.toLowerCase()).toContain('paywall');
 

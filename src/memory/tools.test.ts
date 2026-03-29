@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   createMemoryWriteTool,
   createMemoryImportTool,
+  createMemoryPatchTool,
   createMemoryRedactTool,
   createMemoryDeleteTool,
   createUndoMemoryDeleteTool,
@@ -46,6 +47,7 @@ function makeMemory(overrides: Partial<PurrMemory> = {}): PurrMemory {
 function mockWriter(): {
   write: ReturnType<typeof vi.fn>;
   importBatch: ReturnType<typeof vi.fn>;
+  patchMemory: ReturnType<typeof vi.fn>;
 } {
   return {
     write: vi.fn(async (): Promise<WriteResult> => ({
@@ -58,6 +60,11 @@ function mockWriter(): {
       superseded: 0,
       errors: 0,
       results: [],
+    })),
+    patchMemory: vi.fn(async () => ({
+      memory: makeMemory(),
+      patchEventId: 'patch-1',
+      updatedFields: ['confidence'],
     })),
   };
 }
@@ -103,6 +110,11 @@ describe('createMemoryWriteTool', () => {
       type: 'episodic',
       importance: 0.7,
       sourceRef: 'source:tool:memory_write|invocation:call-1',
+      sourceType: 'tool_write',
+      provenance: {
+        toolName: 'memory_write',
+        toolCallId: 'call-1',
+      },
     }));
   });
 
@@ -239,6 +251,7 @@ describe('createMemoryWriteTool', () => {
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       sourceRef: 'source:tool:memory_write|invocation:call-13',
+      sourceType: 'tool_write',
     }));
   });
 
@@ -253,6 +266,10 @@ describe('createMemoryWriteTool', () => {
 
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
       sourceRef: 'source:shard:shard-abc|tool:memory_write|invocation:call-13b',
+      sourceType: 'shard',
+      provenance: expect.objectContaining({
+        shardId: 'shard-abc',
+      }),
     }));
   });
 
@@ -396,6 +413,7 @@ describe('createMemoryImportTool', () => {
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
     expect(importedRecords[0].sourceRef).toBe('source:tool:memory_import:voxta|invocation:call-2');
+    expect(importedRecords[0].sourceType).toBe('tool_write');
   });
 
   it('uses "import" as default source when not specified', async () => {
@@ -423,6 +441,7 @@ describe('createMemoryImportTool', () => {
     expect(importedRecords[0].sourceRef).toBe(
       'source:shard:shard-xyz|tool:memory_import:import|invocation:call-3b',
     );
+    expect(importedRecords[0].sourceType).toBe('shard');
   });
 
   it('returns error for empty records array', async () => {
@@ -562,6 +581,48 @@ describe('createMemoryImportTool', () => {
 
     const importedRecords = writer.importBatch.mock.calls[0][0];
     expect(importedRecords[0].sensitivity).toBeUndefined();
+  });
+});
+
+describe('createMemoryPatchTool', () => {
+  let writer: ReturnType<typeof mockWriter>;
+
+  beforeEach(() => {
+    writer = mockWriter();
+  });
+
+  it('patches a memory and returns audit details', async () => {
+    const tool = createMemoryPatchTool(writer as unknown as MemoryWriter);
+    const result = await tool.execute('call-patch-1', {
+      memory_id: 'mem-1',
+      confidence: 0.9,
+      append_tags: 'belief-corrected, source-retracted',
+      reason: 'corrected source',
+    });
+
+    expect(resultText(result as any)).toContain('Memory patched');
+    expect(resultText(result as any)).toContain('patch-1');
+    expect(writer.patchMemory).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: 'mem-1',
+      confidence: 0.9,
+      appendTags: ['belief-corrected', 'source-retracted'],
+      reason: 'corrected source',
+      sourceRef: 'source:tool:memory_patch|invocation:call-patch-1',
+      sourceType: 'tool_write',
+    }));
+  });
+
+  it('rejects conflicting tag patch modes', async () => {
+    const tool = createMemoryPatchTool(writer as unknown as MemoryWriter);
+    const result = await tool.execute('call-patch-2', {
+      memory_id: 'mem-1',
+      tags: 'a,b',
+      append_tags: 'c',
+    });
+
+    expect(resultText(result as any)).toContain('either tags or append_tags');
+    expect((result.details as any).isError).toBe(true);
+    expect(writer.patchMemory).not.toHaveBeenCalled();
   });
 });
 

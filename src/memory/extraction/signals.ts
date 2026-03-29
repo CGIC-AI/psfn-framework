@@ -499,12 +499,14 @@ export function buildExtractionSourceRef(
   channelId: string,
   entries: SessionEntry[],
   channelVisibility: ChannelVisibility,
+  triggerReason?: string,
   turnId?: TurnID,
 ): string {
   const source = resolveExtractionSource(channelId);
   const lineRange = resolveExtractionLineRange(entries);
   const turnToken = turnId ? `|turn:${turnId}` : '';
-  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}${turnToken}|visibility:${channelVisibility}|operation:extract`;
+  const triggerToken = triggerReason ? `|trigger:${triggerReason}` : '';
+  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}${turnToken}${triggerToken}|visibility:${channelVisibility}|operation:extract`;
 }
 
 function resolveExtractionSource(channelId: string): string {

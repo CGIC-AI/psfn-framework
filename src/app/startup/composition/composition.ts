@@ -67,6 +67,7 @@ import {
   resolveShardSessionMemorySyncAuditPath,
   resolveSessionsDir,
 } from '../../../persistence/layout.js';
+import { createDefaultSQLiteSessionAdapters } from '../../../persistence/sessions/sqlite-adapters.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -90,8 +91,12 @@ export function composeSessionRuntime(options: SessionCompositionOptions): Sessi
   migrateLegacyPersistenceLayout(companionDataDir);
 
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);
+  const sessionAdapters = createDefaultSQLiteSessionAdapters(sessionsDir);
   const sessionStore = new SessionStore(sessionsDir, {
     integrityProvider: options.sessionIntegrityProvider ?? null,
+    sessionArchivePort: sessionAdapters.sessionArchivePort,
+    transcriptProjection: sessionAdapters.transcriptProjection,
+    turnRecordStore: sessionAdapters.turnRecordStore,
   });
   const sessionManager = new SessionManager(
     sessionStore,

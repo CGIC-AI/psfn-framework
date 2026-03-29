@@ -6,6 +6,7 @@ import {
   type JournalIntegrityVerificationResult,
   type SessionHmacKeyring,
 } from '../journals/journal-utils.js';
+import type { SessionArchivePort } from '../journals/journal/port.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import type { TurnRecordStorePort } from './turn-records.js';
 
@@ -52,6 +53,7 @@ export interface SessionFileSeed {
 export interface SessionStoreOptions {
   integrityProvider?: SessionIntegrityProvider | null;
   integrityKeyring?: SessionHmacKeyring | null;
+  sessionArchivePort?: SessionArchivePort | null;
   searchIndexPath?: string;
   disableSearchIndex?: boolean;
   transcriptProjection?: TranscriptProjectionPort | null;

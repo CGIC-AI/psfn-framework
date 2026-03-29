@@ -10,7 +10,6 @@ import {
   buildMessageJournalEntry,
   buildTurnTombstoneJournalEntry,
 } from '../journals/journal-utils.js';
-import { createSqliteTranscriptProjection } from './search-index.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   CHANNEL_INDEX_FILENAME,
@@ -35,7 +34,13 @@ import {
   supportsKeywordSearch,
   type TranscriptProjectionPort,
 } from './transcript-projection-port.js';
-import { createFilesystemTurnRecordStorePort, type TurnRecordStorePort } from './turn-records.js';
+import {
+  createDefaultSQLiteSessionArchivePort,
+  createDefaultSQLiteTranscriptProjection,
+  createDefaultSQLiteTurnRecordStorePort,
+  DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME,
+} from './sqlite-adapters.js';
+import type { TurnRecordStorePort } from './turn-records.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
   getCrashRecoveryExtractionCandidates,
@@ -53,7 +58,6 @@ import {
   upsertChannelIndex,
   loadChannelIndex,
 } from './store/channel-index.js';
-import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import {
   buildLegacyImportMetadata,
   listLegacyImportManifests,
@@ -124,15 +128,15 @@ export class SessionStore implements TranscriptSearchPort {
       ?? createKeyringIntegrityProvider(options.integrityKeyring ?? null);
     this.journalRuntime = new SessionJournalRuntime(
       integrityProvider,
-      createFilesystemSessionArchivePort(),
+      options.sessionArchivePort ?? createDefaultSQLiteSessionArchivePort(),
     );
     mkdirSync(sessionsDir, { recursive: true });
     if (options.transcriptProjection !== undefined) {
       this.transcriptProjection = options.transcriptProjection;
     } else if (!options.disableSearchIndex) {
       try {
-        this.transcriptProjection = createSqliteTranscriptProjection(
-          options.searchIndexPath ?? join(this.sessionsDir, 'session-search.sqlite'),
+        this.transcriptProjection = createDefaultSQLiteTranscriptProjection(
+          options.searchIndexPath ?? join(this.sessionsDir, DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME),
         );
       } catch (error) {
         log.warn('Transcript projection unavailable; keyword search disabled', {
@@ -141,7 +145,7 @@ export class SessionStore implements TranscriptSearchPort {
         this.transcriptProjection = null;
       }
     }
-    this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
+    this.turnRecordStore = options.turnRecordStore ?? createDefaultSQLiteTurnRecordStorePort(this.sessionsDir);
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();

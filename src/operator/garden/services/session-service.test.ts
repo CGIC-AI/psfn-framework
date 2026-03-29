@@ -645,6 +645,33 @@ describe('AdminSessionDataService', () => {
     ]);
   });
 
+  it('classifies reflection musings with the canonical musing message class', () => {
+    const channelId = 'internal:reflection:musing';
+    const assistantId = store.append({
+      channelId,
+      role: 'assistant',
+      content: 'a soft outward reflection',
+      timestamp: 1_700_000_300_100,
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const result = service.getSessionMessages(channelId);
+    expect(result.messageOntologyViews).toContainEqual({
+      sessionEntryId: assistantId,
+      transportRole: 'assistant',
+      promptRole: 'assistant',
+      semanticType: 'outwardSpeech',
+      messageClass: 'musing',
+      promptVisibility: 'prompt_visible',
+      displayLabel: 'Outward speech',
+    });
+  });
+
   it('lists and reads distinct sessions for the same logical channel', () => {
     const channelId = 'voxta:legacy:cf0a06ea';
     writeFileSync(join(dir, '20241119_voxta-legacy-cf0a06ea_alex_111111.jsonl'), [

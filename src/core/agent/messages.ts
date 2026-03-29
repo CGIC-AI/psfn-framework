@@ -77,6 +77,7 @@ interface MirrorSessionMetadata {
 }
 
 const MAX_MIRROR_RENDER_CHARS = 180;
+const LEGACY_OR_CANONICAL_MUSING_CHANNEL_PATTERN = /^internal:reflection:(musing|whisper)$/i;
 
 // ── Declaration merging ──
 
@@ -120,6 +121,19 @@ export function isMirrorMessage(m: AgentMessage): m is MirrorMessage {
 
 export function isCustomMessage(m: AgentMessage): boolean {
   return hasCustomRole(m);
+}
+
+function resolveStandardMessageClass(
+  message: AgentMessage,
+): typeof MESSAGE_CLASSES.outwardSpeech | typeof MESSAGE_CLASSES.musing {
+  const existingMessageClass = (message as { messageClass?: unknown }).messageClass;
+  return existingMessageClass === MESSAGE_CLASSES.musing
+    ? MESSAGE_CLASSES.musing
+    : MESSAGE_CLASSES.outwardSpeech;
+}
+
+function isMusingReflectionChannel(channelId: string): boolean {
+  return LEGACY_OR_CANONICAL_MUSING_CHANNEL_PATTERN.test(channelId.trim());
 }
 
 // ── convertToLlm ──
@@ -185,9 +199,9 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         messageClass: MESSAGE_CLASSES.mirror,
       } satisfies ClassifiedUserMessage);
     } else {
-      // Standard pi-ai Message — pass through, tagging outward speech explicitly.
+      // Standard pi-ai Message — pass through, preserving canonical outward subtypes.
       if (msg.role === 'user' || msg.role === 'assistant') {
-        result.push(tagMessageClass(msg, MESSAGE_CLASSES.outwardSpeech) as Message);
+        result.push(tagMessageClass(msg, resolveStandardMessageClass(msg)) as Message);
       } else {
         result.push(msg as Message);
       }
@@ -264,7 +278,9 @@ export function sessionEntryToMessage(entry: SessionEntry): AgentMessage {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
     stopReason: 'stop',
     timestamp: ts,
-    messageClass: MESSAGE_CLASSES.outwardSpeech,
+    messageClass: isMusingReflectionChannel(entry.channelId)
+      ? MESSAGE_CLASSES.musing
+      : MESSAGE_CLASSES.outwardSpeech,
   } satisfies ClassifiedAssistantMessage;
 }
 

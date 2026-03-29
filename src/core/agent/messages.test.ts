@@ -38,6 +38,18 @@ function makeAssistant(text: string): AssistantMessage & { messageClass: typeof 
   };
 }
 
+function makeMusingAssistant(text: string): AssistantMessage & { messageClass: typeof MESSAGE_CLASSES.musing } {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+    api: '', provider: '', model: '',
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: 'stop',
+    timestamp: NOW,
+    messageClass: MESSAGE_CLASSES.musing,
+  };
+}
+
 function makeCompaction(summary: string): CompactionMessage {
   return {
     role: 'custom',
@@ -140,6 +152,13 @@ describe('convertToLlm', () => {
     expect(result[1].role).toBe('assistant');
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.outwardSpeech);
     expect((result[1] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.outwardSpeech);
+  });
+
+  it('preserves the canonical musing class on outward reflection assistant messages', () => {
+    const result = convertToLlm([makeMusingAssistant('a quiet thought for Discord')]);
+    expect(result).toHaveLength(1);
+    expect(result[0].role).toBe('assistant');
+    expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.musing);
   });
 
   it('converts compaction to user message with summary prefix', () => {
@@ -252,6 +271,26 @@ describe('sessionEntryToMessage', () => {
     expect(am.content).toEqual([{ type: 'text', text: 'hi there' }]);
     expect(am.timestamp).toBe(NOW);
     expect((msg as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.outwardSpeech);
+  });
+
+  it('converts musing reflection assistant entries to AssistantMessage with the musing class', () => {
+    const entry: SessionEntry = {
+      id: 21, channelId: 'internal:reflection:musing', role: 'assistant',
+      content: 'a quiet thought', timestamp: NOW,
+    };
+    const msg = sessionEntryToMessage(entry);
+    expect(msg.role).toBe('assistant');
+    expect((msg as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.musing);
+  });
+
+  it('normalizes legacy whisper reflection assistant entries to the canonical musing class', () => {
+    const entry: SessionEntry = {
+      id: 22, channelId: 'internal:reflection:whisper', role: 'assistant',
+      content: 'a legacy quiet thought', timestamp: NOW,
+    };
+    const msg = sessionEntryToMessage(entry);
+    expect(msg.role).toBe('assistant');
+    expect((msg as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.musing);
   });
 
   it('converts system entry to SystemNoteMessage', () => {

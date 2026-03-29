@@ -1,5 +1,6 @@
 export const MESSAGE_CLASSES = {
   outwardSpeech: 'outwardSpeech',
+  musing: 'musing',
   systemNote: 'systemNote',
   internalWhisper: 'internalWhisper',
   compaction: 'compaction',

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool, type NtfyNotifier } from './ntfy.js';
+import { createHttpNotificationPortFromEnv, createNotifyOperatorTool, type NotificationPort } from './ntfy.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
@@ -9,7 +9,7 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
 
 describe('notify_operator tool', () => {
   it('returns explicit success text when alert is sent', async () => {
-    const notifier: NtfyNotifier = {
+    const notifier: NotificationPort = {
       notify: vi.fn().mockResolvedValue({
         status: 'sent',
         topic: 'ops',
@@ -31,7 +31,7 @@ describe('notify_operator tool', () => {
   });
 
   it('returns explicit debounced text when duplicate is suppressed', async () => {
-    const notifier: NtfyNotifier = {
+    const notifier: NotificationPort = {
       notify: vi.fn().mockResolvedValue({
         status: 'debounced',
         topic: 'ops',
@@ -48,7 +48,7 @@ describe('notify_operator tool', () => {
   });
 
   it('returns explicit failure text when notifier throws', async () => {
-    const notifier: NtfyNotifier = {
+    const notifier: NotificationPort = {
       notify: vi.fn().mockRejectedValue(new Error('ntfy request failed: 503 Service Unavailable')),
     };
     const tool = createNotifyOperatorTool(notifier);
@@ -63,7 +63,7 @@ describe('notify_operator tool', () => {
   });
 
   it('fails fast when message is empty', async () => {
-    const notifier: NtfyNotifier = {
+    const notifier: NotificationPort = {
       notify: vi.fn(),
     };
     const tool = createNotifyOperatorTool(notifier);
@@ -84,7 +84,7 @@ describe('notify_operator tool', () => {
       discordPerHour: 1,
       emailPerHour: 1,
     });
-    const notifier: NtfyNotifier = {
+    const notifier: NotificationPort = {
       notify: vi.fn().mockResolvedValue({
         status: 'sent',
         topic: 'ops',
@@ -110,7 +110,7 @@ describe('notify_operator tool', () => {
   });
 
   it('blocks scheduled/internal execution contexts to prevent heartbeat ntfy bleed', async () => {
-    const notifier: NtfyNotifier = {
+    const notifier: NotificationPort = {
       notify: vi.fn(),
     };
     const tool = createNotifyOperatorTool(notifier);
@@ -132,7 +132,7 @@ describe('notify_operator tool', () => {
   });
 
   it('declares runtime wiring metadata for Garden health derivation', () => {
-    const notifier: NtfyNotifier = {
+    const notifier: NotificationPort = {
       notify: vi.fn(),
     };
 
@@ -167,7 +167,7 @@ describe('notify_operator tool', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     try {
-      const notifier = createHttpNtfyNotifierFromEnv(
+      const notifier = createHttpNotificationPortFromEnv(
         {
           NTFY_BASE_URL: 'https://ntfy.local',
           NTFY_TOPIC: 'ops',

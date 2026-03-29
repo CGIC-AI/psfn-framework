@@ -4,7 +4,7 @@ import {
   formatPromptGenerationFailureAlert,
 } from './operator-alerts.js';
 import type { StreamTerminalFailureEvent } from '../../../core/agent/stream-adapter.js';
-import type { NtfyNotifier } from '../../../core/tools/ntfy.js';
+import type { NotificationPort } from '../../../core/tools/ntfy.js';
 
 function makeEvent(): StreamTerminalFailureEvent {
   return {
@@ -51,7 +51,7 @@ describe('operator alerts', () => {
   });
 
   it('sends a priority-5 ntfy alert for terminal prompt-generation failures', async () => {
-    const notifier: NtfyNotifier = {
+    const notifier: NotificationPort = {
       notify: vi.fn().mockResolvedValue({
         status: 'sent',
         topic: 'ops',

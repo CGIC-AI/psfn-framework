@@ -41,7 +41,7 @@ import {
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { createPromptGenerationFailureAlertHandler } from '../startup/support/operator-alerts.js';
-import type { NtfyNotifier } from '../../core/tools/ntfy.js';
+import type { NotificationPort } from '../../core/tools/ntfy.js';
 import {
   resolveContactsDir,
   resolveMemoryJournalPath,
@@ -62,7 +62,7 @@ export interface AgentCoreRuntimeOptions {
   cardVersionStore: CharacterCardVersionStore;
   cardProposalQueue: ApprovalQueuePort;
   emotionRuntime: EmotionRuntimeWiring;
-  operatorNotifier: NtfyNotifier;
+  operatorNotifier: NotificationPort;
   identityCoolingOff?: ReturnType<typeof createIdentityCoolingOffManagerFromEnv>;
   primaryUserId?: string;
   primaryTelegramUserId?: string;

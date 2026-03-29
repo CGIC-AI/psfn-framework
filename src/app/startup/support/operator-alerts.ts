@@ -1,12 +1,12 @@
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { StreamTerminalFailureEvent } from '../../../core/agent/stream-adapter.js';
-import type { NtfyNotifier } from '../../../core/tools/ntfy.js';
+import type { NotificationPort } from '../../../core/tools/ntfy.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const log = createComponentLogger('OperatorAlerts');
 
 export function createPromptGenerationFailureAlertHandler(
-  notifier: NtfyNotifier,
+  notifier: NotificationPort,
   companionName = 'PSFN',
 ): (event: StreamTerminalFailureEvent) => Promise<void> {
   const resolvedCompanionName = companionName.trim() || 'PSFN';

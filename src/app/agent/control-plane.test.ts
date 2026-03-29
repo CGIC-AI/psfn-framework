@@ -16,12 +16,12 @@ describe('agent control plane', () => {
     expect(agentMainSource).not.toContain('createRestartTool(');
     expect(agentMainSource).not.toContain('createRebuildTool(');
     expect(agentMainSource).not.toContain('createNotifyOperatorTool(');
-    expect(agentMainSource).not.toContain('DiscordLifecycleNotifier(');
+    expect(agentMainSource).not.toContain('createDiscordLifecycleNotifier(');
   });
 
   it('control-plane owns lifecycle notifier, tools, and shutdown sequencing', () => {
     const controlPlaneSource = readSource('control-plane.ts');
-    expect(controlPlaneSource).toContain('DiscordLifecycleNotifier');
+    expect(controlPlaneSource).toContain('createDiscordLifecycleNotifier');
     expect(controlPlaneSource).toContain('createRestartTool(');
     expect(controlPlaneSource).toContain('createRebuildTool(');
     expect(controlPlaneSource).toContain('createNotifyOperatorTool(');

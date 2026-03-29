@@ -1,9 +1,12 @@
 import { createComponentLogger } from '../../shared/logger.js';
-import { DiscordLifecycleNotifier } from '../../system/lifecycle/notifications.js';
-import type { MessageSender } from '../../system/lifecycle/notifications.js';
+import {
+  createDiscordLifecycleNotifier,
+  type LifecycleNotifier,
+  type MessageSender,
+} from '../../system/lifecycle/notifications.js';
 import { resolveRuntimeCommandInvocation } from '../../system/lifecycle/runtime-mode.js';
 import { createRestartTool, createRebuildTool } from '../../core/tools/lifecycle.js';
-import { createNotifyOperatorTool, type NtfyNotifier } from '../../core/tools/ntfy.js';
+import { createNotifyOperatorTool, type NotificationPort } from '../../core/tools/ntfy.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -38,7 +41,7 @@ export interface BuildAgentControlPlaneOptions {
   moduleLoader: ModuleLoader;
   memoryExtractor: MemoryExtractor;
   agentLoop: SubstrateAgent;
-  operatorNotifier: NtfyNotifier;
+  operatorNotifier: NotificationPort;
   lifecycleRestartSafeguard: LifecycleRestartSafeguard;
   externalRateLimiter: ExternalCommunicationRateLimiter;
   capabilityRuntime: CapabilityRuntime;
@@ -47,7 +50,7 @@ export interface BuildAgentControlPlaneOptions {
 }
 
 export interface AgentControlPlaneRuntime {
-  lifecycleNotifier: DiscordLifecycleNotifier;
+  lifecycleNotifier: LifecycleNotifier;
   stopFn: () => Promise<void>;
 }
 
@@ -79,7 +82,7 @@ export function buildAgentControlPlane(
   const gatewaySender: MessageSender = {
     send: (channelId, content) => gateway.discordSend(channelId, content),
   };
-  const lifecycleNotifier = new DiscordLifecycleNotifier({
+  const lifecycleNotifier = createDiscordLifecycleNotifier({
     sender: gatewaySender,
     heartbeatChannelId,
     dataDir,

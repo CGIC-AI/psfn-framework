@@ -358,3 +358,9 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
     }
   }
 }
+
+export function createDiscordLifecycleNotifier(
+  config: LifecycleNotifierConfig,
+): LifecycleNotifier {
+  return new DiscordLifecycleNotifier(config);
+}

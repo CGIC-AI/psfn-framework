@@ -12,7 +12,7 @@ import {
   createRuntimeSafeguardSurfaces,
   type RuntimeSafeguardSurfaces,
 } from '../startup/support/safeguard-surfaces.js';
-import { createGatewayNtfyNotifier, type NtfyNotifier } from '../../core/tools/ntfy.js';
+import { createGatewayNotificationPort, type NotificationPort } from '../../core/tools/ntfy.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
@@ -35,7 +35,7 @@ export interface BootstrappedAgentCoreRuntime {
   cardProposalQueue: ApprovalQueuePort;
   coreRuntime: AgentCoreRuntime;
   emotionState: EmotionState;
-  operatorNotifier: NtfyNotifier;
+  operatorNotifier: NotificationPort;
   safeguardSurfaces: Pick<
     RuntimeSafeguardSurfaces,
     'safeguardAuditTrail' | 'lifecycleRestartSafeguard' | 'externalRateLimiter'
@@ -93,7 +93,7 @@ export async function bootstrapAgentCoreRuntime(
     audioClassifier: getSharedAudioEmotionClassifier(),
   });
   const emotionState = new EmotionState();
-  const operatorNotifier = createGatewayNtfyNotifier(gateway);
+  const operatorNotifier = createGatewayNotificationPort(gateway);
   const {
     safeguardAuditTrail,
     identityCoolingOff,

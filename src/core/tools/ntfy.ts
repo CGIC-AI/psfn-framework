@@ -18,10 +18,6 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 
-export interface NtfyNotifier {
-  notify(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
-}
-
 export interface HttpNtfyNotifierOptions {
   baseUrl?: string;
   topic?: string;
@@ -32,7 +28,11 @@ export interface HttpNtfyNotifierOptions {
   now?: () => number;
 }
 
-class HttpNtfyNotifier implements NtfyNotifier {
+export interface NotificationPort {
+  notify(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
+}
+
+class HttpNtfyNotifier implements NotificationPort {
   private readonly baseUrl?: string;
   private readonly topic?: string;
   private readonly token?: string;
@@ -131,23 +131,23 @@ function toHeaderByteString(value: string): string {
   return Buffer.from(normalized, 'utf8').toString('latin1');
 }
 
-export function createGatewayNtfyNotifier(
+export function createGatewayNotificationPort(
   gateway: { notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> },
-): NtfyNotifier {
+): NotificationPort {
   return {
     notify: (params) => gateway.notifyNtfy(params),
   };
 }
 
-export function createHttpNtfyNotifier(options: HttpNtfyNotifierOptions): NtfyNotifier {
+export function createHttpNotificationPort(options: HttpNtfyNotifierOptions): NotificationPort {
   return new HttpNtfyNotifier(options);
 }
 
-export function createHttpNtfyNotifierFromEnv(
+export function createHttpNotificationPortFromEnv(
   env: NodeJS.ProcessEnv = process.env,
   credentialVault?: CredentialVaultPort,
-): NtfyNotifier {
-  return createHttpNtfyNotifier({
+): NotificationPort {
+  return createHttpNotificationPort({
     baseUrl: env.NTFY_BASE_URL,
     topic: env.NTFY_TOPIC,
     token: resolveOptionalEnvCredential(credentialVault, 'NTFY_TOKEN', env),
@@ -163,7 +163,7 @@ export interface NotifyOperatorToolOptions {
 }
 
 export function createNotifyOperatorTool(
-  notifier: NtfyNotifier,
+  notifier: NotificationPort,
   options: NotifyOperatorToolOptions = {},
 ): AgentTool<any> {
   const defaultChannel = options.defaultChannel ?? 'discord';

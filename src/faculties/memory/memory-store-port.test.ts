@@ -42,6 +42,17 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
     this.memories.set(memory.id, { ...memory });
   }
 
+  async persistMemoryWrite(input: {
+    memory: PurrMemory;
+    embedding: Float32Array;
+    supersededMemoryIds?: string[];
+  }): Promise<void> {
+    for (const id of input.supersededMemoryIds ?? []) {
+      this.updateMemory(id, { supersededBy: input.memory.id });
+    }
+    this.insertMemory(input.memory, input.embedding);
+  }
+
   runInTransaction<T>(handler: () => T): T {
     return handler();
   }
@@ -304,7 +315,7 @@ describe('MemoryStorePort', () => {
     const retrieved = await retriever.retrieve('oolong tea', 'api:test', 'primary');
 
     expect(write.action).toBe('created');
-    expect(store.countActiveMemories()).toBe(1);
+    expect(await store.countActiveMemories()).toBe(1);
     expect(retrieved).toContain('V prefers oolong tea in the morning');
   });
 });

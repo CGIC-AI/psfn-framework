@@ -50,6 +50,12 @@ export interface IntentionRuntimeWiring {
   behavioralPatternTracker: BehavioralPatternStorePort;
 }
 
+export interface IntentionRuntimeProviders {
+  concernProvider: ActiveConcernContextProvider | null;
+  pendingFollowUpProvider: PendingFollowUpContextProvider | null;
+  behavioralPatternProvider: BehavioralPatternContextProvider | null;
+}
+
 export interface IntentionAppraisalHooks {
   getActiveConcerns(input: {
     channelId: string;
@@ -318,18 +324,21 @@ export function createIntentionBehavioralPatternHooks(
   };
 }
 
-export function wireIntentionRuntime(
+export function wireIntentionRuntimeStores(
   target: IntentionRuntimeTarget,
-  db: Database.Database,
+  runtime: IntentionRuntimeWiring,
+  providers: IntentionRuntimeProviders,
 ): IntentionRuntimeWiring {
   const {
     concernProvider,
     pendingFollowUpProvider,
     behavioralPatternProvider,
+  } = providers;
+  const {
     concernStore,
     pendingFollowUpStore,
     behavioralPatternTracker,
-  }: SQLiteIntentionRuntimeStores = createSQLiteIntentionRuntimeStores(db);
+  } = runtime;
   const behavioralHooks = createIntentionBehavioralPatternHooks(behavioralPatternTracker);
 
   if (typeof target.setActiveConcernProvider === 'function') {
@@ -369,4 +378,31 @@ export function wireIntentionRuntime(
     pendingFollowUpStore,
     behavioralPatternTracker,
   };
+}
+
+export function wireIntentionRuntime(
+  target: IntentionRuntimeTarget,
+  db: Database.Database,
+): IntentionRuntimeWiring {
+  const {
+    concernProvider,
+    pendingFollowUpProvider,
+    behavioralPatternProvider,
+    concernStore,
+    pendingFollowUpStore,
+    behavioralPatternTracker,
+  }: SQLiteIntentionRuntimeStores = createSQLiteIntentionRuntimeStores(db);
+  return wireIntentionRuntimeStores(
+    target,
+    {
+      concernStore,
+      pendingFollowUpStore,
+      behavioralPatternTracker,
+    },
+    {
+      concernProvider,
+      pendingFollowUpProvider,
+      behavioralPatternProvider,
+    },
+  );
 }

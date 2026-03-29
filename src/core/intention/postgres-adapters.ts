@@ -2,14 +2,17 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { createPostgresPool, ensurePostgresSchema, queryOne, queryRows } from '../../persistence/postgres.js';
 import { POSTGRES_INTENTION_MIGRATIONS } from '../../persistence/postgres/migrations.js';
+import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 import type { BehavioralPatternPromotionHook } from './patterns.js';
 import {
   createBehavioralPatternStorePort,
+  type BehavioralPatternContextProvider,
   type BehavioralPatternStorePort as BehavioralPatternPort,
   type BehavioralPatternSample,
   type BehavioralStrategySummary,
 } from './patterns.js';
 import {
+  type ActiveConcernContextProvider,
   createConcernStorePort,
   type ActiveConcern,
   type ActiveConcernCreateInput,
@@ -20,6 +23,7 @@ import {
 } from './concerns.js';
 import {
   createPendingFollowUpStorePort,
+  type PendingFollowUpContextProvider,
   type PendingFollowUp,
   type PendingFollowUpActivateOptions,
   type PendingFollowUpCreateInput,
@@ -28,6 +32,9 @@ import {
 } from './pending-follow-ups.js';
 
 export interface PostgresIntentionPorts {
+  concernProvider: ActiveConcernContextProvider;
+  pendingFollowUpProvider: PendingFollowUpContextProvider;
+  behavioralPatternProvider: BehavioralPatternContextProvider;
   concernStore: ConcernStorePort;
   pendingFollowUpStore: PendingFollowUpStorePort;
   behavioralPatternTracker: BehavioralPatternPort;
@@ -406,11 +413,48 @@ function toProceduralMemoryText(candidate: {
 }
 
 class PostgresActiveConcernStore {
+  private activeConcernCache = new Map<string, ActiveConcern>();
+
   constructor(
     private readonly pool: Pool,
     private readonly now: () => Date,
     private readonly idFactory: () => string,
   ) {}
+
+  snapshotActiveConcerns(contactId?: string): ActiveConcern[] {
+    const normalizedContactId = normalizeContactId(contactId);
+    const asOfMs = this.now().getTime();
+    return [...this.activeConcernCache.values()]
+      .filter((concern) => {
+        if (concern.resolvedAt) return false;
+        if (Date.parse(concern.expiresAt) <= asOfMs) return false;
+        if (!normalizedContactId) return true;
+        return !concern.contactId || concern.contactId === normalizedContactId;
+      })
+      .sort((left, right) => (
+        Date.parse(left.expiresAt) - Date.parse(right.expiresAt)
+        || Date.parse(left.createdAt) - Date.parse(right.createdAt)
+        || left.id.localeCompare(right.id)
+      ));
+  }
+
+  async hydrateCache(): Promise<void> {
+    const rows = await queryRows<ActiveConcernRow>(
+      this.pool,
+      `
+        SELECT
+          id, text, priority, source, created_at, expires_at,
+          resolved_at, resolution_outcome, contact_id, formation_vad
+        FROM active_concerns
+      `,
+    );
+    this.activeConcernCache = new Map(
+      rows.map((row) => {
+        const concern = mapActiveConcernRow(row);
+        return [concern.id, concern] as const;
+      }),
+    );
+  }
 
   async create(input: ActiveConcernCreateInput): Promise<ActiveConcern> {
     const text = normalizeRequiredText(input.text, 'text', MAX_CONCERN_TEXT_CHARS);
@@ -447,7 +491,9 @@ class PostgresActiveConcernStore {
     if (!row) {
       throw new Error(`Failed to insert active concern "${id}"`);
     }
-    return mapActiveConcernRow(row);
+    const concern = mapActiveConcernRow(row);
+    this.activeConcernCache.set(concern.id, concern);
+    return concern;
   }
 
   async getById(id: string): Promise<ActiveConcern | null> {
@@ -463,7 +509,10 @@ class PostgresActiveConcernStore {
       `,
       [normalizedId],
     );
-    return row ? mapActiveConcernRow(row) : null;
+    if (!row) return null;
+    const concern = mapActiveConcernRow(row);
+    this.activeConcernCache.set(concern.id, concern);
+    return concern;
   }
 
   async getActiveConcerns(contactId?: string): Promise<ActiveConcern[]> {
@@ -609,11 +658,45 @@ class PostgresActiveConcernStore {
 }
 
 class PostgresPendingFollowUpStore {
+  private pendingFollowUpCache = new Map<string, PendingFollowUp>();
+
   constructor(
     private readonly pool: Pool,
     private readonly now: () => Date,
     private readonly idFactory: () => string,
   ) {}
+
+  snapshotPendingFollowUps(contactId?: string): PendingFollowUp[] {
+    const normalizedContactId = normalizeContactId(contactId);
+    return [...this.pendingFollowUpCache.values()]
+      .filter((followUp) => {
+        if (followUp.activatedAt) return false;
+        if (!normalizedContactId) return true;
+        return !followUp.contactId || followUp.contactId === normalizedContactId;
+      })
+      .sort((left, right) => (
+        Date.parse(left.createdAt) - Date.parse(right.createdAt)
+        || left.id.localeCompare(right.id)
+      ));
+  }
+
+  async hydrateCache(): Promise<void> {
+    const rows = await queryRows<PendingFollowUpRow>(
+      this.pool,
+      `
+        SELECT
+          id, content, priority, timing, created_at, channel_id, channel_type,
+          author_id, author_name, due_at, contact_id, source_message_id, activated_at, activation_reason
+        FROM intention_pending_follow_ups
+      `,
+    );
+    this.pendingFollowUpCache = new Map(
+      rows.map((row) => {
+        const followUp = mapPendingFollowUpRow(row);
+        return [followUp.id, followUp] as const;
+      }),
+    );
+  }
 
   async create(input: PendingFollowUpCreateInput): Promise<PendingFollowUp> {
     const id = normalizeRequiredText(this.idFactory(), 'id', MAX_PENDING_ID_CHARS);
@@ -661,7 +744,9 @@ class PostgresPendingFollowUpStore {
     if (!row) {
       throw new Error(`Failed to insert pending follow-up "${id}"`);
     }
-    return mapPendingFollowUpRow(row);
+    const followUp = mapPendingFollowUpRow(row);
+    this.pendingFollowUpCache.set(followUp.id, followUp);
+    return followUp;
   }
 
   async getById(id: string): Promise<PendingFollowUp | null> {
@@ -677,7 +762,10 @@ class PostgresPendingFollowUpStore {
       `,
       [normalizedId],
     );
-    return row ? mapPendingFollowUpRow(row) : null;
+    if (!row) return null;
+    const followUp = mapPendingFollowUpRow(row);
+    this.pendingFollowUpCache.set(followUp.id, followUp);
+    return followUp;
   }
 
   async getPendingFollowUps(contactId?: string): Promise<PendingFollowUp[]> {
@@ -734,12 +822,16 @@ class PostgresPendingFollowUpStore {
       `,
       [normalizedId, activatedAt, activationReason ?? null],
     );
-    return row ? mapPendingFollowUpRow(row) : null;
+    if (!row) return null;
+    const followUp = mapPendingFollowUpRow(row);
+    this.pendingFollowUpCache.set(followUp.id, followUp);
+    return followUp;
   }
 }
 
 class PostgresBehavioralPatternTracker {
   private promotionHook: BehavioralPatternPromotionHook | null;
+  private sampleCache = new Map<string, BehavioralPatternSample>();
 
   constructor(
     private readonly pool: Pool,
@@ -757,6 +849,96 @@ class PostgresBehavioralPatternTracker {
 
   setPromotionHook(hook: BehavioralPatternPromotionHook | null): void {
     this.promotionHook = hook;
+  }
+
+  async hydrateCache(): Promise<void> {
+    const rows = await queryRows<BehavioralPatternRow>(
+      this.pool,
+      `
+        SELECT
+          id,
+          contact_id,
+          source_message_id,
+          strategy,
+          response_excerpt,
+          created_at,
+          outcome_score,
+          outcome_observed_at,
+          outcome_source_message_id,
+          promoted_at,
+          promoted_memory_id
+        FROM behavioral_pattern_events
+      `,
+    );
+    this.sampleCache = new Map(
+      rows.map((row) => {
+        const sample = mapBehavioralPatternRow(row);
+        return [sample.id, sample] as const;
+      }),
+    );
+  }
+
+  snapshotBehavioralNotes(contactId?: string, limit = DEFAULT_BEHAVIORAL_SUMMARY_LIMIT): string {
+    const normalizedContactId = normalizeContactId(contactId);
+    if (!normalizedContactId) {
+      return '';
+    }
+    const summaries = this.summarizeSamples(normalizedContactId, clampSummaryLimit(limit), 1);
+    if (summaries.length === 0) {
+      return '';
+    }
+    return wrapPromptSectionXml({
+      id: 'behavioral_notes',
+      content: summaries.map(summary => toBehavioralNote(summary)).join('\n'),
+    });
+  }
+
+  private summarizeSamples(
+    contactId: string,
+    limit: number,
+    minResolvedCount: number,
+  ): BehavioralStrategySummary[] {
+    const summaries = new Map<string, BehavioralStrategySummary>();
+    for (const sample of this.sampleCache.values()) {
+      if (sample.contactId !== contactId) continue;
+      const existing = summaries.get(sample.strategy) ?? {
+        strategy: sample.strategy,
+        sampleCount: 0,
+        resolvedCount: 0,
+        pendingCount: 0,
+        averageOutcome: 0,
+        positiveCount: 0,
+        negativeCount: 0,
+      };
+      existing.sampleCount += 1;
+      if (sample.outcomeScore === undefined) {
+        existing.pendingCount += 1;
+      } else {
+        existing.resolvedCount += 1;
+        existing.averageOutcome += sample.outcomeScore;
+        if (sample.outcomeScore > 0.1) existing.positiveCount += 1;
+        if (sample.outcomeScore < -0.1) existing.negativeCount += 1;
+        if (!existing.lastOutcomeAt || (sample.outcomeObservedAt && sample.outcomeObservedAt > existing.lastOutcomeAt)) {
+          existing.lastOutcomeAt = sample.outcomeObservedAt;
+        }
+      }
+      summaries.set(sample.strategy, existing);
+    }
+
+    return [...summaries.values()]
+      .filter(summary => summary.resolvedCount >= minResolvedCount)
+      .map(summary => ({
+        ...summary,
+        averageOutcome: summary.resolvedCount > 0
+          ? summary.averageOutcome / summary.resolvedCount
+          : 0,
+      }))
+      .sort((left, right) => (
+        right.averageOutcome - left.averageOutcome
+        || right.resolvedCount - left.resolvedCount
+        || left.strategy.localeCompare(right.strategy)
+      ))
+      .slice(0, limit);
   }
 
   async recordResponseStrategy(input: {
@@ -795,7 +977,9 @@ class PostgresBehavioralPatternTracker {
     if (!row) {
       throw new Error('Behavioral pattern event is missing after upsert');
     }
-    return mapBehavioralPatternRow(row);
+    const sample = mapBehavioralPatternRow(row);
+    this.sampleCache.set(sample.id, sample);
+    return sample;
   }
 
   async recordOutcomeForSample(input: {
@@ -843,6 +1027,7 @@ class PostgresBehavioralPatternTracker {
     }
 
     const updated = mapBehavioralPatternRow(row);
+    this.sampleCache.set(updated.id, updated);
     await this.maybePromoteStrategy(updated.contactId, updated.strategy);
     return updated;
   }
@@ -1130,26 +1315,73 @@ function normalizeMinimumAverageOutcomeForPromotion(value: number | undefined): 
   return normalizeOutcomeScore(value);
 }
 
+function formatSigned(value: number): string {
+  const normalized = normalizeOutcomeScore(value);
+  const fixed = normalized.toFixed(2);
+  return normalized >= 0 ? `+${fixed}` : fixed;
+}
+
+function toBehavioralNote(summary: BehavioralStrategySummary): string {
+  const positiveRate = summary.resolvedCount > 0
+    ? Math.round((summary.positiveCount / summary.resolvedCount) * 100)
+    : 0;
+  return (
+    `- ${summary.strategy}: avg ${formatSigned(summary.averageOutcome)} `
+    + `over ${summary.resolvedCount} outcome sample(s), `
+    + `${positiveRate}% positive`
+    + (summary.pendingCount > 0 ? `, ${summary.pendingCount} pending` : '')
+  );
+}
+
+function createPostgresIntentionRuntimeState(
+  pool: Pool,
+  options: PostgresIntentionPortOptions = {},
+): {
+  concernBackend: PostgresActiveConcernStore;
+  pendingFollowUpBackend: PostgresPendingFollowUpStore;
+  behavioralBackend: PostgresBehavioralPatternTracker;
+  ports: PostgresIntentionPorts;
+} {
+  const now = options.now ?? (() => new Date());
+  const idFactory = options.idFactory ?? randomUUID;
+  const concernBackend = new PostgresActiveConcernStore(pool, now, idFactory);
+  const pendingFollowUpBackend = new PostgresPendingFollowUpStore(pool, now, idFactory);
+  const behavioralBackend = new PostgresBehavioralPatternTracker(pool, now, idFactory, {
+      promotionHook: options.promotionHook ?? null,
+      minimumSamplesForPromotion: options.minimumSamplesForPromotion,
+      minimumAverageOutcomeForPromotion: options.minimumAverageOutcomeForPromotion,
+    });
+  const concernStore = createConcernStorePort(concernBackend);
+  const pendingFollowUpStore = createPendingFollowUpStorePort(pendingFollowUpBackend);
+  const behavioralPatternTracker = createBehavioralPatternStorePort(behavioralBackend);
+  return {
+    concernBackend,
+    pendingFollowUpBackend,
+    behavioralBackend,
+    ports: {
+    concernProvider: {
+      getActiveConcerns: (contactId?: string) => concernBackend.snapshotActiveConcerns(contactId),
+    },
+    pendingFollowUpProvider: {
+      getPendingFollowUps: (contactId?: string) => pendingFollowUpBackend.snapshotPendingFollowUps(contactId),
+    },
+    behavioralPatternProvider: {
+      getBehavioralNotes: (contactId?: string, limit?: number) => (
+        behavioralBackend.snapshotBehavioralNotes(contactId, limit)
+      ),
+    },
+    concernStore,
+    pendingFollowUpStore,
+    behavioralPatternTracker,
+    },
+  };
+}
+
 export function createPostgresIntentionPortsFromPool(
   pool: Pool,
   options: PostgresIntentionPortOptions = {},
 ): PostgresIntentionPorts {
-  const now = options.now ?? (() => new Date());
-  const idFactory = options.idFactory ?? randomUUID;
-  const concernStore = createConcernStorePort(new PostgresActiveConcernStore(pool, now, idFactory));
-  const pendingFollowUpStore = createPendingFollowUpStorePort(new PostgresPendingFollowUpStore(pool, now, idFactory));
-  const behavioralPatternTracker = createBehavioralPatternStorePort(
-    new PostgresBehavioralPatternTracker(pool, now, idFactory, {
-      promotionHook: options.promotionHook ?? null,
-      minimumSamplesForPromotion: options.minimumSamplesForPromotion,
-      minimumAverageOutcomeForPromotion: options.minimumAverageOutcomeForPromotion,
-    }),
-  );
-  return {
-    concernStore,
-    pendingFollowUpStore,
-    behavioralPatternTracker,
-  };
+  return createPostgresIntentionRuntimeState(pool, options).ports;
 }
 
 export async function createPostgresIntentionPorts(
@@ -1161,5 +1393,11 @@ export async function createPostgresIntentionPorts(
     allowExitOnIdle: true,
   });
   await ensurePostgresSchema(pool, POSTGRES_INTENTION_MIGRATIONS);
-  return createPostgresIntentionPortsFromPool(pool, options);
+  const state = createPostgresIntentionRuntimeState(pool, options);
+  await Promise.all([
+    state.concernBackend.hydrateCache(),
+    state.pendingFollowUpBackend.hydrateCache(),
+    state.behavioralBackend.hydrateCache(),
+  ]);
+  return state.ports;
 }

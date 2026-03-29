@@ -572,7 +572,14 @@ class PostgresMemoryStore implements MemoryStorePort {
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const selected = Array.from(this.memories.values()).filter((memory) => {
       if (memory.supersededBy || memory.deletedAt) return false;
-      if (normalizedScopeQuery.mode === 'only' || normalizedScopeQuery.refs?.length || normalizedScopeQuery.tags?.length) {
+      if (
+        normalizedScopeQuery
+        && (
+          normalizedScopeQuery.mode === 'only'
+          || normalizedScopeQuery.refs?.length
+          || normalizedScopeQuery.tags?.length
+        )
+      ) {
         const refs = normalizedScopeQuery.refs ?? [];
         const tags = normalizedScopeQuery.tags ?? [];
         const scopeMatch = refs.length === 0 || refs.some(ref => {
@@ -610,6 +617,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     return Array.from(this.memories.values())
       .filter((memory) => {
         if (memory.supersededBy || memory.deletedAt) return false;
+        if (!normalizedScopeQuery) return true;
         const refs = normalizedScopeQuery.refs ?? [];
         const tags = normalizedScopeQuery.tags ?? [];
         if (refs.length === 0 && tags.length === 0) return true;

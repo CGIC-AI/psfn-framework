@@ -92,6 +92,7 @@ async function main(): Promise<void> {
   // ── Connect to gateway ──
 
   const embeddingDims = config.embeddingDims ?? 1024;
+  const primaryUserId = config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID;
 
   log.info(`Connecting to gateway at ${socketPath}...`);
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
@@ -118,8 +119,16 @@ async function main(): Promise<void> {
     config,
     pathSnapshot,
     embeddingDims,
+    primaryUserId,
   });
-  const { backend: persistenceBackend, db, memoryStore: companionMemoryStore } = persistenceRuntime;
+  const {
+    backend: persistenceBackend,
+    db,
+    memoryStore: companionMemoryStore,
+    contactStore: persistedContactStore,
+    intentionRuntime: persistedIntentionRuntime,
+    intentionProviders,
+  } = persistenceRuntime;
   if (db) {
     runDatabaseIntegrityCheck(db);
     log.info('SQLite integrity check passed');
@@ -147,6 +156,9 @@ async function main(): Promise<void> {
     gateway,
     db,
     memoryStore: companionMemoryStore,
+    contactStore: persistedContactStore,
+    intentionRuntime: persistedIntentionRuntime,
+    intentionProviders,
     capabilityRuntime,
   });
   const {

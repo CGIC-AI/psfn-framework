@@ -488,7 +488,8 @@ export class MemoryRetriever implements MemoryProvider {
         this.retrievalThreshold,
         candidateLimit,
         normalizedScopeQuery,
-      )
+      );
+      semanticCandidates = semanticCandidates
         .filter(memory => !isInternalMemoryArtifact(memory))
         .map(cloneScoredMemory);
       if (semanticCandidates.length === 0) {
@@ -661,7 +662,8 @@ export class MemoryRetriever implements MemoryProvider {
           this.retrievalThreshold,
           candidateLimit,
           normalizedScopeQuery,
-        ).filter(memory => !isInternalMemoryArtifact(memory));
+        );
+        semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
       }
       telemetry.semanticCandidateCount = semanticMemories.length;
 

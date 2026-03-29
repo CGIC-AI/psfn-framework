@@ -2,11 +2,19 @@ import type Database from 'better-sqlite3';
 import { MemoryJournal } from '../faculties/memory/journal.js';
 import type { MemoryStorePort } from '../faculties/memory/memory-store-port.js';
 import { createPostgresMemoryStore } from '../faculties/memory/postgres-store.js';
+import { createPostgresContactStore } from '../core/contacts/postgres-adapter.js';
+import type { ContactStorePort } from '../core/contacts/contact-store-port.js';
+import { createPostgresIntentionPorts } from '../core/intention/postgres-adapters.js';
+import type {
+  IntentionRuntimeProviders,
+  IntentionRuntimeWiring,
+} from '../core/intention/runtime-wiring.js';
 import type {
   PersistenceBackend,
   SubstrateConfig,
 } from '../system/config/runtime-config-contracts.js';
 import {
+  resolveContactsDir,
   resolveMemoryJournalPath,
   resolveNotesDir,
   resolveScratchpadMirrorPath,
@@ -21,12 +29,16 @@ export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
   db: Database.Database | null;
   memoryStore: MemoryStorePort;
+  contactStore?: ContactStorePort;
+  intentionRuntime?: IntentionRuntimeWiring;
+  intentionProviders?: IntentionRuntimeProviders;
 }
 
 export interface CreateAgentPersistenceRuntimeOptions {
   config: Pick<SubstrateConfig, 'databasePath' | 'persistenceBackend' | 'postgresDatabaseUrl'>;
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
+  primaryUserId?: string;
   sqlite?: Pick<SqliteCompanionStoreOptions, 'databaseOptions'>;
 }
 
@@ -39,6 +51,7 @@ export async function createAgentPersistenceRuntime(
     if (!databaseUrl) {
       throw new Error('PostgreSQL persistence requires config.postgresDatabaseUrl');
     }
+    const intentionRuntime = await createPostgresIntentionPorts(databaseUrl);
     return {
       backend,
       db: null,
@@ -47,6 +60,11 @@ export async function createAgentPersistenceRuntime(
         scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
         journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
       }),
+      contactStore: await createPostgresContactStore(databaseUrl, options.primaryUserId, {
+        exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
+      }),
+      intentionRuntime,
+      intentionProviders: intentionRuntime,
     };
   }
 

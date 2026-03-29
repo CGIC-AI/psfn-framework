@@ -145,7 +145,7 @@ async function main(): Promise<void> {
     rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
   });
 
-  const privilegedCore = buildGatewayPrivilegedCore({
+  const privilegedCore = await buildGatewayPrivilegedCore({
     config,
     bootstrap,
     startupHydration,
@@ -213,7 +213,13 @@ async function main(): Promise<void> {
   });
   const { discord, telegram } = channelSurfaces;
 
-  log.info(`Audit log: ${bootstrap.auditDbPath}`);
+  if ((config.persistenceBackend ?? 'sqlite') === 'sqlite') {
+    log.info(`Audit log: ${bootstrap.auditDbPath}`);
+  } else {
+    log.info('Gateway audit persistence backend', {
+      persistenceBackend: config.persistenceBackend ?? 'sqlite',
+    });
+  }
 
   // ── Create gateway server ──
 
@@ -261,7 +267,7 @@ async function main(): Promise<void> {
         {
           step: 'close audit database',
           action: () => {
-            auditDb.close();
+            auditDb?.close();
           },
         },
       ], log);

@@ -10,6 +10,7 @@ import { GitOps } from '../integrations/git/ops.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createSQLiteGatewayAuditStore } from './audit.js';
+import { createPostgresGatewayAuditStore } from './postgres-audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
 import { GatewayServer } from './server.js';
@@ -30,15 +31,15 @@ export interface GatewayPrivilegedCore {
   capabilityRuntime: CapabilityRuntime;
   eligibilityGate: EligibilityGate;
   privilegedServices: ReturnType<typeof createGatewayPrivilegedServiceRegistry>;
-  auditDb: ReturnType<typeof initDatabase>;
+  auditDb: ReturnType<typeof initDatabase> | null;
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
   }): GatewayServer;
 }
 
-export function buildGatewayPrivilegedCore(
+export async function buildGatewayPrivilegedCore(
   input: GatewayPrivilegedCoreBuildInput,
-): GatewayPrivilegedCore {
+): Promise<GatewayPrivilegedCore> {
   const eventBus = new EventBus();
   const gitOps = new GitOps({
     repoRoot: input.bootstrap.gitRepoRoot,
@@ -71,8 +72,19 @@ export function buildGatewayPrivilegedCore(
     },
     vaultPolicyConfig: input.bootstrap.policyConfig.vault,
   });
-  const auditDb = initDatabase(input.bootstrap.auditDbPath, { foreignKeys: false });
-  const auditStore = createSQLiteGatewayAuditStore(auditDb);
+  const persistenceBackend = input.config.persistenceBackend ?? 'sqlite';
+  const auditDb = persistenceBackend === 'sqlite'
+    ? initDatabase(input.bootstrap.auditDbPath, { foreignKeys: false })
+    : null;
+  const auditStore = persistenceBackend === 'postgres'
+    ? await (() => {
+      const databaseUrl = input.config.postgresDatabaseUrl?.trim();
+      if (!databaseUrl) {
+        throw new Error('Gateway postgres audit persistence requires config.postgresDatabaseUrl');
+      }
+      return createPostgresGatewayAuditStore(databaseUrl);
+    })()
+    : createSQLiteGatewayAuditStore(auditDb!);
 
   return {
     eventBus,

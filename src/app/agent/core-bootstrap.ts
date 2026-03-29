@@ -26,7 +26,10 @@ import {
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
-import type { IntentionRuntimeWiring } from '../../core/intention/runtime-wiring.js';
+import type {
+  IntentionRuntimeProviders,
+  IntentionRuntimeWiring,
+} from '../../core/intention/runtime-wiring.js';
 
 const log = createComponentLogger('Agent');
 
@@ -53,6 +56,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   memoryStore: MemoryStorePort;
   contactStore?: ContactStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
+  intentionProviders?: IntentionRuntimeProviders;
   capabilityRuntime: CapabilityRuntime;
 }
 
@@ -68,6 +72,7 @@ export async function bootstrapAgentCoreRuntime(
     memoryStore,
     contactStore,
     intentionRuntime,
+    intentionProviders,
     capabilityRuntime,
   } = options;
 
@@ -127,6 +132,7 @@ export async function bootstrapAgentCoreRuntime(
     },
     operatorNotifier,
     intentionRuntime,
+    intentionProviders,
     identityCoolingOff,
     primaryUserId: config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID,
     primaryTelegramUserId: (

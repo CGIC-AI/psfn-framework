@@ -20,10 +20,15 @@ import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { RuntimePathSnapshot } from '../../persistence/layout.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
-import type { IntentionRuntimeWiring, IntentionAppraisalHooks, IntentionBehavioralPatternHooks } from '../../core/intention/runtime-wiring.js';
+import type {
+  IntentionRuntimeWiring,
+  IntentionAppraisalHooks,
+  IntentionBehavioralPatternHooks,
+  IntentionRuntimeProviders,
+} from '../../core/intention/runtime-wiring.js';
 import { composeSessionRuntimeAsync, composeSubstrateAgent, wireCoreMemoryRuntime, wireMemoryRuntime, wireSelfModelRuntime } from '../startup/composition/composition.js';
 import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../startup/composition/parity.js';
-import { wireContactRuntime } from '../../core/contacts/runtime-wiring.js';
+import { registerContactRuntime, wireContactRuntime } from '../../core/contacts/runtime-wiring.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
 import { registerFilesystemTools } from '../../boundary/integrations/filesystem/runtime-wiring.js';
@@ -33,7 +38,12 @@ import { GatewayImageOps } from '../../primitives/images/gateway-ops.js';
 import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
 import { registerWebTools } from '../../boundary/integrations/web/runtime-wiring.js';
 import { GatewayWebFetchOps } from '../../boundary/integrations/web/gateway-ops.js';
-import { createIntentionAppraisalHooks, createIntentionBehavioralPatternHooks, wireIntentionRuntime } from '../../core/intention/runtime-wiring.js';
+import {
+  createIntentionAppraisalHooks,
+  createIntentionBehavioralPatternHooks,
+  wireIntentionRuntime,
+  wireIntentionRuntimeStores,
+} from '../../core/intention/runtime-wiring.js';
 import { createIdentityCoolingOffManagerFromEnv } from '../../system/capabilities/safeguards.js';
 import { composeSystemPromptTemplate } from '../../core/identity/loader.js';
 import {
@@ -67,6 +77,7 @@ export interface AgentCoreRuntimeOptions {
   emotionRuntime: EmotionRuntimeWiring;
   operatorNotifier: NotificationPort;
   intentionRuntime?: IntentionRuntimeWiring;
+  intentionProviders?: IntentionRuntimeProviders;
   identityCoolingOff?: ReturnType<typeof createIdentityCoolingOffManagerFromEnv>;
   primaryUserId?: string;
   primaryTelegramUserId?: string;
@@ -104,6 +115,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     identityCoolingOff = createIdentityCoolingOffManagerFromEnv(process.env, { auditTrail: undefined }),
     primaryUserId,
     primaryTelegramUserId,
+    intentionProviders,
   } = options;
   const db = options.db ?? null;
 
@@ -189,34 +201,44 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionManager,
     config,
   });
-  const contactStore = options.contactStore ?? await (() => {
-    if (!db) {
-      throw new Error('Contact runtime requires an injected ContactStorePort for non-sqlite backends');
-    }
-    return wireContactRuntime(
-      agentLoop,
-      db,
-      primaryUserId,
-      {
-        exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
-        ...(primaryTelegramUserId
-          ? {
-              bootstrapPrimaryIdentityLinks: [{
-                channel: 'telegram',
-                userId: primaryTelegramUserId,
-                privacyLevel: 'private',
-              }],
-            }
-          : {}),
-      },
-    );
-  })();
+  const contactRuntimeOptions = {
+    exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
+    ...(primaryTelegramUserId
+      ? {
+          bootstrapPrimaryIdentityLinks: [{
+            channel: 'telegram',
+            userId: primaryTelegramUserId,
+            privacyLevel: 'private',
+          }],
+        }
+      : {}),
+  };
+  const contactStore = options.contactStore
+    ? await registerContactRuntime(agentLoop, options.contactStore, primaryUserId, contactRuntimeOptions)
+    : await (() => {
+      if (!db) {
+        throw new Error('Contact runtime requires an injected ContactStorePort for non-sqlite backends');
+      }
+      return wireContactRuntime(
+        agentLoop,
+        db,
+        primaryUserId,
+        contactRuntimeOptions,
+      );
+    })();
   const intentionRuntime = options.intentionRuntime ?? (() => {
     if (!db) {
       throw new Error('Intention runtime requires injected persistence stores for non-sqlite backends');
     }
     return wireIntentionRuntime(agentLoop, db);
   })();
+  if (options.intentionRuntime) {
+    wireIntentionRuntimeStores(agentLoop, options.intentionRuntime, intentionProviders ?? {
+      concernProvider: null,
+      pendingFollowUpProvider: null,
+      behavioralPatternProvider: null,
+    });
+  }
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,

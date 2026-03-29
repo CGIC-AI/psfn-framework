@@ -70,6 +70,15 @@ interface MemoryRow {
   embedding: number[] | null;
 }
 
+interface MemorySchemaTableRow {
+  table_name: string;
+}
+
+interface MemorySchemaColumnRow {
+  column_name: string;
+  data_type: string;
+}
+
 interface MemoryDeleteVersionRow {
   delete_id: string;
   memory_id: string;
@@ -282,7 +291,40 @@ export async function createPostgresMemoryStore(
 ): Promise<MemoryStorePort> {
   const pool = createPostgresPool(databaseUrl, { applicationName: 'psfn-memory', allowExitOnIdle: true });
   await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+  await validatePostgresMemorySchema(pool);
   return new PostgresMemoryStore(pool, embeddingDims, options);
+}
+
+async function validatePostgresMemorySchema(pool: Pool): Promise<void> {
+  const legacyEmbeddingTables = await queryRows<MemorySchemaTableRow>(pool, `
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name = 'l2_memory_embeddings'
+  `);
+  if (legacyEmbeddingTables.length > 0) {
+    throw new Error(
+      'Unsupported PostgreSQL memory schema detected: l2_memory_embeddings is no longer used; recreate the memory schema so embeddings live on l2_memories.embedding',
+    );
+  }
+
+  const memoryColumns = await queryRows<MemorySchemaColumnRow>(pool, `
+    SELECT table_name, column_name, data_type, udt_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'l2_memories'
+  `);
+  const embeddingColumn = memoryColumns.find(column => column.column_name === 'embedding');
+  if (!embeddingColumn) {
+    throw new Error(
+      'PostgreSQL memory schema is missing l2_memories.embedding; recreate the memory schema before starting the memory store',
+    );
+  }
+  if (embeddingColumn.data_type !== 'ARRAY') {
+    throw new Error(
+      `PostgreSQL memory schema column l2_memories.embedding must be an array type, got ${embeddingColumn.data_type}`,
+    );
+  }
 }
 
 class PostgresMemoryStore implements MemoryStorePort {
@@ -408,10 +450,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   private enqueuePersist(task: () => Promise<void>): void {
-    this.persistChain = this.persistChain.then(task).catch((error) => {
-      // Surface persistence errors without rejecting sync callers.
-      console.error('PostgresMemoryStore persistence error', error);
-    });
+    this.persistChain = this.persistChain.then(task);
   }
 
   private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<void> {

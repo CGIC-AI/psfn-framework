@@ -3,6 +3,7 @@ import type { QueryResult } from 'pg';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { MemoryRetriever } from './retrieval.js';
 import { createPostgresMemoryStore } from './postgres-store.js';
+import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import type { PurrMemory } from './types.js';
 import { MemoryWriter } from './writer.js';
 
@@ -51,6 +52,16 @@ interface MemoryRow {
 
 class FakeMemoryPool {
   readonly memories = new Map<string, MemoryRow>();
+  readonly schemaHasEmbeddingColumn: boolean;
+  readonly schemaHasLegacyEmbeddingTable: boolean;
+
+  constructor(options: {
+    schemaHasEmbeddingColumn?: boolean;
+    schemaHasLegacyEmbeddingTable?: boolean;
+  } = {}) {
+    this.schemaHasEmbeddingColumn = options.schemaHasEmbeddingColumn ?? true;
+    this.schemaHasLegacyEmbeddingTable = options.schemaHasLegacyEmbeddingTable ?? false;
+  }
 
   async query(text: string, values: readonly unknown[] = []): Promise<QueryResult> {
     const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -60,8 +71,32 @@ class FakeMemoryPool {
       || normalized === 'rollback'
       || normalized.startsWith('create table')
       || normalized.startsWith('create index')
-    ) {
-      return { rows: [], rowCount: 0, command: 'OK', oid: 0, fields: [] } as QueryResult;
+      ) {
+        return { rows: [], rowCount: 0, command: 'OK', oid: 0, fields: [] } as QueryResult;
+      }
+
+    if (normalized.includes('information_schema.tables')) {
+      return {
+        rows: this.schemaHasLegacyEmbeddingTable
+          ? [{ table_name: 'l2_memory_embeddings' }]
+          : [],
+        rowCount: this.schemaHasLegacyEmbeddingTable ? 1 : 0,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
+    if (normalized.includes('information_schema.columns') && normalized.includes("table_name = 'l2_memories'")) {
+      return {
+        rows: this.schemaHasEmbeddingColumn
+          ? [{ table_name: 'l2_memories', column_name: 'embedding', data_type: 'ARRAY', udt_name: '_float8' }]
+          : [],
+        rowCount: this.schemaHasEmbeddingColumn ? 1 : 0,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
     }
 
     if (normalized.includes('from l2_memories')) {
@@ -155,6 +190,12 @@ afterEach(() => {
 });
 
 describe('postgres memory store', () => {
+  it('keeps the supported postgres migration on l2_memories.embedding and omits the dead embeddings table', () => {
+    const migrationSql = POSTGRES_MEMORY_MIGRATIONS.join('\n');
+    expect(migrationSql).toContain('embedding DOUBLE PRECISION[]');
+    expect(migrationSql).not.toContain('CREATE TABLE IF NOT EXISTS l2_memory_embeddings');
+  });
+
   it('supports writer and retriever flow behind MemoryStorePort', async () => {
     postgresMocks.activePool = new FakeMemoryPool();
     const store = await createPostgresMemoryStore('postgres://unused', 4);
@@ -180,5 +221,21 @@ describe('postgres memory store', () => {
       allowExitOnIdle: true,
     });
     expect(postgresMocks.ensurePostgresSchema).toHaveBeenCalled();
+  });
+
+  it('rejects postgres memory schemas that still use the legacy embeddings table', async () => {
+    postgresMocks.activePool = new FakeMemoryPool({ schemaHasLegacyEmbeddingTable: true });
+
+    await expect(createPostgresMemoryStore('postgres://unused', 4)).rejects.toThrow(
+      'Unsupported PostgreSQL memory schema detected: l2_memory_embeddings is no longer used',
+    );
+  });
+
+  it('rejects postgres memory schemas missing the embedding column on l2_memories', async () => {
+    postgresMocks.activePool = new FakeMemoryPool({ schemaHasEmbeddingColumn: false });
+
+    await expect(createPostgresMemoryStore('postgres://unused', 4)).rejects.toThrow(
+      'PostgreSQL memory schema is missing l2_memories.embedding',
+    );
   });
 });

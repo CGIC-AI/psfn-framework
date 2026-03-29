@@ -26,19 +26,14 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     contact_id TEXT,
     deleted_at BIGINT,
     deleted_by TEXT,
-    delete_reason TEXT
+    delete_reason TEXT,
+    embedding DOUBLE PRECISION[]
   );
   `,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_active ON l2_memories(superseded_by, deleted_at, extracted_at DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_contact ON l2_memories(contact_id, deleted_at, extracted_at DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_source_ref ON l2_memories(source_ref);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_scope_ref ON l2_memories(scope_ref_kind, scope_ref_id);`,
-  `
-  CREATE TABLE IF NOT EXISTS l2_memory_embeddings (
-    memory_id TEXT PRIMARY KEY REFERENCES l2_memories(id) ON DELETE CASCADE,
-    embedding DOUBLE PRECISION[] NOT NULL
-  );
-  `,
   `CREATE TABLE IF NOT EXISTS l2_memory_delete_versions (
     delete_id TEXT PRIMARY KEY,
     memory_id TEXT NOT NULL REFERENCES l2_memories(id) ON DELETE CASCADE,

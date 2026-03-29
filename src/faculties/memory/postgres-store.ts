@@ -449,8 +449,10 @@ class PostgresMemoryStore implements MemoryStorePort {
     }
   }
 
-  private enqueuePersist(task: () => Promise<void>): void {
-    this.persistChain = this.persistChain.then(task);
+  private persist<T>(task: () => Promise<T>): Promise<T> {
+    const operation = this.persistChain.then(task);
+    this.persistChain = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<void> {
@@ -589,9 +591,9 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
+    await this.persist(() => this.upsertMemoryRow(memory, embedding));
     this.memories.set(memory.id, memory);
     this.embeddings.set(memory.id, embedding);
-    this.enqueuePersist(() => this.upsertMemoryRow(memory, embedding));
     this.journal?.onInsert(memory);
   }
 
@@ -691,9 +693,9 @@ class PostgresMemoryStore implements MemoryStorePort {
     if (updates.deletedAt !== undefined) next.deletedAt = updates.deletedAt;
     if (updates.deletedBy !== undefined) next.deletedBy = updates.deletedBy;
     if (updates.deleteReason !== undefined) next.deleteReason = updates.deleteReason;
-    this.memories.set(id, next);
     const embedding = this.embeddings.get(id);
-    this.enqueuePersist(() => this.upsertMemoryRow(next, embedding));
+    await this.persist(() => this.upsertMemoryRow(next, embedding));
+    this.memories.set(id, next);
   }
 
   async getAllActiveMemories(limit: number = 10_000): Promise<PurrMemory[]> {
@@ -735,12 +737,12 @@ class PostgresMemoryStore implements MemoryStorePort {
       deletedBy,
       ...(deleteReason ? { deleteReason } : {}),
     };
+    await this.persist(async () => {
+      await this.upsertDeleteVersion(version);
+      await this.upsertMemoryRow({ ...memory, deletedAt, deletedBy, deleteReason }, this.embeddings.get(id));
+    });
     this.memories.set(id, { ...memory, deletedAt, deletedBy, deleteReason });
     this.deleteVersions.set(deleteId, version);
-    this.enqueuePersist(async () => {
-      await this.upsertDeleteVersion(version);
-      await this.upsertMemoryRow(this.memories.get(id)!, this.embeddings.get(id));
-    });
     this.journal?.onSoftDelete(version);
     return version;
   }
@@ -753,13 +755,13 @@ class PostgresMemoryStore implements MemoryStorePort {
     const restoredAt = options.restoredAt ?? Date.now();
     const restoredBy = options.restoredBy?.trim() || 'agent';
     const restored = { ...current, deletedAt: undefined, deletedBy: undefined, deleteReason: undefined };
-    this.memories.set(version.memoryId, restored);
     const nextVersion = { ...version, restoredAt, restoredBy };
-    this.deleteVersions.set(deleteId, nextVersion);
-    this.enqueuePersist(async () => {
+    await this.persist(async () => {
       await this.upsertDeleteVersion(nextVersion);
       await this.upsertMemoryRow(restored, this.embeddings.get(version.memoryId));
     });
+    this.memories.set(version.memoryId, restored);
+    this.deleteVersions.set(deleteId, nextVersion);
     this.journal?.onRestore(nextVersion);
     return nextVersion;
   }
@@ -779,8 +781,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       ...(input.createdBy ? { createdBy: input.createdBy.trim() } : {}),
       ...(input.reason ? { reason: input.reason.trim() } : {}),
     };
-    this.abstractionLinks.set(link.id, link);
-    this.enqueuePersist(async () => {
+    await this.persist(async () => {
       await executeQuery(this.pool, `
         INSERT INTO l2_memory_abstraction_links (
           id, source_memory_id, abstracted_memory_id, external_ref, created_at, created_by, reason
@@ -794,6 +795,7 @@ class PostgresMemoryStore implements MemoryStorePort {
           reason = EXCLUDED.reason
       `, [link.id, link.sourceMemoryId, link.abstractedMemoryId, link.externalRef, link.createdAt, link.createdBy ?? null, link.reason ?? null]);
     });
+    this.abstractionLinks.set(link.id, link);
     return link;
   }
 
@@ -842,8 +844,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     const key = memoryKey(first, second);
     if (this.memoryLinks.has(key)) return null;
     const link: MemoryLink = { id1: first, id2: second, linkType: linkType.trim() || 'related', createdAt: Date.now() };
-    this.memoryLinks.set(key, link);
-    this.enqueuePersist(async () => {
+    await this.persist(async () => {
       await executeQuery(this.pool, `
         INSERT INTO memory_links (id1, id2, link_type, created_at)
         VALUES ($1,$2,$3,$4)
@@ -852,6 +853,7 @@ class PostgresMemoryStore implements MemoryStorePort {
           created_at = EXCLUDED.created_at
       `, [link.id1, link.id2, link.linkType, link.createdAt]);
     });
+    this.memoryLinks.set(key, link);
     return link;
   }
 
@@ -861,13 +863,12 @@ class PostgresMemoryStore implements MemoryStorePort {
     if (!normalizedId1 || !normalizedId2) return false;
     const [first, second] = normalizedId1 < normalizedId2 ? [normalizedId1, normalizedId2] : [normalizedId2, normalizedId1];
     const key = memoryKey(first, second);
-    const removed = this.memoryLinks.delete(key);
-    if (removed) {
-      this.enqueuePersist(async () => {
-        await executeQuery(this.pool, 'DELETE FROM memory_links WHERE id1 = $1 AND id2 = $2', [first, second]);
-      });
-    }
-    return removed;
+    if (!this.memoryLinks.has(key)) return false;
+    await this.persist(async () => {
+      await executeQuery(this.pool, 'DELETE FROM memory_links WHERE id1 = $1 AND id2 = $2', [first, second]);
+    });
+    this.memoryLinks.delete(key);
+    return true;
   }
 
   async getLinkedMemories(id: string): Promise<MemoryLink[]> {
@@ -895,16 +896,16 @@ class PostgresMemoryStore implements MemoryStorePort {
       const next = { ...existing };
       if (fields.type !== undefined) next.type = fields.type;
       if (fields.sensitivity !== undefined) next.sensitivity = fields.sensitivity;
+      await this.persist(() => this.upsertMemoryRow(next, this.embeddings.get(id)));
       this.memories.set(id, next);
-      this.enqueuePersist(() => this.upsertMemoryRow(next, this.embeddings.get(id)));
       count += 1;
     }
     return count;
   }
 
   async upsertContactProfile(profile: ContactProfileArtifact): Promise<void> {
+    await this.persist(() => this.persistContactProfile(profile));
     this.contactProfiles.set(profile.contactId, profile);
-    this.enqueuePersist(() => this.persistContactProfile(profile));
   }
 
   async getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined> {
@@ -924,9 +925,9 @@ class PostgresMemoryStore implements MemoryStorePort {
     const now = options.now ?? Date.now();
     const id = options.id?.trim() || randomUUID();
     const entry: ScratchpadEntry = { id, content: normalized, createdAt: now, updatedAt: now };
+    await this.persist(() => this.upsertScratchpadEntry(entry));
     this.scratchpadEntries.set(id, entry);
-    this.enqueuePersist(() => this.upsertScratchpadEntry(entry));
-    const evictedIds = this.pruneScratchpadEntries();
+    const evictedIds = await this.pruneScratchpadEntries();
     const current = this.scratchpadEntries.get(id);
     if (!current) throw new Error(`Failed to load scratchpad entry after insert: ${id}`);
     return { entry: current, evictedIds };
@@ -946,22 +947,21 @@ class PostgresMemoryStore implements MemoryStorePort {
       content: content.trim(),
       updatedAt: options.now ?? Date.now(),
     };
+    await this.persist(() => this.upsertScratchpadEntry(updated));
     this.scratchpadEntries.set(normalizedId, updated);
-    this.enqueuePersist(() => this.upsertScratchpadEntry(updated));
     return updated;
   }
 
   async removeScratchpadEntry(id: string): Promise<boolean> {
     const normalizedId = id.trim();
     if (!normalizedId) return false;
-    const removed = this.scratchpadEntries.delete(normalizedId);
-    if (removed) {
-      this.enqueuePersist(async () => {
-        await executeQuery(this.pool, 'DELETE FROM scratchpad_entries WHERE id = $1', [normalizedId]);
-        this.syncScratchpadMirror();
-      });
-    }
-    return removed;
+    if (!this.scratchpadEntries.has(normalizedId)) return false;
+    await this.persist(async () => {
+      await executeQuery(this.pool, 'DELETE FROM scratchpad_entries WHERE id = $1', [normalizedId]);
+    });
+    this.scratchpadEntries.delete(normalizedId);
+    this.syncScratchpadMirror();
+    return true;
   }
 
   async getScratchpadEntry(id: string): Promise<ScratchpadEntry | undefined> {
@@ -974,25 +974,23 @@ class PostgresMemoryStore implements MemoryStorePort {
       .slice(0, clampLimit(limit, 64, 1, 64));
   }
 
-  private pruneScratchpadEntries(): string[] {
+  private async pruneScratchpadEntries(): Promise<string[]> {
     const maxEntries = 64;
     const ordered = Array.from(this.scratchpadEntries.values())
       .sort((left, right) => left.updatedAt - right.updatedAt || left.createdAt - right.createdAt);
     const overflow = Math.max(0, ordered.length - maxEntries);
     const evicted = ordered.slice(0, overflow).map(entry => entry.id);
-    for (const id of evicted) {
-      this.scratchpadEntries.delete(id);
-    }
     if (evicted.length > 0) {
-      this.enqueuePersist(async () => {
+      await this.persist(async () => {
         for (const id of evicted) {
           await executeQuery(this.pool, 'DELETE FROM scratchpad_entries WHERE id = $1', [id]);
         }
-        this.syncScratchpadMirror();
       });
-    } else {
-      this.syncScratchpadMirror();
+      for (const id of evicted) {
+        this.scratchpadEntries.delete(id);
+      }
     }
+    this.syncScratchpadMirror();
     return evicted;
   }
 }

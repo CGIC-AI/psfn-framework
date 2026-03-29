@@ -52,19 +52,34 @@ interface MemoryRow {
 
 class FakeMemoryPool {
   readonly memories = new Map<string, MemoryRow>();
+  readonly queryFailures: Array<{ fragment: string; error: Error }>;
   readonly schemaHasEmbeddingColumn: boolean;
   readonly schemaHasLegacyEmbeddingTable: boolean;
 
   constructor(options: {
     schemaHasEmbeddingColumn?: boolean;
     schemaHasLegacyEmbeddingTable?: boolean;
+    queryFailures?: Array<{ fragment: string; errorMessage: string }>;
   } = {}) {
     this.schemaHasEmbeddingColumn = options.schemaHasEmbeddingColumn ?? true;
     this.schemaHasLegacyEmbeddingTable = options.schemaHasLegacyEmbeddingTable ?? false;
+    this.queryFailures = (options.queryFailures ?? []).map(failure => ({
+      fragment: failure.fragment,
+      error: new Error(failure.errorMessage),
+    }));
+  }
+
+  failNextQuery(fragment: string, errorMessage: string): void {
+    this.queryFailures.push({ fragment, error: new Error(errorMessage) });
   }
 
   async query(text: string, values: readonly unknown[] = []): Promise<QueryResult> {
     const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+    const failureIndex = this.queryFailures.findIndex(failure => normalized.includes(failure.fragment));
+    if (failureIndex >= 0) {
+      const [failure] = this.queryFailures.splice(failureIndex, 1);
+      throw failure.error;
+    }
     if (
       normalized === 'begin'
       || normalized === 'commit'
@@ -221,6 +236,74 @@ describe('postgres memory store', () => {
       allowExitOnIdle: true,
     });
     expect(postgresMocks.ensurePostgresSchema).toHaveBeenCalled();
+  });
+
+  it('rejects inserts when persistence fails and leaves the in-memory cache untouched', async () => {
+    const pool = new FakeMemoryPool();
+    pool.failNextQuery('insert into l2_memories', 'simulated insert failure');
+    postgresMocks.activePool = pool;
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    const memory: PurrMemory = {
+      id: 'mem-failure',
+      text: 'failure path memory',
+      type: 'semantic',
+      importance: 0.4,
+      confidence: 0.8,
+      emotionalValence: 0.1,
+      salience: 0.2,
+      sourceRef: 'api:test:failure',
+      extractedAt: 1_700_000_000_000,
+      lastAccessed: 1_700_000_000_000,
+      accessCount: 0,
+      tags: ['failure'],
+      sensitivity: 'low',
+      consentFlags: {},
+    };
+
+    await expect(store.insertMemory(memory, new Float32Array([0.1, 0.2, 0.3, 0.4]))).rejects.toThrow(
+      'simulated insert failure',
+    );
+    expect(await store.getById(memory.id)).toBeUndefined();
+    expect(await store.countActiveMemories()).toBe(0);
+    expect(pool.memories.has(memory.id)).toBe(false);
+  });
+
+  it('rejects soft deletes when persistence fails and keeps the active memory visible', async () => {
+    const pool = new FakeMemoryPool();
+    postgresMocks.activePool = pool;
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    const memory: PurrMemory = {
+      id: 'mem-soft-delete',
+      text: 'soft delete memory',
+      type: 'semantic',
+      importance: 0.4,
+      confidence: 0.8,
+      emotionalValence: 0.1,
+      salience: 0.2,
+      sourceRef: 'api:test:delete',
+      extractedAt: 1_700_000_000_100,
+      lastAccessed: 1_700_000_000_100,
+      accessCount: 0,
+      tags: ['delete'],
+      sensitivity: 'low',
+      consentFlags: {},
+    };
+
+    await store.insertMemory(memory, new Float32Array([0.2, 0.3, 0.4, 0.5]));
+    pool.failNextQuery('insert into l2_memory_delete_versions', 'simulated delete-version failure');
+
+    await expect(store.softDeleteMemory(memory.id, {
+      deleteId: 'delete-version',
+      deletedBy: 'tester',
+      reason: 'cleanup',
+    })).rejects.toThrow(
+      'simulated delete-version failure',
+    );
+    expect(await store.getById(memory.id)).toEqual(memory);
+    expect(await store.getDeleteVersion('delete-version')).toBeUndefined();
+    expect(await store.countActiveMemories()).toBe(1);
   });
 
   it('rejects postgres memory schemas that still use the legacy embeddings table', async () => {

@@ -129,7 +129,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, options.canonicalContactId) ?? {};
 
-    const existing = options.memoryStore.getMemoriesByChannel(options.channelId, 30);
+    const existing = await options.memoryStore.getMemoriesByChannel(options.channelId, 30);
     const noveltyCorpus = existing.map(m => m.text);
     const existingFacts = existing
       .map(m => `- [${m.type}] ${m.text}`)

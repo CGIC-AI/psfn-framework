@@ -266,7 +266,7 @@ async function main(): Promise<void> {
     }
 
     // Check memories in store
-    const channelMemories = memoryStore.getMemoriesByChannel(CHANNEL, 20);
+    const channelMemories = await memoryStore.getMemoriesByChannel(CHANNEL, 20);
     assert(channelMemories.length > 0,
       `${channelMemories.length} memories stored for channel`);
 

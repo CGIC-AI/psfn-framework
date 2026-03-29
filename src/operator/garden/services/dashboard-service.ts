@@ -191,14 +191,14 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return { sessionId, utilizationPct, hasTelemetry: true };
   }
 
-  getDashboardData(options: { costWindow?: DashboardCostWindow } = {}): AdminDashboardData {
+  async getDashboardData(options: { costWindow?: DashboardCostWindow } = {}): Promise<AdminDashboardData> {
     const selectedCostWindow = options.costWindow ?? 'today';
     const nowMs = Date.now();
     this.pruneUsageSamples(nowMs);
     const costByWindow = this.usageSamples.length > 0
       ? aggregateDashboardCostWindows(this.usageSamples, nowMs)
       : createEmptyDashboardCostWindowTotals();
-    const memStats = this.deps.memoryStore.getStats();
+    const memStats = await this.deps.memoryStore.getStats();
     const channels = this.deps.sessionStore.listChannels();
     return {
       stats: {

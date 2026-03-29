@@ -83,7 +83,7 @@ describe('resolveMentionOnlyContactForFact', () => {
     contactStore = new ContactStore(db, PRIMARY_USER_ID);
   });
 
-  it('promotes an existing contact relationship from stronger recurring evidence', () => {
+  it('promotes an existing contact relationship from stronger recurring evidence', async () => {
     const primary = contactStore.upsert({
       displayName: 'Avery',
       discordUserId: PRIMARY_USER_ID,
@@ -93,7 +93,7 @@ describe('resolveMentionOnlyContactForFact', () => {
       relationshipType: 'stranger',
     });
 
-    const resolved = resolveMentionOnlyContactForFact({
+    const resolved = await resolveMentionOnlyContactForFact({
       fact: makeFact("Avery's sister Alex is visiting this weekend", { tags: ['family'] }),
       channelId: 'api:mention-contact',
       canonicalContactId: primary.id,
@@ -103,7 +103,8 @@ describe('resolveMentionOnlyContactForFact', () => {
       memoryStore,
     });
 
-    expect(resolved?.id).toBe(alex.id);
+    expect(resolved).toBeDefined();
+    expect(resolved!.id).toBe(alex.id);
     expect(contactStore.getById(alex.id)?.relationshipType).toBe('family');
   });
 });

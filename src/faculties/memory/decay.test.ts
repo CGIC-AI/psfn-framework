@@ -52,7 +52,7 @@ describe('SalienceDecay', () => {
     vi.useRealTimers();
   });
 
-  it('decays old memories', () => {
+  it('decays old memories', async () => {
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const mem = makeMemory({
       type: 'episodic',
@@ -61,7 +61,7 @@ describe('SalienceDecay', () => {
     });
     store.insertMemory(mem, makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
     const updated = store.getAllActiveMemories();
     expect(updated).toHaveLength(1);
@@ -69,7 +69,7 @@ describe('SalienceDecay', () => {
     expect(updated[0].salience).toBeCloseTo(0.5, 1);
   });
 
-  it('never decays below floor', () => {
+  it('never decays below floor', async () => {
     const veryOld = Date.now() - 365 * 24 * 60 * 60 * 1000;
     const mem = makeMemory({
       type: 'episodic',
@@ -78,13 +78,13 @@ describe('SalienceDecay', () => {
     });
     store.insertMemory(mem, makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
     const updated = store.getAllActiveMemories();
     expect(updated[0].salience).toBe(MEMORY_CONFIG.salienceFloor);
   });
 
-  it('procedural memories decay slower than episodic', () => {
+  it('procedural memories decay slower than episodic', async () => {
     const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
 
     const episodic = makeMemory({
@@ -103,7 +103,7 @@ describe('SalienceDecay', () => {
     store.insertMemory(episodic, makeEmbedding());
     store.insertMemory(procedural, makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
     const all = store.getAllActiveMemories();
     const ep = all.find(m => m.id === 'ep')!;
@@ -112,7 +112,7 @@ describe('SalienceDecay', () => {
     expect(pr.salience).toBeGreaterThan(ep.salience);
   });
 
-  it('retains high-intensity memories longer than medium and low-intensity memories', () => {
+  it('retains high-intensity memories longer than medium and low-intensity memories', async () => {
     const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
 
     const lowIntensity = makeMemory({
@@ -143,7 +143,7 @@ describe('SalienceDecay', () => {
     store.insertMemory(mediumIntensity, makeEmbedding());
     store.insertMemory(highIntensity, makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
     const all = store.getAllActiveMemories();
     const low = all.find(m => m.id === 'low-intensity')!;
@@ -155,7 +155,7 @@ describe('SalienceDecay', () => {
     expect(low.salience).toBeCloseTo(0.5, 1);
   });
 
-  it('composes emotional intensity persistence with durable retention multipliers', () => {
+  it('composes emotional intensity persistence with durable retention multipliers', async () => {
     const twoYearsAgo = Date.now() - 2 * 365 * 24 * 60 * 60 * 1000;
 
     const standardLowIntensity = makeMemory({
@@ -188,7 +188,7 @@ describe('SalienceDecay', () => {
     store.insertMemory(durableLowIntensity, makeEmbedding());
     store.insertMemory(durableHighIntensity, makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
     const all = store.getAllActiveMemories();
     const standardLow = all.find(m => m.id === 'standard-low-intensity')!;
@@ -200,7 +200,7 @@ describe('SalienceDecay', () => {
     expect(durableHigh.salience).toBeGreaterThan(durableLow.salience);
   });
 
-  it('preserves durable core profile memories better than transient memories', () => {
+  it('preserves durable core profile memories better than transient memories', async () => {
     const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
 
     const durable = makeMemory({
@@ -221,7 +221,7 @@ describe('SalienceDecay', () => {
     store.insertMemory(durable, makeEmbedding());
     store.insertMemory(transient, makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
     const all = store.getAllActiveMemories();
     const durableUpdated = all.find(m => m.id === 'durable-rel')!;
@@ -232,7 +232,7 @@ describe('SalienceDecay', () => {
     expect(durableUpdated.salience).toBeGreaterThan(MEMORY_CONFIG.durableSalienceFloor);
   });
 
-  it('never decays durable memories below durable floor', () => {
+  it('never decays durable memories below durable floor', async () => {
     const veryOld = Date.now() - 20 * 365 * 24 * 60 * 60 * 1000;
     const mem = makeMemory({
       type: 'relational',
@@ -242,28 +242,28 @@ describe('SalienceDecay', () => {
     });
     store.insertMemory(mem, makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
     const updated = store.getAllActiveMemories();
     expect(updated[0].salience).toBe(MEMORY_CONFIG.durableSalienceFloor);
   });
 
-  it('does not update recently accessed memories', () => {
+  it('does not update recently accessed memories', async () => {
     const mem = makeMemory({
       salience: 0.8,
       lastAccessed: Date.now(),
     });
     store.insertMemory(mem, makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
     const updated = store.getAllActiveMemories();
     // No meaningful change, salience should remain 0.8
     expect(updated[0].salience).toBe(0.8);
   });
 
-  it('runs decay updates inside a single transaction', () => {
-    const txSpy = vi.spyOn(store, 'runInTransaction');
+  it('updates eligible memories without relying on a transaction wrapper helper', async () => {
+    const updateSpy = vi.spyOn(store, 'updateMemory');
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     store.insertMemory(makeMemory({
       id: 'tx-check',
@@ -272,9 +272,9 @@ describe('SalienceDecay', () => {
       lastAccessed: oneWeekAgo,
     }), makeEmbedding());
 
-    decay.run();
+    await decay.run();
 
-    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy).toHaveBeenCalledTimes(1);
   });
 
   it('uses provided maintenance interval when starting timer', () => {
@@ -295,7 +295,7 @@ describe('SalienceDecay', () => {
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MEMORY_CONFIG.maintenanceIntervalMs);
   });
 
-  it('processes salience decay across multiple pages of active memories', () => {
+  it('processes salience decay across multiple pages of active memories', async () => {
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
 
@@ -308,7 +308,7 @@ describe('SalienceDecay', () => {
       }), makeEmbedding());
     }
 
-    pagedDecay.run();
+    await pagedDecay.run();
 
     const updated = store.getAllActiveMemories(100);
     expect(updated).toHaveLength(5);
@@ -317,7 +317,7 @@ describe('SalienceDecay', () => {
     }
   });
 
-  it('uses paginated reads while decaying active memories', () => {
+  it('uses paginated reads while decaying active memories', async () => {
     const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     for (let i = 0; i < 5; i += 1) {
@@ -330,7 +330,7 @@ describe('SalienceDecay', () => {
     }
 
     const listSpy = vi.spyOn(store, 'listActiveMemories');
-    pagedDecay.run();
+    await pagedDecay.run();
 
     expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 0 });
     expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 2 });

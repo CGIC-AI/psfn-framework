@@ -343,7 +343,16 @@ export function buildAdminApiRoutes(options: {
           return;
         }
         const costWindow = resolveDashboardCostWindow(costWindowParam);
-        sendJson(res, 200, dashboardService.getDashboardData({ costWindow }));
+        dashboardService.getDashboardData({ costWindow }).then(
+          (payload) => {
+            sendJson(res, 200, payload);
+          },
+          (error) => {
+            sendJson(res, 500, {
+              error: `Failed to load dashboard data: ${toSanitizedMessage(error, 'unknown error')}`,
+            });
+          },
+        );
       },
     },
     {
@@ -460,11 +469,17 @@ export function buildAdminApiRoutes(options: {
           sendJson(res, 400, { error: 'startDate must be before or equal to endDate' });
           return;
         }
-        const data = memoryService.listMemories(url.searchParams);
-        sendJson(res, 200, {
-          ...data,
-          contactsById: Object.fromEntries(data.contactsById.entries()),
-        });
+        memoryService.listMemories(url.searchParams).then(
+          (data) => {
+            sendJson(res, 200, {
+              ...data,
+              contactsById: Object.fromEntries(data.contactsById.entries()),
+            });
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list memories') });
+          },
+        );
       },
     },
     {
@@ -496,7 +511,14 @@ export function buildAdminApiRoutes(options: {
           sendJson(res, 400, { error: 'Invalid managed memory scope kind' });
           return;
         }
-        sendJson(res, 200, memoryService.listManagedScopes(url.searchParams));
+        memoryService.listManagedScopes(url.searchParams).then(
+          (payload) => {
+            sendJson(res, 200, payload);
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list managed scopes') });
+          },
+        );
       },
     },
     {
@@ -506,12 +528,18 @@ export function buildAdminApiRoutes(options: {
         const separator = scopeKey.indexOf(':');
         const kind = separator >= 0 ? scopeKey.slice(0, separator) : '';
         const id = separator >= 0 ? scopeKey.slice(separator + 1) : '';
-        const detail = memoryService.getManagedScopeDetail(kind, id);
-        if (!detail) {
-          sendJson(res, 404, { error: 'Managed memory scope not found' });
-          return;
-        }
-        sendJson(res, 200, detail);
+        memoryService.getManagedScopeDetail(kind, id).then(
+          (detail) => {
+            if (!detail) {
+              sendJson(res, 404, { error: 'Managed memory scope not found' });
+              return;
+            }
+            sendJson(res, 200, detail);
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load managed scope detail') });
+          },
+        );
       },
     },
     {
@@ -546,13 +574,19 @@ export function buildAdminApiRoutes(options: {
             return;
           }
 
-          const result = memoryService.updateMemoryScope(id, { scopeRef, scopeTags, repair });
-          if (!result.ok) {
-            const status = result.message === 'Memory not found' ? 404 : 400;
-            sendJson(res, status, { error: result.message ?? 'Failed to update memory scope' });
-            return;
-          }
-          sendJson(res, 200, result);
+          memoryService.updateMemoryScope(id, { scopeRef, scopeTags, repair }).then(
+            (result) => {
+              if (!result.ok) {
+                const status = result.message === 'Memory not found' ? 404 : 400;
+                sendJson(res, status, { error: result.message ?? 'Failed to update memory scope' });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => {
+              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to update memory scope') });
+            },
+          );
         });
       },
     },
@@ -577,12 +611,18 @@ export function buildAdminApiRoutes(options: {
             return;
           }
 
-          const result = memoryService.linkMemories(id1, id2, linkType);
-          if (!result.ok) {
-            sendJson(res, 400, { error: result.message ?? 'Failed to create link' });
-            return;
-          }
-          sendJson(res, 201, result);
+          memoryService.linkMemories(id1, id2, linkType).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 400, { error: result.message ?? 'Failed to create link' });
+                return;
+              }
+              sendJson(res, 201, result);
+            },
+            (error) => {
+              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to create memory link') });
+            },
+          );
         });
       },
     },
@@ -605,12 +645,18 @@ export function buildAdminApiRoutes(options: {
             return;
           }
 
-          const result = memoryService.unlinkMemories(id1, id2);
-          if (!result.ok) {
-            sendJson(res, 404, { error: result.message ?? 'Link not found' });
-            return;
-          }
-          sendJson(res, 200, { ok: true });
+          memoryService.unlinkMemories(id1, id2).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 404, { error: result.message ?? 'Link not found' });
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+            },
+            (error) => {
+              sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to remove memory link') });
+            },
+          );
         });
       },
     },
@@ -635,12 +681,18 @@ export function buildAdminApiRoutes(options: {
             return;
           }
 
-          const result = memoryService.bulkDelete(ids);
-          if (!result.ok) {
-            sendJson(res, 400, { error: result.message ?? 'Bulk delete failed' });
-            return;
-          }
-          sendJson(res, 200, result);
+          memoryService.bulkDelete(ids).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 400, { error: result.message ?? 'Bulk delete failed' });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => {
+              sendJson(res, 500, { error: toSanitizedMessage(error, 'Bulk delete failed') });
+            },
+          );
         });
       },
     },
@@ -675,12 +727,18 @@ export function buildAdminApiRoutes(options: {
             return;
           }
 
-          const result = memoryService.bulkUpdate(ids, { memoryType, sensitivity });
-          if (!result.ok) {
-            sendJson(res, 400, { error: result.message ?? 'Bulk update failed' });
-            return;
-          }
-          sendJson(res, 200, result);
+          memoryService.bulkUpdate(ids, { memoryType, sensitivity }).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 400, { error: result.message ?? 'Bulk update failed' });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => {
+              sendJson(res, 500, { error: toSanitizedMessage(error, 'Bulk update failed') });
+            },
+          );
         });
       },
     },
@@ -689,32 +747,50 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/links'),
       handle: (_req, res, { id }) => {
-        const links = memoryService.getMemoryLinks(id);
-        sendJson(res, 200, { links });
+        memoryService.getMemoryLinks(id).then(
+          (links) => {
+            sendJson(res, 200, { links });
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load memory links') });
+          },
+        );
       },
     },
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
       handle: (_req, res, { id }) => {
-        const detail = memoryService.getMemoryDetail(id);
-        if (!detail) {
-          sendJson(res, 404, { error: 'Memory not found' });
-          return;
-        }
-        sendJson(res, 200, detail);
+        memoryService.getMemoryDetail(id).then(
+          (detail) => {
+            if (!detail) {
+              sendJson(res, 404, { error: 'Memory not found' });
+              return;
+            }
+            sendJson(res, 200, detail);
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load memory detail') });
+          },
+        );
       },
     },
     {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
       handle: (_req, res, { id }) => {
-        const result = memoryService.supersedeMemory(id);
-        if (!result.ok) {
-          sendJson(res, 404, { error: result.message ?? 'Memory not found' });
-          return;
-        }
-        sendJson(res, 200, { ok: true });
+        memoryService.supersedeMemory(id).then(
+          (result) => {
+            if (!result.ok) {
+              sendJson(res, 404, { error: result.message ?? 'Memory not found' });
+              return;
+            }
+            sendJson(res, 200, { ok: true });
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to supersede memory') });
+          },
+        );
       },
     },
     {
@@ -736,17 +812,23 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/contacts'),
       handle: (req, res) => {
         const url = parseRequestUrl(req, '/api/admin/contacts');
-        const data = contactsService.listContacts(url.searchParams);
-        sendJson(
-          res,
-          200,
-          {
-            ...data,
-            profileMap: Object.fromEntries(data.profileMap.entries()),
-            relatedChannelMap: Object.fromEntries(data.relatedChannelMap.entries()),
-            socialGraphMap: Object.fromEntries(data.socialGraphMap.entries()),
+        contactsService.listContacts(url.searchParams).then(
+          (data) => {
+            sendJson(
+              res,
+              200,
+              {
+                ...data,
+                profileMap: Object.fromEntries(data.profileMap.entries()),
+                relatedChannelMap: Object.fromEntries(data.relatedChannelMap.entries()),
+                socialGraphMap: Object.fromEntries(data.socialGraphMap.entries()),
+              },
+              ADMIN_DYNAMIC_JSON_HEADERS,
+            );
           },
-          ADMIN_DYNAMIC_JSON_HEADERS,
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list contacts') });
+          },
         );
       },
     },
@@ -840,12 +922,18 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }) => {
-        const detail = contactsService.getContactDetail(id);
-        if (!detail) {
-          sendJson(res, 404, { error: 'Contact not found' });
-          return;
-        }
-        sendJson(res, 200, detail, ADMIN_DYNAMIC_JSON_HEADERS);
+        contactsService.getContactDetail(id).then(
+          (detail) => {
+            if (!detail) {
+              sendJson(res, 404, { error: 'Contact not found' });
+              return;
+            }
+            sendJson(res, 200, detail, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          (error) => {
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load contact detail') });
+          },
+        );
       },
     },
     {
@@ -923,9 +1011,8 @@ export function buildAdminApiRoutes(options: {
             return;
           }
 
-          let payload: unknown;
           try {
-            payload = JSON.parse(configJson);
+            JSON.parse(configJson);
           } catch {
             sendJson(res, 400, { error: 'configJson must be valid JSON' });
             return;

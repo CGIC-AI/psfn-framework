@@ -265,18 +265,20 @@ function relinkRecurringMemories(params: {
   channelMemories: readonly PurrMemory[];
   canonicalContactName?: string;
   companionName?: string;
-}): void {
+}): Promise<void> {
+  return (async () => {
   for (const memory of params.channelMemories) {
     if (!candidateMatchesMemory(memory, params.candidate, params)) continue;
     if (memory.contactId && memory.contactId !== params.canonicalContactId) continue;
     if (memory.contactId === params.contactId) continue;
-    params.memoryStore.updateMemory(memory.id, { contactId: params.contactId });
+    await params.memoryStore.updateMemory(memory.id, { contactId: params.contactId });
   }
+  })();
 }
 
-export function resolveMentionOnlyContactForFact(
+export async function resolveMentionOnlyContactForFact(
   params: ResolveMentionOnlyContactParams,
-): Contact | undefined {
+) : Promise<Contact | undefined> {
   if (!params.contactStore) return undefined;
   if (typeof params.contactStore.listAll !== 'function' || typeof params.contactStore.upsert !== 'function') {
     return undefined;
@@ -291,7 +293,7 @@ export function resolveMentionOnlyContactForFact(
 
   const contacts = params.contactStore.listAll();
   const existing = findExistingMentionOnlyContact(contacts, candidate);
-  const channelMemories = params.memoryStore.getMemoriesByChannel(params.channelId, 50);
+  const channelMemories = await params.memoryStore.getMemoriesByChannel(params.channelId, 50);
 
   if (existing) {
     if (
@@ -304,7 +306,7 @@ export function resolveMentionOnlyContactForFact(
         'system:memory_extraction:mention_contact',
       );
     }
-    relinkRecurringMemories({
+    await relinkRecurringMemories({
       memoryStore: params.memoryStore,
       candidate,
       contactId: existing.id,
@@ -331,7 +333,7 @@ export function resolveMentionOnlyContactForFact(
     },
   );
 
-  relinkRecurringMemories({
+  await relinkRecurringMemories({
     memoryStore: params.memoryStore,
     candidate,
     contactId: created.id,

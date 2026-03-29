@@ -396,7 +396,7 @@ export class MemoryWriter {
     const targetSalience = clampUnit(salience ?? importance, importance);
 
     // 1. Check for exact duplicates (high threshold per type)
-    const duplicates = this.memoryStore.searchByEmbedding(
+    const duplicates = await this.memoryStore.searchByEmbedding(
       embedding,
       DEDUP_THRESHOLD[type],
       3,
@@ -466,7 +466,7 @@ export class MemoryWriter {
         updates.tags = normalizeMemoryTags([...(updates.tags ?? existing.tags), DURABLE_RETENTION_TAG]);
       }
 
-      this.memoryStore.updateMemory(existing.id, updates);
+      await this.memoryStore.updateMemory(existing.id, updates);
       log.debug('Deduplicated memory', {
         existingId: existing.id,
         text: text.slice(0, 60),
@@ -496,7 +496,7 @@ export class MemoryWriter {
     }
 
     // 2. Check for contradictions (lower threshold)
-    const broader = this.memoryStore.searchByEmbedding(
+    const broader = await this.memoryStore.searchByEmbedding(
       embedding,
       DEDUP_THRESHOLD[type] - MEMORY_CONFIG.contradictionThresholdOffset,
       5,
@@ -576,11 +576,10 @@ export class MemoryWriter {
       contactId,
     };
 
-    this.memoryStore.runInTransaction(() => {
-      for (const old of supersededMemories) {
-        this.memoryStore.updateMemory(old.id, { supersededBy: memory.id });
-      }
-      this.memoryStore.insertMemory(memory, embedding);
+    await this.memoryStore.persistMemoryWrite({
+      memory,
+      embedding,
+      supersededMemoryIds: supersededMemories.map(old => old.id),
     });
 
     for (const old of supersededMemories) {
@@ -639,7 +638,7 @@ export class MemoryWriter {
     const embedding = await this.embeddingService.embed(text);
 
     // Find similar memories of the same type at the dedup threshold
-    const similar = this.memoryStore.searchByEmbedding(
+    const similar = await this.memoryStore.searchByEmbedding(
       embedding,
       DEDUP_THRESHOLD[type] - MEMORY_CONFIG.contradictionThresholdOffset,
       5,
@@ -722,11 +721,10 @@ export class MemoryWriter {
       contactId,
     };
 
-    this.memoryStore.runInTransaction(() => {
-      for (const old of supersededMemories) {
-        this.memoryStore.updateMemory(old.id, { supersededBy: memory.id });
-      }
-      this.memoryStore.insertMemory(memory, embedding);
+    await this.memoryStore.persistMemoryWrite({
+      memory,
+      embedding,
+      supersededMemoryIds: supersededMemories.map(old => old.id),
     });
     for (const old of supersededMemories) {
       log.debug('Upsert superseded memory', { oldId: old.id, replacementId: memory.id, text: text.slice(0, 60) });
@@ -745,7 +743,7 @@ export class MemoryWriter {
       throw new Error('memoryId is required');
     }
 
-    const source = this.memoryStore.getById(memoryId);
+    const source = await this.memoryStore.getById(memoryId);
     if (!source || source.deletedAt !== undefined) {
       return null;
     }
@@ -758,7 +756,7 @@ export class MemoryWriter {
     const reason = opts.reason?.trim() || undefined;
 
     if (behavior === 'delete') {
-      const deleted = this.memoryStore.softDeleteMemory(memoryId, {
+      const deleted = await this.memoryStore.softDeleteMemory(memoryId, {
         deletedBy: requestedBy,
         reason,
       });
@@ -796,7 +794,7 @@ export class MemoryWriter {
       contactId: source.contactId,
     });
 
-    this.memoryStore.recordAbstractionLink({
+    await this.memoryStore.recordAbstractionLink({
       sourceMemoryId: source.id,
       abstractedMemoryId: written.memory.id,
       externalRef,
@@ -810,7 +808,7 @@ export class MemoryWriter {
       `external_ref:${externalRef}`,
     ].filter((part): part is string => typeof part === 'string' && part.length > 0);
 
-    const deleted = this.memoryStore.softDeleteMemory(memoryId, {
+    const deleted = await this.memoryStore.softDeleteMemory(memoryId, {
       deletedBy: requestedBy,
       reason: deleteReasonParts.join(' | '),
     });

@@ -127,7 +127,7 @@ async function main(): Promise<void> {
     }
 
     if (input === '/memories') {
-      const memories = memoryStore.getAllActiveMemories();
+      const memories = await memoryStore.getAllActiveMemories();
       if (memories.length === 0) {
         console.log('[Memory] No memories stored yet.\n');
       } else {

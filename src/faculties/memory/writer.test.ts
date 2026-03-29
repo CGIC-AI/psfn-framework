@@ -30,9 +30,9 @@ function mockEmbeddingService(): EmbeddingProviderPort {
 
 function mockMemoryStore(): {
   insertMemory: ReturnType<typeof vi.fn>;
+  persistMemoryWrite: ReturnType<typeof vi.fn>;
   searchByEmbedding: ReturnType<typeof vi.fn>;
   updateMemory: ReturnType<typeof vi.fn>;
-  runInTransaction: ReturnType<typeof vi.fn>;
   softDeleteMemory: ReturnType<typeof vi.fn>;
   recordAbstractionLink: ReturnType<typeof vi.fn>;
   getAllActiveMemories: ReturnType<typeof vi.fn>;
@@ -40,11 +40,16 @@ function mockMemoryStore(): {
   getStats: ReturnType<typeof vi.fn>;
   getMemoriesByChannel: ReturnType<typeof vi.fn>;
 } {
-  return {
+  const store = {
     insertMemory: vi.fn(),
+    persistMemoryWrite: vi.fn(async (input: { memory: PurrMemory; embedding: Float32Array; supersededMemoryIds?: string[] }) => {
+      for (const memoryId of input.supersededMemoryIds ?? []) {
+        store.updateMemory(memoryId, { supersededBy: input.memory.id });
+      }
+      store.insertMemory(input.memory, input.embedding);
+    }),
     searchByEmbedding: vi.fn(() => []),
     updateMemory: vi.fn(),
-    runInTransaction: vi.fn((handler: () => unknown) => handler()),
     softDeleteMemory: vi.fn(),
     recordAbstractionLink: vi.fn(),
     getAllActiveMemories: vi.fn(() => []),
@@ -52,6 +57,7 @@ function mockMemoryStore(): {
     getStats: vi.fn(() => ({ total: 0, byType: {}, avgSalience: 0 })),
     getMemoriesByChannel: vi.fn(() => []),
   };
+  return store;
 }
 
 function makeExistingMemory(overrides: Partial<PurrMemory & { similarity: number }> = {}): PurrMemory & { similarity: number } {
@@ -398,7 +404,7 @@ describe('MemoryWriter', () => {
       });
 
       expect(result.action).toBe('superseded');
-      expect(store.runInTransaction).toHaveBeenCalledTimes(1);
+      expect(store.persistMemoryWrite).toHaveBeenCalledTimes(1);
       expect(store.updateMemory).toHaveBeenCalledWith('existing-001', {
         supersededBy: result.memory.id,
       });
@@ -637,7 +643,7 @@ describe('MemoryWriter', () => {
       });
 
       expect(result.action).toBe('superseded');
-      expect(store.runInTransaction).toHaveBeenCalledTimes(1);
+      expect(store.persistMemoryWrite).toHaveBeenCalledTimes(1);
       expect(store.updateMemory).toHaveBeenCalledWith('existing-001', {
         supersededBy: result.memory.id,
       });

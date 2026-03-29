@@ -11,7 +11,6 @@ import { computeProfileNovelty } from './signals.js';
 import type {
   AcceptedFactWrite,
   ProfileRefreshReason,
-  ProfileSourceMemory,
   ProfileSynthesisConfig,
   ExtractionTriggerReason,
 } from './types.js';
@@ -34,7 +33,7 @@ export async function refreshContactProfile(
   options: RefreshContactProfileOptions,
 ): Promise<void> {
   const now = Date.now();
-  const existingProfile = options.memoryStore.getContactProfile(options.canonicalContactId);
+  const existingProfile = await options.memoryStore.getContactProfile(options.canonicalContactId);
   const intervalElapsed = !existingProfile
     || (now - existingProfile.updatedAt) >= options.config.refreshIntervalMs;
   const withinCooldown = !!existingProfile
@@ -79,7 +78,7 @@ export async function refreshContactProfile(
     return;
   }
 
-  const sourceMemories = options.memoryStore.getMemoriesByContact(
+  const sourceMemories = await options.memoryStore.getMemoriesByContact(
     options.canonicalContactId,
     options.config.sourceMemoryLimit,
   );
@@ -169,7 +168,7 @@ export async function refreshContactProfile(
       ? 'memory_update'
       : 'interval';
 
-  options.memoryStore.upsertContactProfile({
+  await options.memoryStore.upsertContactProfile({
     contactId: options.canonicalContactId,
     summary,
     sourceMemoryIds: sourceMemories.map(memory => memory.id),

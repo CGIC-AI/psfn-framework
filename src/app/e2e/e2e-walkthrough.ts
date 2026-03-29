@@ -201,7 +201,7 @@ async function main(): Promise<void> {
   await memoryExtractor.extract(CHANNEL);
 
   // Print memories extracted from this walkthrough
-  const walkthroughMemories = memoryStore.getMemoriesByChannel(CHANNEL, 30);
+  const walkthroughMemories = await memoryStore.getMemoriesByChannel(CHANNEL, 30);
   if (walkthroughMemories.length > 0) {
     console.log(`\n  Memories extracted from walkthrough (${walkthroughMemories.length}):`);
     for (const m of walkthroughMemories) {
@@ -212,7 +212,7 @@ async function main(): Promise<void> {
   // Print session stats
   const sessionCount = sessionStore.count(CHANNEL);
   console.log(`\n  Session entries: ${sessionCount}`);
-  console.log(`  Total active memories in database: ${memoryStore.getAllActiveMemories().length}`);
+  console.log(`  Total active memories in database: ${(await memoryStore.getAllActiveMemories()).length}`);
 
   // Drain briefly, but do not block forever if one extraction call is still in-flight.
   await memoryExtractor.stop({ timeoutMs: 10_000 });

@@ -21,7 +21,7 @@ describe('createSqliteCompanionStore', () => {
     return dir;
   }
 
-  it('opens the sqlite companion database and assembles the memory store', () => {
+  it('opens the sqlite companion database and assembles the memory store', async () => {
     const rootDir = makeTempDir('psfn-sqlite-companion-store-');
     const companionDataDir = join(rootDir, 'companion-data');
     const databasePath = join(companionDataDir, 'companion.db');
@@ -33,7 +33,7 @@ describe('createSqliteCompanionStore', () => {
     });
 
     expect(existsSync(databasePath)).toBe(true);
-    expect(store.memoryStore.countActiveMemories()).toBe(0);
+    await expect(store.memoryStore.countActiveMemories()).resolves.toBe(0);
 
     store.db.close();
   });

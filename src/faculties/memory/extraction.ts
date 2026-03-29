@@ -397,7 +397,7 @@ export class MemoryExtractor {
   ): Promise<WriteResult> {
     let factContactId = canonicalContactId;
     if (fact.type === 'relational' && this.contactStore && channelId) {
-      const mentionOnlyContact = resolveMentionOnlyContactForFact({
+      const mentionOnlyContact = await resolveMentionOnlyContactForFact({
         fact,
         channelId,
         canonicalContactId,

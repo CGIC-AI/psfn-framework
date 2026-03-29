@@ -135,9 +135,8 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return map;
   }
 
-  private listManagedScopeMemories(): ReturnType<MemoryStorePort['getAllActiveMemories']> {
-    return this.deps.memoryStore
-      .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN)
+  private async listManagedScopeMemories() {
+    return (await this.deps.memoryStore.getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
       .filter(memory => !isInternalMemoryArtifact(memory));
   }
 
@@ -160,7 +159,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     };
   }
 
-  listMemories(params?: URLSearchParams): AdminMemoryListData {
+  async listMemories(params?: URLSearchParams): Promise<AdminMemoryListData> {
     const limit = parsePositiveInteger(
       params?.get('limit'),
       DEFAULT_MEMORY_LIST_LIMIT,
@@ -173,8 +172,8 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const startDate = parseDateFilter(params?.get('startDate'), 'start');
     const endDate = parseDateFilter(params?.get('endDate'), 'end');
 
-    const filtered = this.deps.memoryStore
-      .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN)
+    const filtered = (await this.deps.memoryStore
+      .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
       .filter((memory) => {
         if (isInternalMemoryArtifact(memory)) return false;
         if (typeFilter && memory.type !== typeFilter) return false;
@@ -203,8 +202,8 @@ export class AdminMemoryDataService implements AdminMemoryService {
     };
   }
 
-  getMemoryDetail(id: string): AdminMemoryDetailData | null {
-    const memory = this.deps.memoryStore.getById(id);
+  async getMemoryDetail(id: string): Promise<AdminMemoryDetailData | null> {
+    const memory = await this.deps.memoryStore.getById(id);
     if (!memory) return null;
     const linkedContact = memory.contactId
       ? this.buildContactSummaryMap().get(memory.contactId)
@@ -217,7 +216,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     };
   }
 
-  listManagedScopes(params?: URLSearchParams) {
+  async listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData> {
     const kindFilterRaw = params?.get('kind')?.trim().toLowerCase();
     const kindFilter = kindFilterRaw === 'project' || kindFilterRaw === 'north_star'
       ? kindFilterRaw as AdminMemoryManagedScopeKind
@@ -231,7 +230,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       needsRepairCount: number;
     }>();
 
-    for (const memory of this.listManagedScopeMemories()) {
+    for (const memory of await this.listManagedScopeMemories()) {
       const scopeDescriptors = collectManagedScopeDescriptors(memory)
         .filter(scope => !kindFilter || scope.kind === kindFilter);
       if (scopeDescriptors.length === 0) continue;
@@ -270,11 +269,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
     };
   }
 
-  getManagedScopeDetail(kind: string, id: string) {
+  async getManagedScopeDetail(kind: string, id: string): Promise<AdminMemoryScopeDetailData | null> {
     const scope = parseManagedScopeParams(kind, id);
     if (!scope) return null;
 
-    const memories = this.listManagedScopeMemories()
+    const memories = (await this.listManagedScopeMemories())
       .filter(memory => collectManagedScopeDescriptors(memory).some(descriptor => (
         descriptor.kind === scope.kind && descriptor.id === scope.id
       )))
@@ -318,15 +317,15 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const embedding = await embeddingService.embed(query);
     return {
       query,
-      results: this.deps.memoryStore
-        .searchByEmbedding(embedding, 0.1, 50)
+      results: (await this.deps.memoryStore
+        .searchByEmbedding(embedding, 0.1, 50))
         .filter(memory => !isInternalMemoryArtifact(memory)),
       contactsById: this.buildContactSummaryMap(),
     };
   }
 
-  supersedeMemory(id: string): MemoryMutationResult {
-    const memory = this.deps.memoryStore.getById(id);
+  async supersedeMemory(id: string): Promise<MemoryMutationResult> {
+    const memory = await this.deps.memoryStore.getById(id);
     if (!memory) {
       this.deps.appendAuditTimelineEntry?.(
         'memory_mutation',
@@ -339,7 +338,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       };
     }
 
-    this.deps.memoryStore.updateMemory(id, { supersededBy: `admin-${randomUUID()}` });
+    await this.deps.memoryStore.updateMemory(id, { supersededBy: `admin-${randomUUID()}` });
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',
@@ -349,15 +348,15 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return { ok: true };
   }
 
-  updateMemoryScope(
+  async updateMemoryScope(
     id: string,
     fields: {
       scopeRef?: { kind?: string; id?: string; label?: string } | null;
       scopeTags?: string[];
       repair?: boolean;
     },
-  ) {
-    const memory = this.deps.memoryStore.getById(id);
+  ): Promise<AdminMemoryScopeMutationResult> {
+    const memory = await this.deps.memoryStore.getById(id);
     if (!memory) {
       return {
         ok: false,
@@ -388,12 +387,12 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ? repairPreview.scopeTags
       : (explicitScopeTags ?? memory.scopeTags ?? []);
 
-    this.deps.memoryStore.updateMemory(memory.id, {
+    await this.deps.memoryStore.updateMemory(memory.id, {
       scopeRef: nextScopeRef,
       scopeTags: nextScopeTags,
     });
 
-    const updated = this.deps.memoryStore.getById(memory.id);
+    const updated = await this.deps.memoryStore.getById(memory.id);
     if (!updated) {
       return {
         ok: false,
@@ -420,7 +419,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     };
   }
 
-  linkMemories(id1: string, id2: string, linkType?: string): AdminMemoryLinkResult {
+  async linkMemories(id1: string, id2: string, linkType?: string): Promise<AdminMemoryLinkResult> {
     const normalizedId1 = id1.trim();
     const normalizedId2 = id2.trim();
     if (!normalizedId1 || !normalizedId2) {
@@ -430,14 +429,14 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, message: 'Cannot link a memory to itself' };
     }
     // Verify both memories exist
-    if (!this.deps.memoryStore.getById(normalizedId1)) {
+    if (!await this.deps.memoryStore.getById(normalizedId1)) {
       return { ok: false, message: `Memory "${normalizedId1}" not found` };
     }
-    if (!this.deps.memoryStore.getById(normalizedId2)) {
+    if (!await this.deps.memoryStore.getById(normalizedId2)) {
       return { ok: false, message: `Memory "${normalizedId2}" not found` };
     }
 
-    const link = this.deps.memoryStore.linkMemories(normalizedId1, normalizedId2, linkType);
+    const link = await this.deps.memoryStore.linkMemories(normalizedId1, normalizedId2, linkType);
     if (!link) {
       return { ok: false, message: 'Link already exists or could not be created' };
     }
@@ -450,14 +449,14 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return { ok: true, link };
   }
 
-  unlinkMemories(id1: string, id2: string): MemoryMutationResult {
+  async unlinkMemories(id1: string, id2: string): Promise<MemoryMutationResult> {
     const normalizedId1 = id1.trim();
     const normalizedId2 = id2.trim();
     if (!normalizedId1 || !normalizedId2) {
       return { ok: false, message: 'Both memory IDs are required' };
     }
 
-    const removed = this.deps.memoryStore.unlinkMemories(normalizedId1, normalizedId2);
+    const removed = await this.deps.memoryStore.unlinkMemories(normalizedId1, normalizedId2);
     if (!removed) {
       return { ok: false, message: 'Link not found' };
     }
@@ -470,11 +469,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return { ok: true };
   }
 
-  getMemoryLinks(id: string): MemoryLink[] {
-    return this.deps.memoryStore.getLinkedMemories(id);
+  async getMemoryLinks(id: string): Promise<MemoryLink[]> {
+    return await this.deps.memoryStore.getLinkedMemories(id);
   }
 
-  bulkDelete(ids: string[]): AdminBulkMutationResult {
+  async bulkDelete(ids: string[]): Promise<AdminBulkMutationResult> {
     if (!ids.length) {
       return { ok: false, count: 0, message: 'No IDs provided' };
     }
@@ -482,7 +481,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, count: 0, message: 'Bulk delete limited to 500 items' };
     }
 
-    const count = this.deps.memoryStore.bulkDelete(ids);
+    const count = await this.deps.memoryStore.bulkDelete(ids);
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',
@@ -491,7 +490,10 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return { ok: true, count };
   }
 
-  bulkUpdate(ids: string[], fields: { memoryType?: string; sensitivity?: string }): AdminBulkMutationResult {
+  async bulkUpdate(
+    ids: string[],
+    fields: { memoryType?: string; sensitivity?: string },
+  ): Promise<AdminBulkMutationResult> {
     if (!ids.length) {
       return { ok: false, count: 0, message: 'No IDs provided' };
     }
@@ -521,7 +523,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, count: 0, message: 'No valid fields to update' };
     }
 
-    const count = this.deps.memoryStore.bulkUpdate(ids, storeFields);
+    const count = await this.deps.memoryStore.bulkUpdate(ids, storeFields);
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',

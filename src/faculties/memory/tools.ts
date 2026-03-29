@@ -361,7 +361,7 @@ export function createMemoryDeleteTool(memoryStore: MemoryStorePort): AgentTool<
           return textResultWithError('Error: memory_id is required', true);
         }
 
-        const deleted = memoryStore.softDeleteMemory(memoryId, {
+        const deleted = await memoryStore.softDeleteMemory(memoryId, {
           deletedBy: 'tool:memory_delete',
           reason: params.reason?.trim(),
         });
@@ -403,7 +403,7 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStorePort): AgentT
           return textResultWithError('Error: delete_id is required', true);
         }
 
-        const restored = memoryStore.undoSoftDelete(deleteId, {
+        const restored = await memoryStore.undoSoftDelete(deleteId, {
           restoredBy: 'tool:undo_memory_delete',
         });
         if (!restored) {
@@ -492,7 +492,7 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): AgentTo
             if (!content) {
               return textResultWithError('Error: content is required for add', true);
             }
-            const result = memoryStore.addScratchpadEntry(content);
+            const result = await memoryStore.addScratchpadEntry(content);
             const evictedSuffix = result.evictedIds.length > 0
               ? ` Evicted oldest ids: ${result.evictedIds.join(', ')}`
               : '';
@@ -507,7 +507,7 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): AgentTo
             if (!content) {
               return textResultWithError('Error: content is required for replace', true);
             }
-            const replaced = memoryStore.replaceScratchpadEntry(id, content);
+            const replaced = await memoryStore.replaceScratchpadEntry(id, content);
             if (!replaced) {
               return textResultWithError(`Scratchpad entry not found: ${id}`, true);
             }
@@ -518,7 +518,7 @@ export function createScratchpadWriteTool(memoryStore: MemoryStorePort): AgentTo
             if (!id) {
               return textResultWithError('Error: id is required for remove', true);
             }
-            const removed = memoryStore.removeScratchpadEntry(id);
+            const removed = await memoryStore.removeScratchpadEntry(id);
             if (!removed) {
               return textResultWithError(`Scratchpad entry not found: ${id}`, true);
             }

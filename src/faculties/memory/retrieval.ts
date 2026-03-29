@@ -467,7 +467,7 @@ export class MemoryRetriever implements MemoryProvider {
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
     const profile = canonicalContactId
-      ? this.memoryStore.getContactProfile(canonicalContactId)
+      ? await this.memoryStore.getContactProfile(canonicalContactId)
       : undefined;
     const emotionalSnapshot = canonicalContactId
       ? this.resolveEmotionalSnapshot(canonicalContactId)
@@ -482,7 +482,7 @@ export class MemoryRetriever implements MemoryProvider {
     if (contextText.trim().length > 0) {
       const embedding = await this.embeddingService.embed(contextText);
       const candidateLimit = Math.max(40, limit * 4);
-      semanticCandidates = this.memoryStore.searchByEmbedding(
+      semanticCandidates = await this.memoryStore.searchByEmbedding(
         embedding,
         this.retrievalThreshold,
         candidateLimit,
@@ -491,8 +491,8 @@ export class MemoryRetriever implements MemoryProvider {
         .filter(memory => !isInternalMemoryArtifact(memory))
         .map(cloneScoredMemory);
       if (semanticCandidates.length === 0) {
-        lexicalCandidates = this.memoryStore
-          .searchByText(contextText, candidateLimit, normalizedScopeQuery)
+        lexicalCandidates = (await this.memoryStore
+          .searchByText(contextText, candidateLimit, normalizedScopeQuery))
           .filter(memory => !isInternalMemoryArtifact(memory))
           .map(cloneScoredMemory);
       }
@@ -594,7 +594,7 @@ export class MemoryRetriever implements MemoryProvider {
     const profile = turnSnapshot?.profile
       ? cloneContactProfileArtifact(turnSnapshot.profile)
       : canonicalContactId
-        ? this.memoryStore.getContactProfile(canonicalContactId)
+        ? await this.memoryStore.getContactProfile(canonicalContactId)
         : undefined;
     telemetry.profileIncluded = !!profile;
     const emotionalSnapshot = turnSnapshot?.emotionalSnapshot
@@ -655,7 +655,7 @@ export class MemoryRetriever implements MemoryProvider {
       if (semanticMemories.length === 0 && !turnSnapshot) {
         const embedding = await this.embeddingService.embed(contextText);
         const candidateLimit = Math.max(40, limit * 4);
-        semanticMemories = this.memoryStore.searchByEmbedding(
+        semanticMemories = await this.memoryStore.searchByEmbedding(
           embedding,
           this.retrievalThreshold,
           candidateLimit,
@@ -667,7 +667,7 @@ export class MemoryRetriever implements MemoryProvider {
       let memories = semanticMemories;
       if (semanticMemories.length === 0) {
         const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
-          ?? this.memoryStore.searchByText(
+          ?? await this.memoryStore.searchByText(
             contextText,
             Math.max(40, limit * 4),
             normalizedScopeQuery,
@@ -992,7 +992,7 @@ export class MemoryRetriever implements MemoryProvider {
       // Update access stats; fail closed if persistence fails.
       for (const s of selected) {
         try {
-          this.memoryStore.updateMemory(s.memory.id, {
+          await this.memoryStore.updateMemory(s.memory.id, {
             lastAccessed: Date.now(),
             accessCount: s.memory.accessCount + 1,
           });
@@ -1093,7 +1093,7 @@ export class MemoryRetriever implements MemoryProvider {
 
     this.lastProactiveRecallTurn = currentTurn;
     try {
-      this.memoryStore.updateMemory(selected.id, {
+      await this.memoryStore.updateMemory(selected.id, {
         lastAccessed: Date.now(),
         accessCount: selected.accessCount + 1,
       });

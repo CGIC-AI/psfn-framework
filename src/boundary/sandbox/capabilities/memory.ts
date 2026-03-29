@@ -24,7 +24,7 @@ export interface SessionSearchOptions {
 
 export interface MemoryCapabilities {
   memory_search: (query: string, limit?: number) => Promise<Array<{ text: string; type: string; importance: number; similarity: number }>>;
-  memory_count: () => number;
+  memory_count: () => Promise<number>;
   memory_write: (
     text: string,
     type: string,
@@ -60,7 +60,7 @@ export interface MemoryCapabilities {
     options?: SessionSearchOptions,
   ) => Promise<SessionSearchResult>;
   session_append_note: (channelId: string, note: string) => boolean;
-  memory_get_by_id: (id: string) => Record<string, unknown> | null;
+  memory_get_by_id: (id: string) => Promise<Record<string, unknown> | null>;
 }
 
 interface CreateMemoryCapabilitiesOptions {
@@ -89,7 +89,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     }
 
     const embedding = await options.embeddingService.embed(query);
-    const results = options.memoryStore.searchByEmbedding(embedding, 0.3, limit);
+    const results = await options.memoryStore.searchByEmbedding(embedding, 0.3, limit);
 
     addEvidence(options.pushEvidence, {
       source: 'memory_search',
@@ -106,11 +106,11 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     }));
   };
 
-  const memory_count = (): number => {
+  const memory_count = async (): Promise<number> => {
     if (!options.memoryStore) {
       return 0;
     }
-    return options.memoryStore.getAllActiveMemories().length;
+    return (await options.memoryStore.getAllActiveMemories()).length;
   };
 
   const memory_write = async (
@@ -295,12 +295,12 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     return true;
   };
 
-  const memory_get_by_id = (id: string): Record<string, unknown> | null => {
+  const memory_get_by_id = async (id: string): Promise<Record<string, unknown> | null> => {
     if (!options.memoryStore) {
       return null;
     }
 
-    const memory = options.memoryStore.getById(id);
+    const memory = await options.memoryStore.getById(id);
     if (!memory) {
       return null;
     }

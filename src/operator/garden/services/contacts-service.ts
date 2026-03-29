@@ -248,7 +248,7 @@ export class AdminContactsDataService implements AdminContactsService {
     }));
   }
 
-  listContacts(params?: URLSearchParams): AdminContactListData {
+  async listContacts(params?: URLSearchParams): Promise<AdminContactListData> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return {
@@ -264,7 +264,7 @@ export class AdminContactsDataService implements AdminContactsService {
 
     const contacts = contactStore.listAll();
     const profileMap = new Map(
-      this.deps.memoryStore.listContactProfiles().map(profile => [profile.contactId, profile] as const),
+      (await this.deps.memoryStore.listContactProfiles()).map(profile => [profile.contactId, profile] as const),
     );
     const relatedChannelMap = buildRelatedConversationChannelMap({
       contacts,
@@ -292,7 +292,7 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  getContactDetail(contactId: string): AdminContactDetailData | null {
+  async getContactDetail(contactId: string): Promise<AdminContactDetailData | null> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return null;
     const contact = contactStore.getById(contactId);
@@ -305,7 +305,7 @@ export class AdminContactsDataService implements AdminContactsService {
 
     return {
       contact,
-      profile: this.deps.memoryStore.getContactProfile(contact.id),
+      profile: await this.deps.memoryStore.getContactProfile(contact.id),
       relatedChannels,
     };
   }

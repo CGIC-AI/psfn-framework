@@ -24,6 +24,7 @@ import type {
   ScratchpadEntry,
   ScratchpadEntryCreateOptions,
   ScratchpadEntryReplaceOptions,
+  MemoryWriteCommit,
 } from './memory-store-port.js';
 import {
   normalizeMemoryScopeQuery,
@@ -675,8 +676,15 @@ export class MemoryStore {
     this.journal?.onInsert(memory);
   }
 
-  runInTransaction<T>(handler: () => T): T {
-    return runSqliteTransaction(this.db, handler);
+  persistMemoryWrite(input: MemoryWriteCommit): void {
+    const supersededMemoryIds = [...new Set(input.supersededMemoryIds ?? [])];
+
+    runSqliteTransaction(this.db, () => {
+      for (const memoryId of supersededMemoryIds) {
+        this.updateMemory(memoryId, { supersededBy: input.memory.id });
+      }
+      this.insertMemory(input.memory, input.embedding);
+    });
   }
 
   searchByEmbedding(

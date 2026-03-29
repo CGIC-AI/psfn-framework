@@ -72,8 +72,8 @@ function buildApiHealthChecks(
   const embeddingsActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
 
   return {
-    memory: () => {
-      const stats = options.memoryStore.getStats();
+    memory: async () => {
+      const stats = await options.memoryStore.getStats();
       return {
         status: 'healthy',
         meta: {

@@ -79,7 +79,7 @@ export interface AdminDashboardData {
 }
 
 export interface AdminDashboardService {
-  getDashboardData(options?: { costWindow?: DashboardCostWindow }): AdminDashboardData;
+  getDashboardData(options?: { costWindow?: DashboardCostWindow }): Promise<AdminDashboardData>;
 }
 
 export type AdminAdaptiveToolTelemetryEvent =
@@ -232,12 +232,12 @@ export interface AdminMemoryScopeMutationResult extends MemoryMutationResult {
 }
 
 export interface AdminMemoryService {
-  listMemories(params?: URLSearchParams): AdminMemoryListData;
-  getMemoryDetail(id: string): AdminMemoryDetailData | null;
-  listManagedScopes(params?: URLSearchParams): AdminMemoryScopeListData;
-  getManagedScopeDetail(kind: string, id: string): AdminMemoryScopeDetailData | null;
+  listMemories(params?: URLSearchParams): Promise<AdminMemoryListData>;
+  getMemoryDetail(id: string): Promise<AdminMemoryDetailData | null>;
+  listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData>;
+  getManagedScopeDetail(kind: string, id: string): Promise<AdminMemoryScopeDetailData | null>;
   searchMemories(query: string): Promise<AdminMemorySearchResult>;
-  supersedeMemory(id: string): MemoryMutationResult;
+  supersedeMemory(id: string): Promise<MemoryMutationResult>;
   updateMemoryScope(
     id: string,
     fields: {
@@ -245,12 +245,12 @@ export interface AdminMemoryService {
       scopeTags?: string[];
       repair?: boolean;
     },
-  ): AdminMemoryScopeMutationResult;
-  linkMemories(id1: string, id2: string, linkType?: string): AdminMemoryLinkResult;
-  unlinkMemories(id1: string, id2: string): MemoryMutationResult;
-  getMemoryLinks(id: string): MemoryLink[];
-  bulkDelete(ids: string[]): AdminBulkMutationResult;
-  bulkUpdate(ids: string[], fields: { memoryType?: string; sensitivity?: string }): AdminBulkMutationResult;
+  ): Promise<AdminMemoryScopeMutationResult>;
+  linkMemories(id1: string, id2: string, linkType?: string): Promise<AdminMemoryLinkResult>;
+  unlinkMemories(id1: string, id2: string): Promise<MemoryMutationResult>;
+  getMemoryLinks(id: string): Promise<MemoryLink[]>;
+  bulkDelete(ids: string[]): Promise<AdminBulkMutationResult>;
+  bulkUpdate(ids: string[], fields: { memoryType?: string; sensitivity?: string }): Promise<AdminBulkMutationResult>;
 }
 
 export interface AdminSessionListData {
@@ -507,8 +507,8 @@ export interface AdminContactSocialGraphView {
 }
 
 export interface AdminContactsService {
-  listContacts(params?: URLSearchParams): AdminContactListData;
-  getContactDetail(contactId: string): AdminContactDetailData | null;
+  listContacts(params?: URLSearchParams): Promise<AdminContactListData>;
+  getContactDetail(contactId: string): Promise<AdminContactDetailData | null>;
   updateContact(contactId: string, body: string): ContactUpdateResult;
   createContact(body: string): ContactUpdateResult;
   deleteContact(contactId: string): ContactUpdateResult;

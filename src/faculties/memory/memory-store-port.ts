@@ -135,53 +135,118 @@ export interface ScratchpadEntryReplaceOptions {
   now?: number;
 }
 
-export interface MemoryStorePort extends ScratchpadProvider {
-  insertMemory(memory: PurrMemory, embedding: Float32Array): void;
-  runInTransaction<T>(handler: () => T): T;
+export interface MemoryWriteCommit {
+  memory: PurrMemory;
+  embedding: Float32Array;
+  supersededMemoryIds?: string[];
+}
+
+type Awaitable<T> = T | Promise<T>;
+
+interface MemoryStorePortBackend extends ScratchpadProvider {
+  insertMemory(memory: PurrMemory, embedding: Float32Array): Awaitable<void>;
+  persistMemoryWrite(input: MemoryWriteCommit): Awaitable<void>;
   searchByEmbedding(
     embedding: Float32Array,
     threshold: number,
     limit: number,
     scopeQuery?: MemoryScopeQuery,
-  ): MemorySearchResult[];
+  ): Awaitable<MemorySearchResult[]>;
   searchByText(
     query: string,
     limit: number,
     scopeQuery?: MemoryScopeQuery,
-  ): MemorySearchResult[];
-  updateMemory(id: string, updates: MemoryStoreUpdatePatch): void;
-  getAllActiveMemories(limit?: number): PurrMemory[];
-  listActiveMemories(options?: MemoryListOptions): PurrMemory[];
-  countActiveMemories(): number;
-  getById(id: string): PurrMemory | undefined;
-  softDeleteMemory(id: string, options?: MemorySoftDeleteOptions): MemoryDeleteVersion | null;
+  ): Awaitable<MemorySearchResult[]>;
+  updateMemory(id: string, updates: MemoryStoreUpdatePatch): Awaitable<void>;
+  getAllActiveMemories(limit?: number): Awaitable<PurrMemory[]>;
+  listActiveMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
+  countActiveMemories(): Awaitable<number>;
+  getById(id: string): Awaitable<PurrMemory | undefined>;
+  softDeleteMemory(
+    id: string,
+    options?: MemorySoftDeleteOptions,
+  ): Awaitable<MemoryDeleteVersion | null>;
   undoSoftDelete(
     deleteId: string,
     options?: MemoryUndoSoftDeleteOptions,
-  ): MemoryDeleteVersion | null;
-  getDeleteVersion(deleteId: string): MemoryDeleteVersion | undefined;
-  recordAbstractionLink(input: MemoryAbstractionLinkInput): MemoryAbstractionLink;
-  getAbstractionLinksForSourceMemory(sourceMemoryId: string): MemoryAbstractionLink[];
-  getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): MemoryAbstractionLink[];
-  getStats(): MemoryStoreStats;
-  getMemoriesByChannel(channelId: string, limit: number): PurrMemory[];
-  getMemoriesByContact(contactId: string, limit: number): PurrMemory[];
-  linkMemories(id1: string, id2: string, linkType?: string): MemoryLink | null;
-  unlinkMemories(id1: string, id2: string): boolean;
-  getLinkedMemories(id: string): MemoryLink[];
-  bulkDelete(ids: string[]): number;
-  bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): number;
-  upsertContactProfile(profile: ContactProfileArtifact): void;
-  getContactProfile(contactId: string): ContactProfileArtifact | undefined;
-  listContactProfiles(): ContactProfileArtifact[];
-  addScratchpadEntry(content: string, options?: ScratchpadEntryCreateOptions): ScratchpadAddResult;
+  ): Awaitable<MemoryDeleteVersion | null>;
+  getDeleteVersion(deleteId: string): Awaitable<MemoryDeleteVersion | undefined>;
+  recordAbstractionLink(input: MemoryAbstractionLinkInput): Awaitable<MemoryAbstractionLink>;
+  getAbstractionLinksForSourceMemory(sourceMemoryId: string): Awaitable<MemoryAbstractionLink[]>;
+  getAbstractionLinksForAbstractedMemory(
+    abstractedMemoryId: string,
+  ): Awaitable<MemoryAbstractionLink[]>;
+  getStats(): Awaitable<MemoryStoreStats>;
+  getMemoriesByChannel(channelId: string, limit: number): Awaitable<PurrMemory[]>;
+  getMemoriesByContact(contactId: string, limit: number): Awaitable<PurrMemory[]>;
+  linkMemories(id1: string, id2: string, linkType?: string): Awaitable<MemoryLink | null>;
+  unlinkMemories(id1: string, id2: string): Awaitable<boolean>;
+  getLinkedMemories(id: string): Awaitable<MemoryLink[]>;
+  bulkDelete(ids: string[]): Awaitable<number>;
+  bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Awaitable<number>;
+  upsertContactProfile(profile: ContactProfileArtifact): Awaitable<void>;
+  getContactProfile(contactId: string): Awaitable<ContactProfileArtifact | undefined>;
+  listContactProfiles(): Awaitable<ContactProfileArtifact[]>;
+  addScratchpadEntry(
+    content: string,
+    options?: ScratchpadEntryCreateOptions,
+  ): Awaitable<ScratchpadAddResult>;
   replaceScratchpadEntry(
     id: string,
     content: string,
     options?: ScratchpadEntryReplaceOptions,
-  ): ScratchpadEntry | null;
-  removeScratchpadEntry(id: string): boolean;
-  getScratchpadEntry(id: string): ScratchpadEntry | undefined;
+  ): Awaitable<ScratchpadEntry | null>;
+  removeScratchpadEntry(id: string): Awaitable<boolean>;
+  getScratchpadEntry(id: string): Awaitable<ScratchpadEntry | undefined>;
+}
+
+export interface MemoryStorePort extends ScratchpadProvider {
+  insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void>;
+  persistMemoryWrite(input: MemoryWriteCommit): Promise<void>;
+  searchByEmbedding(
+    embedding: Float32Array,
+    threshold: number,
+    limit: number,
+    scopeQuery?: MemoryScopeQuery,
+  ): Promise<MemorySearchResult[]>;
+  searchByText(
+    query: string,
+    limit: number,
+    scopeQuery?: MemoryScopeQuery,
+  ): Promise<MemorySearchResult[]>;
+  updateMemory(id: string, updates: MemoryStoreUpdatePatch): Promise<void>;
+  getAllActiveMemories(limit?: number): Promise<PurrMemory[]>;
+  listActiveMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
+  countActiveMemories(): Promise<number>;
+  getById(id: string): Promise<PurrMemory | undefined>;
+  softDeleteMemory(id: string, options?: MemorySoftDeleteOptions): Promise<MemoryDeleteVersion | null>;
+  undoSoftDelete(
+    deleteId: string,
+    options?: MemoryUndoSoftDeleteOptions,
+  ): Promise<MemoryDeleteVersion | null>;
+  getDeleteVersion(deleteId: string): Promise<MemoryDeleteVersion | undefined>;
+  recordAbstractionLink(input: MemoryAbstractionLinkInput): Promise<MemoryAbstractionLink>;
+  getAbstractionLinksForSourceMemory(sourceMemoryId: string): Promise<MemoryAbstractionLink[]>;
+  getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): Promise<MemoryAbstractionLink[]>;
+  getStats(): Promise<MemoryStoreStats>;
+  getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]>;
+  getMemoriesByContact(contactId: string, limit: number): Promise<PurrMemory[]>;
+  linkMemories(id1: string, id2: string, linkType?: string): Promise<MemoryLink | null>;
+  unlinkMemories(id1: string, id2: string): Promise<boolean>;
+  getLinkedMemories(id: string): Promise<MemoryLink[]>;
+  bulkDelete(ids: string[]): Promise<number>;
+  bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number>;
+  upsertContactProfile(profile: ContactProfileArtifact): Promise<void>;
+  getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined>;
+  listContactProfiles(): Promise<ContactProfileArtifact[]>;
+  addScratchpadEntry(content: string, options?: ScratchpadEntryCreateOptions): Promise<ScratchpadAddResult>;
+  replaceScratchpadEntry(
+    id: string,
+    content: string,
+    options?: ScratchpadEntryReplaceOptions,
+  ): Promise<ScratchpadEntry | null>;
+  removeScratchpadEntry(id: string): Promise<boolean>;
+  getScratchpadEntry(id: string): Promise<ScratchpadEntry | undefined>;
   listScratchpadEntries(limit?: number): ScratchpadEntry[];
 }
 
@@ -198,46 +263,54 @@ export interface CoreMemoryStorePort {
   formatForContext(): string;
 }
 
-export function createMemoryStorePort(store: MemoryStorePort): MemoryStorePort {
+export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStorePort {
   return {
-    insertMemory: (memory, embedding) => store.insertMemory(memory, embedding),
-    runInTransaction: <T>(handler: () => T) => store.runInTransaction(handler),
-    searchByEmbedding: (embedding, threshold, limit, scopeQuery) => (
-      store.searchByEmbedding(embedding, threshold, limit, scopeQuery)
+    insertMemory: async (memory, embedding) => {
+      await store.insertMemory(memory, embedding);
+    },
+    persistMemoryWrite: async (input) => {
+      await store.persistMemoryWrite(input);
+    },
+    searchByEmbedding: async (embedding, threshold, limit, scopeQuery) => (
+      await store.searchByEmbedding(embedding, threshold, limit, scopeQuery)
     ),
-    searchByText: (query, limit, scopeQuery) => store.searchByText(query, limit, scopeQuery),
-    updateMemory: (id, updates) => store.updateMemory(id, updates),
-    getAllActiveMemories: (limit) => store.getAllActiveMemories(limit),
-    listActiveMemories: (options) => store.listActiveMemories(options),
-    countActiveMemories: () => store.countActiveMemories(),
-    getById: (id) => store.getById(id),
-    softDeleteMemory: (id, options) => store.softDeleteMemory(id, options),
-    undoSoftDelete: (deleteId, options) => store.undoSoftDelete(deleteId, options),
-    getDeleteVersion: (deleteId) => store.getDeleteVersion(deleteId),
-    recordAbstractionLink: (input) => store.recordAbstractionLink(input),
-    getAbstractionLinksForSourceMemory: (sourceMemoryId) => (
-      store.getAbstractionLinksForSourceMemory(sourceMemoryId)
+    searchByText: async (query, limit, scopeQuery) => await store.searchByText(query, limit, scopeQuery),
+    updateMemory: async (id, updates) => {
+      await store.updateMemory(id, updates);
+    },
+    getAllActiveMemories: async (limit) => await store.getAllActiveMemories(limit),
+    listActiveMemories: async (options) => await store.listActiveMemories(options),
+    countActiveMemories: async () => await store.countActiveMemories(),
+    getById: async (id) => await store.getById(id),
+    softDeleteMemory: async (id, options) => await store.softDeleteMemory(id, options),
+    undoSoftDelete: async (deleteId, options) => await store.undoSoftDelete(deleteId, options),
+    getDeleteVersion: async (deleteId) => await store.getDeleteVersion(deleteId),
+    recordAbstractionLink: async (input) => await store.recordAbstractionLink(input),
+    getAbstractionLinksForSourceMemory: async (sourceMemoryId) => (
+      await store.getAbstractionLinksForSourceMemory(sourceMemoryId)
     ),
-    getAbstractionLinksForAbstractedMemory: (abstractedMemoryId) => (
-      store.getAbstractionLinksForAbstractedMemory(abstractedMemoryId)
+    getAbstractionLinksForAbstractedMemory: async (abstractedMemoryId) => (
+      await store.getAbstractionLinksForAbstractedMemory(abstractedMemoryId)
     ),
-    getStats: () => store.getStats(),
-    getMemoriesByChannel: (channelId, limit) => store.getMemoriesByChannel(channelId, limit),
-    getMemoriesByContact: (contactId, limit) => store.getMemoriesByContact(contactId, limit),
-    linkMemories: (id1, id2, linkType) => store.linkMemories(id1, id2, linkType),
-    unlinkMemories: (id1, id2) => store.unlinkMemories(id1, id2),
-    getLinkedMemories: (id) => store.getLinkedMemories(id),
-    bulkDelete: (ids) => store.bulkDelete(ids),
-    bulkUpdate: (ids, fields) => store.bulkUpdate(ids, fields),
-    upsertContactProfile: (profile) => store.upsertContactProfile(profile),
-    getContactProfile: (contactId) => store.getContactProfile(contactId),
-    listContactProfiles: () => store.listContactProfiles(),
-    addScratchpadEntry: (content, options) => store.addScratchpadEntry(content, options),
-    replaceScratchpadEntry: (id, content, options) => (
-      store.replaceScratchpadEntry(id, content, options)
+    getStats: async () => await store.getStats(),
+    getMemoriesByChannel: async (channelId, limit) => await store.getMemoriesByChannel(channelId, limit),
+    getMemoriesByContact: async (contactId, limit) => await store.getMemoriesByContact(contactId, limit),
+    linkMemories: async (id1, id2, linkType) => await store.linkMemories(id1, id2, linkType),
+    unlinkMemories: async (id1, id2) => await store.unlinkMemories(id1, id2),
+    getLinkedMemories: async (id) => await store.getLinkedMemories(id),
+    bulkDelete: async (ids) => await store.bulkDelete(ids),
+    bulkUpdate: async (ids, fields) => await store.bulkUpdate(ids, fields),
+    upsertContactProfile: async (profile) => {
+      await store.upsertContactProfile(profile);
+    },
+    getContactProfile: async (contactId) => await store.getContactProfile(contactId),
+    listContactProfiles: async () => await store.listContactProfiles(),
+    addScratchpadEntry: async (content, options) => await store.addScratchpadEntry(content, options),
+    replaceScratchpadEntry: async (id, content, options) => (
+      await store.replaceScratchpadEntry(id, content, options)
     ),
-    removeScratchpadEntry: (id) => store.removeScratchpadEntry(id),
-    getScratchpadEntry: (id) => store.getScratchpadEntry(id),
+    removeScratchpadEntry: async (id) => await store.removeScratchpadEntry(id),
+    getScratchpadEntry: async (id) => await store.getScratchpadEntry(id),
     listScratchpadEntries: (limit) => store.listScratchpadEntries(limit),
   };
 }

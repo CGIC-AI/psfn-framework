@@ -20,7 +20,7 @@ import {
 } from './protocol.js';
 import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
-import type { AuditStore } from './audit.js';
+import type { GatewayAuditStorePort } from './audit.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -88,7 +88,7 @@ export interface GatewayServerOptions {
   imageConfig?: ImageRuntimeConfig;
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
-  auditStore?: AuditStore;
+  auditStore?: GatewayAuditStorePort;
   sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;

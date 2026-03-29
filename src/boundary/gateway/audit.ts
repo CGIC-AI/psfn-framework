@@ -30,6 +30,17 @@ export interface AuditSummaryEntry {
 
 export type AuditSummaryHook = (entry: AuditSummaryEntry) => void;
 
+export interface GatewayAuditStorePort {
+  log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): number;
+  complete(id: number, durationMs: number, error?: string): void;
+  recordSummary(entry: AuditSummaryEntry): number;
+  createSummaryHook(): AuditSummaryHook;
+  getRecent(limit?: number): AuditEntry[];
+  getByMethod(method: string, limit?: number): AuditEntry[];
+  getApprovalEvents(limit?: number): AuditEntry[];
+  count(): number;
+}
+
 const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
   maxSizeBytes: 10 * 1024 * 1024,
   maxAgeMs: 30 * 24 * 60 * 60 * 1000,
@@ -38,7 +49,7 @@ const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
 
 const SIZE_PRUNE_BATCH = 100;
 
-export class AuditStore {
+export class AuditStore implements GatewayAuditStorePort {
   private readonly db: Database.Database;
   private readonly insertStmt: Database.Statement;
   private readonly updateDurationStmt: Database.Statement;

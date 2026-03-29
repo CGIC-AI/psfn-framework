@@ -4,7 +4,13 @@ import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../b
 import type { EventBus, EventMap } from '../../event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import {
+  injectPromptRuntimeTokens,
+  orderPromptRuntimeSystemPromptSections,
+  PromptRuntimeLayoutStore,
+  resolvePromptRuntimeLayoutPath,
+  type PromptRuntimeSystemPromptBlockId,
+} from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
@@ -96,6 +102,17 @@ import {
 const log = createComponentLogger('SubstrateAgent');
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 const VISION_TURN_TIMEOUT_MS = 10_000;
+const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
+
+function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
+  const cached = promptRuntimeLayoutStoreCache.get(filePath);
+  if (cached) return cached;
+  const created = new PromptRuntimeLayoutStore(filePath);
+  promptRuntimeLayoutStoreCache.set(filePath, created);
+  return created;
+}
 
 interface ProactiveMemoryProvider extends MemoryProvider {
   retrieveProactiveRecall?: (
@@ -707,12 +724,28 @@ export async function handleMessageForTurn(
       ...templateVariables,
       ...dynamicPromptVariables,
     };
+    let runtimeContext = '';
+    runtimeContext = runtime.buildRuntimeContext(
+      message,
+      authorContext.resolvedUserName,
+      trustLevel,
+      channelType,
+      authorContext.canonicalContactKey,
+      authorContext.subjectIdentityKey,
+      responseStyle,
+      runtimeNow,
+      taskKind,
+      templateVariables,
+      preTurnInternalState,
+      preTurnMetacognitiveFlags,
+      emotionAppraisalChain,
+    );
     let fullPrompt = '';
     let renderedStaticPrefix = '';
     let renderedDynamicSuffix = '';
-    let runtimeContext = '';
 
     if (promptOverride.mode === 'default') {
+      const promptRuntimeLayout = getPromptRuntimeLayoutStore(runtime.config);
       const staticCacheKey = runtime.buildPromptPrefixCacheKey(
         message,
         channelType,
@@ -730,11 +763,31 @@ export async function handleMessageForTurn(
       });
       const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
         || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
+      const personaHint = runtime.getPersonaAdaptation(
+        trustLevel,
+        preTurnInternalState,
+        preTurnMetacognitiveFlags,
+        templateVariables,
+      );
       renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
         now: runtimeNow,
         variables: promptRuntimeVariables,
       });
-      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, scratchpadBlock]
+      const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
+        {
+          id: 'runtime.persona_adaptation' as PromptRuntimeSystemPromptBlockId,
+          content: personaHint ?? '',
+        },
+        {
+          id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
+          content: runtimeContext,
+        },
+        {
+          id: 'runtime.scratchpad' as PromptRuntimeSystemPromptBlockId,
+          content: scratchpadBlock,
+        },
+      ], promptRuntimeLayout);
+      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, ...orderedRuntimeSections.map(section => section.content)]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
@@ -742,22 +795,18 @@ export async function handleMessageForTurn(
       const customPrompt = promptOverride.mode === 'custom'
         ? (promptOverride.systemPrompt ?? '')
         : '';
-      runtimeContext = runtime.buildRuntimeContext(
-        message,
-        authorContext.resolvedUserName,
-        trustLevel,
-        channelType,
-        authorContext.canonicalContactKey,
-        authorContext.subjectIdentityKey,
-        responseStyle,
-        runtimeNow,
-        taskKind,
-        templateVariables,
-        preTurnInternalState,
-        preTurnMetacognitiveFlags,
-        emotionAppraisalChain,
-      );
-      fullPrompt = [customPrompt, runtimeContext, scratchpadBlock]
+      const promptRuntimeLayout = getPromptRuntimeLayoutStore(runtime.config);
+      const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
+        {
+          id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
+          content: runtimeContext,
+        },
+        {
+          id: 'runtime.scratchpad' as PromptRuntimeSystemPromptBlockId,
+          content: scratchpadBlock,
+        },
+      ], promptRuntimeLayout);
+      fullPrompt = [customPrompt, ...orderedRuntimeSections.map(section => section.content)]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');

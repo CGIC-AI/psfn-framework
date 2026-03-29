@@ -849,9 +849,23 @@ export interface PromptRegistryEntry {
   identifier?: string;
 }
 
+export interface PromptRuntimeBlock {
+  id: string;
+  label: string;
+  description: string;
+  source: string;
+  placement: 'system_prompt' | 'context_messages' | 'tool_schemas';
+  visibility: 'hidden' | 'runtime_generated' | 'provider_managed';
+  reorderable: boolean;
+  contentVisible: boolean;
+  lockedReason?: string;
+  effectiveOrder: number;
+}
+
 export interface AdminPromptListData {
   layers: PromptLayer[];
   staticPrompts: PromptRegistryEntry[];
+  runtimeBlocks: PromptRuntimeBlock[];
 }
 
 export interface ConstitutionImmutableBlock {

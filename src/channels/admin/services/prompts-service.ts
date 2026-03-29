@@ -9,6 +9,12 @@ import {
   type PromptLayerRole,
 } from '../../../identity/prompt-types.js';
 import {
+  getPromptRuntimeBlockDefinitions,
+  PromptRuntimeLayoutStore,
+  type PromptRuntimeSystemPromptBlockId,
+} from '../../../identity/prompt-runtime.js';
+import {
+  PromptComposer,
   IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
   buildImmutableHumanSafetySection,
 } from '../../../identity/prompt-composer.js';
@@ -47,6 +53,7 @@ import type {
   AdminNorthStarSnapshotData,
   AdminPromptDetailData,
   AdminPromptListData,
+  AdminPromptRuntimeBlock,
   AdminPromptsService,
   ConstitutionUpdateResult,
   FoundationUpdateResult,
@@ -95,6 +102,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
       details?: Array<string | null | undefined>,
     ) => void;
     companionValuesLayerProvider?: () => CompanionValuesLayerSnapshot | null;
+    promptRuntimeLayoutStore?: PromptRuntimeLayoutStore | null;
   }) {}
 
   private resolveCompanionName(): string {
@@ -207,10 +215,39 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   listPrompts(): AdminPromptListData {
+    const runtimeBlocks = this.listRuntimeBlocks();
     return {
       layers: this.deps.promptStore?.getAll() ?? [],
       staticPrompts: this.deps.promptRegistry?.list() ?? [],
+      runtimeBlocks,
     };
+  }
+
+  private listRuntimeBlocks(): AdminPromptRuntimeBlock[] {
+    const defaultSystemOrder = getPromptRuntimeBlockDefinitions()
+      .filter(block => block.placement === 'system_prompt')
+      .map(block => block.id as PromptRuntimeSystemPromptBlockId);
+    const runtimeLayout = this.deps.promptRuntimeLayoutStore?.getLayout();
+    const systemOrder = runtimeLayout?.systemPromptBlockOrder ?? defaultSystemOrder;
+    const systemOrderIndex = new Map(systemOrder.map((id, index) => [id, index]));
+
+    return getPromptRuntimeBlockDefinitions()
+      .map((block): AdminPromptRuntimeBlock => ({
+        ...block,
+        effectiveOrder: block.placement === 'system_prompt'
+          ? (systemOrderIndex.get(block.id as PromptRuntimeSystemPromptBlockId) ?? Number.MAX_SAFE_INTEGER)
+          : (
+            block.placement === 'context_messages'
+              ? systemOrder.length
+              : systemOrder.length + 1
+          ),
+      }))
+      .sort((left, right) => {
+        if (left.effectiveOrder !== right.effectiveOrder) {
+          return left.effectiveOrder - right.effectiveOrder;
+        }
+        return left.label.localeCompare(right.label);
+      });
   }
 
   private buildImmutableConstitutionBlocks(): AdminConstitutionImmutableBlock[] {
@@ -1090,52 +1127,98 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
   reorderPromptLayers(body: string): PromptUpdateResult {
     const promptStore = this.deps.promptStore;
-    if (!promptStore) {
+    const promptRuntimeLayoutStore = this.deps.promptRuntimeLayoutStore ?? null;
+    if (!promptStore && !promptRuntimeLayoutStore) {
       return { ok: false, message: 'Prompt store not configured' };
     }
 
     const params = this.parseBody(body);
     const rawLayerIds = params.get('layerIds');
-    if (!rawLayerIds) {
-      return { ok: false, message: 'layerIds is required' };
-    }
+    const rawRuntimeBlockIds = params.get('runtimeBlockIds');
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawLayerIds);
-    } catch {
-      return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
-    }
-    if (!Array.isArray(parsed)) {
-      return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
-    }
-
-    const layerIds: string[] = [];
-    for (const entry of parsed) {
-      if (typeof entry !== 'string' || !entry.trim()) {
-        return { ok: false, message: 'layerIds entries must be non-empty strings' };
+    let layerIds: string[] = [];
+    if (rawLayerIds) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawLayerIds);
+      } catch {
+        return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
       }
-      layerIds.push(entry.trim());
+      if (!Array.isArray(parsed)) {
+        return { ok: false, message: 'layerIds must be a JSON array of layer IDs' };
+      }
+
+      for (const entry of parsed) {
+        if (typeof entry !== 'string' || !entry.trim()) {
+          return { ok: false, message: 'layerIds entries must be non-empty strings' };
+        }
+        layerIds.push(entry.trim());
+      }
+    }
+
+    let runtimeBlockIds: PromptRuntimeSystemPromptBlockId[] = [];
+    if (rawRuntimeBlockIds) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(rawRuntimeBlockIds);
+      } catch {
+        return { ok: false, message: 'runtimeBlockIds must be a JSON array of runtime block IDs' };
+      }
+      if (!Array.isArray(parsed)) {
+        return { ok: false, message: 'runtimeBlockIds must be a JSON array of runtime block IDs' };
+      }
+      for (const entry of parsed) {
+        if (typeof entry !== 'string' || !entry.trim()) {
+          return { ok: false, message: 'runtimeBlockIds entries must be non-empty strings' };
+        }
+        runtimeBlockIds.push(entry.trim() as PromptRuntimeSystemPromptBlockId);
+      }
+    }
+
+    if (layerIds.length === 0 && runtimeBlockIds.length === 0) {
+      return { ok: false, message: 'layerIds or runtimeBlockIds is required' };
     }
 
     try {
-      const touched = promptStore.reorderByLayerIds(
-        layerIds,
-        'admin',
-        'Admin prompt-layer reorder via Garden API',
-      );
+      const touched = promptStore && layerIds.length > 0
+        ? promptStore.reorderByLayerIds(
+          layerIds,
+          'admin',
+          'Admin prompt-layer reorder via Garden API',
+        )
+        : [];
+      const runtimeLayoutTouched = promptRuntimeLayoutStore && runtimeBlockIds.length > 0
+        ? promptRuntimeLayoutStore.reorderSystemPromptBlocks(runtimeBlockIds, 'admin')
+        : null;
 
-      if (touched.length > 0) {
+      if (touched.length > 0 || runtimeLayoutTouched) {
+        const noteParts = [
+          touched.length > 0
+            ? `${touched.length} prompt layer${touched.length === 1 ? '' : 's'}`
+            : null,
+          runtimeLayoutTouched
+            ? `${runtimeLayoutTouched.systemPromptBlockOrder.length} runtime prompt block${runtimeLayoutTouched.systemPromptBlockOrder.length === 1 ? '' : 's'}`
+            : null,
+        ].filter((entry): entry is string => entry != null);
         this.injectPromptEditSystemNote(
-          `Admin reordered ${touched.length} prompt layer${touched.length === 1 ? '' : 's'}.`,
+          `Admin reordered ${noteParts.join(' and ')}.`,
         );
       }
 
+      const summaryParts = [
+        touched.length > 0
+          ? `Reordered ${touched.length} prompt layer${touched.length === 1 ? '' : 's'}`
+          : null,
+        runtimeLayoutTouched
+          ? 'updated runtime prompt block order'
+          : null,
+      ].filter((entry): entry is string => entry != null);
+
       return {
         ok: true,
-        message: touched.length > 0
-          ? `Reordered ${touched.length} prompt layer${touched.length === 1 ? '' : 's'}`
-          : 'Prompt layers already in requested order',
+        message: summaryParts.length > 0
+          ? summaryParts.join('; ')
+          : 'Prompt stack already in requested order',
       };
     } catch (error) {
       return {

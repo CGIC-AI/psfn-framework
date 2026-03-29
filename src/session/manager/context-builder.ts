@@ -9,8 +9,15 @@ import {
   type ContextBudgetTurnCharacteristics,
 } from '../../context-budget.js';
 import type { EventBus } from '../../event-bus.js';
+import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
 import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
+import {
+  orderPromptRuntimeSystemPromptSections,
+  PromptRuntimeLayoutStore,
+  resolvePromptRuntimeLayoutPath,
+  type PromptRuntimeSystemPromptBlockId,
+} from '../../identity/prompt-runtime.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import { cloneSessionEntry } from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
@@ -46,6 +53,17 @@ import { buildPromptSectionTelemetryList } from '../../prompt/sections.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
+const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
+
+function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
+  const cached = promptRuntimeLayoutStoreCache.get(filePath);
+  if (cached) return cached;
+  const created = new PromptRuntimeLayoutStore(filePath);
+  promptRuntimeLayoutStoreCache.set(filePath, created);
+  return created;
+}
 
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
@@ -190,27 +208,19 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   // Build system prompt with memories
   let fullSystem = params.systemPrompt;
-  if (hasCoreMemorySection) {
-    fullSystem += '\n\n' + coreMemorySectionText;
-  }
   const hasMemorySection = params.memoriesBlock.trim().length > 0;
   const memorySectionText = hasMemorySection ? params.memoriesBlock : '';
-  if (hasMemorySection) {
-    fullSystem += '\n\n' + params.memoriesBlock;
-  }
 
   // Prepend compaction summaries as context
   let compactionSummarySectionText = '';
   if (compactionSummaryTexts.length > 0) {
     const summaryBlock = compactionSummaryTexts.join('\n\n');
     compactionSummarySectionText = '[Previous conversation summary]\n' + summaryBlock;
-    fullSystem += '\n\n' + compactionSummarySectionText;
   }
 
   let focusKnowledgeSectionText = '';
   if (focusKnowledgeTexts.length > 0) {
     focusKnowledgeSectionText = '[Focus knowledge]\n' + focusKnowledgeTexts.join('\n');
-    fullSystem += '\n\n' + focusKnowledgeSectionText;
   }
 
   // Cross-channel continuity: include recent activity from other channels
@@ -248,7 +258,35 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       })
       .join('\n');
     continuitySectionText = '[Recent activity from other channels]\n' + continuityBlock;
-    fullSystem += '\n\n' + continuitySectionText;
+  }
+
+  const promptRuntimeLayout = getPromptRuntimeLayoutStore(params.config);
+  const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
+    {
+      id: 'memory.core' as PromptRuntimeSystemPromptBlockId,
+      content: coreMemorySectionText,
+    },
+    {
+      id: 'memory.retrieval' as PromptRuntimeSystemPromptBlockId,
+      content: memorySectionText,
+    },
+    {
+      id: 'session.compaction_summary' as PromptRuntimeSystemPromptBlockId,
+      content: compactionSummarySectionText,
+    },
+    {
+      id: 'session.focus_knowledge' as PromptRuntimeSystemPromptBlockId,
+      content: focusKnowledgeSectionText,
+    },
+    {
+      id: 'session.continuity' as PromptRuntimeSystemPromptBlockId,
+      content: continuitySectionText,
+    },
+  ], promptRuntimeLayout);
+  for (const section of orderedRuntimeSections) {
+    const trimmed = section.content.trim();
+    if (!trimmed) continue;
+    fullSystem += '\n\n' + trimmed;
   }
 
   // Convert session entries to LLM messages

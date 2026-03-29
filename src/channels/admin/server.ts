@@ -7,6 +7,10 @@ import type { Lifecycle } from '../../types.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { PromptLayerStore } from '../../identity/prompt-store.js';
 import type { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import {
+  PromptRuntimeLayoutStore,
+  resolvePromptRuntimeLayoutPath,
+} from '../../identity/prompt-runtime.js';
 import type { EventBus } from '../../event-bus.js';
 import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
 import { createComponentLogger } from '../../logger.js';
@@ -115,10 +119,14 @@ export class AdminServer implements Lifecycle {
       legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
     });
     const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      resolvePromptRuntimeLayoutPath(companionDataDir),
+    );
     this.promptsService = new AdminPromptsDataService({
       promptStore: config.promptStore,
       promptRegistry: config.promptRegistry,
       northStarStore,
+      promptRuntimeLayoutStore,
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
       resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),

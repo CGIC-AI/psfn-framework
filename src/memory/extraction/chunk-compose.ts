@@ -45,6 +45,10 @@ export function formatExtractionTranscript(
       let speaker: string;
       if (entry.role === 'assistant') {
         speaker = roleNames.charName?.trim() || entry.authorName?.trim() || 'assistant';
+      } else if (entry.role === 'system') {
+        speaker = entry.authorName?.trim() || 'system';
+      } else if (entry.role === 'tool') {
+        speaker = entry.authorName?.trim() || 'tool';
       } else {
         speaker = entry.authorName?.trim() || roleNames.userName?.trim() || 'user';
       }

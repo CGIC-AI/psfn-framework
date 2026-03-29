@@ -23,9 +23,7 @@ export function resetLastExtractionCount(): void {
 }
 
 function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } {
-  if (entry.role === 'assistant') return { role: 'assistant', content: entry.content };
-  if (entry.role === 'system') return { role: 'user', content: `[System note] ${entry.content}` };
-  return { role: 'user', content: entry.content };
+  return { role: entry.role, content: entry.content };
 }
 
 export interface ExtractionTriggerResult {

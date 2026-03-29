@@ -65,6 +65,26 @@ interface MirrorSessionMetadata {
 
 const MAX_MIRROR_RENDER_CHARS = 180;
 
+function createInternalAssistantMessage(content: string, timestamp: number): PiAssistantMessage {
+  return {
+    role: 'assistant',
+    content: [{ type: 'text', text: content }],
+    api: '',
+    provider: '',
+    model: '',
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop',
+    timestamp,
+  };
+}
+
 // ── Declaration merging ──
 
 declare module '@mariozechner/pi-agent-core' {
@@ -117,7 +137,7 @@ export function isCustomMessage(m: AgentMessage): boolean {
  * Standard messages (user, assistant, toolResult) pass through.
  * Custom messages are converted:
  * - compaction → user message with summary prefix
- * - systemNote → user message with [System note] prefix
+ * - systemNote → assistant-side internal note with [System note] prefix
  * - whisper → assistant-side internal note
  * - mirror → compact user-side mirror note
  * - continuity → filtered out (injected into system prompt instead)
@@ -133,29 +153,15 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
         timestamp: msg.timestamp,
       } satisfies UserMessage);
     } else if (isSystemNoteMessage(msg)) {
-      result.push({
-        role: 'user',
-        content: `[System note] ${msg.content}`,
-        timestamp: msg.timestamp,
-      } satisfies UserMessage);
+      result.push(createInternalAssistantMessage(
+        `[System note] ${msg.content}`,
+        msg.timestamp,
+      ));
     } else if (isWhisperMessage(msg)) {
-      result.push({
-        role: 'assistant',
-        content: [{ type: 'text', text: `[Internal note to self] ${msg.content}` }],
-        api: '',
-        provider: '',
-        model: '',
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: 'stop',
-        timestamp: msg.timestamp,
-      } satisfies PiAssistantMessage);
+      result.push(createInternalAssistantMessage(
+        `[Internal note to self] ${msg.content}`,
+        msg.timestamp,
+      ));
     } else if (isContinuityMessage(msg)) {
       // Continuity messages are injected into system prompt, not as individual messages.
       // Skip in LLM conversion.

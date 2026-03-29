@@ -3,12 +3,8 @@
 // Run: npx tsx src/app/agent/main.ts
 
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
-import { loadConfig } from '../../system/config/load-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { EventBus } from '../../shared/event-bus.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
-import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
-import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import {
   createEmbeddingDimensionMismatchWarning,
   runDatabaseIntegrityCheck,
@@ -21,10 +17,6 @@ import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
-import {
-  RUNTIME_MODE,
-} from '../../system/lifecycle/runtime-mode.js';
-import { attachTerminalDebugObserver } from '../startup/support/terminal-observer.js';
 import { createBehavioralPatternMemoryPromotionHook } from '../../core/intention/patterns.js';
 import {
   wireShardAndThinkRuntime,
@@ -36,25 +28,9 @@ import {
   wireHeartbeatRuntime,
 } from '../startup/composition/parity.js';
 import { createSqliteCompanionStore } from '../../persistence/sqlite-companion-store.js';
-import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
-import {
-  createEligibilityGate,
-} from '../../system/capabilities/eligibility.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
-import {
-  ensureRegistryFile,
-  resolveModuleRegistryPathFromWorkspace,
-} from '../../system/modules/registry.js';
-import {
-  loadRuntimeChannelsConfig,
-} from '../../channels/backplane/config.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
-import {
-  buildRuntimeChannelsConfigOverrides,
-} from '../startup/support/bootstrap-helpers.js';
-import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
-import { emitEligibilityDecisionTelemetry } from '../startup/support/eligibility-telemetry.js';
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
@@ -74,82 +50,37 @@ import {
   createSessionActivityTracker,
   writeStartupSessionMetadata,
 } from './session-activity.js';
-import {
-  enforceNetworkIsolationOnStartup,
-  logStartupHydrationDiagnostics,
-} from './startup-guards.js';
+import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
   createOptionalVaultAutoPublisher,
   registerOptionalVaultTools,
 } from './vault-runtime.js';
-import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { prepareAgentStartupContext } from './startup-context.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
-const DEFAULT_SOCKET_PATH = DEFAULT_GATEWAY_SOCKET_PATH;
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const coreConfig = sanitizeCoreSubstrateConfig(config);
   const {
+    config,
+    coreConfig,
     lifecycleRuntimeContract,
     runtimeStatusMeta,
-    startupHydration,
-  } = resolveStartupPreflightBundle(config, {
-    entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
-    env: process.env,
-    logger: log,
-  });
-  const {
     pathSnapshot,
-    trustPolicyConfig,
     schedulerConfig,
-  } = startupHydration;
-  logStartupHydrationDiagnostics(startupHydration.diagnostics);
-
-  log.info('Loaded trust policy configuration', {
-    exactOverrideCount: Object.keys(
-      trustPolicyConfig.channelClassification.visibilityOverrides.exact,
-    ).length,
-    prefixOverrideCount: Object.keys(
-      trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
-    ).length,
+    channelsConfig,
+    backupConfig,
+    capabilityRuntime,
+    eligibilityGate,
+    socketPath,
+    moduleRegistryPath,
+    eventBus,
+    stopDebugObserver,
+  } = prepareAgentStartupContext({
+    env: process.env,
+    log,
   });
-  const channelsConfig = loadRuntimeChannelsConfig(
-    pathSnapshot.systemDataDir,
-    process.env,
-    buildRuntimeChannelsConfigOverrides(config, startupHydration.settingsDomains.runtime),
-    { credentialVault: config.credentialVault },
-  );
-  const backupConfig = resolveBackupRuntimeConfig({
-    dataDir: pathSnapshot.companionDataDir,
-    defaultRootDir: pathSnapshot.runtimePathLayout.backupsDir,
-  });
-  const capabilityRuntime = new CapabilityRuntime({
-    dataDir: pathSnapshot.systemDataDir,
-    seedDir: process.env.CONFIG_DIR,
-  });
-  config.capabilityTier = capabilityRuntime.getTier();
-  const eligibilityGate = createEligibilityGate(
-    () => capabilityRuntime,
-    (decision) => emitEligibilityDecisionTelemetry(eventBus, decision, log),
-  );
-  const socketPath = process.env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH;
-  if (!process.env.WORKSPACE_PATH) {
-    log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
-      mode: pathSnapshot.runtimePathLayout.mode,
-      workspacePath: pathSnapshot.workspacePath,
-      resolved: pathSnapshot.workspaceRoot,
-    });
-  }
-  const moduleRegistryPath = resolveModuleRegistryPathFromWorkspace(
-    pathSnapshot.workspaceRoot,
-    process.env.MODULE_REGISTRY_PATH,
-  );
-  ensureRegistryFile(moduleRegistryPath);
-  const eventBus = new EventBus();
-  const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'agent' });
 
   log.info('Initializing...');
   log.info('Lifecycle runtime contract resolved', runtimeStatusMeta);

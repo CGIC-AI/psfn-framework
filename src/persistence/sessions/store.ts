@@ -36,6 +36,7 @@ import {
   type TranscriptProjectionPort,
 } from './transcript-projection-port.js';
 import { createFilesystemTurnRecordStorePort, type TurnRecordStorePort } from './turn-records.js';
+import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
   getCrashRecoveryExtractionCandidates,
   getUncleanShutdownChannels,
@@ -106,7 +107,7 @@ function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CH
   return `${normalized.slice(0, maxChars - 3)}...`;
 }
 
-export class SessionStore {
+export class SessionStore implements TranscriptSearchPort {
   private sessionsDir: string;
   private channels: Map<string, ChannelCache> = new Map();
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();

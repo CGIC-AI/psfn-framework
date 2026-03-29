@@ -27,6 +27,7 @@ import {
 } from './compaction-audit.js';
 import { resolveRoleName } from './manager-primitives.js';
 import { resolveSessionEntryRoleEnvelopePreview } from './turn-provenance.js';
+import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
@@ -386,6 +387,30 @@ describe('SessionManager', () => {
       'api:role-envelope-refs',
       [userEntryId ?? 0, assistantEntryId ?? 0, assistantEntryId ?? 0],
     )).toEqual(['turn_record_summary:env_refs_1']);
+  });
+
+  it('delegates transcript search to the injected transcript search port', () => {
+    const transcriptSearch: TranscriptSearchPort = {
+      searchByKeywords: vi.fn(() => [
+        {
+          channelId: 'api:search-hit',
+          messageId: 1,
+          role: 'assistant',
+          timestamp: 1_000,
+          channelVisibility: 'public',
+          score: 0.1,
+          snippet: 'Transcript hit',
+          content: 'Transcript hit',
+        },
+      ]),
+    };
+    const mgr = new SessionManager(store, makeConfig(), undefined, undefined, transcriptSearch);
+
+    const hits = mgr.searchTranscripts('Transcript', 3);
+
+    expect(transcriptSearch.searchByKeywords).toHaveBeenCalledWith('Transcript', 3);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.channelId).toBe('api:search-hit');
   });
 
   it('renders structured tool payloads as summaries instead of raw machine output', async () => {

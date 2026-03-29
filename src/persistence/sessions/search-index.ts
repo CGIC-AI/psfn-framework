@@ -5,3 +5,4 @@ export type {
   TranscriptProjectionDrift,
   TranscriptProjectionPort,
 } from './transcript-projection-port.js';
+export type { TranscriptSearchPort } from './transcript-search-port.js';

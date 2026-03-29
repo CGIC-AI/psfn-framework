@@ -15,6 +15,7 @@ import {
   createNullCrossChannelContinuityPort,
   type CrossChannelContinuityPort,
 } from './cross-channel-continuity-port.js';
+import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
 import type { SessionSearchHit } from '../../persistence/sessions/transcript-projection-port.js';
@@ -243,6 +244,7 @@ export interface FocusSessionCompletionResult {
 const MAX_ACTIVE_FOCUS_EVIDENCE_ITEMS = 64;
 export class SessionManager {
   private store: SessionStore;
+  private transcriptSearch: TranscriptSearchPort;
   private compactionBoundaryStore: SessionStore;
   private config: SubstrateConfig;
   private eventBus: EventBus | null;
@@ -265,8 +267,10 @@ export class SessionManager {
     config: SubstrateConfig,
     eventBus?: EventBus,
     promptRegistry?: PromptRegistryStatePort | null,
+    transcriptSearch?: TranscriptSearchPort,
   ) {
     this.store = store;
+    this.transcriptSearch = transcriptSearch ?? store;
     this.compactionBoundaryStore = createCompactionBoundaryStore(store);
     this.config = config;
     this.eventBus = eventBus ?? null;
@@ -1150,8 +1154,12 @@ export class SessionManager {
     return this.store.count(resolvedChannelId);
   }
 
+  searchByKeywords(query: string, limit?: number): SessionSearchHit[] {
+    return this.transcriptSearch.searchByKeywords(query, limit);
+  }
+
   searchTranscripts(query: string, limit?: number): SessionSearchHit[] {
-    return this.store.searchByKeywords(query, limit);
+    return this.searchByKeywords(query, limit);
   }
 
   resolveStartupSessionMetadata(

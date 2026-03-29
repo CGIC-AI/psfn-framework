@@ -1,8 +1,8 @@
 import type { LLMProviderPort } from '../agent/contracts.js';
-import type { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
 import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
+import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 
 const DEFAULT_SESSION_SEARCH_LIMIT = 8;
 const MAX_SESSION_SEARCH_LIMIT = 25;
@@ -191,7 +191,7 @@ async function summarizeSessionSearch(
 }
 
 export async function runSessionSearch(params: {
-  sessionManager: Pick<SessionManager, 'searchTranscripts'> | null | undefined;
+  transcriptSearch: TranscriptSearchPort | null | undefined;
   llmProvider?: LLMProviderPort | null;
   query: string;
   limit?: number;
@@ -200,7 +200,7 @@ export async function runSessionSearch(params: {
   viewer?: SessionSearchViewerContext;
 }): Promise<SessionSearchResult> {
   const normalizedQuery = params.query.trim();
-  if (!normalizedQuery || !params.sessionManager) {
+  if (!normalizedQuery || !params.transcriptSearch) {
     return {
       query: normalizedQuery,
       summary: normalizedQuery
@@ -216,7 +216,7 @@ export async function runSessionSearch(params: {
   const scopedChannelId = typeof params.targetChannelId === 'string' && params.targetChannelId.trim().length > 0
     ? params.targetChannelId.trim()
     : undefined;
-  const rawHits = params.sessionManager.searchTranscripts(
+  const rawHits = params.transcriptSearch.searchByKeywords(
     normalizedQuery,
     requestedLimit * SESSION_SEARCH_OVERSAMPLE_FACTOR,
   );

@@ -3,10 +3,10 @@ import { createInterface } from 'node:readline';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { LLMProviderPort } from '../agent/contracts.js';
-import type { SessionManager } from '../session/manager.js';
 import type { SessionEntry, JournalEntry } from '../session/types.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
+import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import {
   canViewerAccessSessionHit,
   resolveSessionSearchHitVisibility,
@@ -23,10 +23,6 @@ const SESSION_GREP_OVERSAMPLE_FACTOR = 6;
 const SESSION_GREP_SNIPPET_RADIUS = 90;
 
 type SessionGrepMode = 'literal' | 'regex';
-
-interface SessionSearchToolManager {
-  searchTranscripts: SessionManager['searchTranscripts'];
-}
 
 export interface SessionGrepHitResult {
   channelId: string;
@@ -320,7 +316,7 @@ async function runRipgrepSearch(params: SessionGrepRunnerParams): Promise<Sessio
 }
 
 export function createSessionSearchTool(
-  manager: SessionSearchToolManager,
+  transcriptSearch: TranscriptSearchPort,
   llmProvider: LLMProviderPort,
 ): AgentTool<any> {
   return {
@@ -363,7 +359,7 @@ export function createSessionSearchTool(
       }
 
       const result = await runSessionSearch({
-        sessionManager: manager,
+        transcriptSearch,
         llmProvider,
         query,
         limit: params.limit,

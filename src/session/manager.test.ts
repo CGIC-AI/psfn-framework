@@ -10,6 +10,7 @@ import { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
+import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../identity/prompt-runtime.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
@@ -130,6 +131,33 @@ describe('SessionManager', () => {
     expect(coreIndex).toBeGreaterThanOrEqual(0);
     expect(memoryIndex).toBeGreaterThan(coreIndex);
     expect(ctx.systemPrompt).toContain('Complete Phase V task PSFN-du0t.');
+  });
+
+  it('applies persisted runtime layout ordering to derived session context blocks', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const layoutStore = new PromptRuntimeLayoutStore(resolvePromptRuntimeLayoutPath(dir));
+    layoutStore.reorderSystemPromptBlocks([
+      'memory.retrieval',
+      'memory.core',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+      'session.continuity',
+    ], 'admin');
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.setCoreMemoryProvider({
+      formatForContext: () => '[Core Memory]\nAnalytical and direct.',
+    });
+
+    const ctx = await mgr.buildContext('ch1', 'System', 'Retrieved memory block');
+    const memoryIndex = ctx.systemPrompt.indexOf('Retrieved memory block');
+    const coreIndex = ctx.systemPrompt.indexOf('[Core Memory]');
+
+    expect(memoryIndex).toBeGreaterThanOrEqual(0);
+    expect(coreIndex).toBeGreaterThan(memoryIndex);
   });
 
   it('records memory manifest details when retrieval seed metadata is provided', async () => {

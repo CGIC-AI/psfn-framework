@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../identity/prompt-runtime.js';
 import { getVisionToolRequestContext } from '../../images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -8,6 +12,20 @@ import type { InternalState } from '../../self-model/state.js';
 import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
+
+let tempDir: string | null = null;
+
+afterEach(() => {
+  if (tempDir) {
+    rmSync(tempDir, { recursive: true, force: true });
+    tempDir = null;
+  }
+});
+
+function makeTempDir(): string {
+  tempDir = mkdtempSync(join(tmpdir(), 'psfn-turn-runtime-'));
+  return tempDir;
+}
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -437,13 +455,14 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(promptContext).toMatchObject({
       renderedStaticPrefix: 'Rendered static prefix',
       renderedDynamicSuffix: 'Dynamic suffix template',
-      runtimeContext: '',
+      runtimeContext: 'Runtime context block',
       memoryContextBlock: 'Retrieved memory block',
       scratchpadContext: 'Scratchpad block',
       finalSystemPrompt: 'Final system prompt',
     });
     expect(promptContext?.assembledPrompt).toContain('Rendered static prefix');
-    expect(promptContext?.assembledPrompt).not.toContain('Runtime context block');
+    expect(promptContext?.assembledPrompt).toContain('Persona hint');
+    expect(promptContext?.assembledPrompt).toContain('Runtime context block');
     expect(promptContext?.messages).toEqual([
       { role: 'user', content: 'Earlier user message' },
       { role: 'assistant', content: 'Earlier assistant reply' },
@@ -464,11 +483,62 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(emittedSnapshots).toHaveLength(3);
     expect(emittedSnapshots.at(-1)?.promptContext).toMatchObject({
       finalSystemPrompt: 'Final system prompt',
-      runtimeContext: '',
+      runtimeContext: 'Runtime context block',
     });
     expect(emittedSnapshots.at(-1)?.toolContext).toMatchObject({
       activeTools: [{ name: 'contact_lookup' }],
     });
+  });
+
+  it('applies persisted runtime block order before session context assembly', async () => {
+    const root = makeTempDir();
+    const layoutStore = new PromptRuntimeLayoutStore(resolvePromptRuntimeLayoutPath(root));
+    layoutStore.reorderSystemPromptBlocks([
+      'runtime.scratchpad',
+      'runtime.context',
+      'runtime.persona_adaptation',
+      'memory.core',
+      'memory.retrieval',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+      'session.continuity',
+    ], 'admin');
+
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.config.dataDir = root;
+    runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+      staticPrefixTemplate: 'Static prefix template',
+      dynamicSuffixTemplate: 'Dynamic suffix template',
+      staticHash: 'static-hash',
+      versionPointer: 'prompt-v1',
+    }));
+    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
+    runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
+    runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
+
+    await handleMessageForTurn(runtime, createMessage('msg-runtime-order'));
+
+    const fullPrompt = buildContext.mock.calls[0]?.[1] as string;
+    const scratchpadIndex = fullPrompt.indexOf('Scratchpad block');
+    const runtimeContextIndex = fullPrompt.indexOf('Runtime context block');
+    const personaIndex = fullPrompt.indexOf('Persona hint');
+    expect(scratchpadIndex).toBeGreaterThanOrEqual(0);
+    expect(runtimeContextIndex).toBeGreaterThan(scratchpadIndex);
+    expect(personaIndex).toBeGreaterThan(runtimeContextIndex);
   });
 });
 

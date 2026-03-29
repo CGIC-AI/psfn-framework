@@ -20,8 +20,9 @@ import type {
 import { applyJournalState } from './crash-recovery.js';
 import { snapshotIndexEntry } from './channel-index.js';
 import {
-  createFilesystemSessionJournalPort,
-  type SessionJournalPort,
+  createFilesystemSessionArchivePort,
+  type SessionArchiveHandle,
+  type SessionArchivePort,
 } from '../../journals/journal/port.js';
 
 const log = createComponentLogger('SessionStore');
@@ -47,22 +48,38 @@ function applyTurnTombstonesToSessionEntries(
 
 export class SessionJournalRuntime {
   private integrityProvider: SessionIntegrityProvider | null;
-  private journalPort: SessionJournalPort;
+  private archivePort: SessionArchivePort;
   private searchIndexFailureLogged = false;
   private channelIndexFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
 
   constructor(
     integrityProvider: SessionIntegrityProvider | null,
-    journalPort: SessionJournalPort = createFilesystemSessionJournalPort(),
+    archivePort: SessionArchivePort = createFilesystemSessionArchivePort(),
   ) {
     this.integrityProvider = integrityProvider;
-    this.journalPort = journalPort;
+    this.archivePort = archivePort;
     if (integrityProvider) {
       log.info('Session integrity mode: enabled (HMAC verification active)');
     } else {
       log.info('Session integrity mode: disabled (no keyring configured, entries load without verification)');
     }
+  }
+
+  openArchive(channelId: string, filePath: string): SessionArchiveHandle {
+    return this.archivePort.openArchive(channelId, filePath);
+  }
+
+  createArchive(
+    sessionsDir: string,
+    channelId: string,
+    seed: { timestamp: number; authorId?: string; authorName?: string },
+  ): SessionArchiveHandle {
+    return this.archivePort.createArchive(sessionsDir, channelId, seed);
+  }
+
+  resolveArchivePath(handle: SessionArchiveHandle): string {
+    return this.archivePort.resolveArchivePath(handle);
   }
 
   verifyAndNormalizeEntry(entry: JournalEntry, previousHmac: string | null): JournalEntry {
@@ -100,11 +117,12 @@ export class SessionJournalRuntime {
 
   warnAboutQuarantinedEntries(
     channelId: string,
-    filePath: string,
+    archive: SessionArchiveHandle,
     quarantinedCount: number,
     loadedCount: number,
   ): void {
     const warningKey = `${quarantinedCount}:${loadedCount}`;
+    const filePath = this.archivePort.resolveArchivePath(archive);
     if (this.quarantineWarningKeysByPath.get(filePath) === warningKey) return;
     this.quarantineWarningKeysByPath.set(filePath, warningKey);
 
@@ -112,14 +130,15 @@ export class SessionJournalRuntime {
       `Channel ${channelId}: ${quarantinedCount} quarantined entries, ${loadedCount} entries loaded successfully`,
       {
         path: filePath,
-        quarantinePath: this.journalPort.quarantineSidecarPath(filePath),
+        quarantinePath: this.archivePort.quarantineSidecarPath(archive),
       },
     );
   }
 
-  loadChannelFromPath(channelId: string, filePath: string): ChannelCache {
+  loadChannel(archive: SessionArchiveHandle): ChannelCache {
+    const filePath = this.archivePort.resolveArchivePath(archive);
     const cache: ChannelCache = {
-      channelId,
+      channelId: archive.channelId,
       entries: [],
       compactions: [],
       turnTombstones: new Set(),
@@ -136,9 +155,9 @@ export class SessionJournalRuntime {
 
     if (!existsSync(filePath)) return cache;
 
-    const { entries, maxId, quarantined } = this.journalPort.readJournalFile(filePath);
+    const { entries, maxId, quarantined } = this.archivePort.readJournalFile(archive);
     if (quarantined.length > 0) {
-      this.warnAboutQuarantinedEntries(channelId, filePath, quarantined.length, entries.length);
+      this.warnAboutQuarantinedEntries(archive.channelId, archive, quarantined.length, entries.length);
     }
 
     let previousHmac: string | null = null;
@@ -192,7 +211,7 @@ export class SessionJournalRuntime {
       if (!existsSync(filePath)) continue;
 
       try {
-        const loaded = this.loadChannelFromPath(channelId, filePath);
+        const loaded = this.loadChannel(this.openArchive(channelId, filePath));
         params.searchIndex.replaceChannelEntries(channelId, loaded.entries);
       } catch (error) {
         if (!this.searchIndexFailureLogged) {
@@ -225,6 +244,7 @@ export class SessionJournalRuntime {
 
   writeJournalEntry(params: {
     cache: ChannelCache;
+    archive: SessionArchiveHandle;
     journal: JournalEntry;
     upsertChannelIndex: (channelId: string, entry: ChannelIndexEntry) => void;
   }): void {
@@ -242,7 +262,7 @@ export class SessionJournalRuntime {
       }
     }
 
-    this.journalPort.appendJournalEntry(params.cache.resolvedPath, signed);
+    this.archivePort.appendJournalEntry(params.archive, signed);
     applyJournalState(params.cache, signed);
     params.cache.lastHmac = nextHmac;
     try {
@@ -258,8 +278,8 @@ export class SessionJournalRuntime {
     }
   }
 
-  readRecentEntriesFromTail(_channelId: string, filePath: string, limit: number): SessionEntry[] {
-    const tail = this.journalPort.readJournalTailEntries(filePath, {
+  readRecentEntriesFromTail(archive: SessionArchiveHandle, limit: number): SessionEntry[] {
+    const tail = this.archivePort.readJournalTailEntries(archive, {
       messageLimit: limit,
       includeBoundaryEntry: true,
     });

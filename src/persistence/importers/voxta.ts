@@ -2,7 +2,11 @@ import BetterSqlite3 from 'better-sqlite3';
 import { existsSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import type { SessionEntryRole } from '../../core/session/types.js';
-import { writeL0SessionFile, type RawL0MessageInput } from './l0-file-writer.js';
+import {
+  createFilesystemSessionArchivePort,
+  type RawL0MessageInput,
+  type SessionArchivePort,
+} from '../journals/journal/port.js';
 import {
   resolvePrimaryPartnerDiscordProfile,
   type ImportedProfileAttribution,
@@ -66,6 +70,7 @@ export interface ImportVoxtaCharacterChatsOptions {
   profileAuthorName?: string;
   consolidateToSingleSession?: boolean;
   dryRun?: boolean;
+  archivePort?: SessionArchivePort;
 }
 
 function normalizeVoxtaId(value: string): string {
@@ -308,6 +313,7 @@ export function importVoxtaCharacterChats(
   const channelId = options.channelId?.trim() || 'voxta';
   const defaultChannelVisibility = options.defaultChannelVisibility?.trim() || 'private';
   const consolidateToSingleSession = options.consolidateToSingleSession ?? false;
+  const archivePort = options.archivePort ?? createFilesystemSessionArchivePort();
   const requestedChatIds = new Set((options.chatIds ?? []).map(normalizeVoxtaId));
   const db = new BetterSqlite3(dbPath, {
     readonly: true,
@@ -361,7 +367,7 @@ export function importVoxtaCharacterChats(
       } else {
         const written = options.dryRun
           ? null
-          : writeL0SessionFile({
+          : archivePort.writeImportedSession({
             sessionsDir,
             channelId,
             seedTimestamp: firstTimestamp,
@@ -401,7 +407,7 @@ export function importVoxtaCharacterChats(
 
       const written = options.dryRun
         ? null
-        : writeL0SessionFile({
+        : archivePort.writeImportedSession({
           sessionsDir,
           channelId,
           seedTimestamp: consolidatedMessages[0]!.timestamp,

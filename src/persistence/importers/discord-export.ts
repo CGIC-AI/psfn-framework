@@ -1,6 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
-import { writeL0SessionFile, type RawL0MessageInput } from './l0-file-writer.js';
+import {
+  createFilesystemSessionArchivePort,
+  type RawL0MessageInput,
+  type SessionArchivePort,
+} from '../journals/journal/port.js';
 
 interface DiscordExportAuthor {
   id: string;
@@ -47,6 +51,7 @@ export interface ImportDiscordExportToL0Options {
   channelId?: string;
   defaultChannelVisibility?: string;
   dryRun?: boolean;
+  archivePort?: SessionArchivePort;
 }
 
 export interface DiscordExportImportResult {
@@ -129,7 +134,7 @@ export function importDiscordExportToL0(
   const lastTimestamp = messages[messages.length - 1]!.timestamp;
   const written = options.dryRun
     ? null
-    : writeL0SessionFile({
+    : (options.archivePort ?? createFilesystemSessionArchivePort()).writeImportedSession({
       sessionsDir,
       channelId,
       seedTimestamp: firstTimestamp,

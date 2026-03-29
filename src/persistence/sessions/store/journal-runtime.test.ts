@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildMessageJournalEntry } from '../../journals/journal/entries.js';
-import { createFilesystemSessionJournalPort } from '../../journals/journal/port.js';
+import { createFilesystemSessionArchivePort } from '../../journals/journal/port.js';
 import { SessionJournalRuntime } from './journal-runtime.js';
 import type { ChannelCache } from '../store-primitives.js';
 import type { SessionEntry } from '../../../core/session/types.js';
@@ -22,10 +22,11 @@ describe('SessionJournalRuntime', () => {
     const dir = mkdtempSync(join(tmpdir(), 'psfn-session-journal-runtime-'));
     dirs.push(dir);
     const filePath = join(dir, 'session.jsonl');
-    const port = createFilesystemSessionJournalPort();
+    const port = createFilesystemSessionArchivePort();
     const appendSpy = vi.spyOn(port, 'appendJournalEntry');
     const tailSpy = vi.spyOn(port, 'readJournalTailEntries');
     const runtime = new SessionJournalRuntime(null, port);
+    const archive = runtime.openArchive('ch1', filePath);
     const cache = {
       channelId: 'ch1',
       entries: [],
@@ -51,19 +52,20 @@ describe('SessionJournalRuntime', () => {
 
     runtime.writeJournalEntry({
       cache,
+      archive,
       journal: buildMessageJournalEntry(1, entry),
       upsertChannelIndex,
     });
 
-    expect(appendSpy).toHaveBeenCalledWith(filePath, expect.objectContaining({
+    expect(appendSpy).toHaveBeenCalledWith(archive, expect.objectContaining({
       id: 1,
       channelId: 'ch1',
       type: 'message',
     }));
     expect(upsertChannelIndex).toHaveBeenCalledTimes(1);
 
-    const recent = runtime.readRecentEntriesFromTail('ch1', filePath, 1);
-    expect(tailSpy).toHaveBeenCalledWith(filePath, {
+    const recent = runtime.readRecentEntriesFromTail(archive, 1);
+    expect(tailSpy).toHaveBeenCalledWith(archive, {
       messageLimit: 1,
       includeBoundaryEntry: true,
     });

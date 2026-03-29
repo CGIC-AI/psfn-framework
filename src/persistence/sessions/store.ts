@@ -38,7 +38,6 @@ import {
 import {
   createLightweightCache,
   ensureChannelIndexEntry,
-  makeReadableFilePath,
   migrateLegacyFilenames,
   primeChannelIndexFromDisk,
   rehydrateLastJournalEntry,
@@ -47,7 +46,7 @@ import {
   upsertChannelIndex,
   loadChannelIndex,
 } from './store/channel-index.js';
-import { createFilesystemSessionJournalPort } from '../journals/journal/port.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import {
   buildLegacyImportMetadata,
   listLegacyImportManifests,
@@ -118,7 +117,7 @@ export class SessionStore {
       ?? createKeyringIntegrityProvider(options.integrityKeyring ?? null);
     this.journalRuntime = new SessionJournalRuntime(
       integrityProvider,
-      createFilesystemSessionJournalPort(),
+      createFilesystemSessionArchivePort(),
     );
     mkdirSync(sessionsDir, { recursive: true });
     if (!options.disableSearchIndex) {
@@ -146,7 +145,12 @@ export class SessionStore {
       channelIndexPath: this.channelIndexPath,
       channelIndex: this.channelIndex,
       warnAboutQuarantinedEntries: (id, path, quarantined, loaded) => {
-        this.journalRuntime.warnAboutQuarantinedEntries(id, path, quarantined, loaded);
+        this.journalRuntime.warnAboutQuarantinedEntries(
+          id,
+          this.journalRuntime.openArchive(id, path),
+          quarantined,
+          loaded,
+        );
       },
     });
   }
@@ -166,16 +170,18 @@ export class SessionStore {
   private rehydrateLastJournalEntry(channelId: string, indexEntry: ChannelIndexEntry): JournalEntry | null {
     return rehydrateLastJournalEntry(channelId, indexEntry);
   }
-  private makeReadableFilePath(channelId: string, seed: SessionFileSeed): string {
-    return makeReadableFilePath(this.sessionsDir, channelId, seed);
-  }
   private migrateLegacyFilenames(): void {
     migrateLegacyFilenames({
       sessionsDir: this.sessionsDir,
       channelIndexPath: this.channelIndexPath,
       channelIndex: this.channelIndex,
       warnAboutQuarantinedEntries: (channelId, filePath, quarantinedCount, loadedCount) => {
-        this.journalRuntime.warnAboutQuarantinedEntries(channelId, filePath, quarantinedCount, loadedCount);
+        this.journalRuntime.warnAboutQuarantinedEntries(
+          channelId,
+          this.journalRuntime.openArchive(channelId, filePath),
+          quarantinedCount,
+          loadedCount,
+        );
       },
     });
   }
@@ -185,7 +191,12 @@ export class SessionStore {
       channelIndexPath: this.channelIndexPath,
       channelIndex: this.channelIndex,
       warnAboutQuarantinedEntries: (channelId, filePath, quarantinedCount, loadedCount) => {
-        this.journalRuntime.warnAboutQuarantinedEntries(channelId, filePath, quarantinedCount, loadedCount);
+        this.journalRuntime.warnAboutQuarantinedEntries(
+          channelId,
+          this.journalRuntime.openArchive(channelId, filePath),
+          quarantinedCount,
+          loadedCount,
+        );
       },
     });
   }
@@ -218,7 +229,9 @@ export class SessionStore {
       }
       : this.resolveExistingSession(channelId);
     if (!resolved) return null;
-    const loaded = this.journalRuntime.loadChannelFromPath(resolved.channelId, resolved.filePath);
+    const loaded = this.journalRuntime.loadChannel(
+      this.journalRuntime.openArchive(resolved.channelId, resolved.filePath),
+    );
     this.channels.set(resolved.sessionId, loaded);
     this.upsertChannelIndex(resolved.sessionId, snapshotIndexEntry(loaded));
     return loaded;
@@ -237,7 +250,8 @@ export class SessionStore {
       this.channels.set(resolved.sessionId, cache);
       return cache;
     }
-    const newPath = this.makeReadableFilePath(channelId, seed);
+    const archive = this.journalRuntime.createArchive(this.sessionsDir, channelId, seed);
+    const newPath = this.journalRuntime.resolveArchivePath(archive);
     const cache: ChannelCache = {
       channelId,
       entries: [],
@@ -258,14 +272,19 @@ export class SessionStore {
     return cache;
   }
   private writeJournalEntry(cache: ChannelCache, journal: JournalEntry): void {
+    const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
     this.journalRuntime.writeJournalEntry({
       cache,
+      archive,
       journal,
       upsertChannelIndex: (channelId, entry) => this.upsertChannelIndex(channelId, entry),
     });
   }
   private readRecentEntriesFromTail(channelId: string, filePath: string, limit: number): SessionEntry[] {
-    return this.journalRuntime.readRecentEntriesFromTail(channelId, filePath, limit);
+    return this.journalRuntime.readRecentEntriesFromTail(
+      this.journalRuntime.openArchive(channelId, filePath),
+      limit,
+    );
   }
   private applyTurnTombstonesToEntries(entries: readonly SessionEntry[], tombstones: ReadonlySet<string>): SessionEntry[] {
     if (tombstones.size === 0) return [...entries];

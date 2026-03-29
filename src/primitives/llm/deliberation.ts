@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, CorrelationMetadata, ObservabilityCallType } from '../../shared/contracts/runtime.js';
 import type { LLMCompletionOptions } from './client.js';
 
@@ -328,7 +328,7 @@ interface DeliberationCompletionProvider {
 }
 
 async function completeForDeliberation(
-  llmProvider: LLMProvider,
+  llmProvider: LLMProviderPort,
   context: { systemPrompt: string; messages: ContextMessage[] },
   purpose: CompletionPurpose,
   options?: LLMCompletionOptions,
@@ -380,7 +380,7 @@ function buildDeliberationCorrelation(
 }
 
 export async function runDeliberation(
-  llmProvider: LLMProvider,
+  llmProvider: LLMProviderPort,
   prompt: string,
   options: DeliberationOptions = {},
 ): Promise<DeliberationResult> {

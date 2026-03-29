@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProviderPort } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -32,7 +32,7 @@ export interface CompactionParams {
   channelVisibility: ChannelVisibility;
   systemTokens: number;
   compactionPromptText?: string;
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   store: SessionStore;
   config: SubstrateConfig;
   eventBus: EventBus | null;

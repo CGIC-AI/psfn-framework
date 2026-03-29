@@ -4,7 +4,7 @@
 // calling/execution/looping
 // internally — we just configure it and subscribe to events for streaming.
 //
-// Provider interfaces (LLMProvider, EmbeddingProviderPort, MemoryProvider,
+// Provider interfaces (LLMProviderPort, EmbeddingProviderPort, MemoryProvider,
 // MemoryExtractor) are re-exported here for callers that import contracts
 // from the SubstrateAgent module.
 
@@ -22,7 +22,7 @@ import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, Messa
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
-import type { LLMProvider, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
+import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import {
   resolveChannelResponseStyle,
@@ -140,7 +140,7 @@ import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 const log = createComponentLogger('SubstrateAgent');
 
 export type {
-  LLMProvider,
+  LLMProviderPort,
   EmbeddingProviderPort,
   MemoryProvider,
   MemoryExtractor,
@@ -189,7 +189,7 @@ const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 export class SubstrateAgent {
   private agent: Agent;
   private eventBus: EventBus;
-  private llmClient: LLMProvider;
+  private llmClient: LLMProviderPort;
   private sessionManager: SessionManager;
   private systemPrompt: string;
   private characterName: string;
@@ -256,7 +256,7 @@ export class SubstrateAgent {
 
   constructor(
     eventBus: EventBus,
-    llmClient: LLMProvider,
+    llmClient: LLMProviderPort,
     sessionManager: SessionManager,
     systemPrompt: string,
     config: CoreSubstrateConfig,

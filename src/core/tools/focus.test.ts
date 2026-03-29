@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../session/manager.js';
@@ -48,7 +48,7 @@ describe('focus tools', () => {
   let dir: string;
   let store: SessionStore;
   let manager: SessionManager;
-  let llmProvider: LLMProvider;
+  let llmProvider: LLMProviderPort;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'psfn-focus-tools-'));

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, it, expect, vi } from 'vitest';
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { InferredPostTurnAction, SubstrateMessage, AgentResponse } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -51,7 +51,7 @@ function makeSleeptimeAction(overrides: Partial<InferredPostTurnAction> = {}): I
   };
 }
 
-function makeLLMProvider(content: string): LLMProvider {
+function makeLLMProvider(content: string): LLMProviderPort {
   return {
     stream: vi.fn(async () => ({
       content: '',

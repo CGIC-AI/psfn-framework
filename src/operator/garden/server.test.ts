@@ -18,7 +18,7 @@ import { ShardManager } from '../../faculties/shards/manager.js';
 import { formatPossessiveCompanionName } from '../../core/identity/companion-naming.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 
 function request(
@@ -278,7 +278,7 @@ async function createHarness(options: {
     setConversationChannelPrivacy: vi.fn(() => true),
   };
 
-  const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
+  const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort;
   const shardManager = new ShardManager({
     eventBus,
     llmProvider: mockLlmProvider,

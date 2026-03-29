@@ -57,7 +57,7 @@ import {
 import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import { resolveModel } from '../stream-adapter.js';
-import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
+import type { LLMProviderPort, MemoryExtractor, MemoryProvider } from '../contracts.js';
 import type { MemoryScopeQuery } from '../../../faculties/memory/types.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import {
@@ -106,7 +106,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
 
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
-  llmClient: LLMProvider;
+  llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
   config: SubstrateConfig;

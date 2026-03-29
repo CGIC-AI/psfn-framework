@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { CompletionPurpose, LLMContext, LLMResponse, StreamCallbacks } from '../../shared/contracts/runtime.js';
 import { runDeliberation } from './deliberation.js';
 
@@ -24,7 +24,7 @@ function mockResponse(step: ScriptedStep): LLMResponse {
 }
 
 function scriptedProvider(steps: ScriptedStep[]): {
-  provider: LLMProvider;
+  provider: LLMProviderPort;
   calls: CompletionPurpose[];
   options: Array<Record<string, unknown> | undefined>;
 } {
@@ -32,7 +32,7 @@ function scriptedProvider(steps: ScriptedStep[]): {
   const options: Array<Record<string, unknown> | undefined> = [];
   let index = 0;
 
-  const provider: LLMProvider = {
+  const provider: LLMProviderPort = {
     stream: vi.fn(async (_context: LLMContext, _callbacks?: StreamCallbacks) => ({
       content: '',
       toolCalls: [],

@@ -18,7 +18,7 @@ import type {
 } from '../../../core/agent/substrate-agent.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/think/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
-import type { LLMProvider } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import {
   createPromotedToolsAddTool,
   createPromotedToolsListTool,
@@ -172,7 +172,7 @@ interface HeartbeatAgent {
 
 interface HeartbeatRuntimeOptions {
   eventBus?: EventBus;
-  llmProvider?: LLMProvider;
+  llmProvider?: LLMProviderPort;
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   characterPromptVariablesProvider?: () => Record<string, string>;
@@ -373,7 +373,7 @@ export function wireSessionToolsRuntime(
   target: ToolRegistrarTarget,
   sessionManager: SessionManager,
   dataDir: string,
-  llmProvider: LLMProvider,
+  llmProvider: LLMProviderPort,
 ): void {
   target.registerTool(createSessionSearchTool(sessionManager, llmProvider), 'core');
   target.registerTool(createSessionGrepTool({

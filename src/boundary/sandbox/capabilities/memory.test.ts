@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMProvider } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import { createMemoryCapabilities } from './memory.js';
 
-function mockLLM(summary = 'Summarized search results.'): LLMProvider {
+function mockLLM(summary = 'Summarized search results.'): LLMProviderPort {
   return {
     stream: vi.fn(async () => ({
       content: '',

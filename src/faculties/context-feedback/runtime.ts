@@ -1,5 +1,5 @@
 import type { PostTurnActionInferer } from '../../core/agent/substrate-agent.js';
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -25,7 +25,7 @@ export interface ContextFeedbackRuntimeAgentLoop {
 export interface WireContextFeedbackRuntimeOptions {
   agentLoop: ContextFeedbackRuntimeAgentLoop;
   postTurnActions: PostTurnActionRuntime;
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   sessionStore: Pick<SessionStore, 'getRecent'>;
   eventBus: EventBus;
 }

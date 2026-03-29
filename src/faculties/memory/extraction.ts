@@ -1,4 +1,4 @@
-import type { EmbeddingProviderPort, LLMProvider } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { ContactStore } from '../../core/contacts/store.js';
@@ -64,7 +64,7 @@ export interface MemoryExtractorFormationOptions {
 }
 
 export class MemoryExtractor {
-  private llmClient: LLMProvider;
+  private llmClient: LLMProviderPort;
   private sessionManager: SessionManager;
   private memoryStore: MemoryStorePort;
   private writer: MemoryWriter;
@@ -88,7 +88,7 @@ export class MemoryExtractor {
   private getFormationVAD: (() => MemoryFormationVAD | undefined) | null = null;
 
   constructor(
-    llmClient: LLMProvider,
+    llmClient: LLMProviderPort,
     sessionManager: SessionManager,
     memoryStore: MemoryStorePort,
     embeddingService: EmbeddingProviderPort,

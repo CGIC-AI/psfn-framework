@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { EventBus } from '../../../shared/event-bus.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { HeartbeatPolicyStore } from '../../../core/scheduler/heartbeat-policy.js';
-import type { LLMProvider } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { readLastActiveSession } from '../../../system/lifecycle/notifications.js';
 import { createDefaultExtendedToolAutoloadPolicy } from '../../../core/agent/extended-tool-autoload-policy.js';
 import { buildInternalStateSnapshotRef, InternalStateComputer } from '../../../core/self-model/state.js';
@@ -489,7 +489,7 @@ describe('wireHeartbeatRuntime', () => {
     };
 
     const purposes: string[] = [];
-    const llmProvider: LLMProvider = {
+    const llmProvider: LLMProviderPort = {
       stream: vi.fn(async () => ({
         content: '',
         toolCalls: [],

@@ -9,9 +9,16 @@ import type { TurnMemorySnapshot } from '../turns/snapshot.js';
 import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
 import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
 
-export interface LLMProvider {
+export interface LLMProviderPort {
   stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
   complete(context: LLMContext, purpose: CompletionPurpose): Promise<LLMResponse>;
+}
+
+export function createLLMProviderPort(provider: LLMProviderPort): LLMProviderPort {
+  return {
+    stream: (context, callbacks) => provider.stream(context, callbacks),
+    complete: (context, purpose) => provider.complete(context, purpose),
+  };
 }
 
 export type { LLMRequestMetadata };

@@ -5,7 +5,7 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveModel } from '../../core/agent/stream-adapter.js';
 import {
   resolveConfiguredLiteLLMApiKey,
@@ -40,7 +40,7 @@ type BinaryFetcher = (
 
 export interface ImageVisionReviewerOptions {
   binaryFetcher?: BinaryFetcher;
-  llmProvider?: LLMProvider;
+  llmProvider?: LLMProviderPort;
   completeImpl?: (
     model: Model<any>,
     context: PiContext,

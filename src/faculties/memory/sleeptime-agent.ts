@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
@@ -45,7 +45,7 @@ interface NormalizedSleeptimePlan {
 }
 
 export interface SleeptimeMemoryAgentOptions {
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   sessionManager: SessionMemoryReader;
   coreMemoryStore: CoreMemoryRewriter;
   memoryWriter: SleeptimeMemoryWriter;
@@ -212,7 +212,7 @@ function summarizeSessionEntry(entry: SessionEntry): string {
 }
 
 export class SleeptimeMemoryAgent {
-  private readonly llmProvider: LLMProvider;
+  private readonly llmProvider: LLMProviderPort;
   private readonly sessionManager: SessionMemoryReader;
   private readonly coreMemoryStore: CoreMemoryRewriter;
   private readonly memoryWriter: SleeptimeMemoryWriter;

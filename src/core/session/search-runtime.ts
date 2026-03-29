@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { SessionEntry } from '../../session/types.js';
 import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
@@ -165,7 +165,7 @@ function buildSessionSearchSummaryPayload(
 }
 
 async function summarizeSessionSearch(
-  llmProvider: LLMProvider | null | undefined,
+  llmProvider: LLMProviderPort | null | undefined,
   query: string,
   hits: SessionSearchHitResult[],
 ): Promise<string> {
@@ -192,7 +192,7 @@ async function summarizeSessionSearch(
 
 export async function runSessionSearch(params: {
   sessionManager: Pick<SessionManager, 'searchTranscripts'> | null | undefined;
-  llmProvider?: LLMProvider | null;
+  llmProvider?: LLMProviderPort | null;
   query: string;
   limit?: number;
   summarize?: boolean;

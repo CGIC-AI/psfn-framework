@@ -7,7 +7,7 @@ import {
   JSONRPCClient,
   JSONRPCServerAndClient,
 } from 'json-rpc-2.0';
-import type { LLMProvider, EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -77,7 +77,7 @@ export { requireGatewaySessionHmacKeyring, resolveGatewaySessionHmacKeyring } fr
 
 export interface GatewayServerOptions {
   socketPath: string;
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   embeddingService: EmbeddingProviderPort;
   modelDiscovery?: {
     getAvailableModels(): Promise<unknown[]>;

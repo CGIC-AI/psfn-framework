@@ -43,7 +43,7 @@ import {
   resolveConfiguredLiteLLMApiKeyReference,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -68,7 +68,7 @@ export interface LLMCompletionOptions {
 
 export interface LLMClientRuntimeOptions {
   litellmBaseUrl?: string;
-  transport?: LLMProvider;
+  transport?: LLMProviderPort;
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
@@ -109,7 +109,7 @@ export class LLMClient {
   private litellmApiKeyRef: CredentialReference;
   private fallbackRunner: FallbackRunner;
   private budgetController: ModelBudgetController;
-  private transport?: LLMProvider;
+  private transport?: LLMProviderPort;
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;

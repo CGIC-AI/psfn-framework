@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { ResponseMetadata } from '../../shared/contracts/runtime.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -170,9 +170,9 @@ function buildEvaluationPrompt(input: ContextEvaluationInput): string {
 }
 
 export class ContextEvaluator {
-  private readonly llmProvider: LLMProvider;
+  private readonly llmProvider: LLMProviderPort;
 
-  constructor(llmProvider: LLMProvider) {
+  constructor(llmProvider: LLMProviderPort) {
     this.llmProvider = llmProvider;
   }
 

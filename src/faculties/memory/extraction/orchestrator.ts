@@ -1,5 +1,5 @@
 import { createComponentLogger } from '../../../shared/logger.js';
-import type { LLMProvider } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { resolveLatestTurnContext } from '../../../core/session/turn-provenance.js';
@@ -79,7 +79,7 @@ export interface ExtractionRunOptions {
     recentEntries: readonly SessionEntry[],
     canonicalContactId?: string,
   ) => ExtractionParticipantNames;
-  llmClient: LLMProvider;
+  llmClient: LLMProviderPort;
   sessionManager: SessionManager;
   memoryStore: MemoryStorePort;
   promptRegistry: PromptRegistryStatePort | null;

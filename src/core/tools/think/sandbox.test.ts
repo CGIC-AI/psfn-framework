@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
-import type { LLMProvider, EmbeddingProviderPort } from '../../agent/contracts.js';
+import type { LLMProviderPort, EmbeddingProviderPort } from '../../agent/contracts.js';
 import type { MemoryStore } from '../../../faculties/memory/store.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
@@ -24,7 +24,7 @@ afterAll(() => {
   }
 });
 
-function mockLLM(content = 'llm response'): LLMProvider {
+function mockLLM(content = 'llm response'): LLMProviderPort {
   return {
     stream: vi.fn(async () => ({
       content,
@@ -45,7 +45,7 @@ function mockLLM(content = 'llm response'): LLMProvider {
   };
 }
 
-function mockSequentialLLM(contents: string[]): LLMProvider {
+function mockSequentialLLM(contents: string[]): LLMProviderPort {
   let callIdx = 0;
   return {
     stream: vi.fn(async () => ({
@@ -72,7 +72,7 @@ function mockSequentialLLM(contents: string[]): LLMProvider {
 }
 
 function nullDeps(
-  llm?: LLMProvider,
+  llm?: LLMProviderPort,
   executionPort?: SandboxExecutionPort | null,
   mutationPolicy?: REPLMutationPolicy,
 ) {
@@ -289,7 +289,7 @@ describe('REPLSandbox', () => {
         message: 'test commit',
         filesChanged: 1,
       })),
-    } as unknown as LLMProvider;
+    } as unknown as LLMProviderPort;
     const sandbox = new REPLSandbox(nullDeps(llm, null, {
       allowRepoMutation: true,
     }));
@@ -315,7 +315,7 @@ describe('REPLSandbox', () => {
     const llm = {
       ...mockLLM(),
       gitApplyPatch: vi.fn(async () => {}),
-    } as unknown as LLMProvider;
+    } as unknown as LLMProviderPort;
     const sandbox = new REPLSandbox(nullDeps(llm, null, {
       allowRepoMutation: true,
     }));
@@ -337,7 +337,7 @@ describe('REPLSandbox', () => {
         '["https://example.com/a","https://example.com/b"]',
       ]),
       webFetch: vi.fn(async (url: string) => `content for ${url}`),
-    } as unknown as LLMProvider;
+    } as unknown as LLMProviderPort;
     const sandbox = new REPLSandbox(nullDeps(llm));
     const result = await sandbox.execute(
       [
@@ -364,7 +364,7 @@ describe('REPLSandbox', () => {
       fsWrite: vi.fn(async () => {}),
       fsList: vi.fn(async () => ['src/a.ts', 'src/b.ts']),
       webFetch: vi.fn(async (url: string) => `fetched:${url}`),
-    } as unknown as LLMProvider;
+    } as unknown as LLMProviderPort;
     const sandbox = new REPLSandbox(nullDeps(llm, null, {
       allowWorkspaceWrite: true,
     }));
@@ -516,7 +516,7 @@ describe('REPLSandbox', () => {
       fsWrite: vi.fn(async () => {}),
       fsList: vi.fn(async () => ['one.ts']),
       webFetch: vi.fn(async () => 'web'),
-    } as unknown as LLMProvider;
+    } as unknown as LLMProviderPort;
     const budgetRef: SandboxBudgetRef = {
       subQueries: 0,
       maxSubQueries: 10,
@@ -564,7 +564,7 @@ describe('REPLSandbox', () => {
       webFetch: vi.fn(async () => {
         throw fetchError;
       }),
-    } as unknown as LLMProvider;
+    } as unknown as LLMProviderPort;
     const sandbox = new REPLSandbox(nullDeps(llm));
     const result = await sandbox.execute(
       'const c = await crawler_fetch("https://1.1.1.1/"); print(c);',
@@ -582,7 +582,7 @@ describe('REPLSandbox', () => {
       ...mockLLM(),
       fsRead: vi.fn(async () => stored),
       fsWrite: vi.fn(async (_path: string, content: string) => { stored = content; }),
-    } as unknown as LLMProvider;
+    } as unknown as LLMProviderPort;
     const sandbox = new REPLSandbox(nullDeps(llm));
 
     const result = await sandbox.execute(

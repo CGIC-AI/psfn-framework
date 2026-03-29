@@ -6,7 +6,7 @@ import {
   __retrieval_internals,
 } from './retrieval.js';
 import type { MemoryStorePort } from './memory-store-port.js';
-import type { EmbeddingProviderPort, LLMProvider } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
 import type { ConsentFlags } from '../../system/trust/types.js';
@@ -68,7 +68,7 @@ function makeMockEventBus(): EventBus {
   } as unknown as EventBus;
 }
 
-function makeMockLLMProvider(responses: Array<{ content: string }>): LLMProvider {
+function makeMockLLMProvider(responses: Array<{ content: string }>): LLMProviderPort {
   return {
     stream: vi.fn(),
     complete: vi.fn().mockImplementation(async () => {

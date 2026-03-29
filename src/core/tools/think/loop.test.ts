@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runRLMLoop } from './loop.js';
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { REPLDeps, REPLConfig } from './types.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
@@ -31,7 +31,7 @@ function mockResponse(content: string, inputTokens = 10, outputTokens = 20): LLM
 }
 
 /** Create a mock LLM that returns a sequence of responses */
-function sequentialLLM(responses: string[]): LLMProvider {
+function sequentialLLM(responses: string[]): LLMProviderPort {
   let callIdx = 0;
   return {
     stream: vi.fn(),
@@ -43,7 +43,7 @@ function sequentialLLM(responses: string[]): LLMProvider {
   };
 }
 
-function makeDeps(llm: LLMProvider, overrides?: Partial<REPLDeps>): REPLDeps {
+function makeDeps(llm: LLMProviderPort, overrides?: Partial<REPLDeps>): REPLDeps {
   return {
     llmProvider: llm,
     embeddingService: null,
@@ -98,7 +98,7 @@ describe('runRLMLoop', () => {
         truncated: false,
         durationMs: 5,
       })),
-    } as LLMProvider & {
+    } as LLMProviderPort & {
       shellExec: ReturnType<typeof vi.fn>;
     };
 
@@ -261,7 +261,7 @@ describe('runRLMLoop', () => {
   });
 
   it('handles LLM error gracefully', async () => {
-    const llm: LLMProvider = {
+    const llm: LLMProviderPort = {
       stream: vi.fn(),
       complete: vi.fn(async () => { throw new Error('LLM down'); }),
     };
@@ -270,7 +270,7 @@ describe('runRLMLoop', () => {
   });
 
   it('stops with explicit reason when LLM call exceeds remaining wall-time budget', async () => {
-    const llm: LLMProvider = {
+    const llm: LLMProviderPort = {
       stream: vi.fn(),
       complete: vi.fn(async () => {
         await new Promise(resolve => setTimeout(resolve, 60));
@@ -489,7 +489,7 @@ describe('runRLMLoop', () => {
       {
         fsRead: vi.fn(async (path: string) => `content:${path}`),
       },
-    ) as LLMProvider;
+    ) as LLMProviderPort;
 
     const deps = makeDeps(llm, {
       config: makeConfig({ maxToolCalls: 1, maxIterations: 5 }),
@@ -642,7 +642,7 @@ describe('runRLMLoop', () => {
   });
 
   it('clamps configured wall-time budget to active tier wall-time ceiling', async () => {
-    const llm: LLMProvider = {
+    const llm: LLMProviderPort = {
       stream: vi.fn(),
       complete: vi.fn(async () => {
         await new Promise(resolve => setTimeout(resolve, 45));

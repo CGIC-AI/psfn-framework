@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import {
@@ -19,7 +19,7 @@ import type {
 const log = createComponentLogger('Extraction');
 
 export interface RefreshContactProfileOptions {
-  llmClient: LLMProvider;
+  llmClient: LLMProviderPort;
   promptRegistry: PromptRegistryStatePort | null;
   memoryStore: MemoryStorePort;
   channelId: string;

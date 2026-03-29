@@ -1,5 +1,5 @@
 import type vm from 'node:vm';
-import type { LLMProvider, EmbeddingProviderPort, LLMRequestMetadata } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort, EmbeddingProviderPort, LLMRequestMetadata } from '../../../core/agent/contracts.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
@@ -100,7 +100,7 @@ export interface ScheduleMutationResult {
 }
 
 export interface SandboxDeps {
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   executionPort?: SandboxExecutionPort | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;

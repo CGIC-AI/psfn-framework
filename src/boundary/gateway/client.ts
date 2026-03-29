@@ -1,10 +1,10 @@
 // ── Gateway Client ──
-// Agent-side typed RPC wrapper. Implements LLMProvider and EmbeddingProviderPort
+// Agent-side typed RPC wrapper. Implements LLMProviderPort and EmbeddingProviderPort
 // so it can be used as a drop-in replacement for direct clients.
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
-import type { LLMProvider, EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type { AgentResponse, Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { NdjsonConnection } from './transport.js';
 import { createSocketClient } from './transport.js';
@@ -289,7 +289,7 @@ export interface GatewayConnectionCloseEvent {
   error?: Error;
 }
 
-export class GatewayClient implements LLMProvider, EmbeddingProviderPort {
+export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: NdjsonConnection;
   private embeddingDims: number;
@@ -385,7 +385,7 @@ export class GatewayClient implements LLMProvider, EmbeddingProviderPort {
     });
   }
 
-  // ── LLMProvider interface ──
+  // ── LLMProviderPort interface ──
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     // Generate a unique per-request ID for routing streaming chunks

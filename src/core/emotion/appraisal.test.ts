@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type { CompletionPurpose, LLMContext, LLMResponse } from '../../shared/contracts/runtime.js';
 import { EmotionAppraisal } from './appraisal.js';
 import type { EmotionStateSnapshot } from './state.js';
@@ -17,7 +17,7 @@ function makeSnapshot(
   };
 }
 
-function makeMockProvider(responses: string[]): { provider: LLMProvider; complete: ReturnType<typeof vi.fn> } {
+function makeMockProvider(responses: string[]): { provider: LLMProviderPort; complete: ReturnType<typeof vi.fn> } {
   let index = 0;
   const complete = vi.fn(async (
     _context: LLMContext,

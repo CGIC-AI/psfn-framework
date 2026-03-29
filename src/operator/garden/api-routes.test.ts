@@ -32,7 +32,7 @@ import { saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
-import type { EmbeddingProviderPort, LLMProvider } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
 import type { ScheduledTask } from '../../core/scheduler/types.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
@@ -518,7 +518,7 @@ describe('AdminServer JSON API routes', () => {
       state: 'idle',
     });
 
-    const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
+    const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort;
     shardManager = new ShardManager({
       eventBus,
       llmProvider: mockLlmProvider,

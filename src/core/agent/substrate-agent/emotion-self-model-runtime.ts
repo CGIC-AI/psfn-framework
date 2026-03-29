@@ -18,7 +18,7 @@ import {
 import type { SubstrateMessage, TurnID } from '../../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import type { LLMProvider } from '../contracts.js';
+import type { LLMProviderPort } from '../contracts.js';
 
 const TOP_EMOTION_COUNT = 3;
 const MIN_TOP_EMOTION_SCORE = 0.05;
@@ -36,7 +36,7 @@ export interface EmotionSelfModelRuntimeWiring {
 
 export interface EmotionSelfModelRuntimeOptions {
   sessionManager: SessionManager;
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   emotionRuntime?: EmotionSelfModelRuntimeWiring;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { MemoryProvider, MemoryExtractor, LLMProvider } from './substrate-agent.js';
+import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
 import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
@@ -292,7 +292,7 @@ function makeMockSessionManager(): SessionManager {
   } as unknown as SessionManager;
 }
 
-function makeMockLLMProvider(): LLMProvider {
+function makeMockLLMProvider(): LLMProviderPort {
   const response: LLMResponse = {
     content: 'Hello there!',
     toolCalls: [],
@@ -391,7 +391,7 @@ interface ScriptedCompletionStep {
 }
 
 function makeScriptedMoaProvider(steps: ScriptedCompletionStep[]): {
-  provider: LLMProvider;
+  provider: LLMProviderPort;
   completeSpy: ReturnType<typeof vi.fn>;
 } {
   let index = 0;
@@ -427,7 +427,7 @@ function makeScriptedMoaProvider(steps: ScriptedCompletionStep[]): {
         outputTokens: 0,
         stopReason: 'stop',
       } satisfies LLMResponse),
-      complete: completeSpy as unknown as LLMProvider['complete'],
+      complete: completeSpy as unknown as LLMProviderPort['complete'],
     },
     completeSpy,
   };
@@ -2413,7 +2413,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
     llmProvider.webFetchBinary = vi.fn(async () => ({
@@ -2465,7 +2465,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       marker: boolean;
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
@@ -2515,7 +2515,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
     llmProvider.webFetchBinary = vi.fn(async () => ({
@@ -2567,7 +2567,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
     llmProvider.webFetchBinary = vi.fn(async () => ({
@@ -2619,7 +2619,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
     llmProvider.webFetchBinary = vi.fn(async () => {
@@ -2747,7 +2747,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
     llmProvider.webFetchBinary = vi.fn(async () => ({
@@ -2800,7 +2800,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
     llmProvider.webFetchBinary = vi.fn(async () => ({
@@ -2859,7 +2859,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
     llmProvider.webFetchBinary = vi.fn(async () => ({
@@ -2921,7 +2921,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const fetchMock = vi.fn();
     (globalThis as any).fetch = fetchMock;
 
-    const llmProvider = makeMockLLMProvider() as LLMProvider & {
+    const llmProvider = makeMockLLMProvider() as LLMProviderPort & {
       webFetchBinary: ReturnType<typeof vi.fn>;
     };
     llmProvider.webFetchBinary = vi.fn(async () => ({

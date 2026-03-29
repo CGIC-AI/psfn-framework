@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, LLMResponse } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
@@ -57,7 +57,7 @@ export interface EmotionAppraisalResult {
 }
 
 export interface EmotionAppraisalConfig {
-  llmProvider?: LLMProvider;
+  llmProvider?: LLMProviderPort;
   turnCadence?: number;
   vadDeltaThreshold?: number;
   recentMessageCount?: number;
@@ -278,7 +278,7 @@ function normalizeAppraisalSummary(value: unknown, maxChars: number): string {
   return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 3)}...` : normalized;
 }
 
-interface CompletionProviderWithOptions extends LLMProvider {
+interface CompletionProviderWithOptions extends LLMProviderPort {
   complete(context: LLMContextLike, purpose: CompletionPurpose, options?: {
     correlation?: {
       purpose: string;

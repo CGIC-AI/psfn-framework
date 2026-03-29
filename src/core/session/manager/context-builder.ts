@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../agent/contracts.js';
+import type { LLMProviderPort } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ContextMessage, LLMContext } from '../../../shared/contracts/runtime.js';
@@ -58,7 +58,7 @@ interface BuildSessionContextParams {
   coreMemoryBlock: string;
   memoriesBlock: string;
   compactionPromptText?: string;
-  llmProvider?: LLMProvider;
+  llmProvider?: LLMProviderPort;
   userId?: string;
   channelMeta?: ChannelMeta;
   continuityFallbackUserIds: string[];

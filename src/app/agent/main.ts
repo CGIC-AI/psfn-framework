@@ -35,6 +35,7 @@ import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.
 import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
+import { createLLMProviderPort } from '../../core/agent/contracts.js';
 import {
   bootstrapAgentCoreRuntime,
 } from './core-bootstrap.js';
@@ -92,6 +93,7 @@ async function main(): Promise<void> {
 
   log.info(`Connecting to gateway at ${socketPath}...`);
   const gateway = await GatewayClient.connect(socketPath, embeddingDims);
+  const llmProvider = createLLMProviderPort(gateway);
   log.info('Connected to gateway');
   let shuttingDown = false;
   let stopFn: () => Promise<void> = async () => {};
@@ -208,7 +210,7 @@ async function main(): Promise<void> {
   const shardManager = wireShardAndThinkRuntime({
     agentLoop,
     eventBus,
-    llmProvider: gateway,
+    llmProvider,
     sessionStore,
     embeddingService: gateway,
     memoryStore,
@@ -373,7 +375,7 @@ async function main(): Promise<void> {
     heartbeatChannelId,
     {
       eventBus,
-      llmProvider: gateway,
+      llmProvider,
       capabilityTier: config.capabilityTier,
       compositionalPolicy: config.compositionalPolicy,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),

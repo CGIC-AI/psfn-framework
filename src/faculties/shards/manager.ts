@@ -8,7 +8,7 @@ import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../
 import type { SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { LLMProvider, EmbeddingProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort, EmbeddingProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
@@ -95,7 +95,7 @@ export interface ShardAuditTrail {
 
 export interface ShardManagerDeps {
   eventBus: EventBus;
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   sessionStore: SessionStore;
   sessionManager?: SessionManager | null;
   embeddingService: EmbeddingProviderPort | null;

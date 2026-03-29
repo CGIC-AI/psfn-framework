@@ -13,7 +13,7 @@ import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createBoundedSubagentLaunchTool } from './tools.js';
 import type { BoundedSubagentLaunchPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
-import type { LLMProvider, MemoryProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMResponse } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
@@ -87,7 +87,7 @@ function lastSetToolNames(): string[] {
 
 // ── Fixtures ──
 
-function mockLLM(): LLMProvider {
+function mockLLM(): LLMProviderPort {
   const response: LLMResponse = {
     content: 'unused',
     toolCalls: [],

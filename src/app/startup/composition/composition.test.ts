@@ -14,7 +14,7 @@ import {
   type GatewayToolMetadataCoverage,
   type RuntimeMode,
 } from '../../../core/agent/tool-wiring-validator.js';
-import type { LLMProvider } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
@@ -42,7 +42,7 @@ afterEach(() => {
   }
 });
 
-interface GatewayLLMProvider extends LLMProvider {
+interface GatewayLLMProvider extends LLMProviderPort {
   fsRead: (path: string) => Promise<string>;
   fsWrite: (path: string, content: string) => Promise<void>;
 }

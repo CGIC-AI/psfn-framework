@@ -1,7 +1,7 @@
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { LLMContext, ObservabilityCallType, SubstrateMessage, TurnID, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { LLMProvider } from '../contracts.js';
+import type { LLMProviderPort } from '../contracts.js';
 
 interface MoaLogger {
   warn: (message: string, payload: Record<string, unknown>) => void;
@@ -79,7 +79,7 @@ function buildMoaPrompt(context: LLMContext): string {
 }
 
 export async function runMoaTurn(input: {
-  llmClient: LLMProvider;
+  llmClient: LLMProviderPort;
   context: LLMContext;
   message: SubstrateMessage;
   settings: ResolvedMoaSettings;

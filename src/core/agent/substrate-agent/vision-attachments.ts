@@ -1,6 +1,6 @@
 import type { ImageContent, UserMessage } from '@mariozechner/pi-ai';
 import type { Attachment, SubstrateMessage } from '../../../shared/contracts/runtime.js';
-import type { LLMProvider } from '../contracts.js';
+import type { LLMProviderPort } from '../contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { CurrentTurnVisionReviewContext } from '../../../primitives/images/request-context.js';
@@ -125,7 +125,7 @@ export function hasVisionTurnInputs(message?: SubstrateMessage): boolean {
 
 export async function buildTurnUserContent(input: {
   message: SubstrateMessage;
-  llmClient: LLMProvider;
+  llmClient: LLMProviderPort;
   runtimeMode: RuntimeMode;
   logger: VisionLogger;
   visionReviewer?: ImageVisionReviewer | null;
@@ -227,7 +227,7 @@ function resolveAttachmentImageContentType(attachment: Attachment): string | nul
 
 async function resolveVisionImageContentBlocks(input: {
   message: SubstrateMessage;
-  llmClient: LLMProvider;
+  llmClient: LLMProviderPort;
   runtimeMode: RuntimeMode;
   logger: VisionLogger;
 }): Promise<ResolvedVisionAttachmentSet> {
@@ -295,7 +295,7 @@ async function resolveVisionImageContentBlocks(input: {
 async function resolveVisionAttachmentContent(input: {
   message: SubstrateMessage;
   attachment: Attachment;
-  llmClient: LLMProvider;
+  llmClient: LLMProviderPort;
   runtimeMode: RuntimeMode;
   logger: VisionLogger;
 }): Promise<VisionAttachmentResolutionResult> {

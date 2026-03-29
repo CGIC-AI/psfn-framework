@@ -1,4 +1,4 @@
-import type { LLMProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 
 export const RETRIEVAL_COMPOSITION_BATCH_SIZE = 4;
 export const RETRIEVAL_COMPOSITION_MAX_CANDIDATES = 12;
@@ -28,7 +28,7 @@ interface RetrievalEvaluation {
 }
 
 export async function composeRetrievalRanking(options: {
-  llmClient: LLMProvider;
+  llmClient: LLMProviderPort;
   query: string;
   channelId: string;
   candidates: RetrievalComposeCandidate[];

@@ -1,7 +1,7 @@
 import type {
   MemoryProvider,
   EmbeddingProviderPort,
-  LLMProvider,
+  LLMProviderPort,
   RetrievalVADInput,
 } from '../../core/agent/contracts.js';
 import type {
@@ -371,7 +371,7 @@ export class MemoryRetriever implements MemoryProvider {
   private eventBus?: EventBus;
   private contactStore: ContactStore | null;
   private telemetryEnabled: boolean;
-  private llmProvider: LLMProvider | null;
+  private llmProvider: LLMProviderPort | null;
   private moodCongruenceWeight: number;
   private proactiveRecallProbability: number;
   private proactiveRecallMinTurnsBetween: number;
@@ -384,7 +384,7 @@ export class MemoryRetriever implements MemoryProvider {
     config?: MemoryRetrieverConfig | SubstrateConfig,
     eventBus?: EventBus,
     contactStore?: ContactStore | null,
-    llmProvider?: LLMProvider | null,
+    llmProvider?: LLMProviderPort | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;

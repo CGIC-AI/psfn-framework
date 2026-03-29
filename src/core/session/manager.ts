@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { LLMContext, TurnRecord } from '../../shared/contracts/runtime.js';
 import type { SessionRestartBehavior, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type {
   SessionStore,
   SessionActivitySummary,
@@ -192,7 +192,7 @@ export interface AutoCompactionBetweenTurnsParams {
   channelId: string;
   systemPrompt: string;
   memoriesBlock: string;
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   userId?: string;
   channelMeta?: ChannelMeta;
   compactionPromptText?: string;
@@ -892,7 +892,7 @@ export class SessionManager {
     channelId: string,
     systemPrompt: string,
     memoriesBlock: string,
-    llmProvider?: LLMProvider,
+    llmProvider?: LLMProviderPort,
     userId?: string,
     channelMeta?: ChannelMeta,
     continuityFallbackUserIds: string[] = [],
@@ -1060,7 +1060,7 @@ export class SessionManager {
   }
 
   runPeriodicCompressionGuidelineUpdate(
-    llmProvider: LLMProvider,
+    llmProvider: LLMProviderPort,
   ): Promise<CompressionGuidelineUpdateResult> {
     return this.compressionGuidelineRuntime.runPeriodicGuidelineUpdate(llmProvider);
   }

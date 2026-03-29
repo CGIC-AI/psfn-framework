@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -218,7 +218,7 @@ export function createStartFocusTool(sessionManager: FocusSessionManager): Agent
 
 export function createCompleteFocusTool(
   sessionManager: FocusSessionManager,
-  llmProvider: LLMProvider,
+  llmProvider: LLMProviderPort,
 ): AgentTool<any> {
   return {
     name: 'complete_focus',

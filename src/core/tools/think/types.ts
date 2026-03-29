@@ -1,6 +1,6 @@
 // ── REPL Sandbox Types ──
 
-import type { LLMProvider, EmbeddingProviderPort, LLMRequestMetadata } from '../../agent/contracts.js';
+import type { LLMProviderPort, EmbeddingProviderPort, LLMRequestMetadata } from '../../agent/contracts.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
@@ -123,7 +123,7 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
 };
 
 export interface REPLDeps {
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   executionPort?: SandboxExecutionPort | null;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;

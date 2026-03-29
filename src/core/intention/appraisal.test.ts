@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import {
@@ -25,7 +25,7 @@ function makeEmotionSnapshot(overrides?: Partial<EmotionStateSnapshot>): Emotion
   };
 }
 
-function makeProvider(responses: string[]): { provider: LLMProvider; complete: ReturnType<typeof vi.fn> } {
+function makeProvider(responses: string[]): { provider: LLMProviderPort; complete: ReturnType<typeof vi.fn> } {
   let index = 0;
   const complete = vi.fn(async () => {
     const fallback = responses.length > 0 ? responses[responses.length - 1] : '{"decisions":[{"type":"noop","priority":"low","reason":"default","timing":"none"}]}';

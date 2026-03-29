@@ -2,14 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import {
   CompressionFailureLogStore,
   CompressionGuidelineRuntime,
   CompressionGuidelineStore,
 } from './compression-guideline.js';
 
-function makeMockLLM(content: string): LLMProvider {
+function makeMockLLM(content: string): LLMProviderPort {
   return {
     stream: async () => ({
       content: '',

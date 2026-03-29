@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
@@ -116,7 +116,7 @@ export interface IntentionAppraisalInput {
 }
 
 export interface IntentionAppraisalConfig {
-  llmProvider: LLMProvider;
+  llmProvider: LLMProviderPort;
   appraisalFrequency?: number;
   emotionalShiftThreshold?: number;
   dueSoonWindowMs?: number;
@@ -1213,7 +1213,7 @@ export function sessionEntriesToIntentionMessages(
 }
 
 export class IntentionAppraisal {
-  private readonly llmProvider: LLMProvider;
+  private readonly llmProvider: LLMProviderPort;
   private readonly appraisalFrequency: number;
   private readonly emotionalShiftThreshold: number;
   private readonly dueSoonWindowMs: number;

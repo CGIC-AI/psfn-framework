@@ -574,8 +574,8 @@ describe('wireHeartbeatRuntime', () => {
       const firstDeliberationCall = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
         | { messages?: Array<{ content?: string }> }
         | undefined;
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain(
-        '<appearance_context>\nhands with cat ears and tail\n</appearance_context>',
+      expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(
+        '<appearance_context>',
       );
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain('<internal_state_input>');
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);

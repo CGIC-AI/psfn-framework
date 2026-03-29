@@ -136,6 +136,20 @@ function resolveCurrentTurnVisionReviewFallback(
   };
 }
 
+function buildImageCreateDescription(selfImage: boolean): string {
+  if (selfImage) {
+    return 'Generate a dedicated selfie or self-portrait of the companion. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+  }
+  return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+}
+
+function buildImageCreatePromptDescription(selfImage: boolean): string {
+  if (selfImage) {
+    return 'Full generation prompt for a selfie or self-portrait. The runtime Appearance context is available on this tool; combine it with the desired pose, camera angle, lighting, background, and style.';
+  }
+  return 'Full generation prompt. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path.';
+}
+
 async function reviewGeneratedImages(
   reviewer: ImageVisionReviewer | undefined,
   input: {
@@ -169,16 +183,20 @@ async function reviewGeneratedImages(
 export function createImageCreateTool(
   ops: ImageOperations,
   reviewer?: ImageVisionReviewer,
+  options?: {
+    selfImage?: boolean;
+    toolName?: string;
+  },
 ): AgentTool<any> {
+  const selfImage = options?.selfImage ?? false;
+  const toolName = options?.toolName ?? 'image_create';
   return {
-    name: 'image_create',
-    label: 'image_create',
-    description:
-      'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For self-portraits or selfies, reuse the runtime Appearance context as the companion\'s canonical look and describe the shot directly, for example: "a candid mirror selfie of me, soft morning light, cozy bedroom, natural expression". Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.',
+    name: toolName,
+    label: toolName,
+    description: buildImageCreateDescription(selfImage),
     parameters: Type.Object({
       prompt: Type.String({
-        description:
-          'Full generation prompt. For selfies/self-portraits, explicitly describe the companion using the runtime Appearance context plus the desired pose, camera angle, lighting, background, and style.',
+        description: buildImageCreatePromptDescription(selfImage),
       }),
       provider: providerPreferenceSchema(),
       model: Type.Optional(Type.Union(FAL_CREATE_MODELS.map((value) => Type.Literal(value)))),
@@ -259,10 +277,20 @@ export function createImageCreateTool(
           },
         };
       } catch (error) {
-        return textResultWithError(`image_create failed: ${toErrorMessage(error)}`, true);
+        return textResultWithError(`${toolName} failed: ${toErrorMessage(error)}`, true);
       }
     },
   };
+}
+
+export function createSelfieTool(
+  ops: ImageOperations,
+  reviewer?: ImageVisionReviewer,
+): AgentTool<any> {
+  return createImageCreateTool(ops, reviewer, {
+    selfImage: true,
+    toolName: 'selfie_create',
+  });
 }
 
 export function createImageEditTool(
@@ -273,11 +301,11 @@ export function createImageEditTool(
     name: 'image_edit',
     label: 'image_edit',
     description:
-      'Edit one or more existing images. Write the prompt as the exact transformation you want, including what should change and what must stay the same. For edits of the companion\'s own image, keep the runtime Appearance context aligned with the prompt so her look stays consistent, for example: "turn this into a playful selfie of me at sunset while keeping my usual hair, eyes, cat ears, and tail". Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful edits also return a vision review of the produced image, so use that instead of asking the user to check whether it still looks like you unless you need their aesthetic preference.',
+      'Edit one or more existing images. Write the prompt as the exact transformation you want, including what should change and what must stay the same. For self-image work, use the dedicated selfie_create tool for a fresh companion representation instead of relying on hidden appearance context. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful edits also return a vision review of the produced image, so use that instead of asking the user to check whether it still looks like you unless you need their aesthetic preference.',
     parameters: Type.Object({
       prompt: Type.String({
         description:
-          'Full edit instruction. State the target result clearly and mention any identity details that must remain unchanged; for self-edits, keep the runtime Appearance context consistent.',
+          'Full edit instruction. State the target result clearly and mention any identity details that must remain unchanged; for self-image work, use the dedicated selfie_create tool instead of relying on hidden appearance context.',
       }),
       image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
       provider: providerPreferenceSchema(),

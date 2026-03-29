@@ -43,7 +43,6 @@ import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
 import { ensureRuntimePromptLayers } from '../identity/runtime-prompt-layers.js';
-import { wrapPromptSectionXml } from '../prompt/sections.js';
 import { runDeliberation } from '../llm/deliberation.js';
 import type { DeliberationResult } from '../llm/deliberation.js';
 import {
@@ -688,7 +687,6 @@ export function wireHeartbeatRuntime(
   const formatNarrativePromptInput = (
     prompt: string,
     context: ReflectionInternalStateContext | null,
-    appearanceContext?: string,
   ): string => {
     const sections: string[] = [prompt];
     if (context) {
@@ -718,12 +716,6 @@ export function wireHeartbeatRuntime(
           '</open_threads>',
         ].join('\n'),
       );
-    }
-    if (appearanceContext) {
-      sections.push(wrapPromptSectionXml({
-        id: 'appearance_context',
-        content: appearanceContext,
-      }));
     }
     return sections.join('\n\n');
   };
@@ -805,31 +797,6 @@ export function wireHeartbeatRuntime(
     return Boolean(runtimeOptions.llmProvider);
   };
 
-  const resolveDeliberationAppearanceContext = (): string | undefined => {
-    const provider = runtimeOptions.characterPromptVariablesProvider;
-    if (!provider) return undefined;
-    try {
-      const variables = provider();
-      const candidates = [
-        variables['character.visual_description'],
-        variables.visual_description,
-        variables.extensions_visual_description,
-      ];
-      for (const candidate of candidates) {
-        if (typeof candidate !== 'string') continue;
-        const trimmed = candidate.trim();
-        if (trimmed.length > 0) {
-          return trimmed;
-        }
-      }
-    } catch (error) {
-      log.warn('Failed to resolve appearance context for deliberation heartbeat', {
-        error: String(error),
-      });
-    }
-    return undefined;
-  };
-
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
@@ -879,8 +846,7 @@ export function wireHeartbeatRuntime(
 
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
-    const appearanceContext = shouldUseDeliberation(template) ? resolveDeliberationAppearanceContext() : undefined;
-    const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext, appearanceContext);
+    const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext);
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
     let reflectionMode: 'agent' | 'deliberation' = 'agent';

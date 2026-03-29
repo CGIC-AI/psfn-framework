@@ -161,7 +161,7 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('Channel: api (broadcast).');
   });
 
-  it('exposes appearance context on ordinary turns when image tools are active', () => {
+  it('does not expose appearance context for generic image tools', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -220,10 +220,74 @@ describe('runtime subject identity', () => {
       formatTopEmotions: () => '',
     });
 
+    expect(runtimeContext).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
+    expect(runtimeContext).not.toContain('[Self-Image Tool Guidance]');
+    expect(runtimeContext).not.toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
+  });
+
+  it('exposes appearance context when the explicit selfie tool is active', () => {
+    const message = makeMessage({
+      channelId: 'discord:dm:alex',
+      channelType: 'discord',
+      authorId: 'user-alex',
+      authorName: 'Alex',
+      content: 'send me a selfie',
+    });
+
+    const { templateVariables } = buildPromptTemplateVariables({
+      message,
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      subjectIdentityKey: undefined,
+      now: new Date('2026-03-17T12:00:00Z'),
+      characterPromptVariables: {
+        char_name: 'Companion',
+        'character.visual_description': 'Silver eyes and a weathered jacket.',
+      },
+      modelId: 'test-model',
+      fallbackCharacterName: 'Companion',
+    });
+
+    const runtimeContext = buildRuntimeContext({
+      message,
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables,
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 2,
+        autoload: 2,
+        deferred: 0,
+        total: 2,
+      },
+      extendedTools: [],
+      loadedExtended: new Map([
+        ['selfie_create', {
+          toolName: 'selfie_create',
+          source: 'autoload',
+          activatedAt: 1,
+          lastActivatedAt: 1,
+        }],
+      ]),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+    });
+
     expect(runtimeContext).toContain('<appearance_context>');
     expect(runtimeContext).toContain('Silver eyes and a weathered jacket.');
     expect(runtimeContext).toContain('<self_image_tool_guidance>');
-    expect(runtimeContext).toContain('Use image_create for a brand new selfie, portrait, or scene featuring you.');
+    expect(runtimeContext).toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
   });
 
   it('surfaces attention counts for pending whispers and active concerns', () => {

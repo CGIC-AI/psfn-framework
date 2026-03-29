@@ -12,7 +12,7 @@ import type {
 } from './types.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
-const IMAGE_TOOL_NAMES = new Set(['image_create', 'image_edit']);
+const IMAGE_TOOL_NAMES = new Set(['image_create', 'selfie_create', 'image_edit']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

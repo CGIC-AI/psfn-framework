@@ -7,6 +7,11 @@ import type {
   PromptRegistryEntry,
   PromptRegistryHistoryEntry,
 } from '../../../identity/prompt-registry.js';
+import type {
+  PromptRuntimeBlockId,
+  PromptRuntimeBlockPlacement,
+  PromptRuntimeBlockVisibility,
+} from '../../../identity/prompt-runtime.js';
 import type { PromptHistoryEntry, PromptLayer } from '../../../identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../identity/types.js';
 import type { EditableSettings } from '../../../settings.js';
@@ -490,6 +495,20 @@ export interface AdminContactsService {
 export interface AdminPromptListData {
   layers: PromptLayer[];
   staticPrompts: PromptRegistryEntry[];
+  runtimeBlocks: AdminPromptRuntimeBlock[];
+}
+
+export interface AdminPromptRuntimeBlock {
+  id: PromptRuntimeBlockId;
+  label: string;
+  description: string;
+  source: string;
+  placement: PromptRuntimeBlockPlacement;
+  visibility: PromptRuntimeBlockVisibility;
+  reorderable: boolean;
+  contentVisible: boolean;
+  lockedReason?: string;
+  effectiveOrder: number;
 }
 
 export interface AdminConstitutionImmutableBlock {
@@ -613,4 +632,5 @@ export interface AdminPromptsService {
   rollbackPromptRegistry(body: string): PromptUpdateResult;
   previewPromptLayerDiff(body: string): { oldContent: string; newContent: string } | null;
   resolvePromptLayerMetadata(params: URLSearchParams): { metadata: PromptLayerMetadataUpdate } | { error: string };
+  reorderPromptLayers(body: string): PromptUpdateResult;
 }

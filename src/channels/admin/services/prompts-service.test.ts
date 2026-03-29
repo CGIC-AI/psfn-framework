@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { PromptLayerStore } from '../../../identity/prompt-store.js';
 import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../identity/prompt-composer.js';
 import { composeDefaultFoundationTemplate } from '../../../identity/foundation-sections.js';
+import { PromptRuntimeLayoutStore } from '../../../identity/prompt-runtime.js';
 import { NorthStarStore } from '../../../north-star/store.js';
 import { AdminPromptsDataService } from './prompts-service.js';
 
@@ -134,6 +135,50 @@ describe('AdminPromptsDataService', () => {
     expect(nonNullSnapshot.preview.text).not.toContain('seeded foundation');
   });
 
+  it('lists runtime-derived prompt blocks with persisted effective order', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+    );
+    promptRuntimeLayoutStore.reorderSystemPromptBlocks([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ], 'admin');
+
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const listed = service.listPrompts();
+    expect(listed.runtimeBlocks.map(block => block.id)).toEqual([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+      'session.current_messages',
+      'tools.active_schemas',
+    ]);
+    expect(listed.runtimeBlocks.find(block => block.id === 'session.current_messages')).toMatchObject({
+      reorderable: false,
+      placement: 'context_messages',
+    });
+  });
+
   it('fails closed when immutable constitution layer edits are attempted', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(
@@ -225,6 +270,47 @@ describe('AdminPromptsDataService', () => {
     expect(foundation.content).toContain('<identity>');
     expect(foundation.content).toContain('held together by prompt soil');
     expect(foundation.content).not.toContain('<description>');
+  });
+
+  it('reorders runtime-derived system-prompt blocks through the Garden API service', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+    );
+
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const result = service.reorderPromptLayers(JSON.stringify({
+      runtimeBlockIds: [
+        'session.continuity',
+        'memory.core',
+        'memory.retrieval',
+        'runtime.persona_adaptation',
+        'runtime.context',
+        'runtime.scratchpad',
+        'session.compaction_summary',
+        'session.focus_knowledge',
+      ],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(promptRuntimeLayoutStore.getSystemPromptBlockOrder()).toEqual([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ]);
   });
 
   it('returns a North Star snapshot and saves bounded ordered items', () => {

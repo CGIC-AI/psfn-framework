@@ -84,8 +84,8 @@ interface NorthStarItemInput {
 
 export class AdminPromptsDataService implements AdminPromptsService {
   constructor(private readonly deps: {
-    promptStore?: PromptLayerStatePort | null;
-    promptRegistry?: PromptRegistryStatePort | null;
+    promptStore: PromptLayerStatePort;
+    promptRegistry: PromptRegistryStatePort;
     northStarStore?: NorthStarStore | null;
     sessionStore?: SessionStore | null;
     sessionManager?: SessionManager | null;
@@ -210,8 +210,8 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
   listPrompts(): AdminPromptListData {
     return {
-      layers: this.deps.promptStore?.getAll() ?? [],
-      staticPrompts: this.deps.promptRegistry?.list() ?? [],
+      layers: this.deps.promptStore.getAll(),
+      staticPrompts: this.deps.promptRegistry.list(),
     };
   }
 
@@ -225,9 +225,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   private getFoundationLayers() {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) return [];
-    const layers = promptStore.getAll().filter(layer => isCanonicalCharacterFoundationLayer(layer));
+    const layers = this.deps.promptStore.getAll().filter(layer => isCanonicalCharacterFoundationLayer(layer));
     const orderByIdentifier = new Map(
       FOUNDATION_SECTION_DEFINITIONS.map((section, index) => [section.identifier, index] as const),
     );
@@ -401,10 +399,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     };
   }
 
-  getConstitutionSnapshot(): AdminConstitutionSnapshotData | null {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) return null;
-
+  getConstitutionSnapshot(): AdminConstitutionSnapshotData {
     const immutableBlocks = this.buildImmutableConstitutionBlocks();
     const companionLayer = this.resolveCompanionLayerSnapshot();
     const mutableLayers: AdminConstitutionMutableLayer[] = [];
@@ -443,9 +438,8 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   saveFoundationSections(body: string): FoundationUpdateResult {
-    const promptStore = this.deps.promptStore;
     const foundationLayers = this.getFoundationLayers();
-    if (!promptStore || foundationLayers.length === 0) {
+    if (foundationLayers.length === 0) {
       return { ok: false, message: 'Character Foundation is not configured' };
     }
 
@@ -497,7 +491,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
         const priority = index * 10;
         const existing = layersByIdentifier.get(definition.identifier);
         if (!existing) {
-          promptStore.create({
+          this.deps.promptStore.create({
             type: 'base',
             name: definition.layerName,
             enabled: section.enabled,
@@ -522,7 +516,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
           ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
         };
         if (Object.keys(patch).length > 0) {
-          promptStore.update(
+          this.deps.promptStore.update(
             existing.id,
             patch,
             'admin',
@@ -530,7 +524,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
           );
         }
         if (existing.enabled !== section.enabled) {
-          promptStore.toggle(existing.id);
+          this.deps.promptStore.toggle(existing.id);
         }
       }
       this.injectPromptEditSystemNote(
@@ -546,15 +540,10 @@ export class AdminPromptsDataService implements AdminPromptsService {
       return { ok: false, message: String(error) };
     }
 
-    const snapshot = this.getFoundationSnapshot();
-    if (!snapshot) {
-      return { ok: false, message: 'Failed to load Character Foundation after save' };
-    }
-
     return {
       ok: true,
       message: 'Saved Character Foundation sections',
-      snapshot,
+      snapshot: this.getFoundationSnapshot(),
     };
   }
 
@@ -616,11 +605,6 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) {
-      return { ok: false, message: 'Prompt store not configured' };
-    }
-
     const params = this.parseBody(body);
     if (params.has('immutableBlocks') || params.has('companionLayer')) {
       return { ok: false, message: 'Immutable constitution layers are read-only and cannot be edited' };
@@ -654,13 +638,10 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
 
     const currentSnapshot = this.getConstitutionSnapshot();
-    const existingLayerIds = new Set((currentSnapshot?.mutableLayers ?? []).map(layer => layer.id));
+    const existingLayerIds = new Set(currentSnapshot.mutableLayers.map(layer => layer.id));
     if (existingLayerIds.size === 0) {
       if (parsedLayers.length !== 0) {
         return { ok: false, message: 'Mutable constitution layers are not exposed through Constitution Builder' };
-      }
-      if (!currentSnapshot) {
-        return { ok: false, message: 'Failed to load constitution snapshot after save' };
       }
       return {
         ok: true,
@@ -672,18 +653,6 @@ export class AdminPromptsDataService implements AdminPromptsService {
     if (parsedLayers.length !== existingLayerIds.size) {
       return { ok: false, message: 'mutableLayers must include every mutable layer exactly once' };
     }
-    if (existingLayerIds.size === 0 && parsedLayers.length === 0) {
-      const snapshot = this.getConstitutionSnapshot();
-      if (!snapshot) {
-        return { ok: false, message: 'Failed to load constitution snapshot after save' };
-      }
-      return {
-        ok: true,
-        message: 'No mutable constitution layers to update',
-        snapshot,
-      };
-    }
-
     const mutableLayerPatches: ConstitutionMutableLayerPatchInput[] = [];
     const seen = new Set<string>();
     for (const entry of parsedLayers) {
@@ -708,7 +677,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
 
     try {
-      const currentOrder = promptStore
+      const currentOrder = this.deps.promptStore
         .getAll()
         .sort((left, right) => left.priority - right.priority);
       const nextLayerIds: string[] = [];
@@ -723,7 +692,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
         }
         nextLayerIds.push(layer.id);
       }
-      promptStore.reorderByLayerIds(
+      this.deps.promptStore.reorderByLayerIds(
         nextLayerIds,
         'admin',
         'Admin constitution layer reorder via Garden API',
@@ -733,7 +702,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
 
     for (const patchEntry of mutableLayerPatches) {
-      const layer = promptStore.getById(patchEntry.id);
+      const layer = this.deps.promptStore.getById(patchEntry.id);
       if (!layer) {
         return { ok: false, message: `Prompt layer not found: ${patchEntry.id}` };
       }
@@ -764,7 +733,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
       if (Object.keys(updatePatch).length > 0) {
         try {
-          promptStore.update(
+          this.deps.promptStore.update(
             patchEntry.id,
             updatePatch,
             'admin',
@@ -777,22 +746,17 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
       if (patchEntry.enabled !== undefined && patchEntry.enabled !== layer.enabled) {
         try {
-          promptStore.toggle(patchEntry.id);
+          this.deps.promptStore.toggle(patchEntry.id);
         } catch (error) {
           return { ok: false, message: String(error) };
         }
       }
     }
 
-    const snapshot = this.getConstitutionSnapshot();
-    if (!snapshot) {
-      return { ok: false, message: 'Failed to load constitution snapshot after save' };
-    }
-
     return {
       ok: true,
       message: 'Saved mutable constitution layers',
-      snapshot,
+      snapshot: this.getConstitutionSnapshot(),
     };
   }
 
@@ -935,11 +899,6 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   createPromptLayer(body: string): PromptUpdateResult {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) {
-      return { ok: false, message: 'Prompt store not configured' };
-    }
-
     const params = this.parseBody(body);
     const name = params.get('name')?.trim();
     const type = params.get('type')?.trim() as LayerType | undefined;
@@ -967,7 +926,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     const taskKind = params.get('taskKind')?.trim() || undefined;
 
     try {
-      const layer = promptStore.create({
+      const layer = this.deps.promptStore.create({
         type,
         name,
         content,
@@ -1001,33 +960,24 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   getPromptDetail(layerId: string): AdminPromptDetailData | null {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) return null;
-    const layer = promptStore.getById(layerId);
+    const layer = this.deps.promptStore.getById(layerId);
     if (!layer) return null;
     return {
       layer,
-      layerHistory: promptStore.getLayerHistory(layerId),
+      layerHistory: this.deps.promptStore.getLayerHistory(layerId),
     };
   }
 
   getStaticPromptDetail(key: string): AdminPromptDetailData | null {
-    const promptRegistry = this.deps.promptRegistry;
-    if (!promptRegistry) return null;
-    const staticPrompt = promptRegistry.getByKey(key);
+    const staticPrompt = this.deps.promptRegistry.getByKey(key);
     if (!staticPrompt) return null;
     return {
       staticPrompt,
-      staticPromptHistory: promptRegistry.getPromptHistory(key),
+      staticPromptHistory: this.deps.promptRegistry.getPromptHistory(key),
     };
   }
 
   updatePromptLayer(body: string): PromptUpdateResult {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) {
-      return { ok: false, message: 'Prompt store not configured' };
-    }
-
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? params.get('id') ?? '';
     const name = params.get('name')?.trim();
@@ -1062,7 +1012,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     if (hasPriority) patch.priority = resolvedPriority.priority;
 
     try {
-      const layer = promptStore.update(
+      const layer = this.deps.promptStore.update(
         layerId,
         patch,
         'admin',
@@ -1091,11 +1041,6 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   reorderPromptLayers(body: string): PromptUpdateResult {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) {
-      return { ok: false, message: 'Prompt store not configured' };
-    }
-
     const params = this.parseBody(body);
     const rawLayerIds = params.get('layerIds');
     if (!rawLayerIds) {
@@ -1121,7 +1066,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
 
     try {
-      const touched = promptStore.reorderByLayerIds(
+      const touched = this.deps.promptStore.reorderByLayerIds(
         layerIds,
         'admin',
         'Admin prompt-layer reorder via Garden API',
@@ -1148,16 +1093,11 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   updatePromptRegistry(body: string): PromptUpdateResult {
-    const promptRegistry = this.deps.promptRegistry;
-    if (!promptRegistry) {
-      return { ok: false, message: 'Prompt registry not configured' };
-    }
-
     const params = this.parseBody(body);
     const key = params.get('key') ?? '';
     const content = params.get('content') ?? '';
     try {
-      const staticPrompt = promptRegistry.update(key, content, 'admin');
+      const staticPrompt = this.deps.promptRegistry.update(key, content, 'admin');
       return {
         ok: true,
         message: `Updated "${staticPrompt.key}" to v${staticPrompt.version}`,
@@ -1172,17 +1112,12 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   togglePromptLayer(body: string): PromptUpdateResult {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) {
-      return { ok: false, message: 'Prompt store not configured' };
-    }
-
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
 
     try {
-      promptStore.toggle(layerId);
-      const toggledLayer = promptStore.getById(layerId);
+      this.deps.promptStore.toggle(layerId);
+      const toggledLayer = this.deps.promptStore.getById(layerId);
       return {
         ok: true,
         message: `Toggled "${toggledLayer?.name ?? layerId}"`,
@@ -1197,16 +1132,11 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   rollbackPromptLayer(body: string): PromptUpdateResult {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) {
-      return { ok: false, message: 'Prompt store not configured' };
-    }
-
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
     const version = parseInt(params.get('version') ?? '0', 10);
     try {
-      const rolledBackLayer = promptStore.rollback(layerId, version);
+      const rolledBackLayer = this.deps.promptStore.rollback(layerId, version);
       this.injectPromptEditSystemNote(
         `Admin rolled back ${rolledBackLayer.type} prompt layer "${rolledBackLayer.name}" using v${version} content (now v${rolledBackLayer.version}).`,
       );
@@ -1224,17 +1154,12 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   rollbackPromptRegistry(body: string): PromptUpdateResult {
-    const promptRegistry = this.deps.promptRegistry;
-    if (!promptRegistry) {
-      return { ok: false, message: 'Prompt registry not configured' };
-    }
-
     const params = this.parseBody(body);
     const key = params.get('key') ?? '';
     const version = parseInt(params.get('version') ?? '0', 10);
 
     try {
-      const staticPrompt = promptRegistry.rollback(key, version);
+      const staticPrompt = this.deps.promptRegistry.rollback(key, version);
       return {
         ok: true,
         message: `Rolled back "${staticPrompt.key}" to content from v${version}`,
@@ -1249,15 +1174,12 @@ export class AdminPromptsDataService implements AdminPromptsService {
   }
 
   previewPromptLayerDiff(body: string): { oldContent: string; newContent: string } | null {
-    const promptStore = this.deps.promptStore;
-    if (!promptStore) return null;
-
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
-    const layer = promptStore.getById(layerId);
+    const layer = this.deps.promptStore.getById(layerId);
     if (!layer) return null;
 
-    const layerHistory = promptStore.getLayerHistory(layerId);
+    const layerHistory = this.deps.promptStore.getLayerHistory(layerId);
     if (layerHistory.length === 0) return null;
 
     const previousVersion = layer.version - 1;

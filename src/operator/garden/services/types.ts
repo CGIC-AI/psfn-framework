@@ -629,7 +629,7 @@ export interface AdminPromptsService {
   listPrompts(): AdminPromptListData;
   getFoundationSnapshot(): AdminFoundationSnapshotData | null;
   saveFoundationSections(body: string): FoundationUpdateResult;
-  getConstitutionSnapshot(): AdminConstitutionSnapshotData | null;
+  getConstitutionSnapshot(): AdminConstitutionSnapshotData;
   saveConstitutionMutableLayers(body: string): ConstitutionUpdateResult;
   getNorthStarSnapshot(): AdminNorthStarSnapshotData | null;
   saveNorthStarItems(body: string): NorthStarUpdateResult;

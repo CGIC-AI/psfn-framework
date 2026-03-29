@@ -111,7 +111,7 @@ export class AdminIdentityDataService implements AdminIdentityService {
     config: SubstrateConfig;
     cardVersionStore?: CharacterCardVersionStore | null;
     importIdentityCardHtml?: (body: string) => Promise<string>;
-    promptStore?: PromptLayerStatePort | null;
+    promptStore: PromptLayerStatePort;
   }) {}
 
   private syncCharacterFoundationWithOutcome(

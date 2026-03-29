@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../core/identity/prompt-composer.js';
 import { composeDefaultFoundationTemplate } from '../../../core/identity/foundation-sections.js';
+import { createPromptStatePort } from '../../../core/identity/prompt-state-port.js';
 import { NorthStarStore } from '../../../faculties/north-star/store.js';
 import { AdminPromptsDataService } from './prompts-service.js';
 
@@ -276,7 +277,12 @@ describe('AdminPromptsDataService', () => {
   it('fails closed when North Star save exceeds the three-item cap', () => {
     const root = makeTempDir();
     const northStarStore = new NorthStarStore(join(root, 'north-star.json'));
-    const service = new AdminPromptsDataService({ northStarStore });
+    const promptState = createPromptStatePort({});
+    const service = new AdminPromptsDataService({
+      promptStore: promptState.layers,
+      promptRegistry: promptState.registry,
+      northStarStore,
+    });
 
     const result = service.saveNorthStarItems(JSON.stringify({
       items: [

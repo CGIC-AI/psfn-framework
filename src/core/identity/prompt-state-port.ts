@@ -63,8 +63,8 @@ export interface PromptRegistryStatePort {
 }
 
 export interface PromptStatePort {
-  layers: PromptLayerStatePort | null;
-  registry: PromptRegistryStatePort | null;
+  layers: PromptLayerStatePort;
+  registry: PromptRegistryStatePort;
 }
 
 export function createPromptLayerStatePort(store: PromptLayerStatePort): PromptLayerStatePort {
@@ -107,12 +107,50 @@ export function createPromptRegistryStatePort(store: PromptRegistryStatePort): P
   };
 }
 
+function createDisabledPromptLayerStatePort(): PromptLayerStatePort {
+  const disabledError = () => {
+    throw new Error('Prompt layers are disabled in this runtime');
+  };
+
+  return {
+    get count() {
+      return 0;
+    },
+    getAll: () => [],
+    getById: () => undefined,
+    getByType: () => [],
+    create: disabledError,
+    update: disabledError,
+    reorderByLayerIds: disabledError,
+    toggle: disabledError,
+    delete: disabledError,
+    getLayerHistory: () => [],
+    rollback: disabledError,
+    seedFromCharacterCard: () => false,
+  };
+}
+
+function createDisabledPromptRegistryStatePort(): PromptRegistryStatePort {
+  const disabledError = () => {
+    throw new Error('Prompt registry is disabled in this runtime');
+  };
+
+  return {
+    list: () => [],
+    getByKey: () => undefined,
+    getPrompt: disabledError,
+    update: disabledError,
+    rollback: disabledError,
+    getPromptHistory: () => [],
+  };
+}
+
 export function createPromptStatePort(options: {
   layers?: PromptLayerStatePort | null;
   registry?: PromptRegistryStatePort | null;
 }): PromptStatePort {
   return {
-    layers: options.layers ? createPromptLayerStatePort(options.layers) : null,
-    registry: options.registry ? createPromptRegistryStatePort(options.registry) : null,
+    layers: options.layers ? createPromptLayerStatePort(options.layers) : createDisabledPromptLayerStatePort(),
+    registry: options.registry ? createPromptRegistryStatePort(options.registry) : createDisabledPromptRegistryStatePort(),
   };
 }

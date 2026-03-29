@@ -1520,12 +1520,7 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath('/api/admin/prompts/constitution'),
       handle: (_req, res) => {
-        const snapshot = promptsService.getConstitutionSnapshot();
-        if (!snapshot) {
-          sendJson(res, 400, { error: 'Prompt store not configured' });
-          return;
-        }
-        sendJson(res, 200, snapshot);
+        sendJson(res, 200, promptsService.getConstitutionSnapshot());
       },
     },
     {

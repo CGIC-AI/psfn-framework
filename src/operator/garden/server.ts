@@ -30,6 +30,7 @@ import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
 import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service.js';
+import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { buildAdminRoutes, dispatchAdminRoute, type AdminRoute } from './server-routes.js';
 import { checkAdminRequestAuth, checkAdminUpgradeAuth } from './server-auth.js';
 import { handleAdminRequest } from './server-request-routing.js';
@@ -70,6 +71,8 @@ export class AdminServer implements Lifecycle {
     promptState?: PromptStatePort | null;
     allowInsecureWithoutToken?: boolean;
   }) {
+    const promptState = config.promptState ?? createPromptStatePort({});
+
     this.port = config.port;
     this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
@@ -113,7 +116,7 @@ export class AdminServer implements Lifecycle {
       characterCard: config.characterCard,
       config: config.config,
       cardVersionStore: config.cardVersionStore,
-      promptStore: config.promptState?.layers ?? null,
+      promptStore: promptState.layers,
     });
     const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
     this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
@@ -121,8 +124,8 @@ export class AdminServer implements Lifecycle {
     });
     const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
     this.promptsService = new AdminPromptsDataService({
-      promptStore: config.promptState?.layers ?? null,
-      promptRegistry: config.promptState?.registry ?? null,
+      promptStore: promptState.layers,
+      promptRegistry: promptState.registry,
       northStarStore,
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,

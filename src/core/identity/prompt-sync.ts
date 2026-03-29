@@ -38,15 +38,11 @@ const ALLOWED_RUNTIME_UNRESOLVED_TOKENS = new Set([
 const REQUIRED_CHARACTER_MACRO_FIELDS = ['name', 'personality'] as const;
 
 export function syncCharacterFoundationPromptFromCard(
-  promptStore: PromptLayerStatePort | null | undefined,
+  promptStore: PromptLayerStatePort,
   card: CharacterCardV2,
   _updatedBy: string,
   _reason = 'Sync Character Foundation prompt from imported character card',
 ): PromptSyncResult {
-  if (!promptStore) {
-    return { ok: true, updated: false };
-  }
-
   const nextPrompt = composeSystemPromptTemplate();
   const macroVariables = buildCharacterMacroMap(card);
   const missingRequiredFields = REQUIRED_CHARACTER_MACRO_FIELDS.filter((field) => {

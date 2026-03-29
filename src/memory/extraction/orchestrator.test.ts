@@ -158,6 +158,63 @@ describe('runExtractionOrchestration naming fidelity', () => {
     }), expect.any(String), undefined);
   });
 
+  it('omits internal-lane system notes from extraction prompts', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>User asked for a simple summary.</text>
+<type>semantic</type>
+<importance>0.6</importance>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+      }),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-1' },
+    });
+    const options = buildOptions({
+      llmClient,
+      processFact,
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'api:test',
+          role: 'system',
+          content: 'Admin updated prompt order.',
+          authorId: 'system',
+          authorName: 'System',
+          timestamp: 1,
+          metadata: JSON.stringify({
+            sessionLane: {
+              schemaVersion: 1,
+              kind: 'internal',
+              source: 'appendSystemNote',
+            },
+          }),
+        },
+        {
+          id: 2,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'Please keep only the actual conversation.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('user: Please keep only the actual conversation.'),
+    }), 'extraction');
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.not.stringContaining('Admin updated prompt order.'),
+    }), 'extraction');
+  });
+
   it('uses neutral role labels when explicit participant names are unavailable', async () => {
     const llmClient = {
       complete: vi.fn().mockResolvedValue({

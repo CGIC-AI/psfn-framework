@@ -41,4 +41,33 @@ describe('formatExtractionTranscript', () => {
     expect(transcript).not.toContain('Alex: Agent performed self-check.');
     expect(transcript).not.toContain('Alex: [Tool result: search_logs]');
   });
+
+  it('omits internal-lane entries from extraction transcripts', () => {
+    const transcript = formatExtractionTranscript([
+      makeEntry({
+        role: 'system',
+        content: 'Admin updated prompt order.',
+        authorId: 'system',
+        authorName: 'System',
+        metadata: JSON.stringify({
+          sessionLane: {
+            schemaVersion: 1,
+            kind: 'internal',
+            source: 'appendSystemNote',
+          },
+        }),
+      }),
+      makeEntry({
+        id: 2,
+        role: 'user',
+        content: 'Please summarize only the conversation.',
+        authorName: 'Alex',
+      }),
+    ], {
+      userName: 'Alex',
+    });
+
+    expect(transcript).toBe('Alex: Please summarize only the conversation.');
+    expect(transcript).not.toContain('Admin updated prompt order.');
+  });
 });

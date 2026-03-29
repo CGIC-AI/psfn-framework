@@ -1,4 +1,5 @@
 import type { SessionEntry } from '../../session/types.js';
+import { isNonConversationalSessionEntry } from '../../session/manager-primitives.js';
 import {
   normalizeMemoryTags,
   type ExtractedFact,
@@ -41,6 +42,7 @@ export function formatExtractionTranscript(
   roleNames: ExtractionTranscriptRoleNames = {},
 ): string {
   return entries
+    .filter(entry => !isNonConversationalSessionEntry(entry))
     .map((entry) => {
       let speaker: string;
       if (entry.role === 'assistant') {

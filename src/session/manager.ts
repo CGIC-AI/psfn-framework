@@ -39,6 +39,7 @@ import {
 import {
   collectRecentEntriesWithinTokenBudget,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
+  isNonConversationalSessionEntry,
   type SessionMessageRecordOptions,
 } from './manager-primitives.js';
 import {
@@ -1020,7 +1021,7 @@ export class SessionManager {
     };
   }
 
-  /** Append a system note to a session. Visible in subsequent context builds. */
+  /** Append a system note to a session's internal lane. Hidden from ordinary context builds. */
   appendSystemNote(channelId: string, note: string): void {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (!shouldPersistSessionChannel(resolvedChannelId)) return;
@@ -1031,6 +1032,13 @@ export class SessionManager {
       authorId: 'system',
       authorName: 'System',
       timestamp: Date.now(),
+      metadata: JSON.stringify({
+        sessionLane: {
+          schemaVersion: 1,
+          kind: 'internal',
+          source: 'appendSystemNote',
+        },
+      }),
     });
   }
 
@@ -1111,7 +1119,8 @@ export class SessionManager {
   getRecentMessages(channelId: string, limit?: number): SessionEntry[] {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (limit !== undefined) {
-      return this.store.getRecent(resolvedChannelId, limit);
+      return this.store.getRecent(resolvedChannelId, limit)
+        .filter(entry => !isNonConversationalSessionEntry(entry));
     }
 
     const historyBudget = resolveSessionHistoryBudget(this.config);

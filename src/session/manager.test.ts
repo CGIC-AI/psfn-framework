@@ -1744,29 +1744,47 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBe(20);
   });
 
-  it('appendSystemNote adds a system entry to the session', async () => {
+  it('appendSystemNote stores an internal system entry that stays out of conversational context', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
     mgr.appendSystemNote('ch1', 'Agent performed self-check');
     mgr.recordAssistantMessage('ch1', 'All good');
 
-    // System notes should appear in context as user-role messages with [System note] prefix
+    const recent = mgr.getRecentMessages('ch1');
+    expect(recent).toHaveLength(2);
+    expect(recent[0].role).toBe('user');
+    expect(recent[1].role).toBe('assistant');
+
     const ctx = await mgr.buildContext('ch1', 'Sys', '');
     const allContent = ctx.messages.map(m => m.content).join('\n');
-    expect(allContent).toContain('[System note] Agent performed self-check');
+    expect(allContent).not.toContain('Agent performed self-check');
+
+    const persisted = store.getRecent('ch1', 10);
+    expect(persisted).toHaveLength(3);
+    expect(persisted[1]).toMatchObject({
+      role: 'system',
+      content: 'Agent performed self-check',
+    });
+    expect(JSON.parse(persisted[1].metadata ?? '{}')).toMatchObject({
+      sessionLane: {
+        schemaVersion: 1,
+        kind: 'internal',
+        source: 'appendSystemNote',
+      },
+    });
   });
 
-  it('system notes are visible in getRecentMessages', () => {
+  it('getRecentMessages filters internal system notes while persistence retains them', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
     mgr.appendSystemNote('ch1', 'A note');
 
     const recent = mgr.getRecentMessages('ch1');
-    expect(recent).toHaveLength(2);
-    expect(recent[1].role).toBe('system');
-    expect(recent[1].content).toBe('A note');
+    expect(recent).toHaveLength(1);
+    expect(recent[0].role).toBe('user');
+    expect(store.getRecent('ch1', 10)).toHaveLength(2);
   });
 
   it('skips compaction when context is under threshold', async () => {

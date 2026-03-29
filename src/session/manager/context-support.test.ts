@@ -108,4 +108,37 @@ describe('entriesToMessages', () => {
       },
     ]);
   });
+
+  it('drops internal-lane instrumentation from assembled context', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        role: 'system',
+        content: 'Admin updated prompt order.',
+        authorId: 'system',
+        authorName: 'System',
+        metadata: JSON.stringify({
+          sessionLane: {
+            schemaVersion: 1,
+            kind: 'internal',
+            source: 'appendSystemNote',
+          },
+        }),
+      }),
+      makeEntry({
+        id: 2,
+        role: 'user',
+        content: 'What changed?',
+        authorId: 'user-1',
+        authorName: 'PrimaryUser',
+        timestamp: 1_700_000_000_100,
+      }),
+    ], 'private');
+
+    expect(messages).toEqual([
+      {
+        role: 'user',
+        content: 'What changed?',
+      },
+    ]);
+  });
 });

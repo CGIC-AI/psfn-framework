@@ -16,6 +16,7 @@ import {
   isUntrustedVisibility,
   parseChannelVisibility,
   parseMirrorMetadata,
+  isNonConversationalSessionEntry,
   wrapUntrustedContext,
 } from '../manager-primitives.js';
 
@@ -83,6 +84,9 @@ export function entriesToMessages(
   const messages: Array<ContextMessage & { sourceRole: SessionEntry['role'] }> = [];
 
   for (const entry of entries) {
+    if (isNonConversationalSessionEntry(entry)) {
+      continue;
+    }
     if (isIntentionAppraisalArtifact(entry)) {
       continue;
     }
@@ -135,6 +139,9 @@ export function entriesToMessages(
 export function countIntentionAppraisalArtifacts(entries: readonly SessionEntry[]): number {
   let count = 0;
   for (const entry of entries) {
+    if (isNonConversationalSessionEntry(entry)) {
+      continue;
+    }
     if (isIntentionAppraisalArtifact(entry)) {
       count += 1;
     }

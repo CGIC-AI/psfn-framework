@@ -137,6 +137,48 @@ interface RetryCallbacks {
   onRetry?: (params: { attempt: number; delayMs: number; error: Error }) => Promise<void> | void;
 }
 
+interface SessionMetadataEnvelope {
+  sessionLane?: unknown;
+  [key: string]: unknown;
+}
+
+interface InternalSessionLaneMetadata {
+  schemaVersion: 1;
+  kind: 'internal';
+  source?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseMetadataEnvelope(metadata: string | undefined): SessionMetadataEnvelope | null {
+  if (!metadata) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(metadata);
+  } catch {
+    return null;
+  }
+
+  if (!isRecord(parsed)) {
+    return null;
+  }
+
+  return parsed as SessionMetadataEnvelope;
+}
+
+export function isNonConversationalSessionEntry(entry: Pick<SessionEntry, 'metadata'>): boolean {
+  const envelope = parseMetadataEnvelope(entry.metadata);
+  if (!envelope) return false;
+  const lane = envelope.sessionLane;
+  if (!isRecord(lane)) return false;
+
+  const laneMetadata = lane as Partial<InternalSessionLaneMetadata>;
+  return laneMetadata.schemaVersion === 1 && laneMetadata.kind === 'internal';
+}
+
 export async function withRetry<T>(
   task: () => Promise<T>,
   config: RetryConfig,
@@ -200,8 +242,22 @@ export function collectRecentEntriesWithinTokenBudget(params: {
 
   for (;;) {
     const recent = params.store.getRecent(params.channelId, limit);
-    const trimmed = trimRecentEntriesToTokenBudget(recent, params.tokenBudget);
-    if (recent.length < limit || trimmed.length < recent.length || recent.length === previousFetchedCount) {
+    const visibleRecent = recent.filter(entry => !isNonConversationalSessionEntry(entry));
+    const trimmed = trimRecentEntriesToTokenBudget(visibleRecent, params.tokenBudget);
+    if (recent.length < limit || recent.length === previousFetchedCount) {
+      return {
+        entries: trimmed,
+        sourceCount: recent.length,
+      };
+    }
+
+    if (visibleRecent.length < recent.length) {
+      previousFetchedCount = recent.length;
+      limit = Math.max(limit + 1, limit * 2);
+      continue;
+    }
+
+    if (trimmed.length < visibleRecent.length) {
       return {
         entries: trimmed,
         sourceCount: recent.length,

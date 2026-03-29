@@ -33,6 +33,7 @@ import {
   computeFactValueScore,
   evaluateFactAcceptance,
 } from './signals.js';
+import { isNonConversationalSessionEntry } from '../../session/manager-primitives.js';
 import type {
   AcceptedFactCandidate,
   AcceptedFactWrite,
@@ -117,7 +118,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const recentEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
       ? options.recoveredEntries
       : options.sessionManager.getRecentMessages(options.channelId, 10)
-    ).slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+    )
+      .filter(entry => !isNonConversationalSessionEntry(entry))
+      .slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
     const latestTurnContext = resolveLatestTurnContext(recentEntries);
     const turnId = options.turnId ?? latestTurnContext?.turnId;
     resolvedTurnId = turnId;

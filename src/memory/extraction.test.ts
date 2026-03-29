@@ -508,6 +508,84 @@ describe('MemoryExtractor telemetry payloads', () => {
     expect(startCall?.[1]?.triggerReason).toBe('context_threshold');
   });
 
+  it('ignores system and tool entries when evaluating context-threshold triggers', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({ content: '<response></response>' }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(1),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'system', content: '1234567890123456789012345678901234567890', authorName: 'system' },
+        { role: 'tool', content: 'abcdefghijklmnopqrstuvwxyz', authorName: 'memory_write' },
+        { role: 'user', content: 'tiny', authorName: 'user' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        primaryModel: 'test-model',
+        primaryProvider: 'test-provider',
+        extractionModel: 'test-model',
+        extractionProvider: 'test-provider',
+        primaryMaxTokens: 4096,
+        extractionMaxTokens: 4096,
+        discordToken: '',
+        discordBotId: '',
+        characterCardPath: '',
+        dataDir: '',
+        databasePath: '',
+        sessionMessageLimit: 30,
+        memoryRetrievalLimit: 15,
+        extractionInterval: 10,
+        maintenanceIntervalMs: 60_000,
+        defaultContextWindow: 60,
+        extractionThresholdPct: 50,
+        compactionThresholdPct: 70,
+        memoryExtractionTelemetryEnabled: true,
+        modelRoster: {
+          chat: {
+            model: 'test-model',
+            provider: 'test-provider',
+            maxTokens: 4096,
+            contextWindow: 60,
+          },
+        },
+      } as any,
+    );
+
+    await extractor.maybeExtract('api:threshold-filtered');
+
+    expect(llmClient.complete).not.toHaveBeenCalled();
+    expect((eventBus.emit as ReturnType<typeof vi.fn>).mock.calls).toEqual([]);
+  });
+
   it('ignores internal lane system notes when evaluating context-threshold triggers', async () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),

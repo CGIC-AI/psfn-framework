@@ -149,6 +149,49 @@ describe('ValuesJournalStore', () => {
     });
   });
 
+  it('skips malformed deliberation telemetry entries on read', () => {
+    writeFileSync(
+      filePath,
+      [
+        JSON.stringify({
+          id: 'values-1',
+          version: 1,
+          templateId: 'values-reflection',
+          templateName: 'Values Reflection',
+          prompt: 'P',
+          reflection: 'R',
+          createdAt: '2026-02-26T00:00:00.000Z',
+          telemetry: {
+            deliberation: {
+              sessionId: 'delib-1',
+              stopReason: 'fatigue_taper',
+              rounds: 2,
+              totalInputTokens: 111,
+              totalOutputTokens: 222,
+              totalTokens: 333,
+              estimatedCostUsd: -1,
+              durationMs: 4567,
+            },
+          },
+        }),
+        JSON.stringify({
+          id: 'values-2',
+          version: 2,
+          templateId: 'values-reflection',
+          templateName: 'Values Reflection',
+          prompt: 'P2',
+          reflection: 'R2',
+          createdAt: '2026-02-26T01:00:00.000Z',
+        }),
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+
+    const entries = store.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe('values-2');
+  });
+
   it('persists internal-state narrative context when provided', () => {
     const sample = buildInternalStateSample();
     store.append({

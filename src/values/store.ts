@@ -97,6 +97,56 @@ interface CompanionDerivedLayerOptions {
   historyLimit?: number;
 }
 
+function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const candidate = raw as Partial<ValuesDeliberationMetadata>;
+
+  if (typeof candidate.sessionId !== 'string' || candidate.sessionId.trim().length === 0) return undefined;
+  if (typeof candidate.stopReason !== 'string' || candidate.stopReason.trim().length === 0) return undefined;
+  if (typeof candidate.rounds !== 'number' || !Number.isFinite(candidate.rounds) || candidate.rounds < 0) {
+    return undefined;
+  }
+  if (
+    typeof candidate.totalInputTokens !== 'number'
+    || !Number.isFinite(candidate.totalInputTokens)
+    || candidate.totalInputTokens < 0
+  ) {
+    return undefined;
+  }
+  if (
+    typeof candidate.totalOutputTokens !== 'number'
+    || !Number.isFinite(candidate.totalOutputTokens)
+    || candidate.totalOutputTokens < 0
+  ) {
+    return undefined;
+  }
+  if (typeof candidate.totalTokens !== 'number' || !Number.isFinite(candidate.totalTokens) || candidate.totalTokens < 0) {
+    return undefined;
+  }
+  if (
+    typeof candidate.estimatedCostUsd !== 'number'
+    || !Number.isFinite(candidate.estimatedCostUsd)
+    || candidate.estimatedCostUsd < 0
+  ) {
+    return undefined;
+  }
+  if (typeof candidate.durationMs !== 'number' || !Number.isFinite(candidate.durationMs) || candidate.durationMs < 0) {
+    return undefined;
+  }
+
+  return {
+    sessionId: candidate.sessionId,
+    stopReason: candidate.stopReason,
+    rounds: Math.floor(candidate.rounds),
+    totalInputTokens: candidate.totalInputTokens,
+    totalOutputTokens: candidate.totalOutputTokens,
+    totalTokens: candidate.totalTokens,
+    estimatedCostUsd: candidate.estimatedCostUsd,
+    durationMs: candidate.durationMs,
+  };
+}
+
 function normalizeInternalStateSnapshot(raw: unknown): InternalState | undefined {
   if (raw === undefined || raw === null) return undefined;
   return cloneInternalState(raw as InternalState);
@@ -185,7 +235,11 @@ function normalizeValuesTelemetry(
   },
 ): ValuesJournalTelemetry | undefined {
   const telemetryInput = input.telemetry;
-  const deliberation = telemetryInput?.deliberation ?? input.deliberation;
+  const deliberationInput = telemetryInput?.deliberation ?? input.deliberation;
+  const deliberation = normalizeDeliberationMetadata(deliberationInput);
+  if (deliberationInput !== undefined && deliberation === undefined) {
+    throw new Error('values journal telemetry.deliberation is invalid');
+  }
   const narrativeInput = telemetryInput?.narrativeContext
     ?? ((input.internalStateSnapshotRef !== undefined
       || input.internalState !== undefined

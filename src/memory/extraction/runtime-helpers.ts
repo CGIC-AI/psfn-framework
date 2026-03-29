@@ -23,12 +23,16 @@ export function resetLastExtractionCount(): void {
   lastExtractionCount.clear();
 }
 
-function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } {
+function toTokenMessage(entry: { role: string; content: string }): { role: string; content: string } | null {
+  if (entry.role !== 'assistant' && entry.role !== 'user') {
+    return null;
+  }
   return { role: entry.role, content: entry.content };
 }
 
 function isCountableExtractionEntry(entry: SessionEntry): boolean {
-  return !isNonConversationalSessionEntry(entry);
+  return !isNonConversationalSessionEntry(entry)
+    && (entry.role === 'assistant' || entry.role === 'user');
 }
 
 export interface ExtractionTriggerResult {
@@ -72,7 +76,10 @@ export function evaluateExtractionTrigger(
 
     const recent = sessionManager.getRecentMessages(channelId);
     totalTokens = countMessageTokens(
-      recent.filter(isCountableExtractionEntry).map(toTokenMessage),
+      recent
+        .filter(isCountableExtractionEntry)
+        .map(toTokenMessage)
+        .filter((message): message is { role: string; content: string } => message !== null),
     );
     thresholdMet = totalTokens > tokenBudget;
   }

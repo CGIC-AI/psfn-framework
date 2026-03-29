@@ -19,6 +19,7 @@ import { parseFactsXml } from './parser.js';
 import {
   buildExtractionEntryChunks,
   formatExtractionTranscript,
+  isExtractionTranscriptEntry,
   mergeExtractedFactGroups,
 } from './chunk-compose.js';
 import {
@@ -194,9 +195,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
     const extractionPrompt = options.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
       ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
+    const transcriptEntries = recentEntries.filter(isExtractionTranscriptEntry);
     const entryChunks = options.useCompositionalExtraction
-      ? buildExtractionEntryChunks(recentEntries)
-      : [recentEntries];
+      ? buildExtractionEntryChunks(transcriptEntries)
+      : [transcriptEntries];
     const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'legacy';
     const parsedFactGroups: ExtractedFact[][] = [];
     for (const [index, chunkEntries] of entryChunks.entries()) {

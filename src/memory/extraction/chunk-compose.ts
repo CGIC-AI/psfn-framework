@@ -13,6 +13,11 @@ import {
 
 export const EXTRACTION_COMPOSITION_CHUNK_SIZE = 10;
 
+export function isExtractionTranscriptEntry(entry: SessionEntry): boolean {
+  return !isNonConversationalSessionEntry(entry)
+    && (entry.role === 'assistant' || entry.role === 'user');
+}
+
 export function buildExtractionEntryChunks(
   entries: readonly SessionEntry[],
   chunkSize = EXTRACTION_COMPOSITION_CHUNK_SIZE,
@@ -42,15 +47,11 @@ export function formatExtractionTranscript(
   roleNames: ExtractionTranscriptRoleNames = {},
 ): string {
   return entries
-    .filter(entry => !isNonConversationalSessionEntry(entry))
+    .filter(isExtractionTranscriptEntry)
     .map((entry) => {
       let speaker: string;
       if (entry.role === 'assistant') {
         speaker = roleNames.charName?.trim() || entry.authorName?.trim() || 'assistant';
-      } else if (entry.role === 'system') {
-        speaker = entry.authorName?.trim() || 'system';
-      } else if (entry.role === 'tool') {
-        speaker = entry.authorName?.trim() || 'tool';
       } else {
         speaker = entry.authorName?.trim() || roleNames.userName?.trim() || 'user';
       }

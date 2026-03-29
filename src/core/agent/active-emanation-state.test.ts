@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ActiveEmanationAuthority,
   resolveCanonicalEmbodimentContext,
+  resolveCanonicalSatelliteContext,
 } from './active-emanation-state.js';
 
 const TEST_COMPANION_ID = 'companion-test';
@@ -17,6 +18,7 @@ describe('ActiveEmanationAuthority', () => {
         siteId: 'ha-main',
         satelliteId: 'kitchen',
         embodimentId: 'display',
+        channelPrivacy: 'private',
       },
     }, {
       sourceKey: 'conn-a:session-a',
@@ -27,6 +29,7 @@ describe('ActiveEmanationAuthority', () => {
         siteId: 'ha-main',
         satelliteId: 'kitchen',
         embodimentId: 'display',
+        channelPrivacy: 'private',
         isPrimary: true,
       },
     });
@@ -43,6 +46,7 @@ describe('ActiveEmanationAuthority', () => {
         siteId: 'ha-main',
         satelliteId: 'kitchen',
         embodimentId: 'display',
+        channelPrivacy: 'private',
         isPrimary: true,
       },
     });
@@ -57,6 +61,7 @@ describe('ActiveEmanationAuthority', () => {
         companionId: TEST_COMPANION_ID,
         embodimentId: 'display',
         satelliteId: 'kitchen',
+        channelPrivacy: 'private',
       },
     }, {
       sourceKey: 'conn-a:session-a',
@@ -68,6 +73,7 @@ describe('ActiveEmanationAuthority', () => {
         companionId: TEST_COMPANION_ID,
         embodimentId: 'speaker',
         satelliteId: 'office',
+        channelPrivacy: 'semi_private',
       },
     }, {
       sourceKey: 'conn-b:session-b',
@@ -85,6 +91,7 @@ describe('ActiveEmanationAuthority', () => {
         companionId: TEST_COMPANION_ID,
         embodimentId: 'display',
         satelliteId: 'kitchen',
+        channelPrivacy: 'private',
       },
     }, {
       sourceKey: 'conn-a:session-a',
@@ -97,6 +104,7 @@ describe('ActiveEmanationAuthority', () => {
         embodimentId: 'speaker',
         emanationId: 'speaker-voice',
         satelliteId: 'office',
+        channelPrivacy: 'semi_private',
       },
     }, {
       sourceKey: 'conn-b:session-b',
@@ -108,6 +116,7 @@ describe('ActiveEmanationAuthority', () => {
       companionId: TEST_COMPANION_ID,
       embodimentId: 'speaker',
       satelliteId: 'office',
+      channelPrivacy: 'semi_private',
       isPrimary: true,
     });
 
@@ -120,6 +129,48 @@ describe('ActiveEmanationAuthority', () => {
       sourceKey: 'conn-b:session-b',
     })).toEqual({
       presence: handoff.presence,
+    });
+  });
+
+  it('preserves canonical satellite privacy metadata', () => {
+    const authority = new ActiveEmanationAuthority();
+
+    expect(authority.resolve({
+      presence: {
+        kind: 'satellite',
+        companionId: TEST_COMPANION_ID,
+        siteId: 'ha-main',
+        satelliteId: 'office',
+        channelId: 'api:wyoming:ha-main:office',
+        channelPrivacy: 'private',
+      },
+    }, {
+      sourceKey: 'conn-c:session-c',
+    })).toEqual({
+      presence: {
+        kind: 'satellite',
+        companionId: TEST_COMPANION_ID,
+        siteId: 'ha-main',
+        satelliteId: 'office',
+        channelId: 'api:wyoming:ha-main:office',
+        channelPrivacy: 'private',
+      },
+    });
+
+    expect(resolveCanonicalSatelliteContext({
+      kind: 'satellite',
+      companionId: TEST_COMPANION_ID,
+      siteId: 'ha-main',
+      satelliteId: 'office',
+      channelId: 'api:wyoming:ha-main:office',
+      channelPrivacy: 'private',
+    })).toEqual({
+      kind: 'satellite',
+      companionId: TEST_COMPANION_ID,
+      siteId: 'ha-main',
+      satelliteId: 'office',
+      channelId: 'api:wyoming:ha-main:office',
+      channelPrivacy: 'private',
     });
   });
 });

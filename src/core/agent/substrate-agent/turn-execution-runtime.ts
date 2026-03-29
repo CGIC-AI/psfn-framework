@@ -29,7 +29,11 @@ import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { classifyChannel, type ChannelMeta } from '../../../system/trust/policy.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
-import { resolveCanonicalEmbodimentContext } from '../active-emanation-state.js';
+import {
+  resolveActiveEmanationState,
+  resolveCanonicalEmbodimentContext,
+  resolveCanonicalSatelliteContext,
+} from '../active-emanation-state.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -494,10 +498,32 @@ export async function handleMessageForTurn(
   });
 
   const trustStageStart = Date.now();
+  const routingPresenceResolution = resolveActiveEmanationState(
+    message.routing?.presence ?? message.routing?.wyoming?.presence,
+  );
+  const canonicalPresence = routingPresenceResolution.presence;
+  const canonicalSatellitePresence = resolveCanonicalSatelliteContext(canonicalPresence);
+  const canonicalEmbodimentContext = resolveCanonicalEmbodimentContext(canonicalPresence);
+  if (canonicalPresence) {
+    const nextRouting = {
+      ...(message.routing ?? {}),
+      ...(canonicalPresence.channelPrivacy ? { channelPrivacy: canonicalPresence.channelPrivacy } : {}),
+      presence: canonicalPresence,
+    };
+    if (message.routing?.wyoming || canonicalSatellitePresence) {
+      nextRouting.wyoming = {
+        ...(message.routing?.wyoming ?? {}),
+        ...(canonicalSatellitePresence?.siteId ? { siteId: canonicalSatellitePresence.siteId } : {}),
+        ...(canonicalSatellitePresence ? { satelliteId: canonicalSatellitePresence.satelliteId } : {}),
+        presence: canonicalPresence,
+      };
+    }
+    message.routing = nextRouting;
+  }
   const authorContext = runtime.resolveAuthorContext(message);
   const resolvedChannelPrivacy = normalizeChannelVisibility(message.routing?.channelPrivacy)
     ?? authorContext.channelPrivacyLevel;
-  if (resolvedChannelPrivacy) {
+  if (resolvedChannelPrivacy && message.routing?.channelPrivacy !== resolvedChannelPrivacy) {
     message.routing = {
       ...(message.routing ?? {}),
       channelPrivacy: resolvedChannelPrivacy,
@@ -512,9 +538,7 @@ export async function handleMessageForTurn(
   };
   const channelVisibility = classifyChannel(message.channelId, channelMeta);
   const broadcastVisibilityScope = resolveBroadcastVisibilityScope(message.channelId, channelMeta);
-  const embodimentContext = resolveCanonicalEmbodimentContext(
-    message.routing?.wyoming?.presence ?? message.routing?.presence,
-  );
+  const embodimentContext = canonicalEmbodimentContext;
   const viewerRequestContext = {
     viewerTrustLevel: authorContext.trustLevel,
     viewerChannelVisibility: channelVisibility,

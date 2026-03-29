@@ -43,6 +43,7 @@ describe('Wyoming handle service adapter', () => {
           text: 'hello there',
           site_id: 'home',
           satellite_id: 'sat-1',
+          channel_privacy: 'private',
           user_id: 'alice',
           user_name: 'Alice',
         },
@@ -61,6 +62,14 @@ describe('Wyoming handle service adapter', () => {
     expect(handleMessage.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
       routing: {
         source: 'wyoming',
+        channelPrivacy: 'private',
+        presence: expect.objectContaining({
+          kind: 'satellite',
+          companionId: TEST_COMPANION_ID,
+          siteId: 'home',
+          satelliteId: 'sat-1',
+          channelPrivacy: 'private',
+        }),
         wyoming: expect.objectContaining({
           siteId: 'home',
           satelliteId: 'sat-1',
@@ -69,6 +78,7 @@ describe('Wyoming handle service adapter', () => {
             kind: 'satellite',
             siteId: 'home',
             satelliteId: 'sat-1',
+            channelPrivacy: 'private',
           },
         }),
       },
@@ -163,6 +173,7 @@ describe('Wyoming handle service adapter', () => {
             kind: 'embodiment',
             embodiment_id: 'display',
             satellite_id: 'kitchen',
+            channelPrivacy: 'private',
           },
         },
       },
@@ -171,12 +182,20 @@ describe('Wyoming handle service adapter', () => {
     expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining<Partial<SubstrateMessage>>({
       routing: {
         source: 'wyoming',
+        channelPrivacy: 'private',
+        presence: expect.objectContaining({
+          kind: 'embodiment',
+          embodimentId: 'display',
+          satelliteId: 'kitchen',
+          channelPrivacy: 'private',
+        }),
         wyoming: expect.objectContaining({
           presence: expect.objectContaining({
             companionId: TEST_COMPANION_ID,
             kind: 'embodiment',
             embodimentId: 'display',
             satelliteId: 'kitchen',
+            channelPrivacy: 'private',
             isPrimary: true,
           }),
         }),
@@ -201,6 +220,7 @@ describe('Wyoming handle service adapter', () => {
           presence: {
             kind: 'emanation',
             emanation_id: 'voice-node',
+            channelPrivacy: 'private',
             isPrimary: true,
           },
         },
@@ -271,6 +291,7 @@ describe('Wyoming handle service adapter', () => {
             embodiment_id: 'display',
             satellite_id: 'kitchen',
             companion_id: TEST_COMPANION_ID,
+            channelPrivacy: 'private',
           },
         },
       },
@@ -350,6 +371,7 @@ describe('Wyoming handle service adapter', () => {
             embodiment_id: 'speaker',
             satellite_id: 'office',
             companion_id: TEST_COMPANION_ID,
+            channelPrivacy: 'semi_private',
           },
           presence_handoff: true,
           handoff_from_embodiment_id: 'display',
@@ -360,11 +382,19 @@ describe('Wyoming handle service adapter', () => {
     expect(handleMessage).toHaveBeenLastCalledWith(expect.objectContaining<Partial<SubstrateMessage>>({
       routing: {
         source: 'wyoming',
+        channelPrivacy: 'semi_private',
+        presence: expect.objectContaining({
+          kind: 'embodiment',
+          embodimentId: 'speaker',
+          satelliteId: 'office',
+          channelPrivacy: 'semi_private',
+        }),
         wyoming: expect.objectContaining({
           presence: expect.objectContaining({
             kind: 'embodiment',
             embodimentId: 'speaker',
             satelliteId: 'office',
+            channelPrivacy: 'semi_private',
             isPrimary: true,
           }),
         }),
@@ -390,6 +420,7 @@ describe('Wyoming handle service adapter', () => {
             embodiment_id: 'projector',
             satellite_id: 'studio',
             companion_id: TEST_COMPANION_ID,
+            channelPrivacy: 'private',
           },
         },
       },
@@ -399,11 +430,19 @@ describe('Wyoming handle service adapter', () => {
     expect(handleMessage).toHaveBeenLastCalledWith(expect.objectContaining<Partial<SubstrateMessage>>({
       routing: {
         source: 'wyoming',
+        channelPrivacy: 'private',
+        presence: expect.objectContaining({
+          kind: 'embodiment',
+          embodimentId: 'projector',
+          satelliteId: 'studio',
+          channelPrivacy: 'private',
+        }),
         wyoming: expect.objectContaining({
           presence: expect.objectContaining({
             kind: 'embodiment',
             embodimentId: 'projector',
             satelliteId: 'studio',
+            channelPrivacy: 'private',
             isPrimary: true,
           }),
         }),

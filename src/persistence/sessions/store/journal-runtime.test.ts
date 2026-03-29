@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os';
 import { buildMessageJournalEntry } from '../../journals/journal/entries.js';
 import { createFilesystemSessionArchivePort } from '../../journals/journal/port.js';
 import { SessionJournalRuntime } from './journal-runtime.js';
-import type { ChannelCache } from '../store-primitives.js';
+import type { ChannelCache, ChannelIndexEntry } from '../store-primitives.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import type { TranscriptProjectionPort } from '../transcript-projection-port.js';
 
 describe('SessionJournalRuntime', () => {
   const dirs: string[] = [];
@@ -75,5 +76,76 @@ describe('SessionJournalRuntime', () => {
       channelId: 'ch1',
       content: 'hello',
     });
+  });
+
+  it('marks projection drift instead of failing authoritative replay when backfill fails', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'psfn-session-journal-runtime-backfill-'));
+    dirs.push(dir);
+    const port = createFilesystemSessionArchivePort();
+    const runtime = new SessionJournalRuntime(null, port);
+    const archive = runtime.createArchive(dir, 'ch-projection', { timestamp: 1_000 });
+    const filePath = runtime.resolveArchivePath(archive);
+    const cache = {
+      channelId: 'ch-projection',
+      entries: [],
+      compactions: [],
+      turnTombstones: new Set<string>(),
+      activeTurnTombstoneCount: 0,
+      nextId: 1,
+      lastHmac: null,
+      lastExtractionCoveredUpTo: 0,
+      lastJournalEntry: null,
+      resolvedPath: filePath,
+      messageCount: 0,
+      lastTimestamp: 0,
+      fullyLoaded: true,
+    } satisfies ChannelCache;
+
+    runtime.writeJournalEntry({
+      cache,
+      archive,
+      journal: buildMessageJournalEntry(1, {
+        channelId: 'ch-projection',
+        role: 'user',
+        content: 'projection replay source of truth',
+        timestamp: 1_000,
+      }),
+      upsertChannelIndex: vi.fn(),
+    });
+
+    const projection: TranscriptProjectionPort = {
+      upsertSessionEntry: vi.fn(),
+      replaceChannelEntries: vi.fn(() => {
+        throw new Error('projection backfill offline');
+      }),
+      countProjectedMessages: vi.fn(() => 0),
+      markProjectionDrift: vi.fn(),
+      clearProjectionDrift: vi.fn(),
+      listProjectionDrift: vi.fn(() => []),
+    };
+    const channelIndex = new Map<string, ChannelIndexEntry>([
+      ['ch-projection', { filename: filePath.split('/').at(-1)!, messageCount: 1 }],
+    ]);
+
+    expect(() => {
+      runtime.backfillTranscriptProjectionFromDisk({
+        transcriptProjection: projection,
+        channelIndex,
+        sessionsDir: dir,
+      });
+    }).not.toThrow();
+    expect(projection.replaceChannelEntries).toHaveBeenCalledWith(
+      'ch-projection',
+      [
+        expect.objectContaining({
+          channelId: 'ch-projection',
+          content: 'projection replay source of truth',
+        }),
+      ],
+    );
+    expect(projection.markProjectionDrift).toHaveBeenCalledWith(
+      'ch-projection',
+      'projection backfill offline',
+    );
   });
 });

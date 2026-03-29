@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
 import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity } from '../journals/journal-utils.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
+import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 
 describe('SessionStore', () => {
   let dir: string;
@@ -580,6 +581,87 @@ describe('SessionStore', () => {
     const hits = reloaded.searchByKeywords('aurora protocol', 5);
     expect(hits).toHaveLength(1);
     expect(hits[0].channelId).toBe('api:legacy-search');
+  });
+
+  it('rebuilds transcript projections from authoritative JSONL archives through the injected port', () => {
+    const noProjectionStore = new SessionStore(dir, { disableSearchIndex: true });
+    noProjectionStore.append({
+      channelId: 'api:projection-rebuild',
+      role: 'user',
+      content: 'Archived transcript remains authoritative',
+      timestamp: 1_000,
+    });
+
+    const projection: TranscriptProjectionPort = {
+      upsertSessionEntry: vi.fn(),
+      replaceChannelEntries: vi.fn(),
+      countProjectedMessages: vi.fn(() => 0),
+      markProjectionDrift: vi.fn(),
+      clearProjectionDrift: vi.fn(),
+      listProjectionDrift: vi.fn(() => []),
+    };
+
+    const reloaded = new SessionStore(dir, { transcriptProjection: projection });
+    expect(reloaded.getRecent('api:projection-rebuild', 10)).toHaveLength(1);
+    expect(projection.replaceChannelEntries).toHaveBeenCalledWith(
+      'api:projection-rebuild',
+      [
+        expect.objectContaining({
+          channelId: 'api:projection-rebuild',
+          content: 'Archived transcript remains authoritative',
+        }),
+      ],
+    );
+    expect(projection.markProjectionDrift).not.toHaveBeenCalled();
+  });
+
+  it('preserves JSONL writes when transcript projection updates fail', () => {
+    const projectionError = new Error('projection unavailable');
+    const projection: TranscriptProjectionPort = {
+      upsertSessionEntry: vi.fn(() => {
+        throw projectionError;
+      }),
+      replaceChannelEntries: vi.fn(),
+      countProjectedMessages: vi.fn(() => 0),
+      markProjectionDrift: vi.fn(),
+      clearProjectionDrift: vi.fn(),
+      listProjectionDrift: vi.fn(() => []),
+    };
+    const projectionBackedStore = new SessionStore(dir, { transcriptProjection: projection });
+
+    const appendedId = projectionBackedStore.append({
+      channelId: 'api:projection-failure',
+      role: 'assistant',
+      content: 'Authoritative archive write should survive projection failure',
+      timestamp: 2_000,
+    });
+
+    expect(appendedId).toBe(1);
+    expect(projection.upsertSessionEntry).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'api:projection-failure',
+      id: 1,
+    }));
+    expect(projection.markProjectionDrift).toHaveBeenCalledWith(
+      'api:projection-failure',
+      'projection unavailable',
+    );
+    expect(projectionBackedStore.getRecent('api:projection-failure', 10)).toEqual([
+      expect.objectContaining({
+        id: 1,
+        channelId: 'api:projection-failure',
+        content: 'Authoritative archive write should survive projection failure',
+      }),
+    ]);
+    expect(projectionBackedStore.count('api:projection-failure')).toBe(1);
+
+    const reloaded = new SessionStore(dir, { disableSearchIndex: true });
+    expect(reloaded.getRecent('api:projection-failure', 10)).toEqual([
+      expect.objectContaining({
+        id: 1,
+        channelId: 'api:projection-failure',
+        content: 'Authoritative archive write should survive projection failure',
+      }),
+    ]);
   });
 
   it('creates readable filename pattern for new channels and persists mapping', () => {

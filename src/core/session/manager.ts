@@ -17,7 +17,7 @@ import {
 } from './cross-channel-continuity-port.js';
 import type { UserContinuityStore } from './continuity.js';
 import type { SessionEntry } from './types.js';
-import type { SessionSearchHit } from '../../persistence/sessions/search-index.js';
+import type { SessionSearchHit } from '../../persistence/sessions/transcript-projection-port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
 import { classifyChannel, type ChannelMeta } from '../../system/trust/policy.js';

@@ -10,7 +10,7 @@ import {
   buildMessageJournalEntry,
   buildTurnTombstoneJournalEntry,
 } from '../journals/journal-utils.js';
-import { SessionSearchIndex, type SessionSearchHit } from './search-index.js';
+import { createSqliteTranscriptProjection } from './search-index.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   CHANNEL_INDEX_FILENAME,
@@ -30,6 +30,11 @@ import {
   type SessionStoreOptions,
 } from './store-primitives.js';
 import { inferSessionChannelType } from '../../core/session/session-id.js';
+import {
+  type SessionSearchHit,
+  supportsKeywordSearch,
+  type TranscriptProjectionPort,
+} from './transcript-projection-port.js';
 import {
   getCrashRecoveryExtractionCandidates,
   getUncleanShutdownChannels,
@@ -107,7 +112,7 @@ export class SessionStore {
   private channelIndex: Map<string, ChannelIndexEntry> = new Map();
   private channelIndexPath: string;
   private importManifestPath: string;
-  private searchIndex: SessionSearchIndex | null = null;
+  private transcriptProjection: TranscriptProjectionPort | null = null;
   private journalRuntime: SessionJournalRuntime;
   constructor(sessionsDir: string, options: SessionStoreOptions = {}) {
     this.sessionsDir = sessionsDir;
@@ -120,22 +125,24 @@ export class SessionStore {
       createFilesystemSessionArchivePort(),
     );
     mkdirSync(sessionsDir, { recursive: true });
-    if (!options.disableSearchIndex) {
+    if (options.transcriptProjection !== undefined) {
+      this.transcriptProjection = options.transcriptProjection;
+    } else if (!options.disableSearchIndex) {
       try {
-        this.searchIndex = new SessionSearchIndex(
+        this.transcriptProjection = createSqliteTranscriptProjection(
           options.searchIndexPath ?? join(this.sessionsDir, 'session-search.sqlite'),
         );
       } catch (error) {
-        log.warn('Session search index unavailable; keyword search disabled', {
+        log.warn('Transcript projection unavailable; keyword search disabled', {
           error: toErrorMessage(error),
         });
-        this.searchIndex = null;
+        this.transcriptProjection = null;
       }
     }
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
     this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
-    this.backfillSearchIndexFromDisk();
+    this.backfillTranscriptProjectionFromDisk();
   }
   private ensureChannelIndexEntry(sessionId: string, channelId: string, filePath: string): ChannelIndexEntry {
     return ensureChannelIndexEntry({
@@ -200,9 +207,9 @@ export class SessionStore {
       },
     });
   }
-  private backfillSearchIndexFromDisk(): void {
-    this.journalRuntime.backfillSearchIndexFromDisk({
-      searchIndex: this.searchIndex,
+  private backfillTranscriptProjectionFromDisk(): void {
+    this.journalRuntime.backfillTranscriptProjectionFromDisk({
+      transcriptProjection: this.transcriptProjection,
       channelIndex: this.channelIndex,
       sessionsDir: this.sessionsDir,
     });
@@ -237,7 +244,7 @@ export class SessionStore {
     return loaded;
   }
   private indexSessionEntry(entry: SessionEntry): void {
-    this.journalRuntime.indexSessionEntry(entry, this.searchIndex);
+    this.journalRuntime.indexSessionEntry(entry, this.transcriptProjection);
   }
   private ensureChannelForWrite(channelId: string, seed: SessionFileSeed): ChannelCache {
     const resolvedSessionId = this.resolveSessionId(channelId) ?? channelId;
@@ -298,9 +305,9 @@ export class SessionStore {
       return !tombstones.has(turnId);
     });
   }
-  private syncSearchIndexForChannel(channelId: string, entries: readonly SessionEntry[]): void {
-    if (!this.searchIndex) return;
-    this.searchIndex.replaceChannelEntries(channelId, entries);
+  private syncTranscriptProjectionForChannel(channelId: string, entries: readonly SessionEntry[]): void {
+    if (!this.transcriptProjection) return;
+    this.transcriptProjection.replaceChannelEntries(channelId, entries);
   }
   listLegacyImportManifests(filters: LegacyChatImportManifestFilter = {}): LegacyChatImportManifest[] {
     return listLegacyImportManifests(this.importManifestPath, filters);
@@ -397,11 +404,11 @@ export class SessionStore {
     return filtered.slice(-limit);
   }
   searchByKeywords(query: string, limit = 10): SessionSearchHit[] {
-    if (!this.searchIndex) return [];
-    return this.searchIndex.searchByKeywords(query, limit);
+    if (!supportsKeywordSearch(this.transcriptProjection)) return [];
+    return this.transcriptProjection.searchByKeywords(query, limit);
   }
   rebuildSearchIndex(): void {
-    this.backfillSearchIndexFromDisk();
+    this.backfillTranscriptProjectionFromDisk();
   }
   getRecent(channelId: string, limit: number): SessionEntry[] {
     if (limit <= 0) return [];
@@ -628,7 +635,7 @@ export class SessionStore {
       full.messageCount = full.entries.length;
       full.activeTurnTombstoneCount = full.turnTombstones.size;
       this.upsertChannelIndex(channelId, snapshotIndexEntry(full));
-      this.syncSearchIndexForChannel(channelId, full.entries);
+      this.syncTranscriptProjectionForChannel(channelId, full.entries);
     }
   }
   redactTurn(

@@ -6,6 +6,7 @@ import {
   type JournalIntegrityVerificationResult,
   type SessionHmacKeyring,
 } from '../journals/journal-utils.js';
+import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 
 export interface ChannelCache {
   channelId: string;
@@ -52,6 +53,7 @@ export interface SessionStoreOptions {
   integrityKeyring?: SessionHmacKeyring | null;
   searchIndexPath?: string;
   disableSearchIndex?: boolean;
+  transcriptProjection?: TranscriptProjectionPort | null;
 }
 
 export interface SessionIntegrityProvider {

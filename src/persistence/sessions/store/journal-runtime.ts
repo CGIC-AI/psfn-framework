@@ -9,9 +9,9 @@ import {
   type JournalIntegrityVerificationResult,
   wrapUnverifiedHistory,
 } from '../../journals/journal-utils.js';
-import { SessionSearchIndex } from '../search-index.js';
 import type { JournalEntry, SessionEntry } from '../../../core/session/types.js';
 import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
+import type { TranscriptProjectionPort } from '../transcript-projection-port.js';
 import type {
   ChannelCache,
   ChannelIndexEntry,
@@ -49,7 +49,7 @@ function applyTurnTombstonesToSessionEntries(
 export class SessionJournalRuntime {
   private integrityProvider: SessionIntegrityProvider | null;
   private archivePort: SessionArchivePort;
-  private searchIndexFailureLogged = false;
+  private transcriptProjectionFailureLogged = false;
   private channelIndexFailureLogged = false;
   private quarantineWarningKeysByPath: Map<string, string> = new Map();
 
@@ -189,34 +189,35 @@ export class SessionJournalRuntime {
     return cache;
   }
 
-  backfillSearchIndexFromDisk(params: {
-    searchIndex: SessionSearchIndex | null;
+  backfillTranscriptProjectionFromDisk(params: {
+    transcriptProjection: TranscriptProjectionPort | null;
     channelIndex: Map<string, ChannelIndexEntry>;
     sessionsDir: string;
   }): void {
-    if (!params.searchIndex) return;
+    if (!params.transcriptProjection) return;
 
     for (const [channelId, indexEntry] of params.channelIndex.entries()) {
       const expectedCount = typeof indexEntry.messageCount === 'number' ? indexEntry.messageCount : 0;
-      const indexedCount = params.searchIndex.countIndexedMessages(channelId);
+      const projectedCount = params.transcriptProjection.countProjectedMessages(channelId);
       if (expectedCount <= 0) {
-        if (indexedCount > 0) {
-          params.searchIndex.replaceChannelEntries(channelId, []);
+        if (projectedCount > 0) {
+          params.transcriptProjection.replaceChannelEntries(channelId, []);
         }
         continue;
       }
-      if (indexedCount === expectedCount) continue;
+      if (projectedCount === expectedCount) continue;
 
       const filePath = join(params.sessionsDir, indexEntry.filename);
       if (!existsSync(filePath)) continue;
 
       try {
         const loaded = this.loadChannel(this.openArchive(channelId, filePath));
-        params.searchIndex.replaceChannelEntries(channelId, loaded.entries);
+        params.transcriptProjection.replaceChannelEntries(channelId, loaded.entries);
       } catch (error) {
-        if (!this.searchIndexFailureLogged) {
-          this.searchIndexFailureLogged = true;
-          log.warn('Session search index backfill failed; continuing without interruption', {
+        params.transcriptProjection.markProjectionDrift(channelId, toErrorMessage(error));
+        if (!this.transcriptProjectionFailureLogged) {
+          this.transcriptProjectionFailureLogged = true;
+          log.warn('Transcript projection backfill failed; continuing without interruption', {
             channelId,
             error: toErrorMessage(error),
           });
@@ -225,15 +226,16 @@ export class SessionJournalRuntime {
     }
   }
 
-  indexSessionEntry(entry: SessionEntry, searchIndex: SessionSearchIndex | null): void {
-    if (!searchIndex) return;
+  indexSessionEntry(entry: SessionEntry, transcriptProjection: TranscriptProjectionPort | null): void {
+    if (!transcriptProjection) return;
 
     try {
-      searchIndex.upsertSessionEntry(entry);
+      transcriptProjection.upsertSessionEntry(entry);
     } catch (error) {
-      if (!this.searchIndexFailureLogged) {
-        this.searchIndexFailureLogged = true;
-        log.warn('Session search index write failed; continuing without interruption', {
+      transcriptProjection.markProjectionDrift(entry.channelId, toErrorMessage(error));
+      if (!this.transcriptProjectionFailureLogged) {
+        this.transcriptProjectionFailureLogged = true;
+        log.warn('Transcript projection write failed; continuing without interruption', {
           channelId: entry.channelId,
           messageId: entry.id,
           error: toErrorMessage(error),

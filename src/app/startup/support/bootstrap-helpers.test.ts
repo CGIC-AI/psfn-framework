@@ -907,9 +907,11 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    saveSettings(systemDataDir, {
+      voiceEnabled: true,
+    });
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
-    config.voiceEnabled = true;
 
     expect(() => hydrateCanonicalStartupConfig(config, {
       env: {
@@ -917,6 +919,8 @@ describe('hydrateCanonicalStartupConfig', () => {
         CONFIG_DIR: './config',
         PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
         DATA_DIR: legacyDataDir,
+        DISCORD_TOKEN: undefined,
+        DISCORD_BOT_ID: undefined,
       },
     })).toThrow('DISCORD_TOKEN and DISCORD_BOT_ID are required when DISCORD_VOICE_ENABLED=true');
   });
@@ -940,8 +944,41 @@ describe('hydrateCanonicalStartupConfig', () => {
         CONFIG_DIR: './config',
         PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
         DATA_DIR: legacyDataDir,
+        DISCORD_BOT_ID: undefined,
       },
     })).toThrow('DISCORD_BOT_ID is required when DISCORD_TOKEN is configured');
+  });
+
+  it('does not recreate a credential vault when hydrating agent-side startup config', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    config.voiceEnabled = true;
+    delete config.discordToken;
+    delete config.discordBotId;
+    delete config.credentialVault;
+
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+        DISCORD_TOKEN: 'discord-secret',
+        DISCORD_BOT_ID: 'discord-bot-id',
+      },
+      secretAuthority: 'agent',
+    })).not.toThrow();
+    expect(config.credentialVault).toBeUndefined();
+    expect(config.discordToken).toBeUndefined();
+    expect(config.discordBotId).toBeUndefined();
   });
 
   it('hydrates settings/models/trust/scheduler from canonical owners in one helper', () => {

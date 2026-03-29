@@ -56,4 +56,28 @@ describe('createSandboxBrokerExecutionPort', () => {
 
     await expect(port?.shellExec('node', ['-v'], {})).rejects.toThrow('not allowlisted');
   });
+
+  it('does not inherit agent process secrets into brokered child commands', async () => {
+    process.env.SANDBOX_BROKER_SECRET = 'should-not-leak';
+    const port = createSandboxBrokerExecutionPort({
+      workspacePath: process.cwd(),
+      policy: {
+        enabled: true,
+        allowlist: ['node'],
+        allowedCwd: [process.cwd()],
+      },
+    });
+
+    try {
+      const result = await port?.shellExec(
+        'node',
+        ['-e', 'process.stdout.write(process.env.SANDBOX_BROKER_SECRET ?? "missing")'],
+        {},
+      );
+
+      expect(result?.stdout).toBe('missing');
+    } finally {
+      delete process.env.SANDBOX_BROKER_SECRET;
+    }
+  });
 });

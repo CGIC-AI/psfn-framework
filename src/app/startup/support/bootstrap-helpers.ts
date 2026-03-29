@@ -93,6 +93,7 @@ export interface StartupConfigHydrationResult {
 
 export interface StartupConfigHydrationOptions {
   env?: NodeJS.ProcessEnv;
+  secretAuthority?: 'gateway' | 'agent';
 }
 
 export function buildRuntimeChannelsConfigOverrides(
@@ -172,7 +173,10 @@ export function hydrateCanonicalStartupConfig(
   options: StartupConfigHydrationOptions = {},
 ): StartupConfigHydrationResult {
   const env = options.env ?? process.env;
-  config.credentialVault ??= createEnvCredentialVault(env);
+  const secretAuthority = options.secretAuthority ?? 'gateway';
+  if (secretAuthority === 'gateway') {
+    config.credentialVault ??= createEnvCredentialVault(env);
+  }
   const pathSnapshot = resolveRuntimePathSnapshotFromConfig(config, {
     mode: env.PSFN_RUNTIME_LAYOUT_MODE,
     nodeEnv: env.NODE_ENV,
@@ -197,7 +201,9 @@ export function hydrateCanonicalStartupConfig(
   });
   const { settingsDomains } = startupRuntimeSettings;
   applySettings(config, settingsDomains.runtime);
-  assertSecuritySensitiveStartupConfig(config);
+  if (secretAuthority === 'gateway') {
+    assertSecuritySensitiveStartupConfig(config);
+  }
   installPromotedToolsPersistenceHook(config);
 
   const modelsLoadResult = loadStartupModelsOwnerFile({

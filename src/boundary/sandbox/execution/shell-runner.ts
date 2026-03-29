@@ -12,6 +12,22 @@ const DEFAULT_MAX_OUTPUT_CHARS_CAP = 100_000;
 const MAX_COMMAND_LENGTH = 256;
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
+const SANDBOX_CHILD_ENV_ALLOWLIST = [
+  'HOME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'LOGNAME',
+  'PATH',
+  'PWD',
+  'SHELL',
+  'TERM',
+  'TMP',
+  'TMPDIR',
+  'TEMP',
+  'TZ',
+  'USER',
+] as const;
 
 interface NormalizedShellAllowlist {
   names: Set<string>;
@@ -72,6 +88,19 @@ function resolveExecutableFromPath(command: string): string | null {
     }
   }
   return null;
+}
+
+function buildSandboxChildEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const nextEnv: NodeJS.ProcessEnv = {};
+  for (const key of SANDBOX_CHILD_ENV_ALLOWLIST) {
+    const value = env[key];
+    if (typeof value === 'string' && value.length > 0) {
+      nextEnv[key] = value;
+    }
+  }
+  return nextEnv;
 }
 
 function normalizeAllowlist(values: readonly string[] | undefined): NormalizedShellAllowlist {
@@ -223,9 +252,11 @@ async function runCommandBounded(
   limits: { timeoutMs: number; maxOutputChars: number },
 ): Promise<ShellExecResult> {
   const startedAt = Date.now();
+  const childEnv = buildSandboxChildEnv();
   return await new Promise<ShellExecResult>((resolveResult, rejectResult) => {
     const child = spawn(command, args, {
       cwd,
+      env: childEnv,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });

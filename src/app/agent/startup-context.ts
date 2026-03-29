@@ -1,4 +1,4 @@
-import { loadConfig } from '../../system/config/load-config.js';
+import { loadAgentConfig } from '../../system/config/load-config.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
@@ -135,7 +135,7 @@ export function prepareAgentStartupContext(input: {
   env: NodeJS.ProcessEnv;
   log: AgentStartupLogger;
 }): AgentStartupContext {
-  const config = loadConfig();
+  const config = loadAgentConfig();
   const coreConfig = sanitizeCoreSubstrateConfig(config);
   const {
     lifecycleRuntimeContract,
@@ -144,6 +144,7 @@ export function prepareAgentStartupContext(input: {
   } = resolveStartupPreflightBundle(config, {
     entrypoint: RUNTIME_MODE.GATEWAY_AGENT,
     env: input.env,
+    secretAuthority: 'agent',
     logger: input.log,
   });
   logAgentStartupHydrationDiagnostics(input.log, startupHydration.diagnostics);
@@ -157,11 +158,20 @@ export function prepareAgentStartupContext(input: {
       trustPolicyConfig.channelClassification.visibilityOverrides.prefix,
     ).length,
   });
+  const runtimeChannelsOverrides = buildRuntimeChannelsConfigOverrides(
+    config,
+    startupHydration.settingsDomains.runtime,
+  );
   const channelsConfig = loadRuntimeChannelsConfig(
     pathSnapshot.systemDataDir,
-    input.env,
-    buildRuntimeChannelsConfigOverrides(config, startupHydration.settingsDomains.runtime),
-    { credentialVault: config.credentialVault },
+    {},
+    {
+      ...runtimeChannelsOverrides,
+      telegram: {
+        ...runtimeChannelsOverrides.telegram,
+        enabled: false,
+      },
+    },
   );
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: pathSnapshot.companionDataDir,

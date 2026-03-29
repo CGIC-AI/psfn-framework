@@ -20,6 +20,7 @@ import {
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   DEFAULT_UI_THEME_ID,
   type SubstrateConfig,
+  sanitizeCoreSubstrateConfig,
 } from './runtime-config-contracts.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
@@ -60,10 +61,15 @@ const DEFAULT_DISCORD_TRIGGER_REACTIONS = ['👆'] as const;
 const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
 const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
 const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
-export function loadConfig(): SubstrateConfig {
+type LoadConfigMode = 'gateway' | 'agent';
+
+function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
+  const includeSecretBearingConfig = mode === 'gateway';
   const modelSeedDefaults = loadModelSeedDefaults();
   const runtimeSeedDefaults = loadRuntimeSettingsSeedDefaults();
-  const credentialVault = createEnvCredentialVault(process.env);
+  const credentialVault = includeSecretBearingConfig
+    ? createEnvCredentialVault(env)
+    : undefined;
   const primaryModel = modelSeedDefaults.primary.model;
   const primaryProvider = modelSeedDefaults.primary.provider;
   const primaryMaxTokens = modelSeedDefaults.primary.maxOutputTokens;
@@ -148,40 +154,46 @@ export function loadConfig(): SubstrateConfig {
       },
     ],
   };
-  const responseStyleOverrides = parseResponseStyleOverridesEnv(process.env.RESPONSE_STYLE_OVERRIDES);
-  const gatewayTlsCaPath = parseOptionalStringEnv(process.env.GATEWAY_TLS_CA_PATH);
-  const gatewayTlsRejectUnauthorized = parseOptionalBooleanEnv(process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED);
-  const discordToken = parseOptionalStringEnv(process.env.DISCORD_TOKEN);
-  const discordBotId = parseOptionalStringEnv(process.env.DISCORD_BOT_ID);
-  assertMutuallyRequiredEnvPair('DISCORD_TOKEN', discordToken, 'DISCORD_BOT_ID', discordBotId);
-  const wyomingEnabled = parseOptionalBooleanEnv(process.env.WYOMING_ENABLED) ?? false;
-  const wyomingHost = parseOptionalStringEnv(process.env.WYOMING_HOST) ?? '127.0.0.1';
-  const wyomingPort = parseOptionalIntegerEnv(process.env.WYOMING_PORT, 1);
-  const voiceDaveEncryption = parseOptionalBooleanEnv(process.env.DISCORD_VOICE_DAVE_ENCRYPTION) ?? true;
+  const responseStyleOverrides = parseResponseStyleOverridesEnv(env.RESPONSE_STYLE_OVERRIDES);
+  const gatewayTlsCaPath = parseOptionalStringEnv(env.GATEWAY_TLS_CA_PATH);
+  const gatewayTlsRejectUnauthorized = parseOptionalBooleanEnv(env.GATEWAY_TLS_REJECT_UNAUTHORIZED);
+  const discordToken = includeSecretBearingConfig
+    ? parseOptionalStringEnv(env.DISCORD_TOKEN)
+    : undefined;
+  const discordBotId = includeSecretBearingConfig
+    ? parseOptionalStringEnv(env.DISCORD_BOT_ID)
+    : undefined;
+  if (includeSecretBearingConfig) {
+    assertMutuallyRequiredEnvPair('DISCORD_TOKEN', discordToken, 'DISCORD_BOT_ID', discordBotId);
+  }
+  const wyomingEnabled = parseOptionalBooleanEnv(env.WYOMING_ENABLED) ?? false;
+  const wyomingHost = parseOptionalStringEnv(env.WYOMING_HOST) ?? '127.0.0.1';
+  const wyomingPort = parseOptionalIntegerEnv(env.WYOMING_PORT, 1);
+  const voiceDaveEncryption = parseOptionalBooleanEnv(env.DISCORD_VOICE_DAVE_ENCRYPTION) ?? true;
   const voiceDecryptionFailureTolerance = parseIntegerEnv(
-    process.env.DISCORD_VOICE_DECRYPTION_FAILURE_TOLERANCE,
+    env.DISCORD_VOICE_DECRYPTION_FAILURE_TOLERANCE,
     24,
     0,
   );
-  const echoTtsModel = parseOptionalStringEnv(process.env.ECHO_TTS_MODEL);
+  const echoTtsModel = parseOptionalStringEnv(env.ECHO_TTS_MODEL);
   const runtimePathLayout = resolveRuntimePathLayout({
-    mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
-    nodeEnv: process.env.NODE_ENV,
-    runtimeRootDir: process.env.PSFN_RUNTIME_ROOT,
-    systemDataDir: process.env.SYSTEM_DATA_DIR,
-    companionDataDir: process.env.COMPANION_DATA_DIR,
-    legacyDataDir: process.env.DATA_DIR,
-    workspacePath: process.env.WORKSPACE_PATH,
-    logsDir: process.env.PSFN_LOGS_DIR,
-    tempDir: process.env.PSFN_TEMP_DIR,
-    backupsDir: process.env.BACKUP_ROOT_DIR,
+    mode: env.PSFN_RUNTIME_LAYOUT_MODE,
+    nodeEnv: env.NODE_ENV,
+    runtimeRootDir: env.PSFN_RUNTIME_ROOT,
+    systemDataDir: env.SYSTEM_DATA_DIR,
+    companionDataDir: env.COMPANION_DATA_DIR,
+    legacyDataDir: env.DATA_DIR,
+    workspacePath: env.WORKSPACE_PATH,
+    logsDir: env.PSFN_LOGS_DIR,
+    tempDir: env.PSFN_TEMP_DIR,
+    backupsDir: env.BACKUP_ROOT_DIR,
   });
   const dataDir = runtimePathLayout.systemDataDir;
   const companionDataDir = runtimePathLayout.companionDataDir;
-  const companionId = parseRequiredStringEnv(process.env.COMPANION_ID, 'COMPANION_ID');
-  const characterCardPath = process.env.CHARACTER_CARD_PATH ?? `${companionDataDir}/character.json`;
-  const databaseBasename = sanitizeDatabaseBasename(process.env.DATABASE_BASENAME);
-  const databasePath = process.env.DATABASE_PATH ?? `${companionDataDir}/${databaseBasename}.db`;
+  const companionId = parseRequiredStringEnv(env.COMPANION_ID, 'COMPANION_ID');
+  const characterCardPath = env.CHARACTER_CARD_PATH ?? `${companionDataDir}/character.json`;
+  const databaseBasename = sanitizeDatabaseBasename(env.DATABASE_BASENAME);
+  const databasePath = env.DATABASE_PATH ?? `${companionDataDir}/${databaseBasename}.db`;
 
   return {
     primaryModel,
@@ -190,8 +202,12 @@ export function loadConfig(): SubstrateConfig {
     extractionProvider,
     primaryMaxTokens,
     extractionMaxTokens,
-    discordToken: discordToken ?? '',
-    discordBotId: discordBotId ?? '',
+    ...(includeSecretBearingConfig
+      ? {
+        discordToken: discordToken ?? '',
+        discordBotId: discordBotId ?? '',
+      }
+      : {}),
     characterCardPath,
     companionId,
     systemDataDir: runtimePathLayout.systemDataDir,
@@ -235,7 +251,7 @@ export function loadConfig(): SubstrateConfig {
     modelCatalog,
     modelRoleAssignments,
     modelRegistry,
-    credentialVault,
+    ...(credentialVault ? { credentialVault } : {}),
     modelRoster: {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
@@ -254,15 +270,21 @@ export function loadConfig(): SubstrateConfig {
     voiceReadyCueText: runtimeSeedDefaults.voiceReadyCueText,
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
-    deepgramApiKey: resolveOptionalEnvCredential(credentialVault, 'DEEPGRAM_API_KEY'),
+    ...(includeSecretBearingConfig
+      ? { deepgramApiKey: resolveOptionalEnvCredential(credentialVault, 'DEEPGRAM_API_KEY', env) }
+      : {}),
     deepgramModel: runtimeSeedDefaults.deepgramModel,
     deepgramSttEndpoint: runtimeSeedDefaults.deepgramSttEndpoint,
     deepgramListenEndpoint: runtimeSeedDefaults.deepgramListenEndpoint,
-    elevenLabsApiKey: resolveOptionalEnvCredential(credentialVault, 'ELEVENLABS_API_KEY'),
-    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID,
+    ...(includeSecretBearingConfig
+      ? { elevenLabsApiKey: resolveOptionalEnvCredential(credentialVault, 'ELEVENLABS_API_KEY', env) }
+      : {}),
+    elevenLabsVoiceId: env.ELEVENLABS_VOICE_ID,
     elevenLabsModelId: runtimeSeedDefaults.elevenLabsModelId,
     elevenLabsEndpointBase: runtimeSeedDefaults.elevenLabsEndpointBase,
-    falApiKey: resolveOptionalEnvCredential(credentialVault, 'FAL_API_KEY'),
+    ...(includeSecretBearingConfig
+      ? { falApiKey: resolveOptionalEnvCredential(credentialVault, 'FAL_API_KEY', env) }
+      : {}),
     imageWorkflows: {},
     ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,
@@ -299,6 +321,14 @@ export function loadConfig(): SubstrateConfig {
     obsidianAutoPublish: false,
     obsidianTimeoutMs: DEFAULT_OBSIDIAN_TIMEOUT_MS,
   };
+}
+
+export function loadConfig(): SubstrateConfig {
+  return loadConfigForMode('gateway');
+}
+
+export function loadAgentConfig(): SubstrateConfig {
+  return sanitizeCoreSubstrateConfig(loadConfigForMode('agent')) as SubstrateConfig;
 }
 
 function parseIntegerEnv(value: string | undefined, fallback: number, min: number): number {

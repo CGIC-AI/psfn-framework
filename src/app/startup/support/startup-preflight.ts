@@ -68,7 +68,10 @@ export function resolveStartupPreflightBundle(
 
   return {
     ignoredMutableEnvKeys,
-    startupHydration: hydrateCanonicalStartupConfig(config, { env }),
+    startupHydration: hydrateCanonicalStartupConfig(config, {
+      env,
+      secretAuthority: options.secretAuthority,
+    }),
     ...resolveStartupLifecycleBundle({
       entrypoint: options.entrypoint,
       env,

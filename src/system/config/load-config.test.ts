@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig } from './load-config.js';
+import { loadAgentConfig, loadConfig } from './load-config.js';
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -232,6 +232,26 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramApiKey).toBe('deepgram-secret');
     expect(config.elevenLabsApiKey).toBe('eleven-secret');
     expect(config.gatewayTlsCaPath).toBe('./certs/dev-ca.pem');
+  });
+
+  it('keeps agent config free of secret-bearing startup fields', () => {
+    clearRuntimePathEnv();
+    process.env.DATA_DIR = './sandbox-data';
+    process.env.DISCORD_TOKEN = 'discord-secret';
+    process.env.DISCORD_BOT_ID = '123456789';
+    process.env.DEEPGRAM_API_KEY = 'deepgram-secret';
+    process.env.ELEVENLABS_API_KEY = 'eleven-secret';
+    process.env.FAL_API_KEY = 'fal-secret';
+
+    const config = loadAgentConfig() as Record<string, unknown>;
+
+    expect(config.dataDir).toBe('./sandbox-data');
+    expect(config.discordToken).toBeUndefined();
+    expect(config.discordBotId).toBeUndefined();
+    expect(config.credentialVault).toBeUndefined();
+    expect(config.deepgramApiKey).toBeUndefined();
+    expect(config.elevenLabsApiKey).toBeUndefined();
+    expect(config.falApiKey).toBeUndefined();
   });
 
   it('fails closed when DISCORD_TOKEN is set without DISCORD_BOT_ID', () => {

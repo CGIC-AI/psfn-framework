@@ -5,6 +5,7 @@ import type {
   SatellitePresenceMetadata,
 } from './presence-metadata.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { normalizeChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
 
 export interface ActiveEmanationStateResolution {
   presence?: CompanionPresenceMetadata;
@@ -44,6 +45,14 @@ function readBoolean(record: Record<string, unknown>, keys: string[]): boolean |
   return undefined;
 }
 
+function readChannelPrivacy(record: Record<string, unknown>, keys: string[]): ChannelVisibility | undefined {
+  for (const key of keys) {
+    const value = normalizeChannelVisibility(record[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
 function comparePresence(lhs: CompanionPresenceMetadata, rhs: CompanionPresenceMetadata): boolean {
   return JSON.stringify(lhs) === JSON.stringify(rhs);
 }
@@ -73,6 +82,12 @@ function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateRes
   const isPrimary = readBoolean(record, ['isPrimary', 'primary']);
   const siteId = readString(record, ['siteId', 'site_id']);
   const channelId = readString(record, ['channelId', 'channel_id']);
+  const channelPrivacy = readChannelPrivacy(record, [
+    'channelPrivacy',
+    'channel_privacy',
+    'privacyLevel',
+    'visibility',
+  ]);
   const companionId = readString(record, ['companionId', 'companion_id']);
   const label = readString(record, ['label', 'name']);
 
@@ -94,6 +109,7 @@ function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateRes
       companionId,
       ...(siteId ? { siteId } : {}),
       ...(channelId ? { channelId } : {}),
+      ...(channelPrivacy ? { channelPrivacy } : {}),
       ...(label ? { label } : {}),
       ...(isPrimary !== undefined ? { isPrimary } : {}),
       ...(isActive !== undefined ? { isActive } : {}),
@@ -115,6 +131,7 @@ function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateRes
       ...(siteId ? { siteId } : {}),
       ...(satelliteRef ? { satelliteId: satelliteRef } : {}),
       ...(channelId ? { channelId } : {}),
+      ...(channelPrivacy ? { channelPrivacy } : {}),
       ...(label ? { label } : {}),
       isPrimary: true,
       ...(emanationRef ? { emanationId: emanationRef } : {}),
@@ -135,6 +152,7 @@ function resolveRecord(record: Record<string, unknown>): ActiveEmanationStateRes
       ...(satelliteRef ? { satelliteId: satelliteRef } : {}),
       ...(embodimentRef ? { embodimentId: embodimentRef } : {}),
       ...(channelId ? { channelId } : {}),
+      ...(channelPrivacy ? { channelPrivacy } : {}),
       ...(label ? { label } : {}),
       isActive: true,
     };
@@ -197,6 +215,7 @@ export function resolveCanonicalEmbodimentContext(
       ...(presence.siteId ? { siteId: presence.siteId } : {}),
       ...(presence.satelliteId ? { satelliteId: presence.satelliteId } : {}),
       ...(presence.channelId ? { channelId: presence.channelId } : {}),
+      ...(presence.channelPrivacy ? { channelPrivacy: presence.channelPrivacy } : {}),
       ...(presence.label ? { label: presence.label } : {}),
       isPrimary: true,
       ...(presence.emanationId ? { emanationId: presence.emanationId } : {}),
@@ -214,8 +233,37 @@ export function resolveCanonicalEmbodimentContext(
     ...(presence.siteId ? { siteId: presence.siteId } : {}),
     ...(presence.satelliteId ? { satelliteId: presence.satelliteId } : {}),
     ...(presence.channelId ? { channelId: presence.channelId } : {}),
+    ...(presence.channelPrivacy ? { channelPrivacy: presence.channelPrivacy } : {}),
     ...(presence.label ? { label: presence.label } : {}),
     isPrimary: true,
+  };
+}
+
+export function resolveCanonicalSatelliteContext(
+  value: unknown,
+): SatellitePresenceMetadata | undefined {
+  const resolution = resolveActiveEmanationState(value);
+  if (resolution.error || !resolution.presence) {
+    return undefined;
+  }
+
+  const presence = resolution.presence;
+  if (presence.kind !== 'satellite') {
+    return undefined;
+  }
+
+  return {
+    kind: 'satellite',
+    satelliteId: presence.satelliteId,
+    companionId: presence.companionId,
+    ...(presence.siteId ? { siteId: presence.siteId } : {}),
+    ...(presence.channelId ? { channelId: presence.channelId } : {}),
+    ...(presence.channelPrivacy ? { channelPrivacy: presence.channelPrivacy } : {}),
+    ...(presence.label ? { label: presence.label } : {}),
+    ...(presence.isPrimary !== undefined ? { isPrimary: presence.isPrimary } : {}),
+    ...(presence.isActive !== undefined ? { isActive: presence.isActive } : {}),
+    ...(presence.embodimentId ? { embodimentId: presence.embodimentId } : {}),
+    ...(presence.emanationId ? { emanationId: presence.emanationId } : {}),
   };
 }
 

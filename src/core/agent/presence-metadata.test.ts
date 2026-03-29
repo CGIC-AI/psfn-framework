@@ -7,7 +7,10 @@ import {
   resolvePresenceMetadataResult,
   resolvePresenceSubjectId,
 } from './presence-metadata.js';
-import { resolveCanonicalEmbodimentContext } from './active-emanation-state.js';
+import {
+  resolveCanonicalEmbodimentContext,
+  resolveCanonicalSatelliteContext,
+} from './active-emanation-state.js';
 
 const TEST_COMPANION_ID = 'companion-test';
 
@@ -17,12 +20,14 @@ describe('presence metadata contract', () => {
       siteId: 'ha-main',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
+      channelPrivacy: 'private',
       isPrimary: true,
     })).toEqual({
       kind: 'satellite',
       siteId: 'ha-main',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
+      channelPrivacy: 'private',
       isPrimary: true,
     });
 
@@ -31,12 +36,14 @@ describe('presence metadata contract', () => {
       embodimentId: 'display',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
+      channelPrivacy: 'semi_private',
     })).toEqual({
       kind: 'embodiment',
       siteId: 'ha-main',
       embodimentId: 'display',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
+      channelPrivacy: 'semi_private',
     });
 
     expect(buildEmanationPresenceMetadata({
@@ -45,6 +52,7 @@ describe('presence metadata contract', () => {
       embodimentId: 'display',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
+      channelPrivacy: 'broadcast',
     })).toEqual({
       kind: 'emanation',
       siteId: 'ha-main',
@@ -52,6 +60,7 @@ describe('presence metadata contract', () => {
       embodimentId: 'display',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
+      channelPrivacy: 'broadcast',
     });
   });
 
@@ -64,6 +73,7 @@ describe('presence metadata contract', () => {
         embodimentId: 'display',
         satelliteId: 'kitchen',
         companionId: TEST_COMPANION_ID,
+        channelPrivacy: 'private',
       },
     });
 
@@ -74,6 +84,7 @@ describe('presence metadata contract', () => {
       embodimentId: 'display',
       satelliteId: 'kitchen',
       companionId: TEST_COMPANION_ID,
+      channelPrivacy: 'private',
       isActive: true,
     });
     expect(resolvePresenceSubjectId(normalized)).toBe('voice-node');
@@ -100,6 +111,7 @@ describe('presence metadata contract', () => {
       siteId: 'ha-main',
       satelliteId: 'kitchen',
       channelId: 'api:wyoming:ha-main:display',
+      channelPrivacy: 'private',
       companionId: TEST_COMPANION_ID,
     })).toEqual({
       kind: 'embodiment',
@@ -107,8 +119,27 @@ describe('presence metadata contract', () => {
       siteId: 'ha-main',
       satelliteId: 'kitchen',
       channelId: 'api:wyoming:ha-main:display',
+      channelPrivacy: 'private',
       companionId: TEST_COMPANION_ID,
       isPrimary: true,
+    });
+  });
+
+  it('derives canonical satellite context from active emanation state', () => {
+    expect(resolveCanonicalSatelliteContext({
+      kind: 'satellite',
+      satelliteId: 'kitchen',
+      siteId: 'ha-main',
+      channelId: 'api:wyoming:ha-main:kitchen',
+      channelPrivacy: 'private',
+      companionId: TEST_COMPANION_ID,
+    })).toEqual({
+      kind: 'satellite',
+      satelliteId: 'kitchen',
+      siteId: 'ha-main',
+      channelId: 'api:wyoming:ha-main:kitchen',
+      channelPrivacy: 'private',
+      companionId: TEST_COMPANION_ID,
     });
   });
 });

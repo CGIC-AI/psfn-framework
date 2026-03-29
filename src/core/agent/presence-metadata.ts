@@ -2,6 +2,7 @@ import {
   resolveActiveEmanationState,
   type ActiveEmanationStateResolution,
 } from './active-emanation-state.js';
+import type { ChannelVisibility } from '../../system/trust/types.js';
 
 export type PresenceKind = 'satellite' | 'embodiment' | 'emanation';
 
@@ -11,6 +12,7 @@ export interface SatellitePresenceMetadata {
   companionId: string;
   siteId?: string;
   channelId?: string;
+  channelPrivacy?: ChannelVisibility;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -24,6 +26,7 @@ export interface EmbodimentPresenceMetadata {
   companionId: string;
   siteId?: string;
   channelId?: string;
+  channelPrivacy?: ChannelVisibility;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -37,6 +40,7 @@ export interface EmanationPresenceMetadata {
   companionId: string;
   siteId?: string;
   channelId?: string;
+  channelPrivacy?: ChannelVisibility;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -54,6 +58,7 @@ export function buildSatellitePresenceMetadata(input: {
   companionId: string;
   siteId?: string;
   channelId?: string;
+  channelPrivacy?: ChannelVisibility;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -66,6 +71,7 @@ export function buildSatellitePresenceMetadata(input: {
     companionId: input.companionId,
     ...(input.siteId ? { siteId: input.siteId } : {}),
     ...(input.channelId ? { channelId: input.channelId } : {}),
+    ...(input.channelPrivacy ? { channelPrivacy: input.channelPrivacy } : {}),
     ...(input.label ? { label: input.label } : {}),
     ...(input.isPrimary !== undefined ? { isPrimary: input.isPrimary } : {}),
     ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
@@ -80,6 +86,7 @@ export function buildEmbodimentPresenceMetadata(input: {
   siteId?: string;
   satelliteId?: string;
   channelId?: string;
+  channelPrivacy?: ChannelVisibility;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -92,6 +99,7 @@ export function buildEmbodimentPresenceMetadata(input: {
     ...(input.siteId ? { siteId: input.siteId } : {}),
     ...(input.satelliteId ? { satelliteId: input.satelliteId } : {}),
     ...(input.channelId ? { channelId: input.channelId } : {}),
+    ...(input.channelPrivacy ? { channelPrivacy: input.channelPrivacy } : {}),
     ...(input.label ? { label: input.label } : {}),
     ...(input.isPrimary !== undefined ? { isPrimary: input.isPrimary } : {}),
     ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
@@ -106,6 +114,7 @@ export function buildEmanationPresenceMetadata(input: {
   satelliteId?: string;
   embodimentId?: string;
   channelId?: string;
+  channelPrivacy?: ChannelVisibility;
   label?: string;
   isPrimary?: boolean;
   isActive?: boolean;
@@ -118,6 +127,7 @@ export function buildEmanationPresenceMetadata(input: {
     ...(input.satelliteId ? { satelliteId: input.satelliteId } : {}),
     ...(input.embodimentId ? { embodimentId: input.embodimentId } : {}),
     ...(input.channelId ? { channelId: input.channelId } : {}),
+    ...(input.channelPrivacy ? { channelPrivacy: input.channelPrivacy } : {}),
     ...(input.label ? { label: input.label } : {}),
     ...(input.isPrimary !== undefined ? { isPrimary: input.isPrimary } : {}),
     ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),

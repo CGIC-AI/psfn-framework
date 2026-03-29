@@ -5,6 +5,7 @@ import {
   normalizePresenceMetadata,
   resolvePresenceSubjectId,
 } from '../../../../src/core/agent/presence-metadata.js';
+import { normalizeChannelVisibility } from '../../../../src/system/trust/types.js';
 import {
   isRecord,
   type WyomingFrame,
@@ -339,12 +340,16 @@ export function createWyomingHandleServiceAdapter(
       const satelliteId = readString(presenceInput, ['satellite_id', 'satelliteId'])
         ?? routingPresence?.satelliteId
         ?? resolvePresenceSubjectId(routingPresence);
-      const wyomingPresence = routingPresence
-        ?? buildSatellitePresenceMetadata({
-          siteId: readString(presenceInput, ['site_id', 'siteId']),
-          satelliteId: satelliteId ?? 'unknown',
-          companionId,
-        });
+      const channelPrivacy = routingPresence?.channelPrivacy
+        ?? normalizeChannelVisibility(readString(presenceInput, ['channelPrivacy', 'channel_privacy']))
+        ?? undefined;
+      const satellitePresence = buildSatellitePresenceMetadata({
+        siteId: readString(presenceInput, ['site_id', 'siteId']),
+        satelliteId: satelliteId ?? 'unknown',
+        companionId,
+        ...(channelPrivacy ? { channelPrivacy } : {}),
+      });
+      const canonicalPresence = routingPresence ?? satellitePresence;
       const userId = readString(presenceInput, ['ha_user_id', 'haUserId', 'user_id', 'userId'])
         ?? satelliteId
         ?? 'unknown';
@@ -364,10 +369,12 @@ export function createWyomingHandleServiceAdapter(
         timestamp: new Date(timestampMs),
         routing: {
           source: 'wyoming',
+          ...(channelPrivacy ? { channelPrivacy } : {}),
+          ...(canonicalPresence ? { presence: canonicalPresence } : {}),
           wyoming: {
-            ...(wyomingPresence.siteId ? { siteId: wyomingPresence.siteId } : {}),
-            satelliteId: resolvePresenceSubjectId(wyomingPresence),
-            presence: wyomingPresence,
+            ...(canonicalPresence.siteId ? { siteId: canonicalPresence.siteId } : {}),
+            satelliteId: resolvePresenceSubjectId(canonicalPresence),
+            presence: canonicalPresence,
           },
         },
       };

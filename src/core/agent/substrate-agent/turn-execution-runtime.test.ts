@@ -38,6 +38,84 @@ async function flushAsyncWork() {
   await Promise.resolve();
 }
 
+describe('handleMessageForTurn presence canonicalization', () => {
+  it('promotes authority-resolved satellite presence into the turn context before author resolution', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
+    const awaitPendingAutoCompaction = vi.fn(async () => undefined);
+    const recordUserMessage = vi.fn(() => 1);
+    const recordAssistantMessage = vi.fn(() => 2);
+    const resolveAuthorContext = vi.fn(() => ({
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      resolvedUserName: 'User',
+      canonicalContactKey: 'contact-1',
+      continuityFallbackKeys: [],
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns,
+      awaitPendingAutoCompaction,
+      recordUserMessage,
+      recordAssistantMessage,
+      resolveAuthorContext,
+    });
+    const message = createMessage('msg-satellite-context', {
+      routing: {
+        source: 'wyoming',
+        wyoming: {
+          presence: {
+            kind: 'satellite',
+            companionId: DEFAULT_COMPANION_ID,
+            siteId: 'ha-main',
+            satelliteId: 'office',
+            channelId: 'api:wyoming:ha-main:office',
+            channelPrivacy: 'private',
+          },
+        },
+      },
+    });
+
+    await handleMessageForTurn(runtime, message);
+
+    expect(resolveAuthorContext).toHaveBeenCalledTimes(1);
+    expect(resolveAuthorContext).toHaveBeenCalledWith(expect.objectContaining({
+      routing: expect.objectContaining({
+        source: 'wyoming',
+        channelPrivacy: 'private',
+        presence: expect.objectContaining({
+          kind: 'satellite',
+          companionId: DEFAULT_COMPANION_ID,
+          siteId: 'ha-main',
+          satelliteId: 'office',
+          channelPrivacy: 'private',
+        }),
+        wyoming: expect.objectContaining({
+          siteId: 'ha-main',
+          satelliteId: 'office',
+          presence: expect.objectContaining({
+            kind: 'satellite',
+            companionId: DEFAULT_COMPANION_ID,
+            siteId: 'ha-main',
+            satelliteId: 'office',
+            channelId: 'api:wyoming:ha-main:office',
+            channelPrivacy: 'private',
+          }),
+        }),
+      }),
+    }));
+  });
+});
+
 const TEST_INTERNAL_STATE: InternalState = {
   emotional: {
     vad: { valence: 0, arousal: 0, dominance: 0 },
@@ -74,6 +152,7 @@ function createRuntime(params: {
   recordUserMessage: ReturnType<typeof vi.fn>;
   recordSystemMessage?: ReturnType<typeof vi.fn>;
   recordAssistantMessage: ReturnType<typeof vi.fn>;
+  resolveAuthorContext?: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
@@ -154,7 +233,7 @@ function createRuntime(params: {
       channelId: 'ch1',
     })),
     withCorrelationPurpose: vi.fn((correlation, purpose) => ({ ...correlation, purpose })),
-    resolveAuthorContext: vi.fn(() => ({
+    resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => ({
       trustLevel: 'regular',
       speakerRole: 'user',
       resolvedUserName: 'User',

@@ -1241,7 +1241,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
     });
 
-    const result = await manager.delegateWyomingSession({
+    const result = await manager.delegateSatelliteSession({
       message: {
         id: 'wyoming-msg-conn-kitchen-7',
         channelId: 'api:wyoming:ha-main:voice-pe-kitchen',
@@ -1299,7 +1299,7 @@ describe('ShardManager', () => {
         isDirectMessage: true,
         timestampMs: new Date('2026-02-26T12:00:00.000Z').getTime(),
       }),
-      wyomingRouting: {
+      satelliteRouting: {
         connectionId: 'conn-kitchen',
         sessionId: 'session-kitchen',
         turnId: 'wyoming-turn-conn-kitchen-session-kitchen-1',
@@ -1341,7 +1341,7 @@ describe('ShardManager', () => {
       auditTrail,
     });
 
-    await manager.delegateWyomingSession({
+    await manager.delegateSatelliteSession({
       message: {
         id: 'wyoming-msg-conn-office-3',
         channelId: 'api:wyoming:ha-main:voice-pe-office',
@@ -1367,7 +1367,7 @@ describe('ShardManager', () => {
     });
 
     expect(auditTrail.append).toHaveBeenCalledWith(
-      'wyoming.shard.delegate.start',
+      'satellite.shard.delegate.start',
       expect.objectContaining({
         connectionId: 'conn-office',
         sessionId: 'session-office',
@@ -1380,7 +1380,7 @@ describe('ShardManager', () => {
       }),
     );
     expect(auditTrail.append).toHaveBeenCalledWith(
-      'wyoming.shard.delegate.end',
+      'satellite.shard.delegate.end',
       expect.objectContaining({
         status: 'completed',
         connectionId: 'conn-office',
@@ -1415,7 +1415,7 @@ describe('ShardManager', () => {
       requiredCapabilities: ['wyoming'],
     });
 
-    await manager.delegateWyomingSession({
+    await manager.delegateSatelliteSession({
       message: {
         id: 'wyoming-msg-conn-launch-1',
         channelId: 'api:wyoming:ha-main:voice-pe-launch',
@@ -1479,7 +1479,7 @@ describe('ShardManager', () => {
           id: 'wyoming-msg-conn-launch-1',
           channelId: 'api:wyoming:ha-main:voice-pe-launch',
         }),
-        wyomingRouting: expect.objectContaining({
+        satelliteRouting: expect.objectContaining({
           turnId: 'wyoming-turn-conn-launch-session-launch-1',
         }),
       }),

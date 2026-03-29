@@ -40,6 +40,7 @@ import {
   type SubstrateStreamTransport,
   type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
+import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
@@ -206,6 +207,7 @@ export class SubstrateAgent {
   private reflectionNudge = new ReflectionNudgeTracker();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
+  private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
   private selfModelRuntimeRequired = false;
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
   private currentInternalState: InternalState | null = null;
@@ -710,6 +712,7 @@ export class SubstrateAgent {
     return handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
+      satellitePresence: this.satellitePresencePort,
       llmClient: this.llmClient,
       imageVisionReviewer: this.imageVisionReviewer,
       sessionManager: this.sessionManager,

@@ -8,6 +8,7 @@ import type { InternalState } from '../../self-model/state.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
+import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter-port.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 
@@ -175,6 +176,7 @@ function createRuntime(params: {
   const runtime = {
     eventBus: params.eventBus,
     costTelemetry: createEventBusCostTelemetryPort(params.eventBus),
+    satellitePresence: createActiveEmanationSatellitePresencePort(),
     llmClient: {
       stream: vi.fn(),
       complete: vi.fn(),

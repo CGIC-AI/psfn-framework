@@ -4,7 +4,7 @@ import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
 import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
 import { DiscordAdapter } from '../../../channels/discord/adapter.js';
-import { OpenHomeAdapter } from '../../../../satellites/openhome/host/adapter.js';
+import { createOpenHomeSatelliteAdapterPort } from '../../../../satellites/openhome/host/adapter.js';
 import type { TelegramChannelConfig } from '../../../channels/backplane/config.js';
 import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
 import type {
@@ -103,19 +103,13 @@ export function createApiServerChannelAdapterFactoryEntry(
 }
 
 export function createOpenHomeChannelAdapterFactoryEntry(): ChannelAdapterFactoryPort {
+  const channel = createOpenHomeSatelliteAdapterPort().channel;
+  if (!channel) {
+    throw new Error('OpenHome satellite adapter must expose a channel adapter facet.');
+  }
   return {
-    manifest: {
-      id: 'psfn-amica',
-      label: 'PSFN Amica',
-      enabled: true,
-      required: false,
-      eligibility: {},
-    },
-    create: async (): Promise<ChannelAdapterPort> => {
-      const adapter = new OpenHomeAdapter();
-      await adapter.init();
-      return adapter;
-    },
+    manifest: channel.manifest,
+    create: () => channel.create(),
   };
 }
 

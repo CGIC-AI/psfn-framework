@@ -31,6 +31,7 @@ import { createSqliteCompanionStore } from '../../persistence/sqlite-companion-s
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
+import { createWyomingSatelliteRoutingPort } from '../../../satellites/wyoming/host/routing.js';
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
@@ -410,6 +411,7 @@ async function main(): Promise<void> {
     agentLoop,
     shardManager,
     safeguardAuditTrail,
+    satelliteRouting: createWyomingSatelliteRoutingPort(),
     config,
     log,
     trackSessionActivity,

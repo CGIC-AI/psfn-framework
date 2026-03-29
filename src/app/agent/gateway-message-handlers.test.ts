@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentResponse, SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
+import { createWyomingSatelliteRoutingPort } from '../../../satellites/wyoming/host/routing.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
   return {
@@ -44,9 +46,9 @@ function makeResponse(content: string): AgentResponse {
 
 function createHarness(overrides?: {
   config?: SubstrateConfig;
-  delegateWyomingSession?: (request: {
+  delegateSatelliteSession?: (request: {
     message: SubstrateMessage;
-    routing?: WyomingRoutingMetadata;
+    routing?: SatelliteRoutingMetadata;
   }) => Promise<{
     shardId: string;
     content: string;
@@ -78,8 +80,8 @@ function createHarness(overrides?: {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
   };
   const shardManager = {
-    delegateWyomingSession: vi.fn(
-      overrides?.delegateWyomingSession
+    delegateSatelliteSession: vi.fn(
+      overrides?.delegateSatelliteSession
       ?? (async () => ({
         shardId: 'wyoming-shard-1',
         content: 'delegated response',
@@ -90,6 +92,7 @@ function createHarness(overrides?: {
       })),
     ),
   };
+  const satelliteRouting = createWyomingSatelliteRoutingPort();
   const safeguardAuditTrail = {
     append: vi.fn(),
   };
@@ -100,6 +103,7 @@ function createHarness(overrides?: {
   };
   const trackSessionActivity = vi.fn();
   const config = overrides?.config ?? ({
+    companionId: 'companion-test',
     wyomingShardRouting: { enabled: true },
   } as SubstrateConfig);
 
@@ -108,6 +112,7 @@ function createHarness(overrides?: {
     agentLoop,
     shardManager,
     safeguardAuditTrail,
+    satelliteRouting,
     config,
     log,
     trackSessionActivity,
@@ -137,7 +142,7 @@ describe('registerGatewayMessageHandlers', () => {
     const response = await harness.onHandleMessage(message);
 
     expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
-    expect(harness.shardManager.delegateWyomingSession).toHaveBeenCalledWith({
+    expect(harness.shardManager.delegateSatelliteSession).toHaveBeenCalledWith({
       message,
       routing: expect.objectContaining({
         connectionId: 'conn-1',
@@ -163,7 +168,7 @@ describe('registerGatewayMessageHandlers', () => {
         durationMs: 42,
       },
     });
-    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(1, 'wyoming.routing.decision', {
+    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(1, 'satellite.routing.decision', {
       channelId: message.channelId,
       messageId: message.id,
       delegated: true,
@@ -174,7 +179,7 @@ describe('registerGatewayMessageHandlers', () => {
       siteId: 'ha-main',
       satelliteId: 'den',
     });
-    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(2, 'wyoming.routing.delegated', {
+    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(2, 'satellite.routing.delegated', {
       channelId: message.channelId,
       messageId: message.id,
       shardId: 'wyoming-shard-1',
@@ -188,7 +193,7 @@ describe('registerGatewayMessageHandlers', () => {
 
   it('falls back to primary agent path when Wyoming delegation reports no ready shard', async () => {
     const harness = createHarness({
-      delegateWyomingSession: async () => {
+      delegateSatelliteSession: async () => {
         throw new Error('No ready agent connected');
       },
       handleMessage: async () => makeResponse('fallback response'),
@@ -200,13 +205,13 @@ describe('registerGatewayMessageHandlers', () => {
     expect(response).toEqual(makeResponse('fallback response'));
     expect(harness.agentLoop.handleMessage).toHaveBeenCalledWith(message);
     expect(harness.log.warn).toHaveBeenCalledWith(
-      'Wyoming delegation failed; falling back to primary path',
+      'Satellite delegation failed; falling back to primary path',
       {
         channelId: message.channelId,
         error: 'No ready agent connected',
       },
     );
-    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(2, 'wyoming.routing.fallback', {
+    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(2, 'satellite.routing.fallback', {
       channelId: message.channelId,
       messageId: message.id,
       reason: 'delegation_error',
@@ -215,7 +220,7 @@ describe('registerGatewayMessageHandlers', () => {
       sessionId: 'session-1',
       turnId: 'turn-1',
     });
-    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(3, 'wyoming.routing.primary', {
+    expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(3, 'satellite.routing.primary', {
       channelId: message.channelId,
       messageId: message.id,
       reason: 'delegation_enabled',
@@ -352,7 +357,7 @@ describe('registerGatewayMessageHandlers', () => {
 
     expect(first).toEqual(second);
     expect(harness.trackSessionActivity).toHaveBeenCalledTimes(1);
-    expect(harness.shardManager.delegateWyomingSession).toHaveBeenCalledTimes(1);
+    expect(harness.shardManager.delegateSatelliteSession).toHaveBeenCalledTimes(1);
     expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
       route: 'handle',
       channelId: message.channelId,

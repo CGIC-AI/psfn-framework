@@ -26,7 +26,7 @@ describe('AdminDashboardDataService', () => {
       spawn: vi.fn(async () => {
         throw new Error('spawn should not be used by dashboard inspection');
       }),
-      delegateWyomingSession: vi.fn(async () => {
+      delegateSatelliteSession: vi.fn(async () => {
         throw new Error('delegate should not be used by dashboard inspection');
       }),
       getActiveCount: vi.fn(() => 2),

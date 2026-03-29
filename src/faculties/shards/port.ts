@@ -1,9 +1,9 @@
 import type { ShardConfig, ShardResult } from './types.js';
-import type { ActiveShard, WyomingShardDelegationRequest } from './manager.js';
+import type { ActiveShard, SatelliteDelegationRequest } from './manager.js';
 
 export interface ShardExecutionPort {
   spawn(shardConfig: ShardConfig): Promise<ShardResult>;
-  delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult>;
+  delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult>;
   getActiveCount(): number;
   getActiveShards(): ActiveShard[];
 }

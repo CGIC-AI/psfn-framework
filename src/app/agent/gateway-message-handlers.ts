@@ -1,9 +1,9 @@
 import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
+import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
-import { evaluateWyomingDelegation } from '../../../satellites/wyoming/host/routing.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 
@@ -29,7 +29,7 @@ export interface GatewayMessageAgentLoop {
   handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
 }
 
-export type GatewayMessageShardManager = Pick<ShardExecutionPort, 'delegateWyomingSession'>;
+export type GatewayMessageShardManager = Pick<ShardExecutionPort, 'delegateSatelliteSession'>;
 
 export interface GatewayMessageAuditTrail {
   append(event: string, details?: Record<string, unknown>): unknown;
@@ -46,6 +46,7 @@ export interface GatewayMessageHandlersDeps {
   agentLoop: GatewayMessageAgentLoop;
   shardManager: GatewayMessageShardManager;
   safeguardAuditTrail: GatewayMessageAuditTrail;
+  satelliteRouting: SatelliteRoutingPort;
   config: SubstrateConfig;
   log: GatewayMessageLogger;
   trackSessionActivity: (message: SubstrateMessage) => void;
@@ -57,6 +58,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     agentLoop,
     shardManager,
     safeguardAuditTrail,
+    satelliteRouting,
     config,
     log,
     trackSessionActivity,
@@ -120,9 +122,13 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     const processMessage = async (): Promise<AgentResponse> => {
       trackSessionActivity(message);
       log.info(`Voice message from ${message.authorName}: ${message.content.slice(0, 50)}...`);
-      const routingDecision = evaluateWyomingDelegation(message, config, resolveCompanionIdFromConfig(config));
-      if (routingDecision.isWyoming) {
-        safeguardAuditTrail.append('wyoming.routing.decision', {
+      const routingDecision = satelliteRouting.evaluateDelegation(
+        message,
+        config,
+        resolveCompanionIdFromConfig(config),
+      );
+      if (routingDecision?.isSatellite) {
+        safeguardAuditTrail.append('satellite.routing.decision', {
           channelId: message.channelId,
           messageId: message.id,
           delegated: routingDecision.delegate,
@@ -135,13 +141,13 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
         });
       }
 
-      if (routingDecision.delegate) {
+      if (routingDecision?.delegate) {
         try {
-          const delegated = await shardManager.delegateWyomingSession({
+          const delegated = await shardManager.delegateSatelliteSession({
             message,
             routing: routingDecision.routing,
           });
-          safeguardAuditTrail.append('wyoming.routing.delegated', {
+          safeguardAuditTrail.append('satellite.routing.delegated', {
             channelId: message.channelId,
             messageId: message.id,
             shardId: delegated.shardId,
@@ -163,7 +169,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
           };
         } catch (error) {
           const delegationError = toErrorMessage(error);
-          safeguardAuditTrail.append('wyoming.routing.fallback', {
+          safeguardAuditTrail.append('satellite.routing.fallback', {
             channelId: message.channelId,
             messageId: message.id,
             reason: 'delegation_error',
@@ -172,15 +178,15 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
             sessionId: routingDecision.routing?.sessionId,
             turnId: routingDecision.routing?.turnId,
           });
-          log.warn('Wyoming delegation failed; falling back to primary path', {
+          log.warn('Satellite delegation failed; falling back to primary path', {
             channelId: message.channelId,
             error: delegationError,
           });
         }
       }
 
-      if (routingDecision.isWyoming) {
-        safeguardAuditTrail.append('wyoming.routing.primary', {
+      if (routingDecision?.isSatellite) {
+        safeguardAuditTrail.append('satellite.routing.primary', {
           channelId: message.channelId,
           messageId: message.id,
           reason: routingDecision.reason,

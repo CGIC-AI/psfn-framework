@@ -1,4 +1,5 @@
-import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage, type WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
+import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 import type { ShardSourceContext } from './types.js';
 import { normalizePresenceMetadata, type CompanionPresenceMetadata } from '../../core/agent/presence-metadata.js';
 
@@ -12,7 +13,7 @@ export interface ShardResultLineageSourceMessage {
   isDirectMessage: boolean;
 }
 
-export interface ShardResultLineageWyomingRouting {
+export interface ShardResultLineageSatelliteRouting {
   connectionId?: string;
   sessionId?: string;
   turnId?: string;
@@ -36,7 +37,7 @@ export interface ShardResultLineageEnvelope {
   companionProvenance: ShardCompanionProvenance;
   sourceMessage: ShardResultLineageSourceMessage;
   sourceContext?: ShardSourceContext;
-  wyomingRouting?: ShardResultLineageWyomingRouting;
+  satelliteRouting?: ShardResultLineageSatelliteRouting;
 }
 
 function normalizeNonEmptyString(value: string, fieldName: string): string {
@@ -94,7 +95,7 @@ function normalizeSourceContext(sourceContext: ShardSourceContext | undefined): 
   };
 }
 
-function normalizeWyomingRouting(routing: WyomingRoutingMetadata | undefined): ShardResultLineageWyomingRouting | undefined {
+function normalizeSatelliteRouting(routing: SatelliteRoutingMetadata | undefined): ShardResultLineageSatelliteRouting | undefined {
   if (!routing) {
     return undefined;
   }
@@ -126,10 +127,10 @@ export function buildShardLineageEnvelope(input: {
     'id' | 'channelId' | 'channelType' | 'authorId' | 'authorName' | 'timestamp' | 'isDirectMessage'
   >;
   sourceContext?: ShardSourceContext;
-  wyomingRouting?: WyomingRoutingMetadata;
+  satelliteRouting?: SatelliteRoutingMetadata;
 }): ShardResultLineageEnvelope {
   const sourceContext = normalizeSourceContext(input.sourceContext);
-  const wyomingRouting = normalizeWyomingRouting(input.wyomingRouting);
+  const satelliteRouting = normalizeSatelliteRouting(input.satelliteRouting);
   const coreCompanionId = normalizeNonEmptyString(input.coreCompanionId, 'core companion id');
   const shardId = normalizeNonEmptyString(input.shardId, 'shard id');
   const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
@@ -147,6 +148,6 @@ export function buildShardLineageEnvelope(input: {
     },
     sourceMessage: normalizeSourceMessage(input.sourceMessage),
     ...(sourceContext ? { sourceContext } : {}),
-    ...(wyomingRouting ? { wyomingRouting } : {}),
+    ...(satelliteRouting ? { satelliteRouting } : {}),
   };
 }

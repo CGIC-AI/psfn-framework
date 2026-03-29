@@ -1,22 +1,20 @@
 import type { SubstrateConfig } from '../../../src/system/config/runtime-config-contracts.js';
-import type { SubstrateMessage, WyomingRoutingMetadata } from '../../../src/shared/contracts/runtime.js';
+import type { SubstrateMessage } from '../../../src/shared/contracts/runtime.js';
+import type {
+  SatelliteDelegationDecision,
+  SatelliteRoutingMetadata,
+  SatelliteRoutingPort,
+} from '../../../src/core/agent/satellite-adapter-port.js';
 import {
   buildSatellitePresenceMetadata,
   resolvePresenceMetadataResult,
   resolvePresenceSubjectId,
 } from '../../../src/core/agent/presence-metadata.js';
 
-export interface WyomingDelegationDecision {
-  isWyoming: boolean;
-  delegate: boolean;
-  reason: string;
-  routing?: WyomingRoutingMetadata;
-}
-
 export function resolveWyomingRoutingMetadata(
   message: SubstrateMessage,
   companionId: string,
-): { routing?: WyomingRoutingMetadata; error?: string } | undefined {
+): { routing?: SatelliteRoutingMetadata; error?: string } | undefined {
   const routing = message.routing?.wyoming;
   if (routing) {
     const presenceResolution = routing.presence
@@ -95,59 +93,69 @@ export function resolveWyomingRoutingMetadata(
   };
 }
 
-export function evaluateWyomingDelegation(
-  message: SubstrateMessage,
-  config: SubstrateConfig,
-  companionId: string,
-): WyomingDelegationDecision {
-  const routingResolution = resolveWyomingRoutingMetadata(message, companionId);
-  if (!routingResolution) {
-    return {
-      isWyoming: false,
-      delegate: false,
-      reason: 'not_wyoming',
-    };
-  }
-
-  if ('error' in routingResolution && routingResolution.error) {
-    return {
-      isWyoming: true,
-      delegate: false,
-      reason: routingResolution.error,
-    };
-  }
-
-  const routing = routingResolution.routing;
-  if (!routing) {
-    return {
-      isWyoming: false,
-      delegate: false,
-      reason: 'not_wyoming',
-    };
-  }
-
-  if (!config.wyomingShardRouting?.enabled) {
-    return {
-      isWyoming: true,
-      delegate: false,
-      reason: 'agent_policy_disabled',
-      routing,
-    };
-  }
-
-  if (routing.shardDelegation?.eligible !== true) {
-    return {
-      isWyoming: true,
-      delegate: false,
-      reason: routing.shardDelegation?.reason ?? 'gateway_policy_denied',
-      routing,
-    };
-  }
-
+export function createWyomingSatelliteRoutingPort(): SatelliteRoutingPort {
   return {
-    isWyoming: true,
-    delegate: true,
-    reason: 'delegation_enabled',
-    routing,
+    evaluateDelegation(
+      message: SubstrateMessage,
+      config: SubstrateConfig,
+      companionId: string,
+    ): SatelliteDelegationDecision | undefined {
+      const routingResolution = resolveWyomingRoutingMetadata(message, companionId);
+      if (!routingResolution) {
+        return {
+          adapterId: 'wyoming',
+          isSatellite: false,
+          delegate: false,
+          reason: 'not_satellite',
+        };
+      }
+
+      if ('error' in routingResolution && routingResolution.error) {
+        return {
+          adapterId: 'wyoming',
+          isSatellite: true,
+          delegate: false,
+          reason: routingResolution.error,
+        };
+      }
+
+      const routing = routingResolution.routing;
+      if (!routing) {
+        return {
+          adapterId: 'wyoming',
+          isSatellite: false,
+          delegate: false,
+          reason: 'not_satellite',
+        };
+      }
+
+      if (!config.wyomingShardRouting?.enabled) {
+        return {
+          adapterId: 'wyoming',
+          isSatellite: true,
+          delegate: false,
+          reason: 'agent_policy_disabled',
+          routing,
+        };
+      }
+
+      if (routing.shardDelegation?.eligible !== true) {
+        return {
+          adapterId: 'wyoming',
+          isSatellite: true,
+          delegate: false,
+          reason: routing.shardDelegation?.reason ?? 'gateway_policy_denied',
+          routing,
+        };
+      }
+
+      return {
+        adapterId: 'wyoming',
+        isSatellite: true,
+        delegate: true,
+        reason: 'delegation_enabled',
+        routing,
+      };
+    },
   };
 }

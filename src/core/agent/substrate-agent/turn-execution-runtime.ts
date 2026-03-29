@@ -30,10 +30,9 @@ import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { classifyChannel, type ChannelMeta } from '../../../system/trust/policy.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
+import type { SatellitePresencePort } from '../satellite-adapter-port.js';
 import {
   resolveActiveEmanationState,
-  resolveCanonicalEmbodimentContext,
-  resolveCanonicalSatelliteContext,
 } from '../active-emanation-state.js';
 import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -108,6 +107,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
+  satellitePresence: SatellitePresencePort;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
@@ -504,8 +504,8 @@ export async function handleMessageForTurn(
     message.routing?.presence ?? message.routing?.wyoming?.presence,
   );
   const canonicalPresence = routingPresenceResolution.presence;
-  const canonicalSatellitePresence = resolveCanonicalSatelliteContext(canonicalPresence);
-  const canonicalEmbodimentContext = resolveCanonicalEmbodimentContext(canonicalPresence);
+  const canonicalSatellitePresence = runtime.satellitePresence.resolveCanonicalSatellite(canonicalPresence);
+  const canonicalEmbodimentContext = runtime.satellitePresence.resolveCanonicalEmbodiment(canonicalPresence);
   if (canonicalPresence) {
     const nextRouting = {
       ...(message.routing ?? {}),

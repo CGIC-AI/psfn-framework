@@ -6,7 +6,8 @@ import type {
   ChannelOutboundAdapter,
   ChannelPromptAdapter,
   OutboundContext,
-} from '../types.js';
+} from '../../../src/channels/backplane/types.js';
+import type { SatelliteAdapterPort } from '../../../src/core/agent/satellite-adapter-port.js';
 
 const OPENHOME_CAPABILITIES: ChannelCapabilities = {
   chatTypes: ['direct'],
@@ -59,4 +60,24 @@ export class OpenHomeAdapter implements ChannelAdapterPort {
   async send(channelId: string, content: string): Promise<void> {
     await this.outbound.sendText({ channelId }, content);
   }
+}
+
+export function createOpenHomeSatelliteAdapterPort(): SatelliteAdapterPort {
+  return {
+    id: 'psfn-amica',
+    channel: {
+      manifest: {
+        id: 'psfn-amica',
+        label: 'PSFN Amica',
+        enabled: true,
+        required: false,
+        eligibility: {},
+      },
+      create: async (): Promise<ChannelAdapterPort> => {
+        const adapter = new OpenHomeAdapter();
+        await adapter.init();
+        return adapter;
+      },
+    },
+  };
 }

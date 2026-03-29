@@ -5,11 +5,16 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort, EmbeddingProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import {
+  createActiveEmanationSatellitePresencePort,
+  type SatellitePresencePort,
+  type SatelliteRoutingMetadata,
+} from '../../core/agent/satellite-adapter-port.js';
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
@@ -39,7 +44,6 @@ import {
   type ArtifactReturnPort,
 } from './artifact-policy.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { resolveCanonicalEmbodimentContext } from '../../core/agent/active-emanation-state.js';
 import {
   type BoundedSubagentLaunchSummary,
   type SubagentExecutionPort,
@@ -115,11 +119,12 @@ export interface ShardManagerDeps {
   runtimeMode?: RuntimeMode;
   shardSessionMemorySyncAuditPath?: string;
   artifactReturnPort?: ArtifactReturnPort;
+  satellitePresencePort?: SatellitePresencePort;
 }
 
-export interface WyomingShardDelegationRequest {
+export interface SatelliteDelegationRequest {
   message: SubstrateMessage;
-  routing?: WyomingRoutingMetadata;
+  routing?: SatelliteRoutingMetadata;
   shardName?: string;
 }
 
@@ -145,6 +150,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   private deps: ShardManagerDeps;
   private auditTrail: ShardAuditTrail | null;
   private artifactReturnPort: ArtifactReturnPort;
+  private satellitePresencePort: SatellitePresencePort;
   private activeCount = 0;
   private maxConcurrent: number;
   private heartbeatStaleAfterMs: number;
@@ -166,6 +172,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     );
     this.auditTrail = deps.auditTrail ?? null;
     this.artifactReturnPort = deps.artifactReturnPort ?? createArtifactReturnPort();
+    this.satellitePresencePort = deps.satellitePresencePort ?? createActiveEmanationSatellitePresencePort();
     this.installAuditHooks();
   }
 
@@ -228,11 +235,11 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     };
   }
 
-  async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {
+  async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {
     this.refreshShardHealth();
     const content = request.message.content.trim();
     if (!content) {
-      throw new Error('Wyoming shard delegation requires non-empty message content.');
+      throw new Error('Satellite shard delegation requires non-empty message content.');
     }
 
     const routing = request.routing ?? request.message.routing?.wyoming;
@@ -247,7 +254,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     const routeCapabilities = this.resolveWyomingRouteCapabilities(routing, presenceSubjectId);
     const shardName = request.shardName?.trim()
       || this.resolveWyomingShardName(routing, presenceSubjectId);
-    const embodimentContext = resolveCanonicalEmbodimentContext(routing?.presence);
+    const embodimentContext = this.satellitePresencePort.resolveCanonicalEmbodiment(routing?.presence);
     const shardConfig: ShardConfig = {
       name: shardName,
       task: request.message.content,
@@ -261,7 +268,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         ...(embodimentContext ? { embodimentContext } : {}),
       },
     };
-    this.auditTrail?.append('wyoming.shard.delegate.start', {
+    this.auditTrail?.append('satellite.shard.delegate.start', {
       shardId,
       channelId: request.message.channelId,
       messageId: request.message.id,
@@ -278,7 +285,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       shardId,
       shardChannelId: request.message.channelId,
       sourceMessage: request.message,
-      ...(routing ? { wyomingRouting: routing } : {}),
+      ...(routing ? { satelliteRouting: routing } : {}),
     });
 
     try {
@@ -290,7 +297,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         lineage,
         shardRuntimeConfig,
       );
-      this.auditTrail?.append('wyoming.shard.delegate.end', {
+      this.auditTrail?.append('satellite.shard.delegate.end', {
         shardId,
         status: 'completed',
         durationMs: result.durationMs,
@@ -303,7 +310,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       return result;
     } catch (error) {
       const message = toErrorMessage(error);
-      this.auditTrail?.append('wyoming.shard.delegate.end', {
+      this.auditTrail?.append('satellite.shard.delegate.end', {
         shardId,
         status: 'failed',
         error: message,
@@ -1161,7 +1168,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   }
 
   private resolveWyomingShardName(
-    routing: WyomingRoutingMetadata | undefined,
+    routing: SatelliteRoutingMetadata | undefined,
     presenceSubjectId: string | undefined,
   ): string {
     const siteId = routing?.siteId?.trim() || 'unknown-site';
@@ -1170,7 +1177,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   }
 
   private resolveWyomingRouteCapabilities(
-    routing: WyomingRoutingMetadata | undefined,
+    routing: SatelliteRoutingMetadata | undefined,
     presenceSubjectId: string | undefined,
   ): string[] {
     const siteId = routing?.siteId?.trim() || 'unknown-site';

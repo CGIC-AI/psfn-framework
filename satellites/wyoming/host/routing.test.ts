@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  evaluateWyomingDelegation,
+  createWyomingSatelliteRoutingPort,
   resolveWyomingRoutingMetadata,
 } from './routing.js';
 
@@ -116,15 +116,16 @@ describe('resolveWyomingRoutingMetadata', () => {
   });
 });
 
-describe('evaluateWyomingDelegation', () => {
-  it('returns not_wyoming when routing metadata is unavailable', () => {
+describe('createWyomingSatelliteRoutingPort', () => {
+  it('returns not_satellite when routing metadata is unavailable', () => {
     const message = makeMessage();
-    const decision = evaluateWyomingDelegation(message, {} as any, TEST_COMPANION_ID);
+    const decision = createWyomingSatelliteRoutingPort().evaluateDelegation(message, {} as any, TEST_COMPANION_ID);
 
     expect(decision).toEqual({
-      isWyoming: false,
+      adapterId: 'wyoming',
+      isSatellite: false,
       delegate: false,
-      reason: 'not_wyoming',
+      reason: 'not_satellite',
     });
   });
 
@@ -134,11 +135,12 @@ describe('evaluateWyomingDelegation', () => {
       channelType: 'api',
     });
 
-    const decision = evaluateWyomingDelegation(message, {
+    const decision = createWyomingSatelliteRoutingPort().evaluateDelegation(message, {
       wyomingShardRouting: { enabled: false },
     } as any, TEST_COMPANION_ID);
 
-    expect(decision.isWyoming).toBe(true);
+    expect(decision?.adapterId).toBe('wyoming');
+    expect(decision?.isSatellite).toBe(true);
     expect(decision.delegate).toBe(false);
     expect(decision.reason).toBe('agent_policy_disabled');
     expect(decision.routing?.siteId).toBe('ha-main');
@@ -171,12 +173,13 @@ describe('evaluateWyomingDelegation', () => {
       },
     });
 
-    const decision = evaluateWyomingDelegation(message, {
+    const decision = createWyomingSatelliteRoutingPort().evaluateDelegation(message, {
       wyomingShardRouting: { enabled: true },
     } as any, TEST_COMPANION_ID);
 
     expect(decision).toEqual({
-      isWyoming: true,
+      adapterId: 'wyoming',
+      isSatellite: true,
       delegate: false,
       reason: 'too_busy',
       routing: {
@@ -212,10 +215,11 @@ describe('evaluateWyomingDelegation', () => {
       },
     });
 
-    expect(evaluateWyomingDelegation(message, {
+    expect(createWyomingSatelliteRoutingPort().evaluateDelegation(message, {
       wyomingShardRouting: { enabled: true },
     } as any, TEST_COMPANION_ID)).toEqual({
-      isWyoming: true,
+      adapterId: 'wyoming',
+      isSatellite: true,
       delegate: false,
       reason: 'conflicting active emanation metadata',
     });
@@ -240,12 +244,13 @@ describe('evaluateWyomingDelegation', () => {
       },
     });
 
-    const decision = evaluateWyomingDelegation(message, {
+    const decision = createWyomingSatelliteRoutingPort().evaluateDelegation(message, {
       wyomingShardRouting: { enabled: true },
     } as any, TEST_COMPANION_ID);
 
     expect(decision).toEqual({
-      isWyoming: true,
+      adapterId: 'wyoming',
+      isSatellite: true,
       delegate: true,
       reason: 'delegation_enabled',
       routing: {

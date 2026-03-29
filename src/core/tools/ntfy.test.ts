@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createHttpNotificationPortFromEnv, createNotifyOperatorTool, type NotificationPort } from './ntfy.js';
+import { createHttpNotificationPortFromEnv, createNotifyOperatorTool } from './ntfy.js';
+import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 

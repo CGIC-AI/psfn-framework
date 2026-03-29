@@ -1,6 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { NotifyNtfyParams, NotifyNtfyResult } from '../../boundary/gateway/protocol.js';
+import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 import type { WirableTool } from '../agent/tool-wiring-validator.js';
 import type {
   ExternalCommunicationChannel,
@@ -26,10 +27,6 @@ export interface HttpNtfyNotifierOptions {
   debounceWindowMs?: number;
   fetchImpl?: typeof fetch;
   now?: () => number;
-}
-
-export interface NotificationPort {
-  notify(params: NotifyNtfyParams): Promise<NotifyNtfyResult>;
 }
 
 class HttpNtfyNotifier implements NotificationPort {

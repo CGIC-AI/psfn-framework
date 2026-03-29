@@ -7,6 +7,7 @@ import type { SessionManager } from '../../session/manager.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 
@@ -173,6 +174,7 @@ function createRuntime(params: {
   };
   const runtime = {
     eventBus: params.eventBus,
+    costTelemetry: createEventBusCostTelemetryPort(params.eventBus),
     llmClient: {
       stream: vi.fn(),
       complete: vi.fn(),

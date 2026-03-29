@@ -7,6 +7,7 @@
 
 import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../../shared/event-bus.js';
+import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
 import { SessionManager } from '../../../core/session/manager.js';
 import { UserContinuityStore } from '../../../core/session/continuity.js';
@@ -207,12 +208,13 @@ export interface MemoryRuntimeOptions {
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
+  const costTelemetry = createEventBusCostTelemetryPort(options.eventBus);
   options.agentLoop.memoryProvider = options.config
     ? new MemoryRetriever(
       options.memoryStore,
       options.embeddingService,
       options.config,
-      options.eventBus,
+      costTelemetry,
       options.contactStore ?? null,
       options.llmProvider,
     )
@@ -220,7 +222,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.memoryStore,
       options.embeddingService,
       undefined,
-      options.eventBus,
+      costTelemetry,
       options.contactStore ?? null,
       options.llmProvider,
     );
@@ -231,7 +233,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.sessionManager,
       options.memoryStore,
       options.embeddingService,
-      options.eventBus,
+      costTelemetry,
       options.config,
       options.promptRegistry ?? null,
       options.sessionStore ?? null,
@@ -242,7 +244,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.sessionManager,
       options.memoryStore,
       options.embeddingService,
-      options.eventBus,
+      costTelemetry,
       undefined,
       options.promptRegistry ?? null,
       options.sessionStore ?? null,
@@ -312,6 +314,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     sessionManager: options.sessionManager,
     scheduler: options.scheduler ?? null,
     eventBus: options.eventBus,
+    costTelemetry: createEventBusCostTelemetryPort(options.eventBus),
     getCapabilityTier: options.getCapabilityTier,
     compositionalPolicy: options.compositionalPolicy,
     moduleInstallConfirmationQueue: options.moduleInstallConfirmationQueue,

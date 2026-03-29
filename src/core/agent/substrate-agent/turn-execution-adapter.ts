@@ -1,6 +1,7 @@
 import type { Agent } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../../shared/event-bus.js';
+import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -112,6 +113,7 @@ interface TurnExecutionAdapterCallbacks {
 
 export interface TurnExecutionAdapterOptions {
   eventBus: EventBus;
+  costTelemetry: CostTelemetryPort;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
@@ -135,6 +137,7 @@ export function createTurnExecutionRuntimeAdapter(
 ): TurnExecutionRuntime {
   return {
     eventBus: options.eventBus,
+    costTelemetry: options.costTelemetry,
     llmClient: options.llmClient,
     imageVisionReviewer: options.imageVisionReviewer,
     sessionManager: options.sessionManager,

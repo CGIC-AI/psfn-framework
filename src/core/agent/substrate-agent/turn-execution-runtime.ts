@@ -2,6 +2,7 @@ import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
+import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
@@ -106,6 +107,7 @@ interface ProactiveMemoryProvider extends MemoryProvider {
 
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
+  costTelemetry: CostTelemetryPort;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
@@ -1397,7 +1399,7 @@ export async function handleMessageForTurn(
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.post_turn.actions.inferred'),
       });
     }
-    await runtime.eventBus.emit('agent.turn.usage', {
+    await runtime.costTelemetry.recordTurnUsage({
       message,
       usage: turnUsage,
       ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),

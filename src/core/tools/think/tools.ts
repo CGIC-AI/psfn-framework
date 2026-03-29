@@ -53,9 +53,9 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
           },
         );
 
-        if (effectiveDeps.eventBus) {
+        if (effectiveDeps.costTelemetry) {
           const requestContext = getRequestContext();
-          await effectiveDeps.eventBus.emit('agent.think.trace', {
+          await effectiveDeps.costTelemetry.recordThinkTrace({
             timestamp: Date.now(),
             task: params.task,
             ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),

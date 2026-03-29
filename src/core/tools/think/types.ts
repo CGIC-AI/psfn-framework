@@ -5,6 +5,7 @@ import type { MemoryStorePort } from '../../../faculties/memory/memory-store-por
 import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { EventBus } from '../../../shared/event-bus.js';
+import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import type { CapabilityTier, CompositionalPolicyConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
@@ -130,6 +131,7 @@ export interface REPLDeps {
   sessionManager: SessionManager | null;
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;
+  costTelemetry?: CostTelemetryPort | null;
   getCapabilityTier?: () => CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;

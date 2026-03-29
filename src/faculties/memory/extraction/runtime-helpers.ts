@@ -1,4 +1,4 @@
-import type { EventBus } from '../../../shared/event-bus.js';
+import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { countMessageTokens } from '../../../primitives/llm/tokens.js';
 import type { SessionManager } from '../../../core/session/manager.js';
@@ -133,33 +133,32 @@ export function recordExtractionMarker(
 }
 
 export async function emitExtractionStart(
-  eventBus: EventBus,
+  costTelemetry: CostTelemetryPort,
   telemetryEnabled: boolean,
   channelId: string,
   triggerReason: ExtractionTriggerReason,
   turnId?: TurnID,
 ): Promise<void> {
   if (!telemetryEnabled) {
-    await eventBus.emit('memory.extraction.start', {
+    await costTelemetry.recordMemoryExtractionStart({
       channelId,
       ...(turnId ? { turnId } : {}),
     });
     return;
   }
 
-  await eventBus.emit(
-    'memory.extraction.start',
-    { channelId, triggerReason, ...(turnId ? { turnId } : {}) } as { channelId: string },
+  await costTelemetry.recordMemoryExtractionStart(
+    { channelId, triggerReason, ...(turnId ? { turnId } : {}) },
   );
 }
 
 export async function emitExtractionEnd(
-  eventBus: EventBus,
+  costTelemetry: CostTelemetryPort,
   telemetryEnabled: boolean,
   telemetry: ExtractionEndTelemetry,
 ): Promise<void> {
   if (!telemetryEnabled) {
-    await eventBus.emit('memory.extraction.end', {
+    await costTelemetry.recordMemoryExtractionEnd({
       channelId: telemetry.channelId,
       count: telemetry.count,
       ...(telemetry.turnId ? { turnId: telemetry.turnId } : {}),
@@ -167,9 +166,8 @@ export async function emitExtractionEnd(
     return;
   }
 
-  await eventBus.emit(
-    'memory.extraction.end',
-    telemetry as { channelId: string; count: number },
+  await costTelemetry.recordMemoryExtractionEnd(
+    telemetry,
   );
 }
 

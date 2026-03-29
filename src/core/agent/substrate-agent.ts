@@ -12,6 +12,7 @@ import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
+import { createEventBusCostTelemetryPort } from '../../shared/telemetry/cost-telemetry-port.js';
 import type { SessionManager } from '../session/manager.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
@@ -708,6 +709,7 @@ export class SubstrateAgent {
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
     return handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
+      costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
       llmClient: this.llmClient,
       imageVisionReviewer: this.imageVisionReviewer,
       sessionManager: this.sessionManager,

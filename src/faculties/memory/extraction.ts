@@ -1,5 +1,4 @@
 import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
-import type { EventBus } from '../../shared/event-bus.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { ContactStore } from '../../core/contacts/store.js';
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
@@ -9,6 +8,11 @@ import type { SessionEntry } from '../../core/session/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import {
+  normalizeCostTelemetryPort,
+  type CostTelemetryInput,
+  type CostTelemetryPort,
+} from '../../shared/telemetry/cost-telemetry-port.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import type { ExtractedFact, MemoryFormationVAD } from './types.js';
@@ -68,7 +72,7 @@ export class MemoryExtractor {
   private sessionManager: SessionManager;
   private memoryStore: MemoryStorePort;
   private writer: MemoryWriter;
-  private eventBus: EventBus;
+  private costTelemetry: CostTelemetryPort;
   private runtimeConfig: SubstrateConfig | null;
   private extractionInterval: number;
   private minImportance: number;
@@ -92,7 +96,7 @@ export class MemoryExtractor {
     sessionManager: SessionManager,
     memoryStore: MemoryStorePort,
     embeddingService: EmbeddingProviderPort,
-    eventBus: EventBus,
+    costTelemetry: CostTelemetryInput,
     config?: MemoryExtractorConfig | SubstrateConfig,
     promptRegistry?: PromptRegistryStatePort | null,
     sessionStore?: SessionStore | null,
@@ -103,7 +107,11 @@ export class MemoryExtractor {
     this.sessionManager = sessionManager;
     this.memoryStore = memoryStore;
     this.writer = new MemoryWriter(memoryStore, embeddingService);
-    this.eventBus = eventBus;
+    const resolvedTelemetry = normalizeCostTelemetryPort(costTelemetry);
+    if (!resolvedTelemetry) {
+      throw new Error('MemoryExtractor requires a cost telemetry port');
+    }
+    this.costTelemetry = resolvedTelemetry;
 
     if (config && 'primaryModel' in config) {
       this.runtimeConfig = config;
@@ -344,10 +352,10 @@ export class MemoryExtractor {
         )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
-        emitExtractionStartEvent(this.eventBus, this.isTelemetryEnabled(), extractionChannelId, reason, extractionTurnId)
+        emitExtractionStartEvent(this.costTelemetry, this.isTelemetryEnabled(), extractionChannelId, reason, extractionTurnId)
       ),
       emitExtractionEnd: telemetry => (
-        emitExtractionEndEvent(this.eventBus, this.isTelemetryEnabled(), telemetry)
+        emitExtractionEndEvent(this.costTelemetry, this.isTelemetryEnabled(), telemetry)
       ),
       resolveCoveredUpToMessageId: (extractionChannelId, entries) => (
         resolveCoveredMarker(this.sessionManager, extractionChannelId, entries)

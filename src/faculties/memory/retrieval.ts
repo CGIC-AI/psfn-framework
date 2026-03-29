@@ -41,6 +41,11 @@ import type { ContactStore } from '../../core/contacts/store.js';
 import type { Contact, SocialRelationshipEdge } from '../../core/contacts/types.js';
 import type { EmotionalSnapshot } from '../../core/contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../../core/turns/snapshot.js';
+import {
+  normalizeCostTelemetryPort,
+  type CostTelemetryInput,
+  type CostTelemetryPort,
+} from '../../shared/telemetry/cost-telemetry-port.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
 import {
@@ -368,7 +373,7 @@ export class MemoryRetriever implements MemoryProvider {
   private runtimeConfig: SubstrateConfig | null;
   private fallbackBudgetConfig: ContextBudgetConfigLike | null;
   private retrievalThreshold: number;
-  private eventBus?: EventBus;
+  private costTelemetry?: CostTelemetryPort;
   private contactStore: ContactStore | null;
   private telemetryEnabled: boolean;
   private llmProvider: LLMProviderPort | null;
@@ -382,13 +387,13 @@ export class MemoryRetriever implements MemoryProvider {
     memoryStore: MemoryStorePort,
     embeddingService: EmbeddingProviderPort,
     config?: MemoryRetrieverConfig | SubstrateConfig,
-    eventBus?: EventBus,
+    costTelemetry?: CostTelemetryInput,
     contactStore?: ContactStore | null,
     llmProvider?: LLMProviderPort | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
-    this.eventBus = eventBus;
+    this.costTelemetry = normalizeCostTelemetryPort(costTelemetry);
     if (isSubstrateConfig(config)) {
       this.runtimeConfig = config;
       this.fallbackBudgetConfig = null;
@@ -1485,7 +1490,7 @@ export class MemoryRetriever implements MemoryProvider {
       log.debug('Retrieval stats', telemetry);
     }
 
-    if (!this.eventBus) return;
+    if (!this.costTelemetry) return;
 
     try {
       const requestContext = getRequestContext();
@@ -1501,15 +1506,14 @@ export class MemoryRetriever implements MemoryProvider {
           ...(requestContext.toolCallId ? { toolCallId: requestContext.toolCallId } : {}),
         }
         : {};
-      await this.eventBus.emit(
-        'memory.retrieval',
+      await this.costTelemetry.recordMemoryRetrieval(
         {
           ...telemetry,
           candidates: telemetry.candidateCount,
           ranked: telemetry.rankedCount,
           returned: telemetry.returnedCount,
           ...correlation,
-        } as { channelId: string; count: number },
+        },
       );
     } catch (err) {
       log.error('Failed to emit retrieval telemetry', {

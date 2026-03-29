@@ -79,7 +79,7 @@ function createRuntime(params: {
   const agentState = {
     messages: [] as any[],
     tools: [] as any[],
-    model: { id: 'test-model' },
+    model: { id: 'test-model', provider: 'test', api: 'openai-completions' },
   };
   const emotionSelfModelRuntime = {
     assertSelfModelRuntimeConfigured: vi.fn(),
@@ -448,6 +448,18 @@ describe('handleMessageForTurn compaction scheduling', () => {
       { role: 'user', content: 'Earlier user message' },
       { role: 'assistant', content: 'Earlier assistant reply' },
     ]);
+    expect(promptContext?.providerObservability).toMatchObject({
+      backendApi: 'openai-completions',
+      routeKind: 'registered_model',
+      systemRole: {
+        transport: 'openai_system',
+      },
+      providerWireMessages: [
+        { role: 'system', source: 'system_prompt', content: 'Final system prompt' },
+        { role: 'user', source: 'message', content: 'Earlier user message' },
+        { role: 'assistant', source: 'message', content: expect.stringContaining('Earlier assistant reply') },
+      ],
+    });
     expect(toolContext).toMatchObject({
       activeTools: [
         {
@@ -464,7 +476,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(emittedSnapshots).toHaveLength(3);
     expect(emittedSnapshots.at(-1)?.promptContext).toMatchObject({
       finalSystemPrompt: 'Final system prompt',
-      runtimeContext: '',
+      runtimeContext: 'Runtime context block',
+      providerObservability: {
+        backendApi: 'openai-completions',
+      },
     });
     expect(emittedSnapshots.at(-1)?.toolContext).toMatchObject({
       activeTools: [{ name: 'contact_lookup' }],

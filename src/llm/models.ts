@@ -4,6 +4,10 @@
 
 import { getModels, getProviders } from '@mariozechner/pi-ai';
 import type { Api, KnownProvider, Model } from '@mariozechner/pi-ai';
+import type {
+  LLMSystemPromptTransport,
+  LLMSystemRoleCapabilityMetadata,
+} from '../types.js';
 
 export interface LiteLLMModelConfig {
   /** LiteLLM proxy base URL, e.g. http://localhost:4000/v1 */
@@ -69,4 +73,66 @@ export function createModel(
     contextWindow,
     maxTokens,
   });
+}
+
+function supportsOpenAIDeveloperRole(model: Model<any>): boolean {
+  const provider = model.provider.trim().toLowerCase();
+  const baseUrl = typeof model.baseUrl === 'string' ? model.baseUrl.toLowerCase() : '';
+  const isZai = provider === 'zai' || baseUrl.includes('api.z.ai');
+  const isNonStandard = provider === 'cerebras'
+    || baseUrl.includes('cerebras.ai')
+    || provider === 'xai'
+    || baseUrl.includes('api.x.ai')
+    || baseUrl.includes('chutes.ai')
+    || baseUrl.includes('deepseek.com')
+    || isZai
+    || provider === 'opencode'
+    || baseUrl.includes('opencode.ai');
+  return model.compat?.supportsDeveloperRole ?? !isNonStandard;
+}
+
+function resolveOpenAITransport(model: Model<any>): LLMSystemPromptTransport {
+  if (model.api === 'openai-responses') {
+    return model.reasoning ? 'openai_developer' : 'openai_system';
+  }
+  return model.reasoning && supportsOpenAIDeveloperRole(model) ? 'openai_developer' : 'openai_system';
+}
+
+export function resolveSystemRoleCapabilityMetadata(model: Model<any>): LLMSystemRoleCapabilityMetadata {
+  switch (model.api) {
+    case 'openai-completions':
+    case 'openai-responses': {
+      const supportsDeveloperRole = model.api === 'openai-responses'
+        ? true
+        : supportsOpenAIDeveloperRole(model);
+      return {
+        transport: resolveOpenAITransport(model),
+        supportsSystemRole: true,
+        supportsDeveloperRole,
+        usesOutOfBandSystemPrompt: false,
+      };
+    }
+    case 'anthropic':
+      return {
+        transport: 'anthropic_system',
+        supportsSystemRole: true,
+        supportsDeveloperRole: false,
+        usesOutOfBandSystemPrompt: true,
+      };
+    case 'google-generative-ai':
+    case 'google-vertex':
+      return {
+        transport: 'google_system_instruction',
+        supportsSystemRole: true,
+        supportsDeveloperRole: false,
+        usesOutOfBandSystemPrompt: true,
+      };
+    default:
+      return {
+        transport: 'system_prompt',
+        supportsSystemRole: true,
+        supportsDeveloperRole: false,
+        usesOutOfBandSystemPrompt: true,
+      };
+  }
 }

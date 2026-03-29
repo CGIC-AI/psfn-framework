@@ -5,6 +5,7 @@ import type {
   Attachment,
   CompletionPurpose,
   ContextMessage,
+  LLMProviderObservability,
   ModelThinkingEffort,
   ObservabilityCallType,
   SubstrateMessage,
@@ -323,6 +324,8 @@ export interface ConfirmationResolveResult {
 
 export interface LLMChatResult {
   content: string;
+  reasoning?: string;
+  providerObservability?: LLMProviderObservability;
   toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }>;
   model: string;
   inputTokens: number;
@@ -333,6 +336,8 @@ export interface LLMChatResult {
 
 export interface LLMCompleteResult {
   content: string;
+  reasoning?: string;
+  providerObservability?: LLMProviderObservability;
   model: string;
   inputTokens: number;
   outputTokens: number;

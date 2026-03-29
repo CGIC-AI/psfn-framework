@@ -12,6 +12,7 @@ import { runWithVisionToolRequestContext } from '../../images/request-context.js
 import { runWithRequestContext } from '../../llm/request-context.js';
 import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
 import { countTokens } from '../../llm/tokens.js';
+import { resolveSystemRoleCapabilityMetadata } from '../../llm/models.js';
 import { createComponentLogger } from '../../logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -782,6 +783,29 @@ export async function handleMessageForTurn(
       ),
     );
     turnSnapshot.capturedAt = Date.now();
+    const providerModel = runtime.agent.state.model;
+    const providerSystemRole = resolveSystemRoleCapabilityMetadata(providerModel);
+    const providerWireMessages = [];
+    if (context.systemPrompt) {
+      providerWireMessages.push({
+        role: providerSystemRole.transport === 'openai_developer'
+          ? 'developer'
+          : providerSystemRole.transport === 'google_system_instruction'
+            ? 'system_instruction'
+            : 'system',
+        source: 'system_prompt',
+        content: context.systemPrompt,
+      });
+    }
+    for (const providerMessage of contextMessagesToPiMessages(context.messages)) {
+      providerWireMessages.push({
+        role: providerMessage.role === 'assistant' ? 'assistant' : 'user',
+        source: 'message',
+        content: typeof providerMessage.content === 'string'
+          ? providerMessage.content
+          : JSON.stringify(providerMessage.content),
+      });
+    }
     turnSnapshot.promptContext = {
       renderedStaticPrefix,
       renderedDynamicSuffix,
@@ -826,6 +850,17 @@ export async function handleMessageForTurn(
           content: context.systemPrompt,
         },
       ]),
+      providerObservability: {
+        routeKind: providerModel.provider === 'litellm' ? 'configured_litellm_proxy' : 'registered_model',
+        requestedProvider: providerModel.provider,
+        requestedModel: providerModel.id,
+        backendProvider: providerModel.provider,
+        backendModel: providerModel.id,
+        backendApi: providerModel.api,
+        ...(providerModel.baseUrl ? { backendBaseUrl: providerModel.baseUrl } : {}),
+        systemRole: providerSystemRole,
+        providerWireMessages,
+      },
     };
     await emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {

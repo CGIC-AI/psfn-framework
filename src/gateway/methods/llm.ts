@@ -54,6 +54,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+        ...(response.providerObservability ? { providerObservability: response.providerObservability } : {}),
         toolCalls: response.toolCalls,
         model: response.model,
         inputTokens: response.inputTokens,
@@ -110,6 +111,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+        ...(response.providerObservability ? { providerObservability: response.providerObservability } : {}),
         model: response.model,
         inputTokens: response.inputTokens,
         outputTokens: response.outputTokens,

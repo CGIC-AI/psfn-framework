@@ -314,11 +314,44 @@ export interface StreamCallbacks {
 export interface LLMResponse {
   content: string;
   reasoning?: string;
+  providerObservability?: LLMProviderObservability;
   toolCalls: ToolCall[];
   model: string;
   inputTokens: number;
   outputTokens: number;
   stopReason: string;
+}
+
+export type LLMSystemPromptTransport =
+  | 'openai_system'
+  | 'openai_developer'
+  | 'anthropic_system'
+  | 'google_system_instruction'
+  | 'system_prompt';
+
+export interface LLMProviderWireMessage {
+  role: 'system' | 'developer' | 'user' | 'assistant' | 'tool' | 'system_instruction';
+  source: 'system_prompt' | 'message';
+  content: string;
+}
+
+export interface LLMSystemRoleCapabilityMetadata {
+  transport: LLMSystemPromptTransport;
+  supportsSystemRole: boolean;
+  supportsDeveloperRole: boolean;
+  usesOutOfBandSystemPrompt: boolean;
+}
+
+export interface LLMProviderObservability {
+  routeKind: 'registered_model' | 'configured_litellm_proxy' | 'request_base_url';
+  requestedProvider: string;
+  requestedModel: string;
+  backendProvider: string;
+  backendModel: string;
+  backendApi: string;
+  backendBaseUrl?: string;
+  systemRole: LLMSystemRoleCapabilityMetadata;
+  providerWireMessages: LLMProviderWireMessage[];
 }
 
 export interface ToolCall {

@@ -20,7 +20,7 @@ import {
 } from './protocol.js';
 import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
-import type { GatewayAuditStorePort } from './audit.js';
+import type { GatewayAuditStorePort } from './audit-port.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';

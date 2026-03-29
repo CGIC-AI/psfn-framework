@@ -7,7 +7,7 @@ import type {
   AuditSummaryEntry,
   AuditSummaryHook,
   GatewayAuditStorePort,
-} from './audit.js';
+} from './audit-port.js';
 import type { PolicyDecision } from './protocol.js';
 
 const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {

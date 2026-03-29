@@ -52,6 +52,7 @@ import {
   computeNoveltyScore,
   computeProfileNovelty,
   deriveEmotionalSignal,
+  evaluateExtractionPreLlmGate,
   evaluateFactAcceptance,
 } from './extraction/signals.js';
 import { parseFactsXml } from './extraction/parser.js';
@@ -503,6 +504,7 @@ export type {
 
 export const __test = {
   evaluateFactAcceptance,
+  evaluateExtractionPreLlmGate,
   computeNoveltyScore,
   computeProfileNovelty,
   deriveEmotionalSignal,

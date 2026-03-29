@@ -32,6 +32,7 @@ import {
   compareAcceptedFactCandidates,
   computeFactValueScore,
   evaluateFactAcceptance,
+  evaluateExtractionPreLlmGate,
 } from './signals.js';
 import { isNonConversationalSessionEntry } from '../../session/manager-primitives.js';
 import type {
@@ -128,6 +129,53 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     await options.emitExtractionStart(options.channelId, options.triggerReason, turnId);
 
     const channelVisibility = classifyChannel(options.channelId);
+    if (!options.canonicalContactId) {
+      const preLlmGate = evaluateExtractionPreLlmGate(recentEntries);
+      if (!preLlmGate.allowed) {
+        if (options.telemetryEnabled) {
+          log.debug('Skipping extraction LLM for low-signal turn', {
+            channelId: options.channelId,
+            triggerReason: options.triggerReason,
+            reason: preLlmGate.reason,
+            signalScore: preLlmGate.signalScore,
+            signalCount: preLlmGate.signalCount,
+            recentEntryCount: preLlmGate.recentEntryCount,
+            userEntryCount: preLlmGate.userEntryCount,
+          });
+        }
+
+        await options.emitExtractionEnd({
+          channelId: options.channelId,
+          count: 0,
+          ...(turnId ? { turnId } : {}),
+          triggerReason: options.triggerReason,
+          parsedCount: 0,
+          acceptedCount: 0,
+          rejectedCount: 0,
+          writeCount: 0,
+          deduplicatedCount: 0,
+          supersededCount: 0,
+          rejectionBreakdown: {
+            low_importance: 0,
+            low_confidence: 0,
+            low_novelty: 0,
+            low_signal: 0,
+            write_cap: 0,
+          },
+          compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'legacy',
+          chunkCount: 0,
+          mergedFactCount: 0,
+          crossChunkDeduplicatedCount: 0,
+          boundaryFactCount: 0,
+          preLlmGateSkipped: true,
+          preLlmGateReason: preLlmGate.reason,
+          preLlmGateSignalScore: preLlmGate.signalScore,
+          preLlmGateSignalCount: preLlmGate.signalCount,
+        });
+        return;
+      }
+    }
+
     const sourceRef = buildExtractionSourceRef(options.channelId, recentEntries, channelVisibility, turnId);
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, options.canonicalContactId) ?? {};

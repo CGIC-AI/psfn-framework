@@ -1647,6 +1647,119 @@ describe('MemoryRetriever basic behavior', () => {
       returnedCount: 0,
     });
   });
+
+  it('stops on relevance before the token budget when the tail candidates are weak', async () => {
+    const memories = [
+      makeMemory({
+        id: 'mem-strong',
+        text: 'The user is moving to Portland next week.',
+        sensitivity: 'public',
+        importance: 0.95,
+        confidence: 0.95,
+        salience: 0.95,
+        similarity: 0.98,
+      }),
+      makeMemory({
+        id: 'mem-weak-1',
+        text: 'Apples are fruit.',
+        sensitivity: 'public',
+        importance: 0.22,
+        confidence: 0.22,
+        salience: 0.22,
+        similarity: 0.14,
+      }),
+      makeMemory({
+        id: 'mem-weak-2',
+        text: 'Clouds are white.',
+        sensitivity: 'public',
+        importance: 0.2,
+        confidence: 0.2,
+        salience: 0.2,
+        similarity: 0.12,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    const result = await retriever.retrieve('Portland moving update', 'api:test', 'primary');
+
+    expect(countRenderedMemories(result)).toBe(1);
+    expect(result).toContain('The user is moving to Portland next week.');
+    expect(result).not.toContain('Apples are fruit.');
+    expect(result).not.toContain('Clouds are white.');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      returnedCount: 1,
+      selectionStopReason: 'relevance',
+      relevanceStoppedCount: 2,
+      budgetCappedCount: 0,
+    });
+  });
+
+  it('records a budget stop when relevant candidates still exceed the token limit', async () => {
+    const memories = [
+      makeMemory({
+        id: 'mem-budget-strong',
+        text: 'The user is organizing a board game night in Portland.',
+        sensitivity: 'public',
+        importance: 0.95,
+        confidence: 0.95,
+        salience: 0.95,
+        similarity: 0.98,
+      }),
+      makeMemory({
+        id: 'mem-budget-strong-2',
+        text: 'The user also wants a list of board game friends in Portland.',
+        sensitivity: 'public',
+        importance: 0.92,
+        confidence: 0.92,
+        salience: 0.92,
+        similarity: 0.94,
+      }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      makeRuntimeConfig({
+        defaultContextWindow: 10,
+        modelRoster: {
+          chat: {
+            model: 'test-model',
+            provider: 'test',
+            maxTokens: 16_384,
+            contextWindow: 10,
+            contextBudget: {
+              memoryRetrievalMinTokens: 1,
+            },
+          },
+        },
+      }),
+      eventBus,
+    );
+
+    const result = await retriever.retrieve('board game Portland update', 'api:test', 'primary');
+
+    expect(countRenderedMemories(result)).toBe(1);
+    expect(result).toContain('The user is organizing a board game night in Portland.');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      returnedCount: 1,
+      selectionStopReason: 'budget',
+      relevanceStoppedCount: 0,
+      budgetCappedCount: 1,
+    });
+  });
 });
 
 describe('MemoryRetriever score guarantee (top-K rescue)', () => {

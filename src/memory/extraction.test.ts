@@ -247,6 +247,40 @@ describe('extraction acceptance gates', () => {
     expect(decision.reason).toBeUndefined();
     expect(decision.novelty).toBeGreaterThan(0.35);
   });
+
+  it('skips low-signal turns before the LLM gate', () => {
+    const decision = extractionTestUtils.evaluateExtractionPreLlmGate([
+      {
+        role: 'user',
+        content: 'Please summarize the findings.',
+      },
+      {
+        role: 'assistant',
+        content: 'Sure, I can do that.',
+      },
+    ] as never);
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('low_signal');
+    expect(decision.signalScore).toBeLessThan(0.6);
+  });
+
+  it('allows turns with clear personal or relational signal', () => {
+    const decision = extractionTestUtils.evaluateExtractionPreLlmGate([
+      {
+        role: 'user',
+        content: 'I moved to Seattle for a new job and I feel relieved.',
+      },
+      {
+        role: 'assistant',
+        content: 'That is a major change.',
+      },
+    ] as never);
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.reason).toBeUndefined();
+    expect(decision.signalCount).toBeGreaterThan(0);
+  });
 });
 
 describe('MemoryExtractor telemetry payloads', () => {

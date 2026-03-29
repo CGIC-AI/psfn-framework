@@ -283,3 +283,57 @@ describe('runExtractionOrchestration naming fidelity', () => {
     }), 'extraction');
   });
 });
+
+describe('runExtractionOrchestration pre-LLM gate', () => {
+  it('skips the extraction LLM for low-signal turns and reports the skip', async () => {
+    const llmClient = {
+      complete: vi.fn(),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn();
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      llmClient,
+      processFact,
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'Please summarize the findings.',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'api:test',
+          role: 'assistant',
+          content: 'I can help with that.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      emitExtractionEnd,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(llmClient.complete).not.toHaveBeenCalled();
+    expect(processFact).not.toHaveBeenCalled();
+    expect(options.emitExtractionStart).toHaveBeenCalledWith(
+      'api:test',
+      'manual',
+      expect.any(String),
+    );
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'api:test',
+      count: 0,
+      triggerReason: 'manual',
+      parsedCount: 0,
+      acceptedCount: 0,
+      rejectedCount: 0,
+      writeCount: 0,
+      deduplicatedCount: 0,
+      supersededCount: 0,
+      preLlmGateSkipped: true,
+      preLlmGateReason: 'low_signal',
+    }));
+  });
+});

@@ -4,7 +4,7 @@ import type { CapabilityTier } from '../../../system/config/runtime-config-contr
 import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelVisibility } from '../../../system/trust/types.js';
 import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } from '../../../system/trust/policy.js';
-import type { ContactStore } from '../../contacts/store.js';
+import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
@@ -814,7 +814,7 @@ export function resolvePromptUserName(message: SubstrateMessage, contact?: Conta
 
 export function resolveAuthorContext(input: {
   message: SubstrateMessage;
-  contactStore: ContactStore | null | undefined;
+  contactStore: ContactStorePort | null | undefined;
   logger: RuntimeContextLogger;
   companionIdentityKey: string;
   companionDisplayName?: string;
@@ -869,58 +869,30 @@ export function resolveAuthorContext(input: {
 
   try {
     const channel = resolveIdentityChannel(input.message);
-    const maybeChannelResolver = input.contactStore as ContactStore & {
-      resolveChannelIdentity?: (channel: string, userId: string, displayName?: string) => Contact;
-    };
     // If a trusted canonical contact ID hint is provided in the routing metadata (e.g. set
     // by the Garden admin chat), resolve directly by ID so the correct contact (with nickname
     // etc.) is used regardless of which API auth principal is making the request.
     const canonicalHint = input.message.routing?.canonicalContactId?.trim();
     const hintedContact = canonicalHint ? input.contactStore.getById(canonicalHint) : undefined;
     const contact = hintedContact
-      ?? (typeof maybeChannelResolver.resolveChannelIdentity === 'function'
-        ? maybeChannelResolver.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName)
-        : input.contactStore.resolveUserId(input.message.authorId));
-    const maybeLastSeenUpdater = input.contactStore as ContactStore & {
-      updateLastSeen?: (id: string) => void;
-    };
-    if (hintedContact && typeof maybeLastSeenUpdater.updateLastSeen === 'function') {
+      ?? input.contactStore.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName);
+    if (hintedContact) {
       // Still update last seen so the contact record stays fresh.
-      maybeLastSeenUpdater.updateLastSeen(hintedContact.id);
+      input.contactStore.updateLastSeen(hintedContact.id);
     }
     const canonicalContactKey = contact.id;
     const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
-    const maybeChannelPrivacyReader = input.contactStore as ContactStore & {
-      getConversationChannelPrivacy?: (
-        contactId: string,
-        channel: string,
-        channelId: string,
-      ) => ChannelVisibility | string | null | undefined;
-    };
     const channelPrivacyLevel = explicitChannelPrivacy
       ?? normalizeChannelVisibility(
-        typeof maybeChannelPrivacyReader.getConversationChannelPrivacy === 'function'
-          ? maybeChannelPrivacyReader.getConversationChannelPrivacy(
-            canonicalContactKey,
-            channel,
-            input.message.channelId,
-          )
-          : undefined,
+        input.contactStore.getConversationChannelPrivacy(
+          canonicalContactKey,
+          channel,
+          input.message.channelId,
+        ),
       );
 
-    const maybeActivityRecorder = input.contactStore as ContactStore & {
-      recordChannelActivity?: (
-        contactId: string,
-        channel: string,
-        channelId: string,
-        privacyLevel?: ChannelVisibility,
-      ) => void;
-    };
-    if (
-      canonicalContactKey
-      && typeof maybeActivityRecorder.recordChannelActivity === 'function'
-    ) {
-      maybeActivityRecorder.recordChannelActivity(
+    if (canonicalContactKey) {
+      input.contactStore.recordChannelActivity(
         canonicalContactKey,
         channel,
         input.message.channelId,

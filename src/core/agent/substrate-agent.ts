@@ -21,7 +21,7 @@ import {
 } from '../intention/appraisal.js';
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { ContactStore } from '../contacts/store.js';
+import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
 import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../../system/trust/types.js';
@@ -248,7 +248,7 @@ export class SubstrateAgent {
   behavioralPatternProvider: BehavioralPatternContextProvider | null = null;
 
   // Trust resolution — null until contacts are wired
-  contactStore: ContactStore | null = null;
+  contactStore: ContactStorePort | null = null;
 
   // Prompt composition — null falls back to static systemPrompt
   promptComposer: PromptComposer | null = null;

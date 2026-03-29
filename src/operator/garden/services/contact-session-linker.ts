@@ -1,4 +1,4 @@
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type {
   ChannelPrivacyLevel,
@@ -186,7 +186,7 @@ export function getLinkedContactForSession(options: {
   channelId: string;
   contacts: Contact[];
   sessionStore: SessionStore;
-  contactStore?: ContactStore | null;
+  contactStore?: ContactStorePort | null;
 }): Contact | undefined {
   const {
     channelId,

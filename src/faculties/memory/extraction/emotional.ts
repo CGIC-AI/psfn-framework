@@ -1,7 +1,7 @@
 import type { SessionEntry } from '../../../core/session/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { ExtractedFact } from '../types.js';
 import { deriveEmotionalSignal } from './signals.js';
 
@@ -11,7 +11,7 @@ export interface PersistEmotionalStateOptions {
   canonicalContactId: string | undefined;
   acceptedFacts: ExtractedFact[];
   recentEntries: SessionEntry[];
-  contactStore: ContactStore | null;
+  contactStore: ContactStorePort | null;
   telemetryEnabled: boolean;
 }
 

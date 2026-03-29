@@ -37,7 +37,7 @@ import {
 } from '../../system/trust/broadcast-safety.js';
 import { computeBoundarySimilarityBoost, isBoundaryMemory } from './boundary-log.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { ContactStore } from '../../core/contacts/store.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { Contact, SocialRelationshipEdge } from '../../core/contacts/types.js';
 import type { EmotionalSnapshot } from '../../core/contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../../core/turns/snapshot.js';
@@ -374,7 +374,8 @@ export class MemoryRetriever implements MemoryProvider {
   private fallbackBudgetConfig: ContextBudgetConfigLike | null;
   private retrievalThreshold: number;
   private costTelemetry?: CostTelemetryPort;
-  private contactStore: ContactStore | null;
+  private eventBus?: EventBus;
+  private contactStore: ContactStorePort | null;
   private telemetryEnabled: boolean;
   private llmProvider: LLMProviderPort | null;
   private moodCongruenceWeight: number;
@@ -388,7 +389,7 @@ export class MemoryRetriever implements MemoryProvider {
     embeddingService: EmbeddingProviderPort,
     config?: MemoryRetrieverConfig | SubstrateConfig,
     costTelemetry?: CostTelemetryInput,
-    contactStore?: ContactStore | null,
+    contactStore?: ContactStorePort | null,
     llmProvider?: LLMProviderPort | null,
   ) {
     this.memoryStore = memoryStore;
@@ -1122,12 +1123,8 @@ export class MemoryRetriever implements MemoryProvider {
   private resolveEmotionalSnapshot(contactId: string): EmotionalSnapshot | undefined {
     if (!this.contactStore) return undefined;
 
-    const snapshotStore = this.contactStore as ContactStore & {
-      getEmotionalSnapshot?: (id: string) => EmotionalSnapshot | undefined;
-    };
-    if (typeof snapshotStore.getEmotionalSnapshot === 'function') {
-      return snapshotStore.getEmotionalSnapshot(contactId);
-    }
+    const directSnapshot = this.contactStore.getEmotionalSnapshot(contactId);
+    if (directSnapshot) return directSnapshot;
 
     const contact = this.contactStore.getById(contactId);
     if (!contact?.emotionalBaseline) return undefined;

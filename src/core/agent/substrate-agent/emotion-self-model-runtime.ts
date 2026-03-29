@@ -4,9 +4,8 @@ import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
 import type { ActiveConcern, ActiveConcernContextProvider } from '../../intention/concerns.js';
 import type { PendingFollowUp, PendingFollowUpContextProvider } from '../../intention/pending-follow-ups.js';
-import type { ContactStore } from '../../contacts/store.js';
+import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
-import type { Contact } from '../../contacts/types.js';
 import type { SessionManager } from '../../session/manager.js';
 import { isIntentionAppraisalArtifact } from '../../session/entry-attribution.js';
 import { MetacognitiveMonitor, type MetacognitiveFlag } from '../../self-model/metacognition.js';
@@ -40,7 +39,7 @@ export interface EmotionSelfModelRuntimeOptions {
   emotionRuntime?: EmotionSelfModelRuntimeWiring;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
-  getContactStore: () => ContactStore | null;
+  getContactStore: () => ContactStorePort | null;
   getSelfModelRuntimeRequired: () => boolean;
   logger: EmotionSelfModelRuntimeLogger;
 }
@@ -58,7 +57,7 @@ export class EmotionSelfModelRuntime {
   private readonly sessionManager: SessionManager;
   private readonly getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   private readonly getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
-  private readonly getContactStore: () => ContactStore | null;
+  private readonly getContactStore: () => ContactStorePort | null;
   private readonly getSelfModelRuntimeRequired: () => boolean;
   private readonly logger: EmotionSelfModelRuntimeLogger;
 
@@ -110,7 +109,7 @@ export class EmotionSelfModelRuntime {
 
     const contactStore = this.getContactStore();
     if (!contactStore) {
-      throw new Error('Self-model runtime wiring is required but ContactStore is not configured');
+      throw new Error('Self-model runtime wiring is required but ContactStorePort is not configured');
     }
 
     const manager = this.sessionManager as SessionManager & {
@@ -339,13 +338,7 @@ export class EmotionSelfModelRuntime {
     if (!canonicalContactKey) return null;
     const contactStore = this.getContactStore();
     if (!contactStore) return null;
-    const storeWithEmotion = contactStore as ContactStore & {
-      getEmotionalSnapshot?: (id: string) => EmotionalSnapshot | undefined;
-    };
-    if (typeof storeWithEmotion.getEmotionalSnapshot !== 'function') {
-      return null;
-    }
-    return storeWithEmotion.getEmotionalSnapshot(canonicalContactKey) ?? null;
+    return contactStore.getEmotionalSnapshot(canonicalContactKey) ?? null;
   }
 
   private resolveContactLastSeenDeltaSeconds(
@@ -355,13 +348,7 @@ export class EmotionSelfModelRuntime {
     if (!canonicalContactKey) return null;
     const contactStore = this.getContactStore();
     if (!contactStore) return null;
-    const storeWithLookup = contactStore as ContactStore & {
-      getById?: (id: string) => Contact | undefined;
-    };
-    if (typeof storeWithLookup.getById !== 'function') {
-      return null;
-    }
-    const contact = storeWithLookup.getById(canonicalContactKey);
+    const contact = contactStore.getById(canonicalContactKey);
     if (!contact?.lastSeen) return null;
     const lastSeenMs = Date.parse(contact.lastSeen);
     if (!Number.isFinite(lastSeenMs)) {

@@ -17,7 +17,7 @@ import {
   type RuntimeChannelsConfig,
 } from '../../channels/backplane/config.js';
 import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
-import type { ContactStore } from '../../core/contacts/store.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -54,7 +54,7 @@ export interface StartOptionalApiServerOptions extends AgentApiSurfaceBindings {
   eventBus: EventBus;
   eligibilityGate: EligibilityGate;
   sessionManager: SessionManager;
-  contactStore: ContactStore;
+  contactStore: ContactStorePort;
   memoryStore: MemoryStorePort;
   gateway: GatewayClient;
   scheduler: Scheduler;

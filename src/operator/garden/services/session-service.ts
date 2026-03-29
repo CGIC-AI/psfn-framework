@@ -1,4 +1,4 @@
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { sessionEntryToMessage } from '../../../core/agent/messages.js';
 import { parseCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
@@ -85,7 +85,7 @@ export class AdminSessionDataService implements AdminSessionService {
     sessionStore: SessionStore;
     sessionManager: SessionManager;
     eventBus: EventBus;
-    contactStore?: ContactStore | null;
+    contactStore?: ContactStorePort | null;
   }) {
     this.turnObservability = new AdminSessionTurnObservabilityStore({
       eventBus: deps.eventBus,

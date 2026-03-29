@@ -1,4 +1,4 @@
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type {
   ChannelPrivacyLevel,
@@ -123,7 +123,7 @@ function throwBootstrapSetupError(...issues: string[]): never {
 }
 
 export class AdminChatBootstrapService {
-  private readonly contactStore: ContactStore | null;
+  private readonly contactStore: ContactStorePort | null;
   private readonly configuredApiKey?: string;
   private readonly configuredApiBaseUrl?: string;
   private readonly configuredApiHost?: string;
@@ -133,7 +133,7 @@ export class AdminChatBootstrapService {
   private selection: SelectionState = {};
   private selectionPinnedByUser = false;
 
-  constructor(contactStore?: ContactStore | null, options: AdminChatBootstrapServiceOptions = {}) {
+  constructor(contactStore?: ContactStorePort | null, options: AdminChatBootstrapServiceOptions = {}) {
     this.contactStore = contactStore ?? null;
     this.configuredApiKey = normalizeTrimmed(options.apiKey);
     this.configuredApiBaseUrl = normalizeTrimmed(options.apiBaseUrl);

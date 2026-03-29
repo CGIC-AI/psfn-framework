@@ -88,7 +88,7 @@ describe('AdminContactsDataService', () => {
     }
   });
 
-  it('includes social graph inspector data for linked and mention-only contacts', () => {
+  it('includes social graph inspector data for linked and mention-only contacts', async () => {
     const { db, contactStore, service, profiles } = createServiceHarness();
     try {
       const owner = contactStore.upsert({ displayName: 'Owner', trustLevel: 'trusted', relationshipType: 'friend' });
@@ -131,7 +131,7 @@ describe('AdminContactsDataService', () => {
         confidence: 0.78,
       });
 
-      const result = service.listContacts();
+      const result = await service.listContacts();
       const graph = result.socialGraphMap.get(owner.id);
 
       expect(graph?.entity).toMatchObject({

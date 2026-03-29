@@ -900,16 +900,7 @@ export function buildAdminApiRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const deleteConversationChannel = (
-            contactsService as AdminContactsService & {
-              deleteConversationChannel?: (contactId: string, requestBody: string) => { ok: boolean; message: string };
-            }
-          ).deleteConversationChannel;
-          if (typeof deleteConversationChannel !== 'function') {
-            sendJson(res, 400, { error: 'Conversation channel deletion is not available' });
-            return;
-          }
-          const result = deleteConversationChannel(id, JSON.stringify(parsed.value));
+          const result = contactsService.deleteConversationChannel(id, JSON.stringify(parsed.value));
           if (!result.ok) {
             sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
             return;

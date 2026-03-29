@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { EmbeddingProviderPort } from '../../../core/agent/contracts.js';
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import { isInternalMemoryArtifact } from '../../../faculties/memory/internal-artifacts.js';
 import type {
@@ -110,7 +110,7 @@ function compareMemoryRecency(
 export class AdminMemoryDataService implements AdminMemoryService {
   constructor(private readonly deps: {
     memoryStore: MemoryStorePort;
-    contactStore?: ContactStore | null;
+    contactStore?: ContactStorePort | null;
     embeddingService?: EmbeddingProviderPort | null;
     resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (

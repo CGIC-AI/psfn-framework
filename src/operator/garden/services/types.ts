@@ -514,6 +514,7 @@ export interface AdminContactsService {
   deleteContact(contactId: string): ContactUpdateResult;
   mergeContacts(targetId: string, body: string): ContactUpdateResult;
   unlinkChannelIdentity(contactId: string, body: string): ContactUpdateResult;
+  deleteConversationChannel(contactId: string, body: string): ContactUpdateResult;
 }
 
 export interface AdminPromptListData {

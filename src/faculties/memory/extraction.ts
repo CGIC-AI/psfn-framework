@@ -1,6 +1,6 @@
 import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
-import type { ContactStore } from '../../core/contacts/store.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
@@ -83,7 +83,7 @@ export class MemoryExtractor {
   private telemetryEnabled: boolean;
   private promptRegistry: PromptRegistryStatePort | null;
   private sessionStore: SessionStore | null;
-  private contactStore: ContactStore | null;
+  private contactStore: ContactStorePort | null;
   private acceptingExtractions = true;
   private inFlightExtractions = new Set<Promise<void>>();
   private inFlightByChannel = new Map<string, Promise<void>>();
@@ -100,7 +100,7 @@ export class MemoryExtractor {
     config?: MemoryExtractorConfig | SubstrateConfig,
     promptRegistry?: PromptRegistryStatePort | null,
     sessionStore?: SessionStore | null,
-    contactStore?: ContactStore | null,
+    contactStore?: ContactStorePort | null,
     formationOptions?: MemoryExtractorFormationOptions,
   ) {
     this.llmClient = llmClient;

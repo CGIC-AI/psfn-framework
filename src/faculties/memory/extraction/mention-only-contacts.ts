@@ -1,4 +1,4 @@
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { resolvePreferredContactName } from '../../../core/contacts/preferred-name.js';
 import { looksLikeOpaqueIdentifier } from '../../../core/contacts/store/identity-utils.js';
 import type { Contact, RelationshipType } from '../../../core/contacts/types.js';
@@ -60,7 +60,7 @@ interface ResolveMentionOnlyContactParams {
   canonicalContactId?: string;
   canonicalContactName?: string;
   companionName?: string;
-  contactStore: Pick<ContactStore, 'listAll' | 'upsert' | 'updateRelationshipType'> | null;
+  contactStore: Pick<ContactStorePort, 'listAll' | 'upsert' | 'updateRelationshipType'> | null;
   memoryStore: Pick<MemoryStorePort, 'getMemoriesByChannel' | 'updateMemory'>;
 }
 

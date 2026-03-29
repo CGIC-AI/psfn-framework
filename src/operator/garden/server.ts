@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
-import type { ContactStore } from '../../core/contacts/store.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { PromptStatePort } from '../../core/identity/prompt-state-port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
@@ -66,7 +66,7 @@ export class AdminServer implements Lifecycle {
   private telemetryTransport: AdminServerTelemetryTransport;
 
   constructor(config: AdminServerConfig & {
-    contactStore?: ContactStore | null;
+    contactStore?: ContactStorePort | null;
     promptState?: PromptStatePort | null;
     allowInsecureWithoutToken?: boolean;
   }) {

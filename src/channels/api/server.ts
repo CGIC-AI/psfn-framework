@@ -8,7 +8,7 @@ import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ChannelType, MessageModelOverride, MessagePromptOverride, MessageRoutingMetadata, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { ContactStore } from '../../core/contacts/store.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import {
@@ -172,7 +172,7 @@ export interface ApiServerConfig {
   eventBus: EventBus;
   sessionManager: SessionManager;
   companionId?: string;
-  contactStore?: ContactStore;
+  contactStore?: ContactStorePort;
   apiKey?: string;
   adminToken?: string;
   modelName?: string;
@@ -215,7 +215,7 @@ export class ApiServer implements ChannelAdapterPort {
   private eventBus: EventBus;
   private sensorIngest: SensorIngestPort;
   private sessionManager: SessionManager;
-  private contactStore: ContactStore | null;
+  private contactStore: ContactStorePort | null;
   private apiKey?: string;
   private adminToken?: string;
   private allowInsecureWithoutAuth: boolean;

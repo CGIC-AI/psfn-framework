@@ -29,7 +29,6 @@ import {
   evaluateLowTierTrustDriftSuggestion,
   isManualHighTierTrustMutationAuthorized,
   resolveTrustMutationSource,
-  type LowTierTrustDriftSuggestion,
   type TrustDriftBehaviorSignals,
 } from '../../system/trust/policy.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -99,6 +98,13 @@ import {
   type UpsertResolveContext,
   upsertContact,
 } from './store/upsert-resolve-operations.js';
+import type {
+  ContactStorePort,
+  ContactTrustDriftApplyResult,
+  ContactTrustDriftSuggestion,
+  ContactTrustMutationOptions,
+  ContactUpsertMutationOptions,
+} from './contact-store-port.js';
 
 const log = createComponentLogger('ContactStore');
 
@@ -106,27 +112,8 @@ interface ContactStoreOptions {
   exportDir?: string;
 }
 
-interface TrustMutationOptions {
-  allowPrimaryTrustAssignment?: boolean;
-  mutationSource?: TrustMutationSource;
-}
-
-interface UpsertMutationOptions extends TrustMutationOptions {
-  actor?: string;
-}
-
 type PrimaryTrustMutationSource = 'upsert' | 'set_trust_level';
 type PrimaryTrustMutationOutcome = 'allowed' | 'denied';
-
-export interface ContactTrustDriftSuggestion extends LowTierTrustDriftSuggestion {
-  contactId: string;
-  createdAt: string;
-}
-
-export interface ContactTrustDriftApplyResult {
-  applied: boolean;
-  reason: string;
-}
 
 function sanitizeContactFileComponent(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -157,7 +144,7 @@ function serializeConversationChannelAuditValue(params: {
   return JSON.stringify(params);
 }
 
-export class ContactStore {
+export class ContactStore implements ContactStorePort {
   private db: Database.Database;
   private primaryUserId?: string;
   private exportDir: string | null;
@@ -264,7 +251,7 @@ export class ContactStore {
 
   upsert(
     partial: Partial<Contact> & { displayName: string },
-    options: UpsertMutationOptions = {},
+    options: ContactUpsertMutationOptions = {},
   ): Contact {
     const identities = collectUpsertIdentities(partial);
     const target = this.resolveUpsertTarget(partial, identities);
@@ -491,7 +478,7 @@ export class ContactStore {
     id: string,
     trustLevel: TrustLevel,
     actor?: string,
-    options: TrustMutationOptions = {},
+    options: ContactTrustMutationOptions = {},
   ): boolean {
     const contact = this.getById(id);
     if (!contact) return false;

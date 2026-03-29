@@ -3,7 +3,7 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { ContactStore } from './store.js';
+import type { ContactStorePort } from './contact-store-port.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import { TRUST_LEVELS, isHighTierTrustLevel } from '../../system/trust/types.js';
 import type { TrustDriftBehaviorSignals } from '../../system/trust/policy.js';
@@ -27,7 +27,7 @@ function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
 
-export function createContactSetTrustTool(contactStore: ContactStore): AgentTool<any> {
+export function createContactSetTrustTool(contactStore: ContactStorePort): AgentTool<any> {
   return {
     name: 'contact_set_trust',
     description:
@@ -147,7 +147,7 @@ export function createContactSetTrustTool(contactStore: ContactStore): AgentTool
   };
 }
 
-export function createContactNoteTool(contactStore: ContactStore): AgentTool<any> {
+export function createContactNoteTool(contactStore: ContactStorePort): AgentTool<any> {
   return {
     name: 'contact_note',
     description:
@@ -178,7 +178,7 @@ export function createContactNoteTool(contactStore: ContactStore): AgentTool<any
   };
 }
 
-export function createContactSetChannelPrivacyTool(contactStore: ContactStore): AgentTool<any> {
+export function createContactSetChannelPrivacyTool(contactStore: ContactStorePort): AgentTool<any> {
   return {
     name: 'contact_set_channel_privacy',
     description:
@@ -235,7 +235,7 @@ export function createContactSetChannelPrivacyTool(contactStore: ContactStore): 
   };
 }
 
-export function createContactLookupTool(contactStore: ContactStore): AgentTool<any> {
+export function createContactLookupTool(contactStore: ContactStorePort): AgentTool<any> {
   return {
     name: 'contact_lookup',
     description:
@@ -299,7 +299,7 @@ export function createContactLookupTool(contactStore: ContactStore): AgentTool<a
   };
 }
 
-export function createContactLinkIdentityTool(contactStore: ContactStore): AgentTool<any> {
+export function createContactLinkIdentityTool(contactStore: ContactStorePort): AgentTool<any> {
   return {
     name: 'contact_link_identity',
     description:
@@ -361,7 +361,7 @@ export function createContactLinkIdentityTool(contactStore: ContactStore): Agent
   };
 }
 
-export function createContactListTool(contactStore: ContactStore): AgentTool<any> {
+export function createContactListTool(contactStore: ContactStorePort): AgentTool<any> {
   return {
     name: 'contact_list',
     description: 'List all known contacts with their trust levels and relationship types.',

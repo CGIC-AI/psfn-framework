@@ -1,4 +1,4 @@
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type {
   ContactProfileArtifact,
   MemoryStorePort,
@@ -11,7 +11,6 @@ import {
 import type {
   ChannelPrivacyLevel,
   Contact,
-  ContactIdentityLinkVerification,
   ContactMutationAuditEntry,
   ContactMutationAuditField,
   ContactMutationAuditQuery,
@@ -71,7 +70,7 @@ function isMentionOnlyContact(contact: Contact | undefined): boolean {
 
 export class AdminContactsDataService implements AdminContactsService {
   constructor(private readonly deps: {
-    contactStore?: ContactStore | null;
+    contactStore?: ContactStorePort | null;
     memoryStore: MemoryStorePort;
     sessionStore: SessionStore;
   }) {}
@@ -103,11 +102,7 @@ export class AdminContactsDataService implements AdminContactsService {
   listMutationAuditEntries(query: ContactMutationAuditQuery): ContactMutationAuditEntry[] {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return [];
-    const storeWithAuditList = contactStore as ContactStore & {
-      listMutationAuditEntries?: (auditQuery?: ContactMutationAuditQuery) => ContactMutationAuditEntry[];
-    };
-    if (typeof storeWithAuditList.listMutationAuditEntries !== 'function') return [];
-    return storeWithAuditList.listMutationAuditEntries(query);
+    return contactStore.listMutationAuditEntries(query);
   }
 
   private buildSocialGraphMap(
@@ -272,12 +267,7 @@ export class AdminContactsDataService implements AdminContactsService {
     });
     const socialGraphMap = this.buildSocialGraphMap(contacts, profileMap);
 
-    const maybeVerificationLister = contactStore as ContactStore & {
-      listIdentityLinkVerifications?: (limit?: number) => ContactIdentityLinkVerification[];
-    };
-    const verifications = typeof maybeVerificationLister.listIdentityLinkVerifications === 'function'
-      ? maybeVerificationLister.listIdentityLinkVerifications(20)
-      : [];
+    const verifications = contactStore.listIdentityLinkVerifications(20);
     const mutationAuditQuery = this.parseContactMutationAuditQuery(params);
     const mutationAudits = this.listMutationAuditEntries(mutationAuditQuery);
 
@@ -319,27 +309,7 @@ export class AdminContactsDataService implements AdminContactsService {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return false;
 
-    const storeWithIdentityProfile = contactStore as ContactStore & {
-      updateIdentityProfile?: (contactId: string, name: string, nickname?: string, actor?: string) => boolean;
-    };
-
-    if (typeof storeWithIdentityProfile.updateIdentityProfile === 'function') {
-      return storeWithIdentityProfile.updateIdentityProfile(contact.id, displayName, nickname, actor);
-    }
-
-    const updated = contactStore.upsert({
-      id: contact.id,
-      displayName,
-      nickname,
-      trustLevel: contact.trustLevel,
-      relationshipType: contact.relationshipType,
-      notes: contact.notes,
-      discordUserId: contact.discordUserId,
-      channels: contact.channels,
-      channelIdentities: contact.channelIdentities,
-      firstSeen: contact.firstSeen,
-    });
-    return updated.id === contact.id;
+    return contactStore.updateIdentityProfile(contact.id, displayName, nickname, actor);
   }
 
   createContact(body: string): ContactUpdateResult {
@@ -523,19 +493,12 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'channel and channelId are required' };
     }
 
-    const storeWithDeleteConversationChannel = contactStore as ContactStore & {
-      deleteConversationChannel?: (id: string, channel: string, channelId: string, actor?: string) => boolean;
-    };
-    if (typeof storeWithDeleteConversationChannel.deleteConversationChannel !== 'function') {
-      return { ok: false, message: 'Conversation channel deletion is not available' };
-    }
-
     const contact = contactStore.getById(contactId);
     if (!contact) {
       return { ok: false, message: 'Contact not found' };
     }
 
-    if (!storeWithDeleteConversationChannel.deleteConversationChannel(contactId, channel, channelId, 'admin:api')) {
+    if (!contactStore.deleteConversationChannel(contactId, channel, channelId, 'admin:api')) {
       return { ok: false, message: 'Conversation channel not found on contact' };
     }
 

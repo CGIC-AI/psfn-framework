@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import type { ContactStorePort } from './contact-store-port.js';
 import { ContactStore } from './store.js';
 import type { ChannelPrivacyLevel } from './types.js';
 import {
@@ -12,7 +13,7 @@ import {
 } from './tools.js';
 
 export interface ContactRuntimeTarget {
-  contactStore: ContactStore | null;
+  contactStore: ContactStorePort | null;
   registerTool: ToolRegistrar;
 }
 
@@ -32,7 +33,7 @@ export function wireContactRuntime(
   db: Database.Database,
   primaryUserId?: string,
   options: ContactRuntimeOptions = {},
-): ContactStore {
+): ContactStorePort {
   const contactStore = new ContactStore(db, primaryUserId, {
     exportDir: options.exportDir,
   });

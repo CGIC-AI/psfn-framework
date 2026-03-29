@@ -31,7 +31,7 @@ import type {
   MemoryStorePort,
 } from '../../../faculties/memory/memory-store-port.js';
 import { createCoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
-import type { ContactStore } from '../../../core/contacts/store.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { ShardManager } from '../../../faculties/shards/manager.js';
 import {
   createShardExecutionPort,
@@ -205,7 +205,7 @@ export interface MemoryRuntimeOptions {
   eventBus: EventBus;
   config?: SubstrateConfig;
   promptRegistry?: PromptRegistryStatePort | null;
-  contactStore?: ContactStore | null;
+  contactStore?: ContactStorePort | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {

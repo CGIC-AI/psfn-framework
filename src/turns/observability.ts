@@ -15,6 +15,7 @@ import {
   cloneAdaptiveToolSnapshotTelemetry,
   cloneContextMessage,
   cloneProviderObservability,
+  cloneTurnPromptResponseSnapshot,
   cloneToolSchema,
 } from './snapshot.js';
 
@@ -201,8 +202,14 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+          ...(snapshot.promptContext.currentTurnInput !== undefined
+            ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
+            : {}),
           ...(snapshot.promptContext.providerObservability
             ? { providerObservability: cloneProviderObservability(snapshot.promptContext.providerObservability) }
+            : {}),
+          ...(snapshot.promptContext.response
+            ? { response: cloneTurnPromptResponseSnapshot(snapshot.promptContext.response) }
             : {}),
         },
       }
@@ -276,8 +283,14 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+          ...(snapshot.promptContext.currentTurnInput !== undefined
+            ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
+            : {}),
           ...(snapshot.promptContext.providerObservability
             ? { providerObservability: cloneProviderObservability(snapshot.promptContext.providerObservability) }
+            : {}),
+          ...(snapshot.promptContext.response
+            ? { response: cloneTurnPromptResponseSnapshot(snapshot.promptContext.response) }
             : {}),
         },
       }

@@ -1,5 +1,27 @@
-import { describe, expect, it } from 'vitest';
-import { injectPromptRuntimeTokens, renderPromptRuntimeTokens } from './prompt-runtime.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, expect, it } from 'vitest';
+import {
+  injectPromptRuntimeTokens,
+  orderPromptRuntimeSystemPromptSections,
+  PromptRuntimeLayoutStore,
+  renderPromptRuntimeTokens,
+} from './prompt-runtime.js';
+
+let tempDir: string | null = null;
+
+afterEach(() => {
+  if (tempDir) {
+    rmSync(tempDir, { recursive: true, force: true });
+    tempDir = null;
+  }
+});
+
+function makeTempDir(): string {
+  tempDir = mkdtempSync(join(tmpdir(), 'psfn-prompt-runtime-'));
+  return tempDir;
+}
 
 describe('injectPromptRuntimeTokens', () => {
   const fixedNow = new Date('2026-02-20T13:45:27.000Z');
@@ -135,5 +157,58 @@ describe('injectPromptRuntimeTokens', () => {
 
     expect(output).toContain('<current_datetime>');
     expect(output).not.toContain('<appearance_context>');
+  });
+
+  it('persists and applies runtime system-prompt block ordering', () => {
+    const root = makeTempDir();
+    const store = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
+
+    store.reorderSystemPromptBlocks([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ], 'admin');
+
+    const reloadedStore = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
+    expect(reloadedStore.getSystemPromptBlockOrder()).toEqual([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ]);
+
+    const ordered = orderPromptRuntimeSystemPromptSections([
+      { id: 'runtime.context' as const, content: 'runtime' },
+      { id: 'session.continuity' as const, content: 'continuity' },
+      { id: 'memory.retrieval' as const, content: 'retrieval' },
+    ], reloadedStore);
+
+    expect(ordered.map(section => section.id)).toEqual([
+      'session.continuity',
+      'memory.retrieval',
+      'runtime.context',
+    ]);
+  });
+
+  it('rejects invalid runtime block orders that do not include the full reorderable set', () => {
+    const root = makeTempDir();
+    const store = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
+
+    const invalidOrder = [
+      'runtime.context',
+      'runtime.scratchpad',
+    ] as unknown as Parameters<typeof store.reorderSystemPromptBlocks>[0];
+    expect(() => store.reorderSystemPromptBlocks(invalidOrder, 'admin')).toThrow(
+      'systemPromptBlockOrder must include each reorderable runtime block exactly once',
+    );
   });
 });

@@ -4,7 +4,13 @@ import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../b
 import type { EventBus, EventMap } from '../../event-bus.js';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import {
+  injectPromptRuntimeTokens,
+  orderPromptRuntimeSystemPromptSections,
+  PromptRuntimeLayoutStore,
+  resolvePromptRuntimeLayoutPath,
+  type PromptRuntimeSystemPromptBlockId,
+} from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
@@ -58,7 +64,11 @@ import {
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
 } from '../../turns/observability.js';
-import type { TurnPromptSnapshot, TurnSnapshot } from '../../turns/snapshot.js';
+import type {
+  TurnPromptResponseSnapshot,
+  TurnPromptSnapshot,
+  TurnSnapshot,
+} from '../../turns/snapshot.js';
 import {
   parseDeferredToolHandoffActionId,
 } from '../deferred-tool-handoff.js';
@@ -96,6 +106,17 @@ import {
 const log = createComponentLogger('SubstrateAgent');
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 const VISION_TURN_TIMEOUT_MS = 10_000;
+const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
+
+function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
+  const cached = promptRuntimeLayoutStoreCache.get(filePath);
+  if (cached) return cached;
+  const created = new PromptRuntimeLayoutStore(filePath);
+  promptRuntimeLayoutStoreCache.set(filePath, created);
+  return created;
+}
 
 interface ProactiveMemoryProvider extends MemoryProvider {
   retrieveProactiveRecall?: (
@@ -403,6 +424,53 @@ async function runWithVisionTurnTimeout<T>({
   } finally {
     clearTimeout(timeoutHandle);
   }
+}
+
+function readAssistantReasoning(message: AssistantMessage | null): string | undefined {
+  if (!message || !Array.isArray(message.content)) return undefined;
+  const reasoning = message.content
+    .filter((block: unknown): block is { type: string; thinking?: string } => (
+      typeof block === 'object'
+      && block !== null
+      && (block as { type?: unknown }).type === 'thinking'
+      && typeof (block as { thinking?: unknown }).thinking === 'string'
+    ))
+    .map(block => block.thinking?.trim() ?? '')
+    .filter(block => block.length > 0)
+    .join('\n\n');
+  return reasoning.length > 0 ? reasoning : undefined;
+}
+
+function countAssistantToolCalls(message: AssistantMessage | null): number | undefined {
+  if (!message || !Array.isArray(message.content)) return undefined;
+  const count = message.content.filter((block: unknown) => (
+    typeof block === 'object'
+    && block !== null
+    && (block as { type?: unknown }).type === 'toolCall'
+  )).length;
+  return count > 0 ? count : undefined;
+}
+
+function buildPromptResponseSnapshot(input: {
+  assistantMessage: AssistantMessage | null;
+  content: string;
+  model: string | null;
+  stopReason?: string;
+}): TurnPromptResponseSnapshot {
+  const reasoning = readAssistantReasoning(input.assistantMessage);
+  const toolCallCount = countAssistantToolCalls(input.assistantMessage);
+  return {
+    content: input.content,
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.assistantMessage?.stopReason
+      ? { stopReason: input.assistantMessage.stopReason }
+      : input.stopReason
+        ? { stopReason: input.stopReason }
+        : {}),
+    ...(input.assistantMessage?.errorMessage ? { errorMessage: input.assistantMessage.errorMessage } : {}),
+    ...(reasoning ? { reasoning } : {}),
+    ...(toolCallCount !== undefined ? { toolCallCount } : {}),
+  };
 }
 
 export async function handleMessageForTurn(
@@ -713,6 +781,7 @@ export async function handleMessageForTurn(
     let runtimeContext = '';
 
     if (promptOverride.mode === 'default') {
+      const promptRuntimeLayout = getPromptRuntimeLayoutStore(runtime.config);
       const staticCacheKey = runtime.buildPromptPrefixCacheKey(
         message,
         channelType,
@@ -728,13 +797,33 @@ export async function handleMessageForTurn(
         now: runtimeNow,
         variables: templateVariables,
       });
+      const personaHint = runtime.getPersonaAdaptation(
+        trustLevel,
+        preTurnInternalState,
+        preTurnMetacognitiveFlags,
+        templateVariables,
+      );
       const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
         || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
       renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
         now: runtimeNow,
         variables: promptRuntimeVariables,
       });
-      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, scratchpadBlock]
+      const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
+        {
+          id: 'runtime.persona_adaptation' as PromptRuntimeSystemPromptBlockId,
+          content: personaHint ?? '',
+        },
+        {
+          id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
+          content: runtimeContext,
+        },
+        {
+          id: 'runtime.scratchpad' as PromptRuntimeSystemPromptBlockId,
+          content: scratchpadBlock,
+        },
+      ], promptRuntimeLayout);
+      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, ...orderedRuntimeSections.map(section => section.content)]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
@@ -742,22 +831,18 @@ export async function handleMessageForTurn(
       const customPrompt = promptOverride.mode === 'custom'
         ? (promptOverride.systemPrompt ?? '')
         : '';
-      runtimeContext = runtime.buildRuntimeContext(
-        message,
-        authorContext.resolvedUserName,
-        trustLevel,
-        channelType,
-        authorContext.canonicalContactKey,
-        authorContext.subjectIdentityKey,
-        responseStyle,
-        runtimeNow,
-        taskKind,
-        templateVariables,
-        preTurnInternalState,
-        preTurnMetacognitiveFlags,
-        emotionAppraisalChain,
-      );
-      fullPrompt = [customPrompt, runtimeContext, scratchpadBlock]
+      const promptRuntimeLayout = getPromptRuntimeLayoutStore(runtime.config);
+      const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
+        {
+          id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
+          content: runtimeContext,
+        },
+        {
+          id: 'runtime.scratchpad' as PromptRuntimeSystemPromptBlockId,
+          content: scratchpadBlock,
+        },
+      ], promptRuntimeLayout);
+      fullPrompt = [customPrompt, ...orderedRuntimeSections.map(section => section.content)]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
@@ -917,6 +1002,15 @@ export async function handleMessageForTurn(
       turnUsage = moaResult.turnUsage;
       responseModel = moaResult.model;
       responseText = moaResult.output;
+      if (turnSnapshot.promptContext) {
+        turnSnapshot.promptContext.response = {
+          content: moaResult.output,
+          model: moaResult.model,
+          stopReason: moaResult.stopReason,
+        };
+        turnSnapshot.capturedAt = Date.now();
+        await emitTurnSnapshot(turnSnapshot);
+      }
     } else {
       runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
       const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
@@ -988,6 +1082,11 @@ export async function handleMessageForTurn(
           ? { currentTurnVisionReview: turnUserContentBuildResult.currentTurnVisionReview }
           : {}),
       };
+      if (turnSnapshot.promptContext) {
+        turnSnapshot.promptContext.currentTurnInput = turnUserContentBuildResult.content;
+        turnSnapshot.capturedAt = Date.now();
+        await emitTurnSnapshot(turnSnapshot);
+      }
       try {
         await runWithVisionTurnTimeout({
           channelId: message.channelId,
@@ -1156,6 +1255,15 @@ export async function handleMessageForTurn(
             model: runtime.agent.state.model.id,
           });
         }
+      }
+      if (turnSnapshot.promptContext) {
+        turnSnapshot.promptContext.response = buildPromptResponseSnapshot({
+          assistantMessage: runtime.getLatestAssistantMessage(),
+          content: responseText,
+          model: responseModel,
+        });
+        turnSnapshot.capturedAt = Date.now();
+        await emitTurnSnapshot(turnSnapshot);
       }
     }
     let safeResponseText = responseText;

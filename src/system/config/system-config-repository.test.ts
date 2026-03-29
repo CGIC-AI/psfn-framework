@@ -2,13 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createSystemConfigRepository } from './system-config-repository.js';
+import { createOwnerFileConfigStore } from './config-store.js';
 
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, 'utf-8')) as T;
 }
 
-describe('createSystemConfigRepository', () => {
+describe('createOwnerFileConfigStore', () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
@@ -30,7 +30,7 @@ describe('createSystemConfigRepository', () => {
   it('round-trips the system-owned owner file surfaces through one repository object', () => {
     const dataDir = makeDataDir('psfn-system-config-repository-');
     const seedDir = join(process.cwd(), 'config');
-    const repo = createSystemConfigRepository({
+    const repo = createOwnerFileConfigStore({
       dataDir,
       seedDir,
       defaultContextWindow: 128_000,
@@ -140,7 +140,7 @@ describe('createSystemConfigRepository', () => {
       },
     }));
 
-    const repo = createSystemConfigRepository({
+    const repo = createOwnerFileConfigStore({
       dataDir,
     });
 
@@ -181,10 +181,27 @@ describe('createSystemConfigRepository', () => {
     };
     writeFileSync(join(dataDir, 'channels.json'), JSON.stringify(payload));
 
-    const repo = createSystemConfigRepository({
+    const repo = createOwnerFileConfigStore({
       dataDir,
     });
 
     expect(repo.loadChannelsOwnerFile()).toEqual(payload);
+  });
+
+  it('exposes startup hydration loads through the same config store port', () => {
+    const dataDir = makeDataDir('psfn-config-store-startup-');
+    const seedDir = join(process.cwd(), 'config');
+    const repo = createOwnerFileConfigStore({
+      dataDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+    });
+
+    expect(repo.loadStartupRuntimeSettings().runtimeSettings).toEqual(repo.loadRuntimeSettings());
+    expect(repo.loadStartupModels().config).toEqual(repo.loadModels());
+    expect(repo.loadStartupProviders().config).toEqual(repo.loadProviders());
+    expect(repo.loadStartupTrustPolicy()).toEqual(repo.loadTrustPolicy());
+    expect(repo.loadStartupScheduler()).toEqual(repo.loadScheduler());
+    expect(repo.loadStartupCapabilityTier()).toEqual(repo.loadCapabilityTier());
   });
 });

@@ -1,26 +1,28 @@
 import type { ProcessEnv } from 'node:process';
-import type { RuntimeChannelsConfigOverrides, RuntimeChannelsConfig } from '../../channels/backplane/config.js';
+import type {
+  RuntimeChannelsConfig,
+  RuntimeChannelsConfigOverrides,
+} from '../../channels/backplane/config.js';
 import {
   loadChannelsOwnerFile,
   loadRuntimeChannelsConfig,
   saveChannelsOwnerFile,
 } from '../../channels/backplane/config.js';
+import type { EditableSettings } from '../settings/contracts.js';
+import { loadSettings, saveSettings } from '../settings/io.js';
+import type { BackupJsonConfig } from './backup-config.js';
+import { loadBackupConfig, saveBackupConfig } from './backup-config.js';
 import type { CapabilityTierConfig } from './capability-tier-config.js';
 import {
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
 } from './capability-tier-config.js';
-import type { BackupJsonConfig } from './backup-config.js';
-import {
-  loadBackupConfig,
-  saveBackupConfig,
-} from './backup-config.js';
-import type { ModelsRuntimeConfig } from './models-config.js';
+import type { ModelsLoadResult, ModelsRuntimeConfig } from './models-config.js';
 import {
   loadModelsConfig,
   saveModelsConfig,
 } from './models-config.js';
-import type { ProvidersRuntimeConfig } from './providers-config.js';
+import type { ProvidersLoadResult, ProvidersRuntimeConfig } from './providers-config.js';
 import {
   loadProvidersConfig,
   saveProvidersConfig,
@@ -35,21 +37,22 @@ import {
   loadSkillsConfig,
   saveSkillsConfig,
 } from './skills-config.js';
+import {
+  loadStartupCapabilityTierOwnerFile,
+  loadStartupModelsOwnerFile,
+  loadStartupProvidersOwnerFile,
+  loadStartupRuntimeSettingsOwnerFile,
+  loadStartupSchedulerOwnerFile,
+  loadStartupTrustPolicyOwnerFile,
+  type StartupOwnerFileState,
+} from './startup-owner-files.js';
 import type { TrustPolicyConfig } from './trust-policy-config.js';
 import {
   loadTrustPolicyConfig,
   saveTrustPolicyConfig,
 } from './trust-policy-config.js';
-import type { EditableSettings } from '../settings/contracts.js';
-import { loadSettings, saveSettings } from '../settings/io.js';
 
-export interface SystemConfigRepositoryOptions {
-  dataDir: string;
-  seedDir?: string;
-  defaultContextWindow?: number;
-}
-
-export interface SystemConfigRepository {
+export interface ConfigStorePort {
   loadRuntimeSettings(): EditableSettings;
   saveRuntimeSettings(settings: EditableSettings): void;
   loadModels(): ModelsRuntimeConfig;
@@ -69,11 +72,26 @@ export interface SystemConfigRepository {
   saveSkills(nextConfig: unknown): SkillsRuntimeConfig;
   loadTrustPolicy(): TrustPolicyConfig;
   saveTrustPolicy(nextConfig: unknown): TrustPolicyConfig;
+  loadStartupRuntimeSettings(): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'>;
+  loadStartupModels(options?: { legacySettings?: EditableSettings }): ModelsLoadResult;
+  loadStartupProviders(options?: {
+    legacyLiteLLMBaseUrl?: string;
+    legacyOpenRouterModelsApiUrl?: string;
+  }): ProvidersLoadResult;
+  loadStartupTrustPolicy(): TrustPolicyConfig;
+  loadStartupScheduler(): SchedulerRuntimeConfig;
+  loadStartupCapabilityTier(): CapabilityTierConfig;
 }
 
-export function createSystemConfigRepository(
-  options: SystemConfigRepositoryOptions,
-): SystemConfigRepository {
+export interface OwnerFileConfigStoreOptions {
+  dataDir: string;
+  seedDir?: string;
+  defaultContextWindow?: number;
+}
+
+export function createOwnerFileConfigStore(
+  options: OwnerFileConfigStoreOptions,
+): ConfigStorePort {
   const loadOptions = options.seedDir ? { seedDir: options.seedDir } : undefined;
   const modelLoadOptions = {
     ...loadOptions,
@@ -104,5 +122,27 @@ export function createSystemConfigRepository(
     saveSkills: (nextConfig) => saveSkillsConfig(options.dataDir, nextConfig),
     loadTrustPolicy: () => loadTrustPolicyConfig(options.dataDir, loadOptions),
     saveTrustPolicy: (nextConfig) => saveTrustPolicyConfig(options.dataDir, nextConfig),
+    loadStartupRuntimeSettings: () => loadStartupRuntimeSettingsOwnerFile({
+      dataDir: options.dataDir,
+      seedDir: options.seedDir,
+    }),
+    loadStartupModels: (startupOptions = {}) => loadStartupModelsOwnerFile({
+      dataDir: options.dataDir,
+      seedDir: options.seedDir,
+      defaultContextWindow: options.defaultContextWindow,
+      legacySettings: startupOptions.legacySettings,
+    }),
+    loadStartupProviders: (startupOptions = {}) => loadStartupProvidersOwnerFile({
+      dataDir: options.dataDir,
+      seedDir: options.seedDir,
+      legacyLiteLLMBaseUrl: startupOptions.legacyLiteLLMBaseUrl,
+      legacyOpenRouterModelsApiUrl: startupOptions.legacyOpenRouterModelsApiUrl,
+    }),
+    loadStartupTrustPolicy: () => loadStartupTrustPolicyOwnerFile(options.dataDir, options.seedDir),
+    loadStartupScheduler: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),
+    loadStartupCapabilityTier: () => loadStartupCapabilityTierOwnerFile(
+      options.dataDir,
+      options.seedDir,
+    ),
   };
 }

@@ -218,6 +218,7 @@ async function createHarness(options: {
     extractionProvider: 'test',
     discordToken: '',
     discordBotId: '123',
+    companionId: 'test-companion',
     characterCardPath,
     dataDir: tempDir,
     databasePath: '',
@@ -232,6 +233,18 @@ async function createHarness(options: {
     defaultContextWindow: 128_000,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
+    modelCatalog: {
+      primary: {
+        model: 'test-model-room',
+        provider: 'openai',
+        defaults: {
+          description: 'Test Model Room',
+        },
+      },
+    },
+    modelRoleAssignments: {
+      chat: 'primary',
+    },
     modelRoster: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
     },
@@ -245,6 +258,24 @@ async function createHarness(options: {
   const sessionManager = new SessionManager(sessionStore, config, eventBus);
   const scheduler = new Scheduler(eventBus);
   scheduler.registerHeartbeat(() => {});
+  const contactStore = {
+    listAll: () => [{
+      id: 'contact-admin',
+      displayName: 'Admin User',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      firstSeen: new Date().toISOString(),
+      lastSeen: new Date().toISOString(),
+      channels: [{
+        channel: 'api',
+        userId: 'admin-user',
+        privacyLevel: 'private',
+      }],
+    }],
+    linkChannelIdentity: vi.fn(() => 'linked'),
+    setChannelPrivacy: vi.fn(() => true),
+    setConversationChannelPrivacy: vi.fn(() => true),
+  };
 
   const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
   const shardManager = new ShardManager({
@@ -268,6 +299,7 @@ async function createHarness(options: {
     scheduler,
     shardManager,
     eventBus,
+    contactStore: contactStore as any,
     characterCard: testCard,
     config,
     embeddingService: null,

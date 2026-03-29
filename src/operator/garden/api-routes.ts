@@ -38,8 +38,6 @@ import type {
 import type { ValuesJournalEntry } from '../../faculties/values/store.js';
 import type { ReflectionTemplate } from '../../core/scheduler/heartbeat-policy.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
-import { applyAdminModelsConfigMutation } from './services/settings-service.js';
-import { loadModelsConfig } from '../../system/config/models-config.js';
 
 export type AdminTaskCadence = RecurringCadence;
 
@@ -897,11 +895,17 @@ export function buildAdminApiRoutes(options: {
       method: 'GET',
       match: exactPath(ADMIN_SETTINGS_MODELS_API_PATH),
       handle: (_req, res) => {
+        const modelsJson = settingsService.getSubConfigJson('models');
+        if (modelsJson === null) {
+          sendJson(res, 500, { error: 'models.json config store unavailable' });
+          return;
+        }
         try {
-          const models = loadModelsConfig(config.dataDir, {
-            defaultContextWindow: config.defaultContextWindow,
-          });
-          sendJson(res, 200, models.modelRegistry);
+          const models = JSON.parse(modelsJson);
+          const registry = typeof models === 'object' && models !== null && 'modelRegistry' in models
+            ? (models as { modelRegistry: unknown }).modelRegistry
+            : models;
+          sendJson(res, 200, registry);
         } catch (error) {
           sendJson(res, 500, { error: String(error) });
         }
@@ -927,7 +931,7 @@ export function buildAdminApiRoutes(options: {
             return;
           }
 
-          const result = applyAdminModelsConfigMutation({ config, payload });
+          const result = settingsService.saveSubConfigJson('models', configJson);
           if (!result.ok) {
             sendJson(res, 400, {
               error: result.message,

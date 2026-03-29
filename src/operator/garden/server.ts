@@ -14,6 +14,7 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { readBodyWithLimit, sendText } from '../../channels/backplane/http/primitives.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
+import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveLegacyValuesJournalPath,
@@ -101,8 +102,14 @@ export class AdminServer implements Lifecycle {
       memoryStore: config.memoryStore,
       sessionStore: config.sessionStore,
     });
+    const configStore = createOwnerFileConfigStore({
+      dataDir: config.config.dataDir,
+      seedDir: process.env.CONFIG_DIR,
+      defaultContextWindow: config.config.defaultContextWindow,
+    });
     this.settingsService = new AdminSettingsDataService({
       config: config.config,
+      configStore,
     });
     this.identityService = new AdminIdentityDataService({
       characterCard: config.characterCard,

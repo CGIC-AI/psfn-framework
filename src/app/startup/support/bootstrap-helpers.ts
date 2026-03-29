@@ -13,7 +13,10 @@ import {
 } from '../../../persistence/backups/startup-checks.js';
 import type { RuntimeChannelsConfigOverrides } from '../../../channels/backplane/config.js';
 import { createEnvCredentialVault } from '../../../boundary/custody/credential-vault.js';
-import { createSystemConfigRepository } from '../../../system/config/system-config-repository.js';
+import {
+  createOwnerFileConfigStore,
+  type ConfigStorePort,
+} from '../../../system/config/config-store.js';
 import { type ModelsLoadResult } from '../../../system/config/models-config.js';
 import {
   applyProvidersRuntimeConfig,
@@ -22,7 +25,6 @@ import {
 import { CAPABILITY_TIER_FILE_NAME } from '../../../system/config/capability-tier-config.js';
 import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
 import { type TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
-import { resolveRuntimeSchedulerConfig } from '../../../system/config/scheduler-runtime.js';
 import { setRuntimeTrustPolicy } from '../../../system/trust/runtime-policy.js';
 import {
   resolveRuntimePathSnapshotFromConfig,
@@ -32,14 +34,6 @@ import {
   assertPersistenceCutoverReady,
   buildPersistenceCutoverOptionsFromConfig,
 } from '../../../persistence/cutover.js';
-import {
-  loadStartupCapabilityTierOwnerFile,
-  loadStartupModelsOwnerFile,
-  loadStartupProvidersOwnerFile,
-  loadStartupRuntimeSettingsOwnerFile,
-  loadStartupTrustPolicyOwnerFile,
-  loadStartupSchedulerOwnerFile,
-} from '../../../system/config/startup-owner-files.js';
 export type {
   RuntimeVoiceConnectorBinding,
   RuntimeVoiceProviderGate,
@@ -94,6 +88,7 @@ export interface StartupConfigHydrationResult {
 export interface StartupConfigHydrationOptions {
   env?: NodeJS.ProcessEnv;
   secretAuthority?: 'gateway' | 'agent';
+  configStore?: ConfigStorePort;
 }
 
 export function buildRuntimeChannelsConfigOverrides(
@@ -128,18 +123,37 @@ export function createEmbeddingDimensionMismatchFatalMessage(
   return `${mismatchWarning.message}: configured=${mismatchWarning.configuredDims}, stored=${mismatchWarning.storedDims}. ${mismatchWarning.recommendation}`;
 }
 
-export function installPromotedToolsPersistenceHook(config: SubstrateConfig): void {
+function createDefaultConfigStore(options: {
+  dataDir: string;
+  defaultContextWindow?: number;
+  env: NodeJS.ProcessEnv;
+}): ConfigStorePort {
+  return createOwnerFileConfigStore({
+    dataDir: options.dataDir,
+    seedDir: options.env.CONFIG_DIR,
+    defaultContextWindow: options.defaultContextWindow,
+  });
+}
+
+export function installPromotedToolsPersistenceHook(
+  config: SubstrateConfig,
+  options: {
+    configStore?: ConfigStorePort;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): void {
   const existingHooks = config.runtimeHooks ?? {};
-  const repository = createSystemConfigRepository({
+  const env = options.env ?? process.env;
+  const configStore = options.configStore ?? createDefaultConfigStore({
     dataDir: config.dataDir,
-    seedDir: process.env.CONFIG_DIR,
     defaultContextWindow: config.defaultContextWindow,
+    env,
   });
   config.runtimeHooks = {
     ...existingHooks,
     persistPromotedExtendedTools: (toolNames) => {
-      const current = repository.loadRuntimeSettings();
-      repository.saveRuntimeSettings({
+      const current = configStore.loadRuntimeSettings();
+      configStore.saveRuntimeSettings({
         ...current,
         promotedExtendedTools: [...toolNames],
       });
@@ -188,34 +202,28 @@ export function hydrateCanonicalStartupConfig(
     backupsDir: env.BACKUP_ROOT_DIR,
   });
   const { systemDataDir, companionDataDir, runtimePathLayout } = pathSnapshot;
-  assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config, env));
-  const repository = createSystemConfigRepository({
+  const configStore = options.configStore ?? createDefaultConfigStore({
     dataDir: systemDataDir,
-    seedDir: env.CONFIG_DIR,
     defaultContextWindow: config.defaultContextWindow,
+    env,
   });
-
-  const startupRuntimeSettings = loadStartupRuntimeSettingsOwnerFile({
-    dataDir: systemDataDir,
-    seedDir: env.CONFIG_DIR,
-  });
+  assertPersistenceCutoverReady(buildPersistenceCutoverOptionsFromConfig(config, env));
+  const startupRuntimeSettings = configStore.loadStartupRuntimeSettings();
   const { settingsDomains } = startupRuntimeSettings;
   applySettings(config, settingsDomains.runtime);
   if (secretAuthority === 'gateway') {
     assertSecuritySensitiveStartupConfig(config);
   }
-  installPromotedToolsPersistenceHook(config);
+  installPromotedToolsPersistenceHook(config, {
+    configStore,
+    env,
+  });
 
-  const modelsLoadResult = loadStartupModelsOwnerFile({
-    dataDir: systemDataDir,
-    seedDir: env.CONFIG_DIR,
-    defaultContextWindow: config.defaultContextWindow,
+  const modelsLoadResult = configStore.loadStartupModels({
     legacySettings: settingsDomains.models,
   });
   applySettings(config, modelsLoadResult.config);
-  const providersLoadResult = loadStartupProvidersOwnerFile({
-    dataDir: systemDataDir,
-    seedDir: env.CONFIG_DIR,
+  const providersLoadResult = configStore.loadStartupProviders({
     legacyLiteLLMBaseUrl: env.LITELLM_BASE_URL,
     legacyOpenRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
@@ -235,9 +243,9 @@ export function hydrateCanonicalStartupConfig(
     try {
       const schedulerPath = join(systemDataDir, SCHEDULER_FILE_NAME);
       const schedulerFileExisted = existsSync(schedulerPath);
-      const persistedScheduler = loadStartupSchedulerOwnerFile(systemDataDir, env.CONFIG_DIR);
+      const persistedScheduler = configStore.loadStartupScheduler();
       if (!schedulerFileExisted) {
-        repository.saveScheduler({
+        configStore.saveScheduler({
           ...persistedScheduler,
           salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
         });
@@ -266,9 +274,9 @@ export function hydrateCanonicalStartupConfig(
     try {
       const capabilityPath = join(systemDataDir, CAPABILITY_TIER_FILE_NAME);
       const capabilityFileExisted = existsSync(capabilityPath);
-      const persistedCapabilities = loadStartupCapabilityTierOwnerFile(systemDataDir, env.CONFIG_DIR);
+      const persistedCapabilities = configStore.loadStartupCapabilityTier();
       if (!capabilityFileExisted) {
-        repository.saveCapabilityTier({
+        configStore.saveCapabilityTier({
           ...persistedCapabilities,
           tier: settingsDomains.capabilityTier,
         });
@@ -295,19 +303,21 @@ export function hydrateCanonicalStartupConfig(
 
   if (settingsDomains.legacyKeys.length > 0) {
     try {
-      repository.saveRuntimeSettings(settingsDomains.runtime);
+      configStore.saveRuntimeSettings(settingsDomains.runtime);
     } catch (error) {
       diagnostics.settingsRewriteError = String(error);
     }
   }
 
-  const trustPolicyConfig = loadStartupTrustPolicyOwnerFile(systemDataDir, env.CONFIG_DIR);
+  const trustPolicyConfig = configStore.loadStartupTrustPolicy();
   setRuntimeTrustPolicy(trustPolicyConfig);
 
-  const schedulerConfig = resolveRuntimeSchedulerConfig({
-    dataDir: systemDataDir,
-    seedDir: env.CONFIG_DIR,
-  });
+  const persistedScheduler = configStore.loadStartupScheduler();
+  const schedulerConfig: SchedulerRuntimeConfig = {
+    tickIntervalMs: persistedScheduler.tickIntervalMs,
+    heartbeatIntervalMs: persistedScheduler.heartbeatIntervalMs,
+    salienceDecayIntervalMs: persistedScheduler.salienceDecayIntervalMs,
+  };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
 
   return {

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import { createEnvCredentialVault } from '../../../boundary/custody/credential-vault.js';
 import type { CanonicalModelRegistry } from '../../../shared/contracts/runtime.js';
+import type { ConfigStorePort } from '../../../system/config/config-store.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
   createEligibilityGate,
@@ -886,6 +887,29 @@ describe('installPromotedToolsPersistenceHook', () => {
 
     expect(config.runtimeHooks.existingHook).toBe(existingHook);
     expect(typeof config.runtimeHooks.persistPromotedExtendedTools).toBe('function');
+  });
+
+  it('can persist promoted tool names through an injected config store port', () => {
+    const savedSettings: Record<string, unknown> = {
+      promotedExtendedTools: [],
+    };
+    const configStore = {
+      loadRuntimeSettings: () => ({ ...savedSettings }),
+      saveRuntimeSettings: (settings) => {
+        Object.assign(savedSettings, settings);
+      },
+    } as ConfigStorePort;
+
+    const config = {
+      dataDir: '/unused',
+    } as any;
+    installPromotedToolsPersistenceHook(config, {
+      configStore,
+    });
+
+    config.runtimeHooks.persistPromotedExtendedTools(['memory_recall', 'think']);
+
+    expect(savedSettings.promotedExtendedTools).toEqual(['memory_recall', 'think']);
   });
 });
 

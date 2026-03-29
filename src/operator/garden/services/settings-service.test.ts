@@ -7,6 +7,7 @@ import { loadCapabilityTierConfig } from '../../../system/config/capability-tier
 import { loadModelsConfig } from '../../../system/config/models-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
+import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
 import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { AdminSettingsDataService } from './settings-service.js';
@@ -66,6 +67,16 @@ function buildConfig(
   };
 }
 
+function buildService(config: SubstrateConfig): AdminSettingsDataService {
+  return new AdminSettingsDataService({
+    config,
+    configStore: createOwnerFileConfigStore({
+      dataDir: config.dataDir,
+      defaultContextWindow: config.defaultContextWindow,
+    }),
+  });
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
   if (tempDir) {
@@ -78,7 +89,7 @@ describe('AdminSettingsDataService', () => {
   it('round-trips the visible runtime-owned Garden controls through the canonical settings payload', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
     const payload = {
       sessionRestartBehavior: 'new_session',
       sessionHistoryBudgetPct: 11,
@@ -190,7 +201,7 @@ describe('AdminSettingsDataService', () => {
       refreshModels: refreshModelsSpy,
       refreshCapabilities: refreshCapabilitiesSpy,
     });
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
 
     const modelsBefore = loadModelsConfig(root, { defaultContextWindow: config.defaultContextWindow });
     const runtimeModelControls = {
@@ -224,7 +235,7 @@ describe('AdminSettingsDataService', () => {
   it('returns field-level errors for malformed and out-of-range model-control payloads and fails closed', () => {
     const root = makeTempDir();
     const config = buildConfig(root);
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
 
     const modelsBefore = loadModelsConfig(root, { defaultContextWindow: config.defaultContextWindow });
     const settingsBefore = loadSettings(root);
@@ -288,7 +299,7 @@ describe('AdminSettingsDataService', () => {
   it('applies live context controls through the canonical admin settings mutation path', () => {
     const root = makeTempDir();
     const config = buildConfig(root);
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
 
     const result = service.updateSettings(JSON.stringify({
       extractionThresholdPct: 34,
@@ -310,7 +321,7 @@ describe('AdminSettingsDataService', () => {
   it('rejects removed runtime settings instead of silently persisting dead knobs', () => {
     const root = makeTempDir();
     const config = buildConfig(root);
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
     const settingsBefore = loadSettings(root);
 
     const result = service.updateSettings(JSON.stringify({
@@ -370,7 +381,7 @@ describe('AdminSettingsDataService', () => {
     const config = buildConfig(root, {
       refreshCapabilities: refreshCapabilitiesSpy,
     });
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
     const schedulerPayload = {
       ...JSON.parse(service.getSubConfigJson('scheduler') ?? '{}'),
       salienceDecayIntervalMs: 180_000,
@@ -412,10 +423,48 @@ describe('AdminSettingsDataService', () => {
     }));
   });
 
+  it('round-trips models through the raw editor path via the injected config store port', async () => {
+    const root = makeTempDir();
+    const refreshModelsSpy = vi.fn();
+    const config = buildConfig(root, {
+      refreshModels: refreshModelsSpy,
+    });
+    const service = buildService(config);
+    const currentModels = JSON.parse(service.getSubConfigJson('models') ?? '{}') as {
+      modelRegistry: Record<string, unknown>;
+    };
+    const nextRegistry = structuredClone(currentModels.modelRegistry);
+    const primary = Array.isArray((nextRegistry as { models?: unknown[] }).models)
+      ? (nextRegistry as { models: Array<Record<string, unknown>> }).models.find((entry) => entry.id === 'primary')
+      : null;
+    expect(primary).toBeTruthy();
+    if (!primary) {
+      throw new Error('expected primary model in seeded model registry');
+    }
+    primary.identity = {
+      ...(primary.identity as Record<string, unknown>),
+      model: 'openai/gpt-4.1-mini',
+      provider: 'openai',
+    };
+
+    const result = service.saveSubConfigJson('models', JSON.stringify(nextRegistry));
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'models.json saved',
+    });
+    expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
+    expect(loadModelsConfig(root, {
+      defaultContextWindow: config.defaultContextWindow,
+    }).modelRegistry).toEqual(nextRegistry);
+    expect(config.primaryModel).toBe('openai/gpt-4.1-mini');
+    expect(config.primaryProvider).toBe('openai');
+  });
+
   it('round-trips backup controls through backup.json owner-file saves', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
     const payload = {
       intervalHours: 24,
       maxRotatingBackups: 12,
@@ -466,7 +515,7 @@ describe('AdminSettingsDataService', () => {
     vi.stubEnv('TELEGRAM_BOT_TOKEN', 'resolved-secret');
     vi.stubEnv('TELEGRAM_WEBHOOK_SECRET', 'resolved-webhook-secret');
 
-    const service = new AdminSettingsDataService({ config: buildConfig(root) });
+    const service = buildService(buildConfig(root));
 
     expect(JSON.parse(service.getSubConfigJson('channels') ?? '{}')).toEqual(payload);
   });
@@ -474,7 +523,7 @@ describe('AdminSettingsDataService', () => {
   it('round-trips channels.json owner-file saves through the Garden raw editor surface', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
     const payload = {
       discord: {
         heartbeatChannelId: 'heartbeat-123',
@@ -521,7 +570,7 @@ describe('AdminSettingsDataService', () => {
     const config = buildConfig(root, {
       refreshModels: refreshModelsSpy,
     });
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
     const payload = {
       schemaVersion: 1,
       providers: [

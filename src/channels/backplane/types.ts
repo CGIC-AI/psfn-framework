@@ -63,7 +63,7 @@ export interface ChannelPromptAdapter {
   resolveTaskKind?(message: SubstrateMessage): string | undefined;
 }
 
-export interface ChannelAdapter extends Lifecycle {
+export interface ChannelAdapterPort extends Lifecycle {
   id: string;
   name: string;
   meta: ChannelAdapterMeta;
@@ -81,6 +81,8 @@ export interface ChannelAdapter extends Lifecycle {
   send?(channelId: string, content: string): Promise<void>;
 }
 
+export type ChannelAdapter = ChannelAdapterPort;
+
 export interface ChannelAdapterManifestEntry {
   id: string;
   enabled: boolean;
@@ -89,10 +91,12 @@ export interface ChannelAdapterManifestEntry {
   eligibility?: EligibilityRequirements;
 }
 
-export interface ChannelAdapterFactoryEntry {
+export interface ChannelAdapterFactoryPort {
   manifest: ChannelAdapterManifestEntry;
-  create: () => Promise<ChannelAdapter> | ChannelAdapter;
+  create: () => Promise<ChannelAdapterPort> | ChannelAdapterPort;
 }
+
+export type ChannelAdapterFactoryEntry = ChannelAdapterFactoryPort;
 
 // Lightweight docks for shared call sites that only need a focused channel facet.
 export interface ChannelOutboundDock {
@@ -106,10 +110,10 @@ export interface ChannelPromptDock {
   prompt?: Pick<ChannelPromptAdapter, 'resolveChannelType' | 'resolveTaskKind'>;
 }
 
-export function asOutboundDock(adapter: ChannelAdapter): ChannelOutboundDock {
+export function asOutboundDock(adapter: ChannelAdapterPort): ChannelOutboundDock {
   return adapter;
 }
 
-export function asPromptDock(adapter: ChannelAdapter): ChannelPromptDock {
+export function asPromptDock(adapter: ChannelAdapterPort): ChannelPromptDock {
   return adapter;
 }

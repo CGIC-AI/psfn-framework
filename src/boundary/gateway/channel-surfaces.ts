@@ -1,7 +1,7 @@
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { DiscordAdapter } from '../../channels/discord/adapter.js';
 import type { TelegramAdapter } from '../../channels/telegram/adapter.js';
-import type { ChannelAdapter } from '../../channels/backplane/types.js';
+import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
 import { startDiscordWithRetry } from './discord-startup.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
@@ -50,7 +50,7 @@ export async function initGatewayChannelSurfaces(
 export async function loadGatewayChannelSurfaces(
   input: LoadGatewayChannelSurfacesInput,
 ): Promise<GatewayChannelSurfaces> {
-  const gatewayChannelRegistry = new Map<string, ChannelAdapter>();
+  const gatewayChannelRegistry = new ChannelAdapterRegistry();
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([
     createDiscordChannelAdapterFactoryEntry({
       config: input.config,

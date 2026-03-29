@@ -14,7 +14,7 @@ import {
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
-  ChannelAdapter,
+  ChannelAdapterPort,
   ChannelCapabilities,
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
@@ -99,7 +99,7 @@ interface PendingDiscordTurn {
   replyToOriginal: boolean;
 }
 
-export class DiscordAdapter implements ChannelAdapter {
+export class DiscordAdapter implements ChannelAdapterPort {
   readonly id = 'discord';
   readonly name = this.id;
   readonly meta = {

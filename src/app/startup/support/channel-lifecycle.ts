@@ -1,7 +1,11 @@
 import type {
-  ChannelAdapter,
-  ChannelAdapterFactoryEntry,
+  ChannelAdapterFactoryPort,
+  ChannelAdapterPort,
 } from '../../../channels/backplane/types.js';
+import type {
+  ChannelAdapterRegistryPort,
+  MutableChannelAdapterRegistryPort,
+} from '../../../channels/backplane/registry-port.js';
 import {
   EligibilityDeniedError,
   type EligibilityGate,
@@ -16,13 +20,13 @@ export interface RuntimeChannelLifecycleLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
 }
 
-type SyncChannelRegistry = (channelRegistry: Map<string, ChannelAdapter>) => void;
+type SyncChannelRegistryPort = (channelRegistry: ChannelAdapterRegistryPort) => void;
 
 export function buildChannelAdapterFactoryManifest(
-  entries: readonly ChannelAdapterFactoryEntry[],
-): ChannelAdapterFactoryEntry[] {
+  entries: readonly ChannelAdapterFactoryPort[],
+): ChannelAdapterFactoryPort[] {
   const seen = new Set<string>();
-  const normalized: ChannelAdapterFactoryEntry[] = [];
+  const normalized: ChannelAdapterFactoryPort[] = [];
   for (const entry of entries) {
     const id = entry.manifest.id.trim();
     if (!id) {
@@ -44,9 +48,9 @@ export function buildChannelAdapterFactoryManifest(
 }
 
 export async function loadChannelAdaptersFromManifest(
-  channelRegistry: Map<string, ChannelAdapter>,
-  entries: readonly ChannelAdapterFactoryEntry[],
-  syncChannelRegistry: SyncChannelRegistry,
+  channelRegistry: MutableChannelAdapterRegistryPort,
+  entries: readonly ChannelAdapterFactoryPort[],
+  syncChannelRegistry: SyncChannelRegistryPort,
   log: RuntimeChannelLifecycleLogger,
   eligibilityGate?: EligibilityGate,
 ): Promise<void> {
@@ -116,20 +120,20 @@ export async function loadChannelAdaptersFromManifest(
 }
 
 export function registerChannelAdapter(
-  channelRegistry: Map<string, ChannelAdapter>,
-  adapter: ChannelAdapter,
-  syncChannelRegistry: SyncChannelRegistry,
+  channelRegistry: MutableChannelAdapterRegistryPort,
+  adapter: ChannelAdapterPort,
+  syncChannelRegistry: SyncChannelRegistryPort,
 ): void {
-  channelRegistry.set(adapter.id, adapter);
+  channelRegistry.register(adapter);
   syncChannelRegistry(channelRegistry);
 }
 
 export async function startChannelAdapters(
-  channelRegistry: Map<string, ChannelAdapter>,
-  syncChannelRegistry: SyncChannelRegistry,
+  channelRegistry: MutableChannelAdapterRegistryPort,
+  syncChannelRegistry: SyncChannelRegistryPort,
   log: RuntimeChannelLifecycleLogger,
 ): Promise<void> {
-  const adapters = [...channelRegistry.values()];
+  const adapters = [...channelRegistry.list()];
   if (adapters.length === 0) return;
 
   const results = await Promise.allSettled(
@@ -150,7 +154,7 @@ export async function startChannelAdapters(
   if (failedAdapterIds.length === 0) return;
 
   for (const adapterId of failedAdapterIds) {
-    channelRegistry.delete(adapterId);
+    channelRegistry.unregister(adapterId);
   }
   syncChannelRegistry(channelRegistry);
 
@@ -167,9 +171,9 @@ export async function startChannelAdapters(
 }
 
 export async function stopChannelAdapters(
-  channelRegistry: Map<string, ChannelAdapter>,
+  channelRegistry: ChannelAdapterRegistryPort,
 ): Promise<void> {
-  const adapters = [...channelRegistry.values()].reverse();
+  const adapters = [...channelRegistry.list()].reverse();
   for (const adapter of adapters) {
     await adapter.gateway.stop();
   }

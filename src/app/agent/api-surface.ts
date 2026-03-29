@@ -16,7 +16,7 @@ import {
   buildExternalChannelProfiles,
   type RuntimeChannelsConfig,
 } from '../../channels/backplane/config.js';
-import type { ChannelAdapter } from '../../channels/backplane/types.js';
+import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
 import type { ContactStore } from '../../core/contacts/store.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
@@ -243,7 +243,7 @@ export async function startOptionalApiServer(
   }
 
   const activeProbeConfig = resolveActiveHealthProbeConfig(env);
-  const apiChannelRegistry = new Map<string, ChannelAdapter>();
+  const apiChannelRegistry = new ChannelAdapterRegistry();
   const apiChannelManifest = buildChannelAdapterFactoryManifest([
     createOpenHomeChannelAdapterFactoryEntry(),
     createApiServerChannelAdapterFactoryEntry({

@@ -3,7 +3,7 @@ import type {
   EligibilityOperation,
   EligibilityRequirements,
 } from '../../../system/capabilities/eligibility.js';
-import type { ChannelAdapter } from '../../../channels/backplane/types.js';
+import type { ChannelAdapterPort } from '../../../channels/backplane/types.js';
 import type { StreamingSttConnector } from '../../../primitives/voice/connectors/stt/index.js';
 import type { StreamingTtsConnector } from '../../../primitives/voice/connectors/tts/index.js';
 
@@ -69,10 +69,10 @@ function requirePluginActionEligibility(
 }
 
 export function wrapChannelAdapterWithEligibility(
-  adapter: ChannelAdapter,
+  adapter: ChannelAdapterPort,
   eligibilityGate: EligibilityGate | undefined,
   requirements?: EligibilityRequirements,
-): ChannelAdapter {
+): ChannelAdapterPort {
   const resolvedRequirements = requireEligibilityRequirements('channel', adapter.id, requirements);
   if (!eligibilityGate || !hasEffectiveEligibilityRequirements(resolvedRequirements)) {
     return adapter;
@@ -88,14 +88,14 @@ export function wrapChannelAdapterWithEligibility(
 
   const outbound = {
     ...adapter.outbound,
-    sendText: async (...args: Parameters<ChannelAdapter['outbound']['sendText']>): Promise<void> => {
+    sendText: async (...args: Parameters<ChannelAdapterPort['outbound']['sendText']>): Promise<void> => {
       requirePluginActionEligibility(eligibilityGate, 'channel', adapter.id, 'sendText', requirements);
       await adapter.outbound.sendText(...args);
     },
     ...(adapter.outbound.sendMedia
       ? {
         sendMedia: async (
-          ...args: Parameters<NonNullable<ChannelAdapter['outbound']['sendMedia']>>
+          ...args: Parameters<NonNullable<ChannelAdapterPort['outbound']['sendMedia']>>
         ): Promise<void> => {
           requirePluginActionEligibility(eligibilityGate, 'channel', adapter.id, 'sendMedia', requirements);
           await adapter.outbound.sendMedia?.(...args);
@@ -108,7 +108,7 @@ export function wrapChannelAdapterWithEligibility(
     ? {
       ...adapter.streaming,
       sendTyping: async (
-        ...args: Parameters<NonNullable<ChannelAdapter['streaming']>['sendTyping']>
+        ...args: Parameters<NonNullable<ChannelAdapterPort['streaming']>['sendTyping']>
       ): Promise<void> => {
         requirePluginActionEligibility(eligibilityGate, 'channel', adapter.id, 'sendTyping', requirements);
         await adapter.streaming?.sendTyping(...args);
@@ -123,7 +123,7 @@ export function wrapChannelAdapterWithEligibility(
     ...(streaming ? { streaming } : {}),
     ...(adapter.send
       ? {
-        send: async (...args: Parameters<NonNullable<ChannelAdapter['send']>>): Promise<void> => {
+        send: async (...args: Parameters<NonNullable<ChannelAdapterPort['send']>>): Promise<void> => {
           requirePluginActionEligibility(eligibilityGate, 'channel', adapter.id, 'send', requirements);
           await adapter.send?.(...args);
         },

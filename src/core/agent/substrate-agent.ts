@@ -29,7 +29,7 @@ import {
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
-import type { ChannelPromptDock } from '../../channels/backplane/types.js';
+import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import {
   type PromptComposer,
 } from '../identity/prompt-composer.js';
@@ -199,7 +199,7 @@ export class SubstrateAgent {
   private modelResolved = false;
   private modelSignature: string | null = null;
   private bridge: EventBridge;
-  private channelRegistry = new Map<string, ChannelPromptDock>();
+  private channelRegistry: ChannelPromptRegistryPort = new Map();
   private capabilityRuntime: CapabilityRuntime | null = null;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
   private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
@@ -557,8 +557,8 @@ export class SubstrateAgent {
     this.toolRuntimeFacade.validateToolWiring(mode, gatewayClient, requiredGatewayMetadataCoverage);
   }
 
-  setChannelRegistry(registry: ReadonlyMap<string, ChannelPromptDock>): void {
-    this.channelRegistry = new Map(registry);
+  setChannelRegistry(registry: ChannelPromptRegistryPort): void {
+    this.channelRegistry = registry;
     this.invalidatePromptPrefixCache('channel-registry-updated');
   }
 

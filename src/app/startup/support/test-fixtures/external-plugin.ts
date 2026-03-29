@@ -1,6 +1,6 @@
 import type {
-  ChannelAdapter,
-  ChannelAdapterFactoryEntry,
+  ChannelAdapterFactoryPort,
+  ChannelAdapterPort,
 } from '../../../../channels/backplane/types.js';
 import type { OutboundContext } from '../../../../channels/backplane/types.js';
 import {
@@ -19,7 +19,7 @@ export interface ExternalPluginFixtureState {
 }
 
 export interface ExternalPluginFixture {
-  channelEntry: ChannelAdapterFactoryEntry;
+  channelEntry: ChannelAdapterFactoryPort;
   config: {
     sttProvider: string;
     ttsProvider: string;
@@ -32,7 +32,7 @@ export interface ExternalPluginFixture {
   restore(): void;
 }
 
-function createFixtureChannelAdapter(state: ExternalPluginFixtureState): ChannelAdapter {
+function createFixtureChannelAdapter(state: ExternalPluginFixtureState): ChannelAdapterPort {
   return {
     id: 'fixture-channel',
     name: 'Fixture Channel',

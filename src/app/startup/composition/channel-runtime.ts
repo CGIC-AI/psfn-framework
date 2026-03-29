@@ -8,10 +8,11 @@ import { OpenHomeAdapter } from '../../../../satellites/openhome/host/adapter.js
 import type { TelegramChannelConfig } from '../../../channels/backplane/config.js';
 import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
 import type {
-  ChannelAdapter,
-  ChannelAdapterFactoryEntry,
+  ChannelAdapterFactoryPort,
+  ChannelAdapterPort,
   MessageHandler,
 } from '../../../channels/backplane/types.js';
+import type { ChannelAdapterRegistryPort } from '../../../channels/backplane/registry-port.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
@@ -26,7 +27,7 @@ export interface DiscordChannelAdapterFactoryOptions {
 
 export function createDiscordChannelAdapterFactoryEntry(
   options: DiscordChannelAdapterFactoryOptions,
-): ChannelAdapterFactoryEntry {
+): ChannelAdapterFactoryPort {
   return {
     manifest: {
       id: 'discord',
@@ -35,7 +36,7 @@ export function createDiscordChannelAdapterFactoryEntry(
       required: true,
       eligibility: {},
     },
-    create: async (): Promise<ChannelAdapter> => {
+    create: async (): Promise<ChannelAdapterPort> => {
       const adapter = new DiscordAdapter(options.config, options.eventBus, {
         ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
         ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
@@ -62,7 +63,7 @@ export interface TelegramChannelAdapterFactoryOptions {
 
 export function createTelegramChannelAdapterFactoryEntry(
   options: TelegramChannelAdapterFactoryOptions,
-): ChannelAdapterFactoryEntry {
+): ChannelAdapterFactoryPort {
   return {
     manifest: {
       id: 'telegram',
@@ -71,7 +72,7 @@ export function createTelegramChannelAdapterFactoryEntry(
       required: false,
       eligibility: {},
     },
-    create: async (): Promise<ChannelAdapter> => {
+    create: async (): Promise<ChannelAdapterPort> => {
       const adapter = new TelegramAdapter(options.config, options.eventBus);
       if (options.onMessage) {
         adapter.onMessage(options.onMessage);
@@ -84,7 +85,7 @@ export function createTelegramChannelAdapterFactoryEntry(
 
 export function createApiServerChannelAdapterFactoryEntry(
   config: ApiServerConfig,
-): ChannelAdapterFactoryEntry {
+): ChannelAdapterFactoryPort {
   return {
     manifest: {
       id: 'api',
@@ -93,7 +94,7 @@ export function createApiServerChannelAdapterFactoryEntry(
       required: true,
       eligibility: {},
     },
-    create: async (): Promise<ChannelAdapter> => {
+    create: async (): Promise<ChannelAdapterPort> => {
       const adapter = new ApiServer(config);
       await adapter.init();
       return adapter;
@@ -101,7 +102,7 @@ export function createApiServerChannelAdapterFactoryEntry(
   };
 }
 
-export function createOpenHomeChannelAdapterFactoryEntry(): ChannelAdapterFactoryEntry {
+export function createOpenHomeChannelAdapterFactoryEntry(): ChannelAdapterFactoryPort {
   return {
     manifest: {
       id: 'psfn-amica',
@@ -110,7 +111,7 @@ export function createOpenHomeChannelAdapterFactoryEntry(): ChannelAdapterFactor
       required: false,
       eligibility: {},
     },
-    create: async (): Promise<ChannelAdapter> => {
+    create: async (): Promise<ChannelAdapterPort> => {
       const adapter = new OpenHomeAdapter();
       await adapter.init();
       return adapter;
@@ -118,21 +119,16 @@ export function createOpenHomeChannelAdapterFactoryEntry(): ChannelAdapterFactor
   };
 }
 
-export function requireChannelAdapter<T extends ChannelAdapter>(
-  registry: Map<string, ChannelAdapter>,
+export function requireChannelAdapter<T extends ChannelAdapterPort>(
+  registry: ChannelAdapterRegistryPort,
   channelId: string,
 ): T {
-  const adapter = registry.get(channelId);
-  if (!adapter) {
-    throw new Error(`Required channel adapter "${channelId}" was not loaded`);
-  }
-  return adapter as T;
+  return registry.require<T>(channelId);
 }
 
-export function getOptionalChannelAdapter<T extends ChannelAdapter>(
-  registry: Map<string, ChannelAdapter>,
+export function getOptionalChannelAdapter<T extends ChannelAdapterPort>(
+  registry: ChannelAdapterRegistryPort,
   channelId: string,
 ): T | null {
-  const adapter = registry.get(channelId);
-  return (adapter as T | undefined) ?? null;
+  return registry.optional<T>(channelId);
 }

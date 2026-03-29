@@ -1,5 +1,5 @@
 import type {
-  ChannelAdapter,
+  ChannelAdapterPort,
   ChannelCapabilities,
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
@@ -27,7 +27,7 @@ const OPENHOME_PROMPT: ChannelPromptAdapter = {
   resolveChannelType: () => 'psfn-amica',
 };
 
-export class OpenHomeAdapter implements ChannelAdapter {
+export class OpenHomeAdapter implements ChannelAdapterPort {
   readonly id = 'psfn-amica';
   readonly name = this.id;
   readonly meta = {

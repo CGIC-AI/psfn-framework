@@ -14,7 +14,7 @@ import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js
 import type { SessionManager } from '../../core/session/manager.js';
 import { isChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
 import type {
-  ChannelAdapter,
+  ChannelAdapterPort,
   ChannelCapabilities,
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
@@ -183,7 +183,7 @@ export interface ApiServerConfig {
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
 }
 
-export class ApiServer implements ChannelAdapter {
+export class ApiServer implements ChannelAdapterPort {
   readonly id = 'api';
   readonly name = this.id;
   readonly meta = {

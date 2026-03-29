@@ -1,5 +1,5 @@
 import type {
-  ChannelAdapter,
+  ChannelAdapterPort,
   ChannelCapabilities,
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
@@ -216,7 +216,7 @@ function resolveAuthorName(user: TelegramUser): string {
   return `telegram-${user.id}`;
 }
 
-export class TelegramAdapter implements ChannelAdapter {
+export class TelegramAdapter implements ChannelAdapterPort {
   readonly id = 'telegram';
   readonly name = this.id;
   readonly meta = {

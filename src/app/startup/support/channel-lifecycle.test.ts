@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChannelAdapter } from '../../../channels/backplane/types.js';
+import { ChannelAdapterRegistry } from '../../../channels/backplane/registry-port.js';
+import type { ChannelAdapterPort } from '../../../channels/backplane/types.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,
@@ -21,7 +22,7 @@ function makeAdapter(
     sendText?: () => Promise<void>;
     sendTyping?: () => Promise<void>;
   } = {},
-): ChannelAdapter {
+): ChannelAdapterPort {
   return {
     id,
     outbound: {
@@ -35,7 +36,15 @@ function makeAdapter(
     streaming: {
       sendTyping: behavior.sendTyping ?? vi.fn().mockResolvedValue(undefined),
     },
-  } as unknown as ChannelAdapter;
+  } as unknown as ChannelAdapterPort;
+}
+
+function createChannelRegistry(...adapters: ChannelAdapterPort[]): ChannelAdapterRegistry {
+  const registry = new ChannelAdapterRegistry();
+  for (const adapter of adapters) {
+    registry.register(adapter);
+  }
+  return registry;
 }
 
 function makeLogger() {
@@ -61,7 +70,7 @@ function makeEligibilityGate(
 
 describe('registerChannelAdapter', () => {
   it('registers the adapter and synchronizes the registry', () => {
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const adapter = makeAdapter('discord');
     const syncChannelRegistry = vi.fn();
 
@@ -104,7 +113,7 @@ describe('buildChannelAdapterFactoryManifest', () => {
 
 describe('loadChannelAdaptersFromManifest', () => {
   it('loads enabled adapters and skips disabled manifest entries', async () => {
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([
@@ -130,7 +139,7 @@ describe('loadChannelAdaptersFromManifest', () => {
   });
 
   it('throws when a required adapter fails to initialize', async () => {
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([{
@@ -146,7 +155,7 @@ describe('loadChannelAdaptersFromManifest', () => {
   });
 
   it('throws when a required adapter is disabled in the manifest', async () => {
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([{
@@ -163,7 +172,7 @@ describe('loadChannelAdaptersFromManifest', () => {
   });
 
   it('continues when optional adapter fails and at least one loads', async () => {
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([
@@ -192,7 +201,7 @@ describe('loadChannelAdaptersFromManifest', () => {
   });
 
   it('fails closed when a channel manifest omits eligibility requirements', async () => {
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([{
@@ -207,7 +216,7 @@ describe('loadChannelAdaptersFromManifest', () => {
 
   it('skips optional channel adapters when eligibility denies activation', async () => {
     const decisions: EligibilityDecision[] = [];
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([
@@ -247,7 +256,7 @@ describe('loadChannelAdaptersFromManifest', () => {
   });
 
   it('fails required channel adapters closed when eligibility denies activation', async () => {
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([{
@@ -276,7 +285,7 @@ describe('loadChannelAdaptersFromManifest', () => {
     let allowed = true;
     const sendText = vi.fn().mockResolvedValue(undefined);
     const sendTyping = vi.fn().mockResolvedValue(undefined);
-    const channelRegistry = new Map<string, ChannelAdapter>();
+    const channelRegistry = new ChannelAdapterRegistry();
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
     const factories = buildChannelAdapterFactoryManifest([{
@@ -317,10 +326,10 @@ describe('startChannelAdapters', () => {
   it('starts all adapters, removes failed adapters, and keeps healthy ones', async () => {
     const startHealthy = vi.fn().mockResolvedValue(undefined);
     const startFailing = vi.fn().mockRejectedValue(new Error('failed to connect'));
-    const channelRegistry = new Map<string, ChannelAdapter>([
-      ['healthy', makeAdapter('healthy', { start: startHealthy })],
-      ['failing', makeAdapter('failing', { start: startFailing })],
-    ]);
+    const channelRegistry = createChannelRegistry(
+      makeAdapter('healthy', { start: startHealthy }),
+      makeAdapter('failing', { start: startFailing }),
+    );
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
 
@@ -339,10 +348,10 @@ describe('startChannelAdapters', () => {
   });
 
   it('throws when no channel adapters start successfully', async () => {
-    const channelRegistry = new Map<string, ChannelAdapter>([
-      ['failing-a', makeAdapter('failing-a', { start: vi.fn().mockRejectedValue(new Error('down')) })],
-      ['failing-b', makeAdapter('failing-b', { start: vi.fn().mockRejectedValue(new Error('down')) })],
-    ]);
+    const channelRegistry = createChannelRegistry(
+      makeAdapter('failing-a', { start: vi.fn().mockRejectedValue(new Error('down')) }),
+      makeAdapter('failing-b', { start: vi.fn().mockRejectedValue(new Error('down')) }),
+    );
     const syncChannelRegistry = vi.fn();
     const log = makeLogger();
 
@@ -358,11 +367,11 @@ describe('startChannelAdapters', () => {
 describe('stopChannelAdapters', () => {
   it('stops channel adapters in reverse registration order', async () => {
     const stoppedOrder: string[] = [];
-    const channelRegistry = new Map<string, ChannelAdapter>([
-      ['first', makeAdapter('first', { stop: vi.fn(async () => { stoppedOrder.push('first'); }) })],
-      ['second', makeAdapter('second', { stop: vi.fn(async () => { stoppedOrder.push('second'); }) })],
-      ['third', makeAdapter('third', { stop: vi.fn(async () => { stoppedOrder.push('third'); }) })],
-    ]);
+    const channelRegistry = createChannelRegistry(
+      makeAdapter('first', { stop: vi.fn(async () => { stoppedOrder.push('first'); }) }),
+      makeAdapter('second', { stop: vi.fn(async () => { stoppedOrder.push('second'); }) }),
+      makeAdapter('third', { stop: vi.fn(async () => { stoppedOrder.push('third'); }) }),
+    );
 
     await stopChannelAdapters(channelRegistry);
 

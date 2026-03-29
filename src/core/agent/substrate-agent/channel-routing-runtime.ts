@@ -1,3 +1,4 @@
+import type { ChannelPromptRegistryPort } from '../../../channels/backplane/registry-port.js';
 import type { ChannelPromptDock } from '../../../channels/backplane/types.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
@@ -9,7 +10,7 @@ import {
 
 export function resolveChannelPromptDock(
   message: SubstrateMessage,
-  channelRegistry: ReadonlyMap<string, ChannelPromptDock>,
+  channelRegistry: ChannelPromptRegistryPort,
 ): ChannelPromptDock | undefined {
   const fromChannelType = channelRegistry.get(message.channelType);
   if (fromChannelType) return fromChannelType;
@@ -29,7 +30,7 @@ export function resolveChannelPromptDock(
 
 export function resolveChannelType(
   message: SubstrateMessage,
-  channelRegistry: ReadonlyMap<string, ChannelPromptDock>,
+  channelRegistry: ChannelPromptRegistryPort,
 ): string | undefined {
   const channelDock = resolveChannelPromptDock(message, channelRegistry);
   const adapterType = channelDock?.prompt?.resolveChannelType(message);
@@ -47,7 +48,7 @@ export function resolveChannelType(
 
 export function resolveTaskKind(
   message: SubstrateMessage,
-  channelRegistry: ReadonlyMap<string, ChannelPromptDock>,
+  channelRegistry: ChannelPromptRegistryPort,
 ): string | undefined {
   if (isDeferredToolHandoffMessageId(message.id)) {
     return 'deferred_tool_handoff';

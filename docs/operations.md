@@ -65,6 +65,8 @@ Operational rules:
 - Backend-specific adapter code stays behind the port/composition layer.
 - If a backend or projection strategy changes, run `npm run lint`, `npm run build`, and targeted parity tests for the affected domains before treating the change as safe.
 - If projection drift is suspected, repair from the archive before trusting search results or operator views.
+- Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work.
+- The repair utility accepts `--data-dir` and `--sessions-dir` overrides and follows the configured SQLite or PostgreSQL session projection backend through the port layer.
 
 ## Backups And Integrity
 

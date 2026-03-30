@@ -7,7 +7,7 @@ import {
 } from './policy-config.js';
 
 describe('resolveAllowedReadPathsFromEnv', () => {
-  const workspacePath = '/app/workspace';
+  const workspacePath = '/app/companion';
 
   it('returns undefined when no allowlisted paths are configured', () => {
     expect(resolveAllowedReadPathsFromEnv({}, workspacePath)).toBeUndefined();
@@ -24,10 +24,10 @@ describe('resolveAllowedReadPathsFromEnv', () => {
   it('adds module registry path when MODULE_REGISTRY_TRUSTED_READ=true', () => {
     const value = resolveAllowedReadPathsFromEnv({
       MODULE_REGISTRY_TRUSTED_READ: 'true',
-      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+      MODULE_REGISTRY_PATH: 'modules/repl-registry.json',
     }, workspacePath);
 
-    expect(value).toEqual(['/app/workspace/companion/modules/repl-registry.json']);
+    expect(value).toEqual(['/app/companion/modules/repl-registry.json']);
   });
 
   it('uses MODULE_REGISTRY_PATH override when trusted read is enabled', () => {
@@ -37,36 +37,36 @@ describe('resolveAllowedReadPathsFromEnv', () => {
       ALLOWED_READ_PATHS: '/app/identity',
     }, workspacePath);
 
-    expect(value).toEqual(['/app/identity', '/app/workspace/custom/modules.json']);
+    expect(value).toEqual(['/app/identity', '/app/companion/custom/modules.json']);
   });
 
   it('resolves trusted module registry path when enabled', () => {
     const value = resolveTrustedModuleRegistryPathFromEnv({
       MODULE_REGISTRY_TRUSTED_READ: 'true',
-      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+      MODULE_REGISTRY_PATH: 'modules/repl-registry.json',
     }, workspacePath);
 
-    expect(value).toBe('/app/workspace/companion/modules/repl-registry.json');
+    expect(value).toBe('/app/companion/modules/repl-registry.json');
   });
 
   it('accepts canonical truthy env variants for trusted module registry reads', () => {
     const withOne = resolveTrustedModuleRegistryPathFromEnv({
       MODULE_REGISTRY_TRUSTED_READ: '1',
-      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+      MODULE_REGISTRY_PATH: 'modules/repl-registry.json',
     }, workspacePath);
-    expect(withOne).toBe('/app/workspace/companion/modules/repl-registry.json');
+    expect(withOne).toBe('/app/companion/modules/repl-registry.json');
 
     const withYes = resolveTrustedModuleRegistryPathFromEnv({
       MODULE_REGISTRY_TRUSTED_READ: 'YES',
-      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+      MODULE_REGISTRY_PATH: 'modules/repl-registry.json',
     }, workspacePath);
-    expect(withYes).toBe('/app/workspace/companion/modules/repl-registry.json');
+    expect(withYes).toBe('/app/companion/modules/repl-registry.json');
 
     const withOn = resolveTrustedModuleRegistryPathFromEnv({
       MODULE_REGISTRY_TRUSTED_READ: 'on',
-      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
+      MODULE_REGISTRY_PATH: 'modules/repl-registry.json',
     }, workspacePath);
-    expect(withOn).toBe('/app/workspace/companion/modules/repl-registry.json');
+    expect(withOn).toBe('/app/companion/modules/repl-registry.json');
   });
 
   it('throws when trusted read is enabled without MODULE_REGISTRY_PATH', () => {

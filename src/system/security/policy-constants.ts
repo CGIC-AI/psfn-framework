@@ -14,6 +14,7 @@ export const REPO_ALLOWED_PATHS = [
 ] as const;
 
 export const DEFAULT_GATEWAY_SOCKET_PATH = '/run/psfn/gateway.sock';
+export const DEFAULT_MODULE_REGISTRY_PATH = 'modules/repl-registry.json';
 
 export const WEB_FETCH_USER_AGENT = 'Companion-Substrate/0.1';
 export const WEB_FETCH_TIMEOUT_MS = 15_000;
@@ -41,10 +42,5 @@ export function resolveRequiredModuleRegistryPath(
   env: Record<string, string | undefined> = process.env,
 ): string {
   const configured = env.MODULE_REGISTRY_PATH?.trim();
-  if (!configured) {
-    throw new Error(
-      'MODULE_REGISTRY_PATH must be set (for example: companion/modules/repl-registry.json)',
-    );
-  }
-  return configured;
+  return configured || DEFAULT_MODULE_REGISTRY_PATH;
 }

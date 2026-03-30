@@ -178,6 +178,19 @@ export function getDefaultPromptText(key: PromptRegistryKey): string {
   return seed.text;
 }
 
+function buildSeedEntries(timestamp: string): PromptRegistryEntry[] {
+  return PROMPT_SEEDS.map((seed) => ({
+    key: seed.key,
+    text: seed.text,
+    description: seed.description,
+    consumers: [...seed.consumers],
+    version: 1,
+    updatedAt: timestamp,
+    updatedBy: 'system',
+    checksum: contentChecksum(seed.text),
+  }));
+}
+
 export class PromptRegistryStore {
   private filePath: string;
   private historyPath: string;
@@ -191,6 +204,9 @@ export class PromptRegistryStore {
     this.seedByKey = new Map(PROMPT_SEEDS.map(seed => [seed.key, seed]));
     this.entries = new Map();
     this.lastLoadedMtimeMs = 0;
+    if (!existsSync(this.filePath)) {
+      writeJsonAtomic(this.filePath, buildSeedEntries(new Date().toISOString()));
+    }
     this.loadStrict();
   }
 

@@ -15,7 +15,7 @@ function restoreEnv(): void {
 }
 
 function clearRuntimePathEnv(): void {
-  process.env.COMPANION_ID = 'companion';
+  delete process.env.COMPANION_ID;
   delete process.env.DATA_DIR;
   delete process.env.SYSTEM_DATA_DIR;
   delete process.env.COMPANION_DATA_DIR;
@@ -44,10 +44,11 @@ describe('loadConfig path defaults', () => {
 
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./data');
-    expect(config.companionDataDir).toBe('./data');
+    expect(config.companionDataDir).toBe('./companion');
     expect(config.dataDir).toBe('./data');
-    expect(config.characterCardPath).toBe('./data/character.json');
-    expect(config.databasePath).toBe('./data/companion.db');
+    expect(config.companionId).toBe('companion');
+    expect(config.characterCardPath).toBe('./companion/companion.json');
+    expect(config.databasePath).toBe('companion/state/companion.db');
   });
 
   it('derives card/database paths from DATA_DIR when only DATA_DIR is set', () => {
@@ -58,8 +59,8 @@ describe('loadConfig path defaults', () => {
     expect(config.systemDataDir).toBe('./sandbox-data');
     expect(config.companionDataDir).toBe('./sandbox-data');
     expect(config.dataDir).toBe('./sandbox-data');
-    expect(config.characterCardPath).toBe('./sandbox-data/character.json');
-    expect(config.databasePath).toBe('./sandbox-data/companion.db');
+    expect(config.characterCardPath).toBe('./sandbox-data/companion.json');
+    expect(config.databasePath).toBe('sandbox-data/state/companion.db');
   });
 
   it('respects explicit CHARACTER_CARD_PATH and DATABASE_PATH overrides', () => {
@@ -82,7 +83,7 @@ describe('loadConfig path defaults', () => {
     process.env.DATABASE_BASENAME = 'Companion Prime';
 
     const config = loadConfig();
-    expect(config.databasePath).toBe('./sandbox-data/companion-prime.db');
+    expect(config.databasePath).toBe('sandbox-data/state/companion-prime.db');
   });
 
   it('supports explicit split system and companion roots', () => {
@@ -94,8 +95,8 @@ describe('loadConfig path defaults', () => {
     expect(config.systemDataDir).toBe('./system-data');
     expect(config.companionDataDir).toBe('./companion-data');
     expect(config.dataDir).toBe('./system-data');
-    expect(config.characterCardPath).toBe('./companion-data/character.json');
-    expect(config.databasePath).toBe('./companion-data/companion.db');
+    expect(config.characterCardPath).toBe('./companion-data/companion.json');
+    expect(config.databasePath).toBe('companion-data/state/companion.db');
   });
 
   it('defaults persistence backend to sqlite', () => {
@@ -135,8 +136,8 @@ describe('loadConfig path defaults', () => {
     expect(config.systemDataDir).toBe('./runtime/production/system-data');
     expect(config.companionDataDir).toBe('./runtime/production/companion-data');
     expect(config.dataDir).toBe('./runtime/production/system-data');
-    expect(config.characterCardPath).toBe('./runtime/production/companion-data/character.json');
-    expect(config.databasePath).toBe('./runtime/production/companion-data/companion.db');
+    expect(config.characterCardPath).toBe('./runtime/production/companion-data/companion.json');
+    expect(config.databasePath).toBe('runtime/production/companion-data/state/companion.db');
   });
 
   it('rejects shared DATA_DIR fallback when runtime layout mode resolves to production', () => {
@@ -224,9 +225,9 @@ describe('loadConfig path defaults', () => {
     expect(config.elevenLabsModelId).toBe('eleven_turbo_v2_5');
     expect(config.elevenLabsEndpointBase).toBe('https://api.elevenlabs.io/v1');
     expect(config.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
-    expect(config.embeddingProvider).toBe('ollama');
-    expect(config.embeddingModel).toBe('snowflake-arctic-embed2');
-    expect(config.embeddingDims).toBe(1024);
+    expect(config.embeddingProvider).toBe('transformers');
+    expect(config.embeddingModel).toBe('Xenova/all-MiniLM-L6-v2');
+    expect(config.embeddingDims).toBe(384);
     expect(config.embeddingOllamaUrl).toBe('http://localhost:11434');
     expect(config.transformersModel).toBe('Xenova/all-MiniLM-L6-v2');
     expect(config.transformersCacheDir).toBeUndefined();

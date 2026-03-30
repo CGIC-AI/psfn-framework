@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, normalize, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../shared/logger.js';
 import { readJournalFirstEntry } from './journals/journal-utils.js';
 import { sanitizeChannelId } from './sessions/store-primitives.js';
@@ -13,6 +13,8 @@ interface ChannelIndexPayload {
 }
 
 export const DEFAULT_LEGACY_SHARED_DATA_DIR = './data';
+export const DEFAULT_CONTINUOUS_SYSTEM_DATA_DIR = './data';
+export const DEFAULT_CONTINUOUS_COMPANION_DATA_DIR = './companion';
 export const DEFAULT_PRODUCTION_RUNTIME_ROOT = './runtime/production';
 export const DEFAULT_CONTINUOUS_RUNTIME_ROOT = '.';
 
@@ -66,7 +68,7 @@ export interface RuntimePathSnapshot extends PersistenceRoots {
   workspaceRoot: string;
 }
 
-const DEFAULT_CONTINUOUS_WORKSPACE_PATH = './workspace';
+const DEFAULT_LEGACY_CONTINUOUS_WORKSPACE_PATH = './workspace';
 const DEFAULT_CONTINUOUS_LOGS_DIR = './logs';
 const DEFAULT_CONTINUOUS_TEMP_DIR = './tmp';
 const DEFAULT_PRODUCTION_SYSTEM_DATA_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/system-data`;
@@ -75,6 +77,12 @@ const DEFAULT_PRODUCTION_WORKSPACE_PATH = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/wo
 const DEFAULT_PRODUCTION_LOGS_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/logs`;
 const DEFAULT_PRODUCTION_TEMP_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/tmp`;
 const DEFAULT_PRODUCTION_BACKUPS_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/backups`;
+const COMPANION_STATE_DIRNAME = 'state';
+const COMPANION_DOCS_DIRNAME = 'docs';
+const COMPANION_WORKSPACE_DIRNAME = 'workspace';
+const COMPANION_IMAGES_DIRNAME = 'images';
+const COMPANION_VAULT_DIRNAME = 'vault';
+const COMPANION_SKILLS_DIRNAME = 'skills';
 
 const RUNTIME_LAYOUT_MODE_ALIASES: Readonly<Record<string, RuntimeLayoutMode>> = Object.freeze({
   continuous: RUNTIME_LAYOUT_MODE.CONTINUOUS,
@@ -237,22 +245,21 @@ export function resolveRuntimePathLayout(
     systemDataDir = resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'system-data');
     companionDataDir = resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'companion-data');
   } else if (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT) {
-    const sharedDataDir = join(runtimeRootDir, 'data');
-    systemDataDir = sharedDataDir;
-    companionDataDir = sharedDataDir;
-    usesLegacySharedDataDir = true;
+    systemDataDir = join(runtimeRootDir, 'data');
+    companionDataDir = join(runtimeRootDir, 'companion');
   } else {
-    systemDataDir = DEFAULT_LEGACY_SHARED_DATA_DIR;
-    companionDataDir = DEFAULT_LEGACY_SHARED_DATA_DIR;
-    usesLegacySharedDataDir = true;
+    systemDataDir = DEFAULT_CONTINUOUS_SYSTEM_DATA_DIR;
+    companionDataDir = DEFAULT_CONTINUOUS_COMPANION_DATA_DIR;
   }
 
   const workspacePath = normalizeDir(options.workspacePath)
     ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
       ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'workspace')
-      : (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT
-        ? join(runtimeRootDir, 'workspace')
-        : DEFAULT_CONTINUOUS_WORKSPACE_PATH));
+      : (usesLegacySharedDataDir
+        ? (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT
+          ? join(runtimeRootDir, 'workspace')
+          : DEFAULT_LEGACY_CONTINUOUS_WORKSPACE_PATH)
+        : companionDataDir));
   const logsDir = normalizeDir(options.logsDir)
     ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
       ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'logs')
@@ -360,11 +367,19 @@ export function resolvePersistenceRoots(
     };
   }
 
-  const legacyDataDir = normalizeDir(options.legacyDataDir) ?? DEFAULT_LEGACY_SHARED_DATA_DIR;
+  const legacyDataDir = normalizeDir(options.legacyDataDir);
+  if (legacyDataDir) {
+    return {
+      systemDataDir: legacyDataDir,
+      companionDataDir: legacyDataDir,
+      usesLegacySharedDataDir: true,
+    };
+  }
+
   return {
-    systemDataDir: legacyDataDir,
-    companionDataDir: legacyDataDir,
-    usesLegacySharedDataDir: true,
+    systemDataDir: DEFAULT_CONTINUOUS_SYSTEM_DATA_DIR,
+    companionDataDir: DEFAULT_CONTINUOUS_COMPANION_DATA_DIR,
+    usesLegacySharedDataDir: false,
   };
 }
 
@@ -377,7 +392,31 @@ export function resolveConfiguredSystemDataDir(config: ConfiguredPersistenceDirs
 export function resolveConfiguredCompanionDataDir(config: ConfiguredPersistenceDirs): string {
   return normalizeDir(config.companionDataDir)
     ?? normalizeDir(config.dataDir)
-    ?? DEFAULT_LEGACY_SHARED_DATA_DIR;
+    ?? DEFAULT_CONTINUOUS_COMPANION_DATA_DIR;
+}
+
+export function resolveCompanionStateDir(companionDataDir: string): string {
+  return join(companionDataDir, COMPANION_STATE_DIRNAME);
+}
+
+export function resolveCompanionDocsDir(companionDataDir: string): string {
+  return join(companionDataDir, COMPANION_DOCS_DIRNAME);
+}
+
+export function resolveCompanionWorkspaceDir(companionDataDir: string): string {
+  return join(companionDataDir, COMPANION_WORKSPACE_DIRNAME);
+}
+
+export function resolveCompanionImagesDir(companionDataDir: string): string {
+  return join(companionDataDir, COMPANION_IMAGES_DIRNAME);
+}
+
+export function resolveCompanionVaultDir(companionDataDir: string): string {
+  return join(companionDataDir, COMPANION_VAULT_DIRNAME);
+}
+
+export function resolveCompanionSkillsDir(companionDataDir: string): string {
+  return join(companionDataDir, COMPANION_SKILLS_DIRNAME);
 }
 
 function isInternalReflectionChannel(channelId: string | undefined): boolean {
@@ -486,15 +525,15 @@ function migrateLegacyContinuityFiles(dataDir: string): void {
 }
 
 export function resolveSessionsDir(dataDir: string): string {
-  return join(dataDir, 'sessions');
+  return join(resolveCompanionStateDir(dataDir), 'sessions');
 }
 
 export function resolveNotesDir(dataDir: string): string {
-  return join(dataDir, 'notes');
+  return join(resolveCompanionStateDir(dataDir), 'notes');
 }
 
 export function resolveContactsDir(dataDir: string): string {
-  return join(dataDir, 'contacts');
+  return join(resolveCompanionStateDir(dataDir), 'contacts');
 }
 
 export function resolveContinuityDir(dataDir: string): string {
@@ -538,11 +577,11 @@ export function resolveMemoryJournalPath(dataDir: string): string {
 }
 
 export function resolveCoreMemoryPath(companionDataDir: string): string {
-  return join(companionDataDir, 'core_memory.json');
+  return join(resolveCompanionStateDir(companionDataDir), 'core_memory.json');
 }
 
 export function resolveInternalRoleEnvelopesDir(companionDataDir: string): string {
-  return join(companionDataDir, 'internal-role-envelopes');
+  return join(resolveCompanionStateDir(companionDataDir), 'internal-role-envelopes');
 }
 
 export function resolveInternalRoleEnvelopeLedgerPath(
@@ -553,55 +592,55 @@ export function resolveInternalRoleEnvelopeLedgerPath(
 }
 
 export function resolveCharacterCardHistoryPath(companionDataDir: string): string {
-  return join(companionDataDir, 'character-card-history.jsonl');
+  return join(resolveCompanionStateDir(companionDataDir), 'character-card-history.jsonl');
 }
 
 export function resolvePromptLayersPath(companionDataDir: string): string {
-  return join(companionDataDir, 'prompt-layers.json');
+  return join(resolveCompanionStateDir(companionDataDir), 'prompt-layers.json');
 }
 
 export function resolvePromptHistoryPath(companionDataDir: string): string {
-  return join(companionDataDir, 'prompt-history.jsonl');
+  return join(resolveCompanionStateDir(companionDataDir), 'prompt-history.jsonl');
 }
 
 export function resolvePromptLastKnownGoodPath(companionDataDir: string): string {
-  return join(companionDataDir, 'last-known-good.json');
+  return join(resolveCompanionStateDir(companionDataDir), 'last-known-good.json');
 }
 
 export function resolvePromptRegistryPath(companionDataDir: string): string {
-  return join(companionDataDir, 'prompt-registry.json');
+  return join(resolveCompanionStateDir(companionDataDir), 'prompt-registry.json');
 }
 
 export function resolvePromptRegistryHistoryPath(companionDataDir: string): string {
-  return join(companionDataDir, 'prompt-registry-history.jsonl');
+  return join(resolveCompanionStateDir(companionDataDir), 'prompt-registry-history.jsonl');
 }
 
 export function resolveNorthStarPath(companionDataDir: string): string {
-  return join(companionDataDir, 'north-star.json');
+  return join(resolveCompanionStateDir(companionDataDir), 'north-star.json');
 }
 
 export function resolveHeartbeatPolicyPath(companionDataDir: string): string {
-  return join(companionDataDir, 'heartbeat-policy.json');
+  return join(resolveCompanionStateDir(companionDataDir), 'heartbeat-policy.json');
 }
 
 export function resolvePostTurnActionQueuePath(companionDataDir: string): string {
-  return join(companionDataDir, 'post-turn-actions.queue.json');
+  return join(resolveCompanionStateDir(companionDataDir), 'post-turn-actions.queue.json');
 }
 
 export function resolveSafeguardAuditTrailPath(companionDataDir: string): string {
-  return join(companionDataDir, 'safeguards-audit.jsonl');
+  return join(resolveCompanionStateDir(companionDataDir), 'safeguards-audit.jsonl');
 }
 
 export function resolveShardSessionMemorySyncAuditPath(companionDataDir: string): string {
-  return join(companionDataDir, 'shard-session-memory-sync-audit.jsonl');
+  return join(resolveCompanionStateDir(companionDataDir), 'shard-session-memory-sync-audit.jsonl');
 }
 
 export function resolveIdentityAssetsDir(companionDataDir: string): string {
-  return join(companionDataDir, 'identity-assets');
+  return join(resolveCompanionStateDir(companionDataDir), 'identity-assets');
 }
 
 export function resolveGeneratedImagesDir(companionDataDir: string): string {
-  return join(companionDataDir, 'images');
+  return resolveCompanionImagesDir(companionDataDir);
 }
 
 export function resolveBackupsDir(companionDataDir: string): string {
@@ -609,10 +648,63 @@ export function resolveBackupsDir(companionDataDir: string): string {
 }
 
 export function resolveLastActiveSessionPath(companionDataDir: string): string {
-  return join(companionDataDir, 'last_active_channel.json');
+  return join(resolveCompanionStateDir(companionDataDir), 'last_active_channel.json');
+}
+
+function moveLegacyCompanionArtifact(legacyPath: string, targetPath: string): void {
+  if (!existsSync(legacyPath) || existsSync(targetPath)) {
+    return;
+  }
+
+  mkdirSync(dirname(targetPath), { recursive: true });
+  try {
+    renameSync(legacyPath, targetPath);
+  } catch (error) {
+    log.warn('Failed to migrate legacy companion artifact into state dir', {
+      legacyPath,
+      targetPath,
+      error: String(error),
+    });
+  }
+}
+
+function migrateLegacyCompanionStateLayout(companionDataDir: string): void {
+  const stateDir = resolveCompanionStateDir(companionDataDir);
+  const legacyMappings = [
+    ['sessions', resolveSessionsDir(companionDataDir)],
+    ['notes', resolveNotesDir(companionDataDir)],
+    ['contacts', resolveContactsDir(companionDataDir)],
+    ['internal-role-envelopes', resolveInternalRoleEnvelopesDir(companionDataDir)],
+    ['identity-assets', resolveIdentityAssetsDir(companionDataDir)],
+    ['core_memory.json', resolveCoreMemoryPath(companionDataDir)],
+    ['character-card-history.jsonl', resolveCharacterCardHistoryPath(companionDataDir)],
+    ['prompt-layers.json', resolvePromptLayersPath(companionDataDir)],
+    ['prompt-history.jsonl', resolvePromptHistoryPath(companionDataDir)],
+    ['last-known-good.json', resolvePromptLastKnownGoodPath(companionDataDir)],
+    ['prompt-registry.json', resolvePromptRegistryPath(companionDataDir)],
+    ['prompt-registry-history.jsonl', resolvePromptRegistryHistoryPath(companionDataDir)],
+    ['north-star.json', resolveNorthStarPath(companionDataDir)],
+    ['heartbeat-policy.json', resolveHeartbeatPolicyPath(companionDataDir)],
+    ['post-turn-actions.queue.json', resolvePostTurnActionQueuePath(companionDataDir)],
+    ['safeguards-audit.jsonl', resolveSafeguardAuditTrailPath(companionDataDir)],
+    ['shard-session-memory-sync-audit.jsonl', resolveShardSessionMemorySyncAuditPath(companionDataDir)],
+    ['last_active_channel.json', resolveLastActiveSessionPath(companionDataDir)],
+  ] as const;
+
+  mkdirSync(stateDir, { recursive: true });
+  for (const [legacyRelativePath, targetPath] of legacyMappings) {
+    moveLegacyCompanionArtifact(join(companionDataDir, legacyRelativePath), targetPath);
+  }
 }
 
 export function ensurePersistenceLayout(dataDir: string): void {
+  mkdirSync(resolveCompanionStateDir(dataDir), { recursive: true });
+  mkdirSync(resolveCompanionDocsDir(dataDir), { recursive: true });
+  mkdirSync(resolveCompanionWorkspaceDir(dataDir), { recursive: true });
+  mkdirSync(resolveCompanionImagesDir(dataDir), { recursive: true });
+  mkdirSync(resolveCompanionVaultDir(dataDir), { recursive: true });
+  mkdirSync(resolveCompanionSkillsDir(dataDir), { recursive: true });
+  mkdirSync(resolveBackupsDir(dataDir), { recursive: true });
   mkdirSync(resolveSessionsDir(dataDir), { recursive: true });
   mkdirSync(resolveNotesDir(dataDir), { recursive: true });
   mkdirSync(resolveReflectionNotesDir(dataDir), { recursive: true });
@@ -622,6 +714,7 @@ export function ensurePersistenceLayout(dataDir: string): void {
 }
 
 export function migrateLegacyPersistenceLayout(dataDir: string): void {
+  migrateLegacyCompanionStateLayout(dataDir);
   ensurePersistenceLayout(dataDir);
   migrateReflectionSessionFiles(dataDir);
   migrateLegacyContinuityFiles(dataDir);

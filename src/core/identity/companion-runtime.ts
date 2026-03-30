@@ -1,12 +1,7 @@
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { loadCharacterCard } from './loader.js';
+import { loadOrInitializeCharacterCard } from './loader.js';
+import { DEFAULT_COMPANION_ID } from './companion-naming.js';
 import type { CharacterCardV2 } from './types.js';
-
-function requireCompanionId(value: string | null | undefined, source: string): string {
-  const trimmed = value?.trim();
-  if (trimmed) return trimmed;
-  throw new Error(`Missing companion ID from ${source}: explicit deployment identity is required`);
-}
 
 function requireCompanionName(value: string | null | undefined, source: string): string {
   const trimmed = value?.trim();
@@ -27,7 +22,7 @@ export function resolveCompanionNameFromConfig(
     ? config.characterCardPath.trim()
     : '';
   if (cardPath) {
-    return resolveCompanionNameFromCard(loadCharacterCard(cardPath));
+    return resolveCompanionNameFromCard(loadOrInitializeCharacterCard(cardPath));
   }
 
   return requireCompanionName(config?.characterName, 'configured character name');
@@ -36,7 +31,8 @@ export function resolveCompanionNameFromConfig(
 export function resolveCompanionIdFromConfig(
   config: Pick<SubstrateConfig, 'companionId'> | null | undefined,
 ): string {
-  return requireCompanionId(config?.companionId, 'runtime config');
+  const resolved = config?.companionId?.trim();
+  return resolved || DEFAULT_COMPANION_ID;
 }
 
 export function resolveCompanionIdentityFromConfig(

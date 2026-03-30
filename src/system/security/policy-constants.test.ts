@@ -13,11 +13,11 @@ describe('policy constants', () => {
     expect(REPO_ALLOWED_PATHS).toEqual(['src/', 'docs/', 'companion/', 'psfn/']);
   });
 
-  it('requires explicit module registry path from env', () => {
-    expect(() => resolveRequiredModuleRegistryPath({})).toThrow('MODULE_REGISTRY_PATH must be set');
+  it('defaults the module registry path when env is unset', () => {
+    expect(resolveRequiredModuleRegistryPath({})).toBe('modules/repl-registry.json');
     expect(resolveRequiredModuleRegistryPath({
-      MODULE_REGISTRY_PATH: 'companion/modules/repl-registry.json',
-    })).toBe('companion/modules/repl-registry.json');
+      MODULE_REGISTRY_PATH: 'modules/repl-registry.json',
+    })).toBe('modules/repl-registry.json');
   });
 
   it('exposes canonical gateway fetch defaults', () => {

@@ -9,8 +9,9 @@ import {
 } from './policy.js';
 
 const policyConfig: PolicyConfig = {
-  workspacePath: '/app/workspace',
+  workspacePath: '/app/companion',
   allowedReadPaths: ['/app/identity'],
+  protectedWritePaths: ['/app/companion/state', '/app/companion/companion.json'],
 };
 
 describe('evaluatePolicy', () => {
@@ -291,14 +292,14 @@ describe('evaluatePolicy', () => {
 
   it('allows fs.read inside workspace', () => {
     expect(evaluatePolicy(
-      { method: 'fs.read', params: { path: '/app/workspace/modules/test.ts' } },
+      { method: 'fs.read', params: { path: '/app/companion/modules/test.ts' } },
       policyConfig,
     )).toBe('ALLOW');
   });
 
   it('allows fs.write inside workspace', () => {
     expect(evaluatePolicy(
-      { method: 'fs.write', params: { path: '/app/workspace/notes.txt' } },
+      { method: 'fs.write', params: { path: '/app/companion/notes.txt' } },
       policyConfig,
     )).toBe('ALLOW');
   });
@@ -326,7 +327,7 @@ describe('evaluatePolicy', () => {
 
   it('allows fs.read of workspace root', () => {
     expect(evaluatePolicy(
-      { method: 'fs.read', params: { path: '/app/workspace' } },
+      { method: 'fs.read', params: { path: '/app/companion' } },
       policyConfig,
     )).toBe('ALLOW');
   });
@@ -422,10 +423,10 @@ describe('evaluatePolicy', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: '/app/companion/modules/repl-registry.json' } },
       policyConfig,
-    )).toBe('NEEDS_APPROVAL');
+    )).toBe('ALLOW');
   });
 
-  it('allows module registry path when explicitly trusted', () => {
+  it('still allows module registry path when explicitly trusted', () => {
     const trustedConfig: PolicyConfig = {
       ...policyConfig,
       allowedReadPaths: [
@@ -444,6 +445,20 @@ describe('evaluatePolicy', () => {
       { method: 'fs.write', params: { path: '/app/identity/character.json' } },
       policyConfig,
     )).toBe('NEEDS_APPROVAL');
+  });
+
+  it('denies fs.write under the protected companion state subtree', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: '/app/companion/state/companion.db' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies fs.write to the canonical companion identity file', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: '/app/companion/companion.json' } },
+      policyConfig,
+    )).toBe('DENY');
   });
 
   // ── Git methods ──

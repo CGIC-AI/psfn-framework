@@ -8,7 +8,7 @@ import type {
 import { CHANNEL_PRIVACY_LEVELS } from '../../../core/contacts/types.js';
 import type { ModelCatalogEntry } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { isBootstrapStarterCard, loadCharacterCard } from '../../../core/identity/loader.js';
+import { isBootstrapStarterCard, loadOrInitializeCharacterCard } from '../../../core/identity/loader.js';
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type {
@@ -732,7 +732,7 @@ export class AdminChatBootstrapService {
     const path = normalizeTrimmed(this.runtimeConfig?.characterCardPath);
     if (!path) return null;
     try {
-      return loadCharacterCard(path);
+      return loadOrInitializeCharacterCard(path);
     } catch {
       return null;
     }

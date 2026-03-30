@@ -62,7 +62,6 @@ import type { ApprovalQueuePort } from '../../../system/capabilities/approval-qu
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { RuntimeMode } from '../../../core/agent/tool-wiring-validator.js';
 import {
-  ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
   resolveConfiguredCompanionDataDir,
   resolveCoreMemoryPath,
@@ -122,7 +121,6 @@ function createSessionComposition(
 
 export function composeSessionRuntime(options: SessionCompositionOptions): SessionComposition {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
-  ensurePersistenceLayout(companionDataDir);
   migrateLegacyPersistenceLayout(companionDataDir);
 
   if ((options.config.persistenceBackend ?? 'sqlite') !== 'sqlite') {
@@ -140,7 +138,6 @@ export async function composeSessionRuntimeAsync(
   options: SessionCompositionOptions,
 ): Promise<SessionComposition> {
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
-  ensurePersistenceLayout(companionDataDir);
   migrateLegacyPersistenceLayout(companionDataDir);
 
   const sessionsDir = options.sessionsDir ?? resolveSessionsDir(companionDataDir);

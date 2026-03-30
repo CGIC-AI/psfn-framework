@@ -59,9 +59,16 @@ describe('PromptRegistryStore', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('fails closed when the registry file is missing', () => {
+  it('seeds the registry file when it is missing', () => {
     rmSync(filePath, { force: true });
-    expect(() => new PromptRegistryStore(filePath, historyPath)).toThrow('Prompt registry file not found');
+    const seeded = new PromptRegistryStore(filePath, historyPath);
+
+    expect(seeded.list().map(entry => entry.key)).toEqual([
+      EXTRACTION_PROMPT_KEY,
+      PROFILE_SYNTHESIS_PROMPT_KEY,
+      COMPACTION_SUMMARY_PROMPT_KEY,
+    ]);
+    expect(seeded.getPrompt(EXTRACTION_PROMPT_KEY)).toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
   });
 
   it('updates prompt text and writes history entry', () => {

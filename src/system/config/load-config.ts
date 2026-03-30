@@ -3,7 +3,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
 } from '../../shared/context-budget.js';
 import { createEnvCredentialVault, resolveOptionalEnvCredential } from '../../boundary/custody/credential-vault.js';
-import { resolveRuntimePathLayout } from '../../persistence/layout.js';
+import { resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
 import type {
   CanonicalModelRegistry,
@@ -23,6 +23,10 @@ import {
   type SubstrateConfig,
   sanitizeCoreSubstrateConfig,
 } from './runtime-config-contracts.js';
+import {
+  DEFAULT_COMPANION_CARD_FILE_NAME,
+  DEFAULT_COMPANION_ID,
+} from '../../core/identity/companion-naming.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
@@ -204,10 +208,12 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   });
   const dataDir = runtimePathLayout.systemDataDir;
   const companionDataDir = runtimePathLayout.companionDataDir;
-  const companionId = parseRequiredStringEnv(env.COMPANION_ID, 'COMPANION_ID');
-  const characterCardPath = env.CHARACTER_CARD_PATH ?? `${companionDataDir}/character.json`;
+  const companionId = parseOptionalStringEnv(env.COMPANION_ID) ?? DEFAULT_COMPANION_ID;
+  const characterCardPath = env.CHARACTER_CARD_PATH
+    ?? `${companionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const databaseBasename = sanitizeDatabaseBasename(env.DATABASE_BASENAME);
-  const databasePath = env.DATABASE_PATH ?? `${companionDataDir}/${databaseBasename}.db`;
+  const databasePath = env.DATABASE_PATH
+    ?? `${resolveCompanionStateDir(companionDataDir)}/${databaseBasename}.db`;
   const persistenceBackend = parsePersistenceBackendEnv(env.PERSISTENCE_BACKEND);
   const postgresDatabaseUrl = parseOptionalStringEnv(env.POSTGRES_DATABASE_URL);
   if (persistenceBackend === 'postgres' && !postgresDatabaseUrl) {
@@ -375,14 +381,6 @@ function parseOptionalBooleanEnv(value: string | undefined): boolean | undefined
     return false;
   }
   return undefined;
-}
-
-function parseRequiredStringEnv(value: string | undefined, name: string): string {
-  const normalized = parseOptionalStringEnv(value);
-  if (normalized) {
-    return normalized;
-  }
-  throw new Error(`${name} is required`);
 }
 
 function assertMutuallyRequiredEnvPair(

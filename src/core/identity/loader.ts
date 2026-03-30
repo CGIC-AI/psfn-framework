@@ -1,10 +1,16 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { CharacterCardV2 } from './types.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
-import { normalizeCompanionName } from './companion-naming.js';
+import {
+  DEFAULT_COMPANION_NAME,
+  LEGACY_CHARACTER_CARD_FILE_NAME,
+  normalizeCompanionName,
+} from './companion-naming.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
 import { wrapPromptSectionXml } from './prompt-sections.js';
 import { composeDefaultFoundationTemplate } from './foundation-sections.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
 export function loadCharacterCard(path: string): CharacterCardV2 {
   if (!existsSync(path)) {
@@ -31,6 +37,26 @@ export function isBootstrapStarterCard(card: CharacterCardV2): boolean {
     && card.data.tags.includes('bootstrap');
 }
 
+export function createBootstrapStarterCard(name = DEFAULT_COMPANION_NAME): CharacterCardV2 {
+  return {
+    spec: 'chara_card_v2',
+    spec_version: '2.0',
+    data: {
+      name,
+      description: `${name} is a newly bootstrapped companion instance awaiting onboarding and identity tuning.`,
+      personality: 'Warm, attentive, honest about uncertainty, and ready to be personalized through onboarding.',
+      scenario: 'You are meeting the operator for the first time and can be customized further through companion setup.',
+      first_mes: `Hi, I'm ${name}.`,
+      mes_example: '',
+      system_prompt: '',
+      post_history_instructions: '',
+      tags: ['bootstrap'],
+      creator: 'system',
+      creator_notes: 'Auto-seeded starter identity for first-run bootstrap.',
+    },
+  };
+}
+
 export function composeSystemPromptTemplate(): string {
   return composeDefaultFoundationTemplate();
 }
@@ -47,6 +73,14 @@ function renderWithCharacterMacros(
 }
 
 export function loadOrInitializeCharacterCard(path: string): CharacterCardV2 {
+  if (!existsSync(path)) {
+    const legacyPath = join(dirname(path), LEGACY_CHARACTER_CARD_FILE_NAME);
+    if (legacyPath !== path && existsSync(legacyPath)) {
+      renameSync(legacyPath, path);
+    } else {
+      writeJsonAtomic(path, createBootstrapStarterCard());
+    }
+  }
   return loadCharacterCard(path);
 }
 

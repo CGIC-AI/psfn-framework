@@ -38,7 +38,7 @@ export interface CredentialVaultConfigLike {
   credentialVault?: CredentialVaultPort;
   litellmApiKeyRef?: CredentialReference;
   providerRegistry?: {
-    providers: readonly Array<{
+    providers: ReadonlyArray<{
       type: string;
       enabled: boolean;
       apiKeyRef?: CredentialReference;

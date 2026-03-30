@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -43,9 +43,9 @@ describe('seed defaults', () => {
     const defaults = loadRuntimeSettingsSeedDefaults();
     expect(defaults.deepgramModel).toBe('nova-3');
     expect(defaults.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
-    expect(defaults.embeddingProvider).toBe('ollama');
-    expect(defaults.embeddingModel).toBe('snowflake-arctic-embed2');
-    expect(defaults.embeddingDims).toBe(1024);
+    expect(defaults.embeddingProvider).toBe('transformers');
+    expect(defaults.embeddingModel).toBe('Xenova/all-MiniLM-L6-v2');
+    expect(defaults.embeddingDims).toBe(384);
     expect(defaults.textEmotionModel).toBe('SamLowe/roberta-base-go_emotions-onnx');
     expect(defaults.textEmotionDtype).toBe('fp32');
     expect(defaults.textEmotionCacheDir).toBe('models/transformers');
@@ -69,20 +69,9 @@ describe('seed defaults', () => {
         },
       ],
     }), 'utf-8');
-    writeFileSync(join(seedDir, 'settings.seed.json'), JSON.stringify({
-      embeddingProvider: 'ollama',
-      embeddingDims: 1024,
-      embeddingOllamaUrl: 'http://localhost:11434',
-      transformersModel: 'Xenova/all-MiniLM-L6-v2',
-      embeddingApiModel: 'snowflake-arctic-embed2',
-      embeddingApiDims: 1024,
-      deepgramModel: 'nova-3',
-      deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
-      deepgramListenEndpoint: 'https://api.deepgram.com/v1/listen',
-      elevenLabsModelId: 'eleven_turbo_v2_5',
-      elevenLabsEndpointBase: 'https://api.elevenlabs.io/v1',
-      openRouterModelsApiUrl: 'https://openrouter.ai/api/v1/models',
-    }), 'utf-8');
+    const settingsSeed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as Record<string, unknown>;
+    delete settingsSeed.embeddingModel;
+    writeFileSync(join(seedDir, 'settings.seed.json'), JSON.stringify(settingsSeed), 'utf-8');
 
     expect(() => loadRuntimeSettingsSeedDefaults(seedDir)).toThrow('embeddingModel');
   });

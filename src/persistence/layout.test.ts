@@ -12,6 +12,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   DEFAULT_CONTINUOUS_RUNTIME_ROOT,
+  DEFAULT_CONTINUOUS_COMPANION_DATA_DIR,
+  DEFAULT_CONTINUOUS_SYSTEM_DATA_DIR,
   DEFAULT_PRODUCTION_RUNTIME_ROOT,
   RUNTIME_LAYOUT_MODE,
   ensurePersistenceLayout,
@@ -81,43 +83,43 @@ describe('persistence layout', () => {
   it('resolves canonical companion-state paths under a companion data directory', () => {
     const dataDir = join(tempDir, 'companion');
 
-    expect(resolveSessionsDir(dataDir)).toBe(join(dataDir, 'sessions'));
-    expect(resolveNotesDir(dataDir)).toBe(join(dataDir, 'notes'));
-    expect(resolveContactsDir(dataDir)).toBe(join(dataDir, 'contacts'));
-    expect(resolveContinuityDir(dataDir)).toBe(join(dataDir, 'contacts', 'continuity'));
-    expect(resolveValuesJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'values.jsonl'));
+    expect(resolveSessionsDir(dataDir)).toBe(join(dataDir, 'state', 'sessions'));
+    expect(resolveNotesDir(dataDir)).toBe(join(dataDir, 'state', 'notes'));
+    expect(resolveContactsDir(dataDir)).toBe(join(dataDir, 'state', 'contacts'));
+    expect(resolveContinuityDir(dataDir)).toBe(join(dataDir, 'state', 'contacts', 'continuity'));
+    expect(resolveValuesJournalPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'values.jsonl'));
     expect(resolveLegacyValuesJournalPath(dataDir)).toBe(join(dataDir, 'values.jsonl'));
-    expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'notes', 'reflections'));
-    expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'journal.jsonl'));
-    expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'notes', 'scratchpad.json'));
-    expect(resolveCoreMemoryPath(dataDir)).toBe(join(dataDir, 'core_memory.json'));
-    expect(resolveInternalRoleEnvelopesDir(dataDir)).toBe(join(dataDir, 'internal-role-envelopes'));
+    expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections'));
+    expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections', 'journal.jsonl'));
+    expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'scratchpad.json'));
+    expect(resolveCoreMemoryPath(dataDir)).toBe(join(dataDir, 'state', 'core_memory.json'));
+    expect(resolveInternalRoleEnvelopesDir(dataDir)).toBe(join(dataDir, 'state', 'internal-role-envelopes'));
     expect(resolveInternalRoleEnvelopeLedgerPath(dataDir, 'discord:dm/primary')).toBe(
-      join(dataDir, 'internal-role-envelopes', 'discord%3Adm%2Fprimary.jsonl'),
+      join(dataDir, 'state', 'internal-role-envelopes', 'discord%3Adm%2Fprimary.jsonl'),
     );
-    expect(resolveCharacterCardHistoryPath(dataDir)).toBe(join(dataDir, 'character-card-history.jsonl'));
-    expect(resolvePromptLayersPath(dataDir)).toBe(join(dataDir, 'prompt-layers.json'));
-    expect(resolvePromptHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-history.jsonl'));
-    expect(resolvePromptRegistryPath(dataDir)).toBe(join(dataDir, 'prompt-registry.json'));
-    expect(resolvePromptRegistryHistoryPath(dataDir)).toBe(join(dataDir, 'prompt-registry-history.jsonl'));
-    expect(resolveNorthStarPath(dataDir)).toBe(join(dataDir, 'north-star.json'));
-    expect(resolveHeartbeatPolicyPath(dataDir)).toBe(join(dataDir, 'heartbeat-policy.json'));
-    expect(resolvePostTurnActionQueuePath(dataDir)).toBe(join(dataDir, 'post-turn-actions.queue.json'));
-    expect(resolveSafeguardAuditTrailPath(dataDir)).toBe(join(dataDir, 'safeguards-audit.jsonl'));
+    expect(resolveCharacterCardHistoryPath(dataDir)).toBe(join(dataDir, 'state', 'character-card-history.jsonl'));
+    expect(resolvePromptLayersPath(dataDir)).toBe(join(dataDir, 'state', 'prompt-layers.json'));
+    expect(resolvePromptHistoryPath(dataDir)).toBe(join(dataDir, 'state', 'prompt-history.jsonl'));
+    expect(resolvePromptRegistryPath(dataDir)).toBe(join(dataDir, 'state', 'prompt-registry.json'));
+    expect(resolvePromptRegistryHistoryPath(dataDir)).toBe(join(dataDir, 'state', 'prompt-registry-history.jsonl'));
+    expect(resolveNorthStarPath(dataDir)).toBe(join(dataDir, 'state', 'north-star.json'));
+    expect(resolveHeartbeatPolicyPath(dataDir)).toBe(join(dataDir, 'state', 'heartbeat-policy.json'));
+    expect(resolvePostTurnActionQueuePath(dataDir)).toBe(join(dataDir, 'state', 'post-turn-actions.queue.json'));
+    expect(resolveSafeguardAuditTrailPath(dataDir)).toBe(join(dataDir, 'state', 'safeguards-audit.jsonl'));
     expect(resolveShardSessionMemorySyncAuditPath(dataDir)).toBe(
-      join(dataDir, 'shard-session-memory-sync-audit.jsonl'),
+      join(dataDir, 'state', 'shard-session-memory-sync-audit.jsonl'),
     );
-    expect(resolveIdentityAssetsDir(dataDir)).toBe(join(dataDir, 'identity-assets'));
+    expect(resolveIdentityAssetsDir(dataDir)).toBe(join(dataDir, 'state', 'identity-assets'));
     expect(resolveGeneratedImagesDir(dataDir)).toBe(join(dataDir, 'images'));
     expect(resolveBackupsDir(dataDir)).toBe(join(dataDir, 'backups'));
-    expect(resolveLastActiveSessionPath(dataDir)).toBe(join(dataDir, 'last_active_channel.json'));
+    expect(resolveLastActiveSessionPath(dataDir)).toBe(join(dataDir, 'state', 'last_active_channel.json'));
   });
 
-  it('uses the legacy shared data root when split roots are not configured', () => {
+  it('uses split continuous defaults when no explicit roots are configured', () => {
     expect(resolvePersistenceRoots()).toEqual({
       systemDataDir: './data',
-      companionDataDir: './data',
-      usesLegacySharedDataDir: true,
+      companionDataDir: './companion',
+      usesLegacySharedDataDir: false,
     });
     expect(resolvePersistenceRoots({ legacyDataDir: '/tmp/shared-root' })).toEqual({
       systemDataDir: '/tmp/shared-root',
@@ -160,17 +162,17 @@ describe('persistence layout', () => {
     );
   });
 
-  it('resolves continuous-mode defaults with shared data root compatibility', () => {
+  it('resolves continuous-mode defaults with split companion root', () => {
     expect(resolveRuntimePathLayout()).toEqual({
       mode: RUNTIME_LAYOUT_MODE.CONTINUOUS,
       runtimeRootDir: DEFAULT_CONTINUOUS_RUNTIME_ROOT,
-      systemDataDir: './data',
-      companionDataDir: './data',
-      workspacePath: './workspace',
+      systemDataDir: DEFAULT_CONTINUOUS_SYSTEM_DATA_DIR,
+      companionDataDir: DEFAULT_CONTINUOUS_COMPANION_DATA_DIR,
+      workspacePath: DEFAULT_CONTINUOUS_COMPANION_DATA_DIR,
       logsDir: './logs',
       tempDir: './tmp',
-      backupsDir: resolveBackupsDir('./data'),
-      usesLegacySharedDataDir: true,
+      backupsDir: resolveBackupsDir('./companion'),
+      usesLegacySharedDataDir: false,
     });
   });
 
@@ -234,14 +236,14 @@ describe('persistence layout', () => {
     })).toThrow('must not overlap');
   });
 
-  it('derives continuous shared data defaults from explicit runtime root', () => {
+  it('derives continuous split-root defaults from explicit runtime root', () => {
     const layout = resolveRuntimePathLayout({
       mode: RUNTIME_LAYOUT_MODE.CONTINUOUS,
       runtimeRootDir: '/srv/psfn/continuous',
     });
     expect(layout.systemDataDir).toBe('/srv/psfn/continuous/data');
-    expect(layout.companionDataDir).toBe('/srv/psfn/continuous/data');
-    expect(layout.workspacePath).toBe('/srv/psfn/continuous/workspace');
+    expect(layout.companionDataDir).toBe('/srv/psfn/continuous/companion');
+    expect(layout.workspacePath).toBe('/srv/psfn/continuous/companion');
     expect(layout.logsDir).toBe('/srv/psfn/continuous/logs');
     expect(layout.tempDir).toBe('/srv/psfn/continuous/tmp');
   });
@@ -271,12 +273,15 @@ describe('persistence layout', () => {
     ensurePersistenceLayout(dataDir);
 
     const dirs = [
+      dataDir,
       resolveSessionsDir(dataDir),
       resolveNotesDir(dataDir),
       resolveReflectionNotesDir(dataDir),
       resolveContactsDir(dataDir),
       resolveContinuityDir(dataDir),
       resolveInternalRoleEnvelopesDir(dataDir),
+      resolveGeneratedImagesDir(dataDir),
+      resolveBackupsDir(dataDir),
     ];
     for (const dir of dirs) {
       expect(existsSync(dir)).toBe(true);

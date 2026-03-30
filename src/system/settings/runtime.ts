@@ -101,7 +101,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     importProcessingStrictPolicy: config.importProcessingStrictPolicy ?? false,
     importProcessingLocalEndpointUrl: config.importProcessingLocalEndpointUrl ?? null,
     importProcessingLocalModel: config.importProcessingLocalModel ?? null,
-    embeddingProvider: config.embeddingProvider ?? 'ollama',
+    embeddingProvider: config.embeddingProvider ?? 'transformers',
     embeddingModel: config.embeddingModel ?? null,
     embeddingDims: config.embeddingDims ?? null,
     embeddingOllamaUrl: config.embeddingOllamaUrl ?? null,
@@ -294,7 +294,7 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     config.importProcessingLocalModel = trimmed || undefined;
   }
   if ('embeddingProvider' in settings) {
-    config.embeddingProvider = settings.embeddingProvider ?? 'ollama';
+    config.embeddingProvider = settings.embeddingProvider ?? 'transformers';
   }
   if ('embeddingModel' in settings) {
     const trimmed = settings.embeddingModel?.trim() ?? '';

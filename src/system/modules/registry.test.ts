@@ -155,9 +155,9 @@ describe('resolveModuleRegistryPath', () => {
     expect(result).toBe('/home/test/rel/path.json');
   });
 
-  it('requires MODULE_REGISTRY_PATH when no override is provided', () => {
+  it('falls back to the canonical module registry path when no override is provided', () => {
     delete process.env.MODULE_REGISTRY_PATH;
-    expect(() => resolveModuleRegistryPath(undefined, '/home/test')).toThrow('MODULE_REGISTRY_PATH must be set');
+    expect(resolveModuleRegistryPath(undefined, '/home/test')).toBe('/home/test/modules/repl-registry.json');
   });
 });
 
@@ -172,8 +172,8 @@ describe('resolveModuleRegistryPathFromWorkspace', () => {
     expect(result).toBe('/abs/modules.json');
   });
 
-  it('requires MODULE_REGISTRY_PATH when no override is provided', () => {
+  it('falls back to the canonical module registry path when no override is provided', () => {
     delete process.env.MODULE_REGISTRY_PATH;
-    expect(() => resolveModuleRegistryPathFromWorkspace('/workspace/root')).toThrow('MODULE_REGISTRY_PATH must be set');
+    expect(resolveModuleRegistryPathFromWorkspace('/workspace/root')).toBe('/workspace/root/modules/repl-registry.json');
   });
 });

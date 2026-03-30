@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect } from 'vitest';
@@ -135,7 +135,7 @@ describe('buildCharacterPromptTemplateVariables', () => {
 describe('loadCharacterCard', () => {
   it('loads a character card from disk', () => {
     const root = makeTempDir();
-    const path = join(root, 'character.json');
+    const path = join(root, 'companion.json');
     writeFileSync(path, `${JSON.stringify(TEST_CARD, null, 2)}\n`, 'utf-8');
 
     const card = loadCharacterCard(path);
@@ -151,7 +151,7 @@ describe('loadCharacterCard', () => {
 describe('loadOrInitializeCharacterCard', () => {
   it('loads a required card from disk without initializing a default', () => {
     const root = makeTempDir();
-    const path = join(root, 'character.json');
+    const path = join(root, 'companion.json');
     writeFileSync(path, `${JSON.stringify(TEST_CARD, null, 2)}\n`, 'utf-8');
 
     const card = loadOrInitializeCharacterCard(path);
@@ -159,18 +159,32 @@ describe('loadOrInitializeCharacterCard', () => {
     expect(card.spec).toBe('chara_card_v2');
   });
 
-  it('throws a clear error when the character card is missing', () => {
+  it('seeds a bootstrap starter card when the companion file is missing', () => {
     const root = makeTempDir();
-    const path = join(root, 'nested', 'character.json');
+    const path = join(root, 'nested', 'companion.json');
 
-    expect(() => loadOrInitializeCharacterCard(path)).toThrow(
-      `Missing character card at ${path}: explicit companion identity is required before startup`,
-    );
+    const card = loadOrInitializeCharacterCard(path);
+    expect(card.data.name).toBe('Companion');
+    expect(card.data.tags).toContain('bootstrap');
+    expect(existsSync(path)).toBe(true);
+    expect(JSON.parse(readFileSync(path, 'utf-8')).data.name).toBe('Companion');
+  });
+
+  it('adopts a legacy character.json file into companion.json when present', () => {
+    const root = makeTempDir();
+    const legacyPath = join(root, 'character.json');
+    const companionPath = join(root, 'companion.json');
+    writeFileSync(legacyPath, `${JSON.stringify(TEST_CARD, null, 2)}\n`, 'utf-8');
+
+    const card = loadOrInitializeCharacterCard(companionPath);
+    expect(card.data.name).toBe('TestChar');
+    expect(existsSync(legacyPath)).toBe(false);
+    expect(existsSync(companionPath)).toBe(true);
   });
 
   it('throws a clear error when the character card is invalid JSON', () => {
     const root = makeTempDir();
-    const path = join(root, 'character.json');
+    const path = join(root, 'companion.json');
     writeFileSync(path, '{not json', 'utf-8');
 
     expect(() => loadOrInitializeCharacterCard(path)).toThrow(`Invalid character card at ${path}:`);

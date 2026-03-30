@@ -33,6 +33,7 @@ export interface VaultPolicyConfig {
 export interface PolicyConfig {
   workspacePath: string;
   allowedReadPaths?: string[];
+  protectedWritePaths?: string[];
   fullCodebaseReadRoot?: string;
   urlPolicy?: UrlPolicyConfig;
   webFetchTlsCaCertPaths?: string[];
@@ -311,6 +312,13 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
             resolveWorkspaceFsPathFromRoot(policyConfig.fullCodebaseReadRoot, workspaceRoot),
           );
         }
+      } else if (policyConfig.protectedWritePaths) {
+        const protectedPrefixes = policyConfig.protectedWritePaths.map((blockedPath) =>
+          resolveWorkspaceFsPathFromRoot(blockedPath, workspaceRoot),
+        );
+        if (isInsideAllowedPaths(normalizedPath, protectedPrefixes)) {
+          return 'DENY';
+        }
       }
 
       // Step 1: Check normalized path (string prefix match)
@@ -325,6 +333,15 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       // null = resolution failed (ELOOP, EACCES, etc.) — deny access
       if (canonical === null) {
         return 'DENY';
+      }
+
+      if (isWrite && policyConfig.protectedWritePaths) {
+        const protectedPrefixes = policyConfig.protectedWritePaths.map((blockedPath) =>
+          resolveWorkspaceFsPathFromRoot(blockedPath, workspaceRoot),
+        );
+        if (isInsideAllowedPaths(canonical, protectedPrefixes)) {
+          return 'DENY';
+        }
       }
 
       // If canonical differs from normalized (symlink), re-check against allowed prefixes

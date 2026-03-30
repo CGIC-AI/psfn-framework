@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveCompanionNameFromCard, resolveCompanionNameFromConfig } from './companion-runtime.js';
+import {
+  resolveCompanionIdFromConfig,
+  resolveCompanionNameFromCard,
+  resolveCompanionNameFromConfig,
+} from './companion-runtime.js';
 import type { CharacterCardV2 } from './types.js';
 
 const TEST_CARD: CharacterCardV2 = {
@@ -53,7 +57,7 @@ describe('resolveCompanionNameFromConfig', () => {
 
   it('loads the card name when a card path is set', () => {
     const root = makeTempDir();
-    const path = join(root, 'character.json');
+    const path = join(root, 'companion.json');
     writeFileSync(path, `${JSON.stringify(TEST_CARD, null, 2)}\n`, 'utf-8');
 
     expect(resolveCompanionNameFromConfig({
@@ -66,5 +70,20 @@ describe('resolveCompanionNameFromConfig', () => {
     expect(() => resolveCompanionNameFromConfig({})).toThrow(
       'Missing companion name from configured character name: explicit identity is required',
     );
+  });
+
+  it('seeds a bootstrap card when the configured companion file is missing', () => {
+    const root = makeTempDir();
+    const path = join(root, 'companion.json');
+
+    expect(resolveCompanionNameFromConfig({
+      characterCardPath: path,
+    })).toBe('Companion');
+  });
+});
+
+describe('resolveCompanionIdFromConfig', () => {
+  it('defaults to the canonical companion id when unset', () => {
+    expect(resolveCompanionIdFromConfig({})).toBe('companion');
   });
 });

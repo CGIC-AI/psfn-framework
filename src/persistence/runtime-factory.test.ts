@@ -107,8 +107,8 @@ describe('createAgentPersistenceRuntime', () => {
       'postgres://postgres:secret@localhost:5432/psfn',
       1536,
       expect.objectContaining({
-        notesDir: '/tmp/companion-data/notes',
-        scratchpadMirrorPath: '/tmp/companion-data/notes/scratchpad.json',
+        notesDir: '/tmp/companion-data/state/notes',
+        scratchpadMirrorPath: '/tmp/companion-data/state/notes/scratchpad.json',
         journal: expect.any(Object),
       }),
     );
@@ -116,7 +116,7 @@ describe('createAgentPersistenceRuntime', () => {
       'postgres://postgres:secret@localhost:5432/psfn',
       'user-primary',
       {
-        exportDir: '/tmp/companion-data/contacts',
+        exportDir: '/tmp/companion-data/state/contacts',
       },
     );
     expect(runtimeFactoryMocks.createPostgresIntentionPorts).toHaveBeenCalledWith(

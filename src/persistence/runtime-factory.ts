@@ -14,6 +14,7 @@ import type {
   SubstrateConfig,
 } from '../system/config/runtime-config-contracts.js';
 import {
+  migrateLegacyPersistenceLayout,
   resolveContactsDir,
   resolveMemoryJournalPath,
   resolveNotesDir,
@@ -45,6 +46,8 @@ export interface CreateAgentPersistenceRuntimeOptions {
 export async function createAgentPersistenceRuntime(
   options: CreateAgentPersistenceRuntimeOptions,
 ): Promise<AgentPersistenceRuntime> {
+  migrateLegacyPersistenceLayout(options.pathSnapshot.companionDataDir);
+
   const backend = options.config.persistenceBackend ?? 'sqlite';
   if (backend === 'postgres') {
     const databaseUrl = options.config.postgresDatabaseUrl?.trim();

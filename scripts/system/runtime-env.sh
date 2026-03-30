@@ -31,10 +31,43 @@ psfn_resolve_runtime_workspace_path() {
     return 0
   fi
 
+  if [ -n "${DATA_DIR:-}" ] && [ -z "${SYSTEM_DATA_DIR:-}" ] && [ -z "${COMPANION_DATA_DIR:-}" ]; then
+    if [ -n "${runtime_root}" ] && [ "${runtime_root}" != "." ]; then
+      printf '%s\n' "${runtime_root%/}/workspace"
+    else
+      printf '%s\n' "./workspace"
+    fi
+    return 0
+  fi
+
+  psfn_resolve_companion_data_dir
+}
+
+psfn_resolve_companion_data_dir() {
+  if [ -n "${COMPANION_DATA_DIR:-}" ]; then
+    printf '%s\n' "${COMPANION_DATA_DIR}"
+    return 0
+  fi
+
+  if [ -n "${DATA_DIR:-}" ]; then
+    printf '%s\n' "${DATA_DIR}"
+    return 0
+  fi
+
+  local runtime_root="${PSFN_RUNTIME_ROOT:-}"
+  if psfn_is_production_layout_mode "${PSFN_RUNTIME_LAYOUT_MODE:-}"; then
+    if [ -n "${runtime_root}" ]; then
+      printf '%s\n' "${runtime_root%/}/companion-data"
+    else
+      printf '%s\n' "./runtime/production/companion-data"
+    fi
+    return 0
+  fi
+
   if [ -n "${runtime_root}" ] && [ "${runtime_root}" != "." ]; then
-    printf '%s\n' "${runtime_root%/}/workspace"
+    printf '%s\n' "${runtime_root%/}/companion"
   else
-    printf '%s\n' "./workspace"
+    printf '%s\n' "./companion"
   fi
 }
 
@@ -103,13 +136,17 @@ psfn_source_dotenv_preserving_existing_env() {
 }
 
 psfn_detect_module_registry_path() {
-  local workspace_path
+  local workspace_path companion_data_dir
   workspace_path="$(psfn_resolve_runtime_workspace_path)"
+  companion_data_dir="$(psfn_resolve_companion_data_dir)"
 
   local candidates=(
+    "./modules/repl-registry.json"
     "./companion/modules/repl-registry.json"
     "./psfn/modules/repl-registry.json"
+    "${companion_data_dir%/}/modules/repl-registry.json"
     "${workspace_path%/}/psfn/modules/repl-registry.json"
+    "${workspace_path%/}/modules/repl-registry.json"
   )
 
   local previous_nullglob
@@ -146,6 +183,8 @@ psfn_export_default_module_registry_path() {
   local detected_path
   detected_path="$(psfn_detect_module_registry_path || true)"
   if [ -z "${detected_path}" ]; then
+    export MODULE_REGISTRY_PATH="modules/repl-registry.json"
+    echo "[launcher] MODULE_REGISTRY_PATH not set; defaulting to ${MODULE_REGISTRY_PATH}"
     return 0
   fi
 

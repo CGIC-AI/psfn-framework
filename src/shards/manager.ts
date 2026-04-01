@@ -89,8 +89,7 @@ const DEFAULT_SHARD_PROMPT_GUARDRAILS = [
 export const DEFAULT_SHARD_TOOLSET = [
   'memory',
   'contact',
-  'repo_status',
-  'repo_diff',
+  'repo',
 ] as const;
 
 const DEFAULT_SHARD_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly string[]>> = {

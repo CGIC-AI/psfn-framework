@@ -119,11 +119,8 @@ describe('validateToolWiring', () => {
 
   it('passes tools with satisfied gateway dependencies', () => {
     const tools = [
-      makeTool('repo_status', {
-        requiredGatewayMethods: ['git.status'],
-      }),
-      makeTool('repo_diff', {
-        requiredGatewayMethods: ['git.diff'],
+      makeTool('repo', {
+        requiredGatewayMethods: ['git.status', 'git.diff', 'git.commit'],
       }),
     ];
     const report = validateToolWiring({
@@ -131,36 +128,32 @@ describe('validateToolWiring', () => {
       tools,
       gatewayClientMethods: new Set(['gitStatus', 'gitDiff', 'gitCommit']),
     });
-    expect(report.totalTools).toBe(2);
-    expect(report.validTools).toBe(2);
+    expect(report.totalTools).toBe(1);
+    expect(report.validTools).toBe(1);
     expect(report.invalidTools).toHaveLength(0);
   });
 
   it('flags tools with missing gateway dependencies', () => {
     const tools = [
-      makeTool('repo_status', {
-        requiredGatewayMethods: ['git.status'],
-      }),
-      makeTool('repo_commit', {
-        requiredGatewayMethods: ['git.commit'],
+      makeTool('repo', {
+        requiredGatewayMethods: ['git.status', 'git.commit'],
       }),
     ];
-    // Client only has gitStatus, not gitCommit
     const report = validateToolWiring({
       mode: 'gateway',
       tools,
       gatewayClientMethods: new Set(['gitStatus']),
     });
-    expect(report.totalTools).toBe(2);
-    expect(report.validTools).toBe(1);
+    expect(report.totalTools).toBe(1);
+    expect(report.validTools).toBe(0);
     expect(report.invalidTools).toHaveLength(1);
-    expect(report.invalidTools[0].toolName).toBe('repo_commit');
+    expect(report.invalidTools[0].toolName).toBe('repo');
     expect(report.invalidTools[0].missingGatewayMethods).toEqual(['git.commit (client: gitCommit)']);
   });
 
   it('flags gateway-dependent tools with missing required metadata coverage', () => {
     const tools = [
-      makeTool('repo_commit'),
+      makeTool('repo'),
     ];
     const report = validateToolWiring({
       mode: 'gateway',
@@ -171,13 +164,15 @@ describe('validateToolWiring', () => {
     expect(report.totalTools).toBe(1);
     expect(report.validTools).toBe(0);
     expect(report.invalidTools).toHaveLength(1);
-    expect(report.invalidTools[0].toolName).toBe('repo_commit');
-    expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('git.commit');
+    expect(report.invalidTools[0].toolName).toBe('repo');
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage).toEqual([
+      'requiredGatewayMethods metadata missing (expected: git.status, git.diff, git.apply_patch, git.commit, git.create_branch, git.open_pr)',
+    ]);
   });
 
   it('flags gateway-dependent tools with partial metadata coverage', () => {
     const tools = [
-      makeTool('repo_commit', {
+      makeTool('repo', {
         requiredGatewayMethods: ['git.status'],
       }),
     ];
@@ -190,18 +185,21 @@ describe('validateToolWiring', () => {
     expect(report.totalTools).toBe(1);
     expect(report.validTools).toBe(0);
     expect(report.invalidTools).toHaveLength(1);
-    expect(report.invalidTools[0].missingGatewayMetadataCoverage).toEqual([
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage).toEqual(expect.arrayContaining([
+      'requiredGatewayMethods missing "git.diff"',
+      'requiredGatewayMethods missing "git.apply_patch"',
       'requiredGatewayMethods missing "git.commit"',
-    ]);
+      'requiredGatewayMethods missing "git.create_branch"',
+      'requiredGatewayMethods missing "git.open_pr"',
+    ]));
   });
 
   it('skips gateway method checks in single-process mode', () => {
     const tools = [
-      makeTool('repo_status', {
+      makeTool('repo', {
         requiredGatewayMethods: ['git.status'],
       }),
     ];
-    // In single mode, gateway methods are irrelevant
     const report = validateToolWiring({
       mode: 'single',
       tools,
@@ -279,7 +277,7 @@ describe('validateToolWiring', () => {
 
   it('fails closed when concurrency metadata is required and missing', () => {
     const tools = [
-      makeTool('repo_status', { requiredGatewayMethods: ['git.status'] }),
+      makeTool('repo', { requiredGatewayMethods: ['git.status'] }),
       makeTool('memory_write'),
     ];
     const report = validateToolWiring({
@@ -294,8 +292,15 @@ describe('validateToolWiring', () => {
 
   it('accepts valid concurrency metadata when required', () => {
     const tools = [
-      makeTool('repo_status', {
-        requiredGatewayMethods: ['git.status'],
+      makeTool('repo', {
+        requiredGatewayMethods: [
+          'git.status',
+          'git.diff',
+          'git.apply_patch',
+          'git.commit',
+          'git.create_branch',
+          'git.open_pr',
+        ],
         concurrency: makeConcurrencyMeta('read_only', { maxParallel: 3 }),
       }),
       makeTool('memory_write', {
@@ -311,7 +316,14 @@ describe('validateToolWiring', () => {
     const report = validateToolWiring({
       mode: 'gateway',
       tools,
-      gatewayClientMethods: new Set(['gitStatus']),
+      gatewayClientMethods: new Set([
+        'gitStatus',
+        'gitDiff',
+        'gitApplyPatch',
+        'gitCommit',
+        'gitCreateBranch',
+        'gitOpenPR',
+      ]),
       requireConcurrencyMetadata: true,
     });
     expect(report.invalidTools).toHaveLength(0);
@@ -329,11 +341,11 @@ describe('validateToolWiring', () => {
           interruptibility: 'invalid' as any,
         },
       }),
-      makeTool('repo_diff', {
+      makeTool('repo', {
         concurrency: makeConcurrencyMeta('read_only', {
           maxParallel: 0,
           exclusivityKeyPolicy: 'static_key' as any,
-          exclusivityKey: 'extended:repo_diff',
+          exclusivityKey: 'core:repo',
           eligibility: { foreground: false, background: false },
         }),
       }),
@@ -380,7 +392,7 @@ describe('validateAndLogToolWiring', () => {
 
   it('disables tools with missing gateway metadata coverage', () => {
     const tools = [
-      makeTool('repo_status'),
+      makeTool('repo'),
     ];
     const disabled = validateAndLogToolWiring({
       mode: 'gateway',
@@ -388,20 +400,14 @@ describe('validateAndLogToolWiring', () => {
       gatewayClientMethods: new Set(['gitStatus']),
       requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
     });
-    expect(disabled).toEqual(['repo_status']);
+    expect(disabled).toEqual(['repo']);
   });
 });
 
 describe('production tools validation', () => {
-  it('all git tools pass validation in single-process mode', () => {
-    // In single mode, git tools use GitOps directly — no gateway deps
+  it('the unified repo tool passes validation in single-process mode', () => {
     const gitTools = [
-      makeTool('repo_status'),
-      makeTool('repo_diff'),
-      makeTool('repo_apply_patch'),
-      makeTool('repo_commit'),
-      makeTool('repo_create_branch'),
-      makeTool('repo_open_pr'),
+      makeTool('repo'),
     ];
     const report = validateToolWiring({
       mode: 'single',
@@ -410,18 +416,20 @@ describe('production tools validation', () => {
     expect(report.invalidTools).toHaveLength(0);
   });
 
-  it('all git tools pass validation in gateway mode with full client', () => {
-    // Simulate git tools annotated with gateway requirements
+  it('the unified repo tool passes validation in gateway mode with full client', () => {
     const gitTools = [
-      makeTool('repo_status', { requiredGatewayMethods: ['git.status'] }),
-      makeTool('repo_diff', { requiredGatewayMethods: ['git.diff'] }),
-      makeTool('repo_apply_patch', { requiredGatewayMethods: ['git.apply_patch'] }),
-      makeTool('repo_commit', { requiredGatewayMethods: ['git.commit'] }),
-      makeTool('repo_create_branch', { requiredGatewayMethods: ['git.create_branch'] }),
-      makeTool('repo_open_pr', { requiredGatewayMethods: ['git.open_pr'] }),
+      makeTool('repo', {
+        requiredGatewayMethods: [
+          'git.status',
+          'git.diff',
+          'git.apply_patch',
+          'git.commit',
+          'git.create_branch',
+          'git.open_pr',
+        ],
+      }),
     ];
 
-    // A full GatewayClient has all these methods
     const fullClientMethods = new Set([
       'gitStatus',
       'gitDiff',
@@ -453,12 +461,11 @@ describe('production tools validation', () => {
 
   it('detects git tools that would fail against incomplete client', () => {
     const gitTools = [
-      makeTool('repo_status', { requiredGatewayMethods: ['git.status'] }),
-      makeTool('repo_diff', { requiredGatewayMethods: ['git.diff'] }),
-      makeTool('repo_commit', { requiredGatewayMethods: ['git.commit'] }),
+      makeTool('repo', {
+        requiredGatewayMethods: ['git.status', 'git.diff', 'git.commit'],
+      }),
     ];
 
-    // Client missing gitCommit method
     const incompleteClient = new Set([
       'gitStatus',
       'gitDiff',
@@ -470,7 +477,7 @@ describe('production tools validation', () => {
       gatewayClientMethods: incompleteClient,
     });
     expect(report.invalidTools).toHaveLength(1);
-    expect(report.invalidTools[0].toolName).toBe('repo_commit');
+    expect(report.invalidTools[0].toolName).toBe('repo');
   });
 });
 

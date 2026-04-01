@@ -50,6 +50,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   memory_delete: 'irreversible',
   undo_memory_delete: 'reversible',
   scratchpad: 'irreversible',
+  repo: 'irreversible',
   repo_status: 'reversible',
   repo_diff: 'reversible',
   repo_apply_patch: 'irreversible',

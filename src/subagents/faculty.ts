@@ -47,8 +47,7 @@ const SUBAGENT_TOOLSET_ALL = '*';
 export const DEFAULT_SUBAGENT_TOOLSET = [
   'memory',
   'contact',
-  'repo_status',
-  'repo_diff',
+  'repo',
 ] as const;
 
 const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly string[]>> = {

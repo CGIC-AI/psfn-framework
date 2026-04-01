@@ -77,6 +77,17 @@ Mutation guardrails remain explicit:
 - `edit` requires an exact `old_text` match and fails closed on ambiguous replacements unless `replace_all=true`
 - gateway-side path policy and workspace boundaries remain authoritative
 
+## Live Repo Surface
+
+The runtime now exposes a unified model-facing `repo` tool for git-backed repository inspection and mutation.
+
+- Actions: `inspect`, `patch`, `branch`, `commit`, `publish`
+- `inspect` keeps repository state and diff lookup on one primitive instead of splitting them across read-only micro-tools
+- `patch`, `branch`, and `commit` keep destructive mutation explicit and capability-gated
+- `publish` remains distinct from shell and still routes through the guarded GitHub publication path instead of raw command execution
+
+This keeps repository work on one primitive while preserving the existing protected-branch checks, allowlisted patch paths, and gateway approval policy for write and publish flows.
+
 ## Live Session Surface
 
 The runtime now exposes a unified model-facing `session` tool for continuity, transcript lookup, resumption, and focus workflow.

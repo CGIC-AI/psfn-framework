@@ -340,6 +340,36 @@ describe('capability tool gating', () => {
     expect(fsTool.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('gates unified repo actions using git read/write capability requirements', async () => {
+    const repoTool = createTool('repo');
+    const readGated = gateToolWithCapabilities(
+      repoTool.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const inspectDenied = await readGated.execute('repo-inspect', { action: 'inspect', target: 'status' });
+    expect(repoTool.executeSpy).not.toHaveBeenCalled();
+    expect((inspectDenied.content[0] as any).text).toContain('git.read');
+
+    const writeGated = gateToolWithCapabilities(
+      repoTool.tool,
+      () => accessForTier('apprentice'),
+    );
+    const patchDenied = await writeGated.execute('repo-patch', {
+      action: 'patch',
+      file_path: 'src/runtime.ts',
+      content: 'patched',
+    });
+    expect(repoTool.executeSpy).not.toHaveBeenCalled();
+    expect((patchDenied.content[0] as any).text).toContain('git.write');
+
+    const allowedRead = gateToolWithCapabilities(
+      repoTool.tool,
+      () => accessForTier('nursery'),
+    );
+    await allowedRead.execute('repo-allowed', {});
+    expect(repoTool.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('gates issue tools by issue.* capability tokens', async () => {
     const issueReady = createTool('issue_ready');
     const readyGated = gateToolWithCapabilities(

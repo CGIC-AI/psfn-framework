@@ -25,7 +25,8 @@ export function buildShardArtifactReturn(result: ShardResult): AgentToolResult<{
           ? `[Required capabilities: ${result.requiredCapabilities.join(', ')}]\n`
           : ''}\n`
         + `[Lineage: core=${result.lineage.coreCompanionId}, `
-        + `shard=${result.lineage.shardCompanionId}`
+        + `shard=${result.lineage.shardCompanionId}, `
+        + `mode=${result.lineage.creationMode}`
         + `${result.lineage.parentShardId ? `, parent=${result.lineage.parentShardId}` : ''}]\n\n`
         + result.content,
     }] satisfies TextContent[],

@@ -1,5 +1,9 @@
 import type { SessionEntry } from '../session/types.js';
-import type { GatewayRoutingEnvelope, ShardLineage } from '../routing/envelope.js';
+import type {
+  GatewayRoutingEnvelope,
+  ShardCreationMode,
+  ShardLineage,
+} from '../routing/envelope.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
@@ -29,22 +33,40 @@ export interface ShardContextPackEntry {
   timestamp: number;
 }
 
-export interface ShardContextPack {
+export interface ShardTranscriptContextSnapshot {
+  kind: 'session_entries';
+  entries: ShardContextPackEntry[];
+}
+
+export interface ShardMemoryContextSnapshot {
+  kind: 'memory_block';
+  content: string;
+}
+
+export interface ShardParentContextSnapshot {
   purpose: 'shard_context';
+  inheritedFrom: 'source_channel';
   task: string;
   source: ShardSourceContext;
-  sessionEntries: ShardContextPackEntry[];
-  memoryBlock?: string;
+  transcript: ShardTranscriptContextSnapshot;
+  memory?: ShardMemoryContextSnapshot;
+}
+
+export interface ShardPromptDiscipline {
+  stablePrefix: string;
+  remit: string;
+  guardrails: string[];
 }
 
 export interface ShardConfig {
-  name: string;                    // Human-readable label
-  task: string;                    // The prompt to send to the shard
-  systemPrompt?: string;           // Override parent's system prompt (default: inherit)
-  maxTurns?: number;               // Max conversation turns (default: 1)
+  name: string;                       // Human-readable label
+  task: string;                       // The task the shard should complete
+  creationMode?: ShardCreationMode;   // Explicit shard creation mode (default: fresh)
+  systemPrompt?: string;              // Optional shard remit/discipline supplement
+  maxTurns?: number;                  // Max conversation turns (default: 1)
   sourceContext?: ShardSourceContext;
-  contextPack?: ShardContextPack;
-  capabilities?: string[];         // Declared capability tokens for routing diagnostics
+  parentContext?: ShardParentContextSnapshot;
+  capabilities?: string[];            // Declared capability tokens for routing diagnostics
   requiredCapabilities?: string[]; // Required capability tokens to route this workload
   heartbeatStaleAfterMs?: number;  // Optional override for stale heartbeat threshold
   heartbeatDisconnectAfterMs?: number; // Optional override for stale-eviction timeout
@@ -60,6 +82,7 @@ export interface ShardResult {
   outputTokens: number;
   durationMs: number;
   turns: number;
+  creationMode: ShardCreationMode;
   lifecycleState: ShardLifecycleState;
   runtimeState: ShardRuntimeState;
   runtimeStateReason: string;
@@ -85,6 +108,7 @@ export interface ShardRuntimeRecord {
   createdAt: number;
   startedAt: number;
   completedAt?: number;
+  creationMode: ShardCreationMode;
   lifecycleState: ShardLifecycleState;
   runtimeState: ShardRuntimeState;
   runtimeStateReason: string;

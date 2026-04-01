@@ -16,6 +16,7 @@ describe('routing envelope', () => {
       coreCompanionId: 'companion-alpha',
       shardCompanionId: 'companion-alpha/shards/shard-42',
       shardId: 'shard-42',
+      creationMode: 'fresh',
     });
   });
 
@@ -41,6 +42,7 @@ describe('routing envelope', () => {
         coreCompanionId: 'companion-alpha',
         shardCompanionId: 'companion-alpha/shards/shard-99',
         shardId: 'shard-99',
+        creationMode: 'fresh',
         parentShardId: 'shard-root',
       },
       subagentAddress: {
@@ -63,7 +65,35 @@ describe('routing envelope', () => {
       coreCompanionId: 'companion-alpha',
       shardCompanionId: 'companion-alpha/shards/shard-child',
       shardId: 'shard-child',
+      creationMode: 'fresh',
       parentShardId: 'shard-parent',
+    });
+  });
+
+  it('marks forked shard lineage explicitly without collapsing subagent semantics into shard routing', () => {
+    const envelope = deriveShardRoutingEnvelope({
+      companionId: 'companion-alpha',
+      shardId: 'shard-forked',
+      creationMode: 'forked',
+      parentShardId: 'shard-parent',
+      subagentAddress: {
+        executionPort: 'subagent',
+        workerId: 'worker-12',
+        lane: 'subagent',
+      },
+    });
+
+    expect(envelope.shard).toEqual({
+      coreCompanionId: 'companion-alpha',
+      shardCompanionId: 'companion-alpha/shards/shard-forked',
+      shardId: 'shard-forked',
+      creationMode: 'forked',
+      parentShardId: 'shard-parent',
+    });
+    expect(envelope.subagentAddress).toEqual({
+      executionPort: 'subagent',
+      workerId: 'worker-12',
+      lane: 'subagent',
     });
   });
 });

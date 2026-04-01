@@ -65,6 +65,7 @@ The surface is always on so the model does not have to discover or choose among 
 - Use `think` as an explicit fallback for deep reasoning, not as the default escape hatch.
 - Keep bounded worker control on `subagent` with `action=spawn|message|wait|cancel|status`.
 - Keep shard and subagent names distinct because they model different work durations and isolation semantics.
+- Keep forked shard generation explicit so inherited parent context stays in shard prompt discipline rather than leaking into bounded subagent control.
 
 ## Current-To-Target Migration Map
 
@@ -129,7 +130,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `self_rebuild` | `system` | extended | Same family. |
 | `notify_operator` | `notify` | extended | Operator escalation is its own primitive. |
 | `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
-| `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work. |
+| `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work; forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
 | `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |
 | `skill_list` | `skill` | always-on | Skill management stays explicit. |
 | `skill_view` | `skill` | always-on | Same family. |

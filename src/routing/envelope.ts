@@ -1,11 +1,13 @@
 export const GATEWAY_ROUTING_ENVELOPE_SCHEMA_VERSION = 1 as const;
 
 export type CompanionId = string;
+export type ShardCreationMode = 'fresh' | 'forked';
 
 export interface ShardLineage {
   coreCompanionId: CompanionId;
   shardCompanionId: CompanionId;
   shardId: string;
+  creationMode: ShardCreationMode;
   parentShardId?: string;
 }
 
@@ -25,6 +27,7 @@ export interface GatewayRoutingEnvelope {
 export interface CreateShardLineageInput {
   companionId: CompanionId;
   shardId: string;
+  creationMode?: ShardCreationMode;
   parentShardId?: string;
   shardCompanionId?: CompanionId;
 }
@@ -38,6 +41,7 @@ export interface CreateGatewayRoutingEnvelopeInput {
 export interface DeriveShardRoutingEnvelopeInput {
   companionId: CompanionId;
   shardId: string;
+  creationMode?: ShardCreationMode;
   parentShardId?: string;
   shardCompanionId?: CompanionId;
   subagentAddress?: GatewaySubagentAddress;
@@ -61,6 +65,13 @@ function deriveShardCompanionId(companionId: CompanionId, shardId: string): Comp
   return `${companionId}/shards/${shardId}`;
 }
 
+function normalizeShardCreationMode(value: ShardCreationMode | undefined): ShardCreationMode {
+  if (value === undefined) {
+    return 'fresh';
+  }
+  return value;
+}
+
 export function createShardLineage(input: CreateShardLineageInput): ShardLineage {
   const coreCompanionId = normalizeRequiredString(input.companionId, 'companionId');
   const shardId = normalizeRequiredString(input.shardId, 'shardId');
@@ -74,6 +85,7 @@ export function createShardLineage(input: CreateShardLineageInput): ShardLineage
     coreCompanionId,
     shardCompanionId,
     shardId,
+    creationMode: normalizeShardCreationMode(input.creationMode),
     ...(parentShardId ? { parentShardId } : {}),
   };
 }
@@ -84,6 +96,7 @@ export function cloneShardLineage(lineage: ShardLineage | undefined): ShardLinea
     coreCompanionId: normalizeRequiredString(lineage.coreCompanionId, 'coreCompanionId'),
     shardCompanionId: normalizeRequiredString(lineage.shardCompanionId, 'shardCompanionId'),
     shardId: normalizeRequiredString(lineage.shardId, 'shardId'),
+    creationMode: normalizeShardCreationMode(lineage.creationMode),
     ...(normalizeOptionalString(lineage.parentShardId)
       ? { parentShardId: normalizeOptionalString(lineage.parentShardId) }
       : {}),
@@ -135,6 +148,7 @@ export function deriveShardRoutingEnvelope(
     shard: createShardLineage({
       companionId: input.companionId,
       shardId: input.shardId,
+      creationMode: input.creationMode,
       parentShardId: input.parentShardId,
       shardCompanionId: input.shardCompanionId,
     }),

@@ -290,7 +290,7 @@ Your companion has access to these tools during conversation. Core tools are alw
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
 | **Values** | `values_list`, `values_add`, `values_update` |
 | **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
-| **Media** | `media` (`action=create|edit|analyze`; detailed prompt craft lives in creator skills loaded with `skill_view`) |
+| **Media** | `media` (`action=generate|edit|analyze`; detailed prompt craft lives in creator skills loaded with `skill_view`) |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
 | **Shards** | `spawn_shard` (long-running shard runtime with explicit artifact delivery) |
 | **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |

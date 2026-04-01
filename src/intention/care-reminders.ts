@@ -239,6 +239,7 @@ function mapRow(row: CareReminderRow): CareReminder {
 function advanceYear(isoTimestamp: string, nowIso: string): string {
   const next = new Date(isoTimestamp);
   const now = Date.parse(nowIso);
+  next.setUTCFullYear(next.getUTCFullYear() + 1);
   while (next.getTime() <= now) {
     next.setUTCFullYear(next.getUTCFullYear() + 1);
   }

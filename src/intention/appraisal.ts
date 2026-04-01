@@ -1272,9 +1272,12 @@ export function decisionsToPostTurnActionCandidates(
       const reminderId = decision.reminder?.reminderId?.trim() ?? '';
       if (!reminderId) continue;
       const runAt = resolveReminderRunAt(decision, Date.now());
+      const dedupeSuffix = typeof runAt === 'number' && Number.isFinite(runAt)
+        ? String(runAt)
+        : 'unscheduled';
       candidates.push({
         kind: INTENTION_REMINDER_ACTION_KIND,
-        dedupeKey: `${INTENTION_REMINDER_ACTION_KIND}:${reminderId}`,
+        dedupeKey: `${INTENTION_REMINDER_ACTION_KIND}:${reminderId}:${dedupeSuffix}`,
         payload: {
           reminderId,
         } satisfies IntentionReminderActionPayload,

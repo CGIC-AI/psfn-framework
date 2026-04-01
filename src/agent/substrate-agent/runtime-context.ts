@@ -409,7 +409,8 @@ export function buildScratchpadContextBlock(input: {
 
     const lines = [
       '[Scratchpad]',
-      'Working notes (short-term, may be stale; verify before acting):',
+      'Ephemeral long-context workspace for temporary notes, excerpts, and working summaries.',
+      'Scratchpad is not canonical memory or orient; verify before acting and promote only stable outcomes when warranted.',
     ];
 
     let included = 0;

@@ -26,7 +26,7 @@ describe('tool reversibility tagging', () => {
     expect(resolveToolReversibility('memory_write')).toBe('irreversible');
     expect(resolveToolReversibility('memory_redact')).toBe('irreversible');
     expect(resolveToolReversibility('memory_delete')).toBe('irreversible');
-    expect(resolveToolReversibility('scratchpad_write')).toBe('irreversible');
+    expect(resolveToolReversibility('scratchpad')).toBe('irreversible');
     expect(resolveToolReversibility('self_restart')).toBe('irreversible');
     expect(resolveToolReversibility('repo_commit')).toBe('irreversible');
   });

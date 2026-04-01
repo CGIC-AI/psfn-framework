@@ -34,6 +34,19 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - scratchpad mirror at `notes/scratchpad.json`
 - memory mutation journal at `notes/memories.jsonl`
 
+### Scratchpad
+
+Scratchpad is a separate semantic surface, not a subtype of long-term memory.
+
+- Lives in SQLite `scratchpad_entries` with an optional mirror at `notes/scratchpad.json`
+- Holds temporary long-context notes, excerpts, rolling summaries, and working hypotheses for large source material
+- Is bounded and intentionally ephemeral; it helps the current work, not durable recall
+- Must stay distinct from `orient`, which is active canon, and from typed long-term `memory`, which is durable retrieval state
+- Should be promoted only when the content stabilizes:
+  - stable facts or relational knowledge go to `memory`
+  - durable operator-authored notes or artifacts go to repo docs or `vault`
+  - active self-orientation belongs in `orient`
+
 ## Memory Types
 
 The current runtime supports seven memory types:

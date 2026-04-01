@@ -3,8 +3,7 @@ import type { MemoryStore } from './store.js';
 import type { MemoryWriter } from './writer.js';
 import {
   createMemoryTool,
-  createScratchpadReadTool,
-  createScratchpadWriteTool,
+  createScratchpadTool,
 } from './tools.js';
 
 export interface MemoryRuntimeTarget {
@@ -19,6 +18,5 @@ export function registerMemoryTools(
   },
 ): void {
   target.registerTool(createMemoryTool(options.writer, options.memoryStore), 'core');
-  target.registerTool(createScratchpadReadTool(options.memoryStore), 'core');
-  target.registerTool(createScratchpadWriteTool(options.memoryStore), 'extended');
+  target.registerTool(createScratchpadTool(options.memoryStore), 'core');
 }

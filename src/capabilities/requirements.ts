@@ -35,6 +35,21 @@ function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): Capab
   }
 }
 
+function resolveScratchpadRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case 'list':
+      return 'identity.read';
+    case 'add':
+    case 'replace':
+    case 'append':
+    case 'remove':
+      return 'memory.write';
+    default:
+      return ['identity.read', 'memory.write'];
+  }
+}
+
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
@@ -52,8 +67,6 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   memory_delete: 'memory.delete',
   undo_memory_delete: 'memory.delete',
   memory_write: 'memory.write',
-  scratchpad_read: 'identity.read',
-  scratchpad_write: 'memory.write',
   notify_operator: 'external.web',
   toolset: 'identity.read',
   promoted_tools_list: 'identity.read',
@@ -127,6 +140,9 @@ export function resolveToolRequiredCapabilities(
 ): CapabilityToken[] {
   if (tool.name === 'memory') {
     return normalizeRequirement(resolveUnifiedMemoryRequirement(toRecord(params)));
+  }
+  if (tool.name === 'scratchpad') {
+    return normalizeRequirement(resolveScratchpadRequirement(toRecord(params)));
   }
 
   const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;

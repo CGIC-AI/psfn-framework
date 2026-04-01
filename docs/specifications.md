@@ -125,7 +125,8 @@ Current guidance:
 - `promotedExtendedTools` is a short-term exposure mechanism, not the long-term taxonomy.
 - `toolset` is the model-facing control surface for listing, activating, pinning, and unpinning non-default tools.
 - `core_memory` is the current legacy name; the target orientation surface is `orient`.
-- `scratchpad` stays explicit as the ephemeral long-context workspace.
+- `scratchpad` stays explicit as the ephemeral long-context workspace, separate from `orient` and durable `memory`.
+- Scratchpad promotion is selective: stable facts move to `memory`, durable notes move to repo docs or `vault`, and active canon belongs in `orient`.
 - `north_star` stays its own semantic tool surface.
 
 ## Validation Baseline

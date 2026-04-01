@@ -223,23 +223,22 @@ describe('capability tool gating', () => {
     expect(dynamic.executeSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('gates scratchpad tools using static capability requirements', async () => {
-    const scratchpadRead = createTool('scratchpad_read');
+  it('gates scratchpad actions using dynamic capability requirements', async () => {
+    const scratchpad = createTool('scratchpad');
     const readGated = gateToolWithCapabilities(
-      scratchpadRead.tool,
+      scratchpad.tool,
       () => accessForTier('custom', ['memory.write']),
     );
-    const readDenied = await readGated.execute('call-read', {});
-    expect(scratchpadRead.executeSpy).not.toHaveBeenCalled();
+    const readDenied = await readGated.execute('call-read', { action: 'list' });
+    expect(scratchpad.executeSpy).not.toHaveBeenCalled();
     expect((readDenied.content[0] as any).text).toContain('identity.read');
 
-    const scratchpadWrite = createTool('scratchpad_write');
     const writeGated = gateToolWithCapabilities(
-      scratchpadWrite.tool,
+      scratchpad.tool,
       () => accessForTier('custom', ['identity.read']),
     );
-    const writeDenied = await writeGated.execute('call-write', {});
-    expect(scratchpadWrite.executeSpy).not.toHaveBeenCalled();
+    const writeDenied = await writeGated.execute('call-write', { action: 'add' });
+    expect(scratchpad.executeSpy).not.toHaveBeenCalled();
     expect((writeDenied.content[0] as any).text).toContain('memory.write');
   });
 

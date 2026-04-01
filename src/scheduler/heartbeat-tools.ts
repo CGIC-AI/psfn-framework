@@ -10,6 +10,7 @@ import type {
   HeartbeatPolicyStore,
   ReflectionDeliberationConfig,
 } from './heartbeat-policy.js';
+import { getHeartbeatTemplateAuditProfile } from './heartbeat-policy.js';
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { PostTurnActionCandidate, SubstrateMessage } from '../types.js';
@@ -108,6 +109,7 @@ interface HeartbeatRunTemplateResult {
   templateId: string;
   templateName: string;
   reflection: string;
+  silent?: boolean;
   queued?: boolean;
   deferredAction?: PostTurnActionCandidate;
 }
@@ -126,7 +128,7 @@ export function createHeartbeatGetPolicyTool(
     name: 'heartbeat_get_policy',
     label: 'heartbeat_get_policy',
     description:
-      'View all reflection templates in the heartbeat policy: their IDs, prompts, intervals, and enabled status.',
+      'View all reflection templates in the heartbeat policy: cadence, prompts, enabled status, and the intended purpose/output posture of each heartbeat.',
     parameters: Type.Object({}),
     execute: async (): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
@@ -138,10 +140,15 @@ export function createHeartbeatGetPolicyTool(
         ];
 
         for (const t of policy.templates) {
+          const audit = getHeartbeatTemplateAuditProfile(t);
           lines.push(`[${t.enabled ? 'ON' : 'OFF'}] ${t.id} — "${t.name}"`);
           lines.push(`  Interval: ${formatMs(t.intervalMs)}`);
           lines.push(`  Discord: ${t.sendToDiscord ? 'yes' : 'no'}`);
           lines.push(`  Mode: ${t.mode ?? 'standard'}`);
+          lines.push(`  Purpose: ${audit.purpose}`);
+          lines.push(`  Output: ${audit.outputExpectation}`);
+          lines.push(`  Extraction: ${audit.extractionExpectation}`);
+          lines.push(`  Silence: ${audit.allowSilentInterval ? 'allowed' : 'not allowed by default'}`);
           if (t.mode === 'deliberation') {
             lines.push(`  Deliberation: ${formatDeliberation(t.deliberation)}`);
           }
@@ -459,6 +466,12 @@ export function createHeartbeatRunTemplateTool(
               ...(result.deferredAction ? { deferredAction: result.deferredAction } : {}),
             },
           };
+        }
+        if (result.silent) {
+          return textResult(
+            `Completed reflection template "${result.templateName}" (${result.templateId}) `
+            + 'with no note emitted. The current policy allows a silent/background interval when nothing useful surfaces.',
+          );
         }
         const reflection = result.reflection.trim();
         return textResult(

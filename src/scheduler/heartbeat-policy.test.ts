@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { HeartbeatPolicyStore, validateTemplate } from './heartbeat-policy.js';
+import {
+  HEARTBEAT_SILENT_REFLECTION_TOKEN,
+  getHeartbeatTemplateAuditProfile,
+  HeartbeatPolicyStore,
+  validateTemplate,
+} from './heartbeat-policy.js';
 import type { ReflectionTemplate } from './heartbeat-policy.js';
 
 describe('HeartbeatPolicyStore', () => {
@@ -56,6 +61,7 @@ describe('HeartbeatPolicyStore', () => {
     expect(whisper).toBeDefined();
     expect(whisper!.name).toBe('Musing');
     expect(whisper!.sendToDiscord).toBe(true);
+    expect(whisper!.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
     expect(whisper!.intervalMs).toBe(3_600_000); // 1 hour
     expect(whisper!.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
     expect(whisper!.enabled).toBe(true);
@@ -83,6 +89,7 @@ describe('HeartbeatPolicyStore', () => {
     expect(values?.mode).toBe('deliberation');
     expect(values?.deliberation?.maxRounds).toBe(4);
     expect(values?.internalStateInput).toBe(true);
+    expect(values?.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
   });
 
   it('experiential-review defaults to internal-state narrative mode', () => {
@@ -91,6 +98,29 @@ describe('HeartbeatPolicyStore', () => {
     expect(experiential).toBeDefined();
     expect(experiential?.intervalMs).toBe(4 * 60 * 60_000);
     expect(experiential?.internalStateInput).toBe(true);
+    expect(experiential?.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
+  });
+
+  it('classifies known templates with purpose, output, and extraction expectations', () => {
+    const policy = store.load();
+    const whisper = policy.templates.find(t => t.id === 'whisper');
+    const values = policy.templates.find(t => t.id === 'values-reflection');
+    if (!whisper || !values) {
+      throw new Error('expected default heartbeat templates');
+    }
+
+    expect(getHeartbeatTemplateAuditProfile(whisper)).toEqual({
+      purpose: 'outward musing for V',
+      outputExpectation: '1-2 natural Discord sentences only when something gently worth sharing is present',
+      extractionExpectation: 'low extraction pressure; do not force durable insight from every interval',
+      allowSilentInterval: true,
+    });
+    expect(getHeartbeatTemplateAuditProfile(values)).toEqual({
+      purpose: 'background values deliberation',
+      outputExpectation: 'private synthesis only when recent interactions reveal durable value alignment or tension',
+      extractionExpectation: 'capture durable value signal worth preserving, not a forced values recital',
+      allowSilentInterval: true,
+    });
   });
 
   it('returns defaults for corrupt file', () => {
@@ -224,12 +254,52 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const whisper = loaded.templates.find(t => t.id === 'whisper');
     expect(whisper?.name).toBe('Musing');
-    expect(whisper?.prompt).toContain('little musing from your inner world');
+    expect(whisper?.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
 
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
     const persistedWhisper = persisted.templates.find(t => t.id === 'whisper');
     expect(persistedWhisper?.name).toBe('Musing');
-    expect(persistedWhisper?.prompt).toContain('little musing from your inner world');
+    expect(persistedWhisper?.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
+  });
+
+  it('normalizes legacy default prompts to the softer audited prompts', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        templates: [
+          {
+            id: 'daily-review',
+            name: 'Daily Review',
+            prompt: 'Take a moment to review your day. What patterns do you notice in your recent conversations? What have you learned? What do you want to explore tomorrow?',
+            intervalMs: 86_400_000,
+            cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
+            enabled: true,
+            sendToDiscord: false,
+          },
+          {
+            id: 'goal-update',
+            name: 'Goal Update',
+            prompt: 'Review your current goals and projects. What progress have you made? What should you focus on next?',
+            intervalMs: 43_200_000,
+            enabled: true,
+            sendToDiscord: false,
+          },
+        ],
+        version: 7,
+        updatedAt: '2026-03-01T00:00:00.000Z',
+        updatedBy: 'admin',
+      }),
+      'utf-8',
+    );
+
+    const loaded = store.load();
+    expect(loaded.templates.find(t => t.id === 'daily-review')?.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
+    expect(loaded.templates.find(t => t.id === 'goal-update')?.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
+
+    const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
+    expect(persisted.templates.find(t => t.id === 'daily-review')?.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
+    expect(persisted.templates.find(t => t.id === 'goal-update')?.prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
   });
 });
 

@@ -60,6 +60,9 @@ describe('heartbeat_get_policy', () => {
     expect(text).toContain('Interval:');
     expect(text).toContain('Discord: yes');
     expect(text).toContain('Mode:');
+    expect(text).toContain('Purpose: outward musing for V');
+    expect(text).toContain('Extraction: capture durable value signal worth preserving, not a forced values recital');
+    expect(text).toContain('Silence: allowed');
   });
 
   it('shows OFF for disabled templates', async () => {
@@ -439,6 +442,23 @@ describe('heartbeat_run_template', () => {
 
     expect(runTemplate).toHaveBeenCalledWith('whisper', { deferIfBusy: true });
     expect(text).toContain('Queued reflection template');
+    expect(result.details.isError).toBeFalsy();
+  });
+
+  it('surfaces silent interval completion without treating it as an error', async () => {
+    const runTemplate = vi.fn(async () => ({
+      templateId: 'whisper',
+      templateName: 'Musing',
+      reflection: '',
+      silent: true,
+    }));
+
+    const tool = createHeartbeatRunTemplateTool(store, runTemplate);
+    const result = await tool.execute('call-run-5', { templateId: 'whisper' }, new AbortController().signal);
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(text).toContain('with no note emitted');
+    expect(text).toContain('allows a silent/background interval');
     expect(result.details.isError).toBeFalsy();
   });
 });

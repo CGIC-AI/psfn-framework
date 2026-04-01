@@ -32,6 +32,12 @@ import type { ScheduledTask } from '../../scheduler/types.js';
 import { createTurnId } from '../../turns/id.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
+import {
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  EXTRACTION_PROMPT_KEY,
+  PROFILE_SYNTHESIS_PROMPT_KEY,
+  getDefaultPromptText,
+} from '../../identity/prompt-registry.js';
 
 function request(
   port: number,
@@ -453,6 +459,42 @@ describe('AdminServer JSON API routes', () => {
     writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');
     const sessionsDir = join(tempDir, 'sessions');
     mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(
+      join(tempDir, 'prompt-registry.json'),
+      JSON.stringify([
+        {
+          key: EXTRACTION_PROMPT_KEY,
+          text: getDefaultPromptText(EXTRACTION_PROMPT_KEY),
+          description: 'Memory extraction system prompt.',
+          consumers: ['src/memory/extraction.ts'],
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'system',
+          checksum: 'seed',
+        },
+        {
+          key: COMPACTION_SUMMARY_PROMPT_KEY,
+          text: getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY),
+          description: 'Session compaction system prompt used when conversation context exceeds budget.',
+          consumers: ['src/session/manager.ts'],
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'system',
+          checksum: 'seed',
+        },
+        {
+          key: PROFILE_SYNTHESIS_PROMPT_KEY,
+          text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
+          description: 'Canonical contact profile synthesis prompt.',
+          consumers: ['src/memory/extraction.ts'],
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          updatedBy: 'system',
+          checksum: 'seed',
+        },
+      ]),
+      'utf-8',
+    );
 
     db = new Database(':memory:');
     sqliteVec.load(db);
@@ -651,6 +693,164 @@ describe('AdminServer JSON API routes', () => {
     expect(authorized.status).toBe(200);
     const payload = JSON.parse(authorized.body) as { stats: { memoryTotal: number } };
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
+  });
+
+  it('returns operator-visible subagent runtime snapshots and task detail views', async () => {
+    const runtimeSnapshot = {
+      generatedAt: 1_701_234_567_890,
+      activeCount: 1,
+      activeTasks: [
+        {
+          task: {
+            subagentId: 'subagent-live',
+            name: 'inspect',
+            task: 'Check runtime visibility',
+            workerLane: 'subagent',
+            channelId: 'subagent:subagent-live',
+            lifecycleState: 'running',
+            stateReason: 'agent_initialized',
+            createdAt: 100,
+            startedAt: 125,
+            capabilities: ['general'],
+            requiredCapabilities: ['general'],
+          },
+          transcript: [
+            {
+              id: 1,
+              channelId: 'subagent:subagent-live',
+              role: 'user',
+              content: 'Check runtime visibility',
+              authorId: 'system',
+              authorName: 'SubagentFaculty',
+              timestamp: 125,
+            },
+            {
+              id: 2,
+              channelId: 'subagent:subagent-live',
+              role: 'assistant',
+              content: 'Visibility snapshot ready',
+              authorId: 'system',
+              authorName: 'SubagentFaculty',
+              timestamp: 150,
+            },
+          ],
+          transcriptMessageCount: 2,
+          transcriptTruncated: false,
+          artifacts: [
+            {
+              kind: 'final_output',
+              content: 'Visibility snapshot ready',
+              timestamp: 150,
+              sourceMessageId: 2,
+            },
+          ],
+          resume: {
+            channelId: 'subagent:subagent-live',
+            lifecycleState: 'running',
+            resumable: true,
+            transcriptAvailable: true,
+            transcriptMessageCount: 2,
+            transcriptTruncated: false,
+            lastActivityAt: 150,
+            lastMessageId: 2,
+          },
+        },
+      ],
+      recentTasks: [
+        {
+          task: {
+            subagentId: 'subagent-complete',
+            name: 'report',
+            task: 'Summarize completed work',
+            workerLane: 'subagent',
+            channelId: 'subagent:subagent-complete',
+            lifecycleState: 'completed',
+            stateReason: 'completed',
+            createdAt: 200,
+            startedAt: 210,
+            finishedAt: 250,
+            capabilities: ['general'],
+            requiredCapabilities: ['general'],
+          },
+          transcript: [
+            {
+              id: 1,
+              channelId: 'subagent:subagent-complete',
+              role: 'user',
+              content: 'Summarize completed work',
+              authorId: 'system',
+              authorName: 'SubagentFaculty',
+              timestamp: 210,
+            },
+            {
+              id: 2,
+              channelId: 'subagent:subagent-complete',
+              role: 'assistant',
+              content: 'Completed work summary',
+              authorId: 'system',
+              authorName: 'SubagentFaculty',
+              timestamp: 250,
+            },
+          ],
+          transcriptMessageCount: 2,
+          transcriptTruncated: false,
+          artifacts: [
+            {
+              kind: 'final_output',
+              content: 'Completed work summary',
+              timestamp: 250,
+              sourceMessageId: 2,
+            },
+          ],
+          resume: {
+            channelId: 'subagent:subagent-complete',
+            lifecycleState: 'completed',
+            resumable: false,
+            transcriptAvailable: true,
+            transcriptMessageCount: 2,
+            transcriptTruncated: false,
+            lastActivityAt: 250,
+            lastMessageId: 2,
+          },
+        },
+      ],
+    };
+    const runtimeTaskView = runtimeSnapshot.activeTasks[0];
+    const recentTaskView = runtimeSnapshot.recentTasks[0];
+    const runtimeSnapshotSpy = vi.spyOn(subagentFaculty, 'getRuntimeSnapshot').mockReturnValue(runtimeSnapshot as any);
+    const runtimeTaskViewSpy = vi.spyOn(subagentFaculty, 'getRuntimeTaskView').mockImplementation((subagentId: string) => {
+      if (subagentId === runtimeTaskView.task.subagentId) return runtimeTaskView as any;
+      if (subagentId === recentTaskView.task.subagentId) return recentTaskView as any;
+      return null;
+    });
+
+    const res = await request(
+      port,
+      'GET',
+      '/api/admin/subagents?limit=1&transcriptLimit=2',
+      undefined,
+      authHeaders,
+    );
+    expect(res.status).toBe(200);
+    expect(runtimeSnapshotSpy).toHaveBeenCalledWith({ taskLimit: 1, transcriptLimit: 2 });
+    const payload = JSON.parse(res.body) as typeof runtimeSnapshot;
+    expect(payload.activeCount).toBe(1);
+    expect(payload.activeTasks[0]?.task.subagentId).toBe('subagent-live');
+    expect(payload.recentTasks[0]?.resume.resumable).toBe(false);
+
+    const detail = await request(
+      port,
+      'GET',
+      '/api/admin/subagents/subagent-live?transcriptLimit=2',
+      undefined,
+      authHeaders,
+    );
+    expect(detail.status).toBe(200);
+    expect(runtimeTaskViewSpy).toHaveBeenCalledWith('subagent-live', { transcriptLimit: 2 });
+    const detailPayload = JSON.parse(detail.body) as typeof runtimeTaskView;
+    expect(detailPayload.task.subagentId).toBe('subagent-live');
+    expect(detailPayload.resume.resumable).toBe(true);
+    expect(detailPayload.artifacts[0]?.content).toBe('Visibility snapshot ready');
   });
 
   it('returns period-bounded dashboard cost windows and honors costWindow selection', async () => {

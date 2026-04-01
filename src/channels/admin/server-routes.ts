@@ -25,6 +25,7 @@ import type {
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
+import type { SubagentFaculty } from '../../subagents/faculty.js';
 import type { ConfirmationQueueAdminApi } from './types.js';
 import { GARDEN_PREFIX } from './server-request-routing.js';
 import { sendJson, sendRedirect, sendText } from '../http/primitives.js';
@@ -38,6 +39,7 @@ export interface AdminRoute {
 interface AdminRouteDependencies {
   token?: string;
   dashboardService: AdminDashboardService;
+  subagentFaculty: SubagentFaculty;
   adaptiveToolsService: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
   sessionService: AdminSessionService;
@@ -183,6 +185,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
     },
     ...buildAdminApiRoutes({
       dashboardService: deps.dashboardService,
+      subagentFaculty: deps.subagentFaculty,
       adaptiveToolsService: deps.adaptiveToolsService,
       memoryService: deps.memoryService,
       sessionService: deps.sessionService,

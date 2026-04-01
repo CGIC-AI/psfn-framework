@@ -149,6 +149,7 @@ export class AdminServer implements Lifecycle {
     this.routes = buildAdminRoutes({
       token: this.token,
       dashboardService: this.dashboardService,
+      subagentFaculty: config.subagentFaculty,
       adaptiveToolsService: this.adaptiveToolsService,
       memoryService: this.memoryService,
       sessionService: this.sessionService,

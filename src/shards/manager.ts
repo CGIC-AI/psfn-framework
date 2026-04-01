@@ -86,19 +86,16 @@ const DEFAULT_SHARD_PROMPT_GUARDRAILS = [
   'Do not recurse into additional shards or delegate work through bounded subagent control.',
   'Stay inside the shard remit and available tools; do not widen scope on your own.',
 ] as const;
-const APPRENTICE_SHARD_TOOL_EXTRAS = [
-  'contact_list',
-] as const;
 export const DEFAULT_SHARD_TOOLSET = [
   'memory',
-  'contact_lookup',
+  'contact',
   'repo_status',
   'repo_diff',
 ] as const;
 
 const DEFAULT_SHARD_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly string[]>> = {
   nursery: DEFAULT_SHARD_TOOLSET,
-  apprentice: [...DEFAULT_SHARD_TOOLSET, ...APPRENTICE_SHARD_TOOL_EXTRAS],
+  apprentice: DEFAULT_SHARD_TOOLSET,
   autonomous: [SHARD_TOOLSET_ALL],
   custom: [SHARD_TOOLSET_ALL],
 };

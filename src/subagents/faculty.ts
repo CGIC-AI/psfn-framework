@@ -44,19 +44,16 @@ const DEFAULT_MAX_TURNS = 1;
 const DEFAULT_RECENT_RESULT_LIMIT = 25;
 const DEFAULT_SUBAGENT_CAPABILITIES = ['general'] as const;
 const SUBAGENT_TOOLSET_ALL = '*';
-const APPRENTICE_SUBAGENT_TOOL_EXTRAS = [
-  'contact_list',
-] as const;
 export const DEFAULT_SUBAGENT_TOOLSET = [
   'memory',
-  'contact_lookup',
+  'contact',
   'repo_status',
   'repo_diff',
 ] as const;
 
 const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly string[]>> = {
   nursery: DEFAULT_SUBAGENT_TOOLSET,
-  apprentice: [...DEFAULT_SUBAGENT_TOOLSET, ...APPRENTICE_SUBAGENT_TOOL_EXTRAS],
+  apprentice: DEFAULT_SUBAGENT_TOOLSET,
   autonomous: [SUBAGENT_TOOLSET_ALL],
   custom: [SUBAGENT_TOOLSET_ALL],
 };

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { ContactStore } from './store.js';
 import {
+  createContactTool,
   createContactLinkIdentityTool,
   createContactSetTrustTool,
   createContactNoteTool,
@@ -21,6 +22,124 @@ describe('contact tools', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     store = new ContactStore(db, 'primary-user-123');
+  });
+
+  describe('createContactTool', () => {
+    it('returns a unified contact tool with canonical metadata', () => {
+      const tool = createContactTool(store);
+
+      expect(tool.name).toBe('contact');
+      expect(tool.label).toBe('contact');
+      expect(tool.description).toContain('Unified contact surface');
+      expect(tool.parameters).toBeDefined();
+      expect(typeof tool.execute).toBe('function');
+    });
+
+    it('defaults to list when called without params', async () => {
+      store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-list-default', {});
+
+      expect(resultText(result)).toContain('Contacts (1)');
+      expect(resultText(result)).toContain('Grace [trusted/friend]');
+    });
+
+    it('defaults to lookup when only contactId is provided', async () => {
+      const contact = store.upsert({ displayName: 'Dana', notes: 'Works in design' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-lookup-default', { contactId: contact.id });
+
+      expect(resultText(result)).toContain(`Canonical ID: ${contact.id}`);
+      expect(resultText(result)).toContain('Notes: Works in design');
+    });
+
+    it('updates trust through action=set_trust while preserving guardrails', async () => {
+      const contact = store.upsert({ displayName: 'Alice', discordUserId: 'alice-discord' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-set-trust', {
+        action: 'set_trust',
+        contactId: contact.id,
+        trustLevel: 'public',
+      });
+
+      expect(resultText(result)).toContain('set to public');
+      expect(store.getById(contact.id)!.trustLevel).toBe('public');
+    });
+
+    it('updates notes through action=note', async () => {
+      const contact = store.upsert({ displayName: 'Charlie' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-note', {
+        action: 'note',
+        contactId: contact.id,
+        notes: 'Likes cats and programming',
+      });
+
+      expect(resultText(result)).toContain('Notes updated');
+      expect(store.getById(contact.id)!.notes).toBe('Likes cats and programming');
+    });
+
+    it('links identities through action=link_identity', async () => {
+      const contact = store.upsert({ displayName: 'Nova', discordUserId: 'nova-discord' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-link-identity', {
+        action: 'link_identity',
+        contactId: contact.id,
+        channel: 'api',
+        channelUserId: 'nova-api',
+      });
+
+      expect(resultText(result)).toContain('Linked api:nova-api');
+      expect(store.getByChannelIdentity('api', 'nova-api')?.id).toBe(contact.id);
+    });
+
+    it('updates channel privacy through action=set_channel_privacy', async () => {
+      const contact = store.upsert({ displayName: 'Privacy User' });
+      store.linkChannelIdentity(contact.id, 'api', 'privacy-api');
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-set-channel-privacy', {
+        action: 'set_channel_privacy',
+        contactId: contact.id,
+        channel: 'api',
+        channelUserId: 'privacy-api',
+        privacyLevel: 'public',
+      });
+
+      expect(resultText(result)).toContain('privacy to public');
+      expect(store.getByChannelIdentity('api', 'privacy-api')?.channels?.[0]?.privacyLevel).toBe('public');
+    });
+
+    it('accepts legacy action aliases inside the unified tool', async () => {
+      const contact = store.upsert({ displayName: 'Alias User', notes: 'Alias works' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-legacy-alias', {
+        action: 'contact_lookup',
+        contactId: contact.id,
+      });
+
+      expect(resultText(result)).toContain(`Canonical ID: ${contact.id}`);
+      expect(resultText(result)).toContain('Alias works');
+    });
+
+    it('fails closed when mutation-shaped params are supplied without an action', async () => {
+      const contact = store.upsert({ displayName: 'Needs Action' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-missing-action', {
+        contactId: contact.id,
+        notes: 'should fail',
+      });
+
+      expect(resultText(result)).toContain('action is required');
+      expect(result.details?.isError).toBe(true);
+    });
   });
 
   // ── contact_set_trust ──

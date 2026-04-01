@@ -3,13 +3,16 @@
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { TextContent } from '@mariozechner/pi-ai';
-import type { ShardManager } from './manager.js';
+import type { ArtifactReturnPort, ShardExecutionPort } from './port.js';
+import { shardArtifactReturnPort } from './artifact-policy.js';
 import { getRequestContext } from '../llm/request-context.js';
 import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
-export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
+export function createSpawnShardTool(
+  shardPort: ShardExecutionPort,
+  artifactReturnPort: ArtifactReturnPort = shardArtifactReturnPort,
+): AgentTool<any> {
   return {
     name: 'spawn_shard',
     description:
@@ -51,7 +54,7 @@ export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
         const requestContext = getRequestContext();
-        const result = await manager.spawn({
+        const result = await shardPort.spawn({
           name: params.name,
           task: params.task,
           systemPrompt: params.systemPrompt,
@@ -69,28 +72,7 @@ export function createSpawnShardTool(manager: ShardManager): AgentTool<any> {
             : undefined,
         });
 
-        return {
-          content: [{
-            type: 'text',
-            text:
-              `[Shard "${result.name}" completed in ${result.durationMs}ms, ` +
-              `${result.turns} turn(s), ` +
-              `${result.inputTokens + result.outputTokens} tokens, ` +
-              `state=${result.lifecycleState}, health=${result.health}]\n` +
-              `[State reason: ${result.stateReason}]\n` +
-              `${result.failureReason
-                ? `[Failure reason: ${result.failureReason}]\n`
-                : ''}` +
-              `${result.capabilities.length > 0
-                ? `[Capabilities: ${result.capabilities.join(', ')}]\n`
-                : ''}` +
-              `${result.requiredCapabilities.length > 0
-                ? `[Required capabilities: ${result.requiredCapabilities.join(', ')}]\n`
-                : ''}\n` +
-              result.content,
-          }] satisfies TextContent[],
-          details: {},
-        };
+        return artifactReturnPort.returnArtifact(result);
       } catch (error) {
         return textResultWithError(`[Shard error: ${toErrorMessage(error)}]`, true);
       }

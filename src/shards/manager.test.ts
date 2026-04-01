@@ -11,6 +11,8 @@ import { buildSessionMetadataWithTurn } from '../session/turn-provenance.js';
 import { buildFocusMemoryScopeQuery } from '../session/focus-knowledge.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createSpawnShardTool } from './tools.js';
+import { EXECUTION_PORT_FAMILIES } from './port.js';
+import { shardArtifactReturnPort } from './artifact-policy.js';
 import type { LLMProvider, MemoryProvider } from '../agent/contracts.js';
 import type { SubstrateConfig, LLMResponse } from '../types.js';
 import { createTurnId } from '../turns/id.js';
@@ -170,6 +172,7 @@ describe('ShardManager', () => {
     expect(result.turns).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
+    expect(manager.portFamily).toBe('shard');
   });
 
   it('uses isolated channelId for session entries', async () => {
@@ -1201,6 +1204,7 @@ describe('createSpawnShardTool', () => {
     expect(tool.label).toBe('spawn_shard');
     expect(tool.parameters).toBeDefined();
     expect(typeof tool.execute).toBe('function');
+    expect(EXECUTION_PORT_FAMILIES).toEqual(['subagent', 'shard', 'artifact']);
   });
 
   it('formats result content with stats', async () => {
@@ -1224,6 +1228,28 @@ describe('createSpawnShardTool', () => {
     expect(text).toContain('0 tokens');  // pi-agent-core doesn't surface token counts
     expect(text).toContain('[State reason: completed]');
     expect(text).toContain('tool output');
+  });
+
+  it('routes shard results through the artifact return port boundary', async () => {
+    const artifactReturnPort = {
+      portFamily: 'artifact' as const,
+      returnArtifact: vi.fn(shardArtifactReturnPort.returnArtifact),
+    };
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const tool = createSpawnShardTool(manager, artifactReturnPort);
+    await tool.execute('call-artifact', { name: 'artifact-boundary', task: 'do thing' });
+
+    expect(artifactReturnPort.returnArtifact).toHaveBeenCalled();
   });
 
   it('surfaces explicit lifecycle failure diagnostics from shard results', async () => {

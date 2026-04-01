@@ -10,9 +10,11 @@ import {
 import {
   PENDING_FOLLOW_UP_PRIORITIES,
   PENDING_FOLLOW_UP_TIMINGS,
+  PENDING_FOLLOW_UP_WAKE_CONDITIONS,
   type PendingFollowUp,
   type PendingFollowUpPriority,
   type PendingFollowUpTiming,
+  type PendingFollowUpWakeCondition,
 } from '../intention/pending-follow-ups.js';
 import {
   CARE_REMINDER_CLASSIFICATIONS,
@@ -413,6 +415,12 @@ function normalizePendingFollowUp(followUp: PendingFollowUp, index: number): Pen
   const sourceMessageId = followUp.sourceMessageId === undefined
     ? undefined
     : normalizeOptionalIdentifier(followUp.sourceMessageId, `${prefix}.sourceMessageId`) ?? undefined;
+  const contextSummary = followUp.contextSummary === undefined
+    ? undefined
+    : normalizeOptionalText(followUp.contextSummary, `${prefix}.contextSummary`);
+  const wakeConditions = followUp.wakeConditions === undefined
+    ? undefined
+    : normalizePendingFollowUpWakeConditions(followUp.wakeConditions, `${prefix}.wakeConditions`);
   const activatedAt = followUp.activatedAt === undefined
     ? undefined
     : normalizeIsoTimestamp(followUp.activatedAt, `${prefix}.activatedAt`);
@@ -433,6 +441,8 @@ function normalizePendingFollowUp(followUp: PendingFollowUp, index: number): Pen
     ...(dueAt ? { dueAt } : {}),
     ...(contactId ? { contactId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(contextSummary ? { contextSummary } : {}),
+    ...(wakeConditions ? { wakeConditions } : {}),
     ...(activatedAt ? { activatedAt } : {}),
     ...(activationReason ? { activationReason } : {}),
   };
@@ -537,6 +547,35 @@ function normalizePendingFollowUpChannelType(
     throw new Error(`InternalState field "${fieldName}" has unsupported channelType "${String(value)}"`);
   }
   return value;
+}
+
+function normalizePendingFollowUpWakeCondition(
+  value: string,
+  fieldName: string,
+): PendingFollowUpWakeCondition {
+  if (!PENDING_FOLLOW_UP_WAKE_CONDITIONS.includes(value as PendingFollowUpWakeCondition)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported wake condition "${String(value)}"`);
+  }
+  return value as PendingFollowUpWakeCondition;
+}
+
+function normalizePendingFollowUpWakeConditions(
+  value: readonly PendingFollowUpWakeCondition[],
+  fieldName: string,
+): PendingFollowUpWakeCondition[] | undefined {
+  if (!Array.isArray(value)) {
+    throw new Error(`InternalState field "${fieldName}" must be an array`);
+  }
+  const normalized = [...new Set(
+    value.map((condition, index) => normalizePendingFollowUpWakeCondition(
+      condition,
+      `${fieldName}[${String(index)}]`,
+    )),
+  )];
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  return PENDING_FOLLOW_UP_WAKE_CONDITIONS.filter(condition => normalized.includes(condition));
 }
 
 function normalizeCareReminderKind(value: string, fieldName: string): CareReminderKind {

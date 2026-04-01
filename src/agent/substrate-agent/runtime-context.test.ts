@@ -286,6 +286,8 @@ describe('runtime subject identity', () => {
               authorId: 'scheduler',
               authorName: 'Whisper',
               createdAt: '2026-03-17T11:58:00.000Z',
+              dueAt: '2026-03-20T16:00:00.000Z',
+              wakeConditions: ['next_user_turn'],
             },
           ],
           careReminders: [
@@ -337,7 +339,7 @@ describe('runtime subject identity', () => {
 
     expect(runtimeContext).toContain('Attention: trajectory=deepening, salient_entities=2, active_concerns=2, pending_follow_ups=1, care_reminders=1');
     expect(runtimeContext).toContain('Active concern refs: concern-1:medium, concern-2:low');
-    expect(runtimeContext).toContain('Pending follow-up refs: follow-up-1:soon');
+    expect(runtimeContext).toContain('Pending follow-up refs: follow-up-1:soon@2026-03-20T16:00:00.000Z[next_user_turn]');
     expect(runtimeContext).toContain('Care reminder refs: care-reminder-1:birthday:annual');
   });
 

@@ -183,6 +183,8 @@ describe('wireIntentionRuntime', () => {
         followUp: {
           content: 'Check in tomorrow about medication.',
           channelType: 'api',
+          contextSummary: 'Medication follow-up should wait for the next natural opening.',
+          wakeConditions: ['next_user_turn'],
         },
       },
       channelId: 'api:test',
@@ -201,15 +203,21 @@ describe('wireIntentionRuntime', () => {
       timing: 'scheduled',
       contactId: 'contact-a',
       sourceMessageId: 'msg-3',
+      contextSummary: 'Medication follow-up should wait for the next natural opening.',
+      wakeConditions: ['next_user_turn'],
     });
 
-    hooks.onIntentionFollowUpActivated({
+    expect(hooks.onIntentionFollowUpActivated({
       pendingFollowUpId: pendingFollowUpId!,
       activationReason: 'post_turn_action',
-    });
+    })).toBe(true);
     const activated = runtime.pendingFollowUpStore.getById(pendingFollowUpId!);
     expect(activated?.activatedAt).toBeTruthy();
     expect(activated?.activationReason).toBe('post_turn_action');
+    expect(hooks.onIntentionFollowUpActivated({
+      pendingFollowUpId: pendingFollowUpId!,
+      activationReason: 'post_turn_action',
+    })).toBe(false);
 
     const reminderId = hooks.onIntentionReminderDecision({
       decision: {
@@ -501,6 +509,62 @@ describe('wireIntentionRuntime', () => {
     expect(samples[0]?.outcomeScore).toBeCloseTo(0.53, 5);
     expect(samples[0]?.outcomeSourceMessageId).toBe('msg-turn-2');
   });
+
+  it('surfaces pending follow-ups for deterministic wake-condition resurfacing', () => {
+    const db = new Database(':memory:');
+    const runtime = wireIntentionRuntime(new FakeTarget(), db);
+    const hooks = createIntentionAppraisalHooks(
+      runtime.concernStore,
+      runtime.pendingFollowUpStore,
+      runtime.careReminderStore,
+    );
+
+    runtime.pendingFollowUpStore.create({
+      content: 'Check whether the stress trend is still holding.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      wakeConditions: ['sustained_negative_mood'],
+    });
+    runtime.pendingFollowUpStore.create({
+      content: 'Re-open this on the next external turn.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      wakeConditions: ['next_user_turn'],
+    });
+
+    expect(hooks.getPendingFollowUpsForResurfacing({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-background',
+      isBackgroundTurn: true,
+      now: Date.parse('2026-03-25T12:00:00.000Z'),
+      currentMoodValence: -0.05,
+    })).toEqual([]);
+
+    const resurfaced = hooks.getPendingFollowUpsForResurfacing({
+      channelId: 'api:test',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-foreground',
+      isBackgroundTurn: false,
+      now: Date.parse('2026-03-25T12:05:00.000Z'),
+      motivationSignals: ['sustained_negative_valence'],
+      currentMoodValence: -0.25,
+    });
+    expect(resurfaced.map(followUp => followUp.content).sort()).toEqual([
+      'Check whether the stress trend is still holding.',
+      'Re-open this on the next external turn.',
+    ].sort());
+  });
 });
 
 describe('entrypoint composition', () => {
@@ -514,6 +578,7 @@ describe('entrypoint composition', () => {
     expect(runtimeSource).toContain('getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns');
     expect(runtimeSource).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
     expect(runtimeSource).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
+    expect(runtimeSource).toContain('getPendingFollowUpsForResurfacing: intentionAppraisalHooks.getPendingFollowUpsForResurfacing');
     expect(runtimeSource).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
     expect(runtimeSource).toContain('onIntentionReminderDecision: intentionAppraisalHooks.onIntentionReminderDecision');
     expect(runtimeSource).toContain('onIntentionReminderTriggered: intentionAppraisalHooks.onIntentionReminderTriggered');

@@ -4,6 +4,11 @@ import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js'
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import { cloneInternalState, type InternalState } from '../self-model/state.js';
 import {
+  evaluatePendingFollowUpWakeState,
+  type PendingFollowUp,
+  type PendingFollowUpWakeCondition,
+} from './pending-follow-ups.js';
+import {
   formatActiveDateTimeLabel,
   resolveActiveTimezone,
 } from '../time/active-timezone.js';
@@ -36,8 +41,11 @@ const DEFAULT_SYSTEM_PROMPT = [
   'Consider unresolved concerns, emotional needs, scheduled commitments, and relationship maintenance.',
   'Most turns should return noop unless concrete action is warranted.',
   'Return JSON only, no markdown, with shape:',
-  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
+  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?","contextSummary":"string?","pendingFollowUpId":"string?","wakeConditions":["next_user_turn"|"background_recheck"|"sustained_negative_mood"]?},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
   'For followUp decisions, include followUp.content as a brief internal Whisper note to self, not a user-facing message.',
+  'Use followUp.contextSummary for the key situation to preserve if the follow-up may need to wait and be resurfaced later.',
+  'Use followUp.wakeConditions only when the follow-up should stay pending until a later state cue. next_user_turn waits for the next external user turn, background_recheck waits for an internal/background appraisal turn, and sustained_negative_mood waits for continued notably negative mood or motivation signals.',
+  'When resurfacing or refining an already pending follow-up, reuse followUp.pendingFollowUpId instead of inventing a duplicate.',
   'Use reminder decisions for durable care reminders or important dates that must survive quiet periods and restart, not for one-shot follow-ups.',
   'Write Whisper notes in first person, in the companion\'s own private voice, grounded in the supplied persona context.',
   'Whisper notes should capture what she is noticing or intends to do next, not simulate a sent message to the user.',
@@ -95,6 +103,8 @@ export interface IntentionFollowUpDecision {
   channelType?: ChannelType;
   authorId?: string;
   authorName?: string;
+  contextSummary?: string;
+  wakeConditions?: PendingFollowUpWakeCondition[];
   pendingFollowUpId?: string;
 }
 
@@ -762,9 +772,22 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     : undefined;
   const authorId = typeof value.authorId === 'string' ? value.authorId.trim() : '';
   const authorName = typeof value.authorName === 'string' ? value.authorName.trim() : '';
+  const contextSummary = typeof value.contextSummary === 'string'
+    ? value.contextSummary.trim()
+    : '';
   const pendingFollowUpId = typeof value.pendingFollowUpId === 'string'
     ? value.pendingFollowUpId.trim()
     : '';
+  const wakeConditions = Array.isArray(value.wakeConditions)
+    ? [...new Set(
+      value.wakeConditions
+        .filter((condition): condition is PendingFollowUpWakeCondition => (
+          condition === 'next_user_turn'
+          || condition === 'background_recheck'
+          || condition === 'sustained_negative_mood'
+        )),
+    )]
+    : [];
 
   return {
     content,
@@ -772,6 +795,8 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     ...(channelType ? { channelType } : {}),
     ...(authorId ? { authorId } : {}),
     ...(authorName ? { authorName } : {}),
+    ...(contextSummary ? { contextSummary } : {}),
+    ...(wakeConditions.length > 0 ? { wakeConditions } : {}),
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
   };
 }
@@ -1228,6 +1253,11 @@ export function decisionsToPostTurnActionCandidates(
     if (decision.type === 'followUp') {
       const content = decision.followUp?.content.trim() ?? '';
       if (!content) continue;
+      const hasStateWakeConditions = Array.isArray(decision.followUp?.wakeConditions)
+        && decision.followUp.wakeConditions.length > 0;
+      if (hasStateWakeConditions && decision.dueAt === undefined && decision.timing !== 'immediate') {
+        continue;
+      }
       const runAt = resolveFollowUpRunAt(decision, Date.now(), options);
       const channelId = decision.followUp?.channelId?.trim() || context.message.channelId;
       const channelType = decision.followUp?.channelType ?? context.message.channelType;
@@ -1288,6 +1318,32 @@ export function decisionsToPostTurnActionCandidates(
   }
 
   return candidates;
+}
+
+export function pendingFollowUpsToPostTurnActionCandidates(
+  followUps: readonly PendingFollowUp[],
+): PostTurnActionCandidate[] {
+  return followUps
+    .map((followUp) => {
+      const content = followUp.content.trim();
+      if (!content) {
+        return null;
+      }
+      return {
+        kind: INTENTION_FOLLOW_UP_ACTION_KIND,
+        dedupeKey: `${INTENTION_FOLLOW_UP_ACTION_KIND}:pending:${followUp.id}`,
+        payload: {
+          channelId: followUp.channelId,
+          channelType: followUp.channelType,
+          authorId: followUp.authorId,
+          authorName: followUp.authorName,
+          content,
+          pendingFollowUpId: followUp.id,
+        } satisfies IntentionFollowUpActionPayload,
+        maxRetries: 1,
+      } satisfies PostTurnActionCandidate;
+    })
+    .filter((candidate): candidate is PostTurnActionCandidate => candidate !== null);
 }
 
 export function normalizeIntentionFollowUpActionPayload(payload: unknown): IntentionFollowUpActionPayload | null {
@@ -1569,6 +1625,31 @@ export class IntentionAppraisal {
         ...(resolvedAtLabel ? { resolvedAt: resolvedAtLabel } : {}),
       };
     });
+    const promptPendingFollowUps = (normalized.internalState?.attention.pendingFollowUps ?? []).map((followUp) => {
+      const createdAtLabel = formatPromptTimestamp(Date.parse(followUp.createdAt));
+      const dueAtLabel = followUp.dueAt ? formatPromptTimestamp(Date.parse(followUp.dueAt)) : undefined;
+      const wakeState = evaluatePendingFollowUpWakeState(followUp, {
+        now: normalized.now,
+        isBackgroundTurn: isBackgroundAppraisalChannel(normalized.sessionId),
+        motivationSignals: normalized.motivationSignals,
+        currentMoodValence: normalized.currentEmotion?.mood.valence,
+      });
+      return {
+        id: followUp.id,
+        timing: followUp.timing,
+        priority: followUp.priority,
+        content: followUp.content,
+        ...(followUp.contextSummary ? { contextSummary: followUp.contextSummary } : {}),
+        ...(createdAtLabel ? { createdAt: createdAtLabel } : {}),
+        ...(dueAtLabel ? { dueAt: dueAtLabel } : {}),
+        ...(followUp.wakeConditions?.length ? { wakeConditions: followUp.wakeConditions } : {}),
+        eligibleNow: wakeState.eligibleNow,
+        ...(wakeState.dueAtReached ? { dueNow: true } : {}),
+        ...(wakeState.matchedWakeConditions.length > 0
+          ? { matchedWakeConditions: wakeState.matchedWakeConditions }
+          : {}),
+      };
+    });
     let persona: AppraisalPersonaContext | null;
     try {
       persona = buildAppraisalPersonaContext(
@@ -1613,6 +1694,7 @@ export class IntentionAppraisal {
         : null,
       contactEmotionalSnapshot: normalized.contactEmotionalSnapshot,
       activeConcerns: promptActiveConcerns,
+      pendingFollowUps: promptPendingFollowUps,
       activeCareReminders: promptActiveCareReminders,
       recentlyResolvedConcerns: promptRecentlyResolvedConcerns,
       conversationTrajectory: normalized.conversationTrajectory,

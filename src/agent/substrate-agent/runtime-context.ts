@@ -296,7 +296,13 @@ export function buildRuntimeContext(input: {
     lines.push(`Active concern refs: ${concernRefs.length > 0 ? concernRefs.join(', ') : 'none'}`);
     const pendingRefs = pendingFollowUps
       .slice(0, 3)
-      .map((followUp) => `${followUp.id}:${followUp.timing}`);
+      .map((followUp) => {
+        const dueSuffix = followUp.dueAt ? `@${followUp.dueAt}` : '';
+        const wakeSuffix = followUp.wakeConditions?.length
+          ? `[${followUp.wakeConditions.join('+')}]`
+          : '';
+        return `${followUp.id}:${followUp.timing}${dueSuffix}${wakeSuffix}`;
+      });
     lines.push(`Pending follow-up refs: ${pendingRefs.length > 0 ? pendingRefs.join(', ') : 'none'}`);
     const careReminderRefs = careReminders
       .slice(0, 3)

@@ -130,6 +130,7 @@ import {
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
   normalizeIntentionReminderActionPayload,
+  pendingFollowUpsToPostTurnActionCandidates,
   sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
   type ActiveConcernSnapshot,
@@ -219,10 +220,33 @@ interface HeartbeatRuntimeOptions {
     canonicalContactKey?: string;
     sourceMessageId: string;
   }) => Promise<string | undefined> | string | undefined;
+  getPendingFollowUpsForResurfacing?: (input: {
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    isBackgroundTurn: boolean;
+    now: number;
+    motivationSignals?: readonly string[];
+    currentMoodValence?: number | null;
+  }) => Promise<readonly {
+    id: string;
+    content: string;
+    channelId: string;
+    channelType: SubstrateMessage['channelType'];
+    authorId: string;
+    authorName: string;
+  }[]> | readonly {
+    id: string;
+    content: string;
+    channelId: string;
+    channelType: SubstrateMessage['channelType'];
+    authorId: string;
+    authorName: string;
+  }[];
   onIntentionFollowUpActivated?: (input: {
     pendingFollowUpId: string;
     activationReason?: string;
-  }) => Promise<void> | void;
+  }) => Promise<boolean | undefined> | boolean | undefined;
   onIntentionReminderDecision?: (input: {
     decision: IntentionActionDecision;
     channelId: string;
@@ -1468,7 +1492,7 @@ export function wireHeartbeatRuntime(
           }
         }
 
-        const candidates = decisionsToPostTurnActionCandidates(
+        const decisionCandidates = decisionsToPostTurnActionCandidates(
           decisions,
           {
             message: context.message,
@@ -1477,6 +1501,25 @@ export function wireHeartbeatRuntime(
             ? { surfacePendingFollowUpsImmediately: true }
             : {},
         );
+        const resurfacedPendingFollowUps = runtimeOptions.getPendingFollowUpsForResurfacing
+          ? await runtimeOptions.getPendingFollowUpsForResurfacing({
+            channelId: resolvedSessionId,
+            canonicalContactKey: context.canonicalContactKey,
+            sourceMessageId: context.message.id,
+            isBackgroundTurn: isBackgroundAppraisalChannel(context.message.channelId),
+            now: Date.now(),
+            ...(motivationAssessment?.signals.length
+              ? {
+                motivationSignals: motivationAssessment.signals.map(signal => signal.kind),
+              }
+              : {}),
+            currentMoodValence: currentEmotion.mood.valence,
+          })
+          : [];
+        const candidates = [
+          ...decisionCandidates,
+          ...pendingFollowUpsToPostTurnActionCandidates(resurfacedPendingFollowUps),
+        ];
         if (candidates.length === 0) {
           return;
         }
@@ -1663,10 +1706,13 @@ export function wireHeartbeatRuntime(
               throw new Error(`Intention follow-up action "${action.id}" payload is missing required fields`);
             }
             if (payload.pendingFollowUpId && runtimeOptions.onIntentionFollowUpActivated) {
-              await runtimeOptions.onIntentionFollowUpActivated({
+              const activated = await runtimeOptions.onIntentionFollowUpActivated({
                 pendingFollowUpId: payload.pendingFollowUpId,
                 activationReason: 'post_turn_action',
               });
+              if (activated === false) {
+                return;
+              }
             }
             agentLoop.followUp?.({
               id: `intention-follow-up:${action.id}`,

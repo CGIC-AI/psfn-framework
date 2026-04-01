@@ -978,6 +978,7 @@ export class SubstrateRuntime implements Lifecycle {
         getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns,
         onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
         onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
+        getPendingFollowUpsForResurfacing: intentionAppraisalHooks.getPendingFollowUpsForResurfacing,
         onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
         onIntentionReminderDecision: intentionAppraisalHooks.onIntentionReminderDecision,
         onIntentionReminderTriggered: intentionAppraisalHooks.onIntentionReminderTriggered,

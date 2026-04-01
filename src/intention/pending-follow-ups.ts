@@ -8,6 +8,13 @@ export type PendingFollowUpPriority = typeof PENDING_FOLLOW_UP_PRIORITIES[number
 export const PENDING_FOLLOW_UP_TIMINGS = ['immediate', 'soon', 'scheduled'] as const;
 export type PendingFollowUpTiming = typeof PENDING_FOLLOW_UP_TIMINGS[number];
 
+export const PENDING_FOLLOW_UP_WAKE_CONDITIONS = [
+  'next_user_turn',
+  'background_recheck',
+  'sustained_negative_mood',
+] as const;
+export type PendingFollowUpWakeCondition = typeof PENDING_FOLLOW_UP_WAKE_CONDITIONS[number];
+
 export interface PendingFollowUp {
   id: string;
   content: string;
@@ -21,6 +28,8 @@ export interface PendingFollowUp {
   dueAt?: string;
   contactId?: string;
   sourceMessageId?: string;
+  contextSummary?: string;
+  wakeConditions?: PendingFollowUpWakeCondition[];
   activatedAt?: string;
   activationReason?: string;
 }
@@ -37,6 +46,23 @@ export interface PendingFollowUpCreateInput {
   dueAt?: string;
   contactId?: string;
   sourceMessageId?: string;
+  contextSummary?: string;
+  wakeConditions?: readonly PendingFollowUpWakeCondition[];
+}
+
+export interface PendingFollowUpUpdateInput {
+  content: string;
+  priority: PendingFollowUpPriority;
+  timing: PendingFollowUpTiming;
+  channelId: string;
+  channelType: ChannelType;
+  authorId: string;
+  authorName: string;
+  dueAt?: string;
+  contactId?: string;
+  sourceMessageId?: string;
+  contextSummary?: string;
+  wakeConditions?: readonly PendingFollowUpWakeCondition[];
 }
 
 export interface PendingFollowUpActivateOptions {
@@ -59,6 +85,19 @@ export interface PendingFollowUpContextProvider {
   getPendingFollowUps(contactId?: string): PendingFollowUp[];
 }
 
+export interface PendingFollowUpWakeContext {
+  now: number;
+  isBackgroundTurn: boolean;
+  motivationSignals?: readonly string[];
+  currentMoodValence?: number | null;
+}
+
+export interface PendingFollowUpWakeEvaluation {
+  eligibleNow: boolean;
+  dueAtReached: boolean;
+  matchedWakeConditions: PendingFollowUpWakeCondition[];
+}
+
 interface PendingFollowUpRow {
   id: string;
   content: string;
@@ -72,15 +111,20 @@ interface PendingFollowUpRow {
   due_at: string | null;
   contact_id: string | null;
   source_message_id: string | null;
+  context_summary: string | null;
+  wake_conditions: string | null;
   activated_at: string | null;
   activation_reason: string | null;
 }
 
 const MAX_TEXT_CHARS = 500;
 const MAX_ID_CHARS = 128;
+const MAX_SUMMARY_CHARS = 320;
 const MAX_REASON_CHARS = 240;
 const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
+const NEGATIVE_MOOD_WAKE_THRESHOLD = -0.2;
+const PENDING_FOLLOW_UPS_TABLE = 'intention_pending_follow_ups';
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -147,6 +191,56 @@ function normalizeChannelType(value: string): ChannelType {
   return value as ChannelType;
 }
 
+function normalizeWakeCondition(value: string): PendingFollowUpWakeCondition {
+  if (!PENDING_FOLLOW_UP_WAKE_CONDITIONS.includes(value as PendingFollowUpWakeCondition)) {
+    throw new Error(`Unsupported pending follow-up wake condition: ${String(value)}`);
+  }
+  return value as PendingFollowUpWakeCondition;
+}
+
+function normalizeWakeConditions(
+  value: readonly PendingFollowUpWakeCondition[] | undefined,
+): PendingFollowUpWakeCondition[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = [...new Set(
+    value
+      .filter((condition): condition is PendingFollowUpWakeCondition => typeof condition === 'string')
+      .map(condition => normalizeWakeCondition(condition)),
+  )];
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  return PENDING_FOLLOW_UP_WAKE_CONDITIONS.filter(condition => normalized.includes(condition));
+}
+
+function decodeWakeConditions(
+  value: string | null,
+  fieldName: string,
+): PendingFollowUpWakeCondition[] | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`Pending follow-up ${fieldName} must be valid JSON: ${String(error)}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`Pending follow-up ${fieldName} must be a JSON array`);
+  }
+  return normalizeWakeConditions(parsed as PendingFollowUpWakeCondition[]);
+}
+
+function encodeWakeConditions(
+  value: readonly PendingFollowUpWakeCondition[] | undefined,
+): string | null {
+  const normalized = normalizeWakeConditions(value);
+  return normalized ? JSON.stringify(normalized) : null;
+}
+
 function clampListLimit(limit: number | undefined): number {
   if (limit === undefined || !Number.isFinite(limit)) {
     return DEFAULT_LIST_LIMIT;
@@ -162,6 +256,10 @@ function mapRow(row: PendingFollowUpRow): PendingFollowUp {
   const sourceMessageId = row.source_message_id === null
     ? undefined
     : normalizeOptionalId(row.source_message_id);
+  const contextSummary = row.context_summary === null
+    ? undefined
+    : normalizeOptionalText(row.context_summary, 'context_summary', MAX_SUMMARY_CHARS);
+  const wakeConditions = decodeWakeConditions(row.wake_conditions, 'wake_conditions');
   const activatedAt = row.activated_at === null
     ? undefined
     : normalizeIsoTimestamp(row.activated_at, 'activated_at');
@@ -182,8 +280,51 @@ function mapRow(row: PendingFollowUpRow): PendingFollowUp {
     ...(dueAt ? { dueAt } : {}),
     ...(contactId ? { contactId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(contextSummary ? { contextSummary } : {}),
+    ...(wakeConditions ? { wakeConditions } : {}),
     ...(activatedAt ? { activatedAt } : {}),
     ...(activationReason ? { activationReason } : {}),
+  };
+}
+
+export function hasStateWakeConditions(followUp: Pick<PendingFollowUp, 'wakeConditions'>): boolean {
+  return Array.isArray(followUp.wakeConditions) && followUp.wakeConditions.length > 0;
+}
+
+export function evaluatePendingFollowUpWakeState(
+  followUp: Pick<PendingFollowUp, 'dueAt' | 'wakeConditions'>,
+  context: PendingFollowUpWakeContext,
+): PendingFollowUpWakeEvaluation {
+  const dueAtMs = typeof followUp.dueAt === 'string' ? Date.parse(followUp.dueAt) : Number.NaN;
+  const dueAtReached = Number.isFinite(dueAtMs) && dueAtMs > 0 && dueAtMs <= context.now;
+  const motivationSignals = new Set(
+    (context.motivationSignals ?? [])
+      .filter(signal => typeof signal === 'string')
+      .map(signal => signal.trim().toLowerCase())
+      .filter(signal => signal.length > 0),
+  );
+  const matchedWakeConditions = (followUp.wakeConditions ?? []).filter((condition) => {
+    switch (condition) {
+      case 'next_user_turn':
+        return context.isBackgroundTurn === false;
+      case 'background_recheck':
+        return context.isBackgroundTurn === true;
+      case 'sustained_negative_mood':
+        return motivationSignals.has('sustained_negative_valence')
+          || (
+            typeof context.currentMoodValence === 'number'
+            && Number.isFinite(context.currentMoodValence)
+            && context.currentMoodValence <= NEGATIVE_MOOD_WAKE_THRESHOLD
+          );
+      default:
+        return false;
+    }
+  });
+
+  return {
+    eligibleNow: dueAtReached || matchedWakeConditions.length > 0,
+    dueAtReached,
+    matchedWakeConditions,
   };
 }
 
@@ -214,9 +355,15 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
     const dueAt = input.dueAt ? normalizeIsoTimestamp(input.dueAt, 'dueAt') : undefined;
     const contactId = normalizeOptionalId(input.contactId);
     const sourceMessageId = normalizeOptionalId(input.sourceMessageId);
+    const contextSummary = normalizeOptionalText(
+      input.contextSummary,
+      'contextSummary',
+      MAX_SUMMARY_CHARS,
+    );
+    const wakeConditions = normalizeWakeConditions(input.wakeConditions);
 
     this.db.prepare(`
-      INSERT INTO intention_pending_follow_ups (
+      INSERT INTO ${PENDING_FOLLOW_UPS_TABLE} (
         id,
         content,
         priority,
@@ -228,7 +375,9 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
         author_name,
         due_at,
         contact_id,
-        source_message_id
+        source_message_id,
+        context_summary,
+        wake_conditions
       ) VALUES (
         @id,
         @content,
@@ -241,7 +390,9 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
         @author_name,
         @due_at,
         @contact_id,
-        @source_message_id
+        @source_message_id,
+        @context_summary,
+        @wake_conditions
       )
     `).run({
       id,
@@ -256,9 +407,70 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
       due_at: dueAt ?? null,
       contact_id: contactId ?? null,
       source_message_id: sourceMessageId ?? null,
+      context_summary: contextSummary ?? null,
+      wake_conditions: encodeWakeConditions(wakeConditions),
     });
 
     return this.requireById(id);
+  }
+
+  update(id: string, input: PendingFollowUpUpdateInput): PendingFollowUp | null {
+    const normalizedId = normalizeRequiredText(id, 'id', MAX_ID_CHARS);
+    const content = normalizeRequiredText(input.content, 'content', MAX_TEXT_CHARS);
+    const priority = normalizePriority(input.priority);
+    const timing = normalizeTiming(input.timing);
+    const channelId = normalizeRequiredText(input.channelId, 'channelId', MAX_ID_CHARS);
+    const channelType = normalizeChannelType(input.channelType);
+    const authorId = normalizeRequiredText(input.authorId, 'authorId', MAX_ID_CHARS);
+    const authorName = normalizeRequiredText(input.authorName, 'authorName', MAX_ID_CHARS);
+    const dueAt = input.dueAt ? normalizeIsoTimestamp(input.dueAt, 'dueAt') : undefined;
+    const contactId = normalizeOptionalId(input.contactId);
+    const sourceMessageId = normalizeOptionalId(input.sourceMessageId);
+    const contextSummary = normalizeOptionalText(
+      input.contextSummary,
+      'contextSummary',
+      MAX_SUMMARY_CHARS,
+    );
+    const wakeConditions = normalizeWakeConditions(input.wakeConditions);
+
+    const result = this.db.prepare(`
+      UPDATE ${PENDING_FOLLOW_UPS_TABLE}
+      SET
+        content = @content,
+        priority = @priority,
+        timing = @timing,
+        channel_id = @channel_id,
+        channel_type = @channel_type,
+        author_id = @author_id,
+        author_name = @author_name,
+        due_at = @due_at,
+        contact_id = @contact_id,
+        source_message_id = @source_message_id,
+        context_summary = @context_summary,
+        wake_conditions = @wake_conditions
+      WHERE
+        id = @id
+        AND activated_at IS NULL
+    `).run({
+      id: normalizedId,
+      content,
+      priority,
+      timing,
+      channel_id: channelId,
+      channel_type: channelType,
+      author_id: authorId,
+      author_name: authorName,
+      due_at: dueAt ?? null,
+      contact_id: contactId ?? null,
+      source_message_id: sourceMessageId ?? null,
+      context_summary: contextSummary ?? null,
+      wake_conditions: encodeWakeConditions(wakeConditions),
+    });
+
+    if (result.changes === 0) {
+      return null;
+    }
+    return this.requireById(normalizedId);
   }
 
   getById(id: string): PendingFollowUp | null {
@@ -277,9 +489,11 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
         due_at,
         contact_id,
         source_message_id,
+        context_summary,
+        wake_conditions,
         activated_at,
         activation_reason
-      FROM intention_pending_follow_ups
+      FROM ${PENDING_FOLLOW_UPS_TABLE}
       WHERE id = @id
     `).get({ id: normalizedId }) as PendingFollowUpRow | undefined;
     return row ? mapRow(row) : null;
@@ -318,9 +532,11 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
         due_at,
         contact_id,
         source_message_id,
+        context_summary,
+        wake_conditions,
         activated_at,
         activation_reason
-      FROM intention_pending_follow_ups
+      FROM ${PENDING_FOLLOW_UPS_TABLE}
       ${whereSql}
       ORDER BY
         created_at ASC,
@@ -346,7 +562,7 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
     );
 
     const result = this.db.prepare(`
-      UPDATE intention_pending_follow_ups
+      UPDATE ${PENDING_FOLLOW_UPS_TABLE}
       SET
         activated_at = @activated_at,
         activation_reason = @activation_reason
@@ -375,7 +591,7 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
 
   private initializeSchema(): void {
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS intention_pending_follow_ups (
+      CREATE TABLE IF NOT EXISTS ${PENDING_FOLLOW_UPS_TABLE} (
         id TEXT PRIMARY KEY,
         content TEXT NOT NULL,
         priority TEXT NOT NULL,
@@ -388,6 +604,8 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
         due_at TEXT,
         contact_id TEXT,
         source_message_id TEXT,
+        context_summary TEXT,
+        wake_conditions TEXT,
         activated_at TEXT,
         activation_reason TEXT,
         CHECK (priority IN ('low', 'medium', 'high')),
@@ -396,10 +614,22 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
       );
 
       CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_active
-      ON intention_pending_follow_ups (activated_at, created_at, id);
+      ON ${PENDING_FOLLOW_UPS_TABLE} (activated_at, created_at, id);
 
       CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_contact
-      ON intention_pending_follow_ups (contact_id, activated_at, created_at, id);
+      ON ${PENDING_FOLLOW_UPS_TABLE} (contact_id, activated_at, created_at, id);
     `);
+    this.ensureColumn('context_summary', 'TEXT');
+    this.ensureColumn('wake_conditions', 'TEXT');
+  }
+
+  private ensureColumn(columnName: string, columnDefinition: string): void {
+    const columns = this.db.prepare(`PRAGMA table_info(${PENDING_FOLLOW_UPS_TABLE})`).all() as Array<{
+      name?: string;
+    }>;
+    if (columns.some(column => column.name === columnName)) {
+      return;
+    }
+    this.db.exec(`ALTER TABLE ${PENDING_FOLLOW_UPS_TABLE} ADD COLUMN ${columnName} ${columnDefinition}`);
   }
 }

@@ -75,6 +75,20 @@ function makeInternalState() {
       expiresAt: '2026-03-02T00:00:00.000Z',
       contactId: 'contact-primary',
     }],
+    pendingFollowUps: [{
+      id: 'pending-follow-up-1',
+      content: 'Check in if they come back still sounding discouraged.',
+      priority: 'medium',
+      timing: 'soon',
+      createdAt: '2026-03-01T00:05:00.000Z',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-primary',
+      contextSummary: 'They wanted a gentle re-check after sitting with the plan.',
+      wakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+    }],
     careReminders: [{
       id: 'care-reminder-1',
       kind: 'important_date',
@@ -380,6 +394,47 @@ describe('IntentionAppraisal', () => {
     });
   });
 
+  it('includes pending follow-up resurfacing context in the appraisal prompt', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'noop',
+          priority: 'low',
+          reason: 'No new action required',
+          timing: 'none',
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:pending-follow-ups',
+      internalState: makeInternalState(),
+      currentEmotion: makeEmotionSnapshot({
+        mood: { valence: -0.25, arousal: 0.05, dominance: -0.1 },
+      }),
+      triggerOverride: 'motivation',
+      motivationSignals: ['sustained_negative_valence'],
+      recentMessages: [{ role: 'user', content: 'I still feel pretty low about this.' }],
+    });
+
+    const promptPayload = JSON.parse((complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}') as string) as {
+      pendingFollowUps?: Array<Record<string, unknown>>;
+    };
+    expect(promptPayload.pendingFollowUps?.[0]).toMatchObject({
+      id: 'pending-follow-up-1',
+      timing: 'soon',
+      contextSummary: 'They wanted a gentle re-check after sitting with the plan.',
+      wakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+      eligibleNow: true,
+      matchedWakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+    });
+  });
+
   it('fails closed when model output is malformed', async () => {
     const { provider } = makeProvider(['not valid json']);
     const onEvaluationError = vi.fn();
@@ -637,6 +692,27 @@ describe('intention appraisal action mapping', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('keeps follow-ups pending when they only specify state-based wake conditions', () => {
+    const candidates = decisionsToPostTurnActionCandidates([{
+      type: 'followUp',
+      priority: 'medium',
+      reason: 'Wait until the partner returns or mood stays low.',
+      timing: 'soon',
+      followUp: {
+        content: 'Check back in when the conversation naturally reopens.',
+        wakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+      },
+    }], {
+      message: {
+        id: 'msg-intention-state-wake',
+        channelId: 'api:test',
+        channelType: 'api',
+      },
+    });
+
+    expect(candidates).toEqual([]);
   });
 
   it('forces intention follow-ups to system attribution even if the model supplies user authors', () => {

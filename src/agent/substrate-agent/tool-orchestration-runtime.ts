@@ -778,3 +778,48 @@ export function swapPromotedExtendedTools(
     message: `Swapped promoted tool slots ${fromSlot} and ${toSlot}.`,
   };
 }
+
+function formatPromotedToolList(toolNames: readonly string[]): string {
+  if (toolNames.length === 0) return 'none';
+  return toolNames.map(name => `"${name}"`).join(', ');
+}
+
+export function describePromotedToolMutation(input: {
+  action: 'add' | 'remove' | 'swap';
+  toolName?: string;
+  fromSlot?: number;
+  toSlot?: number;
+  before: readonly string[];
+  after: readonly string[];
+  reason?: string;
+}): string {
+  const actionText = (() => {
+    switch (input.action) {
+      case 'add':
+        return input.toolName
+          ? `Promoted extended tool "${input.toolName}"`
+          : 'Promoted extended tool';
+      case 'remove':
+        return input.toolName
+          ? `Removed promoted extended tool "${input.toolName}"`
+          : 'Removed promoted extended tool';
+      case 'swap':
+        if (input.fromSlot !== undefined && input.toSlot !== undefined) {
+          const fromTool = input.before[input.fromSlot - 1];
+          const toTool = input.before[input.toSlot - 1];
+          const pair = fromTool && toTool
+            ? `slots ${input.fromSlot} and ${input.toSlot} ("${fromTool}" <-> "${toTool}")`
+            : `slots ${input.fromSlot} and ${input.toSlot}`;
+          return `Swapped promoted tool ${pair}`;
+        }
+        return 'Swapped promoted tools';
+    }
+  })();
+
+  const detailParts = [`${actionText}.`, `Promoted tools now: ${formatPromotedToolList(input.after)}.`];
+  const reason = input.reason?.trim();
+  if (reason) {
+    detailParts.push(`Reason: ${reason}.`);
+  }
+  return detailParts.join(' ');
+}

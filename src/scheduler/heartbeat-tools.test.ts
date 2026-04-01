@@ -170,6 +170,69 @@ describe('heartbeat_update_policy', () => {
     expect(experiential?.internalStateInput).toBe(false);
   });
 
+  it('writes durable autonomous-action memory when adding a template', async () => {
+    const memoryWriter = {
+      write: vi.fn(async (input: Record<string, unknown>) => ({
+        action: 'created',
+        memory: { id: 'mem-1', ...input },
+      })),
+    };
+    const tool = createHeartbeatUpdatePolicyTool(store, syncFn, {
+      memoryWriter: memoryWriter as any,
+    });
+    const result = await tool.execute('call-add-template', {
+      action: 'add',
+      id: 'focus-check-in',
+      name: 'Focus Check-In',
+      prompt: 'How should we keep the current priorities in view?',
+      intervalMs: 3_600_000,
+      reason: 'Keep the self-organization cadence visible.',
+    }, new AbortController().signal);
+
+    const text = (result.content[0] as { text: string }).text;
+    expect(text).toContain('Added template "focus-check-in"');
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    const payload = memoryWriter.write.mock.calls[0]?.[0] as {
+      sourceRef?: string;
+      provenanceRefs?: string[];
+      tags?: string[];
+      scopeRef?: { kind?: string; id?: string; label?: string };
+      scopeTags?: string[];
+      text?: string;
+    };
+    expect(payload.sourceRef).toContain('source:autonomous_action|tool:heartbeat_update_policy|action:add');
+    expect(payload.provenanceRefs).toEqual(expect.arrayContaining([
+      'source_type=autonomous_action',
+      'tool=heartbeat_update_policy',
+      'action=add',
+      'reason=Keep the self-organization cadence visible.',
+    ]));
+    expect(payload.tags).toEqual(expect.arrayContaining([
+      'autonomous_action',
+      'self_configuration',
+      'heartbeat_update_policy',
+      'add',
+      'heartbeat_policy',
+      'template:focus-check-in',
+    ]));
+    expect(payload.scopeRef).toEqual({
+      kind: 'system',
+      id: 'self-configuration',
+      label: 'Self-configuration',
+    });
+    expect(payload.scopeTags).toEqual(expect.arrayContaining([
+      'heartbeat_policy',
+      'template:focus-check-in',
+      'template_name:focus check-in',
+    ]));
+    expect(payload.text).toContain('added heartbeat template "focus-check-in"');
+
+    const policy = store.load();
+    const added = policy.templates.find(t => t.id === 'focus-check-in');
+    expect(added?.name).toBe('Focus Check-In');
+    expect(syncFn).toHaveBeenCalled();
+  });
+
   it('changes prompt text', async () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     const newPrompt = 'Tell me about the weather in your inner world today, in detail.';

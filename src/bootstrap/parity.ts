@@ -275,6 +275,8 @@ function hasPromotedToolsManager(
   return (
     typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedToolsLimit === 'function'
     && typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedTools === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).setPromotedExtendedTools === 'function'
+    && typeof (target as Partial<PromotedExtendedToolsManager>).persistPromotedExtendedTools === 'function'
     && typeof (target as Partial<PromotedExtendedToolsManager>).addPromotedExtendedTool === 'function'
     && typeof (target as Partial<PromotedExtendedToolsManager>).removePromotedExtendedTool === 'function'
     && typeof (target as Partial<PromotedExtendedToolsManager>).swapPromotedExtendedTools === 'function'
@@ -393,15 +395,18 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
 export function wireSettingsRuntime(
   target: ToolRegistrarTarget,
   config: SubstrateConfig,
+  options: {
+    getMemoryWriter?: () => Pick<MemoryWriter, 'write'> | undefined;
+  } = {},
 ): void {
   target.registerTool(createSettingsGetTool(config), 'core');
   if (!hasPromotedToolsManager(target)) {
     return;
   }
   target.registerTool(createPromotedToolsListTool(target), 'extended');
-  target.registerTool(createPromotedToolsAddTool(target), 'extended');
-  target.registerTool(createPromotedToolsRemoveTool(target), 'extended');
-  target.registerTool(createPromotedToolsSwapTool(target), 'extended');
+  target.registerTool(createPromotedToolsAddTool(target, { getMemoryWriter: options.getMemoryWriter }), 'extended');
+  target.registerTool(createPromotedToolsRemoveTool(target, { getMemoryWriter: options.getMemoryWriter }), 'extended');
+  target.registerTool(createPromotedToolsSwapTool(target, { getMemoryWriter: options.getMemoryWriter }), 'extended');
 }
 
 export function wireSessionToolsRuntime(
@@ -1830,7 +1835,9 @@ export function wireHeartbeatRuntime(
 
   // Register tools
   target.registerTool(createHeartbeatGetPolicyTool(store), 'core');
-  target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
+  target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks, {
+    memoryWriter: runtimeOptions.memoryWriter,
+  }), 'extended');
   target.registerTool(createHeartbeatRunTemplateTool(store, runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
   target.registerTool(createValuesListTool(valuesJournal), 'core');

@@ -532,7 +532,10 @@ async function main(): Promise<void> {
     getCapabilityTier: () => capabilityRuntime.getTier(),
     confirmationQueue: cardProposalQueue,
   });
-  wireSettingsRuntime(agentLoop, config);
+  let memoryWriter!: MemoryWriter;
+  wireSettingsRuntime(agentLoop, config, {
+    getMemoryWriter: () => memoryWriter,
+  });
   wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir, gateway);
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
@@ -709,7 +712,7 @@ async function main(): Promise<void> {
   });
 
   // Memory write/import tools — intentional memory creation
-  const memoryWriter = new MemoryWriter(memoryStore, gateway);
+  memoryWriter = new MemoryWriter(memoryStore, gateway);
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );

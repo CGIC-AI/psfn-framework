@@ -101,6 +101,8 @@ describe('promoted tools settings helpers', () => {
     const listTool = createPromotedToolsListTool({
       getPromotedExtendedToolsLimit: () => 4,
       getPromotedExtendedTools: () => ['repo_status', 'session_list'],
+      setPromotedExtendedTools: () => ['repo_status', 'session_list'],
+      persistPromotedExtendedTools: () => null,
       addPromotedExtendedTool: () => {
         throw new Error('not used');
       },
@@ -123,6 +125,8 @@ describe('promoted tools settings helpers', () => {
     const addTool = createPromotedToolsAddTool({
       getPromotedExtendedToolsLimit: () => 4,
       getPromotedExtendedTools: () => ['repo_status'],
+      setPromotedExtendedTools: () => ['repo_status'],
+      persistPromotedExtendedTools: () => null,
       addPromotedExtendedTool: () => ({
         ok: false,
         changed: false,
@@ -154,6 +158,8 @@ describe('promoted tools settings helpers', () => {
     const manager = {
       getPromotedExtendedToolsLimit: () => 4,
       getPromotedExtendedTools: () => ['repo_status', 'session_list'],
+      setPromotedExtendedTools: (next: readonly string[]) => [...next],
+      persistPromotedExtendedTools: () => null,
       addPromotedExtendedTool: () => ({
         ok: true,
         changed: true,
@@ -181,13 +187,13 @@ describe('promoted tools settings helpers', () => {
     };
 
     const removeTool = createPromotedToolsRemoveTool(manager);
-    const removeResult = await removeTool.execute('call-remove', { tool: 'repo_status' });
+    const removeResult = await removeTool.execute('call-remove', { tool: 'repo_status', reason: 'prefer direct lookup' });
     const removePayload = JSON.parse(readText(removeResult));
     expect(removePayload.action).toBe('remove');
     expect(removed).toEqual(['repo_status']);
 
     const swapTool = createPromotedToolsSwapTool(manager);
-    const swapResult = await swapTool.execute('call-swap', { fromSlot: 1, toSlot: 2 });
+    const swapResult = await swapTool.execute('call-swap', { fromSlot: 1, toSlot: 2, reason: 'reorder for shorter prefix' });
     const swapPayload = JSON.parse(readText(swapResult));
     expect(swapPayload.action).toBe('swap');
     expect(swapped).toEqual([[1, 2]]);

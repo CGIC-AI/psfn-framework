@@ -151,6 +151,8 @@ describe('wireSettingsRuntime', () => {
       registerTool: vi.fn(),
       getPromotedExtendedToolsLimit: () => 4,
       getPromotedExtendedTools: () => ['repo_status'],
+      setPromotedExtendedTools: () => ['repo_status'],
+      persistPromotedExtendedTools: () => null,
       addPromotedExtendedTool: vi.fn(() => ({
         ok: true,
         changed: true,
@@ -187,6 +189,91 @@ describe('wireSettingsRuntime', () => {
         .filter(([tool]) => tool.name !== 'settings_get')
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
+  });
+
+  it('writes durable autonomous-action memory when promoted tools change', async () => {
+    const memoryWriter = {
+      write: vi.fn(async (input: Record<string, unknown>) => ({
+        action: 'created',
+        memory: { id: 'memory-1', ...input },
+      })),
+    };
+    const target = {
+      registerTool: vi.fn(),
+      getPromotedExtendedToolsLimit: () => 4,
+      getPromotedExtendedTools: () => ['repo_status'],
+      setPromotedExtendedTools: vi.fn((next: readonly string[]) => [...next]),
+      persistPromotedExtendedTools: vi.fn(() => null),
+      addPromotedExtendedTool: vi.fn(() => ({
+        ok: true,
+        changed: true,
+        promotedTools: ['repo_status', 'session_list'],
+        message: 'added',
+      })),
+      removePromotedExtendedTool: vi.fn(() => ({
+        ok: true,
+        changed: true,
+        promotedTools: ['session_list'],
+        message: 'removed',
+      })),
+      swapPromotedExtendedTools: vi.fn(() => ({
+        ok: true,
+        changed: true,
+        promotedTools: ['session_list', 'repo_status'],
+        message: 'swapped',
+      })),
+    };
+
+    wireSettingsRuntime(target as any, {} as any, {
+      getMemoryWriter: () => memoryWriter as any,
+    });
+
+    const addTool = target.registerTool.mock.calls.find(([tool]) => tool.name === 'promoted_tools_add')?.[0] as
+      | { execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ details?: { isError?: boolean } }> }
+      | undefined;
+    expect(addTool).toBeDefined();
+
+    const result = await addTool!.execute('call-add', {
+      tool: 'session_list',
+      reason: 'Prefer the session surface on every turn.',
+    });
+    expect(result.details?.isError).toBeUndefined();
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    const payload = memoryWriter.write.mock.calls[0]?.[0] as {
+      sourceRef?: string;
+      provenanceRefs?: string[];
+      tags?: string[];
+      scopeRef?: { kind?: string; id?: string; label?: string };
+      scopeTags?: string[];
+      text?: string;
+    };
+    expect(payload.sourceRef).toContain('source:autonomous_action|tool:promoted_tools_add|action:add');
+    expect(payload.provenanceRefs).toEqual(expect.arrayContaining([
+      'source_type=autonomous_action',
+      'tool=promoted_tools_add',
+      'action=add',
+      'reason=Prefer the session surface on every turn.',
+    ]));
+    expect(payload.tags).toEqual(expect.arrayContaining([
+      'autonomous_action',
+      'self_configuration',
+      'promoted_tools_add',
+      'add',
+      'promoted_tools',
+      'toolset',
+    ]));
+    expect(payload.scopeRef).toEqual({
+      kind: 'system',
+      id: 'self-configuration',
+      label: 'Self-configuration',
+    });
+    expect(payload.scopeTags).toEqual(expect.arrayContaining([
+      'promoted_tools_add',
+      'add',
+      'promoted_tools',
+      'toolset',
+    ]));
+    expect(payload.text).toContain('Promoted extended tool "session_list"');
   });
 });
 

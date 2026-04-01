@@ -16,6 +16,8 @@ import type { PostTurnActionCandidate, SubstrateMessage } from '../types.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import { isBusyTurnError } from '../lifecycle/turn-contention.js';
+import type { MemoryWriter } from '../memory/writer.js';
+import { buildAutonomousActionMemoryContext } from '../memory/types.js';
 
 // ── Helpers ──
 
@@ -58,6 +60,48 @@ function cloneDeliberation(config: ReflectionDeliberationConfig | undefined): Re
       ? { outputUsdPerMillionTokens: config.outputUsdPerMillionTokens }
       : {}),
   };
+}
+
+async function recordAutonomousHeartbeatMemory(
+  memoryWriter: Pick<MemoryWriter, 'write'>,
+  input: {
+    action: 'add' | 'update';
+    templateId: string;
+    templateName: string;
+    summary: string;
+    reason?: string;
+  },
+): Promise<void> {
+  const provenance = buildAutonomousActionMemoryContext({
+    toolName: 'heartbeat_update_policy',
+    action: input.action,
+    reason: input.reason,
+    timestampMs: Date.now(),
+  });
+
+  await memoryWriter.write({
+    text: input.summary,
+    type: 'episodic',
+    importance: 0.84,
+    salience: 0.82,
+    confidence: 0.9,
+    emotionalValence: 0,
+    retentionClass: 'durable',
+    tags: [
+      ...provenance.tags,
+      'heartbeat_policy',
+      `template:${input.templateId}`,
+    ],
+    sourceRef: provenance.sourceRef,
+    provenanceRefs: provenance.provenanceRefs,
+    scopeRef: provenance.scopeRef,
+    scopeTags: [
+      ...provenance.scopeTags,
+      'heartbeat_policy',
+      `template:${input.templateId}`,
+      `template_name:${input.templateName.toLowerCase()}`,
+    ],
+  });
 }
 
 interface HeartbeatRunTemplateResult {
@@ -118,6 +162,7 @@ export function createHeartbeatGetPolicyTool(
 export function createHeartbeatUpdatePolicyTool(
   store: HeartbeatPolicyStore,
   syncFn: () => void,
+  options: { memoryWriter?: Pick<MemoryWriter, 'write'> } = {},
 ): AgentTool<any> {
   return {
     name: 'heartbeat_update_policy',
@@ -142,6 +187,9 @@ export function createHeartbeatUpdatePolicyTool(
       enabled: Type.Optional(Type.Boolean({ description: 'Enable or disable' })),
       sendToDiscord: Type.Optional(
         Type.Boolean({ description: 'Whether to send the response to Discord' }),
+      ),
+      reason: Type.Optional(
+        Type.String({ description: 'Optional reason for the policy change; captured in autonomous-action memory.' }),
       ),
       internalStateInput: Type.Optional(
         Type.Boolean({
@@ -186,6 +234,7 @@ export function createHeartbeatUpdatePolicyTool(
         intervalMs?: number;
         enabled?: boolean;
         sendToDiscord?: boolean;
+        reason?: string;
         internalStateInput?: boolean;
         mode?: 'standard' | 'deliberation';
         deliberation?: ReflectionDeliberationConfig;
@@ -193,6 +242,7 @@ export function createHeartbeatUpdatePolicyTool(
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
         const policy = store.load();
+        const previousPolicy = JSON.parse(JSON.stringify(policy)) as typeof policy;
 
         // ── Add mode ──
         if (params.action === 'add') {
@@ -234,6 +284,28 @@ export function createHeartbeatUpdatePolicyTool(
           policy.updatedBy = 'agent';
           store.save(policy);
           syncFn();
+
+          if (options.memoryWriter) {
+            try {
+              await recordAutonomousHeartbeatMemory(options.memoryWriter, {
+                action: 'add',
+                templateId: newTemplate.id,
+                templateName: newTemplate.name,
+                reason: params.reason,
+                summary:
+                  `Autonomous self-configuration change via heartbeat_update_policy: added heartbeat template "${newTemplate.id}" `
+                  + `(${newTemplate.name}, interval ${formatMs(newTemplate.intervalMs)}, mode=${newTemplate.mode}).`
+                  + (params.reason ? ` Reason: ${params.reason.trim()}.` : ''),
+              });
+            } catch (error) {
+              store.save(previousPolicy);
+              syncFn();
+              return textResultWithError(
+                `heartbeat_update_policy failed to persist autonomous-action memory; change rolled back. ${errorMessage(error)}`,
+                true,
+              );
+            }
+          }
 
           return textResult(`Added template "${params.id}" (${formatMs(params.intervalMs)} interval)`);
         }
@@ -282,6 +354,38 @@ export function createHeartbeatUpdatePolicyTool(
         policy.updatedBy = 'agent';
         store.save(policy);
         syncFn();
+
+        if (options.memoryWriter) {
+          try {
+            const changedFields = [
+              ...(params.name !== undefined ? [`name="${params.name}"`] : []),
+              ...(params.prompt !== undefined ? ['prompt updated'] : []),
+              ...(params.intervalMs !== undefined ? [`interval=${formatMs(params.intervalMs)}`] : []),
+              ...(params.enabled !== undefined ? [`enabled=${params.enabled}`] : []),
+              ...(params.sendToDiscord !== undefined ? [`discord=${params.sendToDiscord}`] : []),
+              ...(params.internalStateInput !== undefined ? [`internalStateInput=${params.internalStateInput}`] : []),
+              ...(params.mode !== undefined ? [`mode=${params.mode}`] : []),
+              ...(params.deliberation !== undefined ? ['deliberation updated'] : []),
+            ];
+            await recordAutonomousHeartbeatMemory(options.memoryWriter, {
+              action: 'update',
+              templateId: template.id,
+              templateName: template.name,
+              reason: params.reason,
+              summary:
+                `Autonomous self-configuration change via heartbeat_update_policy: updated heartbeat template "${template.id}" `
+                + `(${changedFields.join(', ') || 'no-op'}).`
+                + (params.reason ? ` Reason: ${params.reason.trim()}.` : ''),
+            });
+          } catch (error) {
+            store.save(previousPolicy);
+            syncFn();
+            return textResultWithError(
+              `heartbeat_update_policy failed to persist autonomous-action memory; change rolled back. ${errorMessage(error)}`,
+              true,
+            );
+          }
+        }
 
         return textResult(
           `Updated template "${params.templateId}" — ` +

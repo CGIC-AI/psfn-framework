@@ -119,7 +119,7 @@ function executeContactSetTrust(
 ): AgentToolResult<{ isError?: boolean }> {
   const { contactId, trustLevel, behaviorSignals, confirmSuggestion } = params;
 
-  if (!contactId?.trim()) {
+  if (!contactId.trim()) {
     return textResultWithError('Missing contactId', true);
   }
 

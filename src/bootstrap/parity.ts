@@ -92,10 +92,17 @@ import {
   resolvePromptLayersPath,
   resolvePromptRegistryHistoryPath,
   resolvePromptRegistryPath,
+  resolveReflectionDailyJournalsDir,
   resolveReflectionJournalPath,
+  resolveReflectionProcessLogsDir,
   resolveValuesJournalPath,
 } from '../persistence/layout.js';
 import { ReflectionJournalStore } from '../notes/reflection-journal.js';
+import {
+  buildReflectionProcessId,
+  ReflectionDailyJournalStore,
+  ReflectionProcessLogStore,
+} from '../notes/reflection-substrate.js';
 import type { PostTurnActionRuntime } from './post-turn-actions.js';
 import { isBusyTurnError } from '../lifecycle/turn-contention.js';
 import {
@@ -421,6 +428,8 @@ export function wireHeartbeatRuntime(
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });
   const reflectionJournal = new ReflectionJournalStore(resolveReflectionJournalPath(dataDir));
+  const reflectionDailyJournal = new ReflectionDailyJournalStore(resolveReflectionDailyJournalsDir(dataDir));
+  const reflectionProcessLog = new ReflectionProcessLogStore(resolveReflectionProcessLogsDir(dataDir));
   const policy = store.load();
   const pendingDeferredTemplates = new Set<string>();
   const lastScheduledRunAt = new Map<string, number>();
@@ -872,22 +881,93 @@ export function wireHeartbeatRuntime(
     const internalStateContext = resolveInternalStateContext(template);
     const appearanceContext = shouldUseDeliberation(template) ? resolveDeliberationAppearanceContext() : undefined;
     const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext, appearanceContext);
+    const reflectionCreatedAt = new Date(Date.now()).toISOString();
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
     let persistenceContext = internalStateContext;
+    let reflectionProcessId: string | undefined;
 
     if (shouldUseDeliberation(template)) {
-      const deliberationResult = await runTemplateDeliberation(template, reflectionPrompt);
-      reflectionText = deliberationResult.reflection;
-      deliberationMetadata = deliberationResult.metadata;
-      reflectionMode = 'deliberation';
+      const processId = buildReflectionProcessId(`${template.id}-${source}`);
+      reflectionProcessId = processId;
       try {
-        await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
+        reflectionProcessLog.append({
+          processId,
+          processLabel: `${template.name} deliberation`,
+          processType: 'reflection_deliberation',
+          stage: 'started',
+          executionSource: source,
+          createdAt: reflectionCreatedAt,
+          templateId: template.id,
+          templateName: template.name,
+          channelId: reflectionChannelId,
+          prompt: reflectionPrompt,
+          tags: [template.id, 'reflection', 'deliberation'],
+        });
       } catch (error) {
-        log.warn(`Reflection "${template.id}" memory persistence skipped`, {
+        log.warn(`Reflection "${template.id}" process-start log persistence skipped`, {
           error: String(error),
         });
+      }
+
+      try {
+        const deliberationResult = await runTemplateDeliberation(template, reflectionPrompt);
+        reflectionText = deliberationResult.reflection;
+        deliberationMetadata = deliberationResult.metadata;
+        reflectionMode = 'deliberation';
+
+        try {
+          reflectionProcessLog.append({
+            processId,
+            processLabel: `${template.name} deliberation`,
+            processType: 'reflection_deliberation',
+            stage: 'completed',
+            executionSource: source,
+            createdAt: new Date(Date.now()).toISOString(),
+            templateId: template.id,
+            templateName: template.name,
+            channelId: reflectionChannelId,
+            prompt: reflectionPrompt,
+            reflection: reflectionText,
+            deliberation: deliberationMetadata,
+            tags: [template.id, 'reflection', 'deliberation'],
+          });
+        } catch (error) {
+          log.warn(`Reflection "${template.id}" process log persistence skipped`, {
+            error: String(error),
+          });
+        }
+
+        try {
+          await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
+        } catch (error) {
+          log.warn(`Reflection "${template.id}" memory persistence skipped`, {
+            error: String(error),
+          });
+        }
+      } catch (error) {
+        try {
+          reflectionProcessLog.append({
+            processId,
+            processLabel: `${template.name} deliberation`,
+            processType: 'reflection_deliberation',
+            stage: 'failed',
+            executionSource: source,
+            createdAt: new Date(Date.now()).toISOString(),
+            templateId: template.id,
+            templateName: template.name,
+            channelId: reflectionChannelId,
+            prompt: reflectionPrompt,
+            error: String(error),
+            tags: [template.id, 'reflection', 'deliberation'],
+          });
+        } catch (processLogError) {
+          log.warn(`Reflection "${template.id}" process-failure log persistence skipped`, {
+            error: String(processLogError),
+          });
+        }
+        throw error;
       }
     } else {
       const response = await agentLoop.handleMessage({
@@ -915,6 +995,7 @@ export function wireHeartbeatRuntime(
         reflection: reflectionText,
         channelId: reflectionChannelId,
         mode: reflectionMode,
+        createdAt: reflectionCreatedAt,
         ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
         ...(persistenceContext ? {
           internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
@@ -925,6 +1006,27 @@ export function wireHeartbeatRuntime(
       reflectionJournalEntryId = reflectionEntry.id;
     } catch (error) {
       log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
+        error: String(error),
+      });
+    }
+
+    try {
+      reflectionDailyJournal.append({
+        source: 'heartbeat_template',
+        executionSource: source,
+        templateId: template.id,
+        templateName: template.name,
+        channelId: reflectionChannelId,
+        prompt: reflectionPrompt,
+        reflection: reflectionText,
+        mode: reflectionMode,
+        createdAt: reflectionCreatedAt,
+        ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+        ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
+        tags: [template.id, 'reflection', reflectionMode],
+      });
+    } catch (error) {
+      log.warn(`Reflection "${template.id}" daily journal persistence skipped`, {
         error: String(error),
       });
     }

@@ -26,7 +26,9 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 ### Parallel memory/state artifacts
 
 - `contacts/` continuity files
-- reflection journal entries under `notes/reflections/`
+- reflection journal entries under `notes/reflections/journal.jsonl`
+- append-only daily reflection journals under `notes/reflections/daily/`
+- append-only long-process reflection logs under `notes/reflections/process-logs/`
 - `core_memory.json`
 - contact profiles and social graph state in SQLite/contact stores
 - scratchpad mirror at `notes/scratchpad.json`

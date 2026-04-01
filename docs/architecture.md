@@ -56,6 +56,7 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 
 - L0 session history is append-only JSONL under `sessions/`.
 - `SessionManager` handles compaction, token budgeting, continuity, internal role envelopes, and prompt-aware context assembly.
+- Reflection-oriented append-only notes live separately under `notes/reflections/` for heartbeat journals, per-day journals, and long-process reflection logs.
 - Session integrity can be HMAC-backed in split mode through the gateway-provided integrity provider.
 
 ### Memory

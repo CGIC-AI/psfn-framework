@@ -172,6 +172,7 @@ describe('ShardManager', () => {
     expect(result.turns).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
+    expect(result.backend).toBe('inline');
     expect(result.creationMode).toBe('fresh');
     expect(result.gatewayRouting).toEqual({
       schemaVersion: 1,
@@ -465,6 +466,62 @@ describe('ShardManager', () => {
       }),
     ).rejects.toThrow('missing required capability');
     expect(manager.getActiveCount()).toBe(0);
+  });
+
+  it('fails closed when mediated shard backends are requested below autonomous tier', async () => {
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      parentSystemPrompt: 'test',
+    });
+
+    await expect(
+      manager.spawn({
+        name: 'container-denied',
+        task: 'test',
+        backend: 'container',
+      }),
+    ).rejects.toThrow('requires autonomous or custom capability tier');
+  });
+
+  it('routes mediated shard backend requests through the backend controller and degrades closed', async () => {
+    const requestBackend = vi.fn(async () => ({
+      backend: 'container' as const,
+      controller: 'gateway' as const,
+      status: 'unavailable' as const,
+      reason: 'Gateway mediation accepted shard backend "container" but no docker-backed shard executor is wired.',
+    }));
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test',
+      backendController: {
+        portFamily: 'shard_backend_controller',
+        requestBackend,
+      },
+    });
+
+    await expect(
+      manager.spawn({
+        name: 'containerized-research',
+        task: 'test mediated backend',
+        backend: 'container',
+      }),
+    ).rejects.toThrow('docker-backed shard executor is wired');
+
+    expect(requestBackend).toHaveBeenCalledWith(expect.objectContaining({
+      shardName: 'containerized-research',
+      backend: 'container',
+      capabilityTier: 'autonomous',
+    }));
   });
 
   it('evicts stale shards from active routing and frees execution slots', async () => {
@@ -1324,6 +1381,7 @@ describe('createSpawnShardTool', () => {
     const spawn = vi.fn(async () => ({
       shardId: 'shard-failure',
       name: 'degraded-shard',
+      backend: 'inline' as const,
       content: 'partial output',
       model: 'mock-model',
       inputTokens: 1,
@@ -1374,6 +1432,7 @@ describe('createSpawnShardTool', () => {
     const spawn = vi.fn(async () => ({
       shardId: 'shard-test',
       name: 'ctx',
+      backend: 'inline' as const,
       content: 'ok',
       model: 'mock-model',
       inputTokens: 0,
@@ -1432,6 +1491,59 @@ describe('createSpawnShardTool', () => {
         requestId: 'req-source-context',
         turnId: 'turn-source-context',
       },
+    }));
+  });
+
+  it('passes explicit backend requests into shard spawns', async () => {
+    const spawn = vi.fn(async () => ({
+      shardId: 'shard-backend',
+      name: 'backend-test',
+      backend: 'container' as const,
+      content: 'ok',
+      model: 'mock-model',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: 1,
+      turns: 1,
+      creationMode: 'fresh' as const,
+      lifecycleState: 'offline' as const,
+      runtimeState: 'awaiting_delivery' as const,
+      runtimeStateReason: 'artifact_ready',
+      health: 'healthy' as const,
+      stateReason: 'completed',
+      artifactLifecycleState: 'available' as const,
+      artifactAvailableAt: 1,
+      capabilities: ['general'],
+      requiredCapabilities: [],
+      lineage: {
+        coreCompanionId: 'companion',
+        shardCompanionId: 'companion/shards/shard-backend',
+        shardId: 'shard-backend',
+        creationMode: 'fresh' as const,
+      },
+      gatewayRouting: {
+        schemaVersion: 1,
+        companionId: 'companion',
+        shard: {
+          coreCompanionId: 'companion',
+          shardCompanionId: 'companion/shards/shard-backend',
+          shardId: 'shard-backend',
+          creationMode: 'fresh' as const,
+        },
+      },
+    }));
+    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+
+    await tool.execute('call-backend', {
+      name: 'backend-test',
+      task: 'Use a mediated backend',
+      backend: 'container',
+    });
+
+    expect(spawn).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'backend-test',
+      task: 'Use a mediated backend',
+      backend: 'container',
     }));
   });
 

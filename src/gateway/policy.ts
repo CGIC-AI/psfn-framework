@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import type { BeadsAction, PolicyContext, PolicyDecision } from './protocol.js';
 import type { VaultOperations } from '../vault/ops.js';
+import type { ShardBackendRequestBackend } from './protocol.js';
 
 const log = createComponentLogger('Policy');
 import { evaluateUrlPolicy, type UrlPolicyConfig, type UrlPolicyLane } from './url-policy.js';
@@ -166,6 +167,43 @@ function hasText(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function normalizeShardBackendRequestBackend(value: unknown): ShardBackendRequestBackend | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'container' || normalized === 'orchestrated') {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeAllowlistCommand(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return '';
+  }
+  return basename(trimmed);
+}
+
+function allowlistIncludesCommand(
+  allowlist: readonly string[] | undefined,
+  command: string,
+): boolean {
+  if (!allowlist || allowlist.length === 0) {
+    return false;
+  }
+
+  const expected = normalizeAllowlistCommand(command);
+  return allowlist.some(entry => normalizeAllowlistCommand(entry) === expected);
+}
+
+function requiredShardBackendCommand(
+  backend: ShardBackendRequestBackend,
+): 'docker' | 'kubectl' {
+  return backend === 'container' ? 'docker' : 'kubectl';
+}
+
 export function evaluateShardSessionMemorySyncPolicy(
   envelope: ShardSessionMemorySyncEnvelope,
 ): ShardSessionMemorySyncDecision {
@@ -254,6 +292,24 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
     case 'shell.exec': {
       if (!policyConfig.shellExec?.enabled) {
+        return 'DENY';
+      }
+      return 'ALLOW';
+    }
+
+    case 'shard.backend.request': {
+      const backend = normalizeShardBackendRequestBackend(
+        (params as Record<string, unknown>).backend,
+      );
+      if (!backend) {
+        return 'DENY';
+      }
+      const shellPolicy = policyConfig.shellExec;
+      if (!shellPolicy?.enabled) {
+        return 'DENY';
+      }
+      const requiredCommand = requiredShardBackendCommand(backend);
+      if (!allowlistIncludesCommand(shellPolicy.allowlist, requiredCommand)) {
         return 'DENY';
       }
       return 'ALLOW';

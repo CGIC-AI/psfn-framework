@@ -86,6 +86,7 @@ import {
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from './bootstrap/composition.js';
+import { GatewayShardBackendController } from './shards/backend-controller.js';
 import {
   wirePromptRuntime,
   wireCharacterCardRuntime,
@@ -711,6 +712,7 @@ async function main(): Promise<void> {
     onSubagentFacultyReady: (faculty) => {
       subagentFaculty = faculty;
     },
+    shardBackendController: new GatewayShardBackendController(gateway),
   });
 
   // Memory write/import tools — intentional memory creation

@@ -3,6 +3,7 @@
 
 import type {
   Attachment,
+  CapabilityTier,
   CompletionPurpose,
   ContextMessage,
   ModelThinkingEffort,
@@ -226,6 +227,15 @@ export interface ShellExecParams {
   cwd?: string;
   timeoutMs?: number;
   maxOutputChars?: number;
+}
+
+export type ShardBackendRequestBackend = 'container' | 'orchestrated';
+
+export interface ShardBackendRequestParams extends GatewayCorrelationParams {
+  shardId: string;
+  name: string;
+  backend: ShardBackendRequestBackend;
+  capabilityTier: CapabilityTier;
 }
 
 export type VaultWriteMode = 'create' | 'append' | 'prepend';
@@ -460,6 +470,13 @@ export interface ShellExecResult {
   durationMs: number;
 }
 
+export interface ShardBackendRequestResult {
+  backend: ShardBackendRequestBackend;
+  controller: 'gateway' | 'local';
+  status: 'approved' | 'unavailable';
+  reason: string;
+}
+
 export interface VaultWriteResult {
   name: string;
   folder?: string;
@@ -516,6 +533,7 @@ export interface GatewayMethods {
   'web.fetch': [WebFetchParams, WebFetchResult];
   'web.fetch_binary': [WebFetchBinaryParams, WebFetchBinaryResult];
   'shell.exec': [ShellExecParams, ShellExecResult];
+  'shard.backend.request': [ShardBackendRequestParams, ShardBackendRequestResult];
   'vault.write': [VaultWriteParams, VaultWriteResult];
   'vault.read': [VaultReadParams, VaultReadResult];
   'vault.search': [VaultSearchParams, VaultSearchResult];

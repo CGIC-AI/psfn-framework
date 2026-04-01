@@ -241,6 +241,7 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'web.fetch': 'webFetch',
   'web.fetch_binary': 'webFetchBinary',
   'shell.exec': 'shellExec',
+  'shard.backend.request': 'shardBackendRequest',
   'fs.read': 'fsRead',
   'fs.write': 'fsWrite',
   'fs.list': 'fsList',

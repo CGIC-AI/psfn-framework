@@ -196,6 +196,55 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('denies shard.backend.request when shell policy is disabled', () => {
+    expect(evaluatePolicy(
+      { method: 'shard.backend.request', params: { backend: 'container' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies shard.backend.request when required backend command is not allowlisted', () => {
+    const configWithShell: PolicyConfig = {
+      ...policyConfig,
+      shellExec: {
+        enabled: true,
+        allowlist: ['node'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'shard.backend.request', params: { backend: 'container' } },
+      configWithShell,
+    )).toBe('DENY');
+  });
+
+  it('allows container shard backend mediation when docker is allowlisted', () => {
+    const configWithShell: PolicyConfig = {
+      ...policyConfig,
+      shellExec: {
+        enabled: true,
+        allowlist: ['/usr/bin/docker'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'shard.backend.request', params: { backend: 'container' } },
+      configWithShell,
+    )).toBe('ALLOW');
+  });
+
+  it('allows orchestrated shard backend mediation when kubectl is allowlisted', () => {
+    const configWithShell: PolicyConfig = {
+      ...policyConfig,
+      shellExec: {
+        enabled: true,
+        allowlist: ['kubectl'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'shard.backend.request', params: { backend: 'orchestrated' } },
+      configWithShell,
+    )).toBe('ALLOW');
+  });
+
   it('denies vault.read when vault policy is disabled', () => {
     expect(evaluatePolicy(
       { method: 'vault.read', params: { name: 'Daily.md' } },

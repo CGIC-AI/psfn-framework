@@ -68,6 +68,19 @@ Production startup should not proceed until the cutover plan is clean.
 npm run verify:backup-restore
 ```
 
+## Heartbeat Audit Posture
+
+Use `heartbeat_get_policy` when you need the live heartbeat classification, not just the raw prompt text.
+
+The default heartbeat set is intentionally split by purpose:
+
+- `whisper` / `Musing`: optional outward Discord note; silence is acceptable when nothing genuinely worth sharing surfaces.
+- `daily-review`, `emotional-check`, `goal-update`: background/private scans; they should only emit notes when they produce real carry-forward value.
+- `experiential-review`: private internal-state narrative; extraction should be grounded in actual internal-state deltas or uncertainty.
+- `values-reflection`: background deliberation; extraction should capture durable value signal, not a forced recital.
+
+Operational rule: silent/background intervals are valid outcomes for the audited defaults. Do not treat every cadence tick as requiring a visible note or a durable extraction artifact.
+
 ## Re-Embedding
 
 Re-embed when any of these change:

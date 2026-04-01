@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../event-bus.js';
@@ -687,6 +687,46 @@ describe('wireHeartbeatRuntime', () => {
     expect(experientialCall?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
     expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
     expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
+  });
+
+  it('accepts silent heartbeat intervals without persisting or sending outward noise', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: '[no reflection]' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+      'heartbeat-channel',
+    );
+
+    const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
+    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
+    expect(runTemplateTool).toBeDefined();
+
+    const runResult = await runTemplateTool.execute(
+      'manual-silent',
+      { templateId: 'whisper', deferIfBusy: false },
+      new AbortController().signal,
+    );
+    const runText = runResult.content.map((part: { text: string }) => part.text).join('');
+    expect(runText).toContain('with no note emitted');
+    expect(sender.send).not.toHaveBeenCalled();
+    expect(existsSync(join(tempDir, 'notes', 'reflections', 'journal.jsonl'))).toBe(false);
   });
 
   it('defers manual template runs when the agent is busy and executes them after idle', async () => {

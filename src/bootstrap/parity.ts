@@ -64,7 +64,11 @@ import {
   createNorthStarReorderTool,
   createNorthStarUpdateTool,
 } from '../north-star/tools.js';
-import { HeartbeatPolicyStore } from '../scheduler/heartbeat-policy.js';
+import {
+  HEARTBEAT_SILENT_REFLECTION_TOKEN,
+  getHeartbeatTemplateAuditProfile,
+  HeartbeatPolicyStore,
+} from '../scheduler/heartbeat-policy.js';
 import {
   createHeartbeatGetPolicyTool,
   createHeartbeatRunTemplateTool,
@@ -853,6 +857,24 @@ export function wireHeartbeatRuntime(
     return Boolean(runtimeOptions.llmProvider);
   };
 
+  const normalizeTemplateReflectionOutput = (
+    template: ReflectionTemplate,
+    reflection: string,
+  ): { reflection: string; silent: boolean } => {
+    const trimmed = reflection.trim();
+    const audit = getHeartbeatTemplateAuditProfile(template);
+    if (
+      audit.allowSilentInterval
+      && (
+        trimmed.length === 0
+        || trimmed.toLowerCase() === HEARTBEAT_SILENT_REFLECTION_TOKEN
+      )
+    ) {
+      return { reflection: '', silent: true };
+    }
+    return { reflection: trimmed, silent: false };
+  };
+
   const resolveDeliberationAppearanceContext = (): string | undefined => {
     const provider = runtimeOptions.characterPromptVariablesProvider;
     if (!provider) return undefined;
@@ -931,6 +953,7 @@ export function wireHeartbeatRuntime(
     const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext, appearanceContext);
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
     let reflectionText = '';
+    let silentInterval = false;
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
     let persistenceContext = internalStateContext;
@@ -961,7 +984,9 @@ export function wireHeartbeatRuntime(
 
       try {
         const deliberationResult = await runTemplateDeliberation(template, reflectionPrompt);
-        reflectionText = deliberationResult.reflection;
+        const normalizedReflection = normalizeTemplateReflectionOutput(template, deliberationResult.reflection);
+        reflectionText = normalizedReflection.reflection;
+        silentInterval = normalizedReflection.silent;
         deliberationMetadata = deliberationResult.metadata;
         reflectionMode = 'deliberation';
 
@@ -977,7 +1002,7 @@ export function wireHeartbeatRuntime(
             templateName: template.name,
             channelId: reflectionChannelId,
             prompt: reflectionPrompt,
-            reflection: reflectionText,
+            ...(reflectionText ? { reflection: reflectionText } : {}),
             deliberation: deliberationMetadata,
             tags: [template.id, 'reflection', 'deliberation'],
           });
@@ -987,12 +1012,14 @@ export function wireHeartbeatRuntime(
           });
         }
 
-        try {
-          await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
-        } catch (error) {
-          log.warn(`Reflection "${template.id}" memory persistence skipped`, {
-            error: String(error),
-          });
+        if (!silentInterval) {
+          try {
+            await persistDeliberationMemory(template, reflectionText, deliberationMetadata);
+          } catch (error) {
+            log.warn(`Reflection "${template.id}" memory persistence skipped`, {
+              error: String(error),
+            });
+          }
         }
       } catch (error) {
         try {
@@ -1030,7 +1057,9 @@ export function wireHeartbeatRuntime(
           workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
         },
       });
-      reflectionText = response.content;
+      const normalizedReflection = normalizeTemplateReflectionOutput(template, response.content);
+      reflectionText = normalizedReflection.reflection;
+      silentInterval = normalizedReflection.silent;
       const responseContext = captureResponseInternalStateContext(response);
       if (responseContext) {
         persistenceContext = responseContext;
@@ -1038,90 +1067,92 @@ export function wireHeartbeatRuntime(
     }
 
     let reflectionJournalEntryId: string | undefined;
-    try {
-      const reflectionEntry = reflectionJournal.append({
-        templateId: template.id,
-        templateName: template.name,
-        prompt: reflectionPrompt,
-        reflection: reflectionText,
-        channelId: reflectionChannelId,
-        mode: reflectionMode,
-        createdAt: reflectionCreatedAt,
-        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(persistenceContext ? {
-          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-          internalState: persistenceContext.internalState,
-          metacognitiveFlags: persistenceContext.metacognitiveFlags,
-        } : {}),
-      });
-      reflectionJournalEntryId = reflectionEntry.id;
-    } catch (error) {
-      log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
-        error: String(error),
-      });
-    }
+    if (!silentInterval) {
+      try {
+        const reflectionEntry = reflectionJournal.append({
+          templateId: template.id,
+          templateName: template.name,
+          prompt: reflectionPrompt,
+          reflection: reflectionText,
+          channelId: reflectionChannelId,
+          mode: reflectionMode,
+          createdAt: reflectionCreatedAt,
+          ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+          ...(persistenceContext ? {
+            internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+            internalState: persistenceContext.internalState,
+            metacognitiveFlags: persistenceContext.metacognitiveFlags,
+          } : {}),
+        });
+        reflectionJournalEntryId = reflectionEntry.id;
+      } catch (error) {
+        log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
+          error: String(error),
+        });
+      }
 
-    try {
-      reflectionDailyJournal.append({
-        source: 'heartbeat_template',
-        executionSource: source,
-        templateId: template.id,
-        templateName: template.name,
-        channelId: reflectionChannelId,
-        prompt: reflectionPrompt,
-        reflection: reflectionText,
-        mode: reflectionMode,
-        createdAt: reflectionCreatedAt,
-        ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
-        ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
-        tags: [template.id, 'reflection', reflectionMode],
-      });
-    } catch (error) {
-      log.warn(`Reflection "${template.id}" daily journal persistence skipped`, {
-        error: String(error),
-      });
-    }
-
-    if (template.id === 'values-reflection') {
-      valuesJournal.append({
-        templateId: template.id,
-        templateName: template.name,
-        prompt: reflectionPrompt,
-        reflection: reflectionText,
-        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(persistenceContext ? {
-          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-          internalState: persistenceContext.internalState,
-          metacognitiveFlags: persistenceContext.metacognitiveFlags,
-        } : {}),
-        provenance: {
-          source: 'companion_reflection',
+      try {
+        reflectionDailyJournal.append({
+          source: 'heartbeat_template',
+          executionSource: source,
           templateId: template.id,
           templateName: template.name,
           channelId: reflectionChannelId,
-          mode: reflectionMode,
-          ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
-        },
-      });
-    }
-
-    // Auto-publish to Obsidian vault
-    if (runtimeOptions.vaultAutoPublisher) {
-      try {
-        await runtimeOptions.vaultAutoPublisher.publishReflection({
-          templateId: template.id,
-          templateName: template.name,
+          prompt: reflectionPrompt,
           reflection: reflectionText,
           mode: reflectionMode,
-          createdAt: new Date(),
+          createdAt: reflectionCreatedAt,
+          ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+          ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
+          tags: [template.id, 'reflection', reflectionMode],
         });
       } catch (error) {
-        log.warn(`Reflection "${template.id}" vault publish skipped`, { error: String(error) });
+        log.warn(`Reflection "${template.id}" daily journal persistence skipped`, {
+          error: String(error),
+        });
+      }
+
+      if (template.id === 'values-reflection') {
+        valuesJournal.append({
+          templateId: template.id,
+          templateName: template.name,
+          prompt: reflectionPrompt,
+          reflection: reflectionText,
+          ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+          ...(persistenceContext ? {
+            internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+            internalState: persistenceContext.internalState,
+            metacognitiveFlags: persistenceContext.metacognitiveFlags,
+          } : {}),
+          provenance: {
+            source: 'companion_reflection',
+            templateId: template.id,
+            templateName: template.name,
+            channelId: reflectionChannelId,
+            mode: reflectionMode,
+            ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+          },
+        });
+      }
+
+      // Auto-publish to Obsidian vault
+      if (runtimeOptions.vaultAutoPublisher) {
+        try {
+          await runtimeOptions.vaultAutoPublisher.publishReflection({
+            templateId: template.id,
+            templateName: template.name,
+            reflection: reflectionText,
+            mode: reflectionMode,
+            createdAt: new Date(),
+          });
+        } catch (error) {
+          log.warn(`Reflection "${template.id}" vault publish skipped`, { error: String(error) });
+        }
       }
     }
 
     const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
-    if (shouldSendToDiscord && heartbeatChannelId) {
+    if (!silentInterval && shouldSendToDiscord && heartbeatChannelId) {
       await sender.send(heartbeatChannelId, reflectionText);
     }
 
@@ -1129,6 +1160,7 @@ export function wireHeartbeatRuntime(
       templateId: template.id,
       templateName: template.name,
       reflection: reflectionText,
+      ...(silentInterval ? { silent: true } : {}),
     };
   };
 
@@ -1249,6 +1281,7 @@ export function wireHeartbeatRuntime(
       templateId: string;
       templateName: string;
       reflection: string;
+      silent?: boolean;
       queued?: boolean;
       deferredAction?: PostTurnActionCandidate;
     }> => {

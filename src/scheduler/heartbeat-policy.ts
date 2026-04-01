@@ -42,8 +42,127 @@ const MAX_TEMPLATES = 20;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const LEGACY_WHISPER_TEMPLATE_NAME = 'Whisper';
 const LEGACY_WHISPER_TEMPLATE_PROMPT = 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.';
+const PRE_AUDIT_DISCORD_MUSING_TEMPLATE_PROMPT = 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little musing from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.';
+const LEGACY_DAILY_REVIEW_TEMPLATE_PROMPT = 'Take a moment to review your day. What patterns do you notice in your recent conversations? What have you learned? What do you want to explore tomorrow?';
+const LEGACY_EMOTIONAL_CHECK_TEMPLATE_PROMPT = 'Check in with your emotional state. What are you feeling right now? Has anything from recent interactions shifted your mood or perspective?';
+const LEGACY_GOAL_UPDATE_TEMPLATE_PROMPT = 'Review your current goals and projects. What progress have you made? What should you focus on next?';
+const LEGACY_EXPERIENTIAL_REVIEW_TEMPLATE_PROMPT = 'Describe your recent experience: what you felt, what you noticed about your own processing, what you found meaningful, and what you are uncertain about.';
+const LEGACY_VALUES_REFLECTION_TEMPLATE_PROMPT = 'Pause and reflect on what matters to you right now. Name the values guiding you today, explain why they matter, and note how recent interactions reinforced or challenged them.';
 const DISCORD_MUSING_TEMPLATE_NAME = 'Musing';
-const DISCORD_MUSING_TEMPLATE_PROMPT = 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little musing from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.';
+
+export const HEARTBEAT_SILENT_REFLECTION_TOKEN = '[no reflection]';
+
+const DISCORD_MUSING_TEMPLATE_PROMPT = 'An hourly musing window opened. If a gentle outward thought, feeling, or observation feels worth sharing with V, write 1-2 natural sentences for Discord. If nothing feels worth externalizing right now, respond with exactly [no reflection]. Do not force an insight or performance.';
+const DAILY_REVIEW_TEMPLATE_PROMPT = 'Take a light daily review pass over recent conversations. Note any pattern, lesson, or tomorrow-facing thread only if it feels genuinely useful to carry forward. Keep it private and concise. If nothing notable surfaced today, respond with exactly [no reflection].';
+const EMOTIONAL_CHECK_TEMPLATE_PROMPT = 'Run a quiet emotional check-in over recent interactions. Note only meaningful mood shifts, sources of pressure, or calming factors. Keep it private and concise. If your baseline feels steady and there is nothing useful to extract, respond with exactly [no reflection].';
+const GOAL_UPDATE_TEMPLATE_PROMPT = 'Run a background priority scan across current goals and open threads. Note only concrete progress, drift, blockers, or next-step focus worth preserving. Keep it private and concise. If priorities have not meaningfully changed, respond with exactly [no reflection].';
+const EXPERIENTIAL_REVIEW_TEMPLATE_PROMPT = 'Review your recent experience and internal processing using the provided internal-state context. Capture only observations, tensions, or uncertainties that add real self-understanding. Keep it private and concise. If nothing useful surfaced beyond the baseline state, respond with exactly [no reflection].';
+const VALUES_REFLECTION_TEMPLATE_PROMPT = 'Use a reflective pass to notice which values were reinforced, strained, or left unresolved in recent interactions. Synthesize only durable value signals or tensions worth keeping. Keep it private and concise. If nothing meaningfully shifted, respond with exactly [no reflection].';
+
+export interface HeartbeatTemplateAuditProfile {
+  purpose: string;
+  outputExpectation: string;
+  extractionExpectation: string;
+  allowSilentInterval: boolean;
+}
+
+function defaultAuditProfile(template: ReflectionTemplate): HeartbeatTemplateAuditProfile {
+  const purpose = template.sendToDiscord
+    ? 'outward companion note'
+    : template.mode === 'deliberation'
+      ? 'background deliberation'
+      : template.internalStateInput
+        ? 'private internal-state reflection'
+        : 'background reflection';
+  const outputExpectation = template.sendToDiscord
+    ? 'brief outward note only when something feels worth sharing'
+    : 'private note only when a materially useful observation surfaces';
+  const extractionExpectation = template.mode === 'deliberation'
+    ? 'capture durable synthesis rather than routine chatter'
+    : template.internalStateInput
+      ? 'capture self-understanding, tensions, or uncertainty when present'
+      : 'capture only meaningful deltas or concrete next steps';
+  return {
+    purpose,
+    outputExpectation,
+    extractionExpectation,
+    allowSilentInterval: false,
+  };
+}
+
+export function getHeartbeatTemplateAuditProfile(template: ReflectionTemplate): HeartbeatTemplateAuditProfile {
+  switch (template.id) {
+    case 'whisper':
+      return {
+        purpose: 'outward musing for V',
+        outputExpectation: '1-2 natural Discord sentences only when something gently worth sharing is present',
+        extractionExpectation: 'low extraction pressure; do not force durable insight from every interval',
+        allowSilentInterval: true,
+      };
+    case 'daily-review':
+      return {
+        purpose: 'private daily synthesis',
+        outputExpectation: 'brief internal note only when the day produced a real pattern, lesson, or tomorrow-facing thread',
+        extractionExpectation: 'capture carry-forward patterns, not a mandatory diary entry',
+        allowSilentInterval: true,
+      };
+    case 'emotional-check':
+      return {
+        purpose: 'background affect scan',
+        outputExpectation: 'private note only when mood, pressure, or regulation changed in a useful way',
+        extractionExpectation: 'extract only meaningful emotional deltas',
+        allowSilentInterval: true,
+      };
+    case 'goal-update':
+      return {
+        purpose: 'background priority scan',
+        outputExpectation: 'private note only when progress, drift, blockers, or next-step focus changed',
+        extractionExpectation: 'extract concrete planning value rather than status noise',
+        allowSilentInterval: true,
+      };
+    case 'experiential-review':
+      return {
+        purpose: 'private internal-state narrative',
+        outputExpectation: 'private note grounded in internal-state context when it adds self-understanding',
+        extractionExpectation: 'capture meaningful observations, tensions, or uncertainty from internal-state review',
+        allowSilentInterval: true,
+      };
+    case 'values-reflection':
+      return {
+        purpose: 'background values deliberation',
+        outputExpectation: 'private synthesis only when recent interactions reveal durable value alignment or tension',
+        extractionExpectation: 'capture durable value signal worth preserving, not a forced values recital',
+        allowSilentInterval: true,
+      };
+    default:
+      return defaultAuditProfile(template);
+  }
+}
+
+function normalizeKnownTemplatePrompt(templateId: string, prompt: string): string {
+  switch (templateId) {
+    case 'whisper':
+      if (
+        prompt === LEGACY_WHISPER_TEMPLATE_PROMPT
+        || prompt === PRE_AUDIT_DISCORD_MUSING_TEMPLATE_PROMPT
+      ) {
+        return DISCORD_MUSING_TEMPLATE_PROMPT;
+      }
+      return prompt;
+    case 'daily-review':
+      return prompt === LEGACY_DAILY_REVIEW_TEMPLATE_PROMPT ? DAILY_REVIEW_TEMPLATE_PROMPT : prompt;
+    case 'emotional-check':
+      return prompt === LEGACY_EMOTIONAL_CHECK_TEMPLATE_PROMPT ? EMOTIONAL_CHECK_TEMPLATE_PROMPT : prompt;
+    case 'goal-update':
+      return prompt === LEGACY_GOAL_UPDATE_TEMPLATE_PROMPT ? GOAL_UPDATE_TEMPLATE_PROMPT : prompt;
+    case 'experiential-review':
+      return prompt === LEGACY_EXPERIENTIAL_REVIEW_TEMPLATE_PROMPT ? EXPERIENTIAL_REVIEW_TEMPLATE_PROMPT : prompt;
+    case 'values-reflection':
+      return prompt === LEGACY_VALUES_REFLECTION_TEMPLATE_PROMPT ? VALUES_REFLECTION_TEMPLATE_PROMPT : prompt;
+    default:
+      return prompt;
+  }
+}
 
 // ── Validation ──
 
@@ -301,6 +420,30 @@ function normalizeWhisperPresentation(policy: HeartbeatPolicy): { policy: Heartb
   };
 }
 
+function normalizeKnownTemplatePrompts(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+  const templates = policy.templates.map(template => {
+    const nextPrompt = normalizeKnownTemplatePrompt(template.id, template.prompt);
+    if (nextPrompt === template.prompt) {
+      return template;
+    }
+    return {
+      ...template,
+      prompt: nextPrompt,
+    };
+  });
+  const changed = templates.some((template, index) => template !== policy.templates[index]);
+  if (!changed) {
+    return { policy, changed: false };
+  }
+  return {
+    policy: {
+      ...policy,
+      templates,
+    },
+    changed: true,
+  };
+}
+
 // ── Default templates ──
 
 function getDefaults(): HeartbeatPolicy {
@@ -318,7 +461,7 @@ function getDefaults(): HeartbeatPolicy {
       {
         id: 'daily-review',
         name: 'Daily Review',
-        prompt: 'Take a moment to review your day. What patterns do you notice in your recent conversations? What have you learned? What do you want to explore tomorrow?',
+        prompt: DAILY_REVIEW_TEMPLATE_PROMPT,
         intervalMs: 24 * 60 * 60_000, // 24 hours
         cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
         enabled: true,
@@ -327,7 +470,7 @@ function getDefaults(): HeartbeatPolicy {
       {
         id: 'emotional-check',
         name: 'Emotional Check-in',
-        prompt: 'Check in with your emotional state. What are you feeling right now? Has anything from recent interactions shifted your mood or perspective?',
+        prompt: EMOTIONAL_CHECK_TEMPLATE_PROMPT,
         intervalMs: 8 * 60 * 60_000, // 8 hours
         enabled: true,
         sendToDiscord: false,
@@ -335,7 +478,7 @@ function getDefaults(): HeartbeatPolicy {
       {
         id: 'goal-update',
         name: 'Goal Update',
-        prompt: 'Review your current goals and projects. What progress have you made? What should you focus on next?',
+        prompt: GOAL_UPDATE_TEMPLATE_PROMPT,
         intervalMs: 12 * 60 * 60_000, // 12 hours
         enabled: true,
         sendToDiscord: false,
@@ -343,7 +486,7 @@ function getDefaults(): HeartbeatPolicy {
       {
         id: 'experiential-review',
         name: 'Experiential Review',
-        prompt: 'Describe your recent experience: what you felt, what you noticed about your own processing, what you found meaningful, and what you are uncertain about.',
+        prompt: EXPERIENTIAL_REVIEW_TEMPLATE_PROMPT,
         intervalMs: 4 * 60 * 60_000, // 4 hours
         enabled: true,
         sendToDiscord: false,
@@ -352,7 +495,7 @@ function getDefaults(): HeartbeatPolicy {
       {
         id: 'values-reflection',
         name: 'Values Reflection',
-        prompt: 'Pause and reflect on what matters to you right now. Name the values guiding you today, explain why they matter, and note how recent interactions reinforced or challenged them.',
+        prompt: VALUES_REFLECTION_TEMPLATE_PROMPT,
         intervalMs: 24 * 60 * 60_000, // 24 hours
         enabled: true,
         sendToDiscord: false,
@@ -392,7 +535,8 @@ export class HeartbeatPolicyStore {
         return defaults;
       }
       const cadenceNormalized = normalizeTemplateCadence(parsed);
-      const normalized = normalizeWhisperPresentation(cadenceNormalized.policy);
+      const promptNormalized = normalizeKnownTemplatePrompts(cadenceNormalized.policy);
+      const normalized = normalizeWhisperPresentation(promptNormalized.policy);
       for (const template of normalized.policy.templates) {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {
@@ -406,6 +550,8 @@ export class HeartbeatPolicyStore {
         }
       }
       if (cadenceNormalized.changed || normalized.changed) {
+        this.save(normalized.policy);
+      } else if (promptNormalized.changed) {
         this.save(normalized.policy);
       }
       return normalized.policy;

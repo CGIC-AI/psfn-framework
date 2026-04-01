@@ -283,6 +283,7 @@ export function buildRuntimeContext(input: {
   lines.push('[Tool Stack]');
   lines.push('Treat the currently loaded tools as the live, collapsed stack for this turn. Use a direct tool first when one already fits the task.');
   lines.push('Use tool_search only when a needed semantic tool is missing from the active stack. Use toolset only to add an overlay for this runtime or pin it across turns.');
+  lines.push('Use think only as an explicit fallback after direct tools and any needed tool_search/toolset step, not as the default escape hatch for simple reads, lookups, inspection, or routine state changes.');
   if (collapsedToolStack.activeOverlayNames.length > 0) {
     lines.push(`Additional active overlays: ${collapsedToolStack.activeOverlayNames.join(', ')}.`);
   }

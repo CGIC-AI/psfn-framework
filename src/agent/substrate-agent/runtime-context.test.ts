@@ -224,6 +224,7 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('[Tool Stack]');
     expect(runtimeContext).toContain('Treat the currently loaded tools as the live, collapsed stack for this turn. Use a direct tool first when one already fits the task.');
     expect(runtimeContext).toContain('Use tool_search only when a needed semantic tool is missing from the active stack. Use toolset only to add an overlay for this runtime or pin it across turns.');
+    expect(runtimeContext).toContain('Use think only as an explicit fallback after direct tools and any needed tool_search/toolset step, not as the default escape hatch for simple reads, lookups, inspection, or routine state changes.');
     expect(runtimeContext).toContain('Additional active overlays: media.');
     expect(runtimeContext).toContain('[Self-Media Tool Guidance]');
     expect(runtimeContext).toContain('Use media action="generate" for a brand new selfie, portrait, or scene featuring you.');

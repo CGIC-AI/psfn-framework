@@ -14,9 +14,11 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
   return {
     name: 'think',
     description:
-      'Deep analytical thinking via code execution. Use only when direct tools are insufficient for ' +
-      'multi-step reasoning, synthesis, or pattern analysis; not for routine file lookup, simple reads, ' +
-      'or basic inspection. Runs an iterative code sandbox that can query memories and sub-LMs.',
+      'Explicit fallback analytical thinking via code execution. Reach for direct tools first, and use ' +
+      'tool_search/toolset before think when the active stack is missing the needed capability. Use think ' +
+      'only when those direct tools are still insufficient for multi-step reasoning, synthesis, or pattern ' +
+      'analysis; not for routine file lookup, simple reads, basic inspection, or routine state changes. ' +
+      'Runs an iterative code sandbox that can query memories and sub-LMs.',
     label: 'think',
     parameters: Type.Object({
       task: Type.String({ description: 'The analytical task or question to reason through' }),

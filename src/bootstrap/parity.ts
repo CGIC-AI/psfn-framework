@@ -41,20 +41,13 @@ import { PromptRegistryStore } from '../identity/prompt-registry.js';
 import { runDeliberation } from '../llm/deliberation.js';
 import type { DeliberationResult } from '../llm/deliberation.js';
 import {
-  createPersonaUpdateTool,
   type PersonaUpdateToolOptions,
   type CharacterCardVersionStore,
 } from '../identity/card-versioning.js';
 import { buildCharacterPromptTemplateVariables } from '../identity/loader.js';
 import {
-  createPromptLayerListTool,
-  createPromptLayerGetTool,
-  createIdentityDiffTool,
-  createIdentityChangelogTool,
-  createPromptLayerUpdateTool,
-  createPromptLayerRollbackTool,
-  createPromptLayerToggleTool,
-  type PromptLayerUpdateToolOptions,
+  createIdentityTool,
+  type IdentityToolOptions,
 } from '../identity/prompt-tools.js';
 import { NorthStarStore } from '../north-star/store.js';
 import {
@@ -335,7 +328,7 @@ export function wirePromptRuntime(
   target: PromptRuntimeTarget,
   dataDir: string,
   baseSystemPrompt: string,
-  options: PromptLayerUpdateToolOptions = {},
+  options: IdentityToolOptions = {},
 ): PromptLayerStore {
   const promptStore = new PromptLayerStore(
     resolvePromptLayersPath(dataDir),
@@ -352,14 +345,8 @@ export function wirePromptRuntime(
     companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
     northStarLayerProvider: () => northStarStore.buildPromptLayer(),
   });
-  target.registerTool(createPromptLayerListTool(promptStore), 'core');
-  target.registerTool(createPromptLayerGetTool(promptStore), 'core');
-  target.registerTool(createIdentityDiffTool(promptStore), 'core');
+  target.registerTool(createIdentityTool(promptStore, options), 'core');
   target.registerTool(createNorthStarListTool(northStarStore), 'core');
-  target.registerTool(createIdentityChangelogTool(promptStore), 'extended');
-  target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
-  target.registerTool(createPromptLayerRollbackTool(promptStore, options), 'extended');
-  target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
   target.registerTool(createNorthStarCreateTool(northStarStore), 'extended');
   target.registerTool(createNorthStarUpdateTool(northStarStore), 'extended');
   target.registerTool(createNorthStarDeleteTool(northStarStore), 'extended');
@@ -370,13 +357,12 @@ export function wirePromptRuntime(
 }
 
 export function wireCharacterCardRuntime(
-  target: CharacterCardRuntimeTarget,
+  _target: CharacterCardRuntimeTarget,
   cardStore: CharacterCardVersionStore,
-  options: PersonaUpdateToolOptions = {},
+  _options: PersonaUpdateToolOptions = {},
 ): void {
-  target.registerTool(createPersonaUpdateTool(cardStore, options), 'extended');
   const snapshot = cardStore.getCurrent();
-  log.info(`Persona tooling enabled (v${snapshot.version})`);
+  log.info(`Character-card identity store enabled (v${snapshot.version})`);
 }
 
 /**

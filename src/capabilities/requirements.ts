@@ -18,6 +18,13 @@ const MEMORY_FAIL_CLOSED_REQUIREMENTS = [
   'memory.delete',
 ] as const satisfies readonly CapabilityToken[];
 
+const IDENTITY_FAIL_CLOSED_REQUIREMENTS = [
+  'identity.read',
+  'identity.write.runtime',
+  'identity.write.base',
+  'identity.write.operator',
+] as const satisfies readonly CapabilityToken[];
+
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
   switch (action) {
@@ -32,6 +39,35 @@ function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): Capab
       return 'memory.delete';
     default:
       return MEMORY_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
+function resolveUnifiedIdentityRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!action) {
+    return Object.keys(params).length === 0 ? 'identity.read' : IDENTITY_FAIL_CLOSED_REQUIREMENTS;
+  }
+
+  switch (action) {
+    case 'list_layers':
+    case 'get_layer':
+    case 'diff_layer':
+    case 'history':
+      return 'identity.read';
+    case 'update_persona':
+      return 'identity.write.runtime';
+    case 'update_layer':
+    case 'rollback_layer':
+    case 'toggle_layer': {
+      const layerId = typeof params.layer_id === 'string' ? params.layer_id.trim() : '';
+      if (!layerId) return IDENTITY_FAIL_CLOSED_REQUIREMENTS;
+      return 'identity.write.runtime';
+    }
+    case 'commit_stage':
+    case 'cancel_stage':
+      return 'identity.write.runtime';
+    default:
+      return IDENTITY_FAIL_CLOSED_REQUIREMENTS;
   }
 }
 
@@ -135,6 +171,10 @@ export function resolveToolRequiredCapabilities(
       return normalizeRequirement(annotated(toRecord(params)));
     }
     return normalizeRequirement(annotated);
+  }
+
+  if (tool.name === 'identity') {
+    return normalizeRequirement(resolveUnifiedIdentityRequirement(toRecord(params)));
   }
 
   const fallback = STATIC_TOOL_REQUIREMENTS[tool.name];

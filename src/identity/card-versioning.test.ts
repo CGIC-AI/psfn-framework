@@ -4,15 +4,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
-import { gateToolWithCapabilities, type CapabilityAccess } from '../capabilities/gate.js';
-import { resolveTierCapabilityTokens } from '../capabilities/tiers.js';
-import type { CapabilityTier } from '../types.js';
-import type { CapabilityToken } from '../capabilities/tokens.js';
 import { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import type { CharacterCardV2 } from './types.js';
 import {
   CharacterCardVersionStore,
-  createPersonaUpdateTool,
+  executePersonaUpdateAction,
 } from './card-versioning.js';
 
 function resultText(result: AgentToolResult<any>): string {
@@ -20,18 +16,6 @@ function resultText(result: AgentToolResult<any>): string {
     .filter((c): c is TextContent => c.type === 'text')
     .map(c => c.text)
     .join('');
-}
-
-function accessForTier(
-  tier: CapabilityTier,
-  customTokens: CapabilityToken[] = [],
-): CapabilityAccess {
-  const granted = new Set(resolveTierCapabilityTokens(tier, customTokens));
-  return {
-    getTier: () => tier,
-    getGrantedTokens: () => granted,
-    has: (token) => granted.has(token),
-  };
 }
 
 const BASE_CARD: CharacterCardV2 = {
@@ -108,7 +92,7 @@ describe('CharacterCardVersionStore', () => {
   });
 });
 
-describe('persona_update tool', () => {
+describe('executePersonaUpdateAction', () => {
   let tempDir: string;
   let cardPath: string;
   let historyPath: string;
@@ -127,16 +111,11 @@ describe('persona_update tool', () => {
   });
 
   it('applies low-risk updates immediately in autonomous tier', async () => {
-    const tool = gateToolWithCapabilities(
-      createPersonaUpdateTool(store, {
-        getCapabilityTier: () => 'autonomous',
-      }),
-      () => accessForTier('autonomous'),
-    );
-
-    const result = await tool.execute('tool-call', {
+    const result = executePersonaUpdateAction(store, {
       tags: ['test', 'safe-update'],
       reason: 'Add classification tag',
+    }, {
+      getCapabilityTier: () => 'autonomous',
     });
     const text = resultText(result);
 
@@ -148,16 +127,11 @@ describe('persona_update tool', () => {
     const longDescription = Array.from({ length: 80 }, (_value, index) => `line ${index}`).join(' ');
     store.updateData({ description: longDescription }, 'admin', 'Seed a long description');
 
-    const tool = gateToolWithCapabilities(
-      createPersonaUpdateTool(store, {
-        getCapabilityTier: () => 'autonomous',
-      }),
-      () => accessForTier('autonomous'),
-    );
-
-    const result = await tool.execute('tool-call', {
+    const result = executePersonaUpdateAction(store, {
       description: 'Birthday: November 19th, 2023.',
       reason: 'Add birthday',
+    }, {
+      getCapabilityTier: () => 'autonomous',
     });
 
     expect(resultText(result)).toContain('Protected persona fields require confirmation queue support');
@@ -167,17 +141,12 @@ describe('persona_update tool', () => {
 
   it('queues protected autonomous field edits for confirmation instead of applying them', async () => {
     const queue = new ConfirmationQueue({ idFactory: () => 'card-protected-1' });
-    const tool = gateToolWithCapabilities(
-      createPersonaUpdateTool(store, {
-        getCapabilityTier: () => 'autonomous',
-        confirmationQueue: queue,
-      }),
-      () => accessForTier('autonomous'),
-    );
-
-    const queued = await tool.execute('tool-call', {
+    const queued = executePersonaUpdateAction(store, {
       description: 'Updated protected description',
       reason: 'Refine identity',
+    }, {
+      getCapabilityTier: () => 'autonomous',
+      confirmationQueue: queue,
     });
 
     expect(resultText(queued)).toContain('Persona update queued for confirmation');
@@ -195,17 +164,12 @@ describe('persona_update tool', () => {
 
   it('queues updates for confirmation in nursery tier and applies after approval', async () => {
     const queue = new ConfirmationQueue({ idFactory: () => 'card-1' });
-    const tool = gateToolWithCapabilities(
-      createPersonaUpdateTool(store, {
-        getCapabilityTier: () => 'nursery',
-        confirmationQueue: queue,
-      }),
-      () => accessForTier('nursery'),
-    );
-
-    const queued = await tool.execute('tool-call', {
+    const queued = executePersonaUpdateAction(store, {
       personality: 'Queued personality update',
       reason: 'Needs operator review',
+    }, {
+      getCapabilityTier: () => 'nursery',
+      confirmationQueue: queue,
     });
     expect(resultText(queued)).toContain('Persona update queued for confirmation');
     expect(queue.listPending()).toHaveLength(1);

@@ -86,10 +86,7 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'session_list',
   'skill_list',
   'skill_view',
-  'prompt_layer_list',
-  'prompt_layer_get',
   'north_star_list',
-  'identity_diff',
 ]);
 
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;

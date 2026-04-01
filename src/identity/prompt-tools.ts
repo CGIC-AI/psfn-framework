@@ -6,10 +6,13 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { PromptLayerStore } from './prompt-store.js';
 import type { PromptLayer, PromptHistoryEntry } from './prompt-types.js';
+import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import {
   CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
   isCanonicalCharacterFoundationLayer,
 } from './canonical-foundation.js';
+import type { CharacterCardVersionStore } from './card-versioning.js';
+import { executePersonaUpdateAction, extractCardPatchFromRecord } from './card-versioning.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { withCapabilityRequirement } from '../capabilities/requirements.js';
 import {
@@ -29,6 +32,41 @@ interface PromptLineDiffSummary {
   removed: number;
   lines: string[];
   hiddenLineCount: number;
+}
+
+const IDENTITY_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'identity.read',
+  'identity.write.runtime',
+  'identity.write.base',
+  'identity.write.operator',
+] as const;
+
+const PERSONA_CONFLICT_PARAMETER_KEYS = [
+  'layer_id',
+  'content',
+  'version',
+  'stage_id',
+  'limit',
+  'max_diff_lines',
+] as const;
+
+type IdentityAction =
+  | 'list_layers'
+  | 'get_layer'
+  | 'diff_layer'
+  | 'history'
+  | 'update_layer'
+  | 'rollback_layer'
+  | 'toggle_layer'
+  | 'update_persona'
+  | 'commit_stage'
+  | 'cancel_stage';
+
+export interface IdentityToolOptions {
+  getCapabilityTier?: () => CapabilityTier;
+  identityCoolingOff?: IdentityCoolingOffManager;
+  cardStore?: CharacterCardVersionStore;
+  confirmationQueue?: ConfirmationQueue;
 }
 
 function errorMessage(error: unknown): string {
@@ -241,6 +279,468 @@ function resolveHistoricalPromptVersion(
     content: entry.previousContent,
     checksum: entry.previousChecksum,
   };
+}
+
+function resolveIdentityAction(params: Record<string, unknown>): IdentityAction | null {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    return Object.keys(params).length === 0 ? 'list_layers' : null;
+  }
+
+  switch (rawAction) {
+    case 'list_layers':
+    case 'get_layer':
+    case 'diff_layer':
+    case 'history':
+    case 'update_layer':
+    case 'rollback_layer':
+    case 'toggle_layer':
+    case 'update_persona':
+    case 'commit_stage':
+    case 'cancel_stage':
+      return rawAction;
+    default:
+      return null;
+  }
+}
+
+function hasOwnDefinedValue(params: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(params, key) && params[key] !== undefined;
+}
+
+function hasPersonaMutationParams(params: Record<string, unknown>): boolean {
+  return Object.keys(extractCardPatchFromRecord(params)).length > 0
+    || params.allow_destructive_replace === true;
+}
+
+function hasPromptConflictParams(params: Record<string, unknown>): boolean {
+  return PERSONA_CONFLICT_PARAMETER_KEYS.some((key) => hasOwnDefinedValue(params, key));
+}
+
+function validateIdentityActionShape(
+  action: IdentityAction,
+  params: Record<string, unknown>,
+): string | null {
+  if (action === 'update_persona') {
+    if (hasPromptConflictParams(params)) {
+      return 'update_persona does not accept prompt-layer parameters; use the matching identity action for layer reads or mutations.';
+    }
+    return null;
+  }
+
+  if (hasPersonaMutationParams(params)) {
+    return `${action} does not accept persona mutation fields; use action=update_persona for character-card edits.`;
+  }
+
+  return null;
+}
+
+function resolveIdentityRequiredCapability(
+  store: PromptLayerStore,
+  identityCoolingOff: IdentityCoolingOffManager | undefined,
+  params: Record<string, unknown>,
+): CapabilityToken | readonly CapabilityToken[] {
+  const action = resolveIdentityAction(params);
+  switch (action) {
+    case 'list_layers':
+    case 'get_layer':
+    case 'diff_layer':
+    case 'history':
+      return 'identity.read';
+    case 'update_persona':
+      return 'identity.write.runtime';
+    case 'update_layer':
+    case 'rollback_layer':
+    case 'toggle_layer':
+      return resolvePromptLayerWriteCapability(store, String(params.layer_id ?? ''));
+    case 'commit_stage':
+      return resolvePromptLayerWriteCapabilityForAction(store, identityCoolingOff, {
+        action: 'commit',
+        stage_id: params.stage_id,
+        layer_id: params.layer_id,
+      });
+    case 'cancel_stage':
+      return resolvePromptLayerWriteCapabilityForAction(store, identityCoolingOff, {
+        action: 'cancel',
+        stage_id: params.stage_id,
+        layer_id: params.layer_id,
+      });
+    default:
+      return IDENTITY_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
+export function createIdentityTool(
+  store: PromptLayerStore,
+  options: IdentityToolOptions = {},
+): AgentTool<any> {
+  const identityCoolingOff = options.identityCoolingOff;
+  const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
+  const cardStore = options.cardStore;
+
+  const tool: AgentTool<any> = {
+    name: 'identity',
+    description:
+      'Unified identity surface for prompt-layer inspection, prompt-layer mutation, staged prompt commits/cancels, and persona updates. '
+      + 'Mutating actions remain capability-gated, audited, and confirmation/cooling-off guarded.',
+    label: 'identity',
+    parameters: Type.Object({
+      action: Type.Optional(Type.Union([
+        Type.Literal('list_layers'),
+        Type.Literal('get_layer'),
+        Type.Literal('diff_layer'),
+        Type.Literal('history'),
+        Type.Literal('update_layer'),
+        Type.Literal('rollback_layer'),
+        Type.Literal('toggle_layer'),
+        Type.Literal('update_persona'),
+        Type.Literal('commit_stage'),
+        Type.Literal('cancel_stage'),
+      ], {
+        description:
+          'Identity action. Required for all actions except empty-argument calls, which default to list_layers.',
+      })),
+      layer_id: Type.Optional(Type.String({ description: 'Prompt layer ID (prefix match OK).' })),
+      content: Type.Optional(Type.String({ description: 'Replacement prompt-layer content for update_layer.' })),
+      version: Type.Optional(Type.Number({ description: 'Historical prompt-layer version for diff_layer or rollback_layer.', minimum: 1 })),
+      stage_id: Type.Optional(Type.String({ description: 'Staged prompt-layer edit ID for commit_stage or cancel_stage.' })),
+      max_diff_lines: Type.Optional(Type.Number({
+        description: `Max changed lines to display for diff_layer (default ${DEFAULT_DIFF_LINE_LIMIT}, max ${MAX_DIFF_LINE_LIMIT}).`,
+        minimum: 1,
+      })),
+      limit: Type.Optional(Type.Number({
+        description: `Max history entries for action=history (default ${DEFAULT_CHANGELOG_LIMIT}, max ${MAX_CHANGELOG_LIMIT}).`,
+        minimum: 1,
+      })),
+      reason: Type.Optional(Type.String({ description: 'Short rationale for an identity mutation.' })),
+      name: Type.Optional(Type.String({ description: 'Updated character name for update_persona.' })),
+      description: Type.Optional(Type.String({ description: 'Updated character description for update_persona.' })),
+      personality: Type.Optional(Type.String({ description: 'Updated character personality for update_persona.' })),
+      scenario: Type.Optional(Type.String({ description: 'Updated character scenario for update_persona.' })),
+      first_mes: Type.Optional(Type.String({ description: 'Updated first message seed for update_persona.' })),
+      mes_example: Type.Optional(Type.String({ description: 'Updated dialogue example for update_persona.' })),
+      system_prompt: Type.Optional(Type.String({ description: 'Updated system prompt section for update_persona.' })),
+      post_history_instructions: Type.Optional(Type.String({ description: 'Updated post-history instructions for update_persona.' })),
+      tags: Type.Optional(Type.Array(Type.String(), { description: 'Updated tag list for update_persona.' })),
+      creator: Type.Optional(Type.String({ description: 'Updated creator attribution for update_persona.' })),
+      creator_notes: Type.Optional(Type.String({ description: 'Updated creator notes for update_persona.' })),
+      alternate_greetings: Type.Optional(Type.Array(Type.String(), { description: 'Updated alternate greetings for update_persona.' })),
+      extensions_visual_description: Type.Optional(Type.String({ description: 'Updated visual description extension for update_persona.' })),
+      'extensions.visual_description': Type.Optional(Type.String({ description: 'Alias for extensions_visual_description.' })),
+      allow_destructive_replace: Type.Optional(Type.Boolean({
+        description:
+          'Set true only when intentionally replacing most of a long persona field instead of lightly editing it.',
+      })),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: Record<string, unknown>,
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const action = resolveIdentityAction(params);
+        if (!action) {
+          return textResultWithError(
+            'action is required. Supported actions: list_layers, get_layer, diff_layer, history, update_layer, rollback_layer, toggle_layer, update_persona, commit_stage, cancel_stage.',
+            true,
+          );
+        }
+
+        const shapeError = validateIdentityActionShape(action, params);
+        if (shapeError) {
+          return textResultWithError(shapeError, true);
+        }
+
+        switch (action) {
+          case 'list_layers': {
+            const layers = store.getAll();
+            if (layers.length === 0) return textResult('No prompt layers configured.');
+
+            const lines = layers.map((layer) => {
+              const status = layer.enabled ? 'ON' : 'OFF';
+              const meta = [
+                layer.channelType ? `channel=${layer.channelType}` : null,
+                layer.taskKind ? `task=${layer.taskKind}` : null,
+              ].filter(Boolean).join(', ');
+              return `[${status}] ${layer.type}/${layer.name} (v${layer.version}, priority=${layer.priority}${meta ? ', ' + meta : ''}) -- ${layer.id.slice(0, 8)}`;
+            });
+            return textResult(lines.join('\n'));
+          }
+
+          case 'get_layer': {
+            const layerId = typeof params.layer_id === 'string' ? params.layer_id : '';
+            const layer = resolvePromptLayerById(store, layerId);
+            if (!layer) return textResultWithError(`Layer not found: ${String(params.layer_id ?? '')}`, true);
+
+            return textResult([
+              `ID: ${layer.id}`,
+              `Type: ${layer.type}`,
+              `Name: ${layer.name}`,
+              `Enabled: ${layer.enabled}`,
+              `Priority: ${layer.priority}`,
+              `Version: ${layer.version}`,
+              `Updated: ${layer.updatedAt} by ${layer.updatedBy}`,
+              `Checksum: ${layer.checksum}`,
+              layer.channelType ? `Channel: ${layer.channelType}` : null,
+              layer.taskKind ? `Task: ${layer.taskKind}` : null,
+              `\n--- Content ---\n${layer.content}`,
+            ].filter(Boolean).join('\n'));
+          }
+
+          case 'diff_layer': {
+            const layerId = typeof params.layer_id === 'string' ? params.layer_id : '';
+            const layer = resolvePromptLayerById(store, layerId);
+            if (!layer) return textResultWithError(`Layer not found: ${String(params.layer_id ?? '')}`, true);
+            if (typeof params.version !== 'number' || !Number.isInteger(params.version) || params.version <= 0) {
+              return textResultWithError('version must be a positive integer.', true);
+            }
+            if (params.version > layer.version) {
+              return textResultWithError(
+                `Version ${params.version} is newer than current version ${layer.version}.`,
+                true,
+              );
+            }
+
+            const history = store.getLayerHistory(layer.id);
+            const baseline = resolveHistoricalPromptVersion(layer, history, params.version);
+            if (!baseline) {
+              return textResultWithError(`No prompt history entry found for version ${params.version}.`, true);
+            }
+
+            const maxDiffLines = normalizeOptionalBoundedInteger(
+              params.max_diff_lines,
+              DEFAULT_DIFF_LINE_LIMIT,
+              1,
+              MAX_DIFF_LINE_LIMIT,
+            );
+            const diff = buildPromptLineDiff(baseline.content, layer.content, maxDiffLines);
+            const lines = [
+              `Identity diff for ${layer.type}/${layer.name} (${layer.id.slice(0, 8)})`,
+              `Compared versions: v${params.version} -> v${layer.version}`,
+              `Checksums: ${baseline.checksum} -> ${layer.checksum}`,
+              `Changed lines: +${diff.added} / -${diff.removed}`,
+            ];
+
+            if (params.version === layer.version) {
+              lines.push('No changes: requested version is the current version.');
+              return textResult(lines.join('\n'));
+            }
+
+            if (diff.lines.length === 0) {
+              lines.push('No textual changes between these versions (metadata-only update).');
+              return textResult(lines.join('\n'));
+            }
+
+            lines.push('', '--- Diff ---', ...diff.lines);
+            if (diff.hiddenLineCount > 0) {
+              lines.push(`... ${diff.hiddenLineCount} more changed line(s) omitted.`);
+            }
+            return textResult(lines.join('\n'));
+          }
+
+          case 'history': {
+            const limit = normalizeOptionalBoundedInteger(
+              params.limit,
+              DEFAULT_CHANGELOG_LIMIT,
+              1,
+              MAX_CHANGELOG_LIMIT,
+            );
+            const layerFilter = typeof params.layer_id === 'string' && params.layer_id.trim().length > 0
+              ? resolvePromptLayerById(store, params.layer_id)
+              : null;
+            if (params.layer_id && !layerFilter) {
+              return textResultWithError(`Layer not found: ${params.layer_id}`, true);
+            }
+
+            const history = layerFilter ? store.getLayerHistory(layerFilter.id) : store.getHistory();
+            if (history.length === 0) {
+              return textResult('No prompt changes recorded yet.');
+            }
+
+            const layerTypeById = new Map(store.getAll().map(layer => [layer.id, layer.type]));
+            const sorted = [...history].sort((left, right) => {
+              const timeDelta = new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime();
+              if (timeDelta !== 0) return timeDelta;
+              return right.version - left.version;
+            });
+            const selected = sorted.slice(0, limit);
+            const heading = layerFilter
+              ? `Identity history for ${layerFilter.type}/${layerFilter.name} (${layerFilter.id.slice(0, 8)})`
+              : 'Identity history for all prompt layers';
+
+            const lines = selected.map((entry) => {
+              const lineDelta = countLineChanges(entry.previousContent, entry.newContent);
+              const layerType = layerTypeById.get(entry.layerId) ?? 'unknown';
+              const reason = entry.reason ?? 'unspecified';
+              const deltaSummary = (lineDelta.added === 0 && lineDelta.removed === 0)
+                ? 'metadata-only'
+                : `+${lineDelta.added}/-${lineDelta.removed} lines`;
+              return [
+                `- ${entry.timestamp}`,
+                `${layerType}/${entry.layerName}`,
+                `v${entry.version}->v${entry.version + 1}`,
+                `by ${entry.updatedBy}`,
+                `what: ${deltaSummary}`,
+                `why: ${reason}`,
+              ].join(' | ');
+            });
+
+            const hiddenCount = sorted.length - selected.length;
+            if (hiddenCount > 0) {
+              lines.push(`... ${hiddenCount} older change(s) omitted.`);
+            }
+            return textResult([heading, ...lines].join('\n'));
+          }
+
+          case 'update_layer': {
+            const layerId = typeof params.layer_id === 'string' ? params.layer_id.trim() : '';
+            if (!layerId) return textResultWithError('layer_id is required.', true);
+            if (typeof params.content !== 'string') return textResultWithError('content is required.', true);
+
+            const layer = resolvePromptLayerById(store, layerId);
+            if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+            if (isCanonicalCharacterFoundationLayer(layer)) {
+              return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+            }
+
+            const tier = getCapabilityTier();
+            const needsCoolingOff = (
+              layer.type === 'base'
+              && (tier === 'nursery' || tier === 'apprentice')
+              && !!identityCoolingOff
+            );
+            if (needsCoolingOff) {
+              const staged = identityCoolingOff.stageBaseLayerEdit({
+                layerId: layer.id,
+                layerName: layer.name,
+                previousContent: layer.content,
+                nextContent: params.content,
+                requestedBy: 'agent',
+                tier,
+              });
+              return textResult(
+                `Staged base-layer update (stage_id: ${staged.id}). `
+                + `Cooling-off until ${new Date(staged.readyAt).toISOString()}. `
+                + 'Use identity with action=commit_stage and stage_id to apply, or action=cancel_stage to abort.',
+              );
+            }
+
+            const reason = normalizeReason(typeof params.reason === 'string' ? params.reason : undefined)
+              ?? 'Prompt layer updated via identity action=update_layer';
+            const updated = store.update(layer.id, params.content, 'agent', {}, reason);
+            return textResult(`Updated layer "${updated.name}" to v${updated.version} (checksum: ${updated.checksum})`);
+          }
+
+          case 'rollback_layer': {
+            const layerId = typeof params.layer_id === 'string' ? params.layer_id.trim() : '';
+            if (!layerId) return textResultWithError('layer_id is required.', true);
+            if (typeof params.version !== 'number' || !Number.isInteger(params.version) || params.version <= 0) {
+              return textResultWithError('version must be a positive integer.', true);
+            }
+
+            const layer = resolvePromptLayerById(store, layerId);
+            if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
+            if (isCanonicalCharacterFoundationLayer(layer)) {
+              return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+            }
+            if (params.version > layer.version) {
+              return textResultWithError(
+                `Version ${params.version} is newer than current version ${layer.version}.`,
+                true,
+              );
+            }
+            if (params.version === layer.version) {
+              return textResult(`Layer "${layer.name}" is already at v${params.version}; no rollback needed.`);
+            }
+
+            const history = store.getLayerHistory(layer.id);
+            const baseline = resolveHistoricalPromptVersion(layer, history, params.version);
+            if (!baseline) {
+              return textResultWithError(`No prompt history entry found for version ${params.version}.`, true);
+            }
+            if (baseline.content === layer.content) {
+              return textResult(
+                `Layer "${layer.name}" already matches content from v${params.version}; no rollback applied.`,
+              );
+            }
+
+            const tier = getCapabilityTier();
+            const needsCoolingOff = (
+              layer.type === 'base'
+              && (tier === 'nursery' || tier === 'apprentice')
+              && !!identityCoolingOff
+            );
+            if (needsCoolingOff) {
+              const staged = identityCoolingOff.stageBaseLayerEdit({
+                layerId: layer.id,
+                layerName: layer.name,
+                previousContent: layer.content,
+                nextContent: baseline.content,
+                requestedBy: 'agent',
+                tier,
+              });
+              return textResult(
+                `Staged base-layer rollback to v${params.version} (stage_id: ${staged.id}). `
+                + `Cooling-off until ${new Date(staged.readyAt).toISOString()}. `
+                + 'Use identity with action=commit_stage and stage_id to apply, or action=cancel_stage to abort.',
+              );
+            }
+
+            const reason = normalizeReason(typeof params.reason === 'string' ? params.reason : undefined)
+              ?? `Prompt layer rolled back via identity action=rollback_layer to version ${params.version}`;
+            const updated = store.update(layer.id, baseline.content, 'agent', {}, reason);
+            return textResult(
+              `Rolled back layer "${updated.name}" to v${params.version} content `
+              + `(now v${updated.version}, checksum: ${updated.checksum})`,
+            );
+          }
+
+          case 'toggle_layer': {
+            const layerId = typeof params.layer_id === 'string' ? params.layer_id : '';
+            const layer = resolvePromptLayerById(store, layerId);
+            if (!layer) return textResultWithError(`Layer not found: ${String(params.layer_id ?? '')}`, true);
+            if (isCanonicalCharacterFoundationLayer(layer)) {
+              return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+            }
+
+            const toggled = store.toggle(layer.id);
+            return textResult(`Layer "${toggled.name}" is now ${toggled.enabled ? 'enabled' : 'disabled'}`);
+          }
+
+          case 'update_persona': {
+            if (!cardStore) {
+              return textResultWithError('Character-card identity store is not configured.', true);
+            }
+            return executePersonaUpdateAction(cardStore, params, {
+              getCapabilityTier,
+              confirmationQueue: options.confirmationQueue,
+            });
+          }
+
+          case 'commit_stage':
+          case 'cancel_stage': {
+            return handlePromptLayerStagedAction(store, identityCoolingOff, {
+              action: action === 'commit_stage' ? 'commit' : 'cancel',
+              stage_id: typeof params.stage_id === 'string' ? params.stage_id : undefined,
+              reason: typeof params.reason === 'string' ? params.reason : undefined,
+            }, {
+              commitReason: 'Committed staged identity prompt-layer change via identity tool',
+              commitSuccessMessage: (updated, stageId) =>
+                `Committed staged prompt-layer change for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
+              cancelSuccessMessage: (stageId) =>
+                `Cancelled staged prompt-layer change (stage_id: ${stageId}).`,
+            });
+          }
+        }
+      } catch (error) {
+        return textResultWithError(`identity failed: ${errorMessage(error)}`, true);
+      }
+    },
+  };
+
+  return withCapabilityRequirement(tool, (params) =>
+    resolveIdentityRequiredCapability(store, identityCoolingOff, params),
+  );
 }
 
 export function createPromptLayerListTool(store: PromptLayerStore): AgentTool<any> {

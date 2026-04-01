@@ -193,7 +193,7 @@ describe('wirePromptRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers read-only prompt tools in core and prompt mutations in extended', () => {
+  it('registers unified identity in core and keeps north-star mutations extended', () => {
     const target = {
       promptComposer: null,
       registerTool: vi.fn(),
@@ -202,23 +202,15 @@ describe('wirePromptRuntime', () => {
     wirePromptRuntime(target as any, tempDir, 'Base prompt');
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.find(([tool]) => tool.name === 'prompt_layer_list')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'prompt_layer_get')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'identity_diff')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'identity')?.[1]).toBe('core');
     expect(calls.find(([tool]) => tool.name === 'north_star_list')?.[1]).toBe('core');
     expect(
       calls
-        .filter(([tool]) => !['prompt_layer_list', 'prompt_layer_get', 'identity_diff', 'north_star_list'].includes(tool.name))
+        .filter(([tool]) => !['identity', 'north_star_list'].includes(tool.name))
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
     expect(calls.map(([tool]) => tool.name)).toEqual(expect.arrayContaining([
-      'prompt_layer_list',
-      'prompt_layer_get',
-      'identity_diff',
-      'identity_changelog',
-      'prompt_layer_update',
-      'prompt_layer_rollback',
-      'prompt_layer_toggle',
+      'identity',
       'north_star_list',
       'north_star_create',
       'north_star_update',

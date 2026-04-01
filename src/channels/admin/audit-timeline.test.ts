@@ -139,7 +139,7 @@ describe('AdminAuditTimelineStore', () => {
     const companionEntry = store.append({
       actionType: 'identity_edit',
       decision: 'allowed',
-      narrative: `${DEFAULT_COMPANION_NAME} edited identity via "prompt_layer_update".`,
+      narrative: `${DEFAULT_COMPANION_NAME} edited identity via "identity:update_layer".`,
       actor: 'companion',
     });
     expect(companionEntry.actor).toBe('companion');
@@ -253,9 +253,21 @@ describe('audit event collector actor attribution', () => {
       appendAuditTimelineEntry: appender,
     });
 
+    (eventBus as unknown as { emit: (e: string, p: unknown) => void }).emit('agent.toolcall.end', {
+      toolCallId: 'call-2',
+      toolName: 'identity',
+      channelId: 'discord:general',
+      contentIndex: 0,
+      arguments: {
+        action: 'update_layer',
+        layer_id: 'layer-1',
+        content: 'next prompt',
+      },
+    });
+
     (eventBus as unknown as { emit: (e: string, p: unknown) => void }).emit('agent.tool.end', {
       toolCallId: 'call-2',
-      toolName: 'prompt_layer_update',
+      toolName: 'identity',
       channelId: 'discord:general',
       isError: false,
     });
@@ -264,6 +276,43 @@ describe('audit event collector actor attribution', () => {
     expect(identityEntry).toBeDefined();
     expect(identityEntry!.actor).toBe('companion');
     expect(identityEntry!.narrative).toContain('Companion');
+  });
+
+  it('read-only identity actions do not emit identity-edit audit entries', () => {
+    const eventBus = createMockEventBus();
+    const entries: Array<{
+      actionType: string;
+      actor?: AdminAuditActor;
+    }> = [];
+    const appender: AuditTimelineAppender = (actionType, _decision, _narrative, _details, actor) => {
+      entries.push({ actionType, actor });
+    };
+
+    registerAuditTimelineSources({
+      eventBus,
+      activeToolInvocations: new Map(),
+      appendAuditTimelineEntry: appender,
+    });
+
+    (eventBus as unknown as { emit: (e: string, p: unknown) => void }).emit('agent.toolcall.end', {
+      toolCallId: 'call-2b',
+      toolName: 'identity',
+      channelId: 'discord:general',
+      contentIndex: 0,
+      arguments: {
+        action: 'history',
+      },
+    });
+
+    (eventBus as unknown as { emit: (e: string, p: unknown) => void }).emit('agent.tool.end', {
+      toolCallId: 'call-2b',
+      toolName: 'identity',
+      channelId: 'discord:general',
+      isError: false,
+    });
+
+    expect(entries.filter(entry => entry.actionType === 'identity_edit')).toHaveLength(0);
+    expect(entries.filter(entry => entry.actionType === 'tool_invocation')).toHaveLength(1);
   });
 
   it('memory extraction events have companion actor', () => {

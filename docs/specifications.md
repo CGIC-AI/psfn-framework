@@ -124,6 +124,7 @@ Current guidance:
 
 - `promotedExtendedTools` is a short-term exposure mechanism, not the long-term taxonomy.
 - `toolset` is the model-facing control surface for listing, activating, pinning, and unpinning non-default tools.
+- `identity` is the live unified surface for prompt-layer reads/mutations and persona mutation via explicit `action` semantics; write actions remain capability-gated and safeguard-audited.
 - `core_memory` is the current legacy name; the target orientation surface is `orient`.
 - `scratchpad` stays explicit as the ephemeral long-context workspace.
 - `north_star` stays its own semantic tool surface.

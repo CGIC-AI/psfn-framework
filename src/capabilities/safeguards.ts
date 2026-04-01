@@ -20,6 +20,7 @@ const DEFAULT_EMAIL_MESSAGES_PER_HOUR = 10;
 const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = {
   tool_search: 'reversible',
   toolset: 'irreversible',
+  identity: 'irreversible',
   prompt_layer_list: 'reversible',
   prompt_layer_get: 'reversible',
   prompt_layer_rollback: 'irreversible',

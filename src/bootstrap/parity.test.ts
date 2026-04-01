@@ -9,6 +9,15 @@ import type { LLMProvider } from '../agent/contracts.js';
 import { readLastActiveSession } from '../lifecycle/notifications.js';
 import { createDefaultExtendedToolAutoloadPolicy } from '../agent/extended-tool-autoload-policy.js';
 import { buildInternalStateSnapshotRef, InternalStateComputer } from '../self-model/state.js';
+import { ReflectionJournalStore } from '../notes/reflection-journal.js';
+import {
+  buildReflectionProcessId,
+  ReflectionDailyJournalStore,
+  ReflectionProcessLogStore,
+  toReflectionDailyJournalProvenanceRef,
+  toReflectionJournalProvenanceRef,
+  toReflectionProcessLogProvenanceRef,
+} from '../notes/reflection-substrate.js';
 import {
   wireFilesystemToolsRuntime,
   wireExtendedToolAutoloadPolicy,
@@ -414,6 +423,10 @@ describe('wireHeartbeatRuntime', () => {
         internalStateSnapshotRef?: string;
         internalState?: unknown;
         metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
+        provenance?: {
+          source?: string;
+          reflectionJournalEntryId?: string;
+        };
       };
       expect(entry.version).toBe(1);
       expect(entry.templateId).toBe('values-reflection');
@@ -422,6 +435,8 @@ describe('wireHeartbeatRuntime', () => {
       expect(entry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
       expect(entry.internalState).toEqual(narrative.internalState);
       expect(entry.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
+      expect(entry.provenance?.source).toBe('companion_reflection');
+      expect(entry.provenance?.reflectionJournalEntryId).toBeDefined();
 
       const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
         (call) => call[0]?.channelId === 'internal:reflection:values-reflection',
@@ -675,6 +690,123 @@ describe('wireHeartbeatRuntime', () => {
     expect(experientialCall?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
     expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
     expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
+  });
+
+  it('replays journal and process substrate into deeper reflection prompts with explicit provenance boundaries', async () => {
+    const priorReflectionJournal = new ReflectionJournalStore(join(tempDir, 'notes', 'reflections', 'journal.jsonl'));
+    const priorDailyJournal = new ReflectionDailyJournalStore(join(tempDir, 'notes', 'reflections', 'daily'));
+    const priorProcessLog = new ReflectionProcessLogStore(join(tempDir, 'notes', 'reflections', 'process-logs'));
+    const priorJournalEntry = priorReflectionJournal.append({
+      templateId: 'experiential-review',
+      templateName: 'Experiential Review',
+      prompt: 'Describe your recent experience.',
+      reflection: 'I noticed unresolved ownership questions lingering across the day.',
+      channelId: 'internal:reflection:experiential-review',
+      mode: 'agent',
+      createdAt: '2026-03-01T09:00:00.000Z',
+    });
+    const priorDailyEntry = priorDailyJournal.append({
+      source: 'heartbeat_template',
+      executionSource: 'scheduled',
+      templateId: 'daily-review',
+      templateName: 'Daily Review',
+      channelId: 'internal:reflection:daily-review',
+      prompt: 'Review the day.',
+      reflection: 'The day kept reinforcing steadiness under pressure.',
+      mode: 'agent',
+      createdAt: '2026-03-01T12:00:00.000Z',
+    });
+    const priorProcessId = buildReflectionProcessId('Values Reflection Deliberation', () => 1_700_000_000_000);
+    const priorProcessEntry = priorProcessLog.append({
+      processId: priorProcessId,
+      processLabel: 'Values Reflection Deliberation',
+      processType: 'reflection_deliberation',
+      stage: 'completed',
+      executionSource: 'scheduled',
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      channelId: 'internal:reflection:values-reflection',
+      prompt: 'Reflect carefully on your current values.',
+      reflection: 'Continuity and care remained durable values.',
+      createdAt: '2026-03-01T13:00:00.000Z',
+      deliberation: {
+        sessionId: 'prior-delib-1',
+        stopReason: 'stop',
+        rounds: 1,
+        totalInputTokens: 80,
+        totalOutputTokens: 40,
+        totalTokens: 120,
+        estimatedCostUsd: 0.002,
+        durationMs: 400,
+      },
+    });
+
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const narrative = createInternalStateNarrativeFixture();
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({
+        content: 'Experiential reflection body with prior-day continuity.',
+        metadata: {
+          internalState: narrative.internalState,
+          internalStateSnapshotRef: narrative.snapshotRef,
+          metacognitiveFlags: narrative.metacognitiveFlags,
+        },
+      }),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+    );
+
+    const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
+    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
+    expect(runTemplateTool).toBeDefined();
+
+    await runTemplateTool.execute(
+      'manual-experiential-substrate',
+      { templateId: 'experiential-review', deferIfBusy: false },
+      new AbortController().signal,
+    );
+
+    const experientialCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0]?.channelId === 'internal:reflection:experiential-review',
+    );
+    expect(experientialCall?.[0]?.content).toContain('[Reflection Substrate Replay]');
+    expect(experientialCall?.[0]?.content).toContain('canonical_truth_boundary: non_canonical_reflection_substrate');
+    expect(experientialCall?.[0]?.content).toContain('not canonical truth');
+    expect(experientialCall?.[0]?.content).toContain('unresolved ownership questions lingering');
+    expect(experientialCall?.[0]?.content).toContain('steadiness under pressure');
+    expect(experientialCall?.[0]?.content).toContain('Continuity and care remained durable values');
+
+    const reflectionRaw = readFileSync(join(tempDir, 'notes', 'reflections', 'journal.jsonl'), 'utf-8').trim();
+    const reflectionLines = reflectionRaw.split('\n').filter(line => line.trim().length > 0);
+    const reflectionEntry = JSON.parse(reflectionLines[reflectionLines.length - 1] ?? '{}') as {
+      substrateBoundary?: string;
+      substrateProvenanceRefs?: string[];
+    };
+    expect(reflectionEntry.substrateBoundary).toBe('non_canonical_reflection_substrate');
+    expect(reflectionEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      toReflectionJournalProvenanceRef(priorJournalEntry),
+      toReflectionDailyJournalProvenanceRef(priorDailyEntry),
+      toReflectionProcessLogProvenanceRef(priorProcessEntry),
+    ]));
   });
 
   it('accepts silent heartbeat intervals without persisting or sending outward noise', async () => {

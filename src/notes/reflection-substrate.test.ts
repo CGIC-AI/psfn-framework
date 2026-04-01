@@ -3,10 +3,15 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  assembleReflectionSubstrateContext,
   buildReflectionProcessId,
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
+  toReflectionDailyJournalProvenanceRef,
+  toReflectionProcessLogProvenanceRef,
+  toReflectionJournalProvenanceRef,
 } from './reflection-substrate.js';
+import { NON_CANONICAL_REFLECTION_SUBSTRATE } from './reflection-journal.js';
 
 describe('reflection substrate stores', () => {
   let tempDir: string;
@@ -107,6 +112,68 @@ describe('reflection substrate stores', () => {
     expect(completed.stage).toBe('completed');
     expect(completed.reflection).toContain('continuity mattered');
     expect(completed.deliberation?.sessionId).toBe('delib-1');
+  });
+
+  it('lists recent entries and assembles non-canonical substrate replay context', () => {
+    const dailyStore = new ReflectionDailyJournalStore(join(tempDir, 'daily'));
+    const processStore = new ReflectionProcessLogStore(join(tempDir, 'processes'));
+
+    dailyStore.append({
+      source: 'heartbeat_template',
+      executionSource: 'scheduled',
+      templateId: 'daily-review',
+      templateName: 'Daily Review',
+      channelId: 'internal:reflection:daily-review',
+      prompt: 'Review the day.',
+      reflection: 'The day kept returning to steadiness under pressure.',
+      mode: 'agent',
+      createdAt: '2026-03-31T08:00:00.000Z',
+    });
+    const processId = buildReflectionProcessId('Values Reflection Deliberation', () => 1_700_000_000_000);
+    processStore.append({
+      processId,
+      processLabel: 'Values Reflection Deliberation',
+      processType: 'reflection_deliberation',
+      stage: 'completed',
+      executionSource: 'scheduled',
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      channelId: 'internal:reflection:values-reflection',
+      prompt: 'Reflect carefully on your current values.',
+      reflection: 'Continuity and care remained durable values.',
+      createdAt: '2026-03-31T09:00:00.000Z',
+    });
+
+    const recentDaily = dailyStore.listRecent({ limit: 1 });
+    const recentProcesses = processStore.listRecent({ limit: 1, stages: ['completed'] });
+    const recentJournal = [{
+      id: 'reflection-1',
+      templateId: 'experiential-review',
+      templateName: 'Experiential Review',
+      prompt: 'Describe your recent experience.',
+      reflection: 'I noticed an uncertainty pattern around unresolved ownership.',
+      channelId: 'internal:reflection:experiential-review',
+      mode: 'agent' as const,
+      createdAt: '2026-03-31T07:00:00.000Z',
+    }];
+
+    const context = assembleReflectionSubstrateContext({
+      recentReflectionJournalEntries: recentJournal,
+      recentDailyJournalEntries: recentDaily,
+      recentProcessLogEntries: recentProcesses,
+    });
+
+    expect(context?.canonicalTruthBoundary).toBe(NON_CANONICAL_REFLECTION_SUBSTRATE);
+    expect(context?.promptBlock).toContain('[Reflection Substrate Replay]');
+    expect(context?.promptBlock).toContain('not canonical truth');
+    expect(context?.promptBlock).toContain('steadiness under pressure');
+    expect(context?.promptBlock).toContain('Continuity and care remained durable values');
+    expect(context?.promptBlock).toContain('uncertainty pattern around unresolved ownership');
+    expect(context?.provenanceRefs).toEqual([
+      toReflectionJournalProvenanceRef(recentJournal[0]!),
+      toReflectionDailyJournalProvenanceRef(recentDaily[0]!),
+      toReflectionProcessLogProvenanceRef(recentProcesses[0]!),
+    ]);
   });
 
   it('fails closed when required process-stage fields are missing', () => {

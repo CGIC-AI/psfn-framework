@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { ReflectionJournalStore } from './reflection-journal.js';
+import {
+  NON_CANONICAL_REFLECTION_SUBSTRATE,
+  ReflectionJournalStore,
+} from './reflection-journal.js';
 import { buildInternalStateSnapshotRef, cloneInternalState, InternalStateComputer } from '../self-model/state.js';
 
 function buildInternalStateSample() {
@@ -94,6 +97,34 @@ describe('ReflectionJournalStore', () => {
     expect(persisted.metacognitiveFlags).toEqual([{ flag: 'uncertainty', confidence: 0.58 }]);
   });
 
+  it('persists non-canonical substrate provenance when prior reflection traces are replayed', () => {
+    store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'Notice value continuity.',
+      reflection: 'Continuity mattered more than novelty.',
+      channelId: 'internal:reflection:values-reflection',
+      mode: 'deliberation',
+      substrateBoundary: NON_CANONICAL_REFLECTION_SUBSTRATE,
+      substrateProvenanceRefs: [
+        'reflection_daily:daily-1|template=daily-review',
+        'reflection_process:process-1|stage=completed',
+      ],
+      createdAt: '2026-03-02T02:00:00.000Z',
+    });
+
+    const raw = readFileSync(filePath, 'utf-8').trim();
+    const persisted = JSON.parse(raw) as {
+      substrateBoundary?: string;
+      substrateProvenanceRefs?: string[];
+    };
+    expect(persisted.substrateBoundary).toBe(NON_CANONICAL_REFLECTION_SUBSTRATE);
+    expect(persisted.substrateProvenanceRefs).toEqual([
+      'reflection_daily:daily-1|template=daily-review',
+      'reflection_process:process-1|stage=completed',
+    ]);
+  });
+
   it('fails closed when internal-state context is partial', () => {
     expect(() => store.append({
       templateId: 'experiential-review',
@@ -104,6 +135,18 @@ describe('ReflectionJournalStore', () => {
       mode: 'agent',
       internalStateSnapshotRef: 'internal-state-v1:abc',
     })).toThrow('internalStateSnapshotRef and internalState');
+  });
+
+  it('fails closed when substrate provenance is partial', () => {
+    expect(() => store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'Notice value continuity.',
+      reflection: 'Continuity mattered more than novelty.',
+      channelId: 'internal:reflection:values-reflection',
+      mode: 'deliberation',
+      substrateBoundary: NON_CANONICAL_REFLECTION_SUBSTRATE,
+    })).toThrow('substrateBoundary and substrateProvenanceRefs');
   });
 
   it('preserves reflection-journal normalization error prefixes', () => {

@@ -85,8 +85,12 @@ import {
   resolveReflectionProcessLogsDir,
   resolveValuesJournalPath,
 } from '../persistence/layout.js';
-import { ReflectionJournalStore } from '../notes/reflection-journal.js';
 import {
+  NON_CANONICAL_REFLECTION_SUBSTRATE,
+  ReflectionJournalStore,
+} from '../notes/reflection-journal.js';
+import {
+  assembleReflectionSubstrateContext,
   buildReflectionProcessId,
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
@@ -149,6 +153,12 @@ interface ReflectionInternalStateContext {
   internalState: InternalState;
   internalStateSnapshotRef: string;
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
+}
+
+interface ReflectionSubstratePromptContext {
+  canonicalTruthBoundary: typeof NON_CANONICAL_REFLECTION_SUBSTRATE;
+  promptBlock: string;
+  provenanceRefs: string[];
 }
 
 interface HeartbeatAgentResponse {
@@ -724,6 +734,7 @@ export function wireHeartbeatRuntime(
   const formatNarrativePromptInput = (
     prompt: string,
     context: ReflectionInternalStateContext | null,
+    substrateContext: ReflectionSubstratePromptContext | null,
     appearanceContext?: string,
   ): string => {
     const sections: string[] = [prompt];
@@ -752,10 +763,36 @@ export function wireHeartbeatRuntime(
         ].join('\n'),
       );
     }
+    if (substrateContext) {
+      sections.push(substrateContext.promptBlock);
+    }
     if (appearanceContext) {
       sections.push(`Appearance context:\n${appearanceContext}`);
     }
     return sections.join('\n\n');
+  };
+
+  const resolveReflectionSubstratePromptContext = (
+    template: ReflectionTemplate,
+  ): ReflectionSubstratePromptContext | null => {
+    if (!template.internalStateInput && template.mode !== 'deliberation') {
+      return null;
+    }
+    const context = assembleReflectionSubstrateContext({
+      recentReflectionJournalEntries: reflectionJournal.listRecent({ limit: 2 }),
+      recentDailyJournalEntries: reflectionDailyJournal.listRecent({ limit: 2 }),
+      recentProcessLogEntries: reflectionProcessLog.listRecent({
+        limit: 2,
+        stages: ['completed', 'failed'],
+      }),
+    });
+    return context
+      ? {
+        canonicalTruthBoundary: context.canonicalTruthBoundary,
+        promptBlock: context.promptBlock,
+        provenanceRefs: context.provenanceRefs,
+      }
+      : null;
   };
 
   const captureResponseInternalStateContext = (
@@ -927,9 +964,15 @@ export function wireHeartbeatRuntime(
 
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
+    const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
     const appearanceContext = shouldUseDeliberation(template) ? resolveDeliberationAppearanceContext() : undefined;
-    const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext, appearanceContext);
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
+    const reflectionPrompt = formatNarrativePromptInput(
+      template.prompt,
+      internalStateContext,
+      reflectionSubstrateContext,
+      appearanceContext,
+    );
     let reflectionText = '';
     let silentInterval = false;
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
@@ -1060,6 +1103,10 @@ export function wireHeartbeatRuntime(
             internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
             internalState: persistenceContext.internalState,
             metacognitiveFlags: persistenceContext.metacognitiveFlags,
+          } : {}),
+          ...(reflectionSubstrateContext ? {
+            substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary,
+            substrateProvenanceRefs: reflectionSubstrateContext.provenanceRefs,
           } : {}),
         });
         reflectionJournalEntryId = reflectionEntry.id;

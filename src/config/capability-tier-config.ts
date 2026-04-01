@@ -1,10 +1,11 @@
 import { join } from 'node:path';
-import type { CapabilityTier } from '../types.js';
+import type { CapabilityTier } from '../capabilities/tier-types.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { normalizeCapabilityTokens } from '../capabilities/tokens.js';
 import {
   loadOrSeedJson,
+  loadSeedJson,
   writeJsonAtomic,
 } from './load-or-seed.js';
 import { isRecord } from '../utils/types.js';
@@ -19,6 +20,14 @@ export interface CapabilityTierConfig {
 
 interface CapabilityTierLoadOptions {
   seedDir?: string;
+}
+
+function resolveSeedDir(seedDir?: string): string {
+  const resolved = (seedDir ?? process.env.CONFIG_DIR ?? './config').trim();
+  if (!resolved) {
+    throw new Error('Capability-tier seed directory is required');
+  }
+  return resolved;
 }
 
 function validateCapabilityTierConfig(raw: unknown, sourcePath: string): CapabilityTierConfig {
@@ -46,9 +55,19 @@ export function loadCapabilityTierConfig(
   dataDir: string,
   options: CapabilityTierLoadOptions = {},
 ): CapabilityTierConfig {
-  const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
+  const seedDir = resolveSeedDir(options.seedDir);
   return loadOrSeedJson({
     dataPath: join(dataDir, CAPABILITY_TIER_FILE_NAME),
+    seedPath: join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME),
+    validate: validateCapabilityTierConfig,
+  });
+}
+
+export function loadCapabilityTierSeedDefaults(
+  options: CapabilityTierLoadOptions = {},
+): CapabilityTierConfig {
+  const seedDir = resolveSeedDir(options.seedDir);
+  return loadSeedJson({
     seedPath: join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME),
     validate: validateCapabilityTierConfig,
   });

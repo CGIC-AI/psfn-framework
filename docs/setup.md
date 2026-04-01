@@ -51,6 +51,7 @@ Mutable runtime/admin configuration lives under the system-data config domain:
 - `backup.json`
 
 On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
+`maintenanceIntervalMs` and `capabilityTier` come from `scheduler.seed.json` and `capability-tier.seed.json`, not in-code fallback constants.
 
 ## First Local Bring-Up
 

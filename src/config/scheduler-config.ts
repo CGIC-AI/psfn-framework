@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import {
   loadOrSeedJson,
+  loadSeedJson,
   writeJsonAtomic,
 } from './load-or-seed.js';
 import { isRecord } from '../utils/types.js';
@@ -16,6 +17,14 @@ export interface SchedulerRuntimeConfig {
 
 interface SchedulerRuntimeLoadOptions {
   seedDir?: string;
+}
+
+function resolveSeedDir(seedDir?: string): string {
+  const resolved = (seedDir ?? process.env.CONFIG_DIR ?? './config').trim();
+  if (!resolved) {
+    throw new Error('Scheduler seed directory is required');
+  }
+  return resolved;
 }
 
 function toInterval(value: unknown, field: string): number {
@@ -41,9 +50,19 @@ export function loadSchedulerConfig(
   dataDir: string,
   options: SchedulerRuntimeLoadOptions = {},
 ): SchedulerRuntimeConfig {
-  const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
+  const seedDir = resolveSeedDir(options.seedDir);
   return loadOrSeedJson({
     dataPath: join(dataDir, SCHEDULER_FILE_NAME),
+    seedPath: join(seedDir, SCHEDULER_SEED_FILE_NAME),
+    validate: validateSchedulerConfig,
+  });
+}
+
+export function loadSchedulerSeedDefaults(
+  options: SchedulerRuntimeLoadOptions = {},
+): SchedulerRuntimeConfig {
+  const seedDir = resolveSeedDir(options.seedDir);
+  return loadSeedJson({
     seedPath: join(seedDir, SCHEDULER_SEED_FILE_NAME),
     validate: validateSchedulerConfig,
   });

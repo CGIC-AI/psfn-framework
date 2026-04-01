@@ -7,7 +7,13 @@ import { EventBus } from '../event-bus.js';
 import { SessionStore } from '../session/store.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import { SUBAGENT_WORKER_LANE } from '../agent/worker-lanes.js';
-import type { LLMResponse, SubstrateConfig } from '../types.js';
+import type {
+  CanonicalModelRegistry,
+  LLMResponse,
+  ModelRegistryEntry,
+  ModelSlot,
+  SubstrateConfig,
+} from '../types.js';
 import { SubagentFaculty } from './faculty.js';
 
 let mockSubagentContent = 'subagent response';
@@ -49,11 +55,61 @@ function mockLLM(): LLMProvider {
   };
 }
 
+function createEntry(
+  id: string,
+  rank: number,
+  slot: ModelSlot,
+  purposes: ModelRegistryEntry['purposes'],
+): ModelRegistryEntry {
+  return {
+    id,
+    rank,
+    identity: {
+      provider: slot.provider,
+      model: slot.model,
+      source: { type: slot.provider },
+    },
+    purposes,
+    capabilities: {
+      maxOutputTokens: slot.maxTokens,
+      ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    },
+    tuning: {
+      maxOutputTokens: slot.maxTokens,
+      ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+    },
+  };
+}
+
+function buildTestRegistry(chat: ModelSlot, background: ModelSlot): CanonicalModelRegistry {
+  return {
+    schemaVersion: 1,
+    models: [
+      createEntry('chat', 10, chat, [{ purpose: 'chat', primary: true }]),
+      createEntry('background', 20, background, [{ purpose: 'background', primary: true }]),
+    ],
+  };
+}
+
+const CHAT_SLOT: ModelSlot = {
+  model: 'deepseek/deepseek-v3.2',
+  provider: 'openrouter',
+  maxTokens: 16384,
+  contextWindow: 128_000,
+};
+
+const BACKGROUND_SLOT: ModelSlot = {
+  model: 'deepseek/deepseek-v3.2',
+  provider: 'openrouter',
+  maxTokens: 8192,
+  contextWindow: 128_000,
+};
+
 const TEST_CONFIG: SubstrateConfig = {
-  primaryModel: 'test-model',
-  primaryProvider: 'test',
-  extractionModel: 'test-model',
-  extractionProvider: 'test',
+  primaryModel: 'deepseek/deepseek-v3.2',
+  primaryProvider: 'openrouter',
+  extractionModel: 'deepseek/deepseek-v3.2',
+  extractionProvider: 'openrouter',
   discordToken: '',
   discordBotId: '',
   characterCardPath: '',
@@ -69,8 +125,10 @@ const TEST_CONFIG: SubstrateConfig = {
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
   modelRoster: {
-    chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
+    chat: CHAT_SLOT,
+    background: BACKGROUND_SLOT,
   },
+  modelRegistry: buildTestRegistry(CHAT_SLOT, BACKGROUND_SLOT),
 };
 
 describe('SubagentFaculty', () => {
@@ -269,5 +327,34 @@ describe('SubagentFaculty', () => {
       workerId: result.subagentId,
       lane: SUBAGENT_WORKER_LANE,
     });
+  });
+
+  it('fails closed when the task-focused worker model slot is unavailable', async () => {
+    const chatOnlyConfig: SubstrateConfig = {
+      ...TEST_CONFIG,
+      modelRoster: {
+        chat: CHAT_SLOT,
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          createEntry('chat', 10, CHAT_SLOT, [{ purpose: 'chat', primary: true }]),
+        ],
+      },
+    };
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: chatOnlyConfig,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    await expect(faculty.execute({
+      name: 'inspect',
+      task: 'inspect runtime state',
+    })).rejects.toThrow(/No eligible model configured for purpose 'background'/);
   });
 });

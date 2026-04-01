@@ -140,6 +140,10 @@ import {
   serializeInternalState,
   type InternalState,
 } from '../self-model/state.js';
+import {
+  WHISPER_WORKER_LANE,
+  createWorkerExecutionPolicy,
+} from '../agent/worker-lanes.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
@@ -978,6 +982,9 @@ export function wireHeartbeatRuntime(
         authorName: template.name,
         content: reflectionPrompt,
         timestamp: new Date(),
+        routing: {
+          workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
+        },
       });
       reflectionText = response.content;
       const responseContext = captureResponseInternalStateContext(response);

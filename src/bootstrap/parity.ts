@@ -64,6 +64,7 @@ import {
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from '../scheduler/heartbeat-tools.js';
+import { createScheduleTool } from '../scheduler/schedule-tool.js';
 import type { ReflectionTemplate } from '../scheduler/heartbeat-policy.js';
 import { ValuesJournalStore } from '../values/store.js';
 import type { ValuesDeliberationMetadata } from '../values/store.js';
@@ -124,6 +125,8 @@ import {
   type ActiveConcernSnapshot,
   type IntentionActionDecision,
 } from '../intention/appraisal.js';
+import type { PendingFollowUpStore } from '../intention/pending-follow-ups.js';
+import type { CareReminderStore } from '../intention/care-reminders.js';
 import { MotivationBridge } from '../intention/motivation.js';
 import {
   buildInternalStateSnapshotRef,
@@ -261,6 +264,8 @@ interface HeartbeatRuntimeOptions {
     authorName: string;
     nextDueAt?: string;
   } | undefined;
+  pendingFollowUpStore?: PendingFollowUpStore | null;
+  careReminderStore?: CareReminderStore | null;
   onBehavioralPatternOutcome?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -1879,6 +1884,18 @@ export function wireHeartbeatRuntime(
 
   // Register tools
   target.registerTool(createHeartbeatGetPolicyTool(store), 'core');
+  target.registerTool(createScheduleTool({
+    scheduler,
+    agentLoop,
+    sender,
+    heartbeatPolicyStore: store,
+    syncReflectionTasks,
+    runTemplate: runTemplateNow,
+    heartbeatChannelId,
+    memoryWriter: runtimeOptions.memoryWriter,
+    pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
+    careReminderStore: runtimeOptions.careReminderStore ?? null,
+  }), 'core');
   target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks, {
     memoryWriter: runtimeOptions.memoryWriter,
   }), 'extended');

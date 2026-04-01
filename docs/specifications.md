@@ -130,6 +130,7 @@ Current guidance:
 - `north_star` stays its own semantic tool surface, separate from `orient` and `identity`.
 - `north_star` is a unified action-based extended tool, not a core primitive or a transient session-state surface.
 - `identity` is the live unified surface for prompt-layer reads/mutations and persona mutation via explicit `action` semantics; write actions remain capability-gated and safeguard-audited.
+- `schedule` is the live unified surface for durable reminders, proactive follow-ups, reflection templates, and timed prompt work; legacy scheduler micro-tool semantics remain available as `action` aliases inside that tool during migration.
 
 ## Validation Baseline
 

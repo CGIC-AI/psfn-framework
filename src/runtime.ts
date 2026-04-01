@@ -984,6 +984,8 @@ export class SubstrateRuntime implements Lifecycle {
         onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
         onIntentionReminderDecision: intentionAppraisalHooks.onIntentionReminderDecision,
         onIntentionReminderTriggered: intentionAppraisalHooks.onIntentionReminderTriggered,
+        pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
+        careReminderStore: intentionRuntime.careReminderStore,
         onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
         coreMemoryStore,
         postTurnActions,

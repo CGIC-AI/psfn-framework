@@ -12,6 +12,29 @@ interface CapabilityAnnotatedTool {
   requiredCapability?: CapabilityRequirementInput;
 }
 
+const MEMORY_FAIL_CLOSED_REQUIREMENTS = [
+  'identity.read',
+  'memory.write',
+  'memory.delete',
+] as const satisfies readonly CapabilityToken[];
+
+function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case 'search':
+      return 'identity.read';
+    case 'write':
+    case 'import':
+      return 'memory.write';
+    case 'redact':
+    case 'delete':
+    case 'restore':
+      return 'memory.delete';
+    default:
+      return MEMORY_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
@@ -102,6 +125,10 @@ export function resolveToolRequiredCapabilities(
   tool: AgentTool<any>,
   params: unknown,
 ): CapabilityToken[] {
+  if (tool.name === 'memory') {
+    return normalizeRequirement(resolveUnifiedMemoryRequirement(toRecord(params)));
+  }
+
   const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;
   if (annotated) {
     if (typeof annotated === 'function') {

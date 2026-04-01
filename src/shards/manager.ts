@@ -65,10 +65,9 @@ const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'load_tools', 'toolset'
 const DEFAULT_RUNTIME_SHARD_HISTORY_LIMIT = 25;
 const APPRENTICE_SHARD_TOOL_EXTRAS = [
   'contact_list',
-  'memory_import_batch',
 ] as const;
 export const DEFAULT_SHARD_TOOLSET = [
-  'memory_write',
+  'memory',
   'contact_lookup',
   'repo_status',
   'repo_diff',
@@ -1155,7 +1154,7 @@ export class ShardManager implements ShardExecutionPort {
     return {
       ...tool,
       execute: async (toolCallId, params, signal) => {
-        this.enforceShardToolSyncPolicy(tool.name, shardId, toolCallId);
+        this.enforceShardToolSyncPolicy(tool.name, params, shardId, toolCallId);
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
         // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1164,8 +1163,13 @@ export class ShardManager implements ShardExecutionPort {
     };
   }
 
-  private enforceShardToolSyncPolicy(toolName: string, shardId: string, toolCallId: string): void {
-    const operation = this.resolveShardToolSyncOperation(toolName);
+  private enforceShardToolSyncPolicy(
+    toolName: string,
+    params: unknown,
+    shardId: string,
+    toolCallId: string,
+  ): void {
+    const operation = this.resolveShardToolSyncOperation(toolName, params);
     if (!operation) {
       return;
     }
@@ -1197,7 +1201,26 @@ export class ShardManager implements ShardExecutionPort {
 
   private resolveShardToolSyncOperation(
     toolName: string,
+    params: unknown,
   ): ShardSessionMemorySyncEnvelope['operation'] | null {
+    if (toolName === 'memory') {
+      if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+        return null;
+      }
+      const action = typeof (params as Record<string, unknown>).action === 'string'
+        ? (params as Record<string, unknown>).action.trim()
+        : '';
+      switch (action) {
+        case 'write':
+          return 'memory_write';
+        case 'import':
+          return 'memory_import_batch';
+        case 'redact':
+          return 'memory_redact';
+        default:
+          return null;
+      }
+    }
     if (
       toolName !== 'memory_write'
       && toolName !== 'memory_import_batch'
@@ -1214,7 +1237,8 @@ export class ShardManager implements ShardExecutionPort {
     shardId: string,
   ): unknown {
     if (
-      toolName !== 'memory_write'
+      toolName !== 'memory'
+      && toolName !== 'memory_write'
       && toolName !== 'memory_import_batch'
       && toolName !== 'memory_redact'
     ) {
@@ -1222,6 +1246,15 @@ export class ShardManager implements ShardExecutionPort {
     }
     if (typeof params !== 'object' || params === null || Array.isArray(params)) {
       return params;
+    }
+
+    if (toolName === 'memory') {
+      const action = typeof (params as Record<string, unknown>).action === 'string'
+        ? (params as Record<string, unknown>).action.trim()
+        : '';
+      if (action !== 'write' && action !== 'import' && action !== 'redact') {
+        return params;
+      }
     }
 
     return {

@@ -22,6 +22,17 @@ import { toErrorMessage } from '../utils/errors.js';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
 const SCRATCHPAD_MAX_LIMIT = 64;
+const MEMORY_SEARCH_DEFAULT_LIMIT = 5;
+const MEMORY_SEARCH_MAX_LIMIT = 20;
+const MEMORY_TOOL_ACTIONS = [
+  'write',
+  'search',
+  'import',
+  'redact',
+  'delete',
+  'restore',
+] as const;
+type MemoryToolAction = (typeof MEMORY_TOOL_ACTIONS)[number];
 
 function errorMessage(error: unknown): string {
   return toErrorMessage(error);
@@ -67,8 +78,76 @@ function formatScratchpadList(
   return lines.join('\n');
 }
 
+function formatMemorySearchResults(
+  entries: Array<{
+    id: string;
+    text: string;
+    type: string;
+    sensitivity: string;
+    similarity: number;
+  }>,
+): string {
+  if (entries.length === 0) {
+    return 'No memories matched the search query.';
+  }
+
+  const lines = [`Memory search results (${entries.length}):`];
+  for (const entry of entries) {
+    lines.push(
+      `- ${entry.id} [${entry.type}, ${entry.sensitivity}, similarity=${entry.similarity.toFixed(2)}]: ${entry.text}`,
+    );
+  }
+  return lines.join('\n');
+}
+
+function buildMemorySourceRef(
+  toolCallId: string,
+  action: Exclude<MemoryToolAction, 'search'>,
+  shardSource: string | null,
+  qualifiers: string[] = [],
+): string {
+  const base = shardSource
+    ? `source:${shardSource}|tool:memory|action:${action}`
+    : `source:tool:memory|action:${action}`;
+  const parts = [base, ...qualifiers.filter(Boolean), `invocation:${toolCallId}`];
+  return parts.join('|');
+}
+
+function parseTags(tags: string | undefined): string[] | undefined {
+  return tags
+    ? tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+    : undefined;
+}
+
 export interface MemoryWriteToolOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
+}
+
+interface MemoryToolParams {
+  action: MemoryToolAction;
+  text?: string;
+  type?: MemoryType;
+  importance?: number;
+  emotional_valence?: number;
+  confidence?: number;
+  tags?: string;
+  sensitivity?: SensitivityLevel;
+  query?: string;
+  limit?: number;
+  records?: Array<{
+    text: string;
+    type: MemoryType;
+    importance?: number;
+    emotional_valence?: number;
+    confidence?: number;
+    tags?: string;
+    sensitivity?: SensitivityLevel;
+  }>;
+  source?: string;
+  memory_id?: string;
+  operation?: MemoryRedactionOperation;
+  reason?: string;
+  delete_id?: string;
 }
 
 export function createMemoryWriteTool(
@@ -413,6 +492,284 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<
         return textResult(`Memory restored (id: ${restored.memoryId}, delete_id: ${restored.deleteId}).`);
       } catch (error) {
         return textResultWithError(`Error restoring memory: ${errorMessage(error)}`, true);
+      }
+    },
+  };
+}
+
+export function createMemoryTool(
+  writer: MemoryWriter,
+  memoryStore: MemoryStore,
+  options: MemoryWriteToolOptions = {},
+): AgentTool<any> {
+  return {
+    name: 'memory',
+    description:
+      'Unified long-term memory tool. ' +
+      'Use action=write|search|import|redact|delete|restore to manage durable memory explicitly.',
+    label: 'memory',
+    parameters: Type.Object({
+      action: Type.Unsafe<MemoryToolAction>({
+        type: 'string',
+        enum: [...MEMORY_TOOL_ACTIONS],
+        description: 'One of: write, search, import, redact, delete, restore.',
+      }),
+      text: Type.Optional(
+        Type.String({ description: 'Required for action=write. The memory text to store.' }),
+      ),
+      type: Type.Optional(
+        Type.Unsafe<MemoryType>({
+          type: 'string',
+          enum: [...VALID_MEMORY_TYPES],
+          description: 'Required for action=write. Memory type to store.',
+        }),
+      ),
+      importance: Type.Optional(Type.Number({ description: 'Optional 0-1 significance for action=write.' })),
+      emotional_valence: Type.Optional(Type.Number({ description: 'Optional -1 to 1 emotional valence for action=write.' })),
+      confidence: Type.Optional(Type.Number({ description: 'Optional 0-1 confidence for action=write.' })),
+      tags: Type.Optional(Type.String({ description: 'Optional comma-separated tags for action=write or action=import records.' })),
+      sensitivity: Type.Optional(
+        Type.Unsafe<SensitivityLevel>({
+          type: 'string',
+          enum: [...VALID_SENSITIVITY_LEVELS],
+          description: 'Optional sensitivity for action=write or action=import records.',
+        }),
+      ),
+      query: Type.Optional(
+        Type.String({ description: 'Required for action=search. Lexical memory search query.' }),
+      ),
+      limit: Type.Optional(
+        Type.Number({
+          description: `Optional result limit for action=search (${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}).`,
+        }),
+      ),
+      records: Type.Optional(
+        Type.Array(
+          Type.Object({
+            text: Type.String(),
+            type: Type.Unsafe<MemoryType>({ type: 'string', enum: [...VALID_MEMORY_TYPES] }),
+            importance: Type.Optional(Type.Number()),
+            emotional_valence: Type.Optional(Type.Number()),
+            confidence: Type.Optional(Type.Number()),
+            tags: Type.Optional(Type.String()),
+            sensitivity: Type.Optional(
+              Type.Unsafe<SensitivityLevel>({ type: 'string', enum: [...VALID_SENSITIVITY_LEVELS] }),
+            ),
+          }),
+          { description: 'Required for action=import. Array of memory records to import.' },
+        ),
+      ),
+      source: Type.Optional(
+        Type.String({ description: 'Optional import source label for action=import. Default: "import".' }),
+      ),
+      memory_id: Type.Optional(
+        Type.String({ description: 'Required for action=redact or action=delete. Memory ID to mutate.' }),
+      ),
+      operation: Type.Optional(
+        Type.Unsafe<MemoryRedactionOperation>({
+          type: 'string',
+          enum: [...VALID_MEMORY_REDACTION_OPERATIONS],
+          description: 'Optional redaction mode for action=redact: auto, delete, or abstract.',
+        }),
+      ),
+      reason: Type.Optional(
+        Type.String({ description: 'Optional reason logged for redact/delete operations.' }),
+      ),
+      delete_id: Type.Optional(
+        Type.String({ description: 'Required for action=restore. Delete checkpoint ID to restore.' }),
+      ),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: MemoryToolParams,
+      _signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const internalSource = extractInternalSource(params as Record<string, unknown>);
+        const action = params.action;
+
+        if (!MEMORY_TOOL_ACTIONS.includes(action)) {
+          return textResultWithError(`Error: invalid action "${String(action)}"`, true);
+        }
+
+        switch (action) {
+          case 'write': {
+            const text = params.text?.trim();
+            const type = params.type;
+            if (!text) {
+              return textResultWithError('Error: text is required for action=write', true);
+            }
+            if (!type) {
+              return textResultWithError('Error: type is required for action=write', true);
+            }
+            if (!VALID_MEMORY_TYPES.includes(type)) {
+              return textResultWithError(
+                `Error: invalid type "${type}". Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`,
+                true,
+              );
+            }
+
+            const result = await writer.write({
+              text,
+              type,
+              importance: params.importance !== undefined ? clamp(Number(params.importance), 0, 1) : undefined,
+              emotionalValence: params.emotional_valence !== undefined
+                ? clamp(Number(params.emotional_valence), -1, 1)
+                : undefined,
+              formationVAD: options.getFormationVAD?.(),
+              confidence: params.confidence !== undefined ? clamp(Number(params.confidence), 0, 1) : undefined,
+              tags: parseTags(params.tags),
+              sourceRef: buildMemorySourceRef(toolCallId, 'write', internalSource),
+              sensitivity: params.sensitivity,
+            });
+
+            switch (result.action) {
+              case 'created':
+                return textResult(`Memory created (id: ${result.memory.id}, type: ${type})`);
+              case 'deduplicated':
+                return textResult(`Duplicate detected — bumped salience on existing memory (id: ${result.existingId})`);
+              case 'superseded':
+                return textResult(`Memory created, superseding older conflicting memory (id: ${result.memory.id}, type: ${type})`);
+            }
+            break;
+          }
+
+          case 'search': {
+            const query = params.query?.trim();
+            if (!query) {
+              return textResultWithError('Error: query is required for action=search', true);
+            }
+
+            const limit = params.limit === undefined
+              ? MEMORY_SEARCH_DEFAULT_LIMIT
+              : clampInt(params.limit, 1, MEMORY_SEARCH_MAX_LIMIT);
+            const results = memoryStore.searchByText(query, limit);
+            return textResult(formatMemorySearchResults(results.map(memory => ({
+              id: memory.id,
+              text: memory.text,
+              type: memory.type,
+              sensitivity: memory.sensitivity,
+              similarity: memory.similarity,
+            }))));
+          }
+
+          case 'import': {
+            const rawRecords = params.records;
+            const source = params.source?.trim() || 'import';
+            if (!Array.isArray(rawRecords) || rawRecords.length === 0) {
+              return textResultWithError('Error: records must be a non-empty array for action=import', true);
+            }
+
+            const records: MemoryWriteOptions[] = [];
+            for (let i = 0; i < rawRecords.length; i++) {
+              const record = rawRecords[i];
+              const text = record.text.trim();
+              const type = record.type;
+
+              if (!text) {
+                return textResultWithError(`Error: record[${i}] has empty text`, true);
+              }
+              if (!VALID_MEMORY_TYPES.includes(type)) {
+                return textResultWithError(`Error: record[${i}] has invalid type "${type}"`, true);
+              }
+
+              records.push({
+                text,
+                type,
+                importance: record.importance !== undefined ? clamp(Number(record.importance), 0, 1) : undefined,
+                emotionalValence: record.emotional_valence !== undefined
+                  ? clamp(Number(record.emotional_valence), -1, 1)
+                  : undefined,
+                confidence: record.confidence !== undefined ? clamp(Number(record.confidence), 0, 1) : undefined,
+                tags: parseTags(record.tags),
+                sourceRef: buildMemorySourceRef(toolCallId, 'import', internalSource, [`import_source:${source}`]),
+                sensitivity: record.sensitivity,
+              });
+            }
+
+            const result = await writer.importBatch(records);
+            return textResult(
+              `Import complete: ${result.written} written, ${result.deduplicated} deduplicated, `
+              + `${result.superseded} superseded, ${result.errors} errors (${records.length} total)`,
+            );
+          }
+
+          case 'redact': {
+            const memoryId = params.memory_id?.trim();
+            if (!memoryId) {
+              return textResultWithError('Error: memory_id is required for action=redact', true);
+            }
+
+            const operation = params.operation ?? 'auto';
+            if (!VALID_MEMORY_REDACTION_OPERATIONS.includes(operation)) {
+              return textResultWithError(`Error: invalid operation "${operation}"`, true);
+            }
+
+            const sourceRef = buildMemorySourceRef(toolCallId, 'redact', internalSource);
+            const redacted = await writer.redact({
+              memoryId,
+              operation,
+              reason: params.reason?.trim(),
+              requestedBy: sourceRef,
+              sourceRef,
+            });
+
+            if (!redacted) {
+              return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
+            }
+
+            if (redacted.operation === 'deleted') {
+              return textResult(
+                `Memory redacted via delete (id: ${redacted.sourceMemoryId}, delete_id: ${redacted.deleteId}, behavior: ${redacted.behavior}).`,
+              );
+            }
+
+            return textResult(
+              `Memory redacted via abstraction (source: ${redacted.sourceMemoryId}, abstracted: ${redacted.abstractedMemoryId}, `
+              + `delete_id: ${redacted.deleteId}, provenance_ref: ${redacted.externalProvenanceRef}).`,
+            );
+          }
+
+          case 'delete': {
+            const memoryId = params.memory_id?.trim();
+            if (!memoryId) {
+              return textResultWithError('Error: memory_id is required for action=delete', true);
+            }
+
+            const deleted = memoryStore.softDeleteMemory(memoryId, {
+              deletedBy: 'tool:memory|action:delete',
+              reason: params.reason?.trim(),
+            });
+            if (!deleted) {
+              return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
+            }
+
+            return textResult(
+              `Memory soft-deleted (id: ${deleted.memoryId}, delete_id: ${deleted.deleteId}). `
+              + 'Use action=restore with delete_id to restore.',
+            );
+          }
+
+          case 'restore': {
+            const deleteId = params.delete_id?.trim();
+            if (!deleteId) {
+              return textResultWithError('Error: delete_id is required for action=restore', true);
+            }
+
+            const restored = memoryStore.undoSoftDelete(deleteId, {
+              restoredBy: 'tool:memory|action:restore',
+            });
+            if (!restored) {
+              return textResultWithError(`Delete checkpoint not found or already restored: ${deleteId}`, true);
+            }
+
+            return textResult(`Memory restored (id: ${restored.memoryId}, delete_id: ${restored.deleteId}).`);
+          }
+        }
+
+        return textResultWithError(`Error: unsupported memory action "${action}"`, true);
+      } catch (error) {
+        return textResultWithError(`Error executing memory action: ${errorMessage(error)}`, true);
       }
     },
   };

@@ -105,6 +105,24 @@ describe('capability tool gating', () => {
     expect(memoryDelete.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('gates unified memory delete-like actions by memory.delete capability token', async () => {
+    const memory = createTool('memory');
+    const nurseryGated = gateToolWithCapabilities(
+      memory.tool,
+      () => accessForTier('nursery'),
+    );
+    const denied = await nurseryGated.execute('call-1b', { action: 'delete' });
+    expect(memory.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('memory.delete');
+
+    const apprenticeGated = gateToolWithCapabilities(
+      memory.tool,
+      () => accessForTier('apprentice'),
+    );
+    await apprenticeGated.execute('call-2b', { action: 'restore' });
+    expect(memory.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('gates memory_redact by memory.delete capability token', async () => {
     const memoryRedact = createTool('memory_redact');
     const nurseryGated = gateToolWithCapabilities(
@@ -121,6 +139,26 @@ describe('capability tool gating', () => {
     );
     await apprenticeGated.execute('call-2', {});
     expect(memoryRedact.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates unified memory search and write actions by their specific tokens', async () => {
+    const memorySearch = createTool('memory');
+    const searchGated = gateToolWithCapabilities(
+      memorySearch.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const searchDenied = await searchGated.execute('call-search', { action: 'search' });
+    expect(memorySearch.executeSpy).not.toHaveBeenCalled();
+    expect((searchDenied.content[0] as any).text).toContain('identity.read');
+
+    const memoryWrite = createTool('memory');
+    const writeGated = gateToolWithCapabilities(
+      memoryWrite.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const writeDenied = await writeGated.execute('call-write', { action: 'write' });
+    expect(memoryWrite.executeSpy).not.toHaveBeenCalled();
+    expect((writeDenied.content[0] as any).text).toContain('memory.write');
   });
 
   it('grants autonomous tier access for locked tools', async () => {

@@ -14,12 +14,8 @@ describe('registerMemoryTools', () => {
     );
 
     expect(registerTool.mock.calls).toEqual(expect.arrayContaining([
-      [expect.objectContaining({ name: 'memory_write' }), 'core'],
+      [expect.objectContaining({ name: 'memory' }), 'core'],
       [expect.objectContaining({ name: 'scratchpad_read' }), 'core'],
-      [expect.objectContaining({ name: 'memory_import_batch' }), 'extended'],
-      [expect.objectContaining({ name: 'memory_redact' }), 'extended'],
-      [expect.objectContaining({ name: 'memory_delete' }), 'extended'],
-      [expect.objectContaining({ name: 'undo_memory_delete' }), 'extended'],
       [expect.objectContaining({ name: 'scratchpad_write' }), 'extended'],
     ]));
   });

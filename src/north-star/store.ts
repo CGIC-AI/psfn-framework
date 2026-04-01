@@ -293,7 +293,7 @@ export class NorthStarStore {
 
     const content = [
       NORTH_STAR_LAYER_HEADER,
-      'Keep these long-term goals in view across planning, maintenance, and independent action.',
+      'Keep these long-horizon guiding intentions in view across planning, maintenance, and independent action.',
       '',
       ...enabledItems.flatMap((item, index) => (
         index === enabledItems.length - 1

@@ -126,7 +126,8 @@ Current guidance:
 - `toolset` is the model-facing control surface for listing, activating, pinning, and unpinning non-default tools.
 - `core_memory` is the current legacy name; the target orientation surface is `orient`.
 - `scratchpad` stays explicit as the ephemeral long-context workspace.
-- `north_star` stays its own semantic tool surface.
+- `north_star` stays its own semantic tool surface, separate from `orient` and `identity`.
+- `north_star` is a unified action-based extended tool, not a core primitive or a transient session-state surface.
 
 ## Validation Baseline
 

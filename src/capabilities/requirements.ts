@@ -18,6 +18,11 @@ const MEMORY_FAIL_CLOSED_REQUIREMENTS = [
   'memory.delete',
 ] as const satisfies readonly CapabilityToken[];
 
+const NORTH_STAR_FAIL_CLOSED_REQUIREMENTS = [
+  'identity.read',
+  'identity.write.runtime',
+] as const satisfies readonly CapabilityToken[];
+
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
   switch (action) {
@@ -32,6 +37,22 @@ function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): Capab
       return 'memory.delete';
     default:
       return MEMORY_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
+function resolveUnifiedNorthStarRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case '':
+    case 'list':
+      return 'identity.read';
+    case 'create':
+    case 'update':
+    case 'delete':
+    case 'reorder':
+      return 'identity.write.runtime';
+    default:
+      return NORTH_STAR_FAIL_CLOSED_REQUIREMENTS;
   }
 }
 
@@ -65,11 +86,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   prompt_layer_rollback: 'identity.write.runtime',
   prompt_layer_toggle: 'identity.write.runtime',
   prompt_layer_update: 'identity.write.runtime',
-  north_star_list: 'identity.read',
-  north_star_create: 'identity.write.runtime',
-  north_star_update: 'identity.write.runtime',
-  north_star_delete: 'identity.write.runtime',
-  north_star_reorder: 'identity.write.runtime',
+  north_star: 'identity.write.runtime',
   repo_apply_patch: 'git.write',
   repo_commit: 'git.write',
   repo_create_branch: 'git.write',
@@ -127,6 +144,10 @@ export function resolveToolRequiredCapabilities(
 ): CapabilityToken[] {
   if (tool.name === 'memory') {
     return normalizeRequirement(resolveUnifiedMemoryRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'north_star') {
+    return normalizeRequirement(resolveUnifiedNorthStarRequirement(toRecord(params)));
   }
 
   const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;

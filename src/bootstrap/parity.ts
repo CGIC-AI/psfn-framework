@@ -58,11 +58,7 @@ import {
 } from '../identity/prompt-tools.js';
 import { NorthStarStore } from '../north-star/store.js';
 import {
-  createNorthStarCreateTool,
-  createNorthStarDeleteTool,
-  createNorthStarListTool,
-  createNorthStarReorderTool,
-  createNorthStarUpdateTool,
+  createNorthStarTool,
 } from '../north-star/tools.js';
 import {
   HEARTBEAT_SILENT_REFLECTION_TOKEN,
@@ -355,15 +351,11 @@ export function wirePromptRuntime(
   target.registerTool(createPromptLayerListTool(promptStore), 'core');
   target.registerTool(createPromptLayerGetTool(promptStore), 'core');
   target.registerTool(createIdentityDiffTool(promptStore), 'core');
-  target.registerTool(createNorthStarListTool(northStarStore), 'core');
   target.registerTool(createIdentityChangelogTool(promptStore), 'extended');
   target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
   target.registerTool(createPromptLayerRollbackTool(promptStore, options), 'extended');
   target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
-  target.registerTool(createNorthStarCreateTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarUpdateTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarDeleteTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarReorderTool(northStarStore), 'extended');
+  target.registerTool(createNorthStarTool(northStarStore), 'extended');
 
   log.info(`Prompt stack enabled (${promptStore.count} layers)`);
   return promptStore;

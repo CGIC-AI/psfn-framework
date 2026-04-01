@@ -81,11 +81,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `identity_changelog` | `identity` | always-on | Same family. |
 | `persona_update` | `identity` | extended | Persona mutation remains explicit and guarded. |
 | `character_card_update` | `identity` | extended | Character-card mutation belongs to identity. |
-| `north_star_list` | `north_star` | always-on | Keep this as its own semantic surface. |
-| `north_star_create` | `north_star` | extended | Same family. |
-| `north_star_update` | `north_star` | extended | Same family. |
-| `north_star_delete` | `north_star` | extended | Same family. |
-| `north_star_reorder` | `north_star` | extended | Same family. |
+| `north_star` | `north_star` | extended | Unified long-horizon guiding-intent surface with `action=list|create|update|delete|reorder`; keep it semantic and non-core. |
 | `settings_get` | `system` | always-on | Runtime-setting reads are system guidance, not identity. |
 | `tool_search` | `tool_search` | always-on | Primary discovery surface for non-default tools; pair it with `toolset` for activation or pinning. |
 | `promoted_tools_list` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="list"`. |

@@ -161,6 +161,26 @@ describe('capability tool gating', () => {
     expect((writeDenied.content[0] as any).text).toContain('memory.write');
   });
 
+  it('gates unified north_star actions by read versus runtime-write capability tokens', async () => {
+    const northStarList = createTool('north_star');
+    const listGated = gateToolWithCapabilities(
+      northStarList.tool,
+      () => accessForTier('custom', ['identity.write.runtime']),
+    );
+    const listDenied = await listGated.execute('call-north-star-list', { action: 'list' });
+    expect(northStarList.executeSpy).not.toHaveBeenCalled();
+    expect((listDenied.content[0] as any).text).toContain('identity.read');
+
+    const northStarUpdate = createTool('north_star');
+    const updateGated = gateToolWithCapabilities(
+      northStarUpdate.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const updateDenied = await updateGated.execute('call-north-star-update', { action: 'update' });
+    expect(northStarUpdate.executeSpy).not.toHaveBeenCalled();
+    expect((updateDenied.content[0] as any).text).toContain('identity.write.runtime');
+  });
+
   it('grants autonomous tier access for locked tools', async () => {
     const restart = createTool('self_restart');
     const restartGated = gateToolWithCapabilities(

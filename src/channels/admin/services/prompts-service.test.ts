@@ -270,6 +270,7 @@ describe('AdminPromptsDataService', () => {
     }));
 
     expect(result.ok).toBe(true);
+    expect(result.message).toBe('Saved North Star guidance');
     expect(result.snapshot?.items).toHaveLength(2);
     expect(result.snapshot?.items[0]?.title).toBe('Shared stewardship');
     expect(result.snapshot?.items[1]?.title).toBe('Companion work');

@@ -205,10 +205,10 @@ describe('wirePromptRuntime', () => {
     expect(calls.find(([tool]) => tool.name === 'prompt_layer_list')?.[1]).toBe('core');
     expect(calls.find(([tool]) => tool.name === 'prompt_layer_get')?.[1]).toBe('core');
     expect(calls.find(([tool]) => tool.name === 'identity_diff')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'north_star_list')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'north_star')?.[1]).toBe('extended');
     expect(
       calls
-        .filter(([tool]) => !['prompt_layer_list', 'prompt_layer_get', 'identity_diff', 'north_star_list'].includes(tool.name))
+        .filter(([tool]) => !['prompt_layer_list', 'prompt_layer_get', 'identity_diff'].includes(tool.name))
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
     expect(calls.map(([tool]) => tool.name)).toEqual(expect.arrayContaining([
@@ -219,11 +219,7 @@ describe('wirePromptRuntime', () => {
       'prompt_layer_update',
       'prompt_layer_rollback',
       'prompt_layer_toggle',
-      'north_star_list',
-      'north_star_create',
-      'north_star_update',
-      'north_star_delete',
-      'north_star_reorder',
+      'north_star',
     ]));
   });
 });

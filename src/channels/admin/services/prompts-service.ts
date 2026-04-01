@@ -675,10 +675,10 @@ export class AdminPromptsDataService implements AdminPromptsService {
       return { ok: false, message: 'Failed to load North Star snapshot after save' };
     }
 
-    this.injectPromptEditSystemNote('Admin updated North Star goals.');
+    this.injectPromptEditSystemNote('Admin updated North Star guidance.');
     return {
       ok: true,
-      message: 'Saved North Star goals',
+      message: 'Saved North Star guidance',
       snapshot,
     };
   }

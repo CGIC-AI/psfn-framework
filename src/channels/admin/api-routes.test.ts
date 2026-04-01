@@ -38,12 +38,6 @@ import type { ScheduledTask } from '../../scheduler/types.js';
 import { createTurnId } from '../../turns/id.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
-import {
-  COMPACTION_SUMMARY_PROMPT_KEY,
-  EXTRACTION_PROMPT_KEY,
-  PROFILE_SYNTHESIS_PROMPT_KEY,
-  getDefaultPromptText,
-} from '../../identity/prompt-registry.js';
 
 function request(
   port: number,
@@ -3085,12 +3079,14 @@ describe('AdminServer JSON API routes', () => {
     expect(saveRes.status).toBe(200);
     const savePayload = JSON.parse(saveRes.body) as {
       ok: boolean;
+      message?: string;
       snapshot?: {
         items: Array<{ title: string }>;
         preview: { text: string };
       };
     };
     expect(savePayload.ok).toBe(true);
+    expect(savePayload.message).toBe('Saved North Star guidance');
     expect(savePayload.snapshot?.items.map(item => item.title)).toEqual(['Shared care', 'Companion work']);
     expect(savePayload.snapshot?.preview.text).toContain('[North Star]');
     expect(savePayload.snapshot?.preview.text).toContain('Companion work');

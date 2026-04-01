@@ -131,6 +131,7 @@ Current guidance:
 - `north_star` is a unified action-based extended tool, not a core primitive or a transient session-state surface.
 - `identity` is the live unified surface for prompt-layer reads/mutations and persona mutation via explicit `action` semantics; write actions remain capability-gated and safeguard-audited.
 - `schedule` is the live unified surface for durable reminders, proactive follow-ups, reflection templates, and timed prompt work; legacy scheduler micro-tool semantics remain available as `action` aliases inside that tool during migration.
+- `notify` is the live unified surface for operator briefing, lightweight outbound delivery, and approval escalation. `brief` replaces legacy `notify_operator`, `send` requires explicit delivery targets, and `approval_request` keeps review details explicit and fail-closed.
 
 ## Validation Baseline
 

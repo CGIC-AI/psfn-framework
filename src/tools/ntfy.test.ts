@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
-import { createNotifyOperatorTool, type NtfyNotifier } from './ntfy.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createNotifyDispatcher,
+  createNotifyTool,
+  type NotifyChannelSender,
+  type NtfyNotifier,
+} from './ntfy.js';
 import { ExternalCommunicationRateLimiter } from '../capabilities/safeguards.js';
 import { runWithRequestContext } from '../llm/request-context.js';
 
@@ -7,8 +12,8 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
   return result.content[0]?.text ?? '';
 }
 
-describe('notify_operator tool', () => {
-  it('returns explicit success text when alert is sent', async () => {
+describe('notify tool', () => {
+  it('returns explicit success text when a brief is sent', async () => {
     const notifier: NtfyNotifier = {
       notify: vi.fn().mockResolvedValue({
         status: 'sent',
@@ -16,68 +21,72 @@ describe('notify_operator tool', () => {
         messageId: 'msg-1',
       }),
     };
-    const tool = createNotifyOperatorTool(notifier);
+    const tool = createNotifyTool(createNotifyDispatcher({ briefNotifier: notifier }));
 
     const result = await tool.execute('call-1', {
+      action: 'brief',
       message: 'Discord gateway offline',
       title: 'Incident',
       priority: 5,
     });
 
-    expect(resultText(result as any)).toContain('notify_operator: success');
+    expect(resultText(result as any)).toContain('notify: brief sent via ntfy');
     expect(resultText(result as any)).toContain('topic "ops"');
     expect(resultText(result as any)).toContain('id msg-1');
     expect((result.details as any).isError).toBeUndefined();
   });
 
-  it('returns explicit debounced text when duplicate is suppressed', async () => {
+  it('returns explicit debounced text when a duplicate brief is suppressed', async () => {
     const notifier: NtfyNotifier = {
       notify: vi.fn().mockResolvedValue({
         status: 'debounced',
         topic: 'ops',
       }),
     };
-    const tool = createNotifyOperatorTool(notifier);
+    const tool = createNotifyTool(createNotifyDispatcher({ briefNotifier: notifier }));
 
     const result = await tool.execute('call-2', {
+      action: 'brief',
       message: 'Discord gateway offline',
     });
 
-    expect(resultText(result as any)).toContain('notify_operator: debounced');
+    expect(resultText(result as any)).toContain('notify: brief debounced');
     expect((result.details as any).isError).toBeUndefined();
   });
 
-  it('returns explicit failure text when notifier throws', async () => {
+  it('returns explicit failure text when brief delivery throws', async () => {
     const notifier: NtfyNotifier = {
       notify: vi.fn().mockRejectedValue(new Error('ntfy request failed: 503 Service Unavailable')),
     };
-    const tool = createNotifyOperatorTool(notifier);
+    const tool = createNotifyTool(createNotifyDispatcher({ briefNotifier: notifier }));
 
     const result = await tool.execute('call-3', {
+      action: 'brief',
       message: 'Discord gateway offline',
     });
 
-    expect(resultText(result as any)).toContain('notify_operator: failure');
+    expect(resultText(result as any)).toContain('notify: failure');
     expect(resultText(result as any)).toContain('503 Service Unavailable');
     expect((result.details as any).isError).toBe(true);
   });
 
-  it('fails fast when message is empty', async () => {
+  it('fails fast when brief message is empty', async () => {
     const notifier: NtfyNotifier = {
       notify: vi.fn(),
     };
-    const tool = createNotifyOperatorTool(notifier);
+    const tool = createNotifyTool(createNotifyDispatcher({ briefNotifier: notifier }));
 
     const result = await tool.execute('call-4', {
+      action: 'brief',
       message: '   ',
     });
 
-    expect(resultText(result as any)).toContain('notify_operator: failure');
+    expect(resultText(result as any)).toContain('notify: failure');
     expect((result.details as any).isError).toBe(true);
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
-  it('enforces external communication rate limits', async () => {
+  it('enforces brief safeguard rate limits', async () => {
     let now = 1_000;
     const limiter = new ExternalCommunicationRateLimiter({
       now: () => now,
@@ -90,30 +99,31 @@ describe('notify_operator tool', () => {
         topic: 'ops',
       }),
     };
-    const tool = createNotifyOperatorTool(notifier, {
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
       rateLimiter: limiter,
-      defaultChannel: 'discord',
-    });
+      defaultBudgetChannel: 'discord',
+    }));
 
-    const first = await tool.execute('call-5', { message: 'First alert' });
-    expect(resultText(first as any)).toContain('notify_operator: success');
+    const first = await tool.execute('call-5', { action: 'brief', message: 'First alert' });
+    expect(resultText(first as any)).toContain('notify: brief sent');
 
-    const blocked = await tool.execute('call-6', { message: 'Second alert' });
+    const blocked = await tool.execute('call-6', { action: 'brief', message: 'Second alert' });
     expect(resultText(blocked as any)).toContain('rate limit');
     expect((blocked.details as any).isError).toBe(true);
     expect(notifier.notify).toHaveBeenCalledTimes(1);
 
     now += 60 * 60 * 1000 + 1;
-    const afterWindow = await tool.execute('call-7', { message: 'Third alert' });
-    expect(resultText(afterWindow as any)).toContain('notify_operator: success');
+    const afterWindow = await tool.execute('call-7', { action: 'brief', message: 'Third alert' });
+    expect(resultText(afterWindow as any)).toContain('notify: brief sent');
     expect(notifier.notify).toHaveBeenCalledTimes(2);
   });
 
-  it('blocks scheduled/internal execution contexts to prevent heartbeat ntfy bleed', async () => {
+  it('blocks brief actions from scheduled/internal execution contexts', async () => {
     const notifier: NtfyNotifier = {
       notify: vi.fn(),
     };
-    const tool = createNotifyOperatorTool(notifier);
+    const tool = createNotifyTool(createNotifyDispatcher({ briefNotifier: notifier }));
 
     const result = await runWithRequestContext(
       {
@@ -122,38 +132,130 @@ describe('notify_operator tool', () => {
         purpose: 'agent.turn.prompt',
       },
       async () => tool.execute('call-8', {
+        action: 'brief',
         message: 'Heartbeat alert',
       }),
     );
 
-    expect(resultText(result as any)).toContain('notify_operator: blocked');
+    expect(resultText(result as any)).toContain('notify: blocked');
     expect((result.details as any).isError).toBe(true);
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
-  it('declares runtime wiring metadata for Garden health derivation', () => {
+  it('sends lightweight outbound notifications through explicit discord delivery targets', async () => {
+    const notifier: NtfyNotifier = {
+      notify: vi.fn(),
+    };
+    const sender: NotifyChannelSender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      channelSender: sender,
+    }));
+
+    const result = await tool.execute('call-9', {
+      action: 'send',
+      message: 'Background task completed.',
+      delivery_channel: 'discord',
+      delivery_target: 'discord:ops-room',
+    });
+
+    expect(resultText(result as any)).toContain('notify: send sent via discord');
+    expect(sender.send).toHaveBeenCalledWith({
+      channel: 'discord',
+      target: 'discord:ops-room',
+      message: 'Background task completed.',
+    });
+  });
+
+  it('fails closed when outbound delivery targets are missing or internal', async () => {
+    const notifier: NtfyNotifier = {
+      notify: vi.fn(),
+    };
+    const sender: NotifyChannelSender = {
+      send: vi.fn(),
+    };
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      channelSender: sender,
+    }));
+
+    const missingChannel = await tool.execute('call-10a', {
+      action: 'send',
+      message: 'Background task completed.',
+      delivery_target: 'discord:ops-room',
+    });
+    expect(resultText(missingChannel as any)).toContain('delivery_channel is required');
+
+    const missingTarget = await tool.execute('call-10', {
+      action: 'send',
+      message: 'Background task completed.',
+      delivery_channel: 'discord',
+    });
+    expect(resultText(missingTarget as any)).toContain('delivery_target is required');
+
+    const internalTarget = await tool.execute('call-11', {
+      action: 'send',
+      message: 'Background task completed.',
+      delivery_channel: 'discord',
+      delivery_target: 'internal:heartbeat',
+    });
+    expect(resultText(internalTarget as any)).toContain('external channel');
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  it('sends approval requests through the configured operator discord channel', async () => {
+    const notifier: NtfyNotifier = {
+      notify: vi.fn(),
+    };
+    const sender: NotifyChannelSender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const tool = createNotifyTool(createNotifyDispatcher({
+      briefNotifier: notifier,
+      channelSender: sender,
+      operatorDiscordChannelId: 'discord:operator-room',
+      operatorNtfyTopic: 'ops',
+    }));
+
+    const result = await tool.execute('call-12', {
+      action: 'approval_request',
+      approval_id: 'confirm-1',
+      approval_method: 'git.apply_patch',
+      approval_action: 'git.write',
+      approval_scope: 'src/tools/ntfy.ts',
+      approval_reason: 'Patch touches repo-owned runtime wiring.',
+      approval_expires_at: 1_800_000_000_000,
+    });
+
+    expect(resultText(result as any)).toContain('notify: approval_request sent via discord');
+    expect(sender.send).toHaveBeenCalledWith({
+      channel: 'discord',
+      target: 'discord:operator-room',
+      message: expect.stringContaining('Approval required: git.apply_patch (git.write)'),
+    });
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('declares gateway wiring metadata for ntfy and discord delivery paths', () => {
     const notifier: NtfyNotifier = {
       notify: vi.fn(),
     };
 
-    const tool = createNotifyOperatorTool(notifier, { gatewayMode: true }) as {
+    const tool = createNotifyTool(
+      createNotifyDispatcher({ briefNotifier: notifier }),
+      { gatewayMode: true },
+    ) as {
       wiringMeta?: {
         requiredServices?: string[];
         requiredGatewayMethods?: string[];
-        contextRestrictions?: {
-          disallowInternal?: boolean;
-          disallowScheduled?: boolean;
-        };
       };
     };
 
     expect(tool.wiringMeta).toEqual({
-      requiredGatewayMethods: ['notify.ntfy'],
+      requiredGatewayMethods: ['discord.send', 'notify.ntfy'],
       requiredServices: ['ntfy'],
-      contextRestrictions: {
-        disallowInternal: true,
-        disallowScheduled: true,
-      },
     });
   });
 });

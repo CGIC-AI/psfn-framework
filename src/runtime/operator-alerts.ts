@@ -1,25 +1,26 @@
 import { createComponentLogger } from '../logger.js';
 import type { StreamTerminalFailureEvent } from '../agent/stream-adapter.js';
-import type { NtfyNotifier } from '../tools/ntfy.js';
+import type { NotifyDispatcher } from '../tools/ntfy.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 const log = createComponentLogger('OperatorAlerts');
 
 export function createPromptGenerationFailureAlertHandler(
-  notifier: NtfyNotifier,
+  dispatcher: NotifyDispatcher,
   companionName = 'PSFN',
 ): (event: StreamTerminalFailureEvent) => Promise<void> {
   const resolvedCompanionName = companionName.trim() || 'PSFN';
 
   return async (event: StreamTerminalFailureEvent): Promise<void> => {
     try {
-      await notifier.notify({
+      await dispatcher.dispatch({
+        action: 'brief',
         title: `${resolvedCompanionName} prompt generation failure`,
         priority: 5,
         message: formatPromptGenerationFailureAlert(event, resolvedCompanionName),
       });
     } catch (error) {
-      log.warn('Failed to send ntfy alert for prompt generation failure', {
+      log.warn('Failed to send notify brief for prompt generation failure', {
         companionName: resolvedCompanionName,
         purpose: event.purpose,
         attempts: event.attempts,

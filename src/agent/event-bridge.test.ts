@@ -222,9 +222,9 @@ describe('createEventBridge', () => {
     emitAgentEvent({
       type: 'tool_execution_end',
       toolCallId: 'call-soft-error',
-      toolName: 'notify_operator',
+      toolName: 'notify',
       result: {
-        content: [{ type: 'text', text: 'notify_operator: failure (ntfy request failed: 503).' }],
+        content: [{ type: 'text', text: 'notify: failure (ntfy request failed: 503).' }],
         details: { isError: true },
       },
       isError: false,
@@ -235,9 +235,9 @@ describe('createEventBridge', () => {
     expect(events[0]).toMatchObject({
       channelId: 'test-channel',
       toolCallId: 'call-soft-error',
-      toolName: 'notify_operator',
+      toolName: 'notify',
       isError: true,
-      errorMessage: 'notify_operator: failure (ntfy request failed: 503).',
+      errorMessage: 'notify: failure (ntfy request failed: 503).',
     });
   });
 

@@ -772,6 +772,24 @@ describe('AdminServer JSON API routes', () => {
                 shardId: 'shard-live',
               },
             },
+            taggedOutputs: [],
+            workLog: [
+              {
+                entryId: 'worklog-live-1',
+                event: 'task_declared',
+                timestamp: 100,
+                message: 'Shard remit declared for "deep-work".',
+                details: ['creation_mode=fresh'],
+              },
+            ],
+            mergeReview: {
+              required: false,
+              status: 'none',
+              validationPath: '/api/admin/shards/shard-live',
+              lastUpdatedAt: 110,
+              pendingTaggedOutputCount: 0,
+              blockingReasons: [],
+            },
           },
           transcript: [
             {
@@ -787,6 +805,24 @@ describe('AdminServer JSON API routes', () => {
           transcriptMessageCount: 1,
           transcriptTruncated: false,
           artifacts: [],
+          taggedOutputs: [],
+          workLog: [
+            {
+              entryId: 'worklog-live-1',
+              event: 'task_declared',
+              timestamp: 100,
+              message: 'Shard remit declared for "deep-work".',
+              details: ['creation_mode=fresh'],
+            },
+          ],
+          review: {
+            required: false,
+            status: 'none',
+            validationPath: '/api/admin/shards/shard-live',
+            lastUpdatedAt: 110,
+            pendingTaggedOutputCount: 0,
+            blockingReasons: [],
+          },
           resume: {
             channelId: 'shard:shard-live',
             lifecycleState: 'ready',
@@ -847,6 +883,46 @@ describe('AdminServer JSON API routes', () => {
                 shardId: 'shard-finished',
               },
             },
+            taggedOutputs: [
+              {
+                outputId: 'output-finished-1',
+                kind: 'l0_output',
+                label: 'Final shard output',
+                content: 'Artifact ready for merge-back.',
+                preview: 'Artifact ready for merge-back.',
+                createdAt: 260,
+                reviewRequired: true,
+                reviewState: 'pending',
+                blockedCorePromotion: true,
+                provenance: {
+                  coreCompanionId: 'companion',
+                  shardCompanionId: 'companion/shards/shard-finished',
+                  shardId: 'shard-finished',
+                  channelId: 'shard:shard-finished',
+                  task: 'Return the implementation artifact',
+                  source: 'shard_final_response',
+                  tags: [],
+                },
+              },
+            ],
+            workLog: [
+              {
+                entryId: 'worklog-finished-1',
+                event: 'artifact_ready',
+                timestamp: 260,
+                message: 'Shard artifact staged for fold-back review.',
+                details: ['artifact_state=available'],
+              },
+            ],
+            mergeReview: {
+              required: true,
+              status: 'pending',
+              validationPath: '/api/admin/shards/shard-finished',
+              requestedAt: 260,
+              lastUpdatedAt: 260,
+              pendingTaggedOutputCount: 1,
+              blockingReasons: ['artifact_output_pending_merge_review'],
+            },
           },
           transcript: [
             {
@@ -876,8 +952,67 @@ describe('AdminServer JSON API routes', () => {
               lifecycleState: 'available',
               content: 'Artifact ready for merge-back.',
               timestamp: 260,
+              reviewRequired: true,
+              reviewState: 'pending',
+              provenance: {
+                coreCompanionId: 'companion',
+                shardCompanionId: 'companion/shards/shard-finished',
+                shardId: 'shard-finished',
+                channelId: 'shard:shard-finished',
+                task: 'Return the implementation artifact',
+                source: 'shard_final_response',
+                tags: [],
+              },
             },
           ],
+          taggedOutputs: [
+            {
+              outputId: 'output-finished-1',
+              kind: 'l0_output',
+              label: 'Final shard output',
+              content: 'Artifact ready for merge-back.',
+              preview: 'Artifact ready for merge-back.',
+              createdAt: 260,
+              reviewRequired: true,
+              reviewState: 'pending',
+              blockedCorePromotion: true,
+              provenance: {
+                coreCompanionId: 'companion',
+                shardCompanionId: 'companion/shards/shard-finished',
+                shardId: 'shard-finished',
+                channelId: 'shard:shard-finished',
+                task: 'Return the implementation artifact',
+                source: 'shard_final_response',
+                tags: [],
+              },
+            },
+          ],
+          workLog: [
+            {
+              entryId: 'worklog-finished-1',
+              event: 'artifact_ready',
+              timestamp: 260,
+              message: 'Shard artifact staged for fold-back review.',
+              details: ['artifact_state=available'],
+            },
+            {
+              entryId: 'worklog-finished-2',
+              event: 'artifact_returned',
+              timestamp: 261,
+              message: 'Artifact returned to parent runtime; merge review remains required before core-state promotion.',
+              details: ['artifact_state=available'],
+            },
+          ],
+          review: {
+            required: true,
+            status: 'pending',
+            validationPath: '/api/admin/shards/shard-finished',
+            requestedAt: 260,
+            artifactReturnedAt: 261,
+            lastUpdatedAt: 261,
+            pendingTaggedOutputCount: 1,
+            blockingReasons: ['artifact_output_pending_merge_review'],
+          },
           resume: {
             channelId: 'shard:shard-finished',
             lifecycleState: 'offline',
@@ -919,7 +1054,11 @@ describe('AdminServer JSON API routes', () => {
     const payload = JSON.parse(res.body) as typeof runtimeSnapshot;
     expect(payload.activeCount).toBe(1);
     expect(payload.activeShards[0]?.task.shardId).toBe('shard-live');
+    expect(payload.activeShards[0]?.review.validationPath).toBe('/api/admin/shards/shard-live');
     expect(payload.recentShards[0]?.resume.deliveryPending).toBe(true);
+    expect(payload.recentShards[0]?.review.status).toBe('pending');
+    expect(payload.recentShards[0]?.review.validationPath).toBe('/api/admin/shards/shard-finished');
+    expect(payload.recentShards[0]?.taggedOutputs[0]?.provenance.shardId).toBe('shard-finished');
 
     const detail = await request(
       port,
@@ -932,7 +1071,9 @@ describe('AdminServer JSON API routes', () => {
     expect(runtimeTaskViewSpy).toHaveBeenCalledWith('shard-live', { transcriptLimit: 2 });
     const detailPayload = JSON.parse(detail.body) as typeof runtimeTaskView;
     expect(detailPayload.task.shardId).toBe('shard-live');
+    expect(detailPayload.review.validationPath).toBe('/api/admin/shards/shard-live');
     expect(detailPayload.resume.resumable).toBe(false);
+    expect(detailPayload.workLog[0]?.event).toBe('task_declared');
   });
 
   it('returns operator-visible subagent runtime snapshots and task detail views', async () => {

@@ -185,6 +185,28 @@ describe('ShardManager', () => {
       },
     });
     expect(result.lineage).toEqual(result.gatewayRouting.shard);
+    expect(result.taggedOutputs).toEqual([
+      expect.objectContaining({
+        kind: 'l0_output',
+        reviewState: 'pending',
+        blockedCorePromotion: true,
+        provenance: expect.objectContaining({
+          coreCompanionId: 'companion',
+          shardId: result.shardId,
+        }),
+      }),
+    ]);
+    expect(result.mergeReview).toEqual(expect.objectContaining({
+      required: true,
+      status: 'pending',
+      pendingTaggedOutputCount: 1,
+      blockingReasons: ['artifact_output_pending_merge_review'],
+    }));
+    expect(result.workLog.map(entry => entry.event)).toEqual(expect.arrayContaining([
+      'task_declared',
+      'artifact_ready',
+      'merge_review_pending',
+    ]));
     expect(manager.portFamily).toBe('shard');
   });
 
@@ -395,6 +417,7 @@ describe('ShardManager', () => {
     expect(result.artifactLifecycleState).toBe('available');
     expect(result.health).toBe('healthy');
     expect(result.capabilities).toContain('general');
+    expect(result.mergeReview.status).toBe('pending');
   });
 
   it('keeps completed shard artifacts resumable until an explicit delivery occurs', async () => {
@@ -420,8 +443,14 @@ describe('ShardManager', () => {
         kind: 'final_output',
         lifecycleState: 'available',
         content: 'delivery-ready output',
+        reviewState: 'pending',
       }),
     ]);
+    expect(beforeDelivery?.review).toEqual(expect.objectContaining({
+      required: true,
+      status: 'pending',
+      pendingTaggedOutputCount: 1,
+    }));
     expect(beforeDelivery?.resume).toEqual(expect.objectContaining({
       mode: 'delivery',
       resumable: true,
@@ -432,13 +461,21 @@ describe('ShardManager', () => {
     manager.markArtifactDelivered(result.shardId);
 
     const afterDelivery = manager.getRuntimeShardView(result.shardId, { transcriptLimit: 10 });
-    expect(afterDelivery?.task.runtimeState).toBe('completed');
-    expect(afterDelivery?.task.artifactLifecycleState).toBe('delivered');
-    expect(afterDelivery?.artifacts[0]).toEqual(expect.objectContaining({
+    if (!afterDelivery) {
+      throw new Error('Expected delivered shard runtime view');
+    }
+    expect(afterDelivery.task.runtimeState).toBe('completed');
+    expect(afterDelivery.task.artifactLifecycleState).toBe('delivered');
+    expect(afterDelivery.artifacts[0]).toEqual(expect.objectContaining({
       lifecycleState: 'delivered',
+      reviewState: 'approved',
       deliveredAt: expect.any(Number),
     }));
-    expect(afterDelivery?.resume).toEqual(expect.objectContaining({
+    expect(afterDelivery.review.required).toBe(true);
+    expect(afterDelivery.review.status).toBe('approved');
+    expect(afterDelivery.review.pendingTaggedOutputCount).toBe(0);
+    expect(afterDelivery.review.approvedAt).toEqual(expect.any(Number));
+    expect(afterDelivery.resume).toEqual(expect.objectContaining({
       mode: 'none',
       resumable: false,
       artifactLifecycleState: 'delivered',
@@ -739,6 +776,11 @@ describe('ShardManager', () => {
     expect(setPromptText).toContain(`Source channel: ${sourceChannelId}`);
     expect(setPromptText).toContain('PrimaryUser: Please check the deployment blockers.');
     expect(setPromptText).toContain('Remember the staging database migration is still pending.');
+    expect(result.workLog.map(entry => entry.event)).toEqual(expect.arrayContaining([
+      'task_declared',
+      'context_seeded',
+      'artifact_ready',
+    ]));
 
     const shardEntries = sessionStore.getRecent(`shard:${result.shardId}`, 10);
     expect(shardEntries).toEqual(expect.arrayContaining([
@@ -1112,7 +1154,7 @@ describe('ShardManager', () => {
     ).rejects.toThrow('Fresh shard creation must not inherit parent context');
   });
 
-  it('stamps shard source provenance on shard memory tools', async () => {
+  it('stages shard memory outputs for merge review instead of writing directly into core state', async () => {
     const memory = makeTestTool('memory');
 
     const manager = new ShardManager({
@@ -1133,27 +1175,27 @@ describe('ShardManager', () => {
     const tools = (setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>);
     const wrappedMemory = tools.find((tool) => tool.name === 'memory');
 
-    await wrappedMemory?.execute('mem-call', { action: 'write', text: 'x', type: 'semantic' });
-    await wrappedMemory?.execute('import-call', {
+    const writeResult = await wrappedMemory?.execute('mem-call', { action: 'write', text: 'x', type: 'semantic' });
+    const importResult = await wrappedMemory?.execute('import-call', {
       action: 'import',
       records: [{ text: 'x', type: 'semantic' }],
     });
     await wrappedMemory?.execute('search-call', { action: 'search', query: 'x' });
 
-    expect(memory.execute).toHaveBeenCalledWith(
+    expect(writeResult?.content[0]).toEqual(expect.objectContaining({
+      text: expect.stringContaining(`/api/admin/shards/${result.shardId}`),
+    }));
+    expect(importResult?.content[0]).toEqual(expect.objectContaining({
+      text: expect.stringContaining(`/api/admin/shards/${result.shardId}`),
+    }));
+    expect(memory.execute).not.toHaveBeenCalledWith(
       'mem-call',
-      expect.objectContaining({
-        action: 'write',
-        __psfnShardSource: `shard:${result.shardId}`,
-      }),
+      expect.anything(),
       undefined,
     );
-    expect(memory.execute).toHaveBeenCalledWith(
+    expect(memory.execute).not.toHaveBeenCalledWith(
       'import-call',
-      expect.objectContaining({
-        action: 'import',
-        __psfnShardSource: `shard:${result.shardId}`,
-      }),
+      expect.anything(),
       undefined,
     );
     expect(memory.execute).toHaveBeenCalledWith(
@@ -1163,9 +1205,39 @@ describe('ShardManager', () => {
       }),
       undefined,
     );
+
+    const runtime = manager.getRuntimeShardView(result.shardId, { transcriptLimit: 10 });
+    expect(runtime?.taggedOutputs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'l2_memory',
+        reviewState: 'pending',
+        blockedCorePromotion: true,
+        provenance: expect.objectContaining({
+          shardId: result.shardId,
+          sourceToolName: 'memory',
+          toolCallId: 'mem-call',
+        }),
+      }),
+      expect.objectContaining({
+        kind: 'l2_memory',
+        reviewState: 'pending',
+        blockedCorePromotion: true,
+        provenance: expect.objectContaining({
+          shardId: result.shardId,
+          sourceToolName: 'memory',
+          toolCallId: 'import-call',
+        }),
+      }),
+    ]));
+    expect(runtime?.review).toEqual(expect.objectContaining({
+      required: true,
+      status: 'pending',
+      pendingTaggedOutputCount: 3,
+      blockingReasons: expect.arrayContaining(['staged_shard_memory_pending_merge_review']),
+    }));
   });
 
-  it('denies disallowed shard-to-prime memory sync operations and audits the denial', async () => {
+  it('denies direct shard memory mutation requests that bypass merge review', async () => {
     const memory = makeTestTool('memory');
     const auditTrail = { append: vi.fn() };
 
@@ -1197,15 +1269,15 @@ describe('ShardManager', () => {
 
     await expect(
       wrappedMemory.execute('redact-call', { action: 'redact', memory_id: 'mem-1' }),
-    ).rejects.toThrow('denied_operation');
+    ).rejects.toThrow('requires explicit merge review outside shard runtime');
     expect(memory.execute).not.toHaveBeenCalled();
     expect(auditTrail.append).toHaveBeenCalledWith(
-      'shard.sync.policy',
+      'shard.foldback.mutation.denied',
       expect.objectContaining({
         shardId: result.shardId,
-        operation: 'memory_redact',
-        decision: 'DENY',
-        reason: 'denied_operation',
+        toolName: 'memory',
+        toolCallId: 'redact-call',
+        reason: expect.stringContaining('explicit merge review'),
       }),
     );
   });
@@ -1349,6 +1421,9 @@ describe('createSpawnShardTool', () => {
     expect(text).toContain('artifact=available');
     expect(text).toContain('[State reason: completed]');
     expect(text).toContain('[Runtime reason: artifact_ready]');
+    expect(text).toContain('[Merge review: status=pending, required=true, pending_tagged_outputs=1]');
+    expect(text).toContain('[Validation path: /api/admin/shards/');
+    expect(text).toContain('[Work log entries:');
     expect(text).toContain('tool output');
   });
 
@@ -1373,8 +1448,14 @@ describe('createSpawnShardTool', () => {
 
     expect(artifactReturnPort.returnArtifact).toHaveBeenCalled();
     const delivered = manager.getRuntimeSnapshot({ shardLimit: 10, transcriptLimit: 10 }).recentShards[0];
-    expect(delivered.task.runtimeState).toBe('completed');
-    expect(delivered.task.artifactLifecycleState).toBe('delivered');
+    expect(delivered.task.runtimeState).toBe('awaiting_delivery');
+    expect(delivered.task.artifactLifecycleState).toBe('available');
+    expect(delivered.review).toEqual(expect.objectContaining({
+      required: true,
+      status: 'pending',
+      pendingTaggedOutputCount: 1,
+    }));
+    expect(delivered.workLog.map(entry => entry.event)).toContain('artifact_returned');
   });
 
   it('surfaces explicit lifecycle failure diagnostics from shard results', async () => {
@@ -1414,6 +1495,35 @@ describe('createSpawnShardTool', () => {
           shardId: 'shard-failure',
           creationMode: 'fresh' as const,
         },
+      },
+      taggedOutputs: [{
+        outputId: 'output-failure',
+        kind: 'l0_output' as const,
+        label: 'Final shard output',
+        content: 'partial output',
+        preview: 'partial output',
+        createdAt: 33,
+        reviewRequired: true,
+        reviewState: 'pending' as const,
+        blockedCorePromotion: true,
+        provenance: {
+          coreCompanionId: 'companion',
+          shardCompanionId: 'companion/shards/shard-failure',
+          shardId: 'shard-failure',
+          channelId: 'shard:shard-failure',
+          task: 'diagnostic run',
+          source: 'shard_final_response' as const,
+          tags: [],
+        },
+      }],
+      workLog: [],
+      mergeReview: {
+        required: true,
+        status: 'pending' as const,
+        requestedAt: 33,
+        lastUpdatedAt: 33,
+        pendingTaggedOutputCount: 1,
+        blockingReasons: ['artifact_output_pending_merge_review'],
       },
     }));
     const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
@@ -1464,6 +1574,35 @@ describe('createSpawnShardTool', () => {
           shardId: 'shard-test',
           creationMode: 'forked' as const,
         },
+      },
+      taggedOutputs: [{
+        outputId: 'output-test',
+        kind: 'l0_output' as const,
+        label: 'Final shard output',
+        content: 'ok',
+        preview: 'ok',
+        createdAt: 1,
+        reviewRequired: true,
+        reviewState: 'pending' as const,
+        blockedCorePromotion: true,
+        provenance: {
+          coreCompanionId: 'companion',
+          shardCompanionId: 'companion/shards/shard-test',
+          shardId: 'shard-test',
+          channelId: 'shard:shard-test',
+          task: 'Inspect source context',
+          source: 'shard_final_response' as const,
+          tags: [],
+        },
+      }],
+      workLog: [],
+      mergeReview: {
+        required: true,
+        status: 'pending' as const,
+        requestedAt: 1,
+        lastUpdatedAt: 1,
+        pendingTaggedOutputCount: 1,
+        blockingReasons: ['artifact_output_pending_merge_review'],
       },
     }));
     const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
@@ -1530,6 +1669,35 @@ describe('createSpawnShardTool', () => {
           shardId: 'shard-backend',
           creationMode: 'fresh' as const,
         },
+      },
+      taggedOutputs: [{
+        outputId: 'output-backend',
+        kind: 'l0_output' as const,
+        label: 'Final shard output',
+        content: 'ok',
+        preview: 'ok',
+        createdAt: 1,
+        reviewRequired: true,
+        reviewState: 'pending' as const,
+        blockedCorePromotion: true,
+        provenance: {
+          coreCompanionId: 'companion',
+          shardCompanionId: 'companion/shards/shard-backend',
+          shardId: 'shard-backend',
+          channelId: 'shard:shard-backend',
+          task: 'Use a mediated backend',
+          source: 'shard_final_response' as const,
+          tags: [],
+        },
+      }],
+      workLog: [],
+      mergeReview: {
+        required: true,
+        status: 'pending' as const,
+        requestedAt: 1,
+        lastUpdatedAt: 1,
+        pendingTaggedOutputCount: 1,
+        blockingReasons: ['artifact_output_pending_merge_review'],
       },
     }));
     const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);

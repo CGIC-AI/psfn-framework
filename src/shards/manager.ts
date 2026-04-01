@@ -7,7 +7,6 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type {
   CapabilityTier,
   GatewayRoutingEnvelope,
-  ShardCreationMode,
   ShardToolsetConfig,
   ShardLineage,
   SubstrateConfig,
@@ -32,12 +31,14 @@ import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import {
   cloneGatewayRoutingEnvelope,
   deriveShardRoutingEnvelope,
+  type ShardCreationMode,
 } from '../routing/envelope.js';
 import type { ShardExecutionPort } from './port.js';
 import type {
   ShardBackend,
   ShardConfig,
   ShardLifecycleState,
+  ShardMergeReview,
   ShardParentContextSnapshot,
   ShardPromptDiscipline,
   ShardResult,
@@ -48,8 +49,15 @@ import type {
   ShardRuntimeTaskView,
   ShardSourceContext,
   ShardContextPackEntry,
+  ShardTaggedOutput,
+  ShardTaggedOutputKind,
+  ShardTaggedOutputProvenance,
+  ShardTaggedOutputSource,
+  ShardWorkLogEntry,
+  ShardWorkLogEvent,
 } from './types.js';
 import { toErrorMessage } from '../utils/errors.js';
+import { textResult } from '../tools/results.js';
 import {
   assertMediatedShardBackendTier,
   LocalShardBackendController,
@@ -65,6 +73,7 @@ const CONTEXT_PACK_SESSION_SCAN_LIMIT = 12;
 const CONTEXT_PACK_SESSION_ENTRY_LIMIT = 6;
 const CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS = 600;
 const CONTEXT_PACK_MEMORY_MAX_CHARS = 4_000;
+const SHARD_TAGGED_OUTPUT_PREVIEW_MAX_CHARS = 180;
 const DEFAULT_SHARD_CAPABILITIES = ['general'] as const;
 const SHARD_TOOLSET_ALL = '*';
 const SHARD_SYNC_POLICY_VERSION = 1;
@@ -138,6 +147,13 @@ interface ResolvedShardConfig extends ShardConfig {
   parentContext?: ShardParentContextSnapshot;
   promptDiscipline: ShardPromptDiscipline;
   gatewayRouting: GatewayRoutingEnvelope;
+}
+
+interface StagedShardMemoryOutput {
+  content: string;
+  label: string;
+  source: ShardTaggedOutputSource;
+  provenanceTags: string[];
 }
 
 export class ShardManager implements ShardExecutionPort {
@@ -269,11 +285,38 @@ export class ShardManager implements ShardExecutionPort {
       requiredCapabilities,
       lineage,
       gatewayRouting,
+      taggedOutputs: [],
+      workLog: [],
+      mergeReview: this.createEmptyMergeReview(shardId, startTime),
     };
     this.activeShards.set(shardId, runtimeRecord);
     this.shardRecords.set(shardId, runtimeRecord);
     this.noteShardHistory(shardId);
     this.registerActiveShardChannel(channelId, shardId);
+    this.appendWorkLog(
+      shardId,
+      'task_declared',
+      `Shard remit declared for "${shardConfig.name}".`,
+      [
+        `creation_mode=${shardConfig.creationMode}`,
+        `channel_id=${channelId}`,
+        `task=${this.truncateContextText(shardConfig.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}`,
+      ],
+      startTime,
+    );
+    if (shardConfig.parentContext) {
+      this.appendWorkLog(
+        shardId,
+        'context_seeded',
+        `Shard context seeded from ${shardConfig.parentContext.source.channelId}.`,
+        [
+          `source_channel=${shardConfig.parentContext.source.channelId}`,
+          `transcript_entries=${shardConfig.parentContext.transcript.entries.length}`,
+          `memory_seeded=${shardConfig.parentContext.memory ? 'true' : 'false'}`,
+        ],
+        startTime,
+      );
+    }
     this.auditTrail?.append('shard.lifecycle.transition', {
       shardId,
       from: 'none',
@@ -409,6 +452,11 @@ export class ShardManager implements ShardExecutionPort {
         requiredCapabilities: [...requiredCapabilities],
         lineage,
         gatewayRouting,
+        taggedOutputs: this.cloneTaggedOutputs(finishedShard?.taggedOutputs ?? []),
+        workLog: this.cloneWorkLog(finishedShard?.workLog ?? []),
+        mergeReview: this.cloneMergeReview(
+          finishedShard?.mergeReview ?? this.createEmptyMergeReview(shardId, completedAt),
+        ),
       };
       this.auditTrail?.append('shard.spawn.end', {
         shardId,
@@ -506,6 +554,32 @@ export class ShardManager implements ShardExecutionPort {
     return this.buildRuntimeTaskView(shard, transcriptLimit);
   }
 
+  recordArtifactReturn(shardId: string): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard || shard.artifactLifecycleState === 'pending' || shard.artifactLifecycleState === 'none') {
+      return;
+    }
+    const returnedAt = Date.now();
+    shard.mergeReview.artifactReturnedAt = returnedAt;
+    shard.mergeReview.lastUpdatedAt = returnedAt;
+    this.appendWorkLog(
+      shardId,
+      'artifact_returned',
+      'Artifact returned to parent runtime; merge review remains required before core-state promotion.',
+      [
+        `artifact_state=${shard.artifactLifecycleState}`,
+        `review_status=${shard.mergeReview.status}`,
+      ],
+      returnedAt,
+    );
+    this.auditTrail?.append('shard.foldback.artifact.returned', {
+      shardId,
+      artifactLifecycleState: shard.artifactLifecycleState,
+      reviewStatus: shard.mergeReview.status,
+      returnedAt,
+    });
+  }
+
   markArtifactDelivered(shardId: string): void {
     const shard = this.shardRecords.get(shardId);
     if (!shard || shard.artifactLifecycleState !== 'available') {
@@ -515,7 +589,9 @@ export class ShardManager implements ShardExecutionPort {
     shard.artifactLifecycleState = 'delivered';
     shard.artifactUpdatedAt = deliveredAt;
     shard.deliveredAt = deliveredAt;
+    this.approveTaggedOutputsByKind(shardId, 'l0_output', deliveredAt);
     this.transitionRuntimeState(shardId, 'completed', 'artifact_delivered', deliveredAt);
+    this.refreshMergeReviewState(shardId, deliveredAt);
   }
 
   private resolveHeartbeatStaleAfterMs(value: number | undefined): number {
@@ -708,6 +784,27 @@ export class ShardManager implements ShardExecutionPort {
     shard.artifactLifecycleState = 'available';
     shard.artifactUpdatedAt = completedAt;
     shard.artifactAvailableAt = completedAt;
+    shard.taggedOutputs.push(
+      this.createTaggedOutput(
+        shard,
+        'l0_output',
+        'Final shard output',
+        content,
+        'shard_final_response',
+        completedAt,
+      ),
+    );
+    this.appendWorkLog(
+      shardId,
+      'artifact_ready',
+      'Shard artifact staged for fold-back review.',
+      [
+        `artifact_state=${shard.artifactLifecycleState}`,
+        `tagged_output_count=${shard.taggedOutputs.length}`,
+      ],
+      completedAt,
+    );
+    this.requireMergeReview(shardId, 'artifact_output_pending_merge_review', completedAt);
   }
 
   private markShardCompleted(shardId: string, completedAt: number): void {
@@ -727,6 +824,7 @@ export class ShardManager implements ShardExecutionPort {
     shard.completedAt = Date.now();
     shard.artifactLifecycleState = 'none';
     shard.artifactUpdatedAt = shard.completedAt;
+    shard.mergeReview.lastUpdatedAt = shard.completedAt;
   }
 
   private buildRuntimeTaskView(
@@ -736,12 +834,21 @@ export class ShardManager implements ShardExecutionPort {
     const transcript = this.deps.sessionStore.getRecent(shard.channelId, transcriptLimit);
     const transcriptMessageCount = this.deps.sessionStore.count(shard.channelId);
     const transcriptTruncated = transcriptMessageCount > transcriptLimit;
+    const latestL0Output = [...shard.taggedOutputs]
+      .reverse()
+      .find(output => output.kind === 'l0_output');
     const artifacts = shard.content && shard.artifactLifecycleState !== 'pending' && shard.artifactLifecycleState !== 'none'
       ? [{
         kind: 'final_output' as const,
         lifecycleState: shard.artifactLifecycleState,
         content: shard.content,
         timestamp: shard.artifactAvailableAt ?? shard.completedAt ?? shard.startedAt,
+        reviewRequired: latestL0Output?.reviewRequired ?? true,
+        reviewState: latestL0Output?.reviewState ?? 'pending',
+        provenance: latestL0Output?.provenance ?? this.createTaggedOutputProvenance(
+          shard,
+          'shard_final_response',
+        ),
         ...(shard.deliveredAt ? { deliveredAt: shard.deliveredAt } : {}),
       }]
       : [];
@@ -777,6 +884,9 @@ export class ShardManager implements ShardExecutionPort {
       transcriptMessageCount,
       transcriptTruncated,
       artifacts,
+      taggedOutputs: this.cloneTaggedOutputs(shard.taggedOutputs),
+      workLog: this.cloneWorkLog(shard.workLog),
+      review: this.cloneMergeReview(shard.mergeReview),
       resume,
     };
   }
@@ -788,6 +898,9 @@ export class ShardManager implements ShardExecutionPort {
       requiredCapabilities: [...shard.requiredCapabilities],
       lineage: { ...shard.lineage },
       gatewayRouting: cloneGatewayRoutingEnvelope(shard.gatewayRouting) ?? shard.gatewayRouting,
+      taggedOutputs: this.cloneTaggedOutputs(shard.taggedOutputs),
+      workLog: this.cloneWorkLog(shard.workLog),
+      mergeReview: this.cloneMergeReview(shard.mergeReview),
     };
   }
 
@@ -808,6 +921,15 @@ export class ShardManager implements ShardExecutionPort {
       const shardId = this.resolveShardId(event.channelId);
       if (!shardId) return;
       this.touchShardHeartbeat(shardId);
+      this.appendWorkLog(
+        shardId,
+        'tool_invoked',
+        `Shard invoked tool "${event.toolName}".`,
+        [
+          `tool_name=${event.toolName}`,
+          `tool_call_id=${event.toolCallId}`,
+        ],
+      );
       this.auditTrail?.append('shard.tool.start', {
         shardId,
         channelId: event.channelId,
@@ -1302,10 +1424,480 @@ export class ShardManager implements ShardExecutionPort {
     return `${normalized.slice(0, maxChars - 3)}...`;
   }
 
+  private buildShardValidationPath(shardId: string): string {
+    return `/api/admin/shards/${encodeURIComponent(shardId)}`;
+  }
+
+  private createEmptyMergeReview(shardId: string, timestamp: number): ShardMergeReview {
+    return {
+      required: false,
+      status: 'none',
+      validationPath: this.buildShardValidationPath(shardId),
+      lastUpdatedAt: timestamp,
+      pendingTaggedOutputCount: 0,
+      blockingReasons: [],
+    };
+  }
+
+  private cloneTaggedOutputs(outputs: readonly ShardTaggedOutput[]): ShardTaggedOutput[] {
+    return outputs.map(output => ({
+      ...output,
+      provenance: {
+        ...output.provenance,
+        tags: [...output.provenance.tags],
+      },
+    }));
+  }
+
+  private cloneWorkLog(workLog: readonly ShardWorkLogEntry[]): ShardWorkLogEntry[] {
+    return workLog.map(entry => ({
+      ...entry,
+      details: [...entry.details],
+    }));
+  }
+
+  private cloneMergeReview(review: ShardMergeReview): ShardMergeReview {
+    return {
+      ...review,
+      blockingReasons: [...review.blockingReasons],
+    };
+  }
+
+  private appendWorkLog(
+    shardId: string,
+    event: ShardWorkLogEvent,
+    message: string,
+    details: string[] = [],
+    timestamp = Date.now(),
+  ): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      return;
+    }
+    shard.workLog.push({
+      entryId: `worklog-${randomUUID()}`,
+      event,
+      timestamp,
+      message,
+      details: [...details],
+    });
+  }
+
+  private createTaggedOutputProvenance(
+    shard: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
+    source: ShardTaggedOutputSource,
+    options: {
+      sourceToolName?: string;
+      toolCallId?: string;
+      provenanceTags?: string[];
+    } = {},
+  ): ShardTaggedOutputProvenance {
+    return {
+      coreCompanionId: shard.lineage.coreCompanionId,
+      shardCompanionId: shard.lineage.shardCompanionId,
+      shardId: shard.lineage.shardId,
+      channelId: shard.channelId,
+      task: shard.task,
+      source,
+      ...(options.sourceToolName ? { sourceToolName: options.sourceToolName } : {}),
+      ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
+      tags: [...new Set(options.provenanceTags?.filter(Boolean) ?? [])],
+    };
+  }
+
+  private createTaggedOutput(
+    shard: ShardRuntimeRecord,
+    kind: ShardTaggedOutputKind,
+    label: string,
+    content: string,
+    source: ShardTaggedOutputSource,
+    createdAt: number,
+    options: {
+      sourceToolName?: string;
+      toolCallId?: string;
+      provenanceTags?: string[];
+      reviewState?: ShardTaggedOutput['reviewState'];
+    } = {},
+  ): ShardTaggedOutput {
+    const normalizedContent = content.trim();
+    const reviewState = options.reviewState ?? 'pending';
+    return {
+      outputId: `output-${randomUUID()}`,
+      kind,
+      label,
+      content: normalizedContent,
+      preview: this.truncateContextText(normalizedContent, SHARD_TAGGED_OUTPUT_PREVIEW_MAX_CHARS),
+      createdAt,
+      reviewRequired: true,
+      reviewState,
+      blockedCorePromotion: reviewState !== 'approved',
+      provenance: this.createTaggedOutputProvenance(shard, source, {
+        ...options,
+        provenanceTags: [
+          'fold_back',
+          `tagged_output_kind:${kind}`,
+          `tagged_output_source:${source}`,
+          ...(options.provenanceTags ?? []),
+        ],
+      }),
+    };
+  }
+
+  private approveTaggedOutputsByKind(
+    shardId: string,
+    kind: ShardTaggedOutputKind,
+    timestamp = Date.now(),
+  ): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      return;
+    }
+    let updated = false;
+    for (const output of shard.taggedOutputs) {
+      if (output.kind !== kind || output.reviewState === 'approved') {
+        continue;
+      }
+      output.reviewState = 'approved';
+      output.blockedCorePromotion = false;
+      updated = true;
+    }
+    if (updated) {
+      this.appendWorkLog(
+        shardId,
+        'merge_review_approved',
+        `Approved shard tagged outputs of kind "${kind}".`,
+        [`kind=${kind}`],
+        timestamp,
+      );
+      this.auditTrail?.append('shard.foldback.review.approved', {
+        shardId,
+        kind,
+        timestamp,
+      });
+    }
+  }
+
+  private computeMergeReviewBlockingReasons(shard: ShardRuntimeRecord): string[] {
+    const pendingOutputs = shard.taggedOutputs.filter(output => output.reviewRequired && output.reviewState === 'pending');
+    const reasons = new Set<string>();
+    if (pendingOutputs.some(output => output.kind === 'l0_output')) {
+      reasons.add('artifact_output_pending_merge_review');
+    }
+    if (pendingOutputs.some(output => output.kind === 'l2_memory')) {
+      reasons.add('staged_shard_memory_pending_merge_review');
+    }
+    if (pendingOutputs.some(output => output.provenance.tags.includes('interpretive:emotional_or_relational'))) {
+      reasons.add('emotional_or_relational_interpretation_requires_core_review');
+    }
+    return [...reasons];
+  }
+
+  private refreshMergeReviewState(shardId: string, timestamp = Date.now()): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      return;
+    }
+    const previousStatus = shard.mergeReview.status;
+    const blockingReasons = this.computeMergeReviewBlockingReasons(shard);
+    const hasReviewableOutputs = shard.taggedOutputs.some(output => output.reviewRequired);
+    const required = shard.mergeReview.required || hasReviewableOutputs;
+    const pendingTaggedOutputCount = shard.taggedOutputs
+      .filter(output => output.reviewRequired && output.reviewState === 'pending')
+      .length;
+    shard.mergeReview.required = required;
+    shard.mergeReview.status = pendingTaggedOutputCount > 0
+      ? 'pending'
+      : required
+        ? 'approved'
+        : 'none';
+    if (hasReviewableOutputs && !shard.mergeReview.requestedAt) {
+      shard.mergeReview.requestedAt = timestamp;
+    }
+    if (required && shard.mergeReview.status === 'approved') {
+      shard.mergeReview.approvedAt = timestamp;
+    }
+    if (shard.mergeReview.status !== 'approved') {
+      delete shard.mergeReview.approvedAt;
+    }
+    shard.mergeReview.lastUpdatedAt = timestamp;
+    shard.mergeReview.pendingTaggedOutputCount = pendingTaggedOutputCount;
+    shard.mergeReview.blockingReasons = blockingReasons;
+
+    if (required && previousStatus !== 'pending') {
+      this.appendWorkLog(
+        shardId,
+        'merge_review_pending',
+        'Shard fold-back outputs require explicit merge review.',
+        [
+          ...blockingReasons.map(reason => `reason=${reason}`),
+          `validation_path=${shard.mergeReview.validationPath}`,
+        ],
+        timestamp,
+      );
+      this.auditTrail?.append('shard.foldback.review.pending', {
+        shardId,
+        blockingReasons,
+        pendingTaggedOutputCount,
+        validationPath: shard.mergeReview.validationPath,
+        timestamp,
+      });
+    }
+  }
+
+  private requireMergeReview(shardId: string, _reason: string, timestamp = Date.now()): void {
+    this.refreshMergeReviewState(shardId, timestamp);
+  }
+
+  private parseShardMemoryTags(rawTags: unknown): string[] {
+    if (Array.isArray(rawTags)) {
+      return rawTags
+        .flatMap(tag => typeof tag === 'string' ? [tag.trim().toLowerCase()] : [])
+        .filter(Boolean);
+    }
+    if (typeof rawTags !== 'string') {
+      return [];
+    }
+    return rawTags
+      .split(',')
+      .map(tag => tag.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  private isEmotionalOrRelationalMemory(memoryType: string | undefined, tags: readonly string[]): boolean {
+    if (memoryType?.trim().toLowerCase() === 'emotional') {
+      return true;
+    }
+    return tags.some(tag => (
+      tag.includes('relationship')
+      || tag.includes('relational')
+      || tag.includes('contact')
+      || tag.includes('partner')
+      || tag.includes('family')
+      || tag.includes('friend')
+    ));
+  }
+
+  private buildMemoryOutputProvenanceTags(
+    memoryType: unknown,
+    rawTags: unknown,
+    sensitivity: unknown,
+  ): string[] {
+    const tags = this.parseShardMemoryTags(rawTags);
+    const normalizedType = typeof memoryType === 'string' ? memoryType.trim().toLowerCase() : '';
+    const normalizedSensitivity = typeof sensitivity === 'string' ? sensitivity.trim().toLowerCase() : '';
+    return [
+      ...(normalizedType ? [`memory_type:${normalizedType}`] : []),
+      ...(normalizedSensitivity ? [`sensitivity:${normalizedSensitivity}`] : []),
+      ...tags.map(tag => `memory_tag:${tag}`),
+      ...(this.isEmotionalOrRelationalMemory(normalizedType || undefined, tags)
+        ? ['interpretive:emotional_or_relational']
+        : []),
+    ];
+  }
+
+  private resolveStagedShardMemoryOutputs(
+    toolName: string,
+    params: unknown,
+  ): StagedShardMemoryOutput[] {
+    if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+      return [];
+    }
+    const input = params as Record<string, unknown>;
+
+    const toWriteOutput = (record: Record<string, unknown>, labelPrefix: string): StagedShardMemoryOutput[] => {
+      const text = typeof record.text === 'string' ? record.text.trim() : '';
+      if (!text) {
+        return [];
+      }
+      const memoryType = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
+      return [{
+        content: text,
+        label: `${labelPrefix}${memoryType ? ` (${memoryType})` : ''}`,
+        source: 'memory_write',
+        provenanceTags: this.buildMemoryOutputProvenanceTags(
+          record.type,
+          record.tags,
+          record.sensitivity,
+        ),
+      }];
+    };
+
+    const toImportOutputs = (
+      records: unknown,
+      sourceLabel: string,
+    ): StagedShardMemoryOutput[] => {
+      if (!Array.isArray(records)) {
+        return [];
+      }
+      return records.flatMap((record, index) => {
+        if (typeof record !== 'object' || record === null || Array.isArray(record)) {
+          return [];
+        }
+        const entry = record as Record<string, unknown>;
+        const text = typeof entry.text === 'string' ? entry.text.trim() : '';
+        if (!text) {
+          return [];
+        }
+        const memoryType = typeof entry.type === 'string' ? entry.type.trim().toLowerCase() : '';
+        return [{
+          content: text,
+          label: `Imported shard memory ${index + 1} from ${sourceLabel}${memoryType ? ` (${memoryType})` : ''}`,
+          source: 'memory_import_batch' as const,
+          provenanceTags: this.buildMemoryOutputProvenanceTags(
+            entry.type,
+            entry.tags,
+            entry.sensitivity,
+          ),
+        }];
+      });
+    };
+
+    if (toolName === 'memory') {
+      const action = typeof input.action === 'string' ? input.action.trim().toLowerCase() : '';
+      if (action === 'write') {
+        return toWriteOutput(input, 'Staged shard memory');
+      }
+      if (action === 'import') {
+        const source = typeof input.source === 'string' && input.source.trim()
+          ? input.source.trim().toLowerCase()
+          : 'import';
+        return toImportOutputs(input.records, source);
+      }
+      return [];
+    }
+
+    if (toolName === 'memory_write') {
+      return toWriteOutput(input, 'Staged shard memory');
+    }
+    if (toolName === 'memory_import_batch') {
+      const source = typeof input.source === 'string' && input.source.trim()
+        ? input.source.trim().toLowerCase()
+        : 'import';
+      return toImportOutputs(input.records, source);
+    }
+    return [];
+  }
+
+  private captureShardFoldBackOutput(
+    toolName: string,
+    params: unknown,
+    shardId: string,
+    toolCallId: string,
+  ) {
+    const stagedOutputs = this.resolveStagedShardMemoryOutputs(toolName, params);
+    if (stagedOutputs.length === 0) {
+      return null;
+    }
+
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      throw new Error(`Shard "${shardId}" is offline.`);
+    }
+    const timestamp = Date.now();
+    const captured = stagedOutputs.map(output => {
+      const taggedOutput = this.createTaggedOutput(
+        shard,
+        'l2_memory',
+        output.label,
+        output.content,
+        output.source,
+        timestamp,
+        {
+          sourceToolName: toolName,
+          toolCallId,
+          provenanceTags: output.provenanceTags,
+        },
+      );
+      shard.taggedOutputs.push(taggedOutput);
+      this.appendWorkLog(
+        shardId,
+        'l2_memory_staged',
+        `Shard staged "${output.label}" for merge review.`,
+        [
+          `tool_name=${toolName}`,
+          `tool_call_id=${toolCallId}`,
+          `output_id=${taggedOutput.outputId}`,
+        ],
+        timestamp,
+      );
+      this.auditTrail?.append('shard.foldback.output.staged', {
+        shardId,
+        outputId: taggedOutput.outputId,
+        kind: taggedOutput.kind,
+        source: taggedOutput.provenance.source,
+        toolName,
+        toolCallId,
+        provenanceTags: taggedOutput.provenance.tags,
+      });
+      return taggedOutput;
+    });
+    this.requireMergeReview(shardId, 'staged_shard_memory_pending_merge_review', timestamp);
+
+    return textResult(
+      captured.length === 1
+        ? `Queued shard memory output ${captured[0].outputId} for merge review at ${shard.mergeReview.validationPath}; core state remains unchanged until approval.`
+        : `Queued ${captured.length} shard memory outputs for merge review at ${shard.mergeReview.validationPath}; core state remains unchanged until approval.`,
+    );
+  }
+
+  private assertShardCoreMutationAllowed(
+    toolName: string,
+    params: unknown,
+    shardId: string,
+    toolCallId: string,
+  ): void {
+    const deny = (reason: string): never => {
+      this.appendWorkLog(
+        shardId,
+        'tool_invoked',
+        `Denied shard core mutation via "${toolName}".`,
+        [
+          `tool_name=${toolName}`,
+          `tool_call_id=${toolCallId}`,
+          `reason=${reason}`,
+        ],
+      );
+      this.auditTrail?.append('shard.foldback.mutation.denied', {
+        shardId,
+        toolName,
+        toolCallId,
+        reason,
+      });
+      throw new Error(reason);
+    };
+
+    if (toolName === 'memory') {
+      if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+        return;
+      }
+      const rawAction = (params as { action?: unknown }).action;
+      const action = typeof rawAction === 'string'
+        ? rawAction.trim().toLowerCase()
+        : '';
+      if (action === 'redact' || action === 'delete' || action === 'restore') {
+        deny(`Shard memory action "${action}" requires explicit merge review outside shard runtime.`);
+      }
+      return;
+    }
+
+    if (
+      toolName === 'memory_redact'
+      || toolName === 'memory_delete'
+      || toolName === 'undo_memory_delete'
+    ) {
+      deny(`Shard tool "${toolName}" requires explicit merge review outside shard runtime.`);
+    }
+  }
+
   private wrapShardTool(tool: AgentTool<any>, shardId: string): AgentTool<any> {
     return {
       ...tool,
       execute: async (toolCallId, params, signal) => {
+        const stagedOutput = this.captureShardFoldBackOutput(tool.name, params, shardId, toolCallId);
+        if (stagedOutput) {
+          return stagedOutput;
+        }
+        this.assertShardCoreMutationAllowed(tool.name, params, shardId, toolCallId);
         this.enforceShardToolSyncPolicy(tool.name, params, shardId, toolCallId);
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
         // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
@@ -1359,8 +1951,9 @@ export class ShardManager implements ShardExecutionPort {
       if (typeof params !== 'object' || params === null || Array.isArray(params)) {
         return null;
       }
-      const action = typeof (params as Record<string, unknown>).action === 'string'
-        ? (params as Record<string, unknown>).action.trim()
+      const rawAction = (params as { action?: unknown }).action;
+      const action = typeof rawAction === 'string'
+        ? rawAction.trim()
         : '';
       switch (action) {
         case 'write':
@@ -1401,8 +1994,9 @@ export class ShardManager implements ShardExecutionPort {
     }
 
     if (toolName === 'memory') {
-      const action = typeof (params as Record<string, unknown>).action === 'string'
-        ? (params as Record<string, unknown>).action.trim()
+      const rawAction = (params as { action?: unknown }).action;
+      const action = typeof rawAction === 'string'
+        ? rawAction.trim()
         : '';
       if (action !== 'write' && action !== 'import' && action !== 'redact') {
         return params;

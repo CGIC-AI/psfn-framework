@@ -28,6 +28,19 @@ export function buildShardArtifactReturn(result: ShardResult): AgentToolResult<{
         + `shard=${result.lineage.shardCompanionId}, `
         + `mode=${result.lineage.creationMode}`
         + `${result.lineage.parentShardId ? `, parent=${result.lineage.parentShardId}` : ''}]\n\n`
+        + `[Merge review: status=${result.mergeReview.status}, `
+        + `required=${result.mergeReview.required}, `
+        + `pending_tagged_outputs=${result.mergeReview.pendingTaggedOutputCount}]\n`
+        + `[Validation path: ${result.mergeReview.validationPath}]\n`
+        + `${result.mergeReview.blockingReasons.length > 0
+          ? `[Merge review reasons: ${result.mergeReview.blockingReasons.join('; ')}]\n`
+          : ''}`
+        + `[Work log entries: ${result.workLog.length}]\n`
+        + `${result.taggedOutputs.length > 0
+          ? `[Tagged outputs: ${result.taggedOutputs
+            .map(output => `${output.kind}:${output.outputId}:${output.reviewState}:${output.provenance.source}`)
+            .join(', ')}]\n`
+          : ''}\n`
         + result.content,
     }] satisfies TextContent[],
     details: {},

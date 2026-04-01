@@ -937,7 +937,6 @@ The current obvious split pressure includes files like:
 
 - `src/agent-main.ts`
 - `src/gateway-main.ts`
-- `src/runtime.ts`
 
 Rules:
 
@@ -1032,8 +1031,7 @@ This is required before code refactor because unclear names produce bad seams.
 
 Actions:
 
-- remove `runtime.ts` as a supported operational model
-- make split runtime the only real shape
+- keep split runtime as the only real shape
 - keep any parity/test harness concerns clearly separated from production architecture
 
 ### Phase 3: Separate Gateway from Sandbox

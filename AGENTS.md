@@ -44,10 +44,10 @@ Rules:
 Prefer these files when checking behavior:
 
 1. Runtime entrypoints and wiring
-   - `src/index.ts`
-   - `src/runtime.ts`
    - `src/gateway-main.ts`
    - `src/agent-main.ts`
+   - `src/lifecycle/runtime-mode.ts`
+   - `src/bootstrap/composition.ts`
 2. Config and ownership contracts
    - `src/types.ts`
    - `src/settings.ts`

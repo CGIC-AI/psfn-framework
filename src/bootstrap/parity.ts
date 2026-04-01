@@ -1,5 +1,5 @@
 // ── Shared Runtime Wiring ──
-// Common primitives used by both single-process runtime and gateway agent mode.
+// Common primitives used by the supported split runtime entrypoints.
 
 import type {
   CapabilityTier,
@@ -330,7 +330,7 @@ export function wireExtendedToolAutoloadPolicy(
 
 /**
  * Wire prompt stack storage, composition, and tools.
- * Shared across runtime.ts and agent-main.ts to keep behavior in sync.
+ * Shared across the supported split entrypoints to keep behavior in sync.
  */
 export function wirePromptRuntime(
   target: PromptRuntimeTarget,
@@ -384,7 +384,7 @@ export function wireStaticPromptRegistry(dataDir: string): PromptRegistryStore {
 
 /**
  * Build REPL config with runtime settings overrides.
- * Shared across runtime.ts and agent-main.ts to keep think tool budgets aligned.
+ * Shared across the supported split entrypoints to keep think tool budgets aligned.
  */
 export function buildReplConfig(config: SubstrateConfig): REPLConfig {
   const replConfig: REPLConfig = {
@@ -399,7 +399,7 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
 
 /**
  * Wire unified system tool with read-only settings access in parity mode.
- * Shared across runtime.ts and agent-main.ts.
+ * Shared across the supported split entrypoints.
  */
 export function wireSettingsRuntime(
   target: ToolRegistrarTarget,

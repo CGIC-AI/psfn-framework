@@ -371,7 +371,7 @@ describe('capability tool gating', () => {
       fsTool.tool,
       () => accessForTier('custom', ['memory.write']),
     );
-    const readDenied = await readGated.execute('fs-read', { action: 'read', path: 'src/runtime.ts' });
+    const readDenied = await readGated.execute('fs-read', { action: 'read', path: 'src/agent-main.ts' });
     expect(fsTool.executeSpy).not.toHaveBeenCalled();
     expect((readDenied.content[0] as any).text).toContain('git.read');
 
@@ -411,7 +411,7 @@ describe('capability tool gating', () => {
     );
     const patchDenied = await writeGated.execute('repo-patch', {
       action: 'patch',
-      file_path: 'src/runtime.ts',
+      file_path: 'src/agent-main.ts',
       content: 'patched',
     });
     expect(repoTool.executeSpy).not.toHaveBeenCalled();

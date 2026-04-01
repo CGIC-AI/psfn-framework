@@ -110,7 +110,7 @@ describe('validateToolWiring', () => {
       makeTool('think'),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'direct',
       tools,
     });
     expect(report.totalTools).toBe(2);
@@ -245,14 +245,14 @@ describe('validateToolWiring', () => {
     expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('web.fetch');
   });
 
-  it('skips gateway method checks in single-process mode', () => {
+  it('skips gateway method checks in direct runtime mode', () => {
     const tools = [
       makeTool('repo', {
         requiredGatewayMethods: ['git.status'],
       }),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'direct',
       tools,
     });
     expect(report.totalTools).toBe(1);
@@ -267,7 +267,7 @@ describe('validateToolWiring', () => {
       }),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'direct',
       tools,
       availableServices: new Set(['memoryStore']),
     });
@@ -332,7 +332,7 @@ describe('validateToolWiring', () => {
       makeTool('memory_write'),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'direct',
       tools,
       requireConcurrencyMetadata: true,
     });
@@ -402,7 +402,7 @@ describe('validateToolWiring', () => {
       }),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'direct',
       tools,
       requireConcurrencyMetadata: true,
     });
@@ -420,7 +420,7 @@ describe('validateAndLogToolWiring', () => {
       makeTool('ok_tool'),
     ];
     const disabled = validateAndLogToolWiring({
-      mode: 'single',
+      mode: 'direct',
       tools,
     });
     expect(disabled).toEqual([]);
@@ -456,12 +456,12 @@ describe('validateAndLogToolWiring', () => {
 });
 
 describe('production tools validation', () => {
-  it('the unified repo tool passes validation in single-process mode', () => {
+  it('the unified repo tool passes validation in direct runtime mode', () => {
     const gitTools = [
       makeTool('repo'),
     ];
     const report = validateToolWiring({
-      mode: 'single',
+      mode: 'direct',
       tools: gitTools,
     });
     expect(report.invalidTools).toHaveLength(0);

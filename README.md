@@ -291,7 +291,7 @@ Your companion has access to these tools during conversation. Core tools are alw
 | **Values** | `values_list`, `values_add`, `values_update` |
 | **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
-| **Shards** | `spawn_shard` (parallel sub-agents) |
+| **Shards** | `spawn_shard` (long-running shard runtime with explicit artifact delivery) |
 | **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
 | **Sessions** | `session_new`, `session_list`, `session_resume` |
 | **Settings** | `settings_get`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap` |

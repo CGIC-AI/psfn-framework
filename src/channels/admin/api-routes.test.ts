@@ -739,6 +739,212 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
   });
 
+  it('returns operator-visible shard runtime snapshots and detail views', async () => {
+    const runtimeSnapshot = {
+      generatedAt: 1_701_234_567_890,
+      activeCount: 1,
+      activeShards: [
+        {
+          task: {
+            shardId: 'shard-live',
+            name: 'deep-work',
+            task: 'Continue long-running refactor',
+            channelId: 'shard:shard-live',
+            createdAt: 100,
+            startedAt: 110,
+            lifecycleState: 'ready',
+            runtimeState: 'running',
+            runtimeStateReason: 'agent_initialized',
+            stateReason: 'agent_initialized',
+            health: 'healthy',
+            lastTransitionAt: 110,
+            lastHeartbeatAt: 140,
+            heartbeatStaleAfterMs: 60_000,
+            heartbeatDisconnectAfterMs: 180_000,
+            artifactLifecycleState: 'pending',
+            artifactUpdatedAt: 110,
+            inputTokens: 11,
+            outputTokens: 22,
+            turns: 1,
+            capabilities: ['general'],
+            requiredCapabilities: ['general'],
+            lineage: {
+              coreCompanionId: 'companion',
+              shardCompanionId: 'companion/shards/shard-live',
+              shardId: 'shard-live',
+            },
+            gatewayRouting: {
+              schemaVersion: 1,
+              companionId: 'companion',
+              shard: {
+                coreCompanionId: 'companion',
+                shardCompanionId: 'companion/shards/shard-live',
+                shardId: 'shard-live',
+              },
+            },
+          },
+          transcript: [
+            {
+              id: 1,
+              channelId: 'shard:shard-live',
+              role: 'user',
+              content: 'Continue long-running refactor',
+              authorId: 'system',
+              authorName: 'ShardManager',
+              timestamp: 110,
+            },
+          ],
+          transcriptMessageCount: 1,
+          transcriptTruncated: false,
+          artifacts: [],
+          resume: {
+            channelId: 'shard:shard-live',
+            lifecycleState: 'ready',
+            runtimeState: 'running',
+            health: 'healthy',
+            mode: 'none',
+            resumable: false,
+            artifactLifecycleState: 'pending',
+            artifactAvailable: false,
+            deliveryPending: false,
+            transcriptAvailable: true,
+            transcriptMessageCount: 1,
+            transcriptTruncated: false,
+            lastActivityAt: 110,
+            lastMessageId: 1,
+          },
+        },
+      ],
+      recentShards: [
+        {
+          task: {
+            shardId: 'shard-finished',
+            name: 'merge-back',
+            task: 'Return the implementation artifact',
+            channelId: 'shard:shard-finished',
+            createdAt: 200,
+            startedAt: 210,
+            completedAt: 260,
+            lifecycleState: 'offline',
+            runtimeState: 'awaiting_delivery',
+            runtimeStateReason: 'artifact_ready',
+            stateReason: 'completed',
+            health: 'healthy',
+            lastTransitionAt: 260,
+            lastHeartbeatAt: 240,
+            heartbeatStaleAfterMs: 60_000,
+            heartbeatDisconnectAfterMs: 180_000,
+            artifactLifecycleState: 'available',
+            artifactUpdatedAt: 260,
+            artifactAvailableAt: 260,
+            inputTokens: 25,
+            outputTokens: 40,
+            turns: 2,
+            content: 'Artifact ready for merge-back.',
+            capabilities: ['general'],
+            requiredCapabilities: [],
+            lineage: {
+              coreCompanionId: 'companion',
+              shardCompanionId: 'companion/shards/shard-finished',
+              shardId: 'shard-finished',
+            },
+            gatewayRouting: {
+              schemaVersion: 1,
+              companionId: 'companion',
+              shard: {
+                coreCompanionId: 'companion',
+                shardCompanionId: 'companion/shards/shard-finished',
+                shardId: 'shard-finished',
+              },
+            },
+          },
+          transcript: [
+            {
+              id: 1,
+              channelId: 'shard:shard-finished',
+              role: 'user',
+              content: 'Return the implementation artifact',
+              authorId: 'system',
+              authorName: 'ShardManager',
+              timestamp: 210,
+            },
+            {
+              id: 2,
+              channelId: 'shard:shard-finished',
+              role: 'assistant',
+              content: 'Artifact ready for merge-back.',
+              authorId: 'system',
+              authorName: 'ShardManager',
+              timestamp: 260,
+            },
+          ],
+          transcriptMessageCount: 2,
+          transcriptTruncated: false,
+          artifacts: [
+            {
+              kind: 'final_output',
+              lifecycleState: 'available',
+              content: 'Artifact ready for merge-back.',
+              timestamp: 260,
+            },
+          ],
+          resume: {
+            channelId: 'shard:shard-finished',
+            lifecycleState: 'offline',
+            runtimeState: 'awaiting_delivery',
+            health: 'healthy',
+            mode: 'delivery',
+            resumable: true,
+            artifactLifecycleState: 'available',
+            artifactAvailable: true,
+            deliveryPending: true,
+            transcriptAvailable: true,
+            transcriptMessageCount: 2,
+            transcriptTruncated: false,
+            lastActivityAt: 260,
+            artifactAvailableAt: 260,
+            lastMessageId: 2,
+          },
+        },
+      ],
+    };
+    const runtimeTaskView = runtimeSnapshot.activeShards[0];
+    const recentTaskView = runtimeSnapshot.recentShards[0];
+    const runtimeSnapshotSpy = vi.spyOn(shardManager, 'getRuntimeSnapshot').mockReturnValue(runtimeSnapshot as any);
+    const runtimeTaskViewSpy = vi.spyOn(shardManager, 'getRuntimeShardView').mockImplementation((shardId: string) => {
+      if (shardId === runtimeTaskView.task.shardId) return runtimeTaskView as any;
+      if (shardId === recentTaskView.task.shardId) return recentTaskView as any;
+      return null;
+    });
+
+    const res = await request(
+      port,
+      'GET',
+      '/api/admin/shards?limit=1&transcriptLimit=2',
+      undefined,
+      authHeaders,
+    );
+    expect(res.status).toBe(200);
+    expect(runtimeSnapshotSpy).toHaveBeenCalledWith({ shardLimit: 1, transcriptLimit: 2 });
+    const payload = JSON.parse(res.body) as typeof runtimeSnapshot;
+    expect(payload.activeCount).toBe(1);
+    expect(payload.activeShards[0]?.task.shardId).toBe('shard-live');
+    expect(payload.recentShards[0]?.resume.deliveryPending).toBe(true);
+
+    const detail = await request(
+      port,
+      'GET',
+      '/api/admin/shards/shard-live?transcriptLimit=2',
+      undefined,
+      authHeaders,
+    );
+    expect(detail.status).toBe(200);
+    expect(runtimeTaskViewSpy).toHaveBeenCalledWith('shard-live', { transcriptLimit: 2 });
+    const detailPayload = JSON.parse(detail.body) as typeof runtimeTaskView;
+    expect(detailPayload.task.shardId).toBe('shard-live');
+    expect(detailPayload.resume.resumable).toBe(false);
+  });
+
   it('returns operator-visible subagent runtime snapshots and task detail views', async () => {
     const runtimeSnapshot = {
       generatedAt: 1_701_234_567_890,

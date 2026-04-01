@@ -11,8 +11,10 @@ export function buildShardArtifactReturn(result: ShardResult): AgentToolResult<{
         `[Shard "${result.name}" completed in ${result.durationMs}ms, `
         + `${result.turns} turn(s), `
         + `${result.inputTokens + result.outputTokens} tokens, `
-        + `state=${result.lifecycleState}, health=${result.health}]\n`
+        + `state=${result.lifecycleState}, runtime=${result.runtimeState}, `
+        + `artifact=${result.artifactLifecycleState}, health=${result.health}]\n`
         + `[State reason: ${result.stateReason}]\n`
+        + `[Runtime reason: ${result.runtimeStateReason}]\n`
         + `${result.failureReason
           ? `[Failure reason: ${result.failureReason}]\n`
           : ''}`

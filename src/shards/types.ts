@@ -6,6 +6,15 @@ import type { GatewayRoutingEnvelope, ShardLineage } from '../routing/envelope.j
 
 export type ShardLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';
 export type ShardHealthState = 'healthy' | 'stale' | 'failed';
+export type ShardRuntimeState =
+  | 'preparing'
+  | 'running'
+  | 'detached'
+  | 'awaiting_delivery'
+  | 'completed'
+  | 'failed';
+export type ShardArtifactLifecycleState = 'pending' | 'available' | 'delivered' | 'none';
+export type ShardResumeMode = 'none' | 'delivery';
 
 export interface ShardSourceContext {
   channelId: string;
@@ -52,8 +61,13 @@ export interface ShardResult {
   durationMs: number;
   turns: number;
   lifecycleState: ShardLifecycleState;
+  runtimeState: ShardRuntimeState;
+  runtimeStateReason: string;
   health: ShardHealthState;
   stateReason: string;
+  artifactLifecycleState: ShardArtifactLifecycleState;
+  artifactAvailableAt?: number;
+  deliveredAt?: number;
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
@@ -62,3 +76,88 @@ export interface ShardResult {
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';
+
+export interface ShardRuntimeRecord {
+  shardId: string;
+  name: string;
+  task: string;
+  channelId: string;
+  createdAt: number;
+  startedAt: number;
+  completedAt?: number;
+  lifecycleState: ShardLifecycleState;
+  runtimeState: ShardRuntimeState;
+  runtimeStateReason: string;
+  stateReason: string;
+  health: ShardHealthState;
+  lastTransitionAt: number;
+  lastHeartbeatAt: number;
+  heartbeatStaleAfterMs: number;
+  heartbeatDisconnectAfterMs: number;
+  artifactLifecycleState: ShardArtifactLifecycleState;
+  artifactUpdatedAt: number;
+  artifactAvailableAt?: number;
+  deliveredAt?: number;
+  model?: string;
+  inputTokens: number;
+  outputTokens: number;
+  turns: number;
+  content?: string;
+  failureReason?: string;
+  capabilities: string[];
+  requiredCapabilities: string[];
+  lineage: ShardLineage;
+  gatewayRouting: GatewayRoutingEnvelope;
+}
+
+export interface ShardRuntimeArtifactView {
+  kind: 'final_output';
+  lifecycleState: Exclude<ShardArtifactLifecycleState, 'pending' | 'none'>;
+  content: string;
+  timestamp: number;
+  deliveredAt?: number;
+}
+
+export interface ShardRuntimeResumeView {
+  channelId: string;
+  lifecycleState: ShardLifecycleState;
+  runtimeState: ShardRuntimeState;
+  health: ShardHealthState;
+  mode: ShardResumeMode;
+  resumable: boolean;
+  artifactLifecycleState: ShardArtifactLifecycleState;
+  artifactAvailable: boolean;
+  deliveryPending: boolean;
+  transcriptAvailable: boolean;
+  transcriptMessageCount: number;
+  transcriptTruncated: boolean;
+  lastActivityAt?: number;
+  artifactAvailableAt?: number;
+  deliveredAt?: number;
+  lastMessageId?: number;
+}
+
+export interface ShardRuntimeTaskView {
+  task: ShardRuntimeRecord;
+  transcript: SessionEntry[];
+  transcriptMessageCount: number;
+  transcriptTruncated: boolean;
+  artifacts: ShardRuntimeArtifactView[];
+  resume: ShardRuntimeResumeView;
+}
+
+export interface ShardRuntimeSnapshot {
+  generatedAt: number;
+  activeCount: number;
+  activeShards: ShardRuntimeTaskView[];
+  recentShards: ShardRuntimeTaskView[];
+}
+
+export interface ShardRuntimeSnapshotOptions {
+  shardLimit?: number;
+  transcriptLimit?: number;
+}
+
+export interface ShardRuntimeSnapshotProvider {
+  getRuntimeSnapshot(options?: ShardRuntimeSnapshotOptions): ShardRuntimeSnapshot;
+}

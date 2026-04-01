@@ -18,7 +18,7 @@ export function createSpawnShardTool(
     description:
       'Spawn a sub-agent shard for parallel task execution. ' +
       'Multiple spawn_shard calls in the same turn run concurrently. ' +
-      'Each shard is ephemeral — it runs a task and returns the result.',
+      'Shard runtime remains distinct from bounded subagent tasks and completes only after artifact delivery.',
     label: 'spawn_shard',
     parameters: Type.Object({
       name: Type.String({ description: 'Short label for this shard (e.g. "research", "analysis")' }),
@@ -72,7 +72,11 @@ export function createSpawnShardTool(
             : undefined,
         });
 
-        return artifactReturnPort.returnArtifact(result);
+        const artifact = artifactReturnPort.returnArtifact(result);
+        if (typeof shardPort.markArtifactDelivered === 'function') {
+          shardPort.markArtifactDelivered(result.shardId);
+        }
+        return artifact;
       } catch (error) {
         return textResultWithError(`[Shard error: ${toErrorMessage(error)}]`, true);
       }

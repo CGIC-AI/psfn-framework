@@ -25,6 +25,7 @@ import type {
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
+import type { ShardManager } from '../../shards/manager.js';
 import type { SubagentFaculty } from '../../subagents/faculty.js';
 import type { ConfirmationQueueAdminApi } from './types.js';
 import { GARDEN_PREFIX } from './server-request-routing.js';
@@ -39,6 +40,7 @@ export interface AdminRoute {
 interface AdminRouteDependencies {
   token?: string;
   dashboardService: AdminDashboardService;
+  shardManager: ShardManager;
   subagentFaculty: SubagentFaculty;
   adaptiveToolsService: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
@@ -185,6 +187,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
     },
     ...buildAdminApiRoutes({
       dashboardService: deps.dashboardService,
+      shardManager: deps.shardManager,
       subagentFaculty: deps.subagentFaculty,
       adaptiveToolsService: deps.adaptiveToolsService,
       memoryService: deps.memoryService,

@@ -40,6 +40,7 @@ import type { ReflectionTemplate } from '../../scheduler/heartbeat-policy.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
 import { applyAdminModelsConfigMutation } from './services/settings-service.js';
 import { loadModelsConfig } from '../../config/models-config.js';
+import type { ShardManager } from '../../shards/manager.js';
 import type { SubagentFaculty } from '../../subagents/faculty.js';
 
 export type AdminTaskCadence = RecurringCadence;
@@ -207,6 +208,7 @@ const ADMIN_MODELS_API_PATH = '/api/admin/models';
 const ADMIN_MODELS_REFRESH_API_PATH = '/api/admin/models/refresh';
 const ADMIN_CHAT_BOOTSTRAP_API_PATH = '/api/admin/chat/bootstrap';
 const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/bootstrap';
+const ADMIN_SHARDS_API_PATH = '/api/admin/shards';
 const ADMIN_SUBAGENTS_API_PATH = '/api/admin/subagents';
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
@@ -214,6 +216,7 @@ const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
+  shardManager: ShardManager;
   subagentFaculty: SubagentFaculty;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
@@ -240,6 +243,7 @@ export function buildAdminApiRoutes(options: {
   const {
     config,
     dashboardService,
+    shardManager,
     subagentFaculty,
     adaptiveToolsService,
     memoryService,
@@ -338,6 +342,42 @@ export function buildAdminApiRoutes(options: {
   };
 
   return [
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_SHARDS_API_PATH),
+      handle: (req, res) => {
+        const url = parseRequestUrl(req, ADMIN_SHARDS_API_PATH);
+        const shardLimit = parsePositiveIntegerParam(url.searchParams.get('limit'), 10);
+        if (shardLimit === null) {
+          sendJson(res, 400, { error: 'Invalid limit query parameter. Expected a positive integer.' });
+          return;
+        }
+        const transcriptLimit = parsePositiveIntegerParam(url.searchParams.get('transcriptLimit'), 8);
+        if (transcriptLimit === null) {
+          sendJson(res, 400, { error: 'Invalid transcriptLimit query parameter. Expected a positive integer.' });
+          return;
+        }
+        sendJson(res, 200, shardManager.getRuntimeSnapshot({ shardLimit, transcriptLimit }));
+      },
+    },
+    {
+      method: 'GET',
+      match: prefixedParamPath(`${ADMIN_SHARDS_API_PATH}/`, 'shardId'),
+      handle: (req, res, { shardId }) => {
+        const url = parseRequestUrl(req, `${ADMIN_SHARDS_API_PATH}/${shardId}`);
+        const transcriptLimit = parsePositiveIntegerParam(url.searchParams.get('transcriptLimit'), 8);
+        if (transcriptLimit === null) {
+          sendJson(res, 400, { error: 'Invalid transcriptLimit query parameter. Expected a positive integer.' });
+          return;
+        }
+        const shard = shardManager.getRuntimeShardView(shardId, { transcriptLimit });
+        if (!shard) {
+          sendJson(res, 404, { error: 'Shard runtime not found' });
+          return;
+        }
+        sendJson(res, 200, shard);
+      },
+    },
     {
       method: 'GET',
       match: exactPath('/api/admin/dashboard'),

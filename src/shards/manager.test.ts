@@ -377,14 +377,68 @@ describe('ShardManager', () => {
     const active = manager.getActiveShards();
     expect(active).toHaveLength(1);
     expect(active[0].name).toBe('lifecycle');
-    expect(['registering', 'ready']).toContain(active[0].state);
+    expect(['registering', 'ready']).toContain(active[0].lifecycleState);
+    expect(['preparing', 'running']).toContain(active[0].runtimeState);
+    expect(active[0].artifactLifecycleState).toBe('pending');
     expect(active[0].health).toBe('healthy');
     expect(active[0].lastHeartbeatAt).toBeGreaterThan(0);
 
     const result = await pending;
     expect(result.lifecycleState).toBe('offline');
+    expect(result.runtimeState).toBe('awaiting_delivery');
+    expect(result.artifactLifecycleState).toBe('available');
     expect(result.health).toBe('healthy');
     expect(result.capabilities).toContain('general');
+  });
+
+  it('keeps completed shard artifacts resumable until an explicit delivery occurs', async () => {
+    mockShardContent = 'delivery-ready output';
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const result = await manager.spawn({ name: 'delivery', task: 'prepare artifact' });
+    expect(result.runtimeState).toBe('awaiting_delivery');
+    expect(result.artifactLifecycleState).toBe('available');
+
+    const beforeDelivery = manager.getRuntimeShardView(result.shardId, { transcriptLimit: 10 });
+    expect(beforeDelivery?.task.runtimeState).toBe('awaiting_delivery');
+    expect(beforeDelivery?.artifacts).toEqual([
+      expect.objectContaining({
+        kind: 'final_output',
+        lifecycleState: 'available',
+        content: 'delivery-ready output',
+      }),
+    ]);
+    expect(beforeDelivery?.resume).toEqual(expect.objectContaining({
+      mode: 'delivery',
+      resumable: true,
+      artifactLifecycleState: 'available',
+      deliveryPending: true,
+    }));
+
+    manager.markArtifactDelivered(result.shardId);
+
+    const afterDelivery = manager.getRuntimeShardView(result.shardId, { transcriptLimit: 10 });
+    expect(afterDelivery?.task.runtimeState).toBe('completed');
+    expect(afterDelivery?.task.artifactLifecycleState).toBe('delivered');
+    expect(afterDelivery?.artifacts[0]).toEqual(expect.objectContaining({
+      lifecycleState: 'delivered',
+      deliveredAt: expect.any(Number),
+    }));
+    expect(afterDelivery?.resume).toEqual(expect.objectContaining({
+      mode: 'none',
+      resumable: false,
+      artifactLifecycleState: 'delivered',
+      deliveryPending: false,
+      deliveredAt: expect.any(Number),
+    }));
   });
 
   it('fails closed when required shard capabilities are missing', async () => {
@@ -439,6 +493,51 @@ describe('ShardManager', () => {
     await staleShard;
   });
 
+  it('keeps detached long-running shard records visible until artifact delivery resumes', async () => {
+    mockShardContent = 'late shard output';
+    mockShardDelayMs = 120;
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      maxConcurrent: 1,
+      heartbeatStaleAfterMs: 20,
+      heartbeatDisconnectAfterMs: 30,
+    });
+
+    const pending = manager.spawn({ name: 'detached', task: 'long-running task' });
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const shardId = manager.getActiveShards()[0]?.shardId;
+    expect(shardId).toBeDefined();
+    await new Promise(resolve => setTimeout(resolve, 60));
+
+    expect(manager.getActiveCount()).toBe(0);
+    const detached = manager.getRuntimeShardView(shardId as string, { transcriptLimit: 10 });
+    expect(detached?.task.runtimeState).toBe('detached');
+    expect(detached?.task.lifecycleState).toBe('offline');
+    expect(detached?.task.artifactLifecycleState).toBe('pending');
+    expect(detached?.resume.resumable).toBe(false);
+
+    const result = await pending;
+    expect(result.runtimeState).toBe('awaiting_delivery');
+    expect(result.artifactLifecycleState).toBe('available');
+    expect(result.stateReason).toBe('completed');
+
+    const completed = manager.getRuntimeShardView(result.shardId, { transcriptLimit: 10 });
+    expect(completed?.task.runtimeState).toBe('awaiting_delivery');
+    expect(completed?.task.artifactLifecycleState).toBe('available');
+    expect(completed?.resume).toEqual(expect.objectContaining({
+      mode: 'delivery',
+      resumable: true,
+      artifactLifecycleState: 'available',
+      deliveryPending: true,
+    }));
+  });
+
   it('recovers a heartbeat-stale shard when activity resumes before disconnect timeout', async () => {
     mockShardDelayMs = 160;
     const manager = new ShardManager({
@@ -458,7 +557,7 @@ describe('ShardManager', () => {
 
     const degraded = manager.getActiveShards();
     expect(degraded).toHaveLength(1);
-    expect(degraded[0].state).toBe('degraded');
+    expect(degraded[0].lifecycleState).toBe('degraded');
     expect(degraded[0].health).toBe('stale');
     expect(degraded[0].stateReason).toBe('heartbeat_stale');
     expect(degraded[0].failureReason).toContain('No heartbeat observed');
@@ -471,7 +570,7 @@ describe('ShardManager', () => {
 
     const recovered = manager.getActiveShards();
     expect(recovered).toHaveLength(1);
-    expect(recovered[0].state).toBe('ready');
+    expect(recovered[0].lifecycleState).toBe('ready');
     expect(recovered[0].health).toBe('healthy');
     expect(recovered[0].stateReason).toBe('heartbeat_recovered');
     expect(recovered[0].failureReason).toBeUndefined();
@@ -1126,7 +1225,10 @@ describe('createSpawnShardTool', () => {
     expect(text).toContain('Shard "test-tool" completed');
     expect(text).toContain('1 turn(s)');
     expect(text).toContain('0 tokens');  // pi-agent-core doesn't surface token counts
+    expect(text).toContain('runtime=awaiting_delivery');
+    expect(text).toContain('artifact=available');
     expect(text).toContain('[State reason: completed]');
+    expect(text).toContain('[Runtime reason: artifact_ready]');
     expect(text).toContain('tool output');
   });
 
@@ -1150,6 +1252,9 @@ describe('createSpawnShardTool', () => {
     await tool.execute('call-artifact', { name: 'artifact-boundary', task: 'do thing' });
 
     expect(artifactReturnPort.returnArtifact).toHaveBeenCalled();
+    const delivered = manager.getRuntimeSnapshot({ shardLimit: 10, transcriptLimit: 10 }).recentShards[0];
+    expect(delivered.task.runtimeState).toBe('completed');
+    expect(delivered.task.artifactLifecycleState).toBe('delivered');
   });
 
   it('surfaces explicit lifecycle failure diagnostics from shard results', async () => {
@@ -1163,8 +1268,12 @@ describe('createSpawnShardTool', () => {
       durationMs: 33,
       turns: 1,
       lifecycleState: 'offline' as const,
+      runtimeState: 'awaiting_delivery' as const,
+      runtimeStateReason: 'artifact_ready',
       health: 'failed' as const,
       stateReason: 'heartbeat_timeout',
+      artifactLifecycleState: 'available' as const,
+      artifactAvailableAt: 33,
       failureReason: 'Heartbeat stale for 4200ms exceeded recovery window (4000ms).',
       capabilities: ['general'],
       requiredCapabilities: [],
@@ -1206,8 +1315,12 @@ describe('createSpawnShardTool', () => {
       durationMs: 1,
       turns: 1,
       lifecycleState: 'offline' as const,
+      runtimeState: 'awaiting_delivery' as const,
+      runtimeStateReason: 'artifact_ready',
       health: 'healthy' as const,
       stateReason: 'completed',
+      artifactLifecycleState: 'available' as const,
+      artifactAvailableAt: 1,
       capabilities: ['general'],
       requiredCapabilities: [],
       lineage: {

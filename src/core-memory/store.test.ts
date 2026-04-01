@@ -78,7 +78,7 @@ describe('CoreMemoryStore', () => {
     expect(persona.content.startsWith('start-')).toBe(true);
   });
 
-  it('rethink rewrites all core blocks in one snapshot', () => {
+  it('rethink rewrites all orientation blocks in one snapshot', () => {
     const path = makeStorePath('psfn-core-memory-rethink-');
     const store = new CoreMemoryStore(path);
     const snapshot = store.rethink({

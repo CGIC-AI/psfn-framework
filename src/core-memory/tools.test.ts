@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createCoreMemoryAppendTool,
-  createCoreMemoryReplaceTool,
-  createMemoryRethinkTool,
+  createOrientTool,
 } from './tools.js';
 import type {
   CoreMemoryAppendOptions,
@@ -39,8 +37,8 @@ function makeSnapshot(overrides?: Partial<CoreMemorySnapshot>): CoreMemorySnapsh
   };
 }
 
-describe('core memory tools', () => {
-  it('core_memory_append appends to the requested block', async () => {
+describe('orient tool', () => {
+  it('appends to the requested orientation block', async () => {
     const store = {
       append: vi.fn<(
         label: CoreMemoryLabel,
@@ -52,37 +50,39 @@ describe('core memory tools', () => {
       replace: vi.fn(),
       rethink: vi.fn(),
     };
-    const tool = createCoreMemoryAppendTool(store);
+    const tool = createOrientTool(store);
 
     const result = await tool.execute('call-1', {
+      action: 'append',
       block: 'persona',
       text: '  line two  ',
     });
 
     expect(store.append).toHaveBeenCalledWith('persona', 'line two', { separator: undefined });
-    expect(resultText(result)).toContain('Appended to persona core memory');
+    expect(resultText(result)).toContain('Appended to persona orientation');
     expect(result.details?.isError).toBeUndefined();
   });
 
-  it('core_memory_append rejects empty text', async () => {
+  it('rejects empty append text', async () => {
     const store = {
       append: vi.fn(),
       replace: vi.fn(),
       rethink: vi.fn(),
     };
-    const tool = createCoreMemoryAppendTool(store);
+    const tool = createOrientTool(store);
 
     const result = await tool.execute('call-2', {
+      action: 'append',
       block: 'persona',
       text: '   ',
     });
 
-    expect(resultText(result)).toContain('Error: text is required');
+    expect(resultText(result)).toContain('Error: text is required for action=append');
     expect(result.details?.isError).toBe(true);
     expect(store.append).not.toHaveBeenCalled();
   });
 
-  it('core_memory_replace replaces one block', async () => {
+  it('replaces one orientation block', async () => {
     const store = {
       append: vi.fn(),
       replace: vi.fn<(
@@ -93,19 +93,20 @@ describe('core memory tools', () => {
       ),
       rethink: vi.fn(),
     };
-    const tool = createCoreMemoryReplaceTool(store);
+    const tool = createOrientTool(store);
 
     const result = await tool.execute('call-3', {
+      action: 'replace',
       block: 'goals',
       text: 'Ship PSFN-du0t today.',
     });
 
     expect(store.replace).toHaveBeenCalledWith('goals', 'Ship PSFN-du0t today.');
-    expect(resultText(result)).toContain('Replaced goals core memory');
+    expect(resultText(result)).toContain('Replaced goals orientation');
     expect(result.details?.isError).toBeUndefined();
   });
 
-  it('memory_rethink rewrites all three blocks', async () => {
+  it('reorients all three blocks at once', async () => {
     const store = {
       append: vi.fn(),
       replace: vi.fn(),
@@ -119,9 +120,10 @@ describe('core memory tools', () => {
         }),
       ),
     };
-    const tool = createMemoryRethinkTool(store);
+    const tool = createOrientTool(store);
 
     const result = await tool.execute('call-4', {
+      action: 'reorient',
       persona: 'Pragmatic and helpful.',
       human: 'Prefers concise, technical answers.',
       goals: 'Complete Phase V core memory integration.',
@@ -132,11 +134,11 @@ describe('core memory tools', () => {
       human: 'Prefers concise, technical answers.',
       goals: 'Complete Phase V core memory integration.',
     });
-    expect(resultText(result)).toContain('Rewrote core memory blocks');
+    expect(resultText(result)).toContain('Reoriented active blocks');
     expect(result.details?.isError).toBeUndefined();
   });
 
-  it('memory_rethink returns an error payload when store throws', async () => {
+  it('returns an error payload when orientation update fails', async () => {
     const store = {
       append: vi.fn(),
       replace: vi.fn(),
@@ -144,15 +146,16 @@ describe('core memory tools', () => {
         throw new Error('disk full');
       }),
     };
-    const tool = createMemoryRethinkTool(store);
+    const tool = createOrientTool(store);
 
     const result = await tool.execute('call-5', {
+      action: 'reorient',
       persona: 'x',
       human: 'y',
       goals: 'z',
     });
 
-    expect(resultText(result)).toContain('Error rewriting core memory');
+    expect(resultText(result)).toContain('Error updating orientation');
     expect(resultText(result)).toContain('disk full');
     expect(result.details?.isError).toBe(true);
   });

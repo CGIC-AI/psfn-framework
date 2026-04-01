@@ -257,7 +257,7 @@ export class CoreMemoryStore {
 
   formatForContext(): string {
     const lines = [
-      '[Core Memory]',
+      '[Orientation]',
     ];
 
     for (const label of CORE_MEMORY_LABELS) {

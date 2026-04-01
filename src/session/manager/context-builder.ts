@@ -143,9 +143,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ? [...params.turnSnapshot.focusKnowledgeTexts]
     : [...params.focusKnowledgeTexts];
   const baseSystemTokenCount = countTokens(stableSystemPrompt);
-  const hasCoreMemorySection = params.coreMemoryBlock.trim().length > 0;
-  const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
-  const coreMemoryTokenCount = countTokens(coreMemorySectionText);
+  const hasOrientationSection = params.coreMemoryBlock.trim().length > 0;
+  const orientationSectionText = hasOrientationSection ? params.coreMemoryBlock : '';
+  const orientationTokenCount = countTokens(orientationSectionText);
   const memoryTokenCount = countTokens(params.memoriesBlock);
   const lateSystemTokenCount = countTokens(lateSystemPromptText);
   const compactionThresholdTokenBudget = Math.floor(
@@ -157,13 +157,13 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   let compactionManifest = {
     triggered: false,
     compactedEntryCount: 0,
-    totalTokensBefore: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + lateSystemTokenCount + sessionMessageTokens,
-    totalTokensAfter: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + lateSystemTokenCount + sessionMessageTokens,
+    totalTokensBefore: baseSystemTokenCount + orientationTokenCount + memoryTokenCount + lateSystemTokenCount + sessionMessageTokens,
+    totalTokensAfter: baseSystemTokenCount + orientationTokenCount + memoryTokenCount + lateSystemTokenCount + sessionMessageTokens,
   };
 
   // Explicit compaction remains available for callers that opt into it.
   if (params.llmProvider) {
-    const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + lateSystemTokenCount;
+    const systemTokens = baseSystemTokenCount + orientationTokenCount + memoryTokenCount + lateSystemTokenCount;
     const preCompactionEntryCount = recent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
@@ -205,8 +205,8 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   // Build system prompt with memories
   let fullSystem = stableSystemPrompt;
-  if (hasCoreMemorySection) {
-    fullSystem += '\n\n' + coreMemorySectionText;
+  if (hasOrientationSection) {
+    fullSystem += '\n\n' + orientationSectionText;
   }
   const hasMemorySection = params.memoriesBlock.trim().length > 0;
   const memorySectionText = hasMemorySection ? params.memoriesBlock : '';
@@ -366,7 +366,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       },
       sections: [
         { section: 'system_prompt', tokenCount: baseSystemTokenCount },
-        { section: 'core_memory', tokenCount: coreMemoryTokenCount },
+        { section: 'orientation', tokenCount: orientationTokenCount },
         { section: 'memories', tokenCount: memoryTokenCount },
         {
           section: 'compaction_summary',

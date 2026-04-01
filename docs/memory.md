@@ -13,7 +13,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 ### L1: Active context assembly
 
 - Built on demand by `SessionManager`
-- Mixes recent session entries, continuity, prompt layers, core memory, and retrieved long-term memory
+- Mixes recent session entries, continuity, prompt layers, active orientation, and retrieved long-term memory
 - Applies token budgets, compaction thresholds, and observation masking
 
 ### L2: Typed long-term memories
@@ -29,10 +29,16 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - reflection journal entries under `notes/reflections/journal.jsonl`
 - append-only daily reflection journals under `notes/reflections/daily/`
 - append-only long-process reflection logs under `notes/reflections/process-logs/`
-- `core_memory.json`
+- active orientation persisted in `core_memory.json`
 - contact profiles and social graph state in SQLite/contact stores
 - scratchpad mirror at `notes/scratchpad.json`
 - memory mutation journal at `notes/memories.jsonl`
+
+## Orientation, Long-Term Memory, And Scratchpad
+
+- `orient` is the model-facing surface for active orientation: persona, human, and goals blocks kept hot in context.
+- Long-term memory lives in the typed `memory` store and is retrieved selectively; it is not the same thing as active orientation.
+- `scratchpad` remains an explicit ephemeral workspace for bulky temporary material and working notes, not canonical memory.
 
 ## Memory Types
 
@@ -109,7 +115,7 @@ The memory system is actively maintained by runtime jobs:
 
 - salience decay
 - profile synthesis refresh
-- reflection writes promoted into memory
+- reflection writes promoted into long-term memory
 - extraction marker updates
 - database integrity and embedding-dimension checks at startup
 

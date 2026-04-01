@@ -91,7 +91,7 @@ Legacy env values for JSON-owned settings are ignored, and startup hydration mig
 - sessions
 - notes, reflections, scratchpad mirror, values journal
 - prompt layers and prompt registry
-- core memory and north-star state
+- active orientation (`core_memory.json`) and north-star state
 - images and identity assets
 - safeguard audit trail and post-turn queue
 
@@ -124,7 +124,7 @@ Current guidance:
 
 - `promotedExtendedTools` is a short-term exposure mechanism, not the long-term taxonomy.
 - `toolset` is the model-facing control surface for listing, activating, pinning, and unpinning non-default tools.
-- `core_memory` is the current legacy name; the target orientation surface is `orient`.
+- `orient` is the model-facing active-orientation surface; storage may remain on legacy `core_memory` paths when persistence does not need to change.
 - `scratchpad` stays explicit as the ephemeral long-context workspace.
 - `north_star` stays its own semantic tool surface.
 

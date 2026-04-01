@@ -477,7 +477,13 @@ function resolveStreamCandidates(
   );
   const routingCandidates = resolveRoutingCandidates(config, purpose);
   if (routingCandidates.length === 0) {
-    return [currentCandidate];
+    if (purpose === 'chat') {
+      return [currentCandidate];
+    }
+    throw new Error(
+      `No eligible model configured for purpose '${purpose}'. ` +
+      'Add a primary model for this purpose in config.modelRegistry.',
+    );
   }
 
   const adjustedRoutingCandidates = routingCandidates.map(candidate => (
@@ -490,7 +496,9 @@ function resolveStreamCandidates(
   ));
   const matchedIndex = adjustedRoutingCandidates.findIndex(candidate => candidatesEquivalent(candidate, currentCandidate));
   if (matchedIndex < 0) {
-    return [currentCandidate];
+    return purpose === 'chat'
+      ? [currentCandidate]
+      : adjustedRoutingCandidates;
   }
 
   const matched = adjustedRoutingCandidates[matchedIndex]!;

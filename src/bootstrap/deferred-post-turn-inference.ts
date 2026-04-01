@@ -13,7 +13,8 @@ import {
 import { createSignalWisePostTurnAppraiser } from '../intention/post-turn-appraisal.js';
 
 const HEARTBEAT_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
-const LOAD_TOOLS_TOOL_NAME = 'load_tools';
+const TOOLSET_TOOL_NAME = 'toolset';
+const LEGACY_LOAD_TOOLS_TOOL_NAME = 'load_tools';
 
 export interface InferDeferredPostTurnActionsInput {
   message: SubstrateMessage;
@@ -109,10 +110,8 @@ function isLoadToolsToolResult(message: unknown): boolean {
   }
 
   const candidate = message as Record<string, unknown>;
-  return (
-    candidate.role === 'toolResult'
-    && candidate.toolName === LOAD_TOOLS_TOOL_NAME
-  );
+  if (candidate.role !== 'toolResult') return false;
+  return candidate.toolName === TOOLSET_TOOL_NAME || candidate.toolName === LEGACY_LOAD_TOOLS_TOOL_NAME;
 }
 
 function extractDeferredToolHandoffIntent(message: unknown): DeferredToolHandoffIntent | null {

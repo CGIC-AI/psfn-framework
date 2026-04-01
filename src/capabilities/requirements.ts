@@ -32,6 +32,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   scratchpad_read: 'identity.read',
   scratchpad_write: 'memory.write',
   notify_operator: 'external.web',
+  toolset: 'identity.read',
   promoted_tools_list: 'identity.read',
   promoted_tools_add: 'identity.write.runtime',
   promoted_tools_remove: 'identity.write.runtime',

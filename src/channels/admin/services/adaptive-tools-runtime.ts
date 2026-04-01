@@ -388,7 +388,7 @@ function resolveContextAvailability(
 
   return {
     status: 'available',
-    detail: 'Extended tool can be loaded on demand.',
+    detail: 'Extended tool can be activated or pinned on demand.',
   };
 }
 
@@ -397,11 +397,11 @@ function describeActiveSource(source: string): string {
     case 'core':
       return 'Core tool currently active.';
     case 'promoted':
-      return 'Promoted tool currently active.';
+      return 'Pinned tool currently active.';
     case 'autoload':
       return 'Autoloaded tool currently active.';
     case 'extended_loaded':
-      return 'Loaded via load_tools and currently active.';
+      return 'Activated via toolset and currently active.';
     case 'deferred':
       return 'Deferred tool currently active.';
     default:

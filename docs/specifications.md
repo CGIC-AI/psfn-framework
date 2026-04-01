@@ -123,7 +123,7 @@ The current target taxonomy and migration map live in [`docs/tool-surface.md`](.
 Current guidance:
 
 - `promotedExtendedTools` is a short-term exposure mechanism, not the long-term taxonomy.
-- `load_tools` and the promoted-tool CRUD helpers are temporary control surfaces until `toolset` exists.
+- `toolset` is the model-facing control surface for listing, activating, pinning, and unpinning non-default tools.
 - `core_memory` is the current legacy name; the target orientation surface is `orient`.
 - `scratchpad` stays explicit as the ephemeral long-context workspace.
 - `north_star` stays its own semantic tool surface.

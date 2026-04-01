@@ -60,7 +60,7 @@ const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonl
   custom: [SUBAGENT_TOOLSET_ALL],
 };
 
-const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['spawn_shard', 'load_tools']);
+const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['spawn_shard', 'toolset']);
 
 export interface SubagentToolCatalog {
   core: readonly AgentTool<any>[];

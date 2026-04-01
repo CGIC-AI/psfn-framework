@@ -12,6 +12,7 @@ import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../event-bus.js';
+import type { MemoryWriter } from '../memory/writer.js';
 import type { SessionManager } from '../session/manager.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
@@ -355,9 +356,9 @@ export class SubstrateAgent {
     // Persistent event bridge: pi-agent-core events → EventBus
     this.bridge = createEventBridge(this.agent, eventBus);
 
-    // Register the core discovery and activation tools.
+    // Register the core discovery and non-default tool control tools.
     this.registerTool(this.toolRuntimeFacade.createToolSearchTool(), 'core');
-    this.registerTool(this.toolRuntimeFacade.createLoadToolsTool(), 'core');
+    this.registerTool(this.toolRuntimeFacade.createToolsetTool(), 'core');
 
     // Eagerly try to resolve the model, but don't throw if it fails
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
@@ -536,6 +537,10 @@ export class SubstrateAgent {
 
   swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult {
     return this.toolRuntimeFacade.swapPromotedExtendedTools(fromSlot, toSlot);
+  }
+
+  setToolsetMemoryWriter(getMemoryWriter: () => Pick<MemoryWriter, 'write'> | undefined): void {
+    this.toolRuntimeFacade.setToolsetMemoryWriter(getMemoryWriter);
   }
 
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {

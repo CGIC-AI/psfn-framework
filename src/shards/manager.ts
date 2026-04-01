@@ -35,6 +35,7 @@ import {
 } from '../routing/envelope.js';
 import type { ShardExecutionPort } from './port.js';
 import type {
+  ShardBackend,
   ShardConfig,
   ShardLifecycleState,
   ShardParentContextSnapshot,
@@ -49,6 +50,12 @@ import type {
   ShardContextPackEntry,
 } from './types.js';
 import { toErrorMessage } from '../utils/errors.js';
+import {
+  assertMediatedShardBackendTier,
+  LocalShardBackendController,
+  resolveRequestedShardBackend,
+  type ShardBackendController,
+} from './backend-controller.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
@@ -121,6 +128,7 @@ export interface ShardManagerDeps {
   runtimeMode?: RuntimeMode;
   shardSessionMemorySyncAuditPath?: string;
   companionId?: string;
+  backendController?: ShardBackendController;
 }
 
 export type ActiveShard = ShardRuntimeRecord;
@@ -146,6 +154,7 @@ export class ShardManager implements ShardExecutionPort {
   private shardHistoryOrder: string[] = [];
   private shardRecords = new Map<string, ShardRuntimeRecord>();
   private activeShardChannels = new Map<string, Set<string>>();
+  private backendController: ShardBackendController;
 
   constructor(deps: ShardManagerDeps) {
     this.deps = deps;
@@ -161,6 +170,7 @@ export class ShardManager implements ShardExecutionPort {
     );
     this.auditTrail = deps.auditTrail ?? null;
     this.companionId = deps.companionId?.trim() || DEFAULT_COMPANION_ID;
+    this.backendController = deps.backendController ?? new LocalShardBackendController();
     this.installAuditHooks();
   }
 
@@ -217,6 +227,7 @@ export class ShardManager implements ShardExecutionPort {
     const maxTurns = shardConfig.maxTurns ?? DEFAULT_MAX_TURNS;
     const capabilities = this.resolveAdvertisedCapabilities(shardConfig.capabilities);
     const requiredCapabilities = this.resolveRequiredCapabilities(shardConfig.requiredCapabilities);
+    const backend = resolveRequestedShardBackend(shardConfig);
     const missingCapabilities = requiredCapabilities.filter(capability => !capabilities.includes(capability));
     if (missingCapabilities.length > 0) {
       throw new Error(
@@ -234,6 +245,7 @@ export class ShardManager implements ShardExecutionPort {
     const runtimeRecord: ShardRuntimeRecord = {
       shardId,
       name: shardConfig.name,
+      backend,
       task: shardConfig.task,
       channelId,
       createdAt: startTime,
@@ -273,6 +285,7 @@ export class ShardManager implements ShardExecutionPort {
     this.auditTrail?.append('shard.spawn.start', {
       shardId,
       name: shardConfig.name,
+      backend,
       creationMode: shardConfig.creationMode,
       maxTurns,
       channelId,
@@ -283,6 +296,8 @@ export class ShardManager implements ShardExecutionPort {
       requiredCapabilities,
     });
     try {
+      await this.assertShardBackendReady(shardId, shardConfig.name, backend, shardConfig.sourceContext);
+
       // Each shard gets its own SessionManager wrapping the shared store
       const sessionManager = new SessionManager(
         this.deps.sessionStore,
@@ -371,6 +386,7 @@ export class ShardManager implements ShardExecutionPort {
       const result: ShardResult = {
         shardId,
         name: shardConfig.name,
+        backend,
         content: lastContent,
         model: lastModel,
         inputTokens: totalInput,
@@ -860,6 +876,44 @@ export class ShardManager implements ShardExecutionPort {
 
   private resolveCapabilityTier(): CapabilityTier {
     return normalizeCapabilityTier(this.deps.config.capabilityTier);
+  }
+
+  private async assertShardBackendReady(
+    shardId: string,
+    shardName: string,
+    backend: ShardBackend,
+    sourceContext?: ShardConfig['sourceContext'],
+  ): Promise<void> {
+    if (backend === 'inline') {
+      return;
+    }
+
+    const capabilityTier = this.resolveCapabilityTier();
+    assertMediatedShardBackendTier(backend, capabilityTier);
+    const decision = await this.backendController.requestBackend({
+      shardId,
+      shardName,
+      backend,
+      capabilityTier,
+      ...(sourceContext ? { sourceContext } : {}),
+    });
+    this.auditTrail?.append('shard.backend.control', {
+      shardId,
+      shardName,
+      backend,
+      controller: decision.controller,
+      status: decision.status,
+      reason: decision.reason,
+      capabilityTier,
+    });
+    if (decision.status !== 'approved') {
+      throw new Error(`Shard backend "${backend}" is unavailable: ${decision.reason}`);
+    }
+
+    throw new Error(
+      `Shard backend "${backend}" was approved by ${decision.controller} mediation `
+      + 'but no shard faculty executor is wired for mediated backend execution.',
+    );
   }
 
   private resolveCreationMode(shardConfig: ShardConfig): ShardCreationMode {

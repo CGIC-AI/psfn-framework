@@ -24,6 +24,15 @@ export function createSpawnShardTool(
     parameters: Type.Object({
       name: Type.String({ description: 'Short label for this shard (e.g. "research", "analysis")' }),
       task: Type.String({ description: 'The task/prompt for the shard to execute' }),
+      backend: Type.Optional(Type.Union([
+        Type.Literal('inline'),
+        Type.Literal('container'),
+        Type.Literal('orchestrated'),
+      ], {
+        description:
+          'Optional shard backend. Use "inline" for in-process shard execution; '
+          + '"container" and "orchestrated" stay behind a mediated shard faculty boundary.',
+      })),
       systemPrompt: Type.Optional(
         Type.String({
           description: 'Optional shard remit and prompt-discipline supplement appended after the inherited shard prefix.',
@@ -48,6 +57,7 @@ export function createSpawnShardTool(
       params: {
         name: string;
         task: string;
+        backend?: 'inline' | 'container' | 'orchestrated';
         systemPrompt?: string;
         maxTurns?: number;
         capabilities?: string[];
@@ -60,6 +70,7 @@ export function createSpawnShardTool(
         const result = await shardPort.spawn({
           name: params.name,
           task: params.task,
+          ...(params.backend ? { backend: params.backend } : {}),
           systemPrompt: params.systemPrompt,
           creationMode: requestContext?.channelId ? 'forked' : 'fresh',
           ...(params.maxTurns !== undefined ? { maxTurns: params.maxTurns } : {}),

@@ -29,6 +29,7 @@ import type { MemoryStore } from '../memory/store.js';
 import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
 import { createSpawnShardTool } from '../shards/tools.js';
+import type { ShardBackendController } from '../shards/backend-controller.js';
 import { SubagentFaculty } from '../subagents/faculty.js';
 import { createSubagentTool } from '../subagents/tools.js';
 import { createThinkTool } from '../repl/tools.js';
@@ -268,6 +269,7 @@ export interface ToolRuntimeOptions {
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   onSubagentFacultyReady?: (faculty: SubagentFaculty) => void;
+  shardBackendController?: ShardBackendController;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardManager {
@@ -299,6 +301,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
     auditTrail: options.shardAuditTrail ?? undefined,
     runtimeMode: options.runtimeMode,
+    backendController: options.shardBackendController,
     shardSessionMemorySyncAuditPath: options.companionDataDir
       ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
       : undefined,

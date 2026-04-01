@@ -35,6 +35,8 @@ import type {
   WebFetchBinaryResult,
   WebFetchLane,
   ShellExecResult,
+  ShardBackendRequestParams,
+  ShardBackendRequestResult,
   VaultWriteResult,
   VaultReadResult,
   VaultSearchResult,
@@ -615,6 +617,12 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       args,
       ...options,
     }) as ShellExecResult;
+  }
+
+  async shardBackendRequest(
+    params: ShardBackendRequestParams,
+  ): Promise<ShardBackendRequestResult> {
+    return await this.rpcInstance.request('shard.backend.request', params) as ShardBackendRequestResult;
   }
 
   async vaultWrite(

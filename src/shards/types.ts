@@ -10,6 +10,7 @@ import type {
 
 export type ShardLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';
 export type ShardHealthState = 'healthy' | 'stale' | 'failed';
+export type ShardBackend = 'inline' | 'container' | 'orchestrated';
 export type ShardRuntimeState =
   | 'preparing'
   | 'running'
@@ -61,6 +62,7 @@ export interface ShardPromptDiscipline {
 export interface ShardConfig {
   name: string;                       // Human-readable label
   task: string;                       // The task the shard should complete
+  backend?: ShardBackend;             // Optional execution backend (default: inline)
   creationMode?: ShardCreationMode;   // Explicit shard creation mode (default: fresh)
   systemPrompt?: string;              // Optional shard remit/discipline supplement
   maxTurns?: number;                  // Max conversation turns (default: 1)
@@ -76,6 +78,7 @@ export interface ShardConfig {
 export interface ShardResult {
   shardId: string;
   name: string;
+  backend: ShardBackend;
   content: string;
   model: string;
   inputTokens: number;
@@ -103,6 +106,7 @@ export type ShardStatus = 'running' | 'completed' | 'failed';
 export interface ShardRuntimeRecord {
   shardId: string;
   name: string;
+  backend: ShardBackend;
   task: string;
   channelId: string;
   createdAt: number;

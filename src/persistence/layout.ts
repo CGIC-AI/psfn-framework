@@ -480,6 +480,22 @@ export function resolveReflectionJournalPath(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'journal.jsonl');
 }
 
+export function resolveReflectionDailyJournalsDir(dataDir: string): string {
+  return join(resolveReflectionNotesDir(dataDir), 'daily');
+}
+
+export function resolveReflectionDailyJournalPath(dataDir: string, date: string): string {
+  return join(resolveReflectionDailyJournalsDir(dataDir), `${date}.jsonl`);
+}
+
+export function resolveReflectionProcessLogsDir(dataDir: string): string {
+  return join(resolveReflectionNotesDir(dataDir), 'process-logs');
+}
+
+export function resolveReflectionProcessLogPath(dataDir: string, processId: string): string {
+  return join(resolveReflectionProcessLogsDir(dataDir), `${sanitizeChannelId(processId)}.jsonl`);
+}
+
 export function resolveFocusKnowledgePath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'focus-knowledge.jsonl');
 }
@@ -575,6 +591,8 @@ export function ensurePersistenceLayout(dataDir: string): void {
   mkdirSync(resolveSessionsDir(dataDir), { recursive: true });
   mkdirSync(resolveNotesDir(dataDir), { recursive: true });
   mkdirSync(resolveReflectionNotesDir(dataDir), { recursive: true });
+  mkdirSync(resolveReflectionDailyJournalsDir(dataDir), { recursive: true });
+  mkdirSync(resolveReflectionProcessLogsDir(dataDir), { recursive: true });
   mkdirSync(resolveContactsDir(dataDir), { recursive: true });
   mkdirSync(resolveContinuityDir(dataDir), { recursive: true });
   mkdirSync(resolveInternalRoleEnvelopesDir(dataDir), { recursive: true });

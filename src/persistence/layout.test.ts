@@ -40,7 +40,11 @@ import {
   resolvePromptRegistryHistoryPath,
   resolvePromptRegistryPath,
   resolveReflectionJournalPath,
+  resolveReflectionDailyJournalPath,
+  resolveReflectionDailyJournalsDir,
   resolveReflectionNotesDir,
+  resolveReflectionProcessLogPath,
+  resolveReflectionProcessLogsDir,
   resolveRuntimeLayoutMode,
   resolveRuntimePathLayout,
   resolveSafeguardAuditTrailPath,
@@ -88,6 +92,14 @@ describe('persistence layout', () => {
     expect(resolveLegacyValuesJournalPath(dataDir)).toBe(join(dataDir, 'values.jsonl'));
     expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'notes', 'reflections'));
     expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'journal.jsonl'));
+    expect(resolveReflectionDailyJournalsDir(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'daily'));
+    expect(resolveReflectionDailyJournalPath(dataDir, '2026-03-31')).toBe(
+      join(dataDir, 'notes', 'reflections', 'daily', '2026-03-31.jsonl'),
+    );
+    expect(resolveReflectionProcessLogsDir(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'process-logs'));
+    expect(resolveReflectionProcessLogPath(dataDir, 'focus:alpha/beta')).toBe(
+      join(dataDir, 'notes', 'reflections', 'process-logs', 'focus%3Aalpha%2Fbeta.jsonl'),
+    );
     expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'notes', 'scratchpad.json'));
     expect(resolveCoreMemoryPath(dataDir)).toBe(join(dataDir, 'core_memory.json'));
     expect(resolveInternalRoleEnvelopesDir(dataDir)).toBe(join(dataDir, 'internal-role-envelopes'));
@@ -252,6 +264,8 @@ describe('persistence layout', () => {
       resolveSessionsDir(dataDir),
       resolveNotesDir(dataDir),
       resolveReflectionNotesDir(dataDir),
+      resolveReflectionDailyJournalsDir(dataDir),
+      resolveReflectionProcessLogsDir(dataDir),
       resolveContactsDir(dataDir),
       resolveContinuityDir(dataDir),
       resolveInternalRoleEnvelopesDir(dataDir),

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../event-bus.js';
@@ -448,6 +448,21 @@ describe('wireHeartbeatRuntime', () => {
       );
       expect(valuesCall?.[0]?.content).toContain('[Internal State Input]');
       expect(valuesCall?.[0]?.content).toContain('serialized_internal_state:');
+
+      const journalDate = new Date(1_700_000_000_000 + task!.intervalMs + 1).toISOString().slice(0, 10);
+      const dailyRaw = readFileSync(
+        join(tempDir, 'notes', 'reflections', 'daily', `${journalDate}.jsonl`),
+        'utf-8',
+      ).trim();
+      const dailyLines = dailyRaw.split('\n').filter(line => line.trim().length > 0);
+      const dailyEntry = JSON.parse(dailyLines[dailyLines.length - 1] ?? '{}') as {
+        source?: string;
+        executionSource?: string;
+        templateId?: string;
+      };
+      expect(dailyEntry.source).toBe('heartbeat_template');
+      expect(dailyEntry.executionSource).toBe('scheduled');
+      expect(dailyEntry.templateId).toBe('values-reflection');
     } finally {
       nowSpy.mockRestore();
     }
@@ -612,6 +627,21 @@ describe('wireHeartbeatRuntime', () => {
       expect(reflectionEntry.templateId).toBe('values-reflection');
       expect(reflectionEntry.mode).toBe('deliberation');
       expect(reflectionEntry.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+
+      const processLogDir = join(tempDir, 'notes', 'reflections', 'process-logs');
+      const processLogFiles = readdirSync(processLogDir);
+      expect(processLogFiles).toHaveLength(1);
+      const processLogRaw = readFileSync(join(processLogDir, processLogFiles[0] ?? ''), 'utf-8').trim();
+      const processLogLines = processLogRaw.split('\n').filter(line => line.trim().length > 0);
+      expect(processLogLines).toHaveLength(2);
+      const processCompletedEntry = JSON.parse(processLogLines[1] ?? '{}') as {
+        stage?: string;
+        processType?: string;
+        deliberation?: { sessionId?: string };
+      };
+      expect(processCompletedEntry.stage).toBe('completed');
+      expect(processCompletedEntry.processType).toBe('reflection_deliberation');
+      expect(processCompletedEntry.deliberation?.sessionId).toBeDefined();
     } finally {
       nowSpy.mockRestore();
     }

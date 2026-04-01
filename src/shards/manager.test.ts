@@ -825,7 +825,7 @@ describe('ShardManager', () => {
   });
 
   it('injects default nursery shard toolset and blocks recursion tools', async () => {
-    const memoryWrite = makeTestTool('memory_write');
+    const memory = makeTestTool('memory');
     const contactLookup = makeTestTool('contact_lookup');
     const repoStatus = makeTestTool('repo_status');
     const repoDiff = makeTestTool('repo_diff');
@@ -841,7 +841,7 @@ describe('ShardManager', () => {
       config: { ...TEST_CONFIG, capabilityTier: 'nursery' },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memoryWrite.tool, contactLookup.tool],
+        core: [memory.tool, contactLookup.tool],
         extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
       }),
     });
@@ -855,10 +855,9 @@ describe('ShardManager', () => {
   });
 
   it('unlocks additional shard tools for apprentice tier', async () => {
-    const memoryWrite = makeTestTool('memory_write');
+    const memory = makeTestTool('memory');
     const contactLookup = makeTestTool('contact_lookup');
     const contactList = makeTestTool('contact_list');
-    const memoryImport = makeTestTool('memory_import_batch');
 
     const manager = new ShardManager({
       eventBus,
@@ -869,7 +868,7 @@ describe('ShardManager', () => {
       config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memoryWrite.tool, contactLookup.tool, contactList.tool, memoryImport.tool],
+        core: [memory.tool, contactLookup.tool, contactList.tool],
         extended: [],
       }),
     });
@@ -878,11 +877,11 @@ describe('ShardManager', () => {
 
     const injected = lastSetToolNames();
     expect(injected).toContain('contact_list');
-    expect(injected).toContain('memory_import_batch');
+    expect(injected).toContain('memory');
   });
 
   it('unlocks full configured catalog for autonomous tier', async () => {
-    const memoryWrite = makeTestTool('memory_write');
+    const memory = makeTestTool('memory');
     const repoCommit = makeTestTool('repo_commit');
     const promptUpdate = makeTestTool('prompt_layer_update');
 
@@ -895,7 +894,7 @@ describe('ShardManager', () => {
       config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memoryWrite.tool],
+        core: [memory.tool],
         extended: [repoCommit.tool, promptUpdate.tool],
       }),
     });
@@ -904,14 +903,14 @@ describe('ShardManager', () => {
 
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining([
-      'memory_write',
+      'memory',
       'repo_commit',
       'prompt_layer_update',
     ]));
   });
 
   it('respects configured shard toolset overrides', async () => {
-    const memoryWrite = makeTestTool('memory_write');
+    const memory = makeTestTool('memory');
     const contactLookup = makeTestTool('contact_lookup');
     const repoStatus = makeTestTool('repo_status');
 
@@ -928,7 +927,7 @@ describe('ShardManager', () => {
       },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memoryWrite.tool, contactLookup.tool],
+        core: [memory.tool, contactLookup.tool],
         extended: [repoStatus.tool],
       }),
     });
@@ -937,7 +936,7 @@ describe('ShardManager', () => {
 
     const injected = lastSetToolNames();
     expect(injected).toContain('contact_lookup');
-    expect(injected).not.toContain('memory_write');
+    expect(injected).not.toContain('memory');
     expect(injected).not.toContain('repo_status');
   });
 
@@ -957,7 +956,7 @@ describe('ShardManager', () => {
         role: 'user',
       }),
     });
-    const memoryWrite = makeTestTool('memory_write');
+    const memory = makeTestTool('memory');
     const contactLookup = makeTestTool('contact_lookup');
     const repoStatus = makeTestTool('repo_status');
     const repoDiff = makeTestTool('repo_diff');
@@ -982,7 +981,7 @@ describe('ShardManager', () => {
       },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memoryWrite.tool, contactLookup.tool],
+        core: [memory.tool, contactLookup.tool],
         extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
       }),
     });
@@ -1004,8 +1003,7 @@ describe('ShardManager', () => {
   });
 
   it('stamps shard source provenance on shard memory tools', async () => {
-    const memoryWrite = makeTestTool('memory_write');
-    const memoryImport = makeTestTool('memory_import_batch');
+    const memory = makeTestTool('memory');
 
     const manager = new ShardManager({
       eventBus,
@@ -1016,37 +1014,49 @@ describe('ShardManager', () => {
       config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memoryWrite.tool, memoryImport.tool],
+        core: [memory.tool],
         extended: [],
       }),
     });
 
     const result = await manager.spawn({ name: 'provenance', task: 'test' });
     const tools = (setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>);
-    const wrappedMemoryWrite = tools.find((tool) => tool.name === 'memory_write');
-    const wrappedMemoryImport = tools.find((tool) => tool.name === 'memory_import_batch');
+    const wrappedMemory = tools.find((tool) => tool.name === 'memory');
 
-    await wrappedMemoryWrite?.execute('mem-call', { text: 'x', type: 'semantic' });
-    await wrappedMemoryImport?.execute('import-call', { records: [{ text: 'x', type: 'semantic' }] });
+    await wrappedMemory?.execute('mem-call', { action: 'write', text: 'x', type: 'semantic' });
+    await wrappedMemory?.execute('import-call', {
+      action: 'import',
+      records: [{ text: 'x', type: 'semantic' }],
+    });
+    await wrappedMemory?.execute('search-call', { action: 'search', query: 'x' });
 
-    expect(memoryWrite.execute).toHaveBeenCalledWith(
+    expect(memory.execute).toHaveBeenCalledWith(
       'mem-call',
       expect.objectContaining({
+        action: 'write',
         __psfnShardSource: `shard:${result.shardId}`,
       }),
       undefined,
     );
-    expect(memoryImport.execute).toHaveBeenCalledWith(
+    expect(memory.execute).toHaveBeenCalledWith(
       'import-call',
       expect.objectContaining({
+        action: 'import',
         __psfnShardSource: `shard:${result.shardId}`,
+      }),
+      undefined,
+    );
+    expect(memory.execute).toHaveBeenCalledWith(
+      'search-call',
+      expect.not.objectContaining({
+        __psfnShardSource: expect.any(String),
       }),
       undefined,
     );
   });
 
   it('denies disallowed shard-to-prime memory sync operations and audits the denial', async () => {
-    const memoryRedact = makeTestTool('memory_redact');
+    const memory = makeTestTool('memory');
     const auditTrail = { append: vi.fn() };
 
     const manager = new ShardManager({
@@ -1058,7 +1068,7 @@ describe('ShardManager', () => {
       config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memoryRedact.tool],
+        core: [memory.tool],
         extended: [],
       }),
       auditTrail,
@@ -1069,16 +1079,16 @@ describe('ShardManager', () => {
       name: string;
       execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
     }>;
-    const wrappedMemoryRedact = tools.find((tool) => tool.name === 'memory_redact');
-    expect(wrappedMemoryRedact).toBeDefined();
-    if (!wrappedMemoryRedact) {
-      throw new Error('Expected wrapped memory_redact tool to be present');
+    const wrappedMemory = tools.find((tool) => tool.name === 'memory');
+    expect(wrappedMemory).toBeDefined();
+    if (!wrappedMemory) {
+      throw new Error('Expected wrapped memory tool to be present');
     }
 
     await expect(
-      wrappedMemoryRedact.execute('redact-call', { memory_id: 'mem-1' }),
+      wrappedMemory.execute('redact-call', { action: 'redact', memory_id: 'mem-1' }),
     ).rejects.toThrow('denied_operation');
-    expect(memoryRedact.execute).not.toHaveBeenCalled();
+    expect(memory.execute).not.toHaveBeenCalled();
     expect(auditTrail.append).toHaveBeenCalledWith(
       'shard.sync.policy',
       expect.objectContaining({
@@ -1110,12 +1120,12 @@ describe('ShardManager', () => {
     await eventBus.emit('agent.tool.start', {
       channelId: `shard:${result.shardId}`,
       toolCallId: 'call-a',
-      toolName: 'memory_write',
+      toolName: 'memory',
     });
     await eventBus.emit('agent.tool.end', {
       channelId: `shard:${result.shardId}`,
       toolCallId: 'call-a',
-      toolName: 'memory_write',
+      toolName: 'memory',
       isError: false,
     });
 
@@ -1129,11 +1139,11 @@ describe('ShardManager', () => {
     );
     expect(auditTrail.append).toHaveBeenCalledWith(
       'shard.tool.start',
-      expect.objectContaining({ shardId: result.shardId, toolName: 'memory_write' }),
+      expect.objectContaining({ shardId: result.shardId, toolName: 'memory' }),
     );
     expect(auditTrail.append).toHaveBeenCalledWith(
       'shard.tool.end',
-      expect.objectContaining({ shardId: result.shardId, toolName: 'memory_write', isError: false }),
+      expect.objectContaining({ shardId: result.shardId, toolName: 'memory', isError: false }),
     );
   });
 

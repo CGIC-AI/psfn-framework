@@ -22,6 +22,7 @@ function mockTool(name: string): AgentTool<any> {
 
 describe('tool reversibility tagging', () => {
   it('classifies known irreversible tools', () => {
+    expect(resolveToolReversibility('memory')).toBe('irreversible');
     expect(resolveToolReversibility('memory_write')).toBe('irreversible');
     expect(resolveToolReversibility('memory_redact')).toBe('irreversible');
     expect(resolveToolReversibility('memory_delete')).toBe('irreversible');

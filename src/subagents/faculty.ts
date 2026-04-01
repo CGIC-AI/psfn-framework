@@ -46,10 +46,9 @@ const DEFAULT_SUBAGENT_CAPABILITIES = ['general'] as const;
 const SUBAGENT_TOOLSET_ALL = '*';
 const APPRENTICE_SUBAGENT_TOOL_EXTRAS = [
   'contact_list',
-  'memory_import_batch',
 ] as const;
 export const DEFAULT_SUBAGENT_TOOLSET = [
-  'memory_write',
+  'memory',
   'contact_lookup',
   'repo_status',
   'repo_diff',

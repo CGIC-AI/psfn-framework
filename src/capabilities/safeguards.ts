@@ -45,6 +45,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   contact_link_identity: 'irreversible',
   contact_set_channel_privacy: 'irreversible',
   contact_set_trust: 'irreversible',
+  memory: 'irreversible',
   memory_write: 'irreversible',
   memory_import_batch: 'reversible',
   memory_redact: 'irreversible',

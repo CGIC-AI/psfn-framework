@@ -60,11 +60,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 
 | Current name | Target surface | Exposure | Notes |
 | --- | --- | --- | --- |
-| `memory_write` | `memory` | always-on | Core write path for durable memories. |
-| `memory_import_batch` | `memory` | always-on | Bulk import belongs to the same semantic family. |
-| `memory_redact` | `memory` | extended | Mutation stays explicit and capability-gated. |
-| `memory_delete` | `memory` | extended | Mutation stays explicit and capability-gated. |
-| `undo_memory_delete` | `memory` | extended | Restore path stays under the same family. |
+| `memory` | `memory` | always-on | Unified long-term memory surface with `action=write|search|import|redact|delete|restore`; capability gating still distinguishes read/write/delete-sensitive paths. |
 | `scratchpad_read` | `scratchpad` | always-on | Ephemeral working notes stay explicit. |
 | `scratchpad_write` | `scratchpad` | always-on | Short-lived working notes are not canonical memory. |
 | `core_memory_append` | `orient` | always-on | Collapse the hot canon into `orient`. |

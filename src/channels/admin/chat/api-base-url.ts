@@ -91,7 +91,7 @@ export function resolveAdminChatApiBaseUrl(options: ResolveAdminChatApiBaseUrlOp
   // No API port configured — we cannot construct an absolute URL, so
   // fall back to relative paths.  The browser resolves them against its
   // current origin which works when the admin server proxies the API or
-  // when admin and API share the same port (e.g. single-process mode).
+  // when both surfaces are served from the same reachable origin.
   if (apiPort === undefined) {
     return RELATIVE_BASE_URL;
   }

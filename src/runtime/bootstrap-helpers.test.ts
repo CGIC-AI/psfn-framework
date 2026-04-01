@@ -14,6 +14,8 @@ import { loadCapabilityTierConfig } from '../config/capability-tier-config.js';
 import { loadProvidersConfig } from '../config/providers-config.js';
 import { loadSchedulerConfig, saveSchedulerConfig } from '../config/scheduler-config.js';
 import {
+  buildRuntimeChannelsConfigOverrides,
+  createEmbeddingDimensionMismatchFatalMessage,
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   hydrateCanonicalStartupConfig,
@@ -109,6 +111,79 @@ function makeCanonicalModelsConfigForChatOverride(
 
   return cloned;
 }
+
+describe('buildRuntimeChannelsConfigOverrides', () => {
+  it('returns empty overrides when telegram settings keys are not present', () => {
+    const overrides = buildRuntimeChannelsConfigOverrides(
+      {
+        telegramEnabled: true,
+        telegramAuthorizedUsers: ['111'],
+      } as any,
+      {},
+    );
+
+    expect(overrides).toEqual({});
+  });
+
+  it('maps telegram settings-backed config values into channel overrides', () => {
+    const overrides = buildRuntimeChannelsConfigOverrides(
+      {
+        telegramEnabled: true,
+        telegramAuthorizedUsers: ['111', '222'],
+      } as any,
+      {
+        telegramEnabled: false,
+        telegramAuthorizedUsers: 'ignored-here',
+      },
+    );
+
+    expect(overrides).toEqual({
+      telegram: {
+        enabled: true,
+        allowedUsers: ['111', '222'],
+      },
+    });
+  });
+
+  it('passes an empty allowlist override when telegramAuthorizedUsers was explicitly set empty', () => {
+    const overrides = buildRuntimeChannelsConfigOverrides(
+      {
+        telegramAuthorizedUsers: undefined,
+      } as any,
+      {
+        telegramAuthorizedUsers: undefined,
+      },
+    );
+
+    expect(overrides).toEqual({
+      telegram: {
+        allowedUsers: [],
+      },
+    });
+  });
+});
+
+describe('createEmbeddingDimensionMismatchFatalMessage', () => {
+  it('returns a fatal startup message for embedding dimension mismatch', () => {
+    const message = createEmbeddingDimensionMismatchFatalMessage({
+      status: 'mismatch',
+      configuredDims: 1024,
+      storedDims: 768,
+    });
+
+    expect(message).toContain('Embedding dimension mismatch detected at startup');
+    expect(message).toContain('configured=1024');
+    expect(message).toContain('stored=768');
+  });
+
+  it('returns null when embedding dimensions are compatible', () => {
+    expect(createEmbeddingDimensionMismatchFatalMessage({
+      status: 'match',
+      configuredDims: 1024,
+      storedDims: 1024,
+    })).toBeNull();
+  });
+});
 
 describe('resolveRuntimeVoiceSttProvider', () => {
   it('uses explicit provider when configured', () => {

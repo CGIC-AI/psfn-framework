@@ -55,11 +55,6 @@ describe('wireContactRuntime', () => {
 });
 
 describe('entrypoint composition', () => {
-  it('runtime.ts uses shared contact runtime wiring', () => {
-    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
-    expect(runtimeSource).toContain('wireContactRuntime(');
-  });
-
   it('agent-main.ts uses shared contact runtime wiring', () => {
     const agentMainSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     expect(agentMainSource).toContain('wireContactRuntime(');

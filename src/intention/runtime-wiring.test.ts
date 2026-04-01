@@ -603,23 +603,6 @@ describe('wireIntentionRuntime', () => {
 });
 
 describe('entrypoint composition', () => {
-  it('runtime.ts uses shared intention runtime wiring', () => {
-    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
-    expect(runtimeSource).toContain('wireIntentionRuntime(');
-    expect(runtimeSource).toContain('createIntentionAppraisalHooks(');
-    expect(runtimeSource).toContain('createIntentionBehavioralPatternHooks(');
-    expect(runtimeSource).toContain('setPromotionHook(');
-    expect(runtimeSource).toContain('getActiveConcerns: intentionAppraisalHooks.getActiveConcerns');
-    expect(runtimeSource).toContain('getRecentResolvedConcerns: intentionAppraisalHooks.getRecentResolvedConcerns');
-    expect(runtimeSource).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
-    expect(runtimeSource).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
-    expect(runtimeSource).toContain('getPendingFollowUpsForResurfacing: intentionAppraisalHooks.getPendingFollowUpsForResurfacing');
-    expect(runtimeSource).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
-    expect(runtimeSource).toContain('onIntentionReminderDecision: intentionAppraisalHooks.onIntentionReminderDecision');
-    expect(runtimeSource).toContain('onIntentionReminderTriggered: intentionAppraisalHooks.onIntentionReminderTriggered');
-    expect(runtimeSource).toContain('onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome');
-  });
-
   it('agent-main.ts uses shared intention runtime wiring', () => {
     const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     expect(source).toContain('wireIntentionRuntime(');

@@ -167,7 +167,7 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
 
 // ── Validation Types ──
 
-export type RuntimeMode = 'single' | 'gateway';
+export type RuntimeMode = 'direct' | 'gateway';
 
 export interface ToolValidationResult {
   toolName: string;

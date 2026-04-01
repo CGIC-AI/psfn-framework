@@ -5,12 +5,11 @@ This document is the compact contract for how the live runtime is supposed to be
 ## Source Of Truth Order
 
 1. Runtime entrypoints and composition
-   - `src/index.ts`
-   - `src/runtime.ts`
    - `src/gateway-main.ts`
    - `src/agent-main.ts`
    - `src/bootstrap/composition.ts`
    - `src/bootstrap/parity.ts`
+   - `src/lifecycle/runtime-mode.ts`
 2. Config and persistence contracts
    - `src/types.ts`
    - `src/settings.ts`
@@ -21,9 +20,8 @@ This document is the compact contract for how the live runtime is supposed to be
 
 ## Runtime Contract
 
-- The canonical operational mode is split gateway + agent.
-- `src/index.ts` does not start a usable monolith; it exits fail-closed.
-- `src/runtime.ts` remains the single-process parity implementation for tests, tooling, and compatibility wiring.
+- The only supported operational mode is split gateway + agent.
+- `src/index.ts` is a package root module, not a runtime entrypoint.
 - `npm run split` and `npm run yolo` are the intended launchers for day-to-day runtime use.
 
 ## Configuration Ownership

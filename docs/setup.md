@@ -1,6 +1,6 @@
 # Setup
 
-PSFN now boots through the split runtime. `src/index.ts` only validates the runtime mode contract and exits; use `npm run dev`, `npm run split`, `npm run gateway`, or `npm run agent`.
+PSFN boots only through the split runtime; use `npm run dev`, `npm run split`, `npm run gateway`, or `npm run agent`.
 
 ## Prerequisites
 

@@ -2,7 +2,6 @@
 // Canonicalizes runtime modes across entrypoints and resolves restart strategy.
 
 export const RUNTIME_MODE = Object.freeze({
-  SINGLE: 'single',
   SPLIT: 'split',
   GATEWAY_AGENT: 'gateway-agent',
 } as const);
@@ -29,13 +28,7 @@ export interface ResolveRuntimeModeContractOptions {
   restartCommandEnv?: string;
 }
 
-const MONOLITHIC_MODE_REMOVAL_MESSAGE =
-  'Monolithic runtime mode has been removed. Use "npm run split" or "npm run yolo".';
-
 const RUNTIME_MODE_ALIASES: Readonly<Record<string, RuntimeMode>> = Object.freeze({
-  single: RUNTIME_MODE.SINGLE,
-  'single-process': RUNTIME_MODE.SINGLE,
-  single_process: RUNTIME_MODE.SINGLE,
   split: RUNTIME_MODE.SPLIT,
   yolo: RUNTIME_MODE.SPLIT,
   gateway: RUNTIME_MODE.GATEWAY_AGENT,
@@ -46,13 +39,11 @@ const RUNTIME_MODE_ALIASES: Readonly<Record<string, RuntimeMode>> = Object.freez
 });
 
 const ENTRYPOINT_ALLOWED_MODES: Readonly<Record<RuntimeEntrypoint, readonly RuntimeMode[]>> = Object.freeze({
-  [RUNTIME_MODE.SINGLE]: Object.freeze([RUNTIME_MODE.SINGLE]),
   [RUNTIME_MODE.SPLIT]: Object.freeze([RUNTIME_MODE.SPLIT]),
   [RUNTIME_MODE.GATEWAY_AGENT]: Object.freeze([RUNTIME_MODE.GATEWAY_AGENT, RUNTIME_MODE.SPLIT]),
 });
 
 const DEFAULT_RESTART_COMMAND_BY_MODE: Readonly<Record<RuntimeMode, string | undefined>> = Object.freeze({
-  [RUNTIME_MODE.SINGLE]: undefined,
   [RUNTIME_MODE.SPLIT]: 'npm run split',
   [RUNTIME_MODE.GATEWAY_AGENT]: undefined,
 });
@@ -76,10 +67,6 @@ function resolveRuntimeModeForEntrypoint(
   entrypoint: RuntimeEntrypoint,
   runtimeModeEnv: string | undefined,
 ): RuntimeMode {
-  if (entrypoint === RUNTIME_MODE.SINGLE) {
-    throw new Error(MONOLITHIC_MODE_REMOVAL_MESSAGE);
-  }
-
   const normalizedRequestedMode = normalizeToken(runtimeModeEnv);
   const requestedMode = normalizeRuntimeMode(runtimeModeEnv);
   if (normalizedRequestedMode && !requestedMode) {

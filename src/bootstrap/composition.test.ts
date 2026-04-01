@@ -447,11 +447,10 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('wireShardAndThinkRuntime(');
   });
 
-  it('routes runtime bootstrap through composition helpers', () => {
-    const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
-    expect(source).toContain('composeIdentity(this.config)');
+  it('routes split agent bootstrap through composition helpers', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
+    expect(source).toContain('composeIdentity(config)');
     expect(source).toContain('composeSessionRuntime({');
-    expect(source).toContain('createEmbeddingProviderFromConfig(this.config)');
     expect(source).toContain('composeSubstrateAgent({');
     expect(source).toContain('wireSelfModelRuntime(');
     expect(source).toContain('wireCoreMemoryRuntime({');
@@ -459,15 +458,7 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('wireShardAndThinkRuntime({');
   });
 
-  it('passes sleeptime memory dependencies into shared heartbeat wiring in both runtime modes', () => {
-    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
-    const runtimeHeartbeatIndex = runtimeSource.indexOf('wireHeartbeatRuntime(');
-    expect(runtimeHeartbeatIndex).toBeGreaterThanOrEqual(0);
-    expect(runtimeSource.indexOf('sessionManager: this.sessionManager', runtimeHeartbeatIndex))
-      .toBeGreaterThan(runtimeHeartbeatIndex);
-    expect(runtimeSource.indexOf('coreMemoryStore,', runtimeHeartbeatIndex))
-      .toBeGreaterThan(runtimeHeartbeatIndex);
-
+  it('passes sleeptime memory dependencies into shared heartbeat wiring in the split agent', () => {
     const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     expect(agentSource).toContain('wireSelfModelRuntime(');
     const agentHeartbeatIndex = agentSource.indexOf('wireHeartbeatRuntime(');
@@ -492,23 +483,15 @@ describe('runtime composition wiring', () => {
   });
 
   it('routes channel adapter bootstrap through shared channel runtime helpers', () => {
-    const runtimeSource = readFileSync(resolve('src/runtime.ts'), 'utf-8');
     const agentSource = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     const gatewaySource = readFileSync(resolve('src/gateway-main.ts'), 'utf-8');
 
-    expect(runtimeSource).toContain('createDiscordChannelAdapterFactoryEntry({');
-    expect(runtimeSource).toContain('createOpenHomeChannelAdapterFactoryEntry()');
-    expect(runtimeSource).toContain('createTelegramChannelAdapterFactoryEntry({');
-    expect(runtimeSource).toContain('createApiServerChannelAdapterFactoryEntry({');
     expect(agentSource).toContain('createOpenHomeChannelAdapterFactoryEntry()');
     expect(agentSource).toContain('createApiServerChannelAdapterFactoryEntry({');
     expect(gatewaySource).toContain('createDiscordChannelAdapterFactoryEntry({');
     expect(gatewaySource).toContain('createOpenHomeChannelAdapterFactoryEntry()');
     expect(gatewaySource).toContain('createTelegramChannelAdapterFactoryEntry({');
 
-    expect(runtimeSource).not.toContain('new DiscordAdapter(');
-    expect(runtimeSource).not.toContain('new TelegramAdapter(');
-    expect(runtimeSource).not.toContain('new ApiServer(');
     expect(agentSource).not.toContain('new ApiServer(');
     expect(gatewaySource).not.toContain('new DiscordAdapter(');
     expect(gatewaySource).not.toContain('new TelegramAdapter(');
@@ -521,8 +504,8 @@ describe('runtime composition wiring', () => {
     expect(source).toContain('Shutdown step failed; continuing shutdown');
   });
 
-  it('avoids duplicating composition-owned constructor wiring', () => {
-    const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
+  it('avoids duplicating composition-owned constructor wiring in the split agent entrypoint', () => {
+    const source = readFileSync(resolve('src/agent-main.ts'), 'utf-8');
     expect(source).not.toContain('new SessionStore(');
     expect(source).not.toContain('new SessionManager(');
     expect(source).not.toContain('new AgentLoop(');
@@ -531,16 +514,5 @@ describe('runtime composition wiring', () => {
     expect(source).not.toContain('new ShardManager(');
     expect(source).not.toContain('createShardTool(');
     expect(source).not.toContain('createThinkTool(');
-  });
-
-  it('re-validates tool wiring after module load in single-process mode', () => {
-    const source = readFileSync(resolve('src/runtime.ts'), 'utf-8');
-    const preIndex = source.indexOf("this.agentLoop.validateToolWiring('single')");
-    const moduleLoadIndex = source.indexOf('this.moduleLoader.loadEnabledModules()');
-    const postIndex = source.indexOf("this.agentLoop.validateToolWiring('single')", preIndex + 1);
-
-    expect(preIndex).toBeGreaterThanOrEqual(0);
-    expect(moduleLoadIndex).toBeGreaterThan(preIndex);
-    expect(postIndex).toBeGreaterThan(moduleLoadIndex);
   });
 });

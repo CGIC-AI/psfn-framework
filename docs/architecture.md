@@ -4,10 +4,9 @@ This is the current runtime shape. For the component graph, start with [`docs/ar
 
 ## Canonical Runtime Model
 
-- `src/index.ts` is intentionally not a runnable monolith. It validates the runtime mode contract and exits fail-closed.
+- `src/index.ts` is the package root. It does not start a runtime.
 - `src/gateway-main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, and gateway-backed tool execution.
 - `src/agent-main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop.
-- `src/runtime.ts` still exists as the single-process `SubstrateRuntime` used for parity, tests, and historical wiring. It is no longer the primary operational entrypoint.
 
 ## Composition Layer
 
@@ -18,7 +17,7 @@ Shared runtime construction is concentrated in:
 - `src/bootstrap/post-turn-actions.ts`
 - `src/bootstrap/channel-runtime.ts`
 
-Those helpers keep the split runtime and the single-process parity runtime aligned on core wiring:
+Those helpers keep the supported split entrypoints aligned on core wiring:
 
 - identity loading
 - session runtime

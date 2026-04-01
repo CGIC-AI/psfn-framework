@@ -194,7 +194,7 @@ const SENSITIVE_PRIVACY_TAG_HINTS = new Set<string>([
 const SENSITIVE_PRIVACY_TAG_HINT_LIST = [...SENSITIVE_PRIVACY_TAG_HINTS];
 
 const PUBLIC_SOURCE_PREFIXES = ['twitter:', 'x:', 'mastodon:', 'bluesky:', 'public:'] as const;
-const PRIVATE_SOURCE_PREFIXES = ['api:', 'shard:', 'discord:', 'telegram:', 'signal:', 'dm:'] as const;
+const PRIVATE_SOURCE_PREFIXES = ['api:', 'subagent:', 'shard:', 'discord:', 'telegram:', 'signal:', 'dm:'] as const;
 
 // Decay half-lives in milliseconds
 export const DECAY_HALFLIFE: Record<MemoryType, number> = {

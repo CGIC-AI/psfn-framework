@@ -32,8 +32,8 @@ export interface GatewayMessageAgentLoop {
   handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
 }
 
-export interface WyomingShardDelegationResult {
-  shardId: string;
+export interface WyomingSubagentDelegationResult {
+  subagentId: string;
   content: string;
   model: string;
   inputTokens: number;
@@ -41,11 +41,11 @@ export interface WyomingShardDelegationResult {
   durationMs: number;
 }
 
-export interface GatewayMessageShardManager {
+export interface GatewayMessageSubagentFaculty {
   delegateWyomingSession(request: {
     message: SubstrateMessage;
     routing?: WyomingRoutingMetadata;
-  }): Promise<WyomingShardDelegationResult>;
+  }): Promise<WyomingSubagentDelegationResult>;
 }
 
 export interface GatewayMessageAuditTrail {
@@ -61,7 +61,7 @@ export interface GatewayMessageLogger {
 export interface GatewayMessageHandlersDeps {
   gateway: GatewayMessageGateway;
   agentLoop: GatewayMessageAgentLoop;
-  shardManager: GatewayMessageShardManager;
+  subagentFaculty: GatewayMessageSubagentFaculty;
   safeguardAuditTrail: GatewayMessageAuditTrail;
   config: SubstrateConfig;
   log: GatewayMessageLogger;
@@ -72,7 +72,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
   const {
     gateway,
     agentLoop,
-    shardManager,
+    subagentFaculty,
     safeguardAuditTrail,
     config,
     log,
@@ -154,14 +154,14 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
 
       if (routingDecision.delegate) {
         try {
-          const delegated = await shardManager.delegateWyomingSession({
+          const delegated = await subagentFaculty.delegateWyomingSession({
             message,
             routing: routingDecision.routing,
           });
           safeguardAuditTrail.append('wyoming.routing.delegated', {
             channelId: message.channelId,
             messageId: message.id,
-            shardId: delegated.shardId,
+            subagentId: delegated.subagentId,
             connectionId: routingDecision.routing?.connectionId,
             sessionId: routingDecision.routing?.sessionId,
             turnId: routingDecision.routing?.turnId,

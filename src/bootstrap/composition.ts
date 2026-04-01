@@ -29,6 +29,7 @@ import type { MemoryStore } from '../memory/store.js';
 import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
 import { createSpawnShardTool } from '../shards/tools.js';
+import { SubagentFaculty } from '../subagents/faculty.js';
 import { createThinkTool } from '../repl/tools.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
 import {
@@ -44,6 +45,7 @@ import type { CharacterCardV2 } from '../identity/types.js';
 import type { LLMProvider, EmbeddingService } from '../agent/contracts.js';
 import type { PromptRegistryStore } from '../identity/prompt-registry.js';
 import type { ShardAuditTrail } from '../shards/manager.js';
+import type { SubagentAuditTrail } from '../subagents/faculty.js';
 import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
 import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
@@ -262,14 +264,31 @@ export interface ToolRuntimeOptions {
   scheduler?: Scheduler | null;
   replConfig?: REPLConfig;
   shardAuditTrail?: ShardAuditTrail | null;
+  subagentAuditTrail?: SubagentAuditTrail | null;
   runtimeMode?: RuntimeMode;
   getCapabilityTier?: () => CapabilityTier;
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ConfirmationQueue | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
+  onSubagentFacultyReady?: (faculty: SubagentFaculty) => void;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardManager {
+  const subagentFaculty = new SubagentFaculty({
+    eventBus: options.eventBus,
+    llmProvider: options.llmProvider,
+    sessionStore: options.sessionStore,
+    embeddingService: options.embeddingService,
+    memoryProvider: options.agentLoop.memoryProvider,
+    config: options.config,
+    parentSystemPrompt: options.parentSystemPrompt,
+    taskToolsets: options.config.shardToolsets,
+    toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
+    auditTrail: options.subagentAuditTrail ?? options.shardAuditTrail ?? undefined,
+    runtimeMode: options.runtimeMode,
+  });
+  options.onSubagentFacultyReady?.(subagentFaculty);
+
   const shardManager = new ShardManager({
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,

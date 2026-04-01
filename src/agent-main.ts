@@ -18,6 +18,7 @@ import { getSharedAudioEmotionClassifier } from './emotion/audio-classifier.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { GatewayClient } from './gateway/client.js';
+import { SubagentFaculty } from './subagents/faculty.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from './security/policy-constants.js';
 import type { ApiServer } from './channels/api/server.js';
 import { createApiVoiceWebSocketRuntime } from './channels/api/voice-websocket-runtime.js';
@@ -166,6 +167,13 @@ const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const NETWORK_ISOLATION_PROBE_URL = 'http://1.1.1.1/cdn-cgi/trace';
 const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
 const COMPACTION_GUIDELINE_REVIEW_TASK_ID = 'compaction-guideline-review';
+
+function requireSubagentFaculty(faculty: SubagentFaculty | null): SubagentFaculty {
+  if (!faculty) {
+    throw new Error('Subagent faculty was not initialized during runtime composition.');
+  }
+  return faculty;
+}
 
 function logStartupHydrationDiagnostics(diagnostics: StartupConfigHydrationDiagnostics): void {
   if (diagnostics.modelsMigratedFromLegacySettings) {
@@ -673,6 +681,7 @@ async function main(): Promise<void> {
   log.info('Split module registry path resolved', { moduleRegistryPath });
 
   const replConfig = buildReplConfig(config);
+  let subagentFaculty: SubagentFaculty | null = null;
   const shardManager = wireShardAndThinkRuntime({
     agentLoop,
     eventBus,
@@ -692,6 +701,9 @@ async function main(): Promise<void> {
     moduleInstallConfirmationQueue: cardProposalQueue,
     onModuleRegistryMutation: async (mutation) => {
       await moduleLoader.applyRegistryMutation(mutation);
+    },
+    onSubagentFacultyReady: (faculty) => {
+      subagentFaculty = faculty;
     },
   });
 
@@ -984,6 +996,7 @@ async function main(): Promise<void> {
       sessionManager,
       scheduler,
       shardManager,
+      subagentFaculty: requireSubagentFaculty(subagentFaculty),
       eventBus,
       characterCard: card,
       config,
@@ -1151,7 +1164,7 @@ async function main(): Promise<void> {
   registerGatewayMessageHandlers({
     gateway,
     agentLoop,
-    shardManager,
+    subagentFaculty: requireSubagentFaculty(subagentFaculty),
     safeguardAuditTrail,
     config,
     log,

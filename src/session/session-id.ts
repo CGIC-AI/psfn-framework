@@ -6,7 +6,9 @@ function normalizePrefix(prefix: string): string | null {
 }
 
 export function isInternalSessionId(sessionId: string): boolean {
-  return sessionId.startsWith('internal:') || sessionId.startsWith('shard:');
+  return sessionId.startsWith('internal:')
+    || sessionId.startsWith('subagent:')
+    || sessionId.startsWith('shard:');
 }
 
 export function inferSessionChannelType(sessionId: string): string | undefined {

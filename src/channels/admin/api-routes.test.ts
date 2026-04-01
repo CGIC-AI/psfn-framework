@@ -14,6 +14,7 @@ import { SessionStore } from '../../session/store.js';
 import { SessionManager } from '../../session/manager.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
+import { SubagentFaculty } from '../../subagents/faculty.js';
 import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
 import { PromptRegistryStore } from '../../identity/prompt-registry.js';
@@ -423,6 +424,7 @@ describe('AdminServer JSON API routes', () => {
   let sessionManager: SessionManager;
   let scheduler: Scheduler;
   let shardManager: ShardManager;
+  let subagentFaculty: SubagentFaculty;
   let contactStore: ContactStore;
   let promptStore: PromptLayerStore;
   let promptRegistry: PromptRegistryStore;
@@ -459,6 +461,16 @@ describe('AdminServer JSON API routes', () => {
     sessionStore = new SessionStore(sessionsDir);
     sessionManager = new SessionManager(sessionStore, testConfig, eventBus);
     scheduler = new Scheduler(eventBus);
+    const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
+    subagentFaculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLlmProvider,
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: testConfig,
+      parentSystemPrompt: '',
+    });
     contactStore = new ContactStore(db, 'primary-user');
     promptStore = new PromptLayerStore(
       join(tempDir, 'prompt-layers.json'),
@@ -483,7 +495,6 @@ describe('AdminServer JSON API routes', () => {
       state: 'idle',
     });
 
-    const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
     shardManager = new ShardManager({
       eventBus,
       llmProvider: mockLlmProvider,
@@ -602,6 +613,7 @@ describe('AdminServer JSON API routes', () => {
       sessionManager,
       scheduler,
       shardManager,
+      subagentFaculty,
       eventBus,
       characterCard: testCard,
       config: testConfig,

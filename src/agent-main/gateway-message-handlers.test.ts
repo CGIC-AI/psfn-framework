@@ -52,7 +52,7 @@ function createHarness(overrides?: {
     message: SubstrateMessage;
     routing?: WyomingRoutingMetadata;
   }) => Promise<{
-    shardId: string;
+    subagentId: string;
     content: string;
     model: string;
     inputTokens: number;
@@ -81,13 +81,13 @@ function createHarness(overrides?: {
   const agentLoop = {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
   };
-  const shardManager = {
+  const subagentFaculty = {
     delegateWyomingSession: vi.fn(
       overrides?.delegateWyomingSession
       ?? (async () => ({
-        shardId: 'wyoming-shard-1',
+        subagentId: 'wyoming-subagent-1',
         content: 'delegated response',
-        model: 'shard-model',
+        model: 'subagent-model',
         inputTokens: 3,
         outputTokens: 7,
         durationMs: 42,
@@ -110,7 +110,7 @@ function createHarness(overrides?: {
   registerGatewayMessageHandlers({
     gateway,
     agentLoop,
-    shardManager,
+    subagentFaculty,
     safeguardAuditTrail,
     config,
     log,
@@ -124,7 +124,7 @@ function createHarness(overrides?: {
   return {
     gateway,
     agentLoop,
-    shardManager,
+    subagentFaculty,
     safeguardAuditTrail,
     log,
     trackSessionActivity,
@@ -134,14 +134,14 @@ function createHarness(overrides?: {
 }
 
 describe('registerGatewayMessageHandlers', () => {
-  it('delegates eligible Wyoming voice messages to shard manager and returns delegated response', async () => {
+  it('delegates eligible Wyoming voice messages to subagent faculty and returns delegated response', async () => {
     const harness = createHarness();
     const message = makeMessage();
 
     const response = await harness.onHandleMessage(message);
 
     expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
-    expect(harness.shardManager.delegateWyomingSession).toHaveBeenCalledWith({
+    expect(harness.subagentFaculty.delegateWyomingSession).toHaveBeenCalledWith({
       message,
       routing: message.routing?.wyoming,
     });
@@ -150,7 +150,7 @@ describe('registerGatewayMessageHandlers', () => {
       content: 'delegated response',
       channelId: message.channelId,
       metadata: {
-        model: 'shard-model',
+        model: 'subagent-model',
         inputTokens: 3,
         outputTokens: 7,
         durationMs: 42,
@@ -170,7 +170,7 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.safeguardAuditTrail.append).toHaveBeenNthCalledWith(2, 'wyoming.routing.delegated', {
       channelId: message.channelId,
       messageId: message.id,
-      shardId: 'wyoming-shard-1',
+      subagentId: 'wyoming-subagent-1',
       connectionId: 'conn-1',
       sessionId: 'session-1',
       turnId: 'turn-1',
@@ -345,7 +345,7 @@ describe('registerGatewayMessageHandlers', () => {
 
     expect(first).toEqual(second);
     expect(harness.trackSessionActivity).toHaveBeenCalledTimes(1);
-    expect(harness.shardManager.delegateWyomingSession).toHaveBeenCalledTimes(1);
+    expect(harness.subagentFaculty.delegateWyomingSession).toHaveBeenCalledTimes(1);
     expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
       route: 'handle',
       channelId: message.channelId,

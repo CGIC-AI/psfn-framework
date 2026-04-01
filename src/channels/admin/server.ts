@@ -82,6 +82,7 @@ export class AdminServer implements Lifecycle {
       sessionManager: config.sessionManager,
       scheduler: config.scheduler,
       shardManager: config.shardManager,
+      subagentFaculty: config.subagentFaculty,
       eventBus: config.eventBus,
     });
     this.memoryService = new AdminMemoryDataService({

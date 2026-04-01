@@ -19,7 +19,7 @@ export function createSpawnShardTool(
       'Spawn a sub-agent shard for parallel task execution. ' +
       'Multiple spawn_shard calls in the same turn run concurrently. ' +
       'Shard runtime remains distinct from bounded subagent tasks, preserves a stable shard prompt prefix, '
-      + 'and completes only after artifact delivery.',
+      + 'and keeps fold-back outputs pending explicit merge review before core-state promotion.',
     label: 'spawn_shard',
     parameters: Type.Object({
       name: Type.String({ description: 'Short label for this shard (e.g. "research", "analysis")' }),
@@ -88,8 +88,12 @@ export function createSpawnShardTool(
         });
 
         const artifact = artifactReturnPort.returnArtifact(result);
-        if (typeof shardPort.markArtifactDelivered === 'function') {
-          shardPort.markArtifactDelivered(result.shardId);
+        const reviewAwarePort = shardPort as ShardExecutionPort & {
+          recordArtifactReturn?: (shardId: string) => void;
+          markArtifactDelivered?: (shardId: string) => void;
+        };
+        if (typeof reviewAwarePort.recordArtifactReturn === 'function') {
+          reviewAwarePort.recordArtifactReturn(result.shardId);
         }
         return artifact;
       } catch (error) {

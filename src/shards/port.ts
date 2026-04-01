@@ -1,3 +1,5 @@
+import type { AgentToolResult } from '@mariozechner/pi-agent-core';
+
 export type { SubagentExecutionPort } from '../subagents/port.js';
 export type { SubagentExecutionRequest, SubagentResult } from '../subagents/types.js';
 import type { ShardConfig, ShardResult } from './types.js';
@@ -9,6 +11,7 @@ export type ExecutionPortFamily = typeof EXECUTION_PORT_FAMILIES[number];
 export interface ShardExecutionPort {
   readonly portFamily: 'shard';
   spawn(shardConfig: ShardConfig): Promise<ShardResult>;
+  recordArtifactReturn(shardId: string): void;
   markArtifactDelivered(shardId: string): void;
 }
 

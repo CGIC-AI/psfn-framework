@@ -20,6 +20,19 @@ export type ShardRuntimeState =
   | 'failed';
 export type ShardArtifactLifecycleState = 'pending' | 'available' | 'delivered' | 'none';
 export type ShardResumeMode = 'none' | 'delivery';
+export type ShardTaggedOutputKind = 'l0_output' | 'l2_memory';
+export type ShardTaggedOutputSource = 'shard_final_response' | 'memory_write' | 'memory_import_batch';
+export type ShardTaggedOutputReviewState = 'pending' | 'approved';
+export type ShardMergeReviewStatus = 'none' | 'pending' | 'approved';
+export type ShardWorkLogEvent =
+  | 'context_seeded'
+  | 'task_declared'
+  | 'tool_invoked'
+  | 'l2_memory_staged'
+  | 'artifact_ready'
+  | 'artifact_returned'
+  | 'merge_review_pending'
+  | 'merge_review_approved';
 
 export interface ShardSourceContext {
   channelId: string;
@@ -57,6 +70,51 @@ export interface ShardPromptDiscipline {
   stablePrefix: string;
   remit: string;
   guardrails: string[];
+}
+
+export interface ShardTaggedOutputProvenance {
+  coreCompanionId: string;
+  shardCompanionId: string;
+  shardId: string;
+  channelId: string;
+  task: string;
+  source: ShardTaggedOutputSource;
+  sourceToolName?: string;
+  toolCallId?: string;
+  tags: string[];
+}
+
+export interface ShardTaggedOutput {
+  outputId: string;
+  kind: ShardTaggedOutputKind;
+  label: string;
+  content: string;
+  preview: string;
+  createdAt: number;
+  reviewRequired: boolean;
+  reviewState: ShardTaggedOutputReviewState;
+  blockedCorePromotion: boolean;
+  provenance: ShardTaggedOutputProvenance;
+}
+
+export interface ShardWorkLogEntry {
+  entryId: string;
+  event: ShardWorkLogEvent;
+  timestamp: number;
+  message: string;
+  details: string[];
+}
+
+export interface ShardMergeReview {
+  required: boolean;
+  status: ShardMergeReviewStatus;
+  validationPath: string;
+  requestedAt?: number;
+  artifactReturnedAt?: number;
+  approvedAt?: number;
+  lastUpdatedAt: number;
+  pendingTaggedOutputCount: number;
+  blockingReasons: string[];
 }
 
 export interface ShardConfig {
@@ -99,6 +157,9 @@ export interface ShardResult {
   requiredCapabilities: string[];
   lineage: ShardLineage;
   gatewayRouting: GatewayRoutingEnvelope;
+  taggedOutputs: ShardTaggedOutput[];
+  workLog: ShardWorkLogEntry[];
+  mergeReview: ShardMergeReview;
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';
@@ -136,6 +197,9 @@ export interface ShardRuntimeRecord {
   requiredCapabilities: string[];
   lineage: ShardLineage;
   gatewayRouting: GatewayRoutingEnvelope;
+  taggedOutputs: ShardTaggedOutput[];
+  workLog: ShardWorkLogEntry[];
+  mergeReview: ShardMergeReview;
 }
 
 export interface ShardRuntimeArtifactView {
@@ -143,6 +207,9 @@ export interface ShardRuntimeArtifactView {
   lifecycleState: Exclude<ShardArtifactLifecycleState, 'pending' | 'none'>;
   content: string;
   timestamp: number;
+  reviewRequired: boolean;
+  reviewState: ShardTaggedOutputReviewState;
+  provenance: ShardTaggedOutputProvenance;
   deliveredAt?: number;
 }
 
@@ -171,6 +238,9 @@ export interface ShardRuntimeTaskView {
   transcriptMessageCount: number;
   transcriptTruncated: boolean;
   artifacts: ShardRuntimeArtifactView[];
+  taggedOutputs: ShardTaggedOutput[];
+  workLog: ShardWorkLogEntry[];
+  review: ShardMergeReview;
   resume: ShardRuntimeResumeView;
 }
 

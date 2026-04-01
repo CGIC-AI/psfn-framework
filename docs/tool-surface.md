@@ -58,6 +58,22 @@ The runtime now exposes a unified model-facing `schedule` tool for time-based co
 
 This keeps durable reminders, proactive follow-ups, birthdays, anniversaries, self-reminders, and timed work under one semantic faculty instead of scattering them across ad hoc timer micro-tools.
 
+## Live Session Surface
+
+The runtime now exposes a unified model-facing `session` tool for continuity, transcript lookup, resumption, and focus workflow.
+
+- Primary actions: `list`, `new`, `resume`, `search`, `grep`, `start_focus`, `complete_focus`
+- Migration aliases remain available inside the same tool:
+  `session_list` -> `list`
+  `session_new` -> `new`
+  `session_resume` -> `resume`
+  `session_search` -> `search`
+  `session_grep` -> `grep`
+  `focus_start` -> `start_focus`
+  `focus_complete` -> `complete_focus`
+
+This keeps continuity choice simple for the model while preserving the existing session-management invariants and focus lifecycle behavior.
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals

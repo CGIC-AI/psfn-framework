@@ -114,31 +114,16 @@ describe('wireSessionToolsRuntime', () => {
     wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls).toHaveLength(7);
-    expect(calls.map(([tool]) => tool.name).sort()).toEqual([
-      'complete_focus',
-      'session_grep',
-      'session_list',
-      'session_new',
-      'session_resume',
-      'session_search',
-      'start_focus',
-    ]);
-    expect(calls.find(([tool]) => tool.name === 'session_list')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'session_search')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'session_grep')?.[1]).toBe('core');
-    expect(
-      calls
-        .filter(([tool]) => !['session_list', 'session_search', 'session_grep'].includes(tool.name))
-        .every(([, category]) => category === 'extended'),
-    ).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls.map(([tool]) => tool.name)).toEqual(['session']);
+    expect(calls[0]?.[1]).toBe('core');
 
-    const sessionNewTool = calls.find(([tool]) => tool.name === 'session_new')?.[0] as {
+    const sessionTool = calls.find(([tool]) => tool.name === 'session')?.[0] as {
       execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ details: Record<string, unknown> }>;
     };
-    expect(sessionNewTool).toBeDefined();
+    expect(sessionTool).toBeDefined();
 
-    const result = await sessionNewTool.execute('call-session-new', {});
+    const result = await sessionTool.execute('call-session-new', { action: 'new' });
     const details = result.details as {
       newSessionId: string;
       previousSessionId: string | null;

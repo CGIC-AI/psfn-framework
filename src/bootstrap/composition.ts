@@ -30,6 +30,7 @@ import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
 import { createSpawnShardTool } from '../shards/tools.js';
 import { SubagentFaculty } from '../subagents/faculty.js';
+import { createSubagentTool } from '../subagents/tools.js';
 import { createThinkTool } from '../repl/tools.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
 import {
@@ -288,6 +289,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
     runtimeMode: options.runtimeMode,
   });
   options.onSubagentFacultyReady?.(subagentFaculty);
+  options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'extended');
 
   const shardManager = new ShardManager({
     eventBus: options.eventBus,

@@ -69,6 +69,15 @@ export class SubagentTaskRegistry {
     return this.finishTask(subagentId, 'failed', reason, finishedAt, failureReason);
   }
 
+  markCancelled(
+    subagentId: string,
+    reason: string,
+    finishedAt = Date.now(),
+    failureReason?: string,
+  ): SubagentTaskRecord {
+    return this.finishTask(subagentId, 'cancelled', reason, finishedAt, failureReason);
+  }
+
   getActiveCount(): number {
     return this.activeTasks.size;
   }
@@ -112,7 +121,7 @@ export class SubagentTaskRegistry {
 
   private finishTask(
     subagentId: string,
-    nextState: Extract<SubagentTaskLifecycleState, 'completed' | 'failed'>,
+    nextState: Extract<SubagentTaskLifecycleState, 'completed' | 'failed' | 'cancelled'>,
     reason: string,
     finishedAt: number,
     failureReason?: string,

@@ -24,11 +24,12 @@ import type { SessionStore } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
 import { inferSessionChannelType } from '../session/session-id.js';
 import { toErrorMessage } from '../utils/errors.js';
-import type { SubagentExecutionPort } from './port.js';
+import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type {
   SubagentExecutionRequest,
   SubagentRuntimeArtifactView,
+  SubagentRuntimeTaskDetail,
   SubagentRuntimeResumeView,
   SubagentRuntimeSnapshot,
   SubagentRuntimeSnapshotOptions,
@@ -40,6 +41,7 @@ import type {
 
 const DEFAULT_MAX_CONCURRENT = 8;
 const DEFAULT_MAX_TURNS = 1;
+const DEFAULT_RECENT_RESULT_LIMIT = 25;
 const DEFAULT_SUBAGENT_CAPABILITIES = ['general'] as const;
 const SUBAGENT_TOOLSET_ALL = '*';
 const APPRENTICE_SUBAGENT_TOOL_EXTRAS = [
@@ -61,6 +63,8 @@ const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonl
 };
 
 const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['spawn_shard', 'load_tools']);
+const SUBAGENT_CONTROL_AUTHOR_ID = 'system:subagent-control';
+const SUBAGENT_CONTROL_AUTHOR_NAME = 'SubagentControl';
 
 export interface SubagentToolCatalog {
   core: readonly AgentTool<any>[];
@@ -97,12 +101,32 @@ export interface WyomingSubagentDelegationResult {
   gatewayRouting: GatewayRoutingEnvelope;
 }
 
-export class SubagentFaculty implements SubagentExecutionPort {
+interface ActiveSubagentHandle {
+  subagentId: string;
+  request: SubagentExecutionRequest;
+  baseMessage: SubstrateMessage;
+  channelId: string;
+  startTime: number;
+  maxTurns: number;
+  capabilities: string[];
+  requiredCapabilities: string[];
+  agentLoop: SubstrateAgent | null;
+  pendingMessages: SubstrateMessage[];
+  cancelReason?: string;
+  completion: Promise<SubagentResult>;
+  resolveCompletion: (result: SubagentResult) => void;
+  settled: boolean;
+}
+
+export class SubagentFaculty implements SubagentControlPort {
   readonly portFamily = 'subagent' as const;
 
   private readonly maxConcurrent: number;
   private readonly taskRegistry = new SubagentTaskRegistry();
   private readonly auditTrail: SubagentAuditTrail | null;
+  private readonly activeHandles = new Map<string, ActiveSubagentHandle>();
+  private readonly recentResults = new Map<string, SubagentResult>();
+  private readonly recentResultIds: string[] = [];
 
   constructor(private readonly deps: SubagentFacultyDeps) {
     this.maxConcurrent = Math.max(1, Math.trunc(deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT));
@@ -110,6 +134,17 @@ export class SubagentFaculty implements SubagentExecutionPort {
   }
 
   async execute(request: SubagentExecutionRequest): Promise<SubagentResult> {
+    const task = await this.spawn(request);
+    const result = await this.wait(task.subagentId);
+    if (result.lifecycleState === 'completed') {
+      return result;
+    }
+    const failureReason = result.failureReason ?? result.stateReason;
+    const terminalState = result.lifecycleState === 'cancelled' ? 'cancelled' : 'failed';
+    throw new Error(`Subagent "${result.name}" ${terminalState} (${result.stateReason}): ${failureReason}`);
+  }
+
+  async spawn(request: SubagentExecutionRequest): Promise<SubagentTaskRecord> {
     if (this.taskRegistry.getActiveCount() >= this.maxConcurrent) {
       throw new Error(
         `Subagent limit reached (${this.maxConcurrent} concurrent). Wait for active subagent tasks to finish.`,
@@ -165,6 +200,96 @@ export class SubagentFaculty implements SubagentExecutionPort {
       workerProfileClass: workerExecution.profileClass,
       modelPurpose: workerExecution.modelPurpose,
     });
+    const completion = createDeferred<SubagentResult>();
+    const handle: ActiveSubagentHandle = {
+      subagentId,
+      request,
+      baseMessage,
+      channelId: executionChannelId,
+      startTime,
+      maxTurns,
+      capabilities,
+      requiredCapabilities,
+      agentLoop: null,
+      pendingMessages: [],
+      completion: completion.promise,
+      resolveCompletion: completion.resolve,
+      settled: false,
+    };
+    this.activeHandles.set(subagentId, handle);
+    queueMicrotask(() => {
+      void this.runHandle(handle);
+    });
+    return task;
+  }
+
+  async message(subagentId: string, message: string): Promise<SubagentRuntimeTaskView> {
+    const handle = this.requireActiveHandle(subagentId);
+    if (this.isCancellationRequested(handle)) {
+      throw new Error(`Subagent "${subagentId}" is cancelling and cannot accept new messages.`);
+    }
+    const content = normalizeRequiredText(message, 'message');
+    const followUp = this.buildControlMessage(handle.channelId, content);
+    if (handle.agentLoop) {
+      handle.agentLoop.followUp(followUp);
+    } else {
+      handle.pendingMessages.push(followUp);
+    }
+    this.auditTrail?.append('subagent.message.queued', {
+      subagentId,
+      channelId: handle.channelId,
+      deliveryState: handle.agentLoop ? 'running' : 'queued',
+    });
+    const taskView = this.getRuntimeTaskView(subagentId, { transcriptLimit: 8 });
+    if (!taskView) {
+      throw new Error(`Unknown subagent task "${subagentId}".`);
+    }
+    return taskView;
+  }
+
+  async wait(subagentId: string): Promise<SubagentResult> {
+    const activeHandle = this.activeHandles.get(subagentId);
+    if (activeHandle) {
+      return cloneSubagentResult(await activeHandle.completion);
+    }
+
+    const recentResult = this.recentResults.get(subagentId);
+    if (recentResult) {
+      return cloneSubagentResult(recentResult);
+    }
+
+    throw new Error(`Unknown subagent task "${subagentId}".`);
+  }
+
+  async cancel(subagentId: string, reason?: string): Promise<SubagentResult> {
+    const handle = this.activeHandles.get(subagentId);
+    if (!handle) {
+      const recentResult = this.recentResults.get(subagentId);
+      if (recentResult) {
+        return cloneSubagentResult(recentResult);
+      }
+      throw new Error(`Unknown subagent task "${subagentId}".`);
+    }
+
+    if (!this.isCancellationRequested(handle)) {
+      handle.cancelReason = normalizeOptionalText(reason) ?? 'cancel_requested';
+      this.auditTrail?.append('subagent.cancel.requested', {
+        subagentId,
+        channelId: handle.channelId,
+        reason: handle.cancelReason,
+      });
+      if (handle.agentLoop) {
+        handle.agentLoop.abort();
+      } else {
+        this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
+      }
+    }
+
+    return cloneSubagentResult(await handle.completion);
+  }
+
+  private async runHandle(handle: ActiveSubagentHandle): Promise<void> {
+    if (handle.settled) return;
 
     try {
       const sessionManager = new SessionManager(
@@ -176,12 +301,13 @@ export class SubagentFaculty implements SubagentExecutionPort {
         this.deps.eventBus,
         this.deps.llmProvider,
         sessionManager,
-        request.systemPrompt ?? this.deps.parentSystemPrompt,
+        handle.request.systemPrompt ?? this.deps.parentSystemPrompt,
         this.deps.config,
         {
           runtimeMode: this.deps.runtimeMode ?? 'single',
         },
       );
+      handle.agentLoop = agentLoop;
 
       if (this.deps.memoryProvider) {
         agentLoop.memoryProvider = this.deps.memoryProvider;
@@ -192,12 +318,18 @@ export class SubagentFaculty implements SubagentExecutionPort {
         agentLoop.registerTool(tool);
       }
       this.auditTrail?.append('subagent.tools.injected', {
-        subagentId,
+        subagentId: handle.subagentId,
         tier: this.resolveCapabilityTier(),
         tools: injectedTools.map(tool => tool.name),
       });
 
-      this.transitionTask(subagentId, 'running', 'agent_initialized', startTime);
+      if (this.isCancellationRequested(handle)) {
+        this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
+        return;
+      }
+
+      this.transitionTask(handle.subagentId, 'running', 'agent_initialized', handle.startTime);
+      this.flushPendingMessages(handle);
 
       let totalInput = 0;
       let totalOutput = 0;
@@ -205,12 +337,12 @@ export class SubagentFaculty implements SubagentExecutionPort {
       let lastContent = '';
       let turns = 0;
 
-      for (let turn = 0; turn < maxTurns; turn++) {
+      for (let turn = 0; turn < handle.maxTurns; turn++) {
         const turnMessage = turn === 0
-          ? baseMessage
+          ? handle.baseMessage
           : {
-            ...baseMessage,
-            id: `${subagentId}-turn-${turn}`,
+            ...handle.baseMessage,
+            id: `${handle.subagentId}-turn-${turn}`,
             content: lastContent,
           };
         const response = await agentLoop.handleMessage(turnMessage);
@@ -220,70 +352,48 @@ export class SubagentFaculty implements SubagentExecutionPort {
         lastContent = response.content;
         turns += 1;
 
-        if (turn === 0 && maxTurns === 1) break;
+        if (this.isCancellationRequested(handle)) {
+          this.finishHandle(handle, this.finalizeCancelled(
+            handle,
+            totalInput,
+            totalOutput,
+            lastModel,
+            lastContent,
+            turns,
+          ));
+          return;
+        }
+
+        if (turn === 0 && handle.maxTurns === 1) break;
       }
 
-      const previous = this.taskRegistry.getActiveTask(subagentId);
-      const completed = this.taskRegistry.markCompleted(subagentId, 'completed', Date.now());
-      this.auditTrail?.append('subagent.lifecycle.transition', {
-        subagentId,
-        from: previous?.lifecycleState ?? 'running',
-        to: completed.lifecycleState,
-        reason: completed.stateReason,
-        workerLane: completed.workerLane,
-        channelId: completed.channelId,
-      });
-
-      const result: SubagentResult = {
-        subagentId,
-        name: request.name,
-        content: lastContent,
-        model: lastModel,
-        inputTokens: totalInput,
-        outputTokens: totalOutput,
-        durationMs: Date.now() - startTime,
+      this.finishHandle(handle, this.finalizeCompleted(
+        handle,
+        totalInput,
+        totalOutput,
+        lastModel,
+        lastContent,
         turns,
-        workerLane: SUBAGENT_WORKER_LANE,
-        lifecycleState: 'completed',
-        stateReason: completed.stateReason,
-        capabilities: [...capabilities],
-        requiredCapabilities: [...requiredCapabilities],
-      };
-      this.auditTrail?.append('subagent.execute.end', {
-        subagentId,
-        status: 'completed',
-        durationMs: result.durationMs,
-        turns: result.turns,
-        channelId: executionChannelId,
-      });
-      return result;
+      ));
     } catch (error) {
-      const failureReason = toErrorMessage(error);
-      const previous = this.taskRegistry.getActiveTask(subagentId);
-      const failed = this.taskRegistry.markFailed(
-        subagentId,
-        'execution_failed',
-        failureReason,
-        Date.now(),
-      );
-      this.auditTrail?.append('subagent.lifecycle.transition', {
-        subagentId,
-        from: previous?.lifecycleState ?? 'queued',
-        to: failed.lifecycleState,
-        reason: failed.stateReason,
-        failureReason,
-        workerLane: failed.workerLane,
-        channelId: failed.channelId,
-      });
-      this.auditTrail?.append('subagent.execute.end', {
-        subagentId,
-        status: 'failed',
-        durationMs: Date.now() - startTime,
-        error: failureReason,
-        channelId: executionChannelId,
-      });
-      throw new Error(`Subagent "${request.name}" failed (execution_failed): ${failureReason}`);
+      if (this.isCancellationRequested(handle)) {
+        this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
+        return;
+      }
+      this.finishHandle(handle, this.finalizeFailed(handle, toErrorMessage(error)));
     }
+  }
+
+  getRuntimeTaskDetail(
+    subagentId: string,
+    options: SubagentRuntimeSnapshotOptions = {},
+  ): SubagentRuntimeTaskDetail | null {
+    const view = this.getRuntimeTaskView(subagentId, options);
+    if (!view) return null;
+    const result = this.recentResults.get(subagentId);
+    return result
+      ? { view, result: cloneSubagentResult(result) }
+      : { view };
   }
 
   async delegateWyomingSession(
@@ -378,6 +488,11 @@ export class SubagentFaculty implements SubagentExecutionPort {
     return this.taskRegistry.getRecentTasks(limit);
   }
 
+  getResult(subagentId: string): SubagentResult | null {
+    const result = this.recentResults.get(subagentId);
+    return result ? cloneSubagentResult(result) : null;
+  }
+
   getRuntimeSnapshot(options: SubagentRuntimeSnapshotOptions = {}): SubagentRuntimeSnapshot {
     const taskLimit = normalizePositiveInteger(options.taskLimit, 10);
     const transcriptLimit = normalizePositiveInteger(options.transcriptLimit, 8);
@@ -405,6 +520,204 @@ export class SubagentFaculty implements SubagentExecutionPort {
     }
 
     return this.buildRuntimeTaskView(recent, transcriptLimit);
+  }
+
+  private requireActiveHandle(subagentId: string): ActiveSubagentHandle {
+    const handle = this.activeHandles.get(subagentId);
+    if (!handle) {
+      throw new Error(`Unknown subagent task "${subagentId}".`);
+    }
+    return handle;
+  }
+
+  private isCancellationRequested(handle: ActiveSubagentHandle): boolean {
+    return handle.cancelReason !== undefined;
+  }
+
+  private flushPendingMessages(handle: ActiveSubagentHandle): void {
+    if (!handle.agentLoop || handle.pendingMessages.length === 0) return;
+    const pendingMessages = handle.pendingMessages.splice(0, handle.pendingMessages.length);
+    for (const message of pendingMessages) {
+      handle.agentLoop.followUp(message);
+    }
+  }
+
+  private finishHandle(handle: ActiveSubagentHandle, result: SubagentResult): void {
+    if (handle.settled) return;
+    handle.settled = true;
+    this.activeHandles.delete(handle.subagentId);
+    this.storeRecentResult(result);
+    handle.resolveCompletion(cloneSubagentResult(result));
+  }
+
+  private storeRecentResult(result: SubagentResult): void {
+    this.recentResults.set(result.subagentId, cloneSubagentResult(result));
+    const existingIndex = this.recentResultIds.indexOf(result.subagentId);
+    if (existingIndex >= 0) {
+      this.recentResultIds.splice(existingIndex, 1);
+    }
+    this.recentResultIds.unshift(result.subagentId);
+    while (this.recentResultIds.length > DEFAULT_RECENT_RESULT_LIMIT) {
+      const evicted = this.recentResultIds.pop();
+      if (evicted) {
+        this.recentResults.delete(evicted);
+      }
+    }
+  }
+
+  private finalizeCompleted(
+    handle: ActiveSubagentHandle,
+    totalInput: number,
+    totalOutput: number,
+    lastModel: string,
+    lastContent: string,
+    turns: number,
+  ): SubagentResult {
+    const previous = this.taskRegistry.getActiveTask(handle.subagentId);
+    const completed = this.taskRegistry.markCompleted(handle.subagentId, 'completed', Date.now());
+    this.auditTrail?.append('subagent.lifecycle.transition', {
+      subagentId: handle.subagentId,
+      from: previous?.lifecycleState ?? 'running',
+      to: completed.lifecycleState,
+      reason: completed.stateReason,
+      workerLane: completed.workerLane,
+      channelId: completed.channelId,
+    });
+    const result: SubagentResult = {
+      subagentId: handle.subagentId,
+      name: handle.request.name,
+      content: lastContent,
+      model: lastModel,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      durationMs: Date.now() - handle.startTime,
+      turns,
+      workerLane: SUBAGENT_WORKER_LANE,
+      lifecycleState: 'completed',
+      stateReason: completed.stateReason,
+      capabilities: [...handle.capabilities],
+      requiredCapabilities: [...handle.requiredCapabilities],
+    };
+    this.auditTrail?.append('subagent.execute.end', {
+      subagentId: handle.subagentId,
+      status: 'completed',
+      durationMs: result.durationMs,
+      turns: result.turns,
+      channelId: handle.channelId,
+    });
+    return result;
+  }
+
+  private finalizeCancelled(
+    handle: ActiveSubagentHandle,
+    totalInput: number,
+    totalOutput: number,
+    lastModel: string,
+    lastContent: string,
+    turns: number,
+  ): SubagentResult {
+    const previous = this.taskRegistry.getActiveTask(handle.subagentId);
+    const cancelled = this.taskRegistry.markCancelled(
+      handle.subagentId,
+      'cancel_requested',
+      Date.now(),
+      handle.cancelReason,
+    );
+    this.auditTrail?.append('subagent.lifecycle.transition', {
+      subagentId: handle.subagentId,
+      from: previous?.lifecycleState ?? 'queued',
+      to: cancelled.lifecycleState,
+      reason: cancelled.stateReason,
+      ...(handle.cancelReason ? { failureReason: handle.cancelReason } : {}),
+      workerLane: cancelled.workerLane,
+      channelId: cancelled.channelId,
+    });
+    const result: SubagentResult = {
+      subagentId: handle.subagentId,
+      name: handle.request.name,
+      content: lastContent,
+      model: lastModel,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      durationMs: Date.now() - handle.startTime,
+      turns,
+      workerLane: SUBAGENT_WORKER_LANE,
+      lifecycleState: 'cancelled',
+      stateReason: cancelled.stateReason,
+      ...(handle.cancelReason ? { failureReason: handle.cancelReason } : {}),
+      capabilities: [...handle.capabilities],
+      requiredCapabilities: [...handle.requiredCapabilities],
+    };
+    this.auditTrail?.append('subagent.execute.end', {
+      subagentId: handle.subagentId,
+      status: 'cancelled',
+      durationMs: result.durationMs,
+      turns: result.turns,
+      ...(handle.cancelReason ? { error: handle.cancelReason } : {}),
+      channelId: handle.channelId,
+    });
+    return result;
+  }
+
+  private finalizeFailed(
+    handle: ActiveSubagentHandle,
+    failureReason: string,
+  ): SubagentResult {
+    const previous = this.taskRegistry.getActiveTask(handle.subagentId);
+    const failed = this.taskRegistry.markFailed(
+      handle.subagentId,
+      'execution_failed',
+      failureReason,
+      Date.now(),
+    );
+    this.auditTrail?.append('subagent.lifecycle.transition', {
+      subagentId: handle.subagentId,
+      from: previous?.lifecycleState ?? 'queued',
+      to: failed.lifecycleState,
+      reason: failed.stateReason,
+      failureReason,
+      workerLane: failed.workerLane,
+      channelId: failed.channelId,
+    });
+    const result: SubagentResult = {
+      subagentId: handle.subagentId,
+      name: handle.request.name,
+      content: '',
+      model: '',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: Date.now() - handle.startTime,
+      turns: 0,
+      workerLane: SUBAGENT_WORKER_LANE,
+      lifecycleState: 'failed',
+      stateReason: failed.stateReason,
+      failureReason,
+      capabilities: [...handle.capabilities],
+      requiredCapabilities: [...handle.requiredCapabilities],
+    };
+    this.auditTrail?.append('subagent.execute.end', {
+      subagentId: handle.subagentId,
+      status: 'failed',
+      durationMs: result.durationMs,
+      error: failureReason,
+      channelId: handle.channelId,
+    });
+    return result;
+  }
+
+  private buildControlMessage(channelId: string, content: string): SubstrateMessage {
+    return {
+      id: `subagent-control-${randomUUID()}`,
+      channelId,
+      channelType: inferSessionChannelType(channelId) ?? 'api',
+      authorId: SUBAGENT_CONTROL_AUTHOR_ID,
+      authorName: SUBAGENT_CONTROL_AUTHOR_NAME,
+      content,
+      timestamp: new Date(),
+      routing: {
+        workerExecution: createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE),
+      },
+    };
   }
 
   private buildBaseMessage(
@@ -606,4 +919,37 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
     ? Math.trunc(value)
     : fallback;
   return Math.max(1, normalized);
+}
+
+function normalizeOptionalText(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeRequiredText(value: string, field: string): string {
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) {
+    throw new Error(`${field} is required.`);
+  }
+  return normalized;
+}
+
+function cloneSubagentResult(result: SubagentResult): SubagentResult {
+  return {
+    ...result,
+    capabilities: [...result.capabilities],
+    requiredCapabilities: [...result.requiredCapabilities],
+  };
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }

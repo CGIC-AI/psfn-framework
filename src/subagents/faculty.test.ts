@@ -18,9 +18,13 @@ import { SubagentFaculty } from './faculty.js';
 
 let mockSubagentContent = 'subagent response';
 let mockSubagentError: Error | null = null;
+let mockSubagentDelayMs = 0;
 
 const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
   if (mockSubagentError) throw mockSubagentError;
+  if (mockSubagentDelayMs > 0) {
+    await new Promise(resolve => setTimeout(resolve, mockSubagentDelayMs));
+  }
   this.appendMessage({
     role: 'assistant',
     content: [{ type: 'text' as const, text: mockSubagentContent }],
@@ -142,6 +146,7 @@ describe('SubagentFaculty', () => {
     sessionStore = new SessionStore(root);
     mockSubagentContent = 'subagent response';
     mockSubagentError = null;
+    mockSubagentDelayMs = 0;
     promptSpy.mockClear();
   });
 
@@ -236,6 +241,75 @@ describe('SubagentFaculty', () => {
         content: 'task completed',
       }),
     ]);
+  });
+
+  it('supports bounded spawn, follow-up message delivery, wait, and status detail lookup', async () => {
+    mockSubagentContent = 'interactive result';
+    mockSubagentDelayMs = 20;
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const task = await faculty.spawn({
+      name: 'inspect',
+      task: 'inspect runtime state',
+    });
+    expect(task.lifecycleState).toBe('queued');
+
+    await faculty.message(task.subagentId, 'look at uncommitted changes first');
+    const result = await faculty.wait(task.subagentId);
+
+    expect(result.lifecycleState).toBe('completed');
+    expect(result.content).toBe('interactive result');
+
+    const detail = faculty.getRuntimeTaskDetail(task.subagentId, { transcriptLimit: 10 });
+    expect(detail?.result).toMatchObject({
+      subagentId: task.subagentId,
+      lifecycleState: 'completed',
+    });
+    expect(detail?.view.task.lifecycleState).toBe('completed');
+    expect(detail?.view.transcript.some(entry => entry.content.includes('look at uncommitted changes first'))).toBe(true);
+    expect(faculty.getResult(task.subagentId)).toMatchObject({
+      subagentId: task.subagentId,
+      lifecycleState: 'completed',
+    });
+  });
+
+  it('cancels active bounded workers without crossing into shard semantics', async () => {
+    mockSubagentContent = 'late result';
+    mockSubagentDelayMs = 50;
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const task = await faculty.spawn({
+      name: 'cancel-me',
+      task: 'hold position',
+    });
+
+    const cancelled = await faculty.cancel(task.subagentId, 'operator_cancelled');
+
+    expect(cancelled.lifecycleState).toBe('cancelled');
+    expect(cancelled.stateReason).toBe('cancel_requested');
+    expect(cancelled.failureReason).toBe('operator_cancelled');
+    expect(faculty.getActiveCount()).toBe(0);
+    expect(faculty.getRecentTasks(1)[0]).toMatchObject({
+      subagentId: task.subagentId,
+      lifecycleState: 'cancelled',
+      workerLane: 'subagent',
+    });
   });
 
   it('delegates Wyoming sessions through subagent lifecycle without shard ids', async () => {

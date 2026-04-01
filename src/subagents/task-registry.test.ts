@@ -51,4 +51,23 @@ describe('SubagentTaskRegistry', () => {
       'Invalid subagent task transition for subagent-2: queued -> completed.',
     );
   });
+
+  it('tracks explicit cancellation as a terminal bounded-worker state', () => {
+    const registry = new SubagentTaskRegistry();
+    registry.register({
+      subagentId: 'subagent-3',
+      name: 'cancelled-task',
+      task: 'wait here',
+      channelId: 'subagent:subagent-3',
+      capabilities: ['general'],
+      requiredCapabilities: [],
+    });
+
+    const cancelled = registry.markCancelled('subagent-3', 'cancel_requested', 200, 'operator_cancelled');
+
+    expect(cancelled.lifecycleState).toBe('cancelled');
+    expect(cancelled.finishedAt).toBe(200);
+    expect(cancelled.failureReason).toBe('operator_cancelled');
+    expect(registry.getActiveCount()).toBe(0);
+  });
 });

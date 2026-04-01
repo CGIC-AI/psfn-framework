@@ -97,10 +97,10 @@ Short-lived notes they can read and write within a work session.
 
 Self-authored capability documents.
 
-- [ ] "What skills do you have?" -- `skill_list` `[nursery]`
-- [ ] "Show me the [skill name] skill" -- `skill_view` `[nursery]`
-- [ ] "Create a skill for [topic]" -- `skill_create` `[nursery]`
-- [ ] "Update that skill with [new info]" -- `skill_update` `[nursery]`
+- [ ] "What skills do you have?" -- `skill action="list"` `[nursery]`
+- [ ] "Show me the [skill name] skill" -- `skill action="view"` `[nursery]`
+- [ ] "Create a skill for [topic]" -- `skill action="create"` `[nursery]`
+- [ ] "Update that skill with [new info]" -- `skill action="update"` `[nursery]`
 
 ## Phase 10: Shards (Parallel Agents)
 

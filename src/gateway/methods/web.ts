@@ -44,6 +44,7 @@ interface WebPolicyTestHooks {
 }
 
 type WebFetchMethodName = 'web.fetch' | 'web.fetch_binary';
+type WebFetchActionLane = UrlPolicyLane | 'invalid';
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -96,10 +97,23 @@ function formatFetchProviderError(err: unknown): string {
   return `Fetch failed: ${details}`;
 }
 
-function toLane(value: unknown): UrlPolicyLane {
+function toLane(value: unknown): WebFetchActionLane {
+  if (value === undefined || value === null || value === '') return 'default';
   if (value === 'local_crawler') return 'local_crawler';
   if (value === 'discovery') return 'discovery';
-  return 'default';
+  if (value === 'default') return 'default';
+  return 'invalid';
+}
+
+function resolveLane(value: unknown): UrlPolicyLane {
+  const lane = toLane(value);
+  if (lane === 'invalid') {
+    throw new JSONRPCErrorException(
+      `Unsupported web lane: ${String(value)}`,
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+  return lane;
 }
 
 function normalizeBinaryMaxBytes(value: unknown): number {
@@ -462,7 +476,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'web.fetch',
     handler: async (params: WebFetchParams, runtime) => {
-      const lane = toLane(params.lane);
+      const lane = resolveLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const dnsResolver = resolveDnsResolver(runtime);
 
@@ -507,7 +521,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'web.fetch_binary',
     handler: async (params: WebFetchBinaryParams, runtime) => {
-      const lane = toLane(params.lane);
+      const lane = resolveLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const maxBytes = normalizeBinaryMaxBytes(params.maxBytes);
       const dnsResolver = resolveDnsResolver(runtime);

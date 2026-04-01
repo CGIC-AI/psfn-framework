@@ -166,6 +166,18 @@ The runtime now exposes a unified model-facing `media` tool for image-backed gen
 - `analyze` inspects visible contents or appearance consistency on explicit inputs
 - Detailed composition guidance, prompt craft, and provider/model quirks belong in creator skills loaded with `skill action="view"`; the top-level tool surface stays intentionally generic
 
+## Live Web Surface
+
+The runtime now targets a unified model-facing `web` surface for outward web work while keeping gateway fetch lanes and allowlists explicit underneath.
+
+- Actions: `fetch`, `browse`, `search`
+- `fetch` is the ordinary external-web read path and maps to the gateway default lane
+- `browse` is the explicit local-crawler/webpage traversal path and maps to the gateway `local_crawler` lane
+- `search` is lightweight research discovery that returns a small fetched URL set without collapsing into session continuity or transcript search semantics
+- Gateway RPC methods remain split as `web.fetch` and `web.fetch_binary`; that transport split is deliberate so URL policy, binary size limits, redirect auditing, and lane-specific allowlists stay fail-closed
+
+This keeps ordinary page retrieval, crawler-style browsing, and small-scope web research under one semantic tool family instead of exposing multiple near-duplicate web micro-tools to the model.
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals
@@ -184,6 +196,7 @@ The runtime now exposes a unified model-facing `media` tool for image-backed gen
 - Keep scratchpad distinct from `orient` and `memory`: it is for temporary working context, not active canon or durable recall.
 - Promote scratchpad content only when it hardens into stable facts (`memory`), durable notes/artifacts (`vault` or repo docs), or orientation state (`orient`).
 - Use `think` as an explicit fallback for deep reasoning, not as the default escape hatch.
+- Keep `web` distinct from `session`: transcript lookup and continuity resume belong to `session`, while remote-page discovery/retrieval belongs to `web`.
 - Keep creative prompt craft, appearance heuristics, and provider/model quirks in creator skills rather than top-level tool descriptions.
 - Keep bounded worker control on `subagent` with `action=spawn|message|wait|cancel|status`.
 - Keep shard and subagent names distinct because they model different work durations and isolation semantics.
@@ -255,6 +268,9 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `self_rebuild` | `system` | extended | Same family. |
 | `notify` | `notify` | extended | Unified notify surface with `action=brief|send|approval_request`. |
 | `notify_operator` | `notify` | hidden | Legacy operator alert behavior now maps to `notify action="brief"`. |
+| `web_fetch` | `web` | always-on | Collapsed into `web action="fetch"` for ordinary remote page retrieval through the default gateway lane. |
+| `crawler_fetch` | `web` | always-on | Collapsed into `web action="browse"` so crawler-lane use stays explicit without creating a second top-level web tool. |
+| `web_research` | `web` | always-on | Collapsed into `web action="search"` for small-scope URL discovery + fetch; do not confuse with `session search` or transcript recall. |
 | `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
 | `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work; forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
 | `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |

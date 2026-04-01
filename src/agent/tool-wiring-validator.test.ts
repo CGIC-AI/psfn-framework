@@ -209,6 +209,20 @@ describe('validateToolWiring', () => {
     ]));
   });
 
+  it('requires unified web tools to declare web.fetch gateway coverage', () => {
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools: [makeTool('web')],
+      gatewayClientMethods: new Set(['webFetch']),
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+
+    expect(report.validTools).toBe(0);
+    expect(report.invalidTools).toHaveLength(1);
+    expect(report.invalidTools[0].toolName).toBe('web');
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('web.fetch');
+  });
+
   it('skips gateway method checks in single-process mode', () => {
     const tools = [
       makeTool('repo', {

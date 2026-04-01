@@ -6,6 +6,7 @@
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
   let messages = $state<SessionEntry[]>([]);
+  let continuityArtifacts = $state<AdminSessionMessagesData['continuityArtifacts']>([]);
   let compactionAudits = $state<AdminSessionMessagesData['compactionAuditViews']>([]);
   let error = $state('');
   let loadingChannels = $state(true);
@@ -84,11 +85,13 @@
     selectedSessionId = sessionId;
     loadingMessages = true;
     messages = [];
+    continuityArtifacts = [];
     compactionAudits = [];
     expandedToolCall = null;
     try {
       const data = await getSessionMessages(sessionId);
       messages = data.messages;
+      continuityArtifacts = data.continuityArtifacts ?? [];
       compactionAudits = data.compactionAuditViews ?? [];
 
       // Track last activity from the most recent message timestamp.
@@ -153,6 +156,28 @@
     return date.toLocaleString(undefined, {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     });
+  }
+
+  function continuityArtifactLabel(
+    artifact: AdminSessionMessagesData['continuityArtifacts'][number],
+  ): string {
+    if (artifact.kind === 'wake_return') {
+      return artifact.occasion === 'wake' ? 'Wake Summary' : 'Return Summary';
+    }
+    return 'Checkpoint';
+  }
+
+  function continuityFacetLabel(facet: AdminSessionMessagesData['continuityArtifacts'][number]['facets'][number]): string {
+    switch (facet) {
+      case 'task':
+        return 'Task';
+      case 'relational':
+        return 'Relational';
+      case 'life':
+        return 'Life';
+      default:
+        return facet;
+    }
   }
 
   function channelLabel(ch: ChannelInfo): string {
@@ -360,6 +385,41 @@
                   <div class="text-sm text-shadow-700 bg-bark-100 p-2 rounded">
                     <span class="font-medium text-shadow-800">{audit.verification}</span>
                     &mdash; {audit.summary.slice(0, 160)}{audit.summary.length > 160 ? '...' : ''}
+                  </div>
+                {/each}
+              </div>
+            </details>
+          </div>
+        {/if}
+
+        {#if continuityArtifacts.length > 0}
+          <div class="p-3 bg-moss-50 border-b border-moss-200">
+            <details>
+              <summary class="text-sm text-shadow-700 cursor-pointer hover:text-moss-700">
+                {continuityArtifacts.length} continuity artifact(s)
+              </summary>
+              <div class="mt-3 space-y-2">
+                {#each continuityArtifacts as artifact}
+                  <div class="rounded-lg border border-moss-200 bg-white p-3">
+                    <div class="flex items-center justify-between gap-3">
+                      <span class="text-sm font-medium text-shadow-800">{continuityArtifactLabel(artifact)}</span>
+                      <span class="text-sm text-shadow-600">{formatTimestamp(artifact.createdAt)}</span>
+                    </div>
+                    {#if artifact.facets.length > 0}
+                      <div class="flex flex-wrap gap-1.5 mt-2">
+                        {#each artifact.facets as facet}
+                          <span class="rounded-full bg-moss-100 px-2 py-0.5 text-sm text-moss-700">
+                            {continuityFacetLabel(facet)}
+                          </span>
+                        {/each}
+                      </div>
+                    {/if}
+                    <p class="mt-2 text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">{artifact.summary}</p>
+                    {#if artifact.nextAnchor}
+                      <p class="mt-2 text-sm text-shadow-600">
+                        Next anchor: {artifact.nextAnchor}
+                      </p>
+                    {/if}
                   </div>
                 {/each}
               </div>

@@ -8,6 +8,7 @@ import {
   computeCompactionSourceSha256,
   parseCompactionSourceHashTag,
 } from '../../../session/compaction-audit.js';
+import type { SessionContinuityArtifactStore } from '../../../session/continuity-artifacts.js';
 import { resolveSessionEntryRoleEnvelopePreview } from '../../../session/turn-provenance.js';
 import type {
   AdminSessionListData,
@@ -27,6 +28,7 @@ export class AdminSessionDataService implements AdminSessionService {
     sessionManager: SessionManager;
     eventBus: EventBus;
     contactStore?: ContactStore | null;
+    continuityArtifactStore?: SessionContinuityArtifactStore | null;
   }) {
     this.turnObservability = new AdminSessionTurnObservabilityStore({
       eventBus: deps.eventBus,
@@ -145,6 +147,7 @@ export class AdminSessionDataService implements AdminSessionService {
     const channelId = messages.length > 0
       ? messages[0]!.channelId
       : (sessionActivity?.channelId ?? sessionId);
+    const continuityArtifacts = this.deps.continuityArtifactStore?.listRecent(sessionId, { limit: 20 }) ?? [];
     const roleEnvelopePreviews = messages.flatMap((entry) => {
       const preview = resolveSessionEntryRoleEnvelopePreview(entry);
       return preview ? [{ sessionEntryId: entry.id, preview }] : [];
@@ -161,6 +164,7 @@ export class AdminSessionDataService implements AdminSessionService {
       sessionId,
       channelId,
       messages,
+      continuityArtifacts,
       roleEnvelopePreviews,
       compactionAuditViews,
       turns,

@@ -13,10 +13,17 @@ import { getRequestContext } from '../llm/request-context.js';
 import { textResult, textResultWithError } from './results.js';
 import { createCompleteFocusTool, createStartFocusTool } from './focus.js';
 import {
+  SessionContinuityArtifactStore,
+  type SessionContinuityArtifactKind,
+  type SessionContinuityFacet,
+  type SessionContinuityOccasion,
+} from '../session/continuity-artifacts.js';
+import {
   createSessionGrepTool,
   createSessionSearchTool,
   type SessionGrepToolOptions,
 } from './session-search.js';
+import { resolveSessionContinuityArtifactsDir } from '../persistence/layout.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_SESSION_PREFIX = 'api:session';
@@ -33,6 +40,11 @@ const SESSION_TOOL_ACTION_NAMES = [
   'session_search',
   'grep',
   'session_grep',
+  'list_continuity',
+  'continuity_list',
+  'checkpoint',
+  'wake_return',
+  'wake_return_summary',
   'start_focus',
   'focus_start',
   'complete_focus',
@@ -44,6 +56,9 @@ const SESSION_TOOL_ACTION_HELP = [
   'resume',
   'search',
   'grep',
+  'list_continuity',
+  'checkpoint',
+  'wake_return',
   'start_focus',
   'complete_focus',
 ].join(', ');
@@ -55,6 +70,9 @@ type SessionToolAction =
   | 'resume'
   | 'search'
   | 'grep'
+  | 'list_continuity'
+  | 'checkpoint'
+  | 'wake_return'
   | 'start_focus'
   | 'complete_focus';
 
@@ -104,6 +122,11 @@ interface SessionToolParams extends SessionNewParams {
   mode?: 'literal' | 'regex';
   caseSensitive?: boolean;
   channelId?: string;
+  summary?: string;
+  next_anchor?: string;
+  facets?: SessionContinuityFacet[];
+  occasion?: SessionContinuityOccasion;
+  kind?: SessionContinuityArtifactKind;
   scope?: string;
   conclusion?: string;
 }
@@ -248,6 +271,14 @@ function normalizeSessionAction(params: SessionToolParams): SessionToolAction {
     case 'grep':
     case 'session_grep':
       return 'grep';
+    case 'list_continuity':
+    case 'continuity_list':
+      return 'list_continuity';
+    case 'checkpoint':
+      return 'checkpoint';
+    case 'wake_return':
+    case 'wake_return_summary':
+      return 'wake_return';
     case 'start_focus':
     case 'focus_start':
       return 'start_focus';
@@ -257,6 +288,27 @@ function normalizeSessionAction(params: SessionToolParams): SessionToolAction {
     default:
       throw new Error(`action must be one of: ${SESSION_TOOL_ACTION_HELP}`);
   }
+}
+
+function resolveContinuityTargetSessionId(
+  manager: SessionToolManager,
+  channelId?: string,
+): string | null {
+  if (typeof channelId === 'string' && channelId.trim().length > 0) {
+    return channelId.trim();
+  }
+
+  const requestChannelId = getRequestContext()?.channelId;
+  if (typeof requestChannelId === 'string' && requestChannelId.trim().length > 0) {
+    return requestChannelId.trim();
+  }
+
+  const activeSessionId = manager.getActiveContextSession();
+  if (typeof activeSessionId === 'string' && activeSessionId.trim().length > 0) {
+    return activeSessionId.trim();
+  }
+
+  return null;
 }
 
 export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<any> {
@@ -428,6 +480,9 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
     sessionsDir: options.sessionsDir,
     ...(options.runRipgrep ? { runRipgrep: options.runRipgrep } : {}),
   });
+  const continuityArtifactStore = new SessionContinuityArtifactStore(
+    resolveSessionContinuityArtifactsDir(options.dataDir),
+  );
   const sessionNewTool = createSessionNewTool(options);
   const sessionListTool = createSessionListTool(options.manager, options);
   const sessionResumeTool = createSessionResumeTool(options.manager, options);
@@ -438,7 +493,8 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
     name: 'session',
     label: 'session',
     description:
-      'Unified session continuity surface for list/search/grep/new/resume and focus workflow actions. '
+      'Unified session continuity surface for list/search/grep/new/resume, low-stress continuity checkpoints, '
+      + 'wake/return summaries, and focus workflow actions. '
       + `Use action=${SESSION_TOOL_ACTION_HELP}. Legacy action aliases remain available during migration.`,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(SESSION_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
@@ -483,7 +539,39 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
       )),
       channelId: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Optional exact channel/session scope filter or focus target channel.',
+        description: 'Optional exact channel/session scope filter, focus target, or continuity target session.',
+      })),
+      summary: Type.Optional(Type.String({
+        minLength: 1,
+        maxLength: 800,
+        description: 'Bounded continuity summary text for action=checkpoint or action=wake_return.',
+      })),
+      next_anchor: Type.Optional(Type.String({
+        minLength: 1,
+        maxLength: 240,
+        description: 'Optional gentle next-step anchor for action=checkpoint or action=wake_return.',
+      })),
+      facets: Type.Optional(Type.Array(Type.Union([
+        Type.Literal('task'),
+        Type.Literal('relational'),
+        Type.Literal('life'),
+      ]), {
+        maxItems: 3,
+        uniqueItems: true,
+        description:
+          'Optional continuity facets. Use these to mark whether the note is task, relational, life continuity, or a mix.',
+      })),
+      occasion: Type.Optional(Type.Union([
+        Type.Literal('wake'),
+        Type.Literal('return'),
+      ], {
+        description: 'Required for action=wake_return. Distinguishes wake summaries from return-after-absence summaries.',
+      })),
+      kind: Type.Optional(Type.Union([
+        Type.Literal('checkpoint'),
+        Type.Literal('wake_return'),
+      ], {
+        description: 'Optional filter for action=list_continuity.',
       })),
       scope: Type.Optional(Type.String({
         minLength: 1,
@@ -528,6 +616,84 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
               ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
             }, signal);
+          case 'list_continuity': {
+            const targetSessionId = resolveContinuityTargetSessionId(options.manager, params.channelId);
+            if (!targetSessionId) {
+              return textResultWithError(
+                'session list_continuity failed: unable to resolve channelId for this turn.',
+                true,
+              );
+            }
+
+            const artifacts = continuityArtifactStore.listRecent(targetSessionId, {
+              ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
+              ...(typeof params.kind === 'string' ? { kind: params.kind } : {}),
+            });
+            return textResult(JSON.stringify({
+              sessionId: targetSessionId,
+              count: artifacts.length,
+              artifacts,
+            }, null, 2));
+          }
+          case 'checkpoint': {
+            const targetSessionId = resolveContinuityTargetSessionId(options.manager, params.channelId);
+            if (!targetSessionId) {
+              return textResultWithError(
+                'session checkpoint failed: unable to resolve channelId for this turn.',
+                true,
+              );
+            }
+
+            const artifact = continuityArtifactStore.append({
+              sessionId: targetSessionId,
+              kind: 'checkpoint',
+              summary: typeof params.summary === 'string' ? params.summary : '',
+              ...(typeof params.next_anchor === 'string' ? { nextAnchor: params.next_anchor } : {}),
+              ...(Array.isArray(params.facets) ? { facets: params.facets } : {}),
+            });
+            return {
+              content: [{
+                type: 'text',
+                text:
+                  `session checkpoint saved for "${targetSessionId}" (id ${artifact.id}).`
+                  + `${artifact.nextAnchor ? ` Next anchor: ${artifact.nextAnchor}.` : ''}`,
+              }] satisfies TextContent[],
+              details: {
+                sessionId: targetSessionId,
+                artifact,
+              },
+            };
+          }
+          case 'wake_return': {
+            const targetSessionId = resolveContinuityTargetSessionId(options.manager, params.channelId);
+            if (!targetSessionId) {
+              return textResultWithError(
+                'session wake_return failed: unable to resolve channelId for this turn.',
+                true,
+              );
+            }
+
+            const artifact = continuityArtifactStore.append({
+              sessionId: targetSessionId,
+              kind: 'wake_return',
+              summary: typeof params.summary === 'string' ? params.summary : '',
+              occasion: params.occasion,
+              ...(typeof params.next_anchor === 'string' ? { nextAnchor: params.next_anchor } : {}),
+              ...(Array.isArray(params.facets) ? { facets: params.facets } : {}),
+            });
+            return {
+              content: [{
+                type: 'text',
+                text:
+                  `session ${artifact.occasion}_summary saved for "${targetSessionId}" (id ${artifact.id}).`
+                  + `${artifact.nextAnchor ? ` Next anchor: ${artifact.nextAnchor}.` : ''}`,
+              }] satisfies TextContent[],
+              details: {
+                sessionId: targetSessionId,
+                artifact,
+              },
+            };
+          }
           case 'start_focus':
             return startFocusTool.execute(toolCallId, {
               scope: typeof params.scope === 'string' ? params.scope : '',

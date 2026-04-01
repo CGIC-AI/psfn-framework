@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../../event-bus.js';
 import { SessionManager } from '../../../session/manager.js';
+import { SessionContinuityArtifactStore } from '../../../session/continuity-artifacts.js';
 import { SessionStore } from '../../../session/store.js';
 import { createTurnId } from '../../../turns/id.js';
 import type { SubstrateConfig } from '../../../types.js';
@@ -525,5 +526,52 @@ describe('AdminSessionDataService', () => {
       expect(details.sessionId).toBe(channel.sessionId);
       expect(details.channelId).toBe(channelId);
     }
+  });
+
+  it('includes session continuity artifacts in the admin payload', () => {
+    const sessionId = 'api:continuity-admin';
+    store.append({
+      channelId: sessionId,
+      role: 'assistant',
+      content: 'Current session content.',
+      timestamp: 1_700_000_000_000,
+    });
+    const continuityArtifactStore = new SessionContinuityArtifactStore(join(dir, 'session-continuity'));
+    continuityArtifactStore.append({
+      sessionId,
+      kind: 'checkpoint',
+      summary: 'The main thread is still continuity wiring and the emotional tone is settled.',
+      facets: ['task', 'life'],
+      nextAnchor: 'Resume with the session admin route.',
+      createdAt: '2026-04-01T12:00:00.000Z',
+    });
+    continuityArtifactStore.append({
+      sessionId,
+      kind: 'wake_return',
+      occasion: 'return',
+      summary: 'Returning after a break: the task remains clear and there is no relational repair pending.',
+      facets: ['task', 'relational'],
+      createdAt: '2026-04-01T12:30:00.000Z',
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      continuityArtifactStore,
+    });
+
+    const result = service.getSessionMessages(sessionId);
+    expect(result.continuityArtifacts).toHaveLength(2);
+    expect(result.continuityArtifacts[0]).toMatchObject({
+      kind: 'wake_return',
+      occasion: 'return',
+      facets: ['task', 'relational'],
+    });
+    expect(result.continuityArtifacts[1]).toMatchObject({
+      kind: 'checkpoint',
+      nextAnchor: 'Resume with the session admin route.',
+      facets: ['task', 'life'],
+    });
   });
 });

@@ -48,6 +48,8 @@ import {
   resolveRuntimeLayoutMode,
   resolveRuntimePathLayout,
   resolveSafeguardAuditTrailPath,
+  resolveSessionContinuityArtifactsDir,
+  resolveSessionContinuityArtifactsPath,
   resolveShardSessionMemorySyncAuditPath,
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
@@ -89,6 +91,10 @@ describe('persistence layout', () => {
     expect(resolveContactsDir(dataDir)).toBe(join(dataDir, 'contacts'));
     expect(resolveContinuityDir(dataDir)).toBe(join(dataDir, 'contacts', 'continuity'));
     expect(resolveValuesJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'values.jsonl'));
+    expect(resolveSessionContinuityArtifactsDir(dataDir)).toBe(join(dataDir, 'notes', 'session-continuity'));
+    expect(resolveSessionContinuityArtifactsPath(dataDir, 'api:session/alpha')).toBe(
+      join(dataDir, 'notes', 'session-continuity', 'api%3Asession%2Falpha.jsonl'),
+    );
     expect(resolveLegacyValuesJournalPath(dataDir)).toBe(join(dataDir, 'values.jsonl'));
     expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'notes', 'reflections'));
     expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'notes', 'reflections', 'journal.jsonl'));

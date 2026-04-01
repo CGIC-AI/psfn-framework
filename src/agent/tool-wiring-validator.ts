@@ -167,6 +167,7 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
   issue_close: Object.freeze(['beads.close']),
   issue_sync: Object.freeze(['beads.sync']),
   media: Object.freeze(['image.create', 'image.edit', 'web.fetch_binary']),
+  web: Object.freeze(['web.fetch']),
 });
 
 // ── Validation Types ──

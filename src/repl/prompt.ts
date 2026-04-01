@@ -65,12 +65,13 @@ Variables persist across iterations. When you have the answer, call FINAL().
 - \`await read_file(path)\` — Read file content through gateway fs policy checks
 - \`await write_file(path, content)\` — Write file content through gateway fs policy checks
 - \`await list_files(glob?, maxEntries?)\` — List workspace-relative files via gateway glob policy
-- \`await web_fetch(url, prompt?)\` — Guarded web fetch via gateway SSRF defenses
+- \`await web("fetch", url, { prompt? })\` — Guarded remote page fetch via gateway SSRF defenses and the default web lane
+- \`await web("browse", url, { prompt? })\` — Uses the \`local_crawler\` web lane; policy must explicitly allow it
+- \`await web("search", query, { maxUrls? })\` — Discover and fetch a small URL set for a research question
 - \`await shell_exec(command, args?, options?)\` — Capability-gated shell command runner via gateway policy/audit
 
 ### Research
-- \`await crawler_fetch(url, prompt?)\` — Uses the \`local_crawler\` web lane (must be explicitly enabled by policy)
-- \`await web_research(query, maxUrls?)\` — Discover and fetch a small URL set for a research question
+- Session continuity lookup still belongs to \`session_search\`; use \`web("search", ...)\` only for remote web discovery
 
 ### Text analysis
 - \`search(text, pattern, contextLines?)\` — Regex search with context lines, returns match blocks

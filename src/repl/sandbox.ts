@@ -168,9 +168,7 @@ export class REPLSandbox {
       read_file: toolchain.read_file,
       write_file: toolchain.write_file,
       list_files: toolchain.list_files,
-      web_fetch: web.web_fetch,
-      crawler_fetch: web.crawler_fetch,
-      web_research: web.web_research,
+      web: web.web,
       ...(allowShellExec ? { shell_exec: shell.shell_exec } : {}),
 
       // Text analysis helpers

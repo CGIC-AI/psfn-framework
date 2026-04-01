@@ -155,16 +155,17 @@ The runtime now exposes a unified model-facing `skill` tool for skill discovery,
 - `list` preserves discovery metadata, eligibility outcomes, and filtered-skill reasons
 - `view` loads one skill's full YAML + Markdown body on demand
 - `create` and `update` write managed skills under `data/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot
+- Creator workflows such as image creation, music creation, and future media variants belong here as creator-category skills loaded with `skill action="view"`
 
 ## Live Media Surface
 
-The runtime now exposes a unified model-facing `media` tool for image-backed generation, transformation, and inspection.
+The runtime now exposes a unified model-facing `media` tool for unified media generation, transformation, and inspection.
 
 - Actions: `generate`, `edit`, `analyze`
-- `generate` creates a new image from a prompt
+- `generate` creates a new media artifact from a prompt
 - `edit` transforms one or more existing input URLs
-- `analyze` inspects visible contents or appearance consistency on explicit inputs
-- Detailed composition guidance, prompt craft, and provider/model quirks belong in creator skills loaded with `skill action="view"`; the top-level tool surface stays intentionally generic
+- `analyze` inspects visible contents or consistency questions on explicit inputs
+- Current implementation is image-backed, but image creation, music creation, and future creator workflows all stay modeled as creator skills loaded with `skill action="view"`; the top-level tool surface stays intentionally generic
 
 ## Live Web Surface
 

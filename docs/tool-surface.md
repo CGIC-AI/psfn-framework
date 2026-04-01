@@ -45,6 +45,19 @@ The runtime now exposes a single model-facing `identity` tool for prompt-layer a
 
 The surface is always on so the model does not have to discover or choose among prompt-stack micro-tools. Write actions remain capability-gated, and the existing confirmation/cooling-off safeguards still apply.
 
+## Live Schedule Surface
+
+The runtime now exposes a unified model-facing `schedule` tool for time-based continuity and scheduling work.
+
+- Continuity actions: `list`, `create_follow_up`, `activate_follow_up`, `create_reminder`, `trigger_reminder`
+- Scheduler/template actions: `list_templates`, `update_template`, `run_template`, `schedule_prompt`
+- Legacy migration aliases remain available inside the same tool:
+  `get_policy` -> `list_templates`
+  `update_policy` -> `update_template`
+  `schedule_task` -> `schedule_prompt`
+
+This keeps durable reminders, proactive follow-ups, birthdays, anniversaries, self-reminders, and timed work under one semantic faculty instead of scattering them across ad hoc timer micro-tools.
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -28,6 +29,8 @@ import {
 } from './parity.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../agent/deferred-tool-handoff.js';
+import { PendingFollowUpStore } from '../intention/pending-follow-ups.js';
+import { CareReminderStore } from '../intention/care-reminders.js';
 
 function createInternalStateNarrativeFixture() {
   const internalState = new InternalStateComputer().computeState({
@@ -365,6 +368,84 @@ describe('wireHeartbeatRuntime', () => {
         .filter(([tool]) => ['values_add', 'values_update'].includes(tool.name))
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
+  });
+
+  it('registers unified schedule in core and wires continuity actions to the intention stores', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'reflection output' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+    const db = new Database(':memory:');
+    const pendingFollowUpStore = new PendingFollowUpStore(db);
+    const careReminderStore = new CareReminderStore(db);
+
+    try {
+      wireHeartbeatRuntime(
+        target,
+        scheduler,
+        agentLoop,
+        sender,
+        tempDir,
+        undefined,
+        {
+          pendingFollowUpStore,
+          careReminderStore,
+        },
+      );
+
+      const calls = target.registerTool.mock.calls as Array<[any, string]>;
+      expect(calls.find(([tool]) => tool.name === 'schedule')?.[1]).toBe('core');
+
+      const scheduleTool = calls.find(([tool]) => tool.name === 'schedule')?.[0] as any;
+      expect(scheduleTool).toBeDefined();
+
+      const followUpResult = await scheduleTool.execute('schedule-follow-up', {
+        action: 'create_follow_up',
+        content: 'Check back after the appointment tomorrow.',
+        channel_id: 'discord:care',
+        channel_type: 'discord',
+        due_at: '2026-04-03T14:00:00.000Z',
+        contact_id: 'contact-z',
+      }, new AbortController().signal);
+      const followUpPayload = JSON.parse((followUpResult.content[0] as { text: string }).text) as {
+        followUp: { id: string };
+      };
+      expect(pendingFollowUpStore.getById(followUpPayload.followUp.id)).toMatchObject({
+        contactId: 'contact-z',
+        authorId: 'system:intention',
+      });
+
+      const reminderResult = await scheduleTool.execute('schedule-reminder', {
+        action: 'create_reminder',
+        title: 'Sam birthday',
+        content: 'Remember Sam birthday and send a kind note.',
+        classification: 'birthday',
+        kind: 'important_date',
+        reminder_schedule: 'annual',
+        due_at: '2026-04-11T09:00:00.000Z',
+        channel_id: 'discord:care',
+        channel_type: 'discord',
+      }, new AbortController().signal);
+      const reminderPayload = JSON.parse((reminderResult.content[0] as { text: string }).text) as {
+        reminder: { id: string };
+      };
+      expect(careReminderStore.getById(reminderPayload.reminder.id)).toMatchObject({
+        classification: 'birthday',
+        provenanceSource: 'companion_appraisal',
+      });
+    } finally {
+      db.close();
+    }
   });
 
   it('writes versioned values entries when values-reflection task runs', async () => {

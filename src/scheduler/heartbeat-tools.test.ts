@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import Database from 'better-sqlite3';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,10 +10,13 @@ import {
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from './heartbeat-tools.js';
+import { createScheduleTool } from './schedule-tool.js';
 import { EventBus } from '../event-bus.js';
 import { Scheduler } from './scheduler.js';
 import type { SubstrateAgent } from '../agent/substrate-agent.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
+import { PendingFollowUpStore } from '../intention/pending-follow-ups.js';
+import { CareReminderStore } from '../intention/care-reminders.js';
 
 // ── Mocks ──
 
@@ -625,5 +629,246 @@ describe('schedule_task', () => {
     expect(waitForIdle).toHaveBeenCalledOnce();
     expect(handleMessage).toHaveBeenCalledTimes(2);
     expect(send).toHaveBeenCalledOnce();
+  });
+});
+
+describe('schedule', () => {
+  let tmpDir: string;
+  let store: HeartbeatPolicyStore;
+  let scheduler: Scheduler;
+  let agentLoop: SubstrateAgent;
+  let sender: MessageSender;
+  let db: Database.Database;
+  let pendingFollowUpStore: PendingFollowUpStore;
+  let careReminderStore: CareReminderStore;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `schedule-tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+    mkdirSync(tmpDir, { recursive: true });
+    store = new HeartbeatPolicyStore(join(tmpDir, 'policy.json'));
+    scheduler = new Scheduler(new EventBus(), {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 500,
+    });
+    agentLoop = mockAgentLoop();
+    sender = mockSender();
+    db = new Database(':memory:');
+    pendingFollowUpStore = new PendingFollowUpStore(db);
+    careReminderStore = new CareReminderStore(db);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('lists reminders, follow-ups, templates, and planned tasks from one surface', async () => {
+    pendingFollowUpStore.create({
+      content: 'Check in when they next message about the move.',
+      priority: 'high',
+      timing: 'scheduled',
+      channelId: 'discord:care',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      dueAt: '2026-04-05T12:00:00.000Z',
+      contactId: 'contact-a',
+      contextSummary: 'Moving week follow-up.',
+      wakeConditions: ['next_user_turn'],
+    });
+    careReminderStore.create({
+      kind: 'important_date',
+      classification: 'birthday',
+      title: 'Alex birthday',
+      content: 'Remember Alex birthday and send a warm note.',
+      schedule: 'annual',
+      dueAt: '2026-04-10T09:00:00.000Z',
+      channelId: 'discord:care',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      provenanceSource: 'companion_appraisal',
+      provenanceReason: 'Mentioned explicitly in conversation.',
+      contactId: 'contact-a',
+    });
+    scheduler.register({
+      id: 'planned:test-list',
+      name: 'Planned continuity nudge',
+      type: 'one-shot',
+      intervalMs: 0,
+      runAt: Date.parse('2026-04-03T12:00:00.000Z'),
+      handler: () => {},
+      state: 'idle',
+    });
+
+    const tool = createScheduleTool({
+      scheduler,
+      agentLoop,
+      sender,
+      heartbeatPolicyStore: store,
+      syncReflectionTasks: vi.fn(),
+      runTemplate: vi.fn(async () => ({
+        templateId: 'whisper',
+        templateName: 'Whisper',
+        reflection: 'ok',
+      })),
+      pendingFollowUpStore,
+      careReminderStore,
+    });
+
+    const result = await tool.execute('schedule-list', {
+      action: 'list',
+      contact_id: 'contact-a',
+    }, new AbortController().signal);
+    const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+      counts: Record<string, number>;
+      reminders: Array<Record<string, unknown>>;
+      followUps: Array<Record<string, unknown>>;
+      plannedTasks: Array<Record<string, unknown>>;
+      templates: Array<Record<string, unknown>>;
+    };
+
+    expect(payload.counts).toMatchObject({
+      reminders: 1,
+      followUps: 1,
+      plannedTasks: 1,
+    });
+    expect(payload.reminders[0]).toMatchObject({
+      title: 'Alex birthday',
+      classification: 'birthday',
+      provenanceSource: 'companion_appraisal',
+    });
+    expect(payload.followUps[0]).toMatchObject({
+      content: 'Check in when they next message about the move.',
+      wakeConditions: ['next_user_turn'],
+    });
+    expect(payload.plannedTasks[0]).toMatchObject({
+      id: 'planned:test-list',
+      name: 'Planned continuity nudge',
+    });
+    expect(payload.templates.some(template => template.id === 'whisper')).toBe(true);
+  });
+
+  it('creates and activates follow-ups through the unified schedule actions', async () => {
+    const tool = createScheduleTool({
+      scheduler,
+      agentLoop,
+      sender,
+      heartbeatPolicyStore: store,
+      syncReflectionTasks: vi.fn(),
+      runTemplate: vi.fn(async () => ({
+        templateId: 'whisper',
+        templateName: 'Whisper',
+        reflection: 'ok',
+      })),
+      pendingFollowUpStore,
+      careReminderStore,
+    });
+
+    const createdResult = await tool.execute('schedule-follow-up-create', {
+      action: 'create_follow_up',
+      content: 'Follow up after the interview tomorrow.',
+      channel_id: 'discord:care',
+      channel_type: 'discord',
+      due_at: '2026-04-02T15:00:00.000Z',
+      contact_id: 'contact-b',
+      context_summary: 'Interview follow-up.',
+      wake_conditions: ['next_user_turn'],
+    }, new AbortController().signal);
+    const createdPayload = JSON.parse((createdResult.content[0] as { text: string }).text) as {
+      followUp: { id: string };
+    };
+    const stored = pendingFollowUpStore.list({ includeActivated: true });
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      id: createdPayload.followUp.id,
+      authorId: 'system:intention',
+      contactId: 'contact-b',
+      contextSummary: 'Interview follow-up.',
+    });
+
+    const activatedResult = await tool.execute('schedule-follow-up-activate', {
+      action: 'activate_follow_up',
+      follow_up_id: createdPayload.followUp.id,
+      activation_reason: 'manual_resurface',
+    }, new AbortController().signal);
+    const activatedPayload = JSON.parse((activatedResult.content[0] as { text: string }).text) as {
+      followUp: { activationReason: string | null };
+    };
+    expect(activatedPayload.followUp.activationReason).toBe('manual_resurface');
+    expect(pendingFollowUpStore.getById(createdPayload.followUp.id)?.activatedAt).toBeTruthy();
+  });
+
+  it('creates and triggers durable reminders through the unified schedule actions', async () => {
+    const tool = createScheduleTool({
+      scheduler,
+      agentLoop,
+      sender,
+      heartbeatPolicyStore: store,
+      syncReflectionTasks: vi.fn(),
+      runTemplate: vi.fn(async () => ({
+        templateId: 'whisper',
+        templateName: 'Whisper',
+        reflection: 'ok',
+      })),
+      pendingFollowUpStore,
+      careReminderStore,
+    });
+
+    const createdResult = await tool.execute('schedule-reminder-create', {
+      action: 'create_reminder',
+      title: 'Mom anniversary',
+      content: 'Remember the anniversary and prepare a kind check-in.',
+      classification: 'anniversary',
+      kind: 'important_date',
+      reminder_schedule: 'annual',
+      due_at: '2026-04-08T09:00:00.000Z',
+      channel_id: 'discord:care',
+      channel_type: 'discord',
+      contact_id: 'contact-c',
+      reason: 'Capture an anniversary that should survive quiet periods.',
+    }, new AbortController().signal);
+    const createdPayload = JSON.parse((createdResult.content[0] as { text: string }).text) as {
+      reminder: { id: string; provenanceReason: string };
+    };
+    expect(createdPayload.reminder.provenanceReason).toContain('survive quiet periods');
+
+    const triggeredResult = await tool.execute('schedule-reminder-trigger', {
+      action: 'trigger_reminder',
+      reminder_id: createdPayload.reminder.id,
+    }, new AbortController().signal);
+    const triggeredPayload = JSON.parse((triggeredResult.content[0] as { text: string }).text) as {
+      reminder: { activationCount: number; dueAt: string };
+    };
+    expect(triggeredPayload.reminder.activationCount).toBe(1);
+    expect(triggeredPayload.reminder.dueAt).not.toBe('2026-04-08T09:00:00.000Z');
+  });
+
+  it('keeps legacy schedule_task semantics available as a schedule action', async () => {
+    const tool = createScheduleTool({
+      scheduler,
+      agentLoop,
+      sender,
+      heartbeatPolicyStore: store,
+      syncReflectionTasks: vi.fn(),
+      runTemplate: vi.fn(async () => ({
+        templateId: 'whisper',
+        templateName: 'Whisper',
+        reflection: 'ok',
+      })),
+      pendingFollowUpStore,
+      careReminderStore,
+    });
+
+    const result = await tool.execute('schedule-legacy-task', {
+      action: 'schedule_task',
+      name: 'Legacy task alias',
+      prompt: 'This should still schedule a one-shot prompt through the unified surface.',
+      delay_minutes: 15,
+    }, new AbortController().signal);
+    const text = (result.content[0] as { text: string }).text;
+
+    expect(text).toContain('Scheduled "Legacy task alias"');
+    expect(scheduler.listTasks().some(task => task.id.startsWith('planned:'))).toBe(true);
   });
 });

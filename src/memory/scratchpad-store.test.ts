@@ -20,7 +20,7 @@ describe('MemoryStore scratchpad persistence', () => {
     db.close();
   });
 
-  it('supports add, list, replace, and remove operations', () => {
+  it('supports add, list, replace, append, and remove operations', () => {
     const added = store.addScratchpadEntry('  first working note  ', {
       id: 'sp-1',
       now: 1_700_000_000_000,
@@ -38,6 +38,12 @@ describe('MemoryStore scratchpad persistence', () => {
     });
     expect(replaced?.content).toBe('updated note');
     expect(replaced?.updatedAt).toBe(1_700_000_100_000);
+
+    const appended = store.appendScratchpadEntry('sp-1', 'follow-up detail', {
+      now: 1_700_000_200_000,
+    });
+    expect(appended?.content).toBe('updated note\nfollow-up detail');
+    expect(appended?.updatedAt).toBe(1_700_000_200_000);
 
     expect(store.removeScratchpadEntry('sp-1')).toBe(true);
     expect(store.removeScratchpadEntry('sp-1')).toBe(false);
@@ -109,5 +115,18 @@ describe('MemoryStore scratchpad persistence', () => {
 
     mirrorDb.close();
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('accepts longer scratchpad entries for large temporary source material', () => {
+    const content = 'section '.repeat(450).trim();
+
+    const added = store.addScratchpadEntry(content, {
+      id: 'sp-long',
+      now: 1_700_000_000_000,
+    });
+
+    expect(added.entry.id).toBe('sp-long');
+    expect(added.entry.content).toBe(content);
+    expect(added.entry.content.length).toBeGreaterThan(1_000);
   });
 });

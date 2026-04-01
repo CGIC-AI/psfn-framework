@@ -23,6 +23,11 @@ const NORTH_STAR_FAIL_CLOSED_REQUIREMENTS = [
   'identity.write.runtime',
 ] as const satisfies readonly CapabilityToken[];
 
+const SCRATCHPAD_FAIL_CLOSED_REQUIREMENTS = [
+  'identity.read',
+  'memory.write',
+] as const satisfies readonly CapabilityToken[];
+
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
   switch (action) {
@@ -56,6 +61,21 @@ function resolveUnifiedNorthStarRequirement(params: Record<string, unknown>): Ca
   }
 }
 
+function resolveScratchpadRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case 'list':
+      return 'identity.read';
+    case 'add':
+    case 'replace':
+    case 'append':
+    case 'remove':
+      return 'memory.write';
+    default:
+      return SCRATCHPAD_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
@@ -73,8 +93,6 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   memory_delete: 'memory.delete',
   undo_memory_delete: 'memory.delete',
   memory_write: 'memory.write',
-  scratchpad_read: 'identity.read',
-  scratchpad_write: 'memory.write',
   notify_operator: 'external.web',
   toolset: 'identity.read',
   promoted_tools_list: 'identity.read',
@@ -144,6 +162,9 @@ export function resolveToolRequiredCapabilities(
 ): CapabilityToken[] {
   if (tool.name === 'memory') {
     return normalizeRequirement(resolveUnifiedMemoryRequirement(toRecord(params)));
+  }
+  if (tool.name === 'scratchpad') {
+    return normalizeRequirement(resolveScratchpadRequirement(toRecord(params)));
   }
 
   if (tool.name === 'north_star') {

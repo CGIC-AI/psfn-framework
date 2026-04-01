@@ -68,10 +68,13 @@ function formatScratchpadList(
   entries: Array<{ id: string; content: string; updatedAt: number }>,
 ): string {
   if (entries.length === 0) {
-    return 'Scratchpad is empty.';
+    return 'Scratchpad is empty. Use it for temporary long-context notes, excerpts, and working summaries.';
   }
 
-  const lines = [`Scratchpad entries (${entries.length}):`];
+  const lines = [
+    `Scratchpad entries (${entries.length}) [ephemeral long-context workspace]:`,
+    'Temporary notes are not canonical memory or orientation. Promote only stable facts, decisions, or polished artifacts when warranted.',
+  ];
   for (const entry of entries) {
     lines.push(`- ${entry.id} [${new Date(entry.updatedAt).toISOString()}]: ${entry.content}`);
   }
@@ -775,94 +778,81 @@ export function createMemoryTool(
   };
 }
 
-export function createScratchpadReadTool(memoryStore: MemoryStore): AgentTool<any> {
-  return {
-    name: 'scratchpad_read',
-    description:
-      'List current scratchpad entries (short-lived working notes). ' +
-      'Use before replacing or removing notes so you can reference the right id.',
-    label: 'scratchpad_read',
-    parameters: Type.Object({
-      limit: Type.Optional(
-        Type.Number({ description: `Maximum notes to return (1-${SCRATCHPAD_MAX_LIMIT}, default ${SCRATCHPAD_DEFAULT_LIMIT}).` }),
-      ),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { limit?: number },
-      _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const limit = params.limit === undefined
-          ? SCRATCHPAD_DEFAULT_LIMIT
-          : clampInt(params.limit, 1, SCRATCHPAD_MAX_LIMIT);
-        const entries = memoryStore.listScratchpadEntries(limit);
-        return textResult(formatScratchpadList(entries));
-      } catch (error) {
-        return textResultWithError(`Error reading scratchpad: ${errorMessage(error)}`, true);
-      }
-    },
-  };
-}
+type ScratchpadToolAction = 'list' | 'add' | 'replace' | 'append' | 'remove';
+const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'add', 'replace', 'append', 'remove'];
 
-type ScratchpadWriteOperation = 'add' | 'replace' | 'remove';
-const SCRATCHPAD_WRITE_OPERATIONS: ScratchpadWriteOperation[] = ['add', 'replace', 'remove'];
-
-export function createScratchpadWriteTool(memoryStore: MemoryStore): AgentTool<any> {
+export function createScratchpadTool(memoryStore: MemoryStore): AgentTool<any> {
   return {
-    name: 'scratchpad_write',
+    name: 'scratchpad',
     description:
-      'Mutate scratchpad notes with add/replace/remove operations. ' +
-      'Scratchpad is bounded and intended for short-lived working memory.',
-    label: 'scratchpad_write',
+      'Ephemeral long-context note workspace for temporary excerpts, summaries, and working notes. '
+      + 'Use action=list|add|replace|append|remove. Scratchpad stays distinct from orient and durable memory.',
+    label: 'scratchpad',
     parameters: Type.Object({
-      operation: Type.Unsafe<ScratchpadWriteOperation>({
+      action: Type.Unsafe<ScratchpadToolAction>({
         type: 'string',
-        enum: [...SCRATCHPAD_WRITE_OPERATIONS],
-        description: 'One of: add, replace, remove.',
+        enum: [...SCRATCHPAD_TOOL_ACTIONS],
+        description: 'One of: list, add, replace, append, remove.',
       }),
+      limit: Type.Optional(
+        Type.Number({ description: `Used with action=list. Maximum notes to return (1-${SCRATCHPAD_MAX_LIMIT}, default ${SCRATCHPAD_DEFAULT_LIMIT}).` }),
+      ),
       id: Type.Optional(
-        Type.String({ description: 'Required for replace/remove. Scratchpad entry id.' }),
+        Type.String({ description: 'Required for action=replace, action=append, and action=remove. Scratchpad entry id.' }),
       ),
       content: Type.Optional(
-        Type.String({ description: 'Required for add/replace. Scratchpad note text.' }),
+        Type.String({ description: 'Required for action=add, action=replace, and action=append. Scratchpad note text.' }),
       ),
     }),
     execute: async (
       _toolCallId: string,
       params: {
-        operation: ScratchpadWriteOperation;
+        action: ScratchpadToolAction;
+        limit?: number;
         id?: string;
         content?: string;
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const operation = params.operation;
-        if (!SCRATCHPAD_WRITE_OPERATIONS.includes(operation)) {
-          return textResultWithError(`Error: invalid operation "${operation}"`, true);
+        const action = params.action;
+        if (!SCRATCHPAD_TOOL_ACTIONS.includes(action)) {
+          return textResultWithError(`Error: invalid action "${action}"`, true);
         }
 
-        switch (operation) {
+        switch (action) {
+          case 'list': {
+            const limit = params.limit === undefined
+              ? SCRATCHPAD_DEFAULT_LIMIT
+              : clampInt(params.limit, 1, SCRATCHPAD_MAX_LIMIT);
+            const entries = memoryStore.listScratchpadEntries(limit);
+            return textResult(formatScratchpadList(entries));
+          }
+
           case 'add': {
             const content = params.content?.trim();
             if (!content) {
-              return textResultWithError('Error: content is required for add', true);
+              return textResultWithError('Error: content is required for action=add', true);
             }
             const result = memoryStore.addScratchpadEntry(content);
             const evictedSuffix = result.evictedIds.length > 0
               ? ` Evicted oldest ids: ${result.evictedIds.join(', ')}`
               : '';
-            return textResult(`Scratchpad entry added (id: ${result.entry.id}).${evictedSuffix}`);
+            return textResult(
+              `Scratchpad entry added (id: ${result.entry.id}). `
+              + 'Keep temporary working context here; promote only stable outcomes elsewhere.'
+              + evictedSuffix,
+            );
           }
+
           case 'replace': {
             const id = params.id?.trim();
             const content = params.content?.trim();
             if (!id) {
-              return textResultWithError('Error: id is required for replace', true);
+              return textResultWithError('Error: id is required for action=replace', true);
             }
             if (!content) {
-              return textResultWithError('Error: content is required for replace', true);
+              return textResultWithError('Error: content is required for action=replace', true);
             }
             const replaced = memoryStore.replaceScratchpadEntry(id, content);
             if (!replaced) {
@@ -870,10 +860,27 @@ export function createScratchpadWriteTool(memoryStore: MemoryStore): AgentTool<a
             }
             return textResult(`Scratchpad entry replaced (id: ${replaced.id}).`);
           }
+
+          case 'append': {
+            const id = params.id?.trim();
+            const content = params.content?.trim();
+            if (!id) {
+              return textResultWithError('Error: id is required for action=append', true);
+            }
+            if (!content) {
+              return textResultWithError('Error: content is required for action=append', true);
+            }
+            const appended = memoryStore.appendScratchpadEntry(id, content);
+            if (!appended) {
+              return textResultWithError(`Scratchpad entry not found: ${id}`, true);
+            }
+            return textResult(`Scratchpad entry appended (id: ${appended.id}).`);
+          }
+
           case 'remove': {
             const id = params.id?.trim();
             if (!id) {
-              return textResultWithError('Error: id is required for remove', true);
+              return textResultWithError('Error: id is required for action=remove', true);
             }
             const removed = memoryStore.removeScratchpadEntry(id);
             if (!removed) {
@@ -882,8 +889,10 @@ export function createScratchpadWriteTool(memoryStore: MemoryStore): AgentTool<a
             return textResult(`Scratchpad entry removed (id: ${id}).`);
           }
         }
+
+        return textResultWithError(`Error: unsupported scratchpad action "${action}"`, true);
       } catch (error) {
-        return textResultWithError(`Error writing scratchpad: ${errorMessage(error)}`, true);
+        return textResultWithError(`Error using scratchpad: ${errorMessage(error)}`, true);
       }
     },
   };

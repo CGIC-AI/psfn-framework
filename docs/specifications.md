@@ -116,6 +116,18 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
 - Trust-aware memory retrieval withholds data by default when policy does not allow disclosure.
 - Unknown or malformed provider/settings data should reject rather than silently coerce.
 
+## Tool Surface Contract
+
+The current target taxonomy and migration map live in [`docs/tool-surface.md`](./tool-surface.md).
+
+Current guidance:
+
+- `promotedExtendedTools` is a short-term exposure mechanism, not the long-term taxonomy.
+- `load_tools` and the promoted-tool CRUD helpers are temporary control surfaces until `toolset` exists.
+- `core_memory` is the current legacy name; the target orientation surface is `orient`.
+- `scratchpad` stays explicit as the ephemeral long-context workspace.
+- `north_star` stays its own semantic tool surface.
+
 ## Validation Baseline
 
 Use the smallest relevant set, but these are the common contract checks:

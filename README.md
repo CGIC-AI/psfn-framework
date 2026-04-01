@@ -278,7 +278,7 @@ Gateway (host)                    Agent (container, --network=none)
 
 ### Agent Tools
 
-Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`.
+Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`. The current names below are a migration surface, not the final collapsed taxonomy; see [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and mapping.
 
 | Category | Tools |
 |----------|-------|

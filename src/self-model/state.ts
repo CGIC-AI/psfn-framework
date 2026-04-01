@@ -14,6 +14,19 @@ import {
   type PendingFollowUpPriority,
   type PendingFollowUpTiming,
 } from '../intention/pending-follow-ups.js';
+import {
+  CARE_REMINDER_CLASSIFICATIONS,
+  CARE_REMINDER_KINDS,
+  CARE_REMINDER_PROVENANCE_SOURCES,
+  CARE_REMINDER_SCHEDULES,
+  CARE_REMINDER_STATUSES,
+  type CareReminder,
+  type CareReminderClassification,
+  type CareReminderKind,
+  type CareReminderProvenanceSource,
+  type CareReminderSchedule,
+  type CareReminderStatus,
+} from '../intention/care-reminders.js';
 import { TRUST_LEVELS, type TrustLevel } from '../trust/types.js';
 
 export const INTERNAL_STATE_PROCESSING_QUALITIES = ['fluent', 'deliberate', 'struggling'] as const;
@@ -37,6 +50,7 @@ export interface InternalState {
   attention: {
     activeConcerns: ActiveConcern[];
     pendingFollowUps?: PendingFollowUp[];
+    careReminders?: CareReminder[];
     salientEntities: string[];
     conversationTrajectory: InternalStateConversationTrajectory;
   };
@@ -62,6 +76,7 @@ export interface InternalStateComputeInput {
   emotionState: EmotionStateSnapshot;
   activeConcerns: readonly ActiveConcern[];
   pendingFollowUps?: readonly PendingFollowUp[];
+  careReminders?: readonly CareReminder[];
   trustLevel: TrustLevel;
   contactId?: string;
   contactEmotionalSnapshot?: EmotionalSnapshot | null;
@@ -72,6 +87,7 @@ interface NormalizedInternalStateComputeInput {
   emotionState: EmotionStateSnapshot;
   activeConcerns: ActiveConcern[];
   pendingFollowUps: PendingFollowUp[];
+  careReminders: CareReminder[];
   trustLevel: TrustLevel;
   contactId: string | null;
   contactEmotionalSnapshot: EmotionalSnapshot | null;
@@ -201,6 +217,7 @@ export class InternalStateComputer {
       attention: {
         activeConcerns: normalized.activeConcerns,
         pendingFollowUps: normalized.pendingFollowUps,
+        careReminders: normalized.careReminders,
         salientEntities: resolveSalientEntities(
           normalized.sessionMetrics.userMessageText,
           normalized.sessionMetrics.responseText,
@@ -248,6 +265,7 @@ function normalizeComputeInput(input: InternalStateComputeInput): NormalizedInte
     emotionState: normalizeEmotionStateSnapshot(input.emotionState),
     activeConcerns: normalizeActiveConcerns(input.activeConcerns),
     pendingFollowUps: normalizePendingFollowUps(input.pendingFollowUps ?? []),
+    careReminders: normalizeCareReminders(input.careReminders ?? []),
     trustLevel: normalizeTrustLevel(input.trustLevel),
     contactId: normalizeOptionalIdentifier(input.contactId, 'contactId'),
     contactEmotionalSnapshot: normalizeOptionalEmotionalSnapshot(input.contactEmotionalSnapshot),
@@ -333,6 +351,15 @@ function normalizePendingFollowUps(value: readonly PendingFollowUp[]): PendingFo
     .sort(comparePendingFollowUps);
 }
 
+function normalizeCareReminders(value: readonly CareReminder[]): CareReminder[] {
+  if (!Array.isArray(value)) {
+    throw new Error('InternalState careReminders must be an array');
+  }
+  return value
+    .map((reminder, index) => normalizeCareReminder(reminder, index))
+    .sort(compareCareReminders);
+}
+
 function normalizeConcern(concern: ActiveConcern, index: number): ActiveConcern {
   if (!isRecord(concern)) {
     throw new Error(`InternalState activeConcern[${String(index)}] must be an object`);
@@ -411,6 +438,52 @@ function normalizePendingFollowUp(followUp: PendingFollowUp, index: number): Pen
   };
 }
 
+function normalizeCareReminder(reminder: CareReminder, index: number): CareReminder {
+  if (!isRecord(reminder)) {
+    throw new Error(`InternalState careReminder[${String(index)}] must be an object`);
+  }
+  const prefix = `careReminder[${String(index)}]`;
+  const contactId = reminder.contactId === undefined
+    ? undefined
+    : normalizeOptionalIdentifier(reminder.contactId, `${prefix}.contactId`) ?? undefined;
+  const sourceMessageId = reminder.sourceMessageId === undefined
+    ? undefined
+    : normalizeOptionalIdentifier(reminder.sourceMessageId, `${prefix}.sourceMessageId`) ?? undefined;
+  const lastActivatedAt = reminder.lastActivatedAt === undefined
+    ? undefined
+    : normalizeIsoTimestamp(reminder.lastActivatedAt, `${prefix}.lastActivatedAt`);
+  const completedAt = reminder.completedAt === undefined
+    ? undefined
+    : normalizeIsoTimestamp(reminder.completedAt, `${prefix}.completedAt`);
+  const activationCount = parseNonNegativeFinite(reminder.activationCount, `${prefix}.activationCount`);
+
+  return {
+    id: normalizeIdentifier(reminder.id, `${prefix}.id`),
+    kind: normalizeCareReminderKind(reminder.kind, `${prefix}.kind`),
+    classification: normalizeCareReminderClassification(reminder.classification, `${prefix}.classification`),
+    title: normalizeText(reminder.title, `${prefix}.title`),
+    content: normalizeText(reminder.content, `${prefix}.content`),
+    schedule: normalizeCareReminderSchedule(reminder.schedule, `${prefix}.schedule`),
+    status: normalizeCareReminderStatus(reminder.status, `${prefix}.status`),
+    dueAt: normalizeIsoTimestamp(reminder.dueAt, `${prefix}.dueAt`),
+    createdAt: normalizeIsoTimestamp(reminder.createdAt, `${prefix}.createdAt`),
+    channelId: normalizeIdentifier(reminder.channelId, `${prefix}.channelId`),
+    channelType: normalizePendingFollowUpChannelType(reminder.channelType, `${prefix}.channelType`),
+    authorId: normalizeIdentifier(reminder.authorId, `${prefix}.authorId`),
+    authorName: normalizeText(reminder.authorName, `${prefix}.authorName`),
+    provenanceSource: normalizeCareReminderProvenanceSource(
+      reminder.provenanceSource,
+      `${prefix}.provenanceSource`,
+    ),
+    provenanceReason: normalizeText(reminder.provenanceReason, `${prefix}.provenanceReason`),
+    activationCount: Math.floor(activationCount),
+    ...(contactId ? { contactId } : {}),
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(lastActivatedAt ? { lastActivatedAt } : {}),
+    ...(completedAt ? { completedAt } : {}),
+  };
+}
+
 function normalizeFormationVAD(value: ActiveConcern['formationVAD'], fieldName: string) {
   if (!value || !isRecord(value)) {
     throw new Error(`InternalState field "${fieldName}" must be an object`);
@@ -466,6 +539,44 @@ function normalizePendingFollowUpChannelType(
   return value;
 }
 
+function normalizeCareReminderKind(value: string, fieldName: string): CareReminderKind {
+  if (!CARE_REMINDER_KINDS.includes(value as CareReminderKind)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported kind "${String(value)}"`);
+  }
+  return value as CareReminderKind;
+}
+
+function normalizeCareReminderClassification(value: string, fieldName: string): CareReminderClassification {
+  if (!CARE_REMINDER_CLASSIFICATIONS.includes(value as CareReminderClassification)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported classification "${String(value)}"`);
+  }
+  return value as CareReminderClassification;
+}
+
+function normalizeCareReminderSchedule(value: string, fieldName: string): CareReminderSchedule {
+  if (!CARE_REMINDER_SCHEDULES.includes(value as CareReminderSchedule)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported schedule "${String(value)}"`);
+  }
+  return value as CareReminderSchedule;
+}
+
+function normalizeCareReminderStatus(value: string, fieldName: string): CareReminderStatus {
+  if (!CARE_REMINDER_STATUSES.includes(value as CareReminderStatus)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported status "${String(value)}"`);
+  }
+  return value as CareReminderStatus;
+}
+
+function normalizeCareReminderProvenanceSource(
+  value: string,
+  fieldName: string,
+): CareReminderProvenanceSource {
+  if (!CARE_REMINDER_PROVENANCE_SOURCES.includes(value as CareReminderProvenanceSource)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported provenanceSource "${String(value)}"`);
+  }
+  return value as CareReminderProvenanceSource;
+}
+
 function compareConcerns(left: ActiveConcern, right: ActiveConcern): number {
   const priorityDelta = PRIORITY_RANK[left.priority] - PRIORITY_RANK[right.priority];
   if (priorityDelta !== 0) return priorityDelta;
@@ -478,6 +589,14 @@ function compareConcerns(left: ActiveConcern, right: ActiveConcern): number {
 
 function comparePendingFollowUps(left: PendingFollowUp, right: PendingFollowUp): number {
   const dueAtDelta = Date.parse(left.dueAt ?? left.createdAt) - Date.parse(right.dueAt ?? right.createdAt);
+  if (dueAtDelta !== 0) return dueAtDelta;
+  const createdAtDelta = Date.parse(left.createdAt) - Date.parse(right.createdAt);
+  if (createdAtDelta !== 0) return createdAtDelta;
+  return left.id.localeCompare(right.id);
+}
+
+function compareCareReminders(left: CareReminder, right: CareReminder): number {
+  const dueAtDelta = Date.parse(left.dueAt) - Date.parse(right.dueAt);
   if (dueAtDelta !== 0) return dueAtDelta;
   const createdAtDelta = Date.parse(left.createdAt) - Date.parse(right.createdAt);
   if (createdAtDelta !== 0) return createdAtDelta;
@@ -555,6 +674,7 @@ function normalizeInternalState(state: InternalState): InternalState {
     attention: {
       activeConcerns: normalizeActiveConcerns(state.attention.activeConcerns),
       pendingFollowUps: normalizePendingFollowUps(state.attention.pendingFollowUps ?? []),
+      careReminders: normalizeCareReminders(state.attention.careReminders ?? []),
       salientEntities: normalizeSalientEntities(state.attention.salientEntities),
       conversationTrajectory: normalizeConversationTrajectory(state.attention.conversationTrajectory),
     },

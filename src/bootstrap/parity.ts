@@ -125,9 +125,11 @@ import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js'
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
+  INTENTION_REMINDER_ACTION_KIND,
   decisionsToPostTurnActionCandidates,
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
+  normalizeIntentionReminderActionPayload,
   sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
   type ActiveConcernSnapshot,
@@ -217,6 +219,32 @@ interface HeartbeatRuntimeOptions {
     pendingFollowUpId: string;
     activationReason?: string;
   }) => Promise<void> | void;
+  onIntentionReminderDecision?: (input: {
+    decision: IntentionActionDecision;
+    channelId: string;
+    channelType: SubstrateMessage['channelType'];
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+  }) => Promise<string | undefined> | string | undefined;
+  onIntentionReminderTriggered?: (input: {
+    reminderId: string;
+  }) => Promise<{
+    reminderId: string;
+    content: string;
+    channelId: string;
+    channelType: SubstrateMessage['channelType'];
+    authorId: string;
+    authorName: string;
+    nextDueAt?: string;
+  } | undefined> | {
+    reminderId: string;
+    content: string;
+    channelId: string;
+    channelType: SubstrateMessage['channelType'];
+    authorId: string;
+    authorName: string;
+    nextDueAt?: string;
+  } | undefined;
   onBehavioralPatternOutcome?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -1405,6 +1433,24 @@ export function wireHeartbeatRuntime(
             }
           }
         }
+        if (runtimeOptions.onIntentionReminderDecision) {
+          for (const decision of decisions) {
+            if (decision.type !== 'reminder') continue;
+            const reminderId = await runtimeOptions.onIntentionReminderDecision({
+              decision,
+              channelId: resolvedSessionId,
+              channelType: context.message.channelType,
+              canonicalContactKey: context.canonicalContactKey,
+              sourceMessageId: context.message.id,
+            });
+            if (reminderId) {
+              decision.reminder = {
+                ...decision.reminder,
+                reminderId,
+              };
+            }
+          }
+        }
 
         const candidates = decisionsToPostTurnActionCandidates(
           decisions,
@@ -1613,6 +1659,56 @@ export function wireHeartbeatRuntime(
               authorId: payload.authorId,
               authorName: payload.authorName,
               content: payload.content,
+              timestamp: new Date(),
+            });
+          },
+          { executionMode: 'background' },
+        );
+        runtimeOptions.postTurnActions.registerHandler(
+          INTENTION_REMINDER_ACTION_KIND,
+          async (action) => {
+            const payload = normalizeIntentionReminderActionPayload(action.payload);
+            if (!payload) {
+              throw new Error(`Intention reminder action "${action.id}" payload is missing required fields`);
+            }
+            if (!runtimeOptions.onIntentionReminderTriggered) {
+              throw new Error('Intention reminder action triggered without reminder substrate wiring');
+            }
+            const triggered = await runtimeOptions.onIntentionReminderTriggered({
+              reminderId: payload.reminderId,
+            });
+            if (!triggered) {
+              return;
+            }
+            if (triggered.nextDueAt && telemetryEventBus) {
+              const nextRunAt = Date.parse(triggered.nextDueAt);
+              if (Number.isFinite(nextRunAt) && nextRunAt > 0) {
+                const nextActions = toInferredPostTurnActions([{
+                  kind: INTENTION_REMINDER_ACTION_KIND,
+                  dedupeKey: `${INTENTION_REMINDER_ACTION_KIND}:${triggered.reminderId}`,
+                  payload: {
+                    reminderId: triggered.reminderId,
+                  },
+                  maxRetries: 1,
+                  runAt: nextRunAt,
+                }], {
+                  id: action.id,
+                  channelId: action.channelId,
+                });
+                if (nextActions.length > 0) {
+                  await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+                    actions: nextActions,
+                  });
+                }
+              }
+            }
+            agentLoop.followUp?.({
+              id: `intention-reminder:${action.id}`,
+              channelId: triggered.channelId,
+              channelType: triggered.channelType,
+              authorId: triggered.authorId,
+              authorName: triggered.authorName,
+              content: triggered.content,
               timestamp: new Date(),
             });
           },

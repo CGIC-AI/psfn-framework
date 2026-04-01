@@ -667,6 +667,7 @@ export class SubstrateRuntime implements Lifecycle {
     const intentionAppraisalHooks = createIntentionAppraisalHooks(
       intentionRuntime.concernStore,
       intentionRuntime.pendingFollowUpStore,
+      intentionRuntime.careReminderStore,
     );
     const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
       intentionRuntime.behavioralPatternTracker,
@@ -975,6 +976,8 @@ export class SubstrateRuntime implements Lifecycle {
         onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
         onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
         onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
+        onIntentionReminderDecision: intentionAppraisalHooks.onIntentionReminderDecision,
+        onIntentionReminderTriggered: intentionAppraisalHooks.onIntentionReminderTriggered,
         onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
         coreMemoryStore,
         postTurnActions,

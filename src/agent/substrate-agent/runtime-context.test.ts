@@ -288,6 +288,26 @@ describe('runtime subject identity', () => {
               createdAt: '2026-03-17T11:58:00.000Z',
             },
           ],
+          careReminders: [
+            {
+              id: 'care-reminder-1',
+              kind: 'important_date',
+              classification: 'birthday',
+              title: 'Alex birthday',
+              content: 'Remember to celebrate Alex on their birthday.',
+              schedule: 'annual',
+              status: 'active',
+              dueAt: '2026-04-01T09:00:00.000Z',
+              createdAt: '2026-03-17T11:40:00.000Z',
+              channelId: 'internal:reflection:whisper',
+              channelType: 'terminal',
+              authorId: 'system:intention',
+              authorName: 'Whisper',
+              provenanceSource: 'companion_appraisal',
+              provenanceReason: 'Birthday mentioned by the partner.',
+              activationCount: 0,
+            },
+          ],
           salientEntities: ['contact summary', 'follow-up'],
           conversationTrajectory: 'deepening',
         },
@@ -315,9 +335,10 @@ describe('runtime subject identity', () => {
       formatTopEmotions: () => '',
     });
 
-    expect(runtimeContext).toContain('Attention: trajectory=deepening, salient_entities=2, active_concerns=2, pending_follow_ups=1');
+    expect(runtimeContext).toContain('Attention: trajectory=deepening, salient_entities=2, active_concerns=2, pending_follow_ups=1, care_reminders=1');
     expect(runtimeContext).toContain('Active concern refs: concern-1:medium, concern-2:low');
     expect(runtimeContext).toContain('Pending follow-up refs: follow-up-1:soon');
+    expect(runtimeContext).toContain('Care reminder refs: care-reminder-1:birthday:annual');
   });
 
   it('uses persisted conversation-channel privacy and records it on activity', () => {

@@ -8,6 +8,10 @@ import {
   type ActiveConcernContextProvider,
 } from './concerns.js';
 import {
+  CareReminderStore,
+  type CareReminderContextProvider,
+} from './care-reminders.js';
+import {
   PendingFollowUpStore,
   type PendingFollowUpContextProvider,
 } from './pending-follow-ups.js';
@@ -32,9 +36,11 @@ const RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT = 3;
 export interface IntentionRuntimeTarget {
   activeConcernProvider: ActiveConcernContextProvider | null;
   pendingFollowUpProvider?: PendingFollowUpContextProvider | null;
+  careReminderProvider?: CareReminderContextProvider | null;
   behavioralPatternProvider?: BehavioralPatternContextProvider | null;
   setActiveConcernProvider?: (provider: ActiveConcernContextProvider | null) => void;
   setPendingFollowUpProvider?: (provider: PendingFollowUpContextProvider | null) => void;
+  setCareReminderProvider?: (provider: CareReminderContextProvider | null) => void;
   setBehavioralPatternProvider?: (provider: BehavioralPatternContextProvider | null) => void;
   registerIntentionPostTurnHook?: (hook: IntentionPostTurnHook) => (() => void) | void;
   registerTool: ToolRegistrar;
@@ -43,6 +49,7 @@ export interface IntentionRuntimeTarget {
 export interface IntentionRuntimeWiring {
   concernStore: ActiveConcernStore;
   pendingFollowUpStore: PendingFollowUpStore;
+  careReminderStore: CareReminderStore;
   behavioralPatternTracker: BehavioralPatternTracker;
 }
 
@@ -72,6 +79,26 @@ export interface IntentionAppraisalHooks {
     pendingFollowUpId: string;
     activationReason?: string;
   }): void;
+  onIntentionReminderDecision(input: {
+    decision: IntentionActionDecision;
+    channelId: string;
+    channelType: ChannelType;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+  }): string | undefined;
+  onIntentionReminderTriggered(input: {
+    reminderId: string;
+  }): IntentionReminderTriggerResult | undefined;
+}
+
+export interface IntentionReminderTriggerResult {
+  reminderId: string;
+  content: string;
+  channelId: string;
+  channelType: ChannelType;
+  authorId: string;
+  authorName: string;
+  nextDueAt?: string;
 }
 
 export interface IntentionBehavioralPatternHooks {
@@ -126,6 +153,28 @@ function resolveFollowUpDecisionContent(decision: IntentionActionDecision): stri
   return content;
 }
 
+function resolveReminderDecisionTitle(decision: IntentionActionDecision): string {
+  if (decision.type !== 'reminder') {
+    throw new Error(`Expected reminder decision, received "${decision.type}"`);
+  }
+  const title = normalizeOptionalText(decision.reminder?.title);
+  if (!title) {
+    throw new Error('Reminder decision must include reminder.title');
+  }
+  return title;
+}
+
+function resolveReminderDecisionContent(decision: IntentionActionDecision): string {
+  if (decision.type !== 'reminder') {
+    throw new Error(`Expected reminder decision, received "${decision.type}"`);
+  }
+  const content = normalizeOptionalText(decision.reminder?.content);
+  if (!content) {
+    throw new Error('Reminder decision must include reminder.content');
+  }
+  return content;
+}
+
 function normalizeFutureIsoTimestamp(value: number | undefined): string | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -135,6 +184,13 @@ function normalizeFutureIsoTimestamp(value: number | undefined): string | undefi
     return undefined;
   }
   return new Date(normalized).toISOString();
+}
+
+function normalizeReminderIsoTimestamp(value: number | undefined): string | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return new Date(Math.floor(value)).toISOString();
 }
 
 function toActiveConcernSnapshot(concern: ReturnType<ActiveConcernStore['getActiveConcerns']>[number]): ActiveConcernSnapshot {
@@ -174,6 +230,7 @@ function normalizeObservedAtIso(value: number | undefined): string | undefined {
 export function createIntentionAppraisalHooks(
   concernStore: ActiveConcernStore,
   pendingFollowUpStore: PendingFollowUpStore,
+  careReminderStore: CareReminderStore,
 ): IntentionAppraisalHooks {
   return {
     getActiveConcerns: ({ canonicalContactKey }) => (
@@ -248,6 +305,59 @@ export function createIntentionAppraisalHooks(
         ...(activationReason ? { activationReason } : {}),
       });
     },
+    onIntentionReminderDecision: ({
+      decision,
+      channelId,
+      channelType,
+      canonicalContactKey,
+      sourceMessageId,
+    }) => {
+      if (decision.type !== 'reminder') {
+        return undefined;
+      }
+      const dueAt = normalizeReminderIsoTimestamp(decision.dueAt);
+      if (!dueAt) {
+        return undefined;
+      }
+      const reminder = careReminderStore.create({
+        kind: decision.reminder?.kind ?? 'self_reminder',
+        classification: decision.reminder?.classification ?? 'self_note',
+        title: resolveReminderDecisionTitle(decision),
+        content: resolveReminderDecisionContent(decision),
+        schedule: decision.reminder?.schedule ?? 'one_time',
+        dueAt,
+        channelId: normalizeOptionalText(decision.reminder?.channelId) ?? channelId,
+        channelType: decision.reminder?.channelType ?? channelType,
+        authorId: 'system:intention',
+        authorName: 'Whisper',
+        provenanceSource: 'companion_appraisal',
+        provenanceReason: normalizeOptionalText(decision.reason) ?? 'Companion-authored reminder',
+        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+        sourceMessageId,
+      });
+      return reminder.id;
+    },
+    onIntentionReminderTriggered: ({
+      reminderId,
+    }) => {
+      const reminder = careReminderStore.getById(reminderId);
+      if (!reminder || reminder.status !== 'active') {
+        return undefined;
+      }
+      const updated = careReminderStore.markTriggered(reminderId);
+      if (!updated) {
+        return undefined;
+      }
+      return {
+        reminderId: updated.id,
+        content: reminder.content,
+        channelId: reminder.channelId,
+        channelType: reminder.channelType,
+        authorId: reminder.authorId,
+        authorName: reminder.authorName,
+        ...(updated.status === 'active' ? { nextDueAt: updated.dueAt } : {}),
+      };
+    },
   };
 }
 
@@ -314,6 +424,7 @@ export function wireIntentionRuntime(
 ): IntentionRuntimeWiring {
   const concernStore = new ActiveConcernStore(db);
   const pendingFollowUpStore = new PendingFollowUpStore(db);
+  const careReminderStore = new CareReminderStore(db);
   const behavioralPatternTracker = new BehavioralPatternTracker(db);
   const behavioralHooks = createIntentionBehavioralPatternHooks(behavioralPatternTracker);
 
@@ -327,6 +438,12 @@ export function wireIntentionRuntime(
     target.setPendingFollowUpProvider(pendingFollowUpStore);
   } else {
     target.pendingFollowUpProvider = pendingFollowUpStore;
+  }
+
+  if (typeof target.setCareReminderProvider === 'function') {
+    target.setCareReminderProvider(careReminderStore);
+  } else {
+    target.careReminderProvider = careReminderStore;
   }
 
   if (typeof target.setBehavioralPatternProvider === 'function') {
@@ -352,6 +469,7 @@ export function wireIntentionRuntime(
   return {
     concernStore,
     pendingFollowUpStore,
+    careReminderStore,
     behavioralPatternTracker,
   };
 }

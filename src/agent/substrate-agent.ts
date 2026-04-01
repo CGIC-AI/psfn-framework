@@ -79,6 +79,7 @@ import { EmotionState } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
 import type { ActiveConcernContextProvider } from '../intention/concerns.js';
+import type { CareReminderContextProvider } from '../intention/care-reminders.js';
 import type { PendingFollowUpContextProvider } from '../intention/pending-follow-ups.js';
 import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
 import {
@@ -247,6 +248,7 @@ export class SubstrateAgent {
   scratchpadProvider: ScratchpadProvider | null = null;
   activeConcernProvider: ActiveConcernContextProvider | null = null;
   pendingFollowUpProvider: PendingFollowUpContextProvider | null = null;
+  careReminderProvider: CareReminderContextProvider | null = null;
   behavioralPatternProvider: BehavioralPatternContextProvider | null = null;
 
   // Trust resolution — null until contacts are wired
@@ -284,6 +286,7 @@ export class SubstrateAgent {
       emotionRuntime: options?.emotionRuntime,
       getActiveConcernProvider: () => this.activeConcernProvider,
       getPendingFollowUpProvider: () => this.pendingFollowUpProvider,
+      getCareReminderProvider: () => this.careReminderProvider,
       getContactStore: () => this.contactStore,
       getSelfModelRuntimeRequired: () => this.selfModelRuntimeRequired,
       logger: log,
@@ -670,6 +673,10 @@ export class SubstrateAgent {
 
   setPendingFollowUpProvider(provider: PendingFollowUpContextProvider | null): void {
     this.pendingFollowUpProvider = provider;
+  }
+
+  setCareReminderProvider(provider: CareReminderContextProvider | null): void {
+    this.careReminderProvider = provider;
   }
 
   setBehavioralPatternProvider(provider: BehavioralPatternContextProvider | null): void {

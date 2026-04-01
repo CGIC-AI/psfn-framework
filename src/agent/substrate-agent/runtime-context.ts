@@ -259,6 +259,7 @@ export function buildRuntimeContext(input: {
 
   if (input.internalState) {
     const pendingFollowUps = input.internalState.attention.pendingFollowUps ?? [];
+    const careReminders = input.internalState.attention.careReminders ?? [];
     lines.push('');
     lines.push('[Internal State]');
     lines.push(
@@ -282,7 +283,8 @@ export function buildRuntimeContext(input: {
       `Attention: trajectory=${input.internalState.attention.conversationTrajectory},`
       + ` salient_entities=${input.internalState.attention.salientEntities.length},`
       + ` active_concerns=${input.internalState.attention.activeConcerns.length},`
-      + ` pending_follow_ups=${pendingFollowUps.length}`,
+      + ` pending_follow_ups=${pendingFollowUps.length},`
+      + ` care_reminders=${careReminders.length}`,
     );
     const concernRefs = input.internalState.attention.activeConcerns
       .slice(0, 3)
@@ -292,6 +294,10 @@ export function buildRuntimeContext(input: {
       .slice(0, 3)
       .map((followUp) => `${followUp.id}:${followUp.timing}`);
     lines.push(`Pending follow-up refs: ${pendingRefs.length > 0 ? pendingRefs.join(', ') : 'none'}`);
+    const careReminderRefs = careReminders
+      .slice(0, 3)
+      .map((reminder) => `${reminder.id}:${reminder.classification}:${reminder.schedule}`);
+    lines.push(`Care reminder refs: ${careReminderRefs.length > 0 ? careReminderRefs.join(', ') : 'none'}`);
     const metacognitiveSummary = cloneMetacognitiveFlags(metacognitiveFlags)
       .slice(0, 3)
       .map((flag) => `${flag.flag}(${flag.confidence.toFixed(3)})`);

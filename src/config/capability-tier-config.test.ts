@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   loadCapabilityTierConfig,
+  loadCapabilityTierSeedDefaults,
   saveCapabilityTierConfig,
   CAPABILITY_TIER_FILE_NAME,
   CAPABILITY_TIER_SEED_FILE_NAME,
@@ -36,6 +37,26 @@ describe('capability-tier config', () => {
       const persistedRaw = readFileSync(join(dataDir, CAPABILITY_TIER_FILE_NAME), 'utf-8');
       const persisted = JSON.parse(persistedRaw);
       expect(persisted).toEqual(loaded);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reads seed defaults without requiring a data directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'capability-tier-seed-defaults-'));
+    const seedDir = join(root, 'seed');
+    mkdirSync(seedDir, { recursive: true });
+
+    try {
+      writeJson(join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME), {
+        tier: 'custom',
+        customTokens: ['identity.read', 'git.read', 'identity.read'],
+      });
+
+      expect(loadCapabilityTierSeedDefaults({ seedDir })).toEqual({
+        tier: 'custom',
+        customTokens: ['identity.read', 'git.read'],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

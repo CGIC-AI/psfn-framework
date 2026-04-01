@@ -1,7 +1,11 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './types.js';
 
 const ORIGINAL_ENV = { ...process.env };
+const TEMP_ROOTS: string[] = [];
 
 function restoreEnv(): void {
   for (const key of Object.keys(process.env)) {
@@ -31,7 +35,59 @@ function clearRuntimePathEnv(): void {
   delete process.env.DISCORD_BOT_ID;
 }
 
+function writeJson(path: string, value: unknown): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+}
+
+function makeSeedDir(prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  TEMP_ROOTS.push(root);
+  const seedDir = join(root, 'config');
+  mkdirSync(seedDir, { recursive: true });
+
+  writeJson(join(seedDir, 'models.seed.json'), {
+    schemaVersion: 1,
+    models: [
+      {
+        id: 'primary',
+        identity: { provider: 'seed-provider', model: 'seed-primary-model' },
+        capabilities: { maxOutputTokens: 4096, contextWindow: 32768 },
+      },
+      {
+        id: 'extraction',
+        identity: { provider: 'seed-provider', model: 'seed-extraction-model' },
+        capabilities: { maxOutputTokens: 2048, contextWindow: 32768 },
+      },
+    ],
+  });
+  writeJson(join(seedDir, 'settings.seed.json'), {
+    deepgramModel: 'seed-deepgram',
+    deepgramSttEndpoint: 'wss://seed.deepgram.invalid/listen',
+    deepgramListenEndpoint: 'https://seed.deepgram.invalid/listen',
+    elevenLabsModelId: 'seed-eleven-model',
+    elevenLabsEndpointBase: 'https://seed.eleven.invalid/v1',
+    openRouterModelsApiUrl: 'https://seed.openrouter.invalid/models',
+    embeddingProvider: 'ollama',
+    embeddingModel: 'seed-embed-model',
+    embeddingDims: 768,
+    embeddingOllamaUrl: 'http://seed-ollama.invalid:11434',
+    transformersModel: 'seed/transformers-model',
+    textEmotionModel: 'seed/text-emotion-model',
+    textEmotionCacheDir: 'seed-cache',
+    textEmotionDtype: 'fp32',
+    embeddingApiModel: 'seed-embed-api-model',
+    embeddingApiDims: 768,
+  });
+
+  return seedDir;
+}
+
 afterEach(() => {
+  while (TEMP_ROOTS.length > 0) {
+    const root = TEMP_ROOTS.pop();
+    if (!root) continue;
+    rmSync(root, { recursive: true, force: true });
+  }
   restoreEnv();
 });
 
@@ -164,7 +220,7 @@ describe('loadConfig path defaults', () => {
     expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
     expect(config.extractionProvider).toBe('openrouter');
     expect(config.extractionMaxTokens).toBe(8_192);
-    expect(config.sessionMessageLimit).toBe(30);
+    expect(config.sessionMessageLimit).toBeUndefined();
     expect(config.maintenanceIntervalMs).toBe(300_000);
     expect(config.retryMaxAttempts).toBe(3);
     expect(config.deepgramModel).toBe('nova-3');
@@ -206,6 +262,28 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramApiKey).toBe('deepgram-secret');
     expect(config.elevenLabsApiKey).toBe('eleven-secret');
     expect(config.gatewayTlsCaPath).toBe('./certs/dev-ca.pem');
+  });
+
+  it('loads maintenance interval and capability tier from owner-file seeds before JSON hydration', () => {
+    clearRuntimePathEnv();
+    const seedDir = makeSeedDir('psfn-load-config-seeds-');
+    writeJson(join(seedDir, 'scheduler.seed.json'), {
+      tickIntervalMs: 60_000,
+      heartbeatIntervalMs: 180_000,
+      salienceDecayIntervalMs: 654_000,
+    });
+    writeJson(join(seedDir, 'capability-tier.seed.json'), {
+      tier: 'apprentice',
+      customTokens: [],
+    });
+
+    process.env.CONFIG_DIR = seedDir;
+    process.env.MAINTENANCE_INTERVAL_MS = '1234';
+    process.env.CAPABILITY_TIER = 'autonomous';
+
+    const config = loadConfig();
+    expect(config.maintenanceIntervalMs).toBe(654_000);
+    expect(config.capabilityTier).toBe('apprentice');
   });
 
   it('fails closed when DISCORD_TOKEN is set without DISCORD_BOT_ID', () => {

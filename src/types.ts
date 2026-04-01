@@ -12,6 +12,8 @@ import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import type { ChannelVisibility, TrustLevel } from './trust/types.js';
 import type { ImageWorkflowSettings } from './images/types.js';
 import { resolveRuntimePathLayout } from './persistence/layout.js';
+import { loadCapabilityTierSeedDefaults } from './config/capability-tier-config.js';
+import { loadSchedulerSeedDefaults } from './config/scheduler-config.js';
 import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './config/seed-defaults.js';
 import { parseOptionalStringEnv } from './utils/env.js';
 
@@ -758,7 +760,6 @@ const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
 };
 export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 const DEFAULT_EXTRACTION_INTERVAL = 5;
-const DEFAULT_MAINTENANCE_INTERVAL_MS = 300_000;
 const DEFAULT_EXTRACTION_THRESHOLD_PCT = 30;
 const DEFAULT_COMPACTION_THRESHOLD_PCT = 70;
 const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
@@ -781,13 +782,18 @@ const DEFAULT_RETRY_BASE_DELAY_MS = 2_000;
 const DEFAULT_IMPORT_PROCESSING_ROUTE_MODE: ImportProcessingRouteMode = 'background';
 const DEFAULT_DISCORD_TRIGGER_REACTIONS = ['👆'] as const;
 const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
-const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
 const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
 export const DEFAULT_UI_THEME_ID = 'garden';
 
 export function loadConfig(): SubstrateConfig {
   const modelSeedDefaults = loadModelSeedDefaults();
   const runtimeSeedDefaults = loadRuntimeSettingsSeedDefaults();
+  const schedulerSeedDefaults = loadSchedulerSeedDefaults({
+    seedDir: process.env.CONFIG_DIR,
+  });
+  const capabilityTierSeedDefaults = loadCapabilityTierSeedDefaults({
+    seedDir: process.env.CONFIG_DIR,
+  });
   const primaryModel = modelSeedDefaults.primary.model;
   const primaryProvider = modelSeedDefaults.primary.provider;
   const primaryMaxTokens = modelSeedDefaults.primary.maxOutputTokens;
@@ -934,7 +940,7 @@ export function loadConfig(): SubstrateConfig {
     moodCongruenceWeight: DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled: false,
     extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
-    maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
+    maintenanceIntervalMs: schedulerSeedDefaults.salienceDecayIntervalMs,
     defaultContextWindow,
     extractionThresholdPct: DEFAULT_EXTRACTION_THRESHOLD_PCT,
     compactionThresholdPct: DEFAULT_COMPACTION_THRESHOLD_PCT,
@@ -1020,7 +1026,7 @@ export function loadConfig(): SubstrateConfig {
     wyomingHost,
     ...(wyomingPort !== undefined ? { wyomingPort } : {}),
     telegramEnabled: false,
-    capabilityTier: DEFAULT_CAPABILITY_TIER,
+    capabilityTier: capabilityTierSeedDefaults.tier,
     ...(Object.keys(shardToolsets).length > 0 ? { shardToolsets } : {}),
     // Obsidian vault
     obsidianAutoPublish: false,

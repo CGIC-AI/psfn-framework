@@ -37,9 +37,13 @@ import type {
   ShardConfig,
   ShardContextPack,
   ShardContextPackEntry,
-  ShardHealthState,
   ShardLifecycleState,
   ShardResult,
+  ShardRuntimeRecord,
+  ShardRuntimeSnapshot,
+  ShardRuntimeSnapshotOptions,
+  ShardRuntimeState,
+  ShardRuntimeTaskView,
   ShardSourceContext,
 } from './types.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -58,6 +62,7 @@ const SHARD_SYNC_POLICY_VERSION = 1;
 const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'load_tools']);
+const DEFAULT_RUNTIME_SHARD_HISTORY_LIMIT = 25;
 const APPRENTICE_SHARD_TOOL_EXTRAS = [
   'contact_list',
   'memory_import_batch',
@@ -112,23 +117,7 @@ export interface ShardManagerDeps {
   companionId?: string;
 }
 
-export interface ActiveShard {
-  id: string;
-  name: string;
-  task: string;
-  startedAt: number;
-  channelId: string;
-  state: ShardLifecycleState;
-  stateReason: string;
-  health: ShardHealthState;
-  lastTransitionAt: number;
-  lastHeartbeatAt: number;
-  heartbeatStaleAfterMs: number;
-  heartbeatDisconnectAfterMs: number;
-  capabilities: string[];
-  requiredCapabilities: string[];
-  failureReason?: string;
-}
+export type ActiveShard = ShardRuntimeRecord;
 
 export class ShardManager implements ShardExecutionPort {
   readonly portFamily = 'shard' as const;
@@ -139,7 +128,10 @@ export class ShardManager implements ShardExecutionPort {
   private maxConcurrent: number;
   private heartbeatStaleAfterMs: number;
   private heartbeatDisconnectAfterMs: number;
+  private runtimeShardHistoryLimit = DEFAULT_RUNTIME_SHARD_HISTORY_LIMIT;
   private activeShards = new Map<string, ActiveShard>();
+  private shardHistoryOrder: string[] = [];
+  private shardRecords = new Map<string, ShardRuntimeRecord>();
   private activeShardChannels = new Map<string, Set<string>>();
 
   constructor(deps: ShardManagerDeps) {
@@ -221,22 +213,35 @@ export class ShardManager implements ShardExecutionPort {
     );
 
     this.activeCount++;
-    this.activeShards.set(shardId, {
-      id: shardId,
+    const runtimeRecord: ShardRuntimeRecord = {
+      shardId,
       name: shardConfig.name,
       task: shardConfig.task,
-      startedAt: startTime,
       channelId,
-      state: 'registering',
+      createdAt: startTime,
+      startedAt: startTime,
+      lifecycleState: 'registering',
+      runtimeState: 'preparing',
+      runtimeStateReason: 'spawn_requested',
       stateReason: 'spawn_requested',
       health: 'healthy',
       lastTransitionAt: startTime,
       lastHeartbeatAt: startTime,
       heartbeatStaleAfterMs,
       heartbeatDisconnectAfterMs,
+      artifactLifecycleState: 'pending',
+      artifactUpdatedAt: startTime,
+      inputTokens: 0,
+      outputTokens: 0,
+      turns: 0,
       capabilities,
       requiredCapabilities,
-    });
+      lineage,
+      gatewayRouting,
+    };
+    this.activeShards.set(shardId, runtimeRecord);
+    this.shardRecords.set(shardId, runtimeRecord);
+    this.noteShardHistory(shardId);
     this.registerActiveShardChannel(channelId, shardId);
     this.auditTrail?.append('shard.lifecycle.transition', {
       shardId,
@@ -293,6 +298,7 @@ export class ShardManager implements ShardExecutionPort {
         tier: this.resolveCapabilityTier(),
         tools: injectedTools.map(tool => tool.name),
       });
+      this.transitionRuntimeState(shardId, 'running', 'agent_initialized');
       this.transitionShardState(shardId, 'ready', 'agent_initialized');
       this.touchShardHeartbeat(shardId);
       // No memoryExtractor — shards don't run L1 extraction/archive jobs.
@@ -328,8 +334,20 @@ export class ShardManager implements ShardExecutionPort {
         if (turn === 0 && maxTurns === 1) break;
       }
 
+      const completedAt = Date.now();
+      this.setShardArtifact(
+        shardId,
+        lastContent,
+        lastModel,
+        totalInput,
+        totalOutput,
+        turns,
+        completedAt,
+      );
+      this.transitionRuntimeState(shardId, 'awaiting_delivery', 'artifact_ready');
       this.transitionShardState(shardId, 'offline', 'completed');
-      const finishedShard = this.activeShards.get(shardId);
+      this.markShardCompleted(shardId, completedAt);
+      const finishedShard = this.shardRecords.get(shardId);
       const result: ShardResult = {
         shardId,
         name: shardConfig.name,
@@ -337,11 +355,18 @@ export class ShardManager implements ShardExecutionPort {
         model: lastModel,
         inputTokens: totalInput,
         outputTokens: totalOutput,
-        durationMs: Date.now() - startTime,
+        durationMs: completedAt - startTime,
         turns,
-        lifecycleState: finishedShard?.state ?? 'offline',
+        lifecycleState: finishedShard?.lifecycleState ?? 'offline',
+        runtimeState: finishedShard?.runtimeState ?? 'awaiting_delivery',
+        runtimeStateReason: finishedShard?.runtimeStateReason ?? 'artifact_ready',
         health: finishedShard?.health ?? 'healthy',
         stateReason: finishedShard?.stateReason ?? 'completed',
+        artifactLifecycleState: finishedShard?.artifactLifecycleState ?? 'available',
+        ...(finishedShard?.artifactAvailableAt
+          ? { artifactAvailableAt: finishedShard.artifactAvailableAt }
+          : {}),
+        ...(finishedShard?.deliveredAt ? { deliveredAt: finishedShard.deliveredAt } : {}),
         ...(finishedShard?.failureReason ? { failureReason: finishedShard.failureReason } : {}),
         capabilities: [...capabilities],
         requiredCapabilities: [...requiredCapabilities],
@@ -356,13 +381,17 @@ export class ShardManager implements ShardExecutionPort {
         companionId: result.gatewayRouting.companionId,
         shardCompanionId: result.lineage.shardCompanionId,
         lifecycleState: result.lifecycleState,
+        runtimeState: result.runtimeState,
+        artifactLifecycleState: result.artifactLifecycleState,
         health: result.health,
       });
       return result;
     } catch (error) {
       const msg = toErrorMessage(error);
+      this.transitionRuntimeState(shardId, 'failed', 'execution_failed');
       this.transitionShardState(shardId, 'degraded', 'execution_failed', msg);
       this.transitionShardState(shardId, 'offline', 'execution_failed', msg);
+      this.markShardFailure(shardId, msg);
       this.auditTrail?.append('shard.spawn.end', {
         shardId,
         status: 'failed',
@@ -401,11 +430,51 @@ export class ShardManager implements ShardExecutionPort {
 
   getActiveShards(): ActiveShard[] {
     this.refreshShardHealth();
-    return [...this.activeShards.values()].map(shard => ({
-      ...shard,
-      capabilities: [...shard.capabilities],
-      requiredCapabilities: [...shard.requiredCapabilities],
-    }));
+    return [...this.activeShards.values()].map(shard => this.cloneShardRecord(shard));
+  }
+
+  getRuntimeSnapshot(options: ShardRuntimeSnapshotOptions = {}): ShardRuntimeSnapshot {
+    this.refreshShardHealth();
+    const shardLimit = normalizePositiveInteger(options.shardLimit, 10);
+    const transcriptLimit = normalizePositiveInteger(options.transcriptLimit, 8);
+    const activeShards = [...this.activeShards.values()].map(shard => this.buildRuntimeTaskView(shard, transcriptLimit));
+    const recentShards = this.shardHistoryOrder
+      .map(shardId => this.shardRecords.get(shardId))
+      .filter((shard): shard is ShardRuntimeRecord => shard !== undefined && !this.activeShards.has(shard.shardId))
+      .slice(0, shardLimit)
+      .map(shard => this.buildRuntimeTaskView(shard, transcriptLimit));
+
+    return {
+      generatedAt: Date.now(),
+      activeCount: this.activeCount,
+      activeShards,
+      recentShards,
+    };
+  }
+
+  getRuntimeShardView(
+    shardId: string,
+    options: ShardRuntimeSnapshotOptions = {},
+  ): ShardRuntimeTaskView | null {
+    this.refreshShardHealth();
+    const transcriptLimit = normalizePositiveInteger(options.transcriptLimit, 8);
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      return null;
+    }
+    return this.buildRuntimeTaskView(shard, transcriptLimit);
+  }
+
+  markArtifactDelivered(shardId: string): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard || shard.artifactLifecycleState !== 'available') {
+      return;
+    }
+    const deliveredAt = Date.now();
+    shard.artifactLifecycleState = 'delivered';
+    shard.artifactUpdatedAt = deliveredAt;
+    shard.deliveredAt = deliveredAt;
+    this.transitionRuntimeState(shardId, 'completed', 'artifact_delivered', deliveredAt);
   }
 
   private resolveHeartbeatStaleAfterMs(value: number | undefined): number {
@@ -428,7 +497,7 @@ export class ShardManager implements ShardExecutionPort {
     const shard = this.activeShards.get(shardId);
     if (!shard) return;
     shard.lastHeartbeatAt = Date.now();
-    if (shard.state === 'degraded' && shard.stateReason === 'heartbeat_stale') {
+    if (shard.lifecycleState === 'degraded' && shard.stateReason === 'heartbeat_stale') {
       this.transitionShardState(shardId, 'ready', 'heartbeat_recovered');
     }
   }
@@ -436,9 +505,9 @@ export class ShardManager implements ShardExecutionPort {
   private refreshShardHealth(now = Date.now()): void {
     const activeShards = [...this.activeShards.values()];
     for (const shard of activeShards) {
-      const inHeartbeatManagedState = shard.state === 'registering'
-        || shard.state === 'ready'
-        || (shard.state === 'degraded' && shard.stateReason === 'heartbeat_stale');
+      const inHeartbeatManagedState = shard.lifecycleState === 'registering'
+        || shard.lifecycleState === 'ready'
+        || (shard.lifecycleState === 'degraded' && shard.stateReason === 'heartbeat_stale');
       if (!inHeartbeatManagedState) {
         continue;
       }
@@ -449,7 +518,7 @@ export class ShardManager implements ShardExecutionPort {
       }
 
       const staleReason = `No heartbeat observed for ${staleForMs}ms (limit ${shard.heartbeatStaleAfterMs}ms).`;
-      this.transitionShardState(shard.id, 'degraded', 'heartbeat_stale', staleReason);
+      this.transitionShardState(shard.shardId, 'degraded', 'heartbeat_stale', staleReason);
       if (staleForMs <= shard.heartbeatDisconnectAfterMs) {
         continue;
       }
@@ -457,10 +526,11 @@ export class ShardManager implements ShardExecutionPort {
       const timeoutReason =
         `Heartbeat stale for ${staleForMs}ms exceeded recovery window `
         + `(${shard.heartbeatDisconnectAfterMs}ms).`;
-      this.transitionShardState(shard.id, 'offline', 'heartbeat_timeout', timeoutReason);
-      this.releaseActiveShard(shard.id, shard.channelId);
+      this.transitionRuntimeState(shard.shardId, 'detached', 'heartbeat_timeout');
+      this.transitionShardState(shard.shardId, 'offline', 'heartbeat_timeout', timeoutReason);
+      this.releaseActiveShard(shard.shardId, shard.channelId);
       this.auditTrail?.append('shard.health.evict', {
-        shardId: shard.id,
+        shardId: shard.shardId,
         state: 'offline',
         reason: 'heartbeat_timeout',
         staleForMs,
@@ -475,12 +545,12 @@ export class ShardManager implements ShardExecutionPort {
     if (!shard) {
       throw new Error(`Shard routing denied: "${shardId}" is offline.`);
     }
-    if (shard.state !== 'ready' || shard.health !== 'healthy') {
+    if (shard.lifecycleState !== 'ready' || shard.health !== 'healthy') {
       const detail = shard.failureReason
         ? `${shard.stateReason}; ${shard.failureReason}`
         : shard.stateReason;
       throw new Error(
-        `Shard routing denied: "${shard.name}" is ${shard.state}/${shard.health} (${detail}).`,
+        `Shard routing denied: "${shard.name}" is ${shard.lifecycleState}/${shard.health} (${detail}).`,
       );
     }
 
@@ -508,13 +578,13 @@ export class ShardManager implements ShardExecutionPort {
     reason: string,
     failureReason?: string,
   ): void {
-    const shard = this.activeShards.get(shardId);
+    const shard = this.shardRecords.get(shardId);
     if (!shard) {
       return;
     }
 
     const now = Date.now();
-    const currentState = shard.state;
+    const currentState = shard.lifecycleState;
     const currentFailureReason = shard.failureReason;
     if (
       currentState === nextState
@@ -530,7 +600,7 @@ export class ShardManager implements ShardExecutionPort {
           `Invalid shard lifecycle transition for ${shardId}: ${currentState} -> ${nextState}.`,
         );
       }
-      shard.state = nextState;
+      shard.lifecycleState = nextState;
       shard.lastTransitionAt = now;
     }
     shard.stateReason = reason;
@@ -555,6 +625,141 @@ export class ShardManager implements ShardExecutionPort {
       health: shard.health,
       ...(failureReason ? { failureReason } : {}),
     });
+  }
+
+  private transitionRuntimeState(
+    shardId: string,
+    nextState: ShardRuntimeState,
+    reason: string,
+    timestamp = Date.now(),
+  ): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      return;
+    }
+    if (shard.runtimeState === nextState && shard.runtimeStateReason === reason) {
+      return;
+    }
+    shard.runtimeState = nextState;
+    shard.runtimeStateReason = reason;
+    shard.lastTransitionAt = timestamp;
+  }
+
+  private setShardArtifact(
+    shardId: string,
+    content: string,
+    model: string,
+    inputTokens: number,
+    outputTokens: number,
+    turns: number,
+    completedAt: number,
+  ): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      return;
+    }
+    shard.content = content;
+    shard.model = model;
+    shard.inputTokens = inputTokens;
+    shard.outputTokens = outputTokens;
+    shard.turns = turns;
+    shard.completedAt = completedAt;
+    shard.artifactLifecycleState = 'available';
+    shard.artifactUpdatedAt = completedAt;
+    shard.artifactAvailableAt = completedAt;
+  }
+
+  private markShardCompleted(shardId: string, completedAt: number): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      return;
+    }
+    shard.completedAt = completedAt;
+  }
+
+  private markShardFailure(shardId: string, failureReason: string): void {
+    const shard = this.shardRecords.get(shardId);
+    if (!shard) {
+      return;
+    }
+    shard.failureReason = failureReason;
+    shard.completedAt = Date.now();
+    shard.artifactLifecycleState = 'none';
+    shard.artifactUpdatedAt = shard.completedAt;
+  }
+
+  private buildRuntimeTaskView(
+    shard: ShardRuntimeRecord,
+    transcriptLimit: number,
+  ): ShardRuntimeTaskView {
+    const transcript = this.deps.sessionStore.getRecent(shard.channelId, transcriptLimit);
+    const transcriptMessageCount = this.deps.sessionStore.count(shard.channelId);
+    const transcriptTruncated = transcriptMessageCount > transcriptLimit;
+    const artifacts = shard.content && shard.artifactLifecycleState !== 'pending' && shard.artifactLifecycleState !== 'none'
+      ? [{
+        kind: 'final_output' as const,
+        lifecycleState: shard.artifactLifecycleState,
+        content: shard.content,
+        timestamp: shard.artifactAvailableAt ?? shard.completedAt ?? shard.startedAt,
+        ...(shard.deliveredAt ? { deliveredAt: shard.deliveredAt } : {}),
+      }]
+      : [];
+    const lastEntry = transcript.at(-1);
+    const lastActivityAt = lastEntry?.timestamp
+      ?? shard.deliveredAt
+      ?? shard.artifactAvailableAt
+      ?? shard.completedAt
+      ?? shard.lastHeartbeatAt;
+    const deliveryPending = shard.artifactLifecycleState === 'available';
+    const resume = {
+      channelId: shard.channelId,
+      lifecycleState: shard.lifecycleState,
+      runtimeState: shard.runtimeState,
+      health: shard.health,
+      mode: deliveryPending ? 'delivery' as const : 'none' as const,
+      resumable: deliveryPending,
+      artifactLifecycleState: shard.artifactLifecycleState,
+      artifactAvailable: shard.artifactLifecycleState === 'available' || shard.artifactLifecycleState === 'delivered',
+      deliveryPending,
+      transcriptAvailable: transcriptMessageCount > 0,
+      transcriptMessageCount,
+      transcriptTruncated,
+      ...(Number.isFinite(lastActivityAt) ? { lastActivityAt } : {}),
+      ...(shard.artifactAvailableAt ? { artifactAvailableAt: shard.artifactAvailableAt } : {}),
+      ...(shard.deliveredAt ? { deliveredAt: shard.deliveredAt } : {}),
+      ...(lastEntry?.id ? { lastMessageId: lastEntry.id } : {}),
+    };
+
+    return {
+      task: this.cloneShardRecord(shard),
+      transcript,
+      transcriptMessageCount,
+      transcriptTruncated,
+      artifacts,
+      resume,
+    };
+  }
+
+  private cloneShardRecord(shard: ShardRuntimeRecord): ShardRuntimeRecord {
+    return {
+      ...shard,
+      capabilities: [...shard.capabilities],
+      requiredCapabilities: [...shard.requiredCapabilities],
+      lineage: { ...shard.lineage },
+      gatewayRouting: cloneGatewayRoutingEnvelope(shard.gatewayRouting) ?? shard.gatewayRouting,
+    };
+  }
+
+  private noteShardHistory(shardId: string): void {
+    this.shardHistoryOrder = [shardId, ...this.shardHistoryOrder.filter(current => current !== shardId)];
+    const obsoleteShardIds = this.shardHistoryOrder.slice(this.runtimeShardHistoryLimit);
+    this.shardHistoryOrder = this.shardHistoryOrder.slice(0, this.runtimeShardHistoryLimit);
+    for (const obsoleteShardId of obsoleteShardIds) {
+      if (this.activeShards.has(obsoleteShardId)) {
+        continue;
+      }
+      this.shardRecords.delete(obsoleteShardId);
+    }
   }
 
   private installAuditHooks(): void {
@@ -1076,6 +1281,13 @@ function normalizeCapabilityTokens(
       .map(item => item.trim())
       .filter(Boolean),
   )];
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number): number {
+  const normalized = typeof value === 'number' && Number.isFinite(value)
+    ? Math.trunc(value)
+    : fallback;
+  return Math.max(1, normalized);
 }
 
 function normalizeHeartbeatStaleAfterMs(value: number | undefined, fallback: number): number {

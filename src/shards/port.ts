@@ -9,6 +9,7 @@ export type ExecutionPortFamily = typeof EXECUTION_PORT_FAMILIES[number];
 export interface ShardExecutionPort {
   readonly portFamily: 'shard';
   spawn(shardConfig: ShardConfig): Promise<ShardResult>;
+  markArtifactDelivered(shardId: string): void;
 }
 
 export interface ArtifactReturnPort {

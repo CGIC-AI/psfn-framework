@@ -68,6 +68,13 @@ export interface ResolvedAuthorContext {
 
 const SELF_MEDIA_TOOL_NAMES = ['media'] as const;
 
+interface CollapsedToolStackSummary {
+  activeOverlayNames: string[];
+  activeInternalNames: string[];
+  discoverableOverlayCount: number;
+  discoverableInternalCount: number;
+}
+
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
 }
@@ -78,6 +85,62 @@ function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMess
   return {
     ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
     ...(privacyLevel ? { privacyLevel } : {}),
+  };
+}
+
+function summarizeCollapsedToolStack(input: {
+  extendedTools: readonly AgentTool<any>[];
+  loadedExtended: ReadonlyMap<string, AdaptiveLoadedExtendedToolState>;
+  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
+  promotedExtendedToolNames: ReadonlySet<string>;
+}): CollapsedToolStackSummary {
+  const activeOverlayNames = new Set<string>();
+  const activeInternalNames = new Set<string>();
+  const discoverableOverlayNames = new Set<string>();
+  const discoverableInternalNames = new Set<string>();
+
+  const classifyIntoBucket = (toolName: string, bucket: 'active' | 'discoverable'): void => {
+    if (input.classifyExtendedToolForTurn(toolName) === 'overlay') {
+      if (bucket === 'active') {
+        activeOverlayNames.add(toolName);
+      } else {
+        discoverableOverlayNames.add(toolName);
+      }
+      return;
+    }
+
+    if (bucket === 'active') {
+      activeInternalNames.add(toolName);
+    } else {
+      discoverableInternalNames.add(toolName);
+    }
+  };
+
+  for (const tool of input.extendedTools) {
+    const isActive = input.promotedExtendedToolNames.has(tool.name) || input.loadedExtended.has(tool.name);
+    classifyIntoBucket(tool.name, isActive ? 'active' : 'discoverable');
+  }
+
+  for (const toolName of input.promotedExtendedToolNames) {
+    classifyIntoBucket(toolName, 'active');
+  }
+
+  for (const toolName of input.loadedExtended.keys()) {
+    classifyIntoBucket(toolName, 'active');
+  }
+
+  for (const toolName of activeOverlayNames) {
+    discoverableOverlayNames.delete(toolName);
+  }
+  for (const toolName of activeInternalNames) {
+    discoverableInternalNames.delete(toolName);
+  }
+
+  return {
+    activeOverlayNames: [...activeOverlayNames].sort(),
+    activeInternalNames: [...activeInternalNames].sort(),
+    discoverableOverlayCount: discoverableOverlayNames.size,
+    discoverableInternalCount: discoverableInternalNames.size,
   };
 }
 
@@ -180,22 +243,14 @@ export function buildRuntimeContext(input: {
   const emotionAppraisalChain = input.emotionAppraisalChain ?? [];
   const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
   const responseStyleGuidance = getResponseStylePromptGuidance(responseStyle);
-  const extendedCount = input.extendedTools.length;
-  const {
-    core: coreCount,
-    promoted: promotedCount,
-    extendedLoaded: extendedLoadedCount,
-    autoload: autoloadCount,
-    deferred: deferredCount,
-    total: activeCount,
-  } = input.activeToolCounts;
   const subjectIdentityKey = input.subjectIdentityKey ?? input.message.authorId;
   const canonicalIdentityKey = input.canonicalContactKey ?? input.subjectIdentityKey ?? input.message.authorId;
-  const extendedBreakdown = [
-    extendedLoadedCount > 0 ? `${extendedLoadedCount} loaded` : null,
-    autoloadCount > 0 ? `${autoloadCount} autoload` : null,
-    deferredCount > 0 ? `${deferredCount} deferred` : null,
-  ].filter(Boolean).join(' + ');
+  const collapsedToolStack = summarizeCollapsedToolStack({
+    extendedTools: input.extendedTools,
+    loadedExtended: input.loadedExtended,
+    classifyExtendedToolForTurn: input.classifyExtendedToolForTurn,
+    promotedExtendedToolNames: input.promotedExtendedToolNames,
+  });
 
   const lines = [
     '[Runtime Context]',
@@ -205,12 +260,6 @@ export function buildRuntimeContext(input: {
     `Response style preference: ${responseStyle}`,
     `Capability tier: ${input.capabilityTier}`,
     `Context window: ${input.contextWindow} tokens`,
-    `Tools: ${activeCount} active`
-    + ` (${coreCount} core`
-    + (promotedCount > 0 ? ` + ${promotedCount} promoted` : '')
-    + (extendedBreakdown ? ` + ${extendedBreakdown}` : '')
-    + ')'
-    + (extendedCount > 0 ? `, ${extendedCount} discoverable via tool_search` : ''),
   ];
   if (!isInternalJournalChannel(input.message.channelId)) {
     lines.splice(
@@ -223,10 +272,34 @@ export function buildRuntimeContext(input: {
   const isScheduledTask = input.taskKind === 'heartbeat'
     || input.taskKind === 'reflection'
     || input.message.channelId.startsWith('internal:');
+  const isBackgroundRelevantTurn = isScheduledTask || input.taskKind === 'deferred_tool_handoff';
   const shouldIncludeAppearanceContext = isScheduledTask || hasActiveSelfMediaTool();
   if (shouldIncludeAppearanceContext) {
     const appearance = resolveAppearanceContext();
     if (appearance.length > 0) lines.push(`Appearance context: ${appearance}`);
+  }
+
+  lines.push('');
+  lines.push('[Tool Stack]');
+  lines.push('Treat the currently loaded tools as the live, collapsed stack for this turn. Use a direct tool first when one already fits the task.');
+  lines.push('Use tool_search only when a needed semantic tool is missing from the active stack. Use toolset only to add an overlay for this runtime or pin it across turns.');
+  if (collapsedToolStack.activeOverlayNames.length > 0) {
+    lines.push(`Additional active overlays: ${collapsedToolStack.activeOverlayNames.join(', ')}.`);
+  }
+  if (collapsedToolStack.discoverableOverlayCount > 0) {
+    lines.push(`${collapsedToolStack.discoverableOverlayCount} more non-default semantic tools are discoverable on demand.`);
+  }
+  if (isBackgroundRelevantTurn) {
+    if (collapsedToolStack.activeInternalNames.length > 0) {
+      lines.push(`Internal/background tools active for this turn: ${collapsedToolStack.activeInternalNames.join(', ')}.`);
+    } else if (collapsedToolStack.discoverableInternalCount > 0) {
+      lines.push(`${collapsedToolStack.discoverableInternalCount} internal/background tools are available for scheduled or deferred work.`);
+    }
+  } else if (
+    collapsedToolStack.activeInternalNames.length > 0
+    || collapsedToolStack.discoverableInternalCount > 0
+  ) {
+    lines.push('Internal/background tools stay out of ordinary direct turns unless the turn is scheduled or deferred.');
   }
 
   if (hasActiveSelfMediaTool()) {
@@ -238,32 +311,6 @@ export function buildRuntimeContext(input: {
     lines.push('Load relevant creator skills with skill action="view" when you need detailed composition, prompt craft, appearance continuity cues, or provider/model quirks.');
     lines.push('Image creation, music creation, and future creator workflows belong in skills layered on the unified media surface, not in new top-level tools.');
     lines.push('Generate and edit actions already return a vision review, so do not ask the user to go check basic appearance consistency unless you need their subjective preference.');
-  }
-
-  if (extendedCount > 0) {
-    lines.push('');
-    lines.push('[Tool Discovery]');
-    lines.push('Use tool_search first for non-default tools. Use toolset to activate overlay tools for this runtime or pin them across turns.');
-
-    lines.push('');
-    lines.push('Available extended tools:');
-    for (const t of input.extendedTools) {
-      const loaded = input.loadedExtended.get(t.name);
-      const turnClass = input.classifyExtendedToolForTurn(t.name);
-      let suffix = ' (discover with tool_search; activate or pin with toolset)';
-      if (turnClass !== 'overlay') {
-        suffix = ' (background-only; discover with tool_search)';
-      } else if (input.promotedExtendedToolNames.has(t.name)) {
-        suffix = ' (pinned, always active; discoverable via tool_search)';
-      } else if (loaded?.source === 'autoload') {
-        suffix = ' (autoload active; discoverable via tool_search)';
-      } else if (loaded?.source === 'deferred') {
-        suffix = ' (deferred active; discoverable via tool_search)';
-      } else if (loaded?.source === 'extended_loaded') {
-        suffix = ' (loaded active; discoverable via tool_search)';
-      }
-      lines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
-    }
   }
 
   lines.push('');

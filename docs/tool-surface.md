@@ -227,6 +227,15 @@ This keeps long-horizon shard execution, operator-visible shard runtime state, a
 - operator/debug surfaces
 - autoload bookkeeping
 
+## Runtime Prompt Presentation
+
+The companion-facing runtime prompt should describe the live collapsed stack, not the implementation mechanics behind it.
+
+- Treat the currently loaded tools as the active stack for the turn; prefer calling a direct tool that already fits the task.
+- Mention `tool_search` and `toolset` as the discovery/control path for non-default overlays, but do not spend prompt budget on active counts, per-tool activation sources, or suffixes such as promoted/autoload/deferred.
+- Hide internal/background-only tools from ordinary direct turns unless the current turn is scheduled, deferred, or otherwise explicitly about that background workflow.
+- Keep richer activation/source/debug detail on admin and observability surfaces rather than in the companion prompt.
+
 ## Naming Rules
 
 - Prefer one top-level tool per semantic domain.

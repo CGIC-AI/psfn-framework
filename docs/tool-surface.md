@@ -207,6 +207,18 @@ The runtime now exposes a unified model-facing `system` tool for safe runtime-se
 
 `system action="read"` preserves the existing safe runtime-settings snapshot behavior. `system action="restart|rebuild"` preserves the existing restart safeguard checks, notification flow, and capability enforcement, but keeps lifecycle control on one semantic surface instead of separate micro-tools.
 
+## Live Shard Surface
+
+The runtime now exposes a unified model-facing `shard` tool for long-horizon shard work and fold-back lifecycle control.
+
+- Actions: `spawn`, `list`, `status`, `deliver`
+- Legacy action alias remains available inside the same tool:
+  `spawn_shard` -> `spawn`
+- `list` and `status` are anchored on the live shard runtime snapshot/detail views instead of ad hoc summaries
+- `deliver` wires to the real shard delivery path, which transitions available artifacts into delivered state and refreshes fold-back review metadata
+
+This keeps long-horizon shard execution, operator-visible shard runtime state, and explicit fold-back delivery on one semantic surface while preserving shard-specific concurrency scheduling and merge-review semantics.
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals
@@ -302,7 +314,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `crawler_fetch` | `web` | always-on | Collapsed into `web action="browse"` so crawler-lane use stays explicit without creating a second top-level web tool. |
 | `web_research` | `web` | always-on | Collapsed into `web action="search"` for small-scope URL discovery + fetch; do not confuse with `session search` or transcript recall. |
 | `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
-| `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work; forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
+| `spawn_shard` | `shard` | extended | Legacy action/name now collapses into `shard action="spawn"`; long-horizon clone work is shard work, not subagent work, and forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
 | `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |
 | `skill` | `skill` | always-on | Unified surface with `action=list|view|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
 | `vault_write` | `vault` | extended | Collapsed into `vault action="write"`; vault stays for durable notes/artifacts, not scratchpad or memory. |

@@ -69,6 +69,10 @@ const SYSTEM_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'identity.read',
   'lifecycle.restart',
   'lifecycle.rebuild',
+];
+
+const SHARD_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'shard.spawn',
 ] as const;
 
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
@@ -347,6 +351,21 @@ function resolveUnifiedSystemRequirement(params: Record<string, unknown>): Capab
   }
 }
 
+function resolveUnifiedShardRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case '':
+    case 'spawn':
+    case 'spawn_shard':
+    case 'list':
+    case 'status':
+    case 'deliver':
+      return 'shard.spawn';
+    default:
+      return SHARD_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
@@ -395,6 +414,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   settings_get: 'identity.read',
   system: SYSTEM_FAIL_CLOSED_REQUIREMENTS,
   subagent: 'subagent.spawn',
+  shard: 'shard.spawn',
   spawn_shard: 'shard.spawn',
   think: 'repl.execute',
 };
@@ -450,6 +470,10 @@ export function resolveToolRequiredCapabilities(
 
   if (tool.name === 'system') {
     return normalizeRequirement(resolveUnifiedSystemRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'shard') {
+    return normalizeRequirement(resolveUnifiedShardRequirement(toRecord(params)));
   }
 
   const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;

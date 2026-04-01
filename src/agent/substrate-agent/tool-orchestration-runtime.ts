@@ -71,7 +71,7 @@ const LOADED_TOOL_SOURCE_PRIORITY: Record<LoadedToolSource, number> = {
 };
 
 export const DEFAULT_PARALLEL_READ_MAX = 3;
-export const DEFAULT_SPAWN_SHARD_PARALLEL_MAX = 5;
+export const DEFAULT_SHARD_PARALLEL_MAX = 5;
 
 const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'repo_status',
@@ -87,7 +87,7 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;
 
 export function inferToolConcurrencyClass(toolName: string): ToolConcurrencyClass {
-  if (toolName === 'spawn_shard') return 'spawn_shard';
+  if (toolName === 'shard') return 'shard';
   if (PARALLEL_READ_ONLY_TOOL_NAMES.has(toolName)) return 'read_only';
   return 'exclusive';
 }
@@ -95,7 +95,7 @@ export function inferToolConcurrencyClass(toolName: string): ToolConcurrencyClas
 export function inferToolInterruptibility(
   concurrencyClass: ToolConcurrencyClass,
 ): ToolInterruptibility {
-  if (concurrencyClass === 'spawn_shard') return 'non_interruptible';
+  if (concurrencyClass === 'shard') return 'non_interruptible';
   return 'cooperative';
 }
 
@@ -158,8 +158,8 @@ export function withToolConcurrencyMetadata(
     concurrency.exclusivityKeyPolicy = 'none';
     delete concurrency.exclusivityKey;
     if (concurrency.maxParallel === undefined) {
-      concurrency.maxParallel = concurrency.class === 'spawn_shard'
-        ? DEFAULT_SPAWN_SHARD_PARALLEL_MAX
+      concurrency.maxParallel = concurrency.class === 'shard'
+        ? DEFAULT_SHARD_PARALLEL_MAX
         : DEFAULT_PARALLEL_READ_MAX;
     }
   }

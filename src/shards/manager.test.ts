@@ -10,7 +10,7 @@ import { runWithRequestContext } from '../llm/request-context.js';
 import { buildSessionMetadataWithTurn } from '../session/turn-provenance.js';
 import { buildFocusMemoryScopeQuery } from '../session/focus-knowledge.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
-import { createSpawnShardTool } from './tools.js';
+import { createShardTool } from './tools.js';
 import { EXECUTION_PORT_FAMILIES } from './port.js';
 import { shardArtifactReturnPort } from './artifact-policy.js';
 import type { LLMProvider, MemoryProvider } from '../agent/contracts.js';
@@ -939,11 +939,10 @@ describe('ShardManager', () => {
 
   it('injects default nursery shard toolset and blocks recursion tools', async () => {
     const memory = makeTestTool('memory');
-    const contactLookup = makeTestTool('contact_lookup');
-    const repoStatus = makeTestTool('repo_status');
-    const repoDiff = makeTestTool('repo_diff');
+    const contact = makeTestTool('contact');
+    const repo = makeTestTool('repo');
     const repoCommit = makeTestTool('repo_commit');
-    const spawnShard = makeTestTool('spawn_shard');
+    const spawnShard = makeTestTool('shard');
 
     const manager = new ShardManager({
       eventBus,
@@ -954,8 +953,8 @@ describe('ShardManager', () => {
       config: { ...TEST_CONFIG, capabilityTier: 'nursery' },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memory.tool, contactLookup.tool],
-        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
+        core: [memory.tool, contact.tool],
+        extended: [repo.tool, repoCommit.tool, spawnShard.tool],
       }),
     });
 
@@ -964,7 +963,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining(['toolset', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
-    expect(injected).not.toContain('spawn_shard');
+    expect(injected).not.toContain('shard');
   });
 
   it('unlocks additional shard tools for apprentice tier', async () => {
@@ -1070,11 +1069,10 @@ describe('ShardManager', () => {
       }),
     });
     const memory = makeTestTool('memory');
-    const contactLookup = makeTestTool('contact_lookup');
-    const repoStatus = makeTestTool('repo_status');
-    const repoDiff = makeTestTool('repo_diff');
+    const contact = makeTestTool('contact');
+    const repo = makeTestTool('repo');
     const repoCommit = makeTestTool('repo_commit');
-    const spawnShard = makeTestTool('spawn_shard');
+    const spawnShard = makeTestTool('shard');
 
     const manager = new ShardManager({
       eventBus,
@@ -1094,8 +1092,8 @@ describe('ShardManager', () => {
       },
       parentSystemPrompt: 'test',
       toolCatalogProvider: () => ({
-        core: [memory.tool, contactLookup.tool],
-        extended: [repoStatus.tool, repoDiff.tool, repoCommit.tool, spawnShard.tool],
+        core: [memory.tool, contact.tool],
+        extended: [repo.tool, repoCommit.tool, spawnShard.tool],
       }),
     });
 
@@ -1113,7 +1111,7 @@ describe('ShardManager', () => {
     const injected = lastSetToolNames();
     expect(injected).toEqual(expect.arrayContaining(['toolset', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
-    expect(injected).not.toContain('spawn_shard');
+    expect(injected).not.toContain('shard');
   });
 
   it('requires explicit forked shard creation before inheriting source context', async () => {
@@ -1355,7 +1353,7 @@ describe('ShardManager', () => {
   });
 });
 
-describe('createSpawnShardTool', () => {
+describe('createShardTool', () => {
   let dir: string;
   let sessionStore: SessionStore;
   let eventBus: EventBus;
@@ -1388,11 +1386,11 @@ describe('createSpawnShardTool', () => {
       parentSystemPrompt: 'test',
     });
 
-    const tool = createSpawnShardTool(manager);
+    const tool = createShardTool(manager);
 
-    expect(tool.name).toBe('spawn_shard');
+    expect(tool.name).toBe('shard');
     expect(tool.description).toBeTruthy();
-    expect(tool.label).toBe('spawn_shard');
+    expect(tool.label).toBe('shard');
     expect(tool.parameters).toBeDefined();
     expect(typeof tool.execute).toBe('function');
     expect(EXECUTION_PORT_FAMILIES).toEqual(['subagent', 'shard', 'artifact']);
@@ -1410,7 +1408,7 @@ describe('createSpawnShardTool', () => {
       parentSystemPrompt: 'test',
     });
 
-    const tool = createSpawnShardTool(manager);
+    const tool = createShardTool(manager);
     const result = await tool.execute('call-1', { name: 'test-tool', task: 'do something' });
 
     const text = result.content.map((c: any) => c.text).join('');
@@ -1443,7 +1441,7 @@ describe('createSpawnShardTool', () => {
       parentSystemPrompt: 'test',
     });
 
-    const tool = createSpawnShardTool(manager, artifactReturnPort);
+    const tool = createShardTool(manager, artifactReturnPort);
     await tool.execute('call-artifact', { name: 'artifact-boundary', task: 'do thing' });
 
     expect(artifactReturnPort.returnArtifact).toHaveBeenCalled();
@@ -1456,6 +1454,62 @@ describe('createSpawnShardTool', () => {
       pendingTaggedOutputCount: 1,
     }));
     expect(delivered.workLog.map(entry => entry.event)).toContain('artifact_returned');
+  });
+
+  it('lists shard runtime snapshots through the unified shard tool', async () => {
+    mockShardContent = 'snapshot-ready output';
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    await manager.spawn({ name: 'snapshot', task: 'prepare snapshot' });
+    const tool = createShardTool(manager);
+    const result = await tool.execute('call-list', { action: 'list', shard_limit: 5, transcript_limit: 2 });
+    const text = result.content.map((c: any) => c.text).join('');
+
+    expect(text).toContain('Shard runtime snapshot generated');
+    expect(text).toContain('snapshot');
+    expect(text).toContain('review=pending');
+  });
+
+  it('reads shard status and delivers artifacts through the unified shard tool', async () => {
+    mockShardContent = 'deliver-me';
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const spawned = await manager.spawn({ name: 'deliverable', task: 'finish and wait' });
+    const tool = createShardTool(manager);
+
+    const status = await tool.execute('call-status', {
+      action: 'status',
+      shard_id: spawned.shardId,
+      transcript_limit: 2,
+    });
+    const statusText = status.content.map((c: any) => c.text).join('');
+    expect(statusText).toContain(`Shard "deliverable" (${spawned.shardId})`);
+    expect(statusText).toContain('delivery_pending=true');
+
+    const delivered = await tool.execute('call-deliver', {
+      action: 'deliver',
+      shard_id: spawned.shardId,
+    });
+    const deliveryText = delivered.content.map((c: any) => c.text).join('');
+    expect(deliveryText).toContain('Marked shard "deliverable"');
+    expect(deliveryText).toContain('artifact=delivered');
+    expect(deliveryText).toContain('review=approved');
   });
 
   it('surfaces explicit lifecycle failure diagnostics from shard results', async () => {
@@ -1526,7 +1580,7 @@ describe('createSpawnShardTool', () => {
         blockingReasons: ['artifact_output_pending_merge_review'],
       },
     }));
-    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+    const tool = createShardTool({ spawn } as unknown as ShardManager);
 
     const result = await tool.execute('call-failure', {
       name: 'degraded-shard',
@@ -1605,7 +1659,7 @@ describe('createSpawnShardTool', () => {
         blockingReasons: ['artifact_output_pending_merge_review'],
       },
     }));
-    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+    const tool = createShardTool({ spawn } as unknown as ShardManager);
 
     await runWithRequestContext(
       {
@@ -1700,7 +1754,7 @@ describe('createSpawnShardTool', () => {
         blockingReasons: ['artifact_output_pending_merge_review'],
       },
     }));
-    const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
+    const tool = createShardTool({ spawn } as unknown as ShardManager);
 
     await tool.execute('call-backend', {
       name: 'backend-test',
@@ -1730,11 +1784,11 @@ describe('createSpawnShardTool', () => {
       parentSystemPrompt: 'test',
     });
 
-    const tool = createSpawnShardTool(manager);
+    const tool = createShardTool(manager);
     const result = await tool.execute('call-2', { name: 'fail', task: 'test' });
 
     const text = result.content.map((c: any) => c.text).join('');
-    expect(text).toContain('Shard error');
+    expect(text).toContain('shard failed for action=spawn');
     expect(result.details?.isError).toBe(true);
   });
 });

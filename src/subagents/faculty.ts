@@ -57,7 +57,7 @@ const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonl
   custom: [SUBAGENT_TOOLSET_ALL],
 };
 
-const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['spawn_shard', 'load_tools', 'toolset']);
+const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['spawn_shard', 'shard', 'load_tools', 'toolset']);
 const SUBAGENT_CONTROL_AUTHOR_ID = 'system:subagent-control';
 const SUBAGENT_CONTROL_AUTHOR_NAME = 'SubagentControl';
 

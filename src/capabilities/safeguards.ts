@@ -64,6 +64,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   notify: 'irreversible',
   notify_operator: 'irreversible',
   subagent: 'irreversible',
+  shard: 'irreversible',
   spawn_shard: 'irreversible',
   think: 'reversible',
   skill: 'irreversible',

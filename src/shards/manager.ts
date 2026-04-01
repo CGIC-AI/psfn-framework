@@ -79,7 +79,7 @@ const SHARD_TOOLSET_ALL = '*';
 const SHARD_SYNC_POLICY_VERSION = 1;
 const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
-const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'load_tools', 'toolset']);
+const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'shard', 'load_tools', 'toolset']);
 const DEFAULT_RUNTIME_SHARD_HISTORY_LIMIT = 25;
 const DEFAULT_SHARD_PROMPT_GUARDRAILS = [
   'Operate as a shard that returns an artifact, not as a bounded subagent assignment.',
@@ -98,6 +98,7 @@ const DEFAULT_SHARD_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly s
   autonomous: [SHARD_TOOLSET_ALL],
   custom: [SHARD_TOOLSET_ALL],
 };
+const APPRENTICE_SHARD_TOOL_EXTRAS = ['contact_list'] as const;
 
 const SHARD_STATE_TRANSITIONS: Readonly<Record<ShardLifecycleState, readonly ShardLifecycleState[]>> = {
   registering: ['ready', 'degraded', 'offline'],

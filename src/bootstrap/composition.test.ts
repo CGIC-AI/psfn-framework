@@ -438,12 +438,12 @@ describe('agent-main split wiring', () => {
 });
 
 describe('runtime composition wiring', () => {
-  it('keeps spawn_shard tool registration in shared shard/think composition wiring', () => {
+  it('keeps shard tool registration in shared shard/think composition wiring', () => {
     const source = readFileSync(resolve('src/bootstrap/composition.ts'), 'utf-8');
     expect(source).toContain('createSubagentTool(');
     expect(source).toContain("registerTool(createSubagentTool(subagentFaculty), 'extended')");
-    expect(source).toContain('createSpawnShardTool(');
-    expect(source).toContain('registerTool(createSpawnShardTool(');
+    expect(source).toContain('createShardTool(');
+    expect(source).toContain('registerTool(createShardTool(');
     expect(source).toContain('wireShardAndThinkRuntime(');
   });
 
@@ -529,7 +529,7 @@ describe('runtime composition wiring', () => {
     expect(source).not.toContain('new MemoryRetriever(');
     expect(source).not.toContain('new MemoryExtractor(');
     expect(source).not.toContain('new ShardManager(');
-    expect(source).not.toContain('createSpawnShardTool(');
+    expect(source).not.toContain('createShardTool(');
     expect(source).not.toContain('createThinkTool(');
   });
 

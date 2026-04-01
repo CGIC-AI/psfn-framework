@@ -54,6 +54,11 @@ const SHELL_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'repl.execute',
 ] as const;
 
+const VAULT_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'identity.read',
+  'identity.write.runtime',
+] as const;
+
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
   switch (action) {
@@ -213,6 +218,46 @@ function resolveUnifiedShellRequirement(params: Record<string, unknown>): Capabi
   }
 }
 
+function resolveUnifiedVaultRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case 'read':
+    case 'vault_read':
+    case 'search':
+    case 'vault_search':
+      return 'identity.read';
+    case 'write':
+    case 'vault_write':
+    case 'daily':
+    case 'vault_daily':
+      return 'identity.write.runtime';
+    case '': {
+      const hasName = typeof params.name === 'string';
+      const hasContent = typeof params.content === 'string';
+      const hasQuery = typeof params.query === 'string';
+      const hasFolder = typeof params.folder === 'string';
+      const hasMode = typeof params.mode === 'string';
+      const hasLimit = typeof params.limit === 'number';
+
+      if (hasQuery && !hasName && !hasContent && !hasFolder && !hasMode) {
+        return 'identity.read';
+      }
+      if (hasName && hasContent) {
+        return 'identity.write.runtime';
+      }
+      if (hasName && !hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) {
+        return 'identity.read';
+      }
+      if (!hasName && hasContent && !hasQuery && !hasFolder && !hasMode && !hasLimit) {
+        return 'identity.write.runtime';
+      }
+      return VAULT_FAIL_CLOSED_REQUIREMENTS;
+    }
+    default:
+      return VAULT_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
@@ -268,10 +313,6 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   subagent: 'subagent.spawn',
   spawn_shard: 'shard.spawn',
   think: 'repl.execute',
-  vault_write: 'identity.write.runtime',
-  vault_read: 'identity.read',
-  vault_search: 'identity.read',
-  vault_daily: 'identity.write.runtime',
 };
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -313,6 +354,10 @@ export function resolveToolRequiredCapabilities(
 
   if (tool.name === 'north_star') {
     return normalizeRequirement(resolveUnifiedNorthStarRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'vault') {
+    return normalizeRequirement(resolveUnifiedVaultRequirement(toRecord(params)));
   }
 
   const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;

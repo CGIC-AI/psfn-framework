@@ -79,6 +79,8 @@ describe('extended-tool-autoload-policy', () => {
   });
 
   it('keeps north_star as a single semantic memory-overlay candidate', () => {
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory).toContain('vault');
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'vault')).toHaveLength(1);
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory).toContain('north_star');
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'north_star')).toHaveLength(1);
   });

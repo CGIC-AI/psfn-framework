@@ -65,10 +65,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'issue_sync',
   ],
   memory: [
-    'vault_write',
-    'vault_read',
-    'vault_search',
-    'vault_daily',
+    'vault',
     'identity',
     'north_star',
   ],
@@ -80,8 +77,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
   ],
   social: [
     'media',
-    'vault_write',
-    'vault_daily',
+    'vault',
   ],
 };
 

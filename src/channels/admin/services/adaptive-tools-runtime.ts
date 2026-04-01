@@ -21,49 +21,18 @@ interface DerivedToolDefinition {
 
 const CONDITIONAL_TOOLS: DerivedToolDefinition[] = [
   {
-    name: 'vault_write',
-    description: 'Create or append to a markdown note in the Obsidian vault.',
+    name: 'vault',
+    description: 'Unified durable vault surface for Obsidian notes, search, and daily journaling.',
     scope: 'conditional',
     registered: false,
     wiringMeta: {
       requiredServices: ['vault'],
-    },
-  },
-  {
-    name: 'vault_read',
-    description: 'Read the content of a note from the Obsidian vault.',
-    scope: 'conditional',
-    registered: false,
-    wiringMeta: {
-      requiredServices: ['vault'],
-    },
-  },
-  {
-    name: 'vault_search',
-    description: 'Search for notes in the Obsidian vault.',
-    scope: 'conditional',
-    registered: false,
-    wiringMeta: {
-      requiredServices: ['vault'],
-    },
-  },
-  {
-    name: 'vault_daily',
-    description: 'Read from or append to the current Obsidian daily note.',
-    scope: 'conditional',
-    registered: false,
-    wiringMeta: {
-      requiredServices: ['vault'],
+      requiredGatewayMethods: ['vault.write', 'vault.read', 'vault.search', 'vault.daily'],
     },
   },
 ];
 
-const VAULT_ACTION_BY_TOOL: Record<string, string> = {
-  vault_write: 'write',
-  vault_read: 'read',
-  vault_search: 'search',
-  vault_daily: 'daily',
-};
+const ALL_VAULT_ACTIONS = ['write', 'read', 'search', 'daily'] as const;
 
 export function cloneRuntimeState(state: AdaptiveToolRuntimeState): AdaptiveToolRuntimeState {
   return {
@@ -171,7 +140,7 @@ function resolveToolDefinitions(
   }
 
   const vaultService = serviceHealth.find(service => service.serviceId === 'vault');
-  if (vaultService && !definitions.has('vault_write') && vaultService.status !== 'healthy') {
+  if (vaultService && !definitions.has('vault') && vaultService.status !== 'healthy') {
     for (const conditionalTool of CONDITIONAL_TOOLS) {
       definitions.set(conditionalTool.name, {
         ...conditionalTool,
@@ -231,14 +200,10 @@ function resolveToolHealth(
     });
   }
 
-  if (definition.name in VAULT_ACTION_BY_TOOL) {
-    const vaultHealth = serviceById.get('vault');
-    const requiredAction = VAULT_ACTION_BY_TOOL[definition.name];
-    if (vaultHealth?.availableActions && !vaultHealth.availableActions.includes(requiredAction)) {
-      statuses.push({
-        status: 'unavailable',
-        detail: `Vault action "${requiredAction}" is not enabled in this runtime.`,
-      });
+  if (definition.name === 'vault') {
+    const actionStatus = resolveVaultActionCoverageStatus(serviceById.get('vault'));
+    if (actionStatus) {
+      statuses.push(actionStatus);
     }
   }
 
@@ -256,7 +221,7 @@ function resolveServiceBackedStatus(
   definition: DerivedToolDefinition,
   serviceById: Map<string, RuntimeServiceHealth>,
 ): AdminToolHealthView['health'] | null {
-  if (definition.name in VAULT_ACTION_BY_TOOL) {
+  if (definition.name === 'vault') {
     const vaultHealth = serviceById.get('vault');
     if (!vaultHealth) {
       return {
@@ -265,12 +230,14 @@ function resolveServiceBackedStatus(
       };
     }
 
-    const requiredAction = VAULT_ACTION_BY_TOOL[definition.name];
-    if (vaultHealth.availableActions && !vaultHealth.availableActions.includes(requiredAction)) {
-      return {
-        status: 'unavailable',
-        detail: `Vault action "${requiredAction}" is not enabled in this runtime.`,
-      };
+    const actionStatus = resolveVaultActionCoverageStatus(vaultHealth);
+    if (actionStatus) {
+      return vaultHealth.status === 'healthy'
+        ? actionStatus
+        : {
+          status: vaultHealth.status,
+          detail: vaultHealth.detail,
+        };
     }
 
     return {
@@ -312,6 +279,32 @@ function statusPriority(status: RuntimeServiceHealthStatus): number {
     default:
       return 1;
   }
+}
+
+function resolveVaultActionCoverageStatus(
+  vaultHealth: RuntimeServiceHealth | undefined,
+): { status: RuntimeServiceHealthStatus; detail: string } | null {
+  if (!vaultHealth?.availableActions) {
+    return null;
+  }
+
+  const availableActionSet = new Set(vaultHealth.availableActions);
+  const missingActions = ALL_VAULT_ACTIONS.filter(action => !availableActionSet.has(action));
+  if (missingActions.length === 0) {
+    return null;
+  }
+
+  if (missingActions.length === ALL_VAULT_ACTIONS.length) {
+    return {
+      status: 'unavailable',
+      detail: 'Vault actions are not enabled in this runtime.',
+    };
+  }
+
+  return {
+    status: 'degraded',
+    detail: `Vault is missing actions required by the unified tool: ${missingActions.join(', ')}.`,
+  };
 }
 
 function resolveContextAvailability(

@@ -71,6 +71,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   spawn_shard: 'irreversible',
   think: 'reversible',
   skill: 'irreversible',
+  vault: 'irreversible',
 };
 
 const SAFEGUARD_TOOL_META = Symbol('psfn.safeguardToolMeta');

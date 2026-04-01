@@ -29,53 +29,46 @@ describe('registerVaultTools', () => {
     target = createMockTarget();
   });
 
-  it('registers all 4 vault tools as extended', () => {
+  it('registers the unified vault tool as extended', () => {
     registerVaultTools(target, createMockOps());
-    expect(target.registerTool).toHaveBeenCalledTimes(4);
+    expect(target.registerTool).toHaveBeenCalledTimes(1);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const toolNames = target.registerTool.mock.calls.map((call: any[]) => call[0].name);
-    expect(toolNames).toContain('vault_write');
-    expect(toolNames).toContain('vault_read');
-    expect(toolNames).toContain('vault_search');
-    expect(toolNames).toContain('vault_daily');
-
-    // All registered as 'extended' category
-    for (const call of target.registerTool.mock.calls) {
-      expect(call[1]).toBe('extended');
-    }
+    const [tool, scope] = target.registerTool.mock.calls[0] as [
+      { name: string },
+      string,
+    ];
+    expect(tool.name).toBe('vault');
+    expect(scope).toBe('extended');
   });
 
-  it('attaches gateway wiring metadata when gatewayMode is true', () => {
+  it('attaches gateway wiring metadata for all vault RPC methods when gatewayMode is true', () => {
     registerVaultTools(target, createMockOps(), { gatewayMode: true });
 
-    const expectedMethodsByTool: Record<string, string> = {
-      vault_write: 'vault.write',
-      vault_read: 'vault.read',
-      vault_search: 'vault.search',
-      vault_daily: 'vault.daily',
-    };
-
-    for (const call of target.registerTool.mock.calls) {
-      const tool = call[0] as { name: string; wiringMeta?: { requiredGatewayMethods: string[] } };
-      expect(tool.wiringMeta).toBeDefined();
-      expect(tool.wiringMeta!.requiredGatewayMethods).toContain(expectedMethodsByTool[tool.name]);
-    }
+    const [tool] = target.registerTool.mock.calls[0] as [
+      { wiringMeta?: { requiredGatewayMethods: string[] } },
+    ];
+    expect(tool.wiringMeta).toBeDefined();
+    expect(tool.wiringMeta?.requiredGatewayMethods).toEqual([
+      'vault.write',
+      'vault.read',
+      'vault.search',
+      'vault.daily',
+    ]);
   });
 
   it('attaches vault service wiring metadata without gatewayMode', () => {
     registerVaultTools(target, createMockOps());
 
-    for (const call of target.registerTool.mock.calls) {
-      const tool = call[0] as {
+    const [tool] = target.registerTool.mock.calls[0] as [
+      {
         wiringMeta?: {
           requiredServices?: string[];
           requiredGatewayMethods?: string[];
         };
-      };
-      expect(tool.wiringMeta?.requiredServices).toEqual(['vault']);
-      expect(tool.wiringMeta?.requiredGatewayMethods).toBeUndefined();
-    }
+      },
+    ];
+    expect(tool.wiringMeta?.requiredServices).toEqual(['vault']);
+    expect(tool.wiringMeta?.requiredGatewayMethods).toBeUndefined();
   });
 });
 
@@ -84,7 +77,7 @@ describe('wireVaultRuntime', () => {
     const target = createMockTarget();
     const ops = wireVaultRuntime(target, { vaultName: 'TestVault' });
     expect(ops).toBeDefined();
-    expect(target.registerTool).toHaveBeenCalledTimes(4);
+    expect(target.registerTool).toHaveBeenCalledTimes(1);
   });
 
   it('passes config to VaultOps', () => {
@@ -94,7 +87,6 @@ describe('wireVaultRuntime', () => {
       cliPath: '/opt/obsidian',
       timeoutMs: 5000,
     });
-    // VaultOps was created successfully (would throw if vaultName was empty)
     expect(ops).toBeDefined();
   });
 });

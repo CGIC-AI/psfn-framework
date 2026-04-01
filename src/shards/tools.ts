@@ -18,13 +18,16 @@ export function createSpawnShardTool(
     description:
       'Spawn a sub-agent shard for parallel task execution. ' +
       'Multiple spawn_shard calls in the same turn run concurrently. ' +
-      'Shard runtime remains distinct from bounded subagent tasks and completes only after artifact delivery.',
+      'Shard runtime remains distinct from bounded subagent tasks, preserves a stable shard prompt prefix, '
+      + 'and completes only after artifact delivery.',
     label: 'spawn_shard',
     parameters: Type.Object({
       name: Type.String({ description: 'Short label for this shard (e.g. "research", "analysis")' }),
       task: Type.String({ description: 'The task/prompt for the shard to execute' }),
       systemPrompt: Type.Optional(
-        Type.String({ description: 'Optional system prompt override (default: inherit parent prompt)' }),
+        Type.String({
+          description: 'Optional shard remit and prompt-discipline supplement appended after the inherited shard prefix.',
+        }),
       ),
       maxTurns: Type.Optional(
         Type.Number({ minimum: 1, maximum: 8, description: 'Optional max turns for the shard loop (default: 1)' }),
@@ -58,6 +61,7 @@ export function createSpawnShardTool(
           name: params.name,
           task: params.task,
           systemPrompt: params.systemPrompt,
+          creationMode: requestContext?.channelId ? 'forked' : 'fresh',
           ...(params.maxTurns !== undefined ? { maxTurns: params.maxTurns } : {}),
           ...(params.capabilities?.length ? { capabilities: params.capabilities } : {}),
           ...(params.requiredCapabilities?.length

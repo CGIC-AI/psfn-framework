@@ -172,6 +172,7 @@ describe('ShardManager', () => {
     expect(result.turns).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
+    expect(result.creationMode).toBe('fresh');
     expect(result.gatewayRouting).toEqual({
       schemaVersion: 1,
       companionId: 'companion',
@@ -179,6 +180,7 @@ describe('ShardManager', () => {
         coreCompanionId: 'companion',
         shardCompanionId: `companion/shards/${result.shardId}`,
         shardId: result.shardId,
+        creationMode: 'fresh',
       },
     });
     expect(result.lineage).toEqual(result.gatewayRouting.shard);
@@ -234,7 +236,7 @@ describe('ShardManager', () => {
     expect(setPromptCall[0]).toContain(companionPrompt);
   });
 
-  it('uses custom system prompt when provided', async () => {
+  it('keeps the inherited shard prefix and appends custom shard remit guidance', async () => {
     const companionPrompt = 'I am Companion.';
     const manager = new ShardManager({
       eventBus,
@@ -254,8 +256,11 @@ describe('ShardManager', () => {
 
     expect(setSystemPromptSpy).toHaveBeenCalled();
     const setPromptCall = setSystemPromptSpy.mock.calls[0];
+    expect(setPromptCall[0]).toContain(companionPrompt);
+    expect(setPromptCall[0]).toContain('[Shard remit]');
     expect(setPromptCall[0]).toContain('You are a research shard.');
-    expect(setPromptCall[0]).not.toContain(companionPrompt);
+    expect(setPromptCall[0]).toContain('[Shard guardrails]');
+    expect(setPromptCall[0]).toContain('not as a bounded subagent assignment');
   });
 
   it('runs concurrent shards in parallel', async () => {
@@ -642,6 +647,7 @@ describe('ShardManager', () => {
 
     const result = await manager.spawn({
       name: 'context-pack',
+      creationMode: 'forked',
       task: 'Summarize the deployment blockers.',
       sourceContext: {
         channelId: sourceChannelId,
@@ -651,6 +657,8 @@ describe('ShardManager', () => {
     });
 
     expect(memory.retrieve).toHaveBeenCalledTimes(1);
+    expect(result.creationMode).toBe('forked');
+    expect(result.lineage.creationMode).toBe('forked');
     expect(memory.retrieve).toHaveBeenCalledWith(
       'Summarize the deployment blockers.',
       sourceChannelId,
@@ -666,7 +674,11 @@ describe('ShardManager', () => {
     const setPromptCall = setSystemPromptSpy.mock.calls[0];
     expect(setPromptCall).toBeDefined();
     const [setPromptText] = setPromptCall;
-    expect(setPromptText).toContain('[Shard context pack]');
+    expect(setPromptText).toContain('You are a helpful assistant.');
+    expect(setPromptText).toContain('[Shard remit]');
+    expect(setPromptText).toContain('Creation mode: forked.');
+    expect(setPromptText).toContain('[Shard guardrails]');
+    expect(setPromptText).toContain('[Forked shard parent context]');
     expect(setPromptText).toContain(`Source channel: ${sourceChannelId}`);
     expect(setPromptText).toContain('PrimaryUser: Please check the deployment blockers.');
     expect(setPromptText).toContain('Remember the staging database migration is still pending.');
@@ -726,6 +738,7 @@ describe('ShardManager', () => {
 
     await manager.spawn({
       name: 'sync-audit',
+      creationMode: 'forked',
       task: 'Extract only blockers.',
       sourceContext: {
         channelId: sourceChannelId,
@@ -803,6 +816,7 @@ describe('ShardManager', () => {
 
     await manager.spawn({
       name: 'scoped-memory',
+      creationMode: 'forked',
       task: 'Summarize the memory improvement work.',
       sourceContext: {
         channelId: sourceChannelId,
@@ -988,6 +1002,7 @@ describe('ShardManager', () => {
 
     await manager.spawn({
       name: 'toolset-packed',
+      creationMode: 'forked',
       task: 'Audit tool restrictions',
       sourceContext: {
         channelId: sourceChannelId,
@@ -1000,6 +1015,44 @@ describe('ShardManager', () => {
     expect(injected).toEqual(expect.arrayContaining(['toolset', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
     expect(injected).not.toContain('spawn_shard');
+  });
+
+  it('requires explicit forked shard creation before inheriting source context', async () => {
+    const sourceTurnId = createTurnId();
+    const sourceChannelId = 'api:explicit-fork-required';
+    sessionStore.append({
+      channelId: sourceChannelId,
+      role: 'user',
+      content: 'Carry context deliberately.',
+      timestamp: Date.now() - 100,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId: sourceTurnId,
+        requestId: 'req-explicit-fork',
+        role: 'user',
+      }),
+    });
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    await expect(
+      manager.spawn({
+        name: 'implicit-fork',
+        task: 'Should fail',
+        sourceContext: {
+          channelId: sourceChannelId,
+          requestId: 'req-explicit-fork',
+          turnId: sourceTurnId,
+        },
+      }),
+    ).rejects.toThrow('Fresh shard creation must not inherit parent context');
   });
 
   it('stamps shard source provenance on shard memory tools', async () => {
@@ -1277,6 +1330,7 @@ describe('createSpawnShardTool', () => {
       outputTokens: 2,
       durationMs: 33,
       turns: 1,
+      creationMode: 'fresh' as const,
       lifecycleState: 'offline' as const,
       runtimeState: 'awaiting_delivery' as const,
       runtimeStateReason: 'artifact_ready',
@@ -1291,6 +1345,7 @@ describe('createSpawnShardTool', () => {
         coreCompanionId: 'companion',
         shardCompanionId: 'companion/shards/shard-failure',
         shardId: 'shard-failure',
+        creationMode: 'fresh' as const,
       },
       gatewayRouting: {
         schemaVersion: 1,
@@ -1299,6 +1354,7 @@ describe('createSpawnShardTool', () => {
           coreCompanionId: 'companion',
           shardCompanionId: 'companion/shards/shard-failure',
           shardId: 'shard-failure',
+          creationMode: 'fresh' as const,
         },
       },
     }));
@@ -1324,6 +1380,7 @@ describe('createSpawnShardTool', () => {
       outputTokens: 0,
       durationMs: 1,
       turns: 1,
+      creationMode: 'forked' as const,
       lifecycleState: 'offline' as const,
       runtimeState: 'awaiting_delivery' as const,
       runtimeStateReason: 'artifact_ready',
@@ -1337,6 +1394,7 @@ describe('createSpawnShardTool', () => {
         coreCompanionId: 'companion',
         shardCompanionId: 'companion/shards/shard-test',
         shardId: 'shard-test',
+        creationMode: 'forked' as const,
       },
       gatewayRouting: {
         schemaVersion: 1,
@@ -1345,6 +1403,7 @@ describe('createSpawnShardTool', () => {
           coreCompanionId: 'companion',
           shardCompanionId: 'companion/shards/shard-test',
           shardId: 'shard-test',
+          creationMode: 'forked' as const,
         },
       },
     }));
@@ -1367,6 +1426,7 @@ describe('createSpawnShardTool', () => {
     expect(spawn).toHaveBeenCalledWith(expect.objectContaining({
       name: 'ctx',
       task: 'Inspect source context',
+      creationMode: 'forked',
       sourceContext: {
         channelId: 'api:source-context',
         requestId: 'req-source-context',

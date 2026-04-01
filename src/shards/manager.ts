@@ -7,6 +7,7 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type {
   CapabilityTier,
   GatewayRoutingEnvelope,
+  ShardCreationMode,
   ShardToolsetConfig,
   ShardLineage,
   SubstrateConfig,
@@ -35,9 +36,9 @@ import {
 import type { ShardExecutionPort } from './port.js';
 import type {
   ShardConfig,
-  ShardContextPack,
-  ShardContextPackEntry,
   ShardLifecycleState,
+  ShardParentContextSnapshot,
+  ShardPromptDiscipline,
   ShardResult,
   ShardRuntimeRecord,
   ShardRuntimeSnapshot,
@@ -45,6 +46,7 @@ import type {
   ShardRuntimeState,
   ShardRuntimeTaskView,
   ShardSourceContext,
+  ShardContextPackEntry,
 } from './types.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -63,6 +65,11 @@ const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_shard', 'load_tools', 'toolset']);
 const DEFAULT_RUNTIME_SHARD_HISTORY_LIMIT = 25;
+const DEFAULT_SHARD_PROMPT_GUARDRAILS = [
+  'Operate as a shard that returns an artifact, not as a bounded subagent assignment.',
+  'Do not recurse into additional shards or delegate work through bounded subagent control.',
+  'Stay inside the shard remit and available tools; do not widen scope on your own.',
+] as const;
 const APPRENTICE_SHARD_TOOL_EXTRAS = [
   'contact_list',
 ] as const;
@@ -118,6 +125,13 @@ export interface ShardManagerDeps {
 
 export type ActiveShard = ShardRuntimeRecord;
 
+interface ResolvedShardConfig extends ShardConfig {
+  creationMode: ShardCreationMode;
+  parentContext?: ShardParentContextSnapshot;
+  promptDiscipline: ShardPromptDiscipline;
+  gatewayRouting: GatewayRoutingEnvelope;
+}
+
 export class ShardManager implements ShardExecutionPort {
   readonly portFamily = 'shard' as const;
   private deps: ShardManagerDeps;
@@ -154,15 +168,20 @@ export class ShardManager implements ShardExecutionPort {
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
-    const gatewayRouting = this.deriveGatewayRouting(shardId, shardConfig.gatewayRouting);
-    const contextPack = shardConfig.contextPack ?? await this.buildContextPack(
-      shardId,
-      channelId,
-      shardConfig,
-    );
-    const preparedConfig = contextPack
-      ? { ...shardConfig, contextPack, gatewayRouting }
-      : { ...shardConfig, gatewayRouting };
+    const creationMode = this.resolveCreationMode(shardConfig);
+    this.assertShardCreationContract(shardConfig, creationMode);
+    const gatewayRouting = this.deriveGatewayRouting(shardId, creationMode, shardConfig.gatewayRouting);
+    const parentContext = shardConfig.parentContext
+      ?? (creationMode === 'forked'
+        ? await this.buildParentContextSnapshot(shardId, channelId, shardConfig)
+        : undefined);
+    const preparedConfig: ResolvedShardConfig = {
+      ...shardConfig,
+      creationMode,
+      ...(parentContext ? { parentContext } : {}),
+      promptDiscipline: this.buildPromptDiscipline(shardConfig, creationMode, parentContext),
+      gatewayRouting,
+    };
     const baseMessage: SubstrateMessage = {
       id: shardId,
       channelId,
@@ -182,7 +201,7 @@ export class ShardManager implements ShardExecutionPort {
   private async executeShard(
     shardId: string,
     channelId: string,
-    shardConfig: ShardConfig,
+    shardConfig: ResolvedShardConfig,
     baseMessage: SubstrateMessage,
   ): Promise<ShardResult> {
     this.refreshShardHealth();
@@ -193,7 +212,7 @@ export class ShardManager implements ShardExecutionPort {
     }
 
     const startTime = Date.now();
-    const gatewayRouting = this.deriveGatewayRouting(shardId, shardConfig.gatewayRouting);
+    const gatewayRouting = shardConfig.gatewayRouting;
     const lineage = gatewayRouting.shard as ShardLineage;
     const maxTurns = shardConfig.maxTurns ?? DEFAULT_MAX_TURNS;
     const capabilities = this.resolveAdvertisedCapabilities(shardConfig.capabilities);
@@ -233,6 +252,7 @@ export class ShardManager implements ShardExecutionPort {
       inputTokens: 0,
       outputTokens: 0,
       turns: 0,
+      creationMode: shardConfig.creationMode,
       capabilities,
       requiredCapabilities,
       lineage,
@@ -253,6 +273,7 @@ export class ShardManager implements ShardExecutionPort {
     this.auditTrail?.append('shard.spawn.start', {
       shardId,
       name: shardConfig.name,
+      creationMode: shardConfig.creationMode,
       maxTurns,
       channelId,
       companionId: gatewayRouting.companionId,
@@ -283,7 +304,7 @@ export class ShardManager implements ShardExecutionPort {
       );
 
       // Shards can READ memory but don't extract or archive (ephemeral)
-      if (this.deps.memoryProvider && !shardConfig.contextPack) {
+      if (this.deps.memoryProvider && !shardConfig.parentContext) {
         agentLoop.memoryProvider = this.deps.memoryProvider;
       }
 
@@ -356,6 +377,7 @@ export class ShardManager implements ShardExecutionPort {
         outputTokens: totalOutput,
         durationMs: completedAt - startTime,
         turns,
+        creationMode: shardConfig.creationMode,
         lifecycleState: finishedShard?.lifecycleState ?? 'offline',
         runtimeState: finishedShard?.runtimeState ?? 'awaiting_delivery',
         runtimeStateReason: finishedShard?.runtimeStateReason ?? 'artifact_ready',
@@ -375,6 +397,7 @@ export class ShardManager implements ShardExecutionPort {
       this.auditTrail?.append('shard.spawn.end', {
         shardId,
         status: 'completed',
+        creationMode: shardConfig.creationMode,
         durationMs: result.durationMs,
         turns: result.turns,
         companionId: result.gatewayRouting.companionId,
@@ -405,18 +428,21 @@ export class ShardManager implements ShardExecutionPort {
 
   private deriveGatewayRouting(
     shardId: string,
+    creationMode: ShardCreationMode,
     inherited: GatewayRoutingEnvelope | undefined,
   ): GatewayRoutingEnvelope {
     if (inherited?.shard?.shardId === shardId) {
       return cloneGatewayRoutingEnvelope(inherited) ?? deriveShardRoutingEnvelope({
         companionId: this.companionId,
         shardId,
+        creationMode,
       });
     }
     const companionId = inherited?.companionId.trim() || this.companionId;
     return deriveShardRoutingEnvelope({
       companionId,
       shardId,
+      creationMode,
       parentShardId: inherited?.shard?.shardId,
       ...(inherited?.subagentAddress ? { subagentAddress: inherited.subagentAddress } : {}),
     });
@@ -836,14 +862,40 @@ export class ShardManager implements ShardExecutionPort {
     return normalizeCapabilityTier(this.deps.config.capabilityTier);
   }
 
-  private async buildContextPack(
+  private resolveCreationMode(shardConfig: ShardConfig): ShardCreationMode {
+    return shardConfig.creationMode ?? 'fresh';
+  }
+
+  private assertShardCreationContract(
+    shardConfig: ShardConfig,
+    creationMode: ShardCreationMode,
+  ): void {
+    if (creationMode === 'forked') {
+      if (shardConfig.parentContext || shardConfig.sourceContext) {
+        return;
+      }
+      throw new Error(
+        'Forked shard creation requires sourceContext or a typed parentContext snapshot.',
+      );
+    }
+
+    if (shardConfig.parentContext || shardConfig.sourceContext) {
+      throw new Error(
+        'Fresh shard creation must not inherit parent context. Set creationMode to "forked" to inherit source context.',
+      );
+    }
+  }
+
+  private async buildParentContextSnapshot(
     shardId: string,
     shardChannelId: string,
     shardConfig: ShardConfig,
-  ): Promise<ShardContextPack | null> {
+  ): Promise<ShardParentContextSnapshot> {
     const source = this.normalizeSourceContext(shardConfig.sourceContext);
     if (!source) {
-      return null;
+      throw new Error(
+        'Forked shard creation requires a non-empty sourceContext.channelId when parentContext is not supplied.',
+      );
     }
 
     const policyDecision = evaluateCompositionalPolicyForChannelId({
@@ -853,7 +905,9 @@ export class ShardManager implements ShardExecutionPort {
       purpose: 'shard_context',
     });
     if (!policyDecision.allowed) {
-      return null;
+      throw new Error(
+        `Forked shard creation denied for source channel "${source.channelId}" (${policyDecision.reason}).`,
+      );
     }
 
     const sessionSyncEnvelope: ShardSessionMemorySyncEnvelope = {
@@ -906,16 +960,24 @@ export class ShardManager implements ShardExecutionPort {
         this.resolveContextPackMemoryScopeQuery(source.channelId),
       )
       : '';
-    if (sessionEntries.length === 0 && memoryBlock.length === 0) {
-      return null;
-    }
 
     return {
       purpose: 'shard_context',
+      inheritedFrom: 'source_channel',
       task: shardConfig.task,
       source,
-      sessionEntries,
-      ...(memoryBlock ? { memoryBlock } : {}),
+      transcript: {
+        kind: 'session_entries',
+        entries: sessionEntries,
+      },
+      ...(memoryBlock
+        ? {
+          memory: {
+            kind: 'memory_block',
+            content: memoryBlock,
+          },
+        }
+        : {}),
     };
   }
 
@@ -1094,20 +1156,55 @@ export class ShardManager implements ShardExecutionPort {
     return this.deps.sessionManager?.getActiveFocusMemoryScopeQuery(sourceChannelId) ?? undefined;
   }
 
-  private resolveSystemPrompt(shardConfig: ShardConfig): string {
-    const basePrompt = shardConfig.systemPrompt ?? this.deps.parentSystemPrompt;
-    if (!shardConfig.contextPack) {
-      return basePrompt;
-    }
+  private buildPromptDiscipline(
+    shardConfig: ShardConfig,
+    creationMode: ShardCreationMode,
+    parentContext: ShardParentContextSnapshot | undefined,
+  ): ShardPromptDiscipline {
+    const stablePrefix = this.deps.parentSystemPrompt.trim();
+    const remitSupplement = shardConfig.systemPrompt?.trim();
 
-    return [basePrompt, this.renderContextPack(shardConfig.contextPack)]
+    return {
+      stablePrefix,
+      remit: [
+        `Creation mode: ${creationMode}.`,
+        `Shard name: ${shardConfig.name.trim()}.`,
+        `Shard task: ${this.truncateContextText(shardConfig.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}.`,
+        ...(remitSupplement ? [`Remit notes: ${remitSupplement}`] : []),
+        ...(parentContext ? [`Inherited source channel: ${parentContext.source.channelId}.`] : []),
+      ].join('\n'),
+      guardrails: [
+        ...DEFAULT_SHARD_PROMPT_GUARDRAILS,
+        ...(creationMode === 'forked'
+          ? ['Treat inherited parent context as a read-only snapshot, not as a live conversation to continue.']
+          : ['Do not assume any hidden parent context beyond the shard remit.']),
+      ],
+    };
+  }
+
+  private resolveSystemPrompt(shardConfig: ResolvedShardConfig): string {
+    return [
+      shardConfig.promptDiscipline.stablePrefix,
+      this.renderPromptDiscipline(shardConfig.promptDiscipline),
+      ...(shardConfig.parentContext ? [this.renderParentContextSnapshot(shardConfig.parentContext)] : []),
+    ]
       .map(section => section.trim())
       .filter(section => section.length > 0)
       .join('\n\n');
   }
 
-  private renderContextPack(contextPack: ShardContextPack): string {
-    const sourceConversation = contextPack.sessionEntries
+  private renderPromptDiscipline(promptDiscipline: ShardPromptDiscipline): string {
+    return [
+      '[Shard remit]',
+      promptDiscipline.remit,
+      '',
+      '[Shard guardrails]',
+      ...promptDiscipline.guardrails.map(guardrail => `- ${guardrail}`),
+    ].join('\n');
+  }
+
+  private renderParentContextSnapshot(parentContext: ShardParentContextSnapshot): string {
+    const sourceConversation = parentContext.transcript.entries
       .map(entry => {
         const speaker = entry.role === 'assistant'
           ? 'Assistant'
@@ -1119,12 +1216,13 @@ export class ShardManager implements ShardExecutionPort {
       .join('\n');
 
     return [
-      '[Shard context pack]',
-      'Use only this task-scoped source context while working the shard task.',
-      `Source channel: ${contextPack.source.channelId}`,
-      ...(contextPack.source.requestId ? [`Source requestId: ${contextPack.source.requestId}`] : []),
-      ...(contextPack.source.turnId ? [`Source turnId: ${contextPack.source.turnId}`] : []),
-      `Task scope: ${this.truncateContextText(contextPack.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}`,
+      '[Forked shard parent context]',
+      'Use this inherited parent snapshot as read-only context while completing the shard remit.',
+      `Inherited from: ${parentContext.inheritedFrom}`,
+      `Source channel: ${parentContext.source.channelId}`,
+      ...(parentContext.source.requestId ? [`Source requestId: ${parentContext.source.requestId}`] : []),
+      ...(parentContext.source.turnId ? [`Source turnId: ${parentContext.source.turnId}`] : []),
+      `Task scope: ${this.truncateContextText(parentContext.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}`,
       ...(sourceConversation
         ? [
           '',
@@ -1132,11 +1230,11 @@ export class ShardManager implements ShardExecutionPort {
           sourceConversation,
         ]
         : []),
-      ...(contextPack.memoryBlock
+      ...(parentContext.memory?.content
         ? [
           '',
           '[Task-scoped memory]',
-          contextPack.memoryBlock,
+          parentContext.memory.content,
         ]
         : []),
     ].join('\n');

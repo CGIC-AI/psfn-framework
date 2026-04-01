@@ -55,6 +55,7 @@ export interface RequestAgentVoiceStreamOptions {
   message: SubstrateMessage;
   options?: VoiceStreamRequestOptions;
   wyomingShardRouting: WyomingShardRoutingConfig;
+  companionId: string;
   nextRequestCounter: () => number;
 }
 
@@ -63,6 +64,7 @@ export async function requestAgentVoiceStream({
   message,
   options = {},
   wyomingShardRouting,
+  companionId,
   nextRequestCounter,
 }: RequestAgentVoiceStreamOptions): Promise<VoiceHandleMessageResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS;
@@ -72,7 +74,12 @@ export async function requestAgentVoiceStream({
   const requestCounter = nextRequestCounter();
   const correlationId = options.correlationId ?? `voice-corr-${Date.now()}-${requestCounter}`;
   const streamId = options.streamId ?? `voice-stream-${Date.now()}-${requestCounter}`;
-  const routedMessage = applyWyomingRoutingPolicy(message, options.metadata, wyomingShardRouting);
+  const routedMessage = applyWyomingRoutingPolicy(
+    message,
+    options.metadata,
+    wyomingShardRouting,
+    companionId,
+  );
 
   const queue = new BoundedQueue<string>({
     maxSize: maxQueueSize,

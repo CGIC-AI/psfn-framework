@@ -1,6 +1,8 @@
 import type {
   AgentResponse,
   Attachment,
+  GatewayRoutingEnvelope,
+  ShardLineage,
   SubstrateConfig,
   SubstrateMessage,
   WyomingRoutingMetadata,
@@ -39,12 +41,15 @@ export interface WyomingShardDelegationResult {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  lineage: ShardLineage;
+  gatewayRouting: GatewayRoutingEnvelope;
 }
 
 export interface GatewayMessageShardManager {
   delegateWyomingSession(request: {
     message: SubstrateMessage;
     routing?: WyomingRoutingMetadata;
+    gatewayRouting?: GatewayRoutingEnvelope;
   }): Promise<WyomingShardDelegationResult>;
 }
 
@@ -157,11 +162,15 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
           const delegated = await shardManager.delegateWyomingSession({
             message,
             routing: routingDecision.routing,
+            gatewayRouting: message.routing?.gateway,
           });
           safeguardAuditTrail.append('wyoming.routing.delegated', {
             channelId: message.channelId,
             messageId: message.id,
             shardId: delegated.shardId,
+            companionId: delegated.gatewayRouting.companionId,
+            shardCompanionId: delegated.lineage.shardCompanionId,
+            parentShardId: delegated.lineage.parentShardId,
             connectionId: routingDecision.routing?.connectionId,
             sessionId: routingDecision.routing?.sessionId,
             turnId: routingDecision.routing?.turnId,

@@ -19,6 +19,7 @@ import type { ContactStore } from '../../contacts/store.js';
 import type { SubstrateAgent } from '../../agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { createGatewayRoutingEnvelope } from '../../routing/envelope.js';
 import type { SessionManager } from '../../session/manager.js';
 import { isChannelVisibility, type ChannelVisibility } from '../../trust/types.js';
 import type {
@@ -1061,8 +1062,25 @@ export class ApiServer implements ChannelAdapter {
     const visibilityScope = requestedScope === 'public_only' || requestedScope === 'approved_private_context'
       ? requestedScope
       : undefined;
+    const shouldAttachGatewayEnvelope = source !== 'api'
+      || Boolean(
+        approvalToken
+        || visibilityScope
+        || channelPrivacy
+        || overrides.modelOverride
+        || overrides.promptOverride
+        || overrides.responseStyle
+        || canonicalContactId,
+      );
     const routing: MessageRoutingMetadata = {
       source,
+      ...(shouldAttachGatewayEnvelope
+        ? {
+          gateway: createGatewayRoutingEnvelope({
+            companionId: this.modelName,
+          }),
+        }
+        : {}),
       ...(approvalToken || visibilityScope
         ? {
           broadcast: {
@@ -1078,6 +1096,7 @@ export class ApiServer implements ChannelAdapter {
       ...(canonicalContactId ? { canonicalContactId } : {}),
     };
     const hasRouting = source !== 'api'
+      || routing.gateway
       || routing.broadcast
       || routing.channelPrivacy
       || routing.modelOverride

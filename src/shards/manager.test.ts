@@ -172,6 +172,16 @@ describe('ShardManager', () => {
     expect(result.turns).toBe(1);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(result.shardId).toMatch(/^shard-/);
+    expect(result.gatewayRouting).toEqual({
+      schemaVersion: 1,
+      companionId: 'companion',
+      shard: {
+        coreCompanionId: 'companion',
+        shardCompanionId: `companion/shards/${result.shardId}`,
+        shardId: result.shardId,
+      },
+    });
+    expect(result.lineage).toEqual(result.gatewayRouting.shard);
     expect(manager.portFamily).toBe('shard');
   });
 
@@ -1072,6 +1082,16 @@ describe('ShardManager', () => {
       'wyoming:ha-main',
       'wyoming:ha-main:voice-pe-kitchen',
     ]));
+    expect(result.gatewayRouting).toEqual({
+      schemaVersion: 1,
+      companionId: 'companion',
+      shard: {
+        coreCompanionId: 'companion',
+        shardCompanionId: `companion/shards/${result.shardId}`,
+        shardId: result.shardId,
+      },
+    });
+    expect(result.lineage).toEqual(result.gatewayRouting.shard);
     const delegatedEntries = sessionStore.getRecent('api:wyoming:ha-main:voice-pe-kitchen', 10);
     expect(delegatedEntries).toHaveLength(2);
     expect(delegatedEntries[0]).toMatchObject({
@@ -1123,6 +1143,7 @@ describe('ShardManager', () => {
     expect(auditTrail.append).toHaveBeenCalledWith(
       'wyoming.shard.delegate.start',
       expect.objectContaining({
+        companionId: 'companion',
         connectionId: 'conn-office',
         sessionId: 'session-office',
         turnId: 'wyoming-turn-conn-office-session-office-1',
@@ -1132,10 +1153,67 @@ describe('ShardManager', () => {
       'wyoming.shard.delegate.end',
       expect.objectContaining({
         status: 'completed',
+        companionId: 'companion',
         connectionId: 'conn-office',
         sessionId: 'session-office',
       }),
     );
+  });
+
+  it('preserves shard lineage separately from subagent addressing when delegation is nested', async () => {
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const result = await manager.delegateWyomingSession({
+      message: {
+        id: 'wyoming-msg-conn-nest-1',
+        channelId: 'api:wyoming:ha-main:voice-pe-den',
+        channelType: 'api',
+        authorId: 'wyoming-user:owner',
+        authorName: 'Wyoming Voice User',
+        content: 'follow up',
+        isDirectMessage: true,
+        timestamp: new Date('2026-02-26T12:00:00.000Z'),
+      },
+      routing: {
+        connectionId: 'conn-nest',
+        sessionId: 'session-nest',
+        turnId: 'wyoming-turn-conn-nest-session-nest-1',
+        siteId: 'ha-main',
+        satelliteId: 'voice-pe-den',
+      },
+      gatewayRouting: {
+        schemaVersion: 1,
+        companionId: 'companion-alpha',
+        shard: {
+          coreCompanionId: 'companion-alpha',
+          shardCompanionId: 'companion-alpha/shards/shard-parent',
+          shardId: 'shard-parent',
+        },
+        subagentAddress: {
+          executionPort: 'subagent',
+          workerId: 'worker-7',
+          lane: 'subagent',
+        },
+      },
+    });
+
+    expect(result.gatewayRouting.companionId).toBe('companion-alpha');
+    expect(result.lineage.coreCompanionId).toBe('companion-alpha');
+    expect(result.lineage.parentShardId).toBe('shard-parent');
+    expect(result.gatewayRouting.subagentAddress).toEqual({
+      executionPort: 'subagent',
+      workerId: 'worker-7',
+      lane: 'subagent',
+    });
+    expect(result.lineage.shardId).toBe(result.shardId);
   });
 
   it('decrements active count even on failure', async () => {
@@ -1268,6 +1346,20 @@ describe('createSpawnShardTool', () => {
       failureReason: 'Heartbeat stale for 4200ms exceeded recovery window (4000ms).',
       capabilities: ['general'],
       requiredCapabilities: [],
+      lineage: {
+        coreCompanionId: 'companion',
+        shardCompanionId: 'companion/shards/shard-failure',
+        shardId: 'shard-failure',
+      },
+      gatewayRouting: {
+        schemaVersion: 1,
+        companionId: 'companion',
+        shard: {
+          coreCompanionId: 'companion',
+          shardCompanionId: 'companion/shards/shard-failure',
+          shardId: 'shard-failure',
+        },
+      },
     }));
     const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
 
@@ -1296,6 +1388,20 @@ describe('createSpawnShardTool', () => {
       stateReason: 'completed',
       capabilities: ['general'],
       requiredCapabilities: [],
+      lineage: {
+        coreCompanionId: 'companion',
+        shardCompanionId: 'companion/shards/shard-test',
+        shardId: 'shard-test',
+      },
+      gatewayRouting: {
+        schemaVersion: 1,
+        companionId: 'companion',
+        shard: {
+          coreCompanionId: 'companion',
+          shardCompanionId: 'companion/shards/shard-test',
+          shardId: 'shard-test',
+        },
+      },
     }));
     const tool = createSpawnShardTool({ spawn } as unknown as ShardManager);
 

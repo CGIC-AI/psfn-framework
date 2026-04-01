@@ -6,7 +6,9 @@ import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type {
   CapabilityTier,
+  GatewayRoutingEnvelope,
   ShardToolsetConfig,
+  ShardLineage,
   SubstrateConfig,
   SubstrateMessage,
   WyomingRoutingMetadata,
@@ -26,6 +28,11 @@ import {
   type ShardSessionMemorySyncEnvelope,
 } from '../gateway/policy.js';
 import { appendShardSessionMemorySyncAudit } from '../persistence/jsonl.js';
+import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
+import {
+  cloneGatewayRoutingEnvelope,
+  deriveShardRoutingEnvelope,
+} from '../routing/envelope.js';
 import type { ShardExecutionPort } from './port.js';
 import type {
   ShardConfig,
@@ -103,11 +110,13 @@ export interface ShardManagerDeps {
   auditTrail?: ShardAuditTrail;
   runtimeMode?: RuntimeMode;
   shardSessionMemorySyncAuditPath?: string;
+  companionId?: string;
 }
 
 export interface WyomingShardDelegationRequest {
   message: SubstrateMessage;
   routing?: WyomingRoutingMetadata;
+  gatewayRouting?: GatewayRoutingEnvelope;
   shardName?: string;
 }
 
@@ -133,6 +142,7 @@ export class ShardManager implements ShardExecutionPort {
   readonly portFamily = 'shard' as const;
   private deps: ShardManagerDeps;
   private auditTrail: ShardAuditTrail | null;
+  private companionId: string;
   private activeCount = 0;
   private maxConcurrent: number;
   private heartbeatStaleAfterMs: number;
@@ -153,6 +163,7 @@ export class ShardManager implements ShardExecutionPort {
       this.heartbeatStaleAfterMs * DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER,
     );
     this.auditTrail = deps.auditTrail ?? null;
+    this.companionId = deps.companionId?.trim() || DEFAULT_COMPANION_ID;
     this.installAuditHooks();
   }
 
@@ -160,14 +171,15 @@ export class ShardManager implements ShardExecutionPort {
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
+    const gatewayRouting = this.deriveGatewayRouting(shardId, shardConfig.gatewayRouting);
     const contextPack = shardConfig.contextPack ?? await this.buildContextPack(
       shardId,
       channelId,
       shardConfig,
     );
     const preparedConfig = contextPack
-      ? { ...shardConfig, contextPack }
-      : shardConfig;
+      ? { ...shardConfig, contextPack, gatewayRouting }
+      : { ...shardConfig, gatewayRouting };
     const baseMessage: SubstrateMessage = {
       id: shardId,
       channelId,
@@ -175,6 +187,10 @@ export class ShardManager implements ShardExecutionPort {
       authorId: 'system',
       authorName: 'ShardManager',
       content: shardConfig.task,
+      routing: {
+        source: 'api',
+        gateway: cloneGatewayRoutingEnvelope(gatewayRouting),
+      },
       timestamp: new Date(),
     };
     return this.executeShard(shardId, channelId, preparedConfig, baseMessage);
@@ -189,6 +205,10 @@ export class ShardManager implements ShardExecutionPort {
 
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
+    const gatewayRouting = this.deriveGatewayRouting(
+      shardId,
+      request.gatewayRouting ?? request.message.routing?.gateway,
+    );
     const routeCapabilities = this.resolveWyomingRouteCapabilities(routing);
     const shardName = request.shardName?.trim()
       || this.resolveWyomingShardName(routing);
@@ -198,11 +218,15 @@ export class ShardManager implements ShardExecutionPort {
       maxTurns: 1,
       capabilities: routeCapabilities,
       requiredCapabilities: routeCapabilities,
+      gatewayRouting,
     };
     this.auditTrail?.append('wyoming.shard.delegate.start', {
       shardId,
       channelId: request.message.channelId,
       messageId: request.message.id,
+      companionId: gatewayRouting.companionId,
+      shardCompanionId: gatewayRouting.shard?.shardCompanionId,
+      parentShardId: gatewayRouting.shard?.parentShardId,
       connectionId: routing?.connectionId,
       sessionId: routing?.sessionId,
       turnId: routing?.turnId,
@@ -215,7 +239,13 @@ export class ShardManager implements ShardExecutionPort {
         shardId,
         request.message.channelId,
         shardConfig,
-        request.message,
+        {
+          ...request.message,
+          routing: {
+            ...(request.message.routing ?? {}),
+            gateway: cloneGatewayRoutingEnvelope(gatewayRouting),
+          },
+        },
       );
       this.auditTrail?.append('wyoming.shard.delegate.end', {
         shardId,
@@ -223,6 +253,8 @@ export class ShardManager implements ShardExecutionPort {
         durationMs: result.durationMs,
         channelId: request.message.channelId,
         messageId: request.message.id,
+        companionId: result.gatewayRouting.companionId,
+        shardCompanionId: result.lineage.shardCompanionId,
         connectionId: routing?.connectionId,
         sessionId: routing?.sessionId,
         turnId: routing?.turnId,
@@ -236,6 +268,8 @@ export class ShardManager implements ShardExecutionPort {
         error: message,
         channelId: request.message.channelId,
         messageId: request.message.id,
+        companionId: gatewayRouting.companionId,
+        shardCompanionId: gatewayRouting.shard?.shardCompanionId,
         connectionId: routing?.connectionId,
         sessionId: routing?.sessionId,
         turnId: routing?.turnId,
@@ -258,6 +292,8 @@ export class ShardManager implements ShardExecutionPort {
     }
 
     const startTime = Date.now();
+    const gatewayRouting = this.deriveGatewayRouting(shardId, shardConfig.gatewayRouting);
+    const lineage = gatewayRouting.shard as ShardLineage;
     const maxTurns = shardConfig.maxTurns ?? DEFAULT_MAX_TURNS;
     const capabilities = this.resolveAdvertisedCapabilities(shardConfig.capabilities);
     const requiredCapabilities = this.resolveRequiredCapabilities(shardConfig.requiredCapabilities);
@@ -305,6 +341,9 @@ export class ShardManager implements ShardExecutionPort {
       name: shardConfig.name,
       maxTurns,
       channelId,
+      companionId: gatewayRouting.companionId,
+      shardCompanionId: lineage.shardCompanionId,
+      parentShardId: lineage.parentShardId,
       capabilities,
       requiredCapabilities,
     });
@@ -396,12 +435,16 @@ export class ShardManager implements ShardExecutionPort {
         ...(finishedShard?.failureReason ? { failureReason: finishedShard.failureReason } : {}),
         capabilities: [...capabilities],
         requiredCapabilities: [...requiredCapabilities],
+        lineage,
+        gatewayRouting,
       };
       this.auditTrail?.append('shard.spawn.end', {
         shardId,
         status: 'completed',
         durationMs: result.durationMs,
         turns: result.turns,
+        companionId: result.gatewayRouting.companionId,
+        shardCompanionId: result.lineage.shardCompanionId,
         lifecycleState: result.lifecycleState,
         health: result.health,
       });
@@ -420,6 +463,25 @@ export class ShardManager implements ShardExecutionPort {
     } finally {
       this.releaseActiveShard(shardId, channelId);
     }
+  }
+
+  private deriveGatewayRouting(
+    shardId: string,
+    inherited: GatewayRoutingEnvelope | undefined,
+  ): GatewayRoutingEnvelope {
+    if (inherited?.shard?.shardId === shardId) {
+      return cloneGatewayRoutingEnvelope(inherited) ?? deriveShardRoutingEnvelope({
+        companionId: this.companionId,
+        shardId,
+      });
+    }
+    const companionId = inherited?.companionId.trim() || this.companionId;
+    return deriveShardRoutingEnvelope({
+      companionId,
+      shardId,
+      parentShardId: inherited?.shard?.shardId,
+      ...(inherited?.subagentAddress ? { subagentAddress: inherited.subagentAddress } : {}),
+    });
   }
 
   getActiveCount(): number {

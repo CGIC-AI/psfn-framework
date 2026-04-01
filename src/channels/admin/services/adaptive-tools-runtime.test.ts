@@ -13,19 +13,16 @@ describe('deriveToolHealthViews', () => {
             scope: 'core',
           },
           {
-            name: 'notify_operator',
-            description: 'Send an out-of-band operator alert via ntfy.',
+            name: 'notify',
+            description: 'Unified notification surface for operator briefs, lightweight outbound sends, and approval escalation.',
             scope: 'extended',
             wiringMeta: {
               requiredServices: ['ntfy'],
-              contextRestrictions: {
-                disallowInternal: true,
-                disallowScheduled: true,
-              },
+              requiredGatewayMethods: ['discord.send', 'notify.ntfy'],
               concurrency: {
                 class: 'exclusive',
                 exclusivityKeyPolicy: 'category_tool_name',
-                exclusivityKey: 'extended:notify_operator',
+                exclusivityKey: 'extended:notify',
                 interruptibility: 'cooperative',
                 eligibility: {
                   foreground: true,
@@ -61,7 +58,7 @@ describe('deriveToolHealthViews', () => {
       state: {
         generatedAt: 2,
         coreTools: ['tool_search', 'toolset'],
-        extendedTools: ['notify_operator', 'heartbeat_run_template'],
+        extendedTools: ['notify', 'heartbeat_run_template'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
@@ -98,7 +95,7 @@ describe('deriveToolHealthViews', () => {
       ],
     });
 
-    const notifyOperator = views.find((entry) => entry.name === 'notify_operator');
+    const notifyOperator = views.find((entry) => entry.name === 'notify');
     expect(notifyOperator).toMatchObject({
       health: {
         status: 'healthy',
@@ -108,8 +105,7 @@ describe('deriveToolHealthViews', () => {
           status: 'available',
         },
         internalHeartbeat: {
-          status: 'not_applicable',
-          detail: 'Blocked on internal channels.',
+          status: 'available',
         },
       },
     });

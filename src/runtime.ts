@@ -60,7 +60,12 @@ import {
 } from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
-import { createHttpNtfyNotifierFromEnv, createNotifyOperatorTool } from './tools/ntfy.js';
+import {
+  createHttpNtfyNotifierFromEnv,
+  createNotifyDispatcher,
+  createNotifyTool,
+  createOutboundDockNotifySender,
+} from './tools/ntfy.js';
 import { MemoryWriter } from './memory/writer.js';
 import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
@@ -577,6 +582,9 @@ export class SubstrateRuntime implements Lifecycle {
     });
     const emotionState = new EmotionState();
     const operatorNotifier = createHttpNtfyNotifierFromEnv();
+    const operatorAlertDispatcher = createNotifyDispatcher({
+      briefNotifier: operatorNotifier,
+    });
     this.agentLoop = composeSubstrateAgent({
       eventBus: this.eventBus,
       llmProvider: this.llmClient,
@@ -587,7 +595,7 @@ export class SubstrateRuntime implements Lifecycle {
       config: this.config,
       runtimeMode: 'single',
       streamRuntimeOptions: {
-        onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
+        onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorAlertDispatcher, card.data.name),
       },
       emotionRuntime: {
         observer: emotionObserver,
@@ -936,12 +944,15 @@ export class SubstrateRuntime implements Lifecycle {
         runtimeMode: lifecycleRuntimeContract.mode,
       },
     ));
-    this.agentLoop.registerTool(createNotifyOperatorTool(
-      operatorNotifier,
-      {
+    this.agentLoop.registerTool(createNotifyTool(
+      createNotifyDispatcher({
+        briefNotifier: operatorNotifier,
+        channelSender: createOutboundDockNotifySender(this.discord),
+        operatorDiscordChannelId: process.env.CONFIRMATION_OPERATOR_DISCORD_CHANNEL_ID,
+        operatorNtfyTopic: process.env.CONFIRMATION_NTFY_TOPIC ?? process.env.NTFY_TOPIC,
         rateLimiter: externalRateLimiter,
-        defaultChannel: 'discord',
-      },
+        defaultBudgetChannel: 'discord',
+      }),
     ));
 
     // Vault auto-publisher (for heartbeat reflections → Obsidian vault)

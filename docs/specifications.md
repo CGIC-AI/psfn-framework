@@ -133,6 +133,7 @@ Current guidance:
 - `schedule` is the live unified surface for durable reminders, proactive follow-ups, reflection templates, and timed prompt work; legacy scheduler micro-tool semantics remain available as `action` aliases inside that tool during migration.
 - `session` is the live unified surface for continuity lookup, transcript search/grep, resumption, and focus lifecycle actions; write-oriented actions remain capability-gated inside the same tool.
 - `fs` is the live unified workspace primitive for bounded file inspection and safe mutation via `action=list|read|search|write|edit`; bounded reads, workspace path policy, and overwrite/edit guardrails remain explicit.
+- `notify` is the live unified surface for operator briefing, lightweight outbound delivery, and approval escalation. `brief` replaces legacy `notify_operator`, `send` requires explicit delivery targets, and `approval_request` keeps review details explicit and fail-closed.
 
 ## Validation Baseline
 

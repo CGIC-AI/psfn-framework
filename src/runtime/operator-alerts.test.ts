@@ -4,7 +4,7 @@ import {
   formatPromptGenerationFailureAlert,
 } from './operator-alerts.js';
 import type { StreamTerminalFailureEvent } from '../agent/stream-adapter.js';
-import type { NtfyNotifier } from '../tools/ntfy.js';
+import type { NotifyDispatcher } from '../tools/ntfy.js';
 
 function makeEvent(): StreamTerminalFailureEvent {
   return {
@@ -51,20 +51,23 @@ describe('operator alerts', () => {
   });
 
   it('sends a priority-5 ntfy alert for terminal prompt-generation failures', async () => {
-    const notifier: NtfyNotifier = {
-      notify: vi.fn().mockResolvedValue({
+    const dispatcher: NotifyDispatcher = {
+      dispatch: vi.fn().mockResolvedValue({
+        action: 'brief',
         status: 'sent',
-        topic: 'ops',
+        delivery: 'ntfy',
+        target: 'ops',
       }),
     };
-    const handler = createPromptGenerationFailureAlertHandler(notifier, 'PSFN');
+    const handler = createPromptGenerationFailureAlertHandler(dispatcher, 'PSFN');
 
     await handler(makeEvent());
 
-    expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({
+    expect(dispatcher.dispatch).toHaveBeenCalledWith({
+      action: 'brief',
       title: 'PSFN prompt generation failure',
       priority: 5,
       message: expect.stringContaining('Last tried: openrouter/moonshotai/kimi-k2.5'),
-    }));
+    });
   });
 });

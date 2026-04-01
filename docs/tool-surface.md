@@ -93,6 +93,17 @@ The runtime now exposes a unified model-facing `session` tool for continuity, tr
 
 This keeps continuity choice simple for the model while preserving the existing session-management invariants and focus lifecycle behavior.
 
+## Live Notify Surface
+
+The runtime now exposes a unified model-facing `notify` tool for operator briefs, lightweight outbound delivery, and approval escalation.
+
+- Actions: `brief`, `send`, `approval_request`
+- `brief` is the direct replacement for legacy `notify_operator`
+- `send` requires an explicit delivery channel and explicit external target; it does not infer the current channel
+- `approval_request` keeps operator-review details explicit instead of hiding them behind implicit side effects
+
+The surface keeps lightweight visible tool output separate from the heavier internal delivery work. Briefs remain fail-closed for scheduled/internal contexts, outbound sends require explicit delivery targets, and approval escalation stays explicit about what is awaiting review.
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals
@@ -176,7 +187,8 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `schedule_task` | `schedule` | extended | Durable tasking belongs here. |
 | `self_restart` | `system` | extended | Runtime control belongs under system. |
 | `self_rebuild` | `system` | extended | Same family. |
-| `notify_operator` | `notify` | extended | Operator escalation is its own primitive. |
+| `notify` | `notify` | extended | Unified notify surface with `action=brief|send|approval_request`. |
+| `notify_operator` | `notify` | hidden | Legacy operator alert behavior now maps to `notify action="brief"`. |
 | `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
 | `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work; forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
 | `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |

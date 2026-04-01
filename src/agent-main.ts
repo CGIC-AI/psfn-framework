@@ -68,7 +68,12 @@ import {
 } from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
 import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
-import { createGatewayNtfyNotifier, createNotifyOperatorTool } from './tools/ntfy.js';
+import {
+  createGatewayDiscordNotifySender,
+  createGatewayNtfyNotifier,
+  createNotifyDispatcher,
+  createNotifyTool,
+} from './tools/ntfy.js';
 import { attachTerminalDebugObserver } from './debug/terminal-observer.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
@@ -478,6 +483,9 @@ async function main(): Promise<void> {
   });
   const emotionState = new EmotionState();
   const operatorNotifier = createGatewayNtfyNotifier(gateway);
+  const operatorAlertDispatcher = createNotifyDispatcher({
+    briefNotifier: operatorNotifier,
+  });
   const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: gateway,
@@ -488,7 +496,7 @@ async function main(): Promise<void> {
     config,
     runtimeMode: 'gateway',
     streamRuntimeOptions: {
-      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
+      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorAlertDispatcher, card.data.name),
     },
     emotionRuntime: {
       observer: emotionObserver,
@@ -507,6 +515,14 @@ async function main(): Promise<void> {
   });
   const externalRateLimiter = createExternalCommunicationRateLimiterFromEnv(process.env, {
     auditTrail: safeguardAuditTrail,
+  });
+  const notifyDispatcher = createNotifyDispatcher({
+    briefNotifier: operatorNotifier,
+    channelSender: createGatewayDiscordNotifySender(gateway),
+    operatorDiscordChannelId: process.env.CONFIRMATION_OPERATOR_DISCORD_CHANNEL_ID,
+    operatorNtfyTopic: process.env.CONFIRMATION_NTFY_TOPIC ?? process.env.NTFY_TOPIC,
+    rateLimiter: externalRateLimiter,
+    defaultBudgetChannel: 'discord',
   });
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
@@ -1101,14 +1117,7 @@ async function main(): Promise<void> {
       runtimeMode: lifecycleRuntimeContract.mode,
     },
   ));
-  agentLoop.registerTool(createNotifyOperatorTool(
-    operatorNotifier,
-    {
-      rateLimiter: externalRateLimiter,
-      defaultChannel: 'discord',
-      gatewayMode: true,
-    },
-  ));
+  agentLoop.registerTool(createNotifyTool(notifyDispatcher, { gatewayMode: true }));
 
   // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
   let vaultAutoPublisher: import('./vault/auto-publish.js').VaultAutoPublisher | undefined;

@@ -149,7 +149,7 @@ export type GatewayToolMetadataCoverage = Readonly<Record<string, readonly strin
 
 export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage = Object.freeze({
   fs: Object.freeze(['fs.read', 'fs.list', 'fs.search', 'fs.write', 'fs.edit']),
-  notify_operator: Object.freeze(['notify.ntfy']),
+  notify: Object.freeze(['discord.send', 'notify.ntfy']),
   repo_status: Object.freeze(['git.status']),
   repo_diff: Object.freeze(['git.diff']),
   repo_apply_patch: Object.freeze(['git.apply_patch']),

@@ -2,7 +2,10 @@ import { JSONRPCErrorException } from 'json-rpc-2.0';
 import type { ConfirmationQueueEntry } from '../capabilities/confirmation-queue.js';
 import type { ChannelOutboundDock } from '../channels/types.js';
 import { createComponentLogger } from '../logger.js';
-import { toErrorMessage } from '../utils/errors.js';
+import {
+  createOutboundDockNotifySender,
+  deliverApprovalRequestNotification,
+} from '../tools/ntfy.js';
 import {
   GatewayErrors,
   type NotifyNtfyParams,
@@ -10,7 +13,6 @@ import {
 } from './protocol.js';
 
 const log = createComponentLogger('Gateway');
-const DEFAULT_CONFIRMATION_NOTIFICATION_PRIORITY = 4;
 
 export interface GatewayNtfyConfig {
   baseUrl: string;
@@ -138,57 +140,33 @@ export async function notifyOperatorForPendingAction({
   ntfyTopic,
   ntfyNotifier,
 }: PendingActionNotificationOptions): Promise<void> {
-  const notification = formatPendingConfirmationAlert(entry);
-  const operatorChannelId = operatorDiscordChannelId?.trim();
-  let delivered = false;
-
-  if (operatorChannelId) {
-    try {
-      await discordAdapter.outbound.sendText(
-        { channelId: operatorChannelId },
-        notification,
-      );
-      delivered = true;
-    } catch (error) {
-      log.warn('Failed to send confirmation alert via Discord', {
-        confirmationId: entry.id,
-        channelId: operatorChannelId,
-        error: toErrorMessage(error),
-      });
-    }
-  }
-
-  if (!delivered && ntfyNotifier?.isConfigured()) {
-    try {
-      await ntfyNotifier.send({
-        message: notification,
-        title: 'PSFN approval required',
-        priority: DEFAULT_CONFIRMATION_NOTIFICATION_PRIORITY,
-        topic: ntfyTopic,
-      });
-      delivered = true;
-    } catch (error) {
-      log.warn('Failed to send confirmation alert via ntfy', {
-        confirmationId: entry.id,
-        error: toErrorMessage(error),
-      });
-    }
-  }
-
-  if (!delivered) {
+  try {
+    await deliverApprovalRequestNotification({
+      request: {
+        id: entry.id,
+        method: entry.method,
+        approvalAction: entry.action,
+        scope: entry.scope,
+        reason: entry.companionReason,
+        expiresAt: entry.expiresAt,
+      },
+      briefNotifier: {
+        notify: async (params) => {
+          if (!ntfyNotifier?.isConfigured()) {
+            throw new Error('ntfy is not configured');
+          }
+          return await ntfyNotifier.send(params);
+        },
+      },
+      channelSender: createOutboundDockNotifySender(discordAdapter),
+      operatorDiscordChannelId,
+      operatorNtfyTopic: ntfyTopic,
+      defaultBudgetChannel: 'discord',
+    });
+  } catch (error) {
     log.warn('No operator notification channel available for queued confirmation', {
       confirmationId: entry.id,
+      error: error instanceof Error ? error.message : String(error),
     });
   }
-}
-
-function formatPendingConfirmationAlert(entry: ConfirmationQueueEntry): string {
-  return [
-    `Approval required: ${entry.method} (${entry.action})`,
-    `Scope: ${entry.scope}`,
-    `Reason: ${entry.companionReason}`,
-    `Confirmation ID: ${entry.id}`,
-    `Expires: ${new Date(entry.expiresAt).toISOString()}`,
-    'Review in admin: /confirmations',
-  ].join('\n');
 }

@@ -48,7 +48,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - Prefer one top-level tool per semantic domain.
 - Prefer an `action` parameter over a family of near-duplicate verbs.
 - Keep `north_star` separate from the core always-on set.
-- Rename `core_memory` to `orient`; the companion should read that as active orientation, not deep archival memory.
+- Use `orient` as the active-orientation surface; it is not deep archival memory.
 - Keep `scratchpad` as the ephemeral long-context workspace for large temporary material such as PDFs, articles, working notes, and rolling source summaries.
 - Keep scratchpad distinct from `orient` and `memory`: it is for temporary working context, not active canon or durable recall.
 - Promote scratchpad content only when it hardens into stable facts (`memory`), durable notes/artifacts (`vault` or repo docs), or orientation state (`orient`).
@@ -64,9 +64,9 @@ The table below maps current first-party tool names to the target surface. "Keep
 | --- | --- | --- | --- |
 | `memory` | `memory` | always-on | Unified long-term memory surface with `action=write|search|import|redact|delete|restore`; capability gating still distinguishes read/write/delete-sensitive paths. |
 | `scratchpad` | `scratchpad` | always-on | Unified ephemeral workspace with `action=list|add|replace|append|remove`; short-lived working notes stay explicit and non-canonical. |
-| `core_memory_append` | `orient` | always-on | Collapse the hot canon into `orient`. |
-| `core_memory_replace` | `orient` | always-on | Same orientation surface, different action. |
-| `memory_rethink` | `orient` | background-only | Re-orienting the hot canon is reflective work, not a routine turn action. |
+| `core_memory_append` | `orient` | always-on | Now maps to `orient action="append"` for incremental orientation updates. |
+| `core_memory_replace` | `orient` | always-on | Now maps to `orient action="replace"` for single-block rewrites. |
+| `memory_rethink` | `orient` | background-only | Now maps to `orient action="reorient"` for holistic orientation refresh. |
 | `values_list` | `orient` | always-on | Values are part of active self-orientation, not a separate tool family. |
 | `values_add` | `orient` | extended | Append-only value journaling stays on the orientation surface. |
 | `values_update` | `orient` | extended | Revisions stay append-only and provenance-aware. |

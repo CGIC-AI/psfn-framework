@@ -34,9 +34,7 @@ import { createSubagentTool } from '../subagents/tools.js';
 import { createThinkTool } from '../repl/tools.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
 import {
-  createCoreMemoryAppendTool,
-  createCoreMemoryReplaceTool,
-  createMemoryRethinkTool,
+  createOrientTool,
 } from '../core-memory/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { Scheduler } from '../scheduler/scheduler.js';
@@ -175,9 +173,7 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   const store = new CoreMemoryStore(resolveCoreMemoryPath(companionDataDir));
   options.sessionManager.setCoreMemoryProvider(store);
-  options.agentLoop.registerTool(createCoreMemoryAppendTool(store));
-  options.agentLoop.registerTool(createCoreMemoryReplaceTool(store));
-  options.agentLoop.registerTool(createMemoryRethinkTool(store));
+  options.agentLoop.registerTool(createOrientTool(store));
   return store;
 }
 

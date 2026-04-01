@@ -103,13 +103,13 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Memory block');
   });
 
-  it('injects core memory into system prompt before retrieved memory block', async () => {
+  it('injects orientation into system prompt before retrieved memory block', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
     mgr.setCoreMemoryProvider({
       formatForContext: () => [
-        '[Core Memory]',
+        '[Orientation]',
         'persona:',
         'Analytical and direct.',
         'human:',
@@ -120,7 +120,7 @@ describe('SessionManager', () => {
     });
 
     const ctx = await mgr.buildContext('ch1', 'System', 'Retrieved memory block');
-    const coreIndex = ctx.systemPrompt.indexOf('[Core Memory]');
+    const coreIndex = ctx.systemPrompt.indexOf('[Orientation]');
     const memoryIndex = ctx.systemPrompt.indexOf('Retrieved memory block');
 
     expect(coreIndex).toBeGreaterThanOrEqual(0);
@@ -133,7 +133,7 @@ describe('SessionManager', () => {
     const mgr = new SessionManager(store, config);
     mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
     mgr.setCoreMemoryProvider({
-      formatForContext: () => '[Core Memory]\nStable companion memory',
+      formatForContext: () => '[Orientation]\nStable companion orientation',
     });
     store.insertCompaction('ch1', 'Summary of older turns.', Date.now());
     const continuityStore = new UserContinuityStore(dir);
@@ -169,7 +169,7 @@ describe('SessionManager', () => {
     );
 
     const staticIndex = ctx.systemPrompt.indexOf('Static prefix');
-    const coreIndex = ctx.systemPrompt.indexOf('[Core Memory]');
+    const coreIndex = ctx.systemPrompt.indexOf('[Orientation]');
     const summaryIndex = ctx.systemPrompt.indexOf('[Previous conversation summary]');
     const continuityIndex = ctx.systemPrompt.indexOf('[Recent activity from other channels]');
     const memoryIndex = ctx.systemPrompt.indexOf('Retrieved memory block');
@@ -271,7 +271,7 @@ describe('SessionManager', () => {
     });
     expect(ctx.manifest?.budgets.sections).toEqual(expect.arrayContaining([
       { section: 'system_prompt', tokenCount: expect.any(Number) },
-      { section: 'core_memory', tokenCount: expect.any(Number) },
+      { section: 'orientation', tokenCount: expect.any(Number) },
       { section: 'memories', tokenCount: expect.any(Number) },
       { section: 'compaction_summary', tokenCount: 0 },
       { section: 'continuity', tokenCount: 0 },

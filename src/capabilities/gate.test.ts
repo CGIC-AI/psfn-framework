@@ -262,58 +262,52 @@ describe('capability tool gating', () => {
     expect((writeDenied.content[0] as any).text).toContain('memory.write');
   });
 
-  it('gates session tools using static capability requirements', async () => {
-    const sessionList = createTool('session_list');
-    const listGated = gateToolWithCapabilities(
-      sessionList.tool,
+  it('gates unified session actions by read versus runtime-write capability tokens', async () => {
+    const session = createTool('session');
+    const readGated = gateToolWithCapabilities(
+      session.tool,
       () => accessForTier('custom', ['memory.write']),
     );
-    const listDenied = await listGated.execute('session-list', {});
-    expect(sessionList.executeSpy).not.toHaveBeenCalled();
+    const listDenied = await readGated.execute('session-list', { action: 'list' });
+    expect(session.executeSpy).not.toHaveBeenCalled();
     expect((listDenied.content[0] as any).text).toContain('identity.read');
 
-    const sessionSearch = createTool('session_search');
-    const searchGated = gateToolWithCapabilities(
-      sessionSearch.tool,
-      () => accessForTier('custom', ['memory.write']),
-    );
-    const searchDenied = await searchGated.execute('session-search', {});
-    expect(sessionSearch.executeSpy).not.toHaveBeenCalled();
+    const searchDenied = await readGated.execute('session-search', { action: 'search', query: 'orion' });
+    expect(session.executeSpy).not.toHaveBeenCalled();
     expect((searchDenied.content[0] as any).text).toContain('identity.read');
 
-    const sessionGrep = createTool('session_grep');
-    const grepGated = gateToolWithCapabilities(
-      sessionGrep.tool,
-      () => accessForTier('custom', ['memory.write']),
-    );
-    const grepDenied = await grepGated.execute('session-grep', {});
-    expect(sessionGrep.executeSpy).not.toHaveBeenCalled();
+    const grepDenied = await readGated.execute('session-grep', { action: 'session_grep', pattern: 'orion' });
+    expect(session.executeSpy).not.toHaveBeenCalled();
     expect((grepDenied.content[0] as any).text).toContain('identity.read');
 
-    const sessionNew = createTool('session_new');
-    const deniedGated = gateToolWithCapabilities(
-      sessionNew.tool,
+    const writeGated = gateToolWithCapabilities(
+      session.tool,
       () => accessForTier('custom', ['identity.read']),
     );
-    const denied = await deniedGated.execute('call-denied', {});
-    expect(sessionNew.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('identity.write.runtime');
+    const newDenied = await writeGated.execute('session-new', { action: 'new' });
+    expect(session.executeSpy).not.toHaveBeenCalled();
+    expect((newDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const resumeDenied = await writeGated.execute('session-resume', {
+      action: 'session_resume',
+      sessionId: 'api:resume-me',
+    });
+    expect(session.executeSpy).not.toHaveBeenCalled();
+    expect((resumeDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const focusDenied = await writeGated.execute('session-focus', {
+      action: 'start_focus',
+      scope: 'Investigate continuity',
+    });
+    expect(session.executeSpy).not.toHaveBeenCalled();
+    expect((focusDenied.content[0] as any).text).toContain('identity.write.runtime');
 
     const allowedGated = gateToolWithCapabilities(
-      sessionNew.tool,
+      session.tool,
       () => accessForTier('nursery'),
     );
-    await allowedGated.execute('call-allowed', {});
-    expect(sessionNew.executeSpy).toHaveBeenCalledTimes(1);
-
-    const sessionResume = createTool('session_resume');
-    const resumeGated = gateToolWithCapabilities(
-      sessionResume.tool,
-      () => accessForTier('custom', ['identity.read']),
-    );
-    const resumeDenied = await resumeGated.execute('session-resume', {});
-    expect(sessionResume.executeSpy).not.toHaveBeenCalled();
-    expect((resumeDenied.content[0] as any).text).toContain('identity.write.runtime');
+    await allowedGated.execute('session-allowed', { action: 'complete_focus' });
+    expect(session.executeSpy).toHaveBeenCalledTimes(1);
   });
 
   it('gates issue tools by issue.* capability tokens', async () => {

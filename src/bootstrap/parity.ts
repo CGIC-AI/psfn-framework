@@ -31,10 +31,8 @@ import type { MemoryWriter } from '../memory/writer.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../filesystem/runtime-wiring.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../core-memory/store.js';
-import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../tools/session.js';
-import { createSessionGrepTool, createSessionSearchTool } from '../tools/session-search.js';
+import { createSessionTool } from '../tools/session.js';
 import { resolveSessionsDir } from '../persistence/layout.js';
-import { createCompleteFocusTool, createStartFocusTool } from '../tools/focus.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptRegistryStore } from '../identity/prompt-registry.js';
@@ -423,11 +421,10 @@ export function wireSessionToolsRuntime(
   dataDir: string,
   llmProvider: LLMProvider,
 ): void {
-  target.registerTool(createSessionSearchTool(sessionManager, llmProvider), 'core');
-  target.registerTool(createSessionGrepTool({
+  target.registerTool(createSessionTool({
+    manager: sessionManager,
+    llmProvider,
     sessionsDir: resolveSessionsDir(dataDir),
-  }), 'core');
-  target.registerTool(createSessionNewTool({
     dataDir,
     setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
     seedSession: (sessionId) => {
@@ -436,11 +433,7 @@ export function wireSessionToolsRuntime(
         'Session initialized via session_new.',
       );
     },
-  }), 'extended');
-  target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'core');
-  target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
-  target.registerTool(createStartFocusTool(sessionManager), 'extended');
-  target.registerTool(createCompleteFocusTool(sessionManager, llmProvider), 'extended');
+  }), 'core');
 }
 
 export function wireFilesystemToolsRuntime(

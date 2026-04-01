@@ -35,6 +35,11 @@ const IDENTITY_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'identity.write.operator',
 ] as const;
 
+const SESSION_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'identity.read',
+  'identity.write.runtime',
+] as const;
+
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
   switch (action) {
@@ -109,6 +114,39 @@ function resolveUnifiedIdentityRequirement(params: Record<string, unknown>): Cap
       return 'identity.write.runtime';
     default:
       return IDENTITY_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
+function resolveUnifiedSessionRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!action) {
+    const hasNonListParams = Object.entries(params).some(([key, value]) => (
+      key !== 'action'
+      && key !== 'limit'
+      && value !== undefined
+    ));
+    return hasNonListParams ? SESSION_FAIL_CLOSED_REQUIREMENTS : 'identity.read';
+  }
+
+  switch (action) {
+    case 'list':
+    case 'session_list':
+    case 'search':
+    case 'session_search':
+    case 'grep':
+    case 'session_grep':
+      return 'identity.read';
+    case 'new':
+    case 'session_new':
+    case 'resume':
+    case 'session_resume':
+    case 'start_focus':
+    case 'focus_start':
+    case 'complete_focus':
+    case 'focus_complete':
+      return 'identity.write.runtime';
+    default:
+      return SESSION_FAIL_CLOSED_REQUIREMENTS;
   }
 }
 
@@ -217,6 +255,10 @@ export function resolveToolRequiredCapabilities(
 
   if (tool.name === 'identity') {
     return normalizeRequirement(resolveUnifiedIdentityRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'session') {
+    return normalizeRequirement(resolveUnifiedSessionRequirement(toRecord(params)));
   }
 
   const fallback = STATIC_TOOL_REQUIREMENTS[tool.name];

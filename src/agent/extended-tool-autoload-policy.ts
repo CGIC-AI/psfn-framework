@@ -69,8 +69,6 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'vault_read',
     'vault_search',
     'vault_daily',
-    'session_resume',
-    'session_new',
     'identity',
     'north_star',
   ],

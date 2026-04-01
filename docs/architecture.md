@@ -89,6 +89,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 
 - `Scheduler` handles heartbeat/reflection tasks, maintenance, one-shot tasks, backups, and deferred work.
 - Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime.
+- Deferred continuation post-turn delivery is intentionally limited to explicit `deferred-tool-handoff:*` completions keyed by continuation id. Arbitrary background process watchers must define a separate runtime contract if they need restart-safe state or user notification semantics.
 
 ## Persistence Topology
 

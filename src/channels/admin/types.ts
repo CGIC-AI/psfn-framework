@@ -5,6 +5,7 @@ import type { SessionStore } from '../../session/store.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { ShardManager } from '../../shards/manager.js';
+import type { SubagentFaculty } from '../../subagents/faculty.js';
 import type { EventBus } from '../../event-bus.js';
 import type { EmbeddingService } from '../../agent/contracts.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
@@ -49,6 +50,7 @@ export interface AdminServerConfig {
   sessionManager: SessionManager;
   scheduler: Scheduler;
   shardManager: ShardManager;
+  subagentFaculty: SubagentFaculty;
   eventBus: EventBus;
   characterCard: CharacterCardV2;
   config: SubstrateConfig;
@@ -91,6 +93,7 @@ export interface DashboardStats {
   sessionCount: number;
   schedulerTasks: number;
   activeShards: number;
+  activeSubagents: number;
   sessionUsage: {
     turns: number;
     inputTokens: number;

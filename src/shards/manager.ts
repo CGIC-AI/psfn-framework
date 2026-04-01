@@ -11,7 +11,6 @@ import type {
   ShardLineage,
   SubstrateConfig,
   SubstrateMessage,
-  WyomingRoutingMetadata,
 } from '../types.js';
 import type { EventBus } from '../event-bus.js';
 import type { LLMProvider, EmbeddingService, MemoryProvider } from '../agent/contracts.js';
@@ -113,13 +112,6 @@ export interface ShardManagerDeps {
   companionId?: string;
 }
 
-export interface WyomingShardDelegationRequest {
-  message: SubstrateMessage;
-  routing?: WyomingRoutingMetadata;
-  gatewayRouting?: GatewayRoutingEnvelope;
-  shardName?: string;
-}
-
 export interface ActiveShard {
   id: string;
   name: string;
@@ -194,88 +186,6 @@ export class ShardManager implements ShardExecutionPort {
       timestamp: new Date(),
     };
     return this.executeShard(shardId, channelId, preparedConfig, baseMessage);
-  }
-
-  async delegateWyomingSession(request: WyomingShardDelegationRequest): Promise<ShardResult> {
-    this.refreshShardHealth();
-    const content = request.message.content.trim();
-    if (!content) {
-      throw new Error('Wyoming shard delegation requires non-empty message content.');
-    }
-
-    const routing = request.routing ?? request.message.routing?.wyoming;
-    const shardId = `wyoming-shard-${randomUUID()}`;
-    const gatewayRouting = this.deriveGatewayRouting(
-      shardId,
-      request.gatewayRouting ?? request.message.routing?.gateway,
-    );
-    const routeCapabilities = this.resolveWyomingRouteCapabilities(routing);
-    const shardName = request.shardName?.trim()
-      || this.resolveWyomingShardName(routing);
-    const shardConfig: ShardConfig = {
-      name: shardName,
-      task: request.message.content,
-      maxTurns: 1,
-      capabilities: routeCapabilities,
-      requiredCapabilities: routeCapabilities,
-      gatewayRouting,
-    };
-    this.auditTrail?.append('wyoming.shard.delegate.start', {
-      shardId,
-      channelId: request.message.channelId,
-      messageId: request.message.id,
-      companionId: gatewayRouting.companionId,
-      shardCompanionId: gatewayRouting.shard?.shardCompanionId,
-      parentShardId: gatewayRouting.shard?.parentShardId,
-      connectionId: routing?.connectionId,
-      sessionId: routing?.sessionId,
-      turnId: routing?.turnId,
-      siteId: routing?.siteId,
-      satelliteId: routing?.satelliteId,
-    });
-
-    try {
-      const result = await this.executeShard(
-        shardId,
-        request.message.channelId,
-        shardConfig,
-        {
-          ...request.message,
-          routing: {
-            ...(request.message.routing ?? {}),
-            gateway: cloneGatewayRoutingEnvelope(gatewayRouting),
-          },
-        },
-      );
-      this.auditTrail?.append('wyoming.shard.delegate.end', {
-        shardId,
-        status: 'completed',
-        durationMs: result.durationMs,
-        channelId: request.message.channelId,
-        messageId: request.message.id,
-        companionId: result.gatewayRouting.companionId,
-        shardCompanionId: result.lineage.shardCompanionId,
-        connectionId: routing?.connectionId,
-        sessionId: routing?.sessionId,
-        turnId: routing?.turnId,
-      });
-      return result;
-    } catch (error) {
-      const message = toErrorMessage(error);
-      this.auditTrail?.append('wyoming.shard.delegate.end', {
-        shardId,
-        status: 'failed',
-        error: message,
-        channelId: request.message.channelId,
-        messageId: request.message.id,
-        companionId: gatewayRouting.companionId,
-        shardCompanionId: gatewayRouting.shard?.shardCompanionId,
-        connectionId: routing?.connectionId,
-        sessionId: routing?.sessionId,
-        turnId: routing?.turnId,
-      });
-      throw error;
-    }
   }
 
   private async executeShard(
@@ -1113,22 +1023,6 @@ export class ShardManager implements ShardExecutionPort {
       ...(params as Record<string, unknown>),
       [INTERNAL_SHARD_SOURCE_PARAM]: `shard:${shardId}`,
     };
-  }
-
-  private resolveWyomingShardName(routing: WyomingRoutingMetadata | undefined): string {
-    const siteId = routing?.siteId?.trim() || 'unknown-site';
-    const satelliteId = routing?.satelliteId?.trim() || 'unknown-satellite';
-    return `wyoming:${siteId}:${satelliteId}`;
-  }
-
-  private resolveWyomingRouteCapabilities(routing: WyomingRoutingMetadata | undefined): string[] {
-    const siteId = routing?.siteId?.trim() || 'unknown-site';
-    const satelliteId = routing?.satelliteId?.trim() || 'unknown-satellite';
-    return normalizeCapabilityTokens([
-      'wyoming',
-      `wyoming:${siteId}`,
-      `wyoming:${siteId}:${satelliteId}`,
-    ]);
   }
 
   private registerActiveShardChannel(channelId: string, shardId: string): void {

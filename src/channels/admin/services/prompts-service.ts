@@ -112,7 +112,11 @@ export class AdminPromptsDataService implements AdminPromptsService {
       this.deps.sessionStore
         .listChannels()
         .map(channel => channel.channelId)
-        .filter(channelId => !channelId.startsWith('internal:') && !channelId.startsWith('shard:')),
+        .filter(
+          channelId => !channelId.startsWith('internal:')
+            && !channelId.startsWith('subagent:')
+            && !channelId.startsWith('shard:'),
+        ),
     )];
 
     for (const channelId of targetChannels) {

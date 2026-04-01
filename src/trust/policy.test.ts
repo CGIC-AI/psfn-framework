@@ -363,6 +363,10 @@ describe('classifyChannel', () => {
     expect(classifyChannel('shard:abc-123')).toBe('private');
   });
 
+  it('classifies subagent channels as private', () => {
+    expect(classifyChannel('subagent:abc-123')).toBe('private');
+  });
+
   it('classifies internal channels as private', () => {
     expect(classifyChannel('internal:scheduler')).toBe('private');
   });

@@ -14,6 +14,7 @@ import { SessionStore } from '../../session/store.js';
 import { SessionManager } from '../../session/manager.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import { ShardManager } from '../../shards/manager.js';
+import { SubagentFaculty } from '../../subagents/faculty.js';
 import { formatPossessiveCompanionName } from '../../identity/companion-naming.js';
 import type { CharacterCardV2 } from '../../identity/types.js';
 import type { SubstrateConfig } from '../../types.js';
@@ -247,6 +248,15 @@ async function createHarness(options: {
   scheduler.registerHeartbeat(() => {});
 
   const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProvider;
+  const subagentFaculty = new SubagentFaculty({
+    eventBus,
+    llmProvider: mockLlmProvider,
+    sessionStore,
+    embeddingService: null,
+    memoryProvider: null,
+    config,
+    parentSystemPrompt: '',
+  });
   const shardManager = new ShardManager({
     eventBus,
     llmProvider: mockLlmProvider,
@@ -267,6 +277,7 @@ async function createHarness(options: {
     sessionManager,
     scheduler,
     shardManager,
+    subagentFaculty,
     eventBus,
     characterCard: testCard,
     config,

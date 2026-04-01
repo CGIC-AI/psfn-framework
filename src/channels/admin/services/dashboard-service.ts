@@ -4,6 +4,7 @@ import type { Scheduler } from '../../../scheduler/scheduler.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { SessionStore } from '../../../session/store.js';
 import type { ShardManager } from '../../../shards/manager.js';
+import type { SubagentFaculty } from '../../../subagents/faculty.js';
 import type { DashboardCostWindow, DashboardSessionContextPressure, ThinkTraceView } from '../types.js';
 import type { AdminDashboardData, AdminDashboardService } from './types.js';
 import {
@@ -48,6 +49,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     sessionManager?: SessionManager;
     scheduler: Scheduler;
     shardManager: ShardManager;
+    subagentFaculty: SubagentFaculty;
     eventBus: EventBus;
   }) {
     this.deps.eventBus.on('agent.turn.usage', ({ message, usage }) => {
@@ -208,6 +210,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
         sessionCount: channels.length,
         schedulerTasks: this.deps.scheduler.taskCount,
         activeShards: this.deps.shardManager.getActiveCount(),
+        activeSubagents: this.deps.subagentFaculty.getActiveCount(),
         sessionUsage: {
           turns: this.usageTotals.turns,
           inputTokens: this.usageTotals.inputTokens,

@@ -34,23 +34,23 @@ export interface GatewayMessageAgentLoop {
   handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
 }
 
-export interface WyomingShardDelegationResult {
-  shardId: string;
+export interface WyomingSubagentDelegationResult {
+  subagentId: string;
   content: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
-  lineage: ShardLineage;
+  lineage?: ShardLineage;
   gatewayRouting: GatewayRoutingEnvelope;
 }
 
-export interface GatewayMessageShardManager {
+export interface GatewayMessageSubagentFaculty {
   delegateWyomingSession(request: {
     message: SubstrateMessage;
     routing?: WyomingRoutingMetadata;
     gatewayRouting?: GatewayRoutingEnvelope;
-  }): Promise<WyomingShardDelegationResult>;
+  }): Promise<WyomingSubagentDelegationResult>;
 }
 
 export interface GatewayMessageAuditTrail {
@@ -66,7 +66,7 @@ export interface GatewayMessageLogger {
 export interface GatewayMessageHandlersDeps {
   gateway: GatewayMessageGateway;
   agentLoop: GatewayMessageAgentLoop;
-  shardManager: GatewayMessageShardManager;
+  subagentFaculty: GatewayMessageSubagentFaculty;
   safeguardAuditTrail: GatewayMessageAuditTrail;
   config: SubstrateConfig;
   log: GatewayMessageLogger;
@@ -77,7 +77,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
   const {
     gateway,
     agentLoop,
-    shardManager,
+    subagentFaculty,
     safeguardAuditTrail,
     config,
     log,
@@ -159,7 +159,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
 
       if (routingDecision.delegate) {
         try {
-          const delegated = await shardManager.delegateWyomingSession({
+          const delegated = await subagentFaculty.delegateWyomingSession({
             message,
             routing: routingDecision.routing,
             gatewayRouting: message.routing?.gateway,
@@ -167,10 +167,10 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
           safeguardAuditTrail.append('wyoming.routing.delegated', {
             channelId: message.channelId,
             messageId: message.id,
-            shardId: delegated.shardId,
+            subagentId: delegated.subagentId,
             companionId: delegated.gatewayRouting.companionId,
-            shardCompanionId: delegated.lineage.shardCompanionId,
-            parentShardId: delegated.lineage.parentShardId,
+            shardCompanionId: delegated.lineage?.shardCompanionId,
+            parentShardId: delegated.lineage?.parentShardId,
             connectionId: routingDecision.routing?.connectionId,
             sessionId: routingDecision.routing?.sessionId,
             turnId: routingDecision.routing?.turnId,

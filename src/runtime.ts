@@ -22,6 +22,7 @@ import { MemoryExtractor } from './memory/extraction.js';
 import { SalienceDecay } from './memory/decay.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { ShardManager } from './shards/manager.js';
+import { SubagentFaculty } from './subagents/faculty.js';
 import {
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
@@ -254,6 +255,7 @@ export class SubstrateRuntime implements Lifecycle {
   private salienceDecay!: SalienceDecay;
   private scheduler!: Scheduler;
   private shardManager!: ShardManager;
+  private subagentFaculty!: SubagentFaculty;
   private channelRegistry = new Map<string, ChannelAdapter>();
   private capabilityRuntime!: CapabilityRuntime;
   private moduleLoader?: ModuleLoader;
@@ -797,6 +799,9 @@ export class SubstrateRuntime implements Lifecycle {
       onModuleRegistryMutation: async (mutation) => {
         await this.moduleLoader?.applyRegistryMutation(mutation);
       },
+      onSubagentFacultyReady: (faculty) => {
+        this.subagentFaculty = faculty;
+      },
     });
 
     // Memory write/import tools — intentional memory creation
@@ -1199,6 +1204,7 @@ export class SubstrateRuntime implements Lifecycle {
         sessionManager: this.sessionManager,
         scheduler: this.scheduler,
         shardManager: this.shardManager,
+        subagentFaculty: this.subagentFaculty,
         eventBus: this.eventBus,
         characterCard: card,
         config: this.config,

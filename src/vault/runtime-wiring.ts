@@ -2,8 +2,10 @@
 // Instantiates VaultOps and registers the unified vault tool on a target.
 
 import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { EventBus } from '../event-bus.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { WirableTool, ToolWiringMeta } from '../agent/tool-wiring-validator.js';
+import { createLegacyAliasTelemetryEmitter } from '../tools/legacy-alias-telemetry.js';
 import { VaultOps, type VaultOpsConfig, type VaultOperations } from './ops.js';
 import { createVaultTool } from './tools.js';
 
@@ -28,6 +30,7 @@ function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTo
 }
 
 export interface RegisterVaultToolsOptions {
+  eventBus?: EventBus;
   /** When true, attaches gateway RPC method requirements as wiring metadata */
   gatewayMode?: boolean;
 }
@@ -37,7 +40,9 @@ export function registerVaultTools(
   vaultOps: VaultOperations,
   options?: RegisterVaultToolsOptions,
 ): void {
-  const tool = createVaultTool(vaultOps);
+  const tool = createVaultTool(vaultOps, {
+    emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(options?.eventBus),
+  });
   attachWiringMeta(tool, {
     ...(options?.gatewayMode ? { requiredGatewayMethods: [...VAULT_TOOL_GATEWAY_METHODS] } : {}),
     requiredServices: ['vault'],

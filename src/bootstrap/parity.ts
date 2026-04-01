@@ -48,6 +48,7 @@ import { NorthStarStore } from '../north-star/store.js';
 import {
   createNorthStarTool,
 } from '../north-star/tools.js';
+import { createLegacyAliasTelemetryEmitter } from '../tools/legacy-alias-telemetry.js';
 import {
   HEARTBEAT_SILENT_REFLECTION_TOKEN,
   getHeartbeatTemplateAuditProfile,
@@ -404,10 +405,13 @@ export function wireSettingsRuntime(
   target: ToolRegistrarTarget,
   config: SubstrateConfig,
   options: {
+    eventBus?: EventBus;
     getMemoryWriter?: () => Pick<MemoryWriter, 'write'> | undefined;
   } = {},
 ): void {
-  target.registerTool(createSystemTool(config), 'core');
+  target.registerTool(createSystemTool(config, {
+    emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(options.eventBus),
+  }), 'core');
   if (options.getMemoryWriter && hasToolsetMemoryWriterTarget(target)) {
     target.setToolsetMemoryWriter(options.getMemoryWriter);
   }
@@ -418,12 +422,14 @@ export function wireSessionToolsRuntime(
   sessionManager: SessionManager,
   dataDir: string,
   llmProvider: LLMProvider,
+  eventBus?: EventBus,
 ): void {
   target.registerTool(createSessionTool({
     manager: sessionManager,
     llmProvider,
     sessionsDir: resolveSessionsDir(dataDir),
     dataDir,
+    emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(eventBus),
     setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
     seedSession: (sessionId) => {
       sessionManager.appendSystemNote(
@@ -1933,6 +1939,7 @@ export function wireHeartbeatRuntime(
     memoryWriter: runtimeOptions.memoryWriter,
     pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
     careReminderStore: runtimeOptions.careReminderStore ?? null,
+    emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(runtimeOptions.eventBus),
   }), 'core');
   target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks, {
     memoryWriter: runtimeOptions.memoryWriter,

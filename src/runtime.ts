@@ -642,9 +642,16 @@ export class SubstrateRuntime implements Lifecycle {
     });
     let memoryWriter!: MemoryWriter;
     wireSettingsRuntime(this.agentLoop, this.config, {
+      eventBus: this.eventBus,
       getMemoryWriter: () => memoryWriter,
     });
-    wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir, this.llmClient);
+    wireSessionToolsRuntime(
+      this.agentLoop,
+      this.sessionManager,
+      companionDataDir,
+      this.llmClient,
+      this.eventBus,
+    );
     const coreMemoryStore = wireCoreMemoryRuntime({
       agentLoop: this.agentLoop,
       sessionManager: this.sessionManager,
@@ -663,6 +670,7 @@ export class SubstrateRuntime implements Lifecycle {
       this.db,
       primaryUserId,
       {
+        eventBus: this.eventBus,
         exportDir: resolveContactsDir(companionDataDir),
         ...(primaryTelegramUserId
           ? {

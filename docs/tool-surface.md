@@ -334,6 +334,12 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `image_edit` | `media` | extended | Collapsed into `media action="edit"` on the same surface. |
 | `image_analyze` | `media` | extended | Collapsed into `media action="analyze"` on the same surface. |
 
+## Retirement Guidance
+
+- Legacy action aliases on unified tools are temporary migration shims, not a second permanent API surface.
+- Use `agent.tools.legacy_alias` telemetry to measure whether operators and prompts have moved to the canonical action names.
+- Remove legacy aliases only after canonical unified actions have stable adoption and the dependent prompt/runtime surfaces have been updated.
+
 ## Configuration Guidance
 
 - Keep `promotedExtendedTools` small. It is a short-term exposure mechanism, not the long-term taxonomy.

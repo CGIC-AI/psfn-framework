@@ -32,6 +32,9 @@ function inferTelemetryCallType(eventName: EventName): ObservabilityCallType | u
   if (eventName === 'agent.tool.start' || eventName === 'agent.tool.end') {
     return 'tool';
   }
+  if (eventName === 'agent.tools.legacy_alias') {
+    return 'tool';
+  }
   if (eventName.startsWith('agent.tools.adaptive.')) {
     return 'tool';
   }

@@ -33,6 +33,7 @@ import type { ShardBackendController } from '../shards/backend-controller.js';
 import { SubagentFaculty } from '../subagents/faculty.js';
 import { createSubagentTool } from '../subagents/tools.js';
 import { createThinkTool } from '../repl/tools.js';
+import { createLegacyAliasTelemetryEmitter } from '../tools/legacy-alias-telemetry.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
 import {
   createOrientTool,
@@ -306,7 +307,11 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
       ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
       : undefined,
   });
-  options.agentLoop.registerTool(createShardTool(shardManager));
+  options.agentLoop.registerTool(createShardTool(
+    shardManager,
+    undefined,
+    { emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(options.eventBus) },
+  ));
 
   options.agentLoop.registerTool(createThinkTool({
     llmProvider: options.llmProvider,

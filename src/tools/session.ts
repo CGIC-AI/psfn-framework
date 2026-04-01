@@ -24,6 +24,7 @@ import {
   type SessionGrepToolOptions,
 } from './session-search.js';
 import { resolveSessionContinuityArtifactsDir } from '../persistence/layout.js';
+import type { LegacyAliasTelemetryCallback } from './legacy-alias-telemetry.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 const DEFAULT_SESSION_PREFIX = 'api:session';
@@ -92,6 +93,7 @@ export interface UnifiedSessionToolOptions extends SessionNewToolOptions {
   llmProvider: LLMProvider;
   sessionsDir: string;
   runRipgrep?: SessionGrepToolOptions['runRipgrep'];
+  emitLegacyAliasTelemetry?: LegacyAliasTelemetryCallback;
 }
 
 type SessionToolManager = Pick<
@@ -588,7 +590,17 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
       signal?: AbortSignal,
     ): Promise<AgentToolResult<Record<string, unknown>>> => {
       try {
-        switch (normalizeSessionAction(params)) {
+        const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+        const action = normalizeSessionAction(params);
+        if (rawAction && rawAction !== action) {
+          options.emitLegacyAliasTelemetry?.({
+            toolName: 'session',
+            alias: rawAction,
+            canonicalAction: action,
+            migrationSurface: 'session',
+          });
+        }
+        switch (action) {
           case 'list':
             return sessionListTool.execute(toolCallId, {
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),

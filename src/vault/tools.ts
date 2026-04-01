@@ -4,6 +4,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { VaultOperations } from './ops.js';
+import type { LegacyAliasTelemetryCallback } from '../tools/legacy-alias-telemetry.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -141,7 +142,11 @@ async function executeVaultDaily(
   return textResult(`Appended to daily note (${result.date})`);
 }
 
-export function createVaultTool(ops: VaultOperations): AgentTool<any> {
+interface VaultToolOptions {
+  emitLegacyAliasTelemetry?: LegacyAliasTelemetryCallback;
+}
+
+export function createVaultTool(ops: VaultOperations, options: VaultToolOptions = {}): AgentTool<any> {
   return {
     name: 'vault',
     label: 'vault',
@@ -194,9 +199,18 @@ export function createVaultTool(ops: VaultOperations): AgentTool<any> {
       _toolCallId: string,
       params: VaultToolParams = {},
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      let actionForError = typeof params.action === 'string' ? params.action : undefined;
+      const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+      let actionForError = rawAction || undefined;
       try {
         actionForError = normalizeVaultAction(params);
+        if (rawAction && rawAction !== actionForError) {
+          options.emitLegacyAliasTelemetry?.({
+            toolName: 'vault',
+            alias: rawAction,
+            canonicalAction: actionForError,
+            migrationSurface: 'vault',
+          });
+        }
         switch (actionForError) {
           case 'read':
             return await executeVaultRead(ops, params);

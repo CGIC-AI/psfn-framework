@@ -406,6 +406,44 @@ describe('unified session tool', () => {
     expect(manager.getActiveContextSession()).toBe('api:session-two');
   });
 
+  it('emits legacy alias telemetry for unified session aliases', async () => {
+    store.append({
+      channelId: 'api:session-one',
+      role: 'assistant',
+      content: 'session one',
+      timestamp: 1_000,
+    });
+    const emitLegacyAliasTelemetry = vi.fn();
+    const tool = createSessionTool({
+      manager,
+      llmProvider: {
+        complete: vi.fn(async () => ({
+          content: 'unused',
+          toolCalls: [],
+          model: 'mock',
+          inputTokens: 1,
+          outputTokens: 1,
+          stopReason: 'stop',
+        })),
+      } as any,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+      emitLegacyAliasTelemetry,
+    });
+
+    await tool.execute('session-resume', {
+      action: 'session_resume',
+      sessionId: 'api:session-one',
+    });
+
+    expect(emitLegacyAliasTelemetry).toHaveBeenCalledWith({
+      toolName: 'session',
+      alias: 'session_resume',
+      canonicalAction: 'resume',
+      migrationSurface: 'session',
+    });
+  });
+
   it('dispatches transcript lookup actions, including legacy aliases, through the unified tool', async () => {
     store.append({
       channelId: 'api:public-session',

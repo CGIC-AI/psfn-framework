@@ -849,6 +849,7 @@ describe('schedule', () => {
   });
 
   it('keeps legacy schedule_task semantics available as a schedule action', async () => {
+    const emitLegacyAliasTelemetry = vi.fn();
     const tool = createScheduleTool({
       scheduler,
       agentLoop,
@@ -862,6 +863,7 @@ describe('schedule', () => {
       })),
       pendingFollowUpStore,
       careReminderStore,
+      emitLegacyAliasTelemetry,
     });
 
     const result = await tool.execute('schedule-legacy-task', {
@@ -874,5 +876,11 @@ describe('schedule', () => {
 
     expect(text).toContain('Scheduled "Legacy task alias"');
     expect(scheduler.listTasks().some(task => task.id.startsWith('planned:'))).toBe(true);
+    expect(emitLegacyAliasTelemetry).toHaveBeenCalledWith({
+      toolName: 'schedule',
+      alias: 'schedule_task',
+      canonicalAction: 'schedule_prompt',
+      migrationSurface: 'schedule',
+    });
   });
 });

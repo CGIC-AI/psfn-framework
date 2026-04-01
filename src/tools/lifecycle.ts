@@ -12,6 +12,7 @@ import type { CapabilityTier } from '../types.js';
 import type { LifecycleRestartSafeguard } from '../capabilities/safeguards.js';
 import type { SubstrateConfig } from '../types.js';
 import { executeSystemReadAction, type SettingsReadParams } from '../settings-tools.js';
+import type { LegacyAliasTelemetryCallback } from './legacy-alias-telemetry.js';
 import { textResultWithError } from './results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -31,6 +32,7 @@ interface SystemToolParams extends SettingsReadParams {
 }
 
 interface SystemToolOptions extends LifecycleToolOptions {
+  emitLegacyAliasTelemetry?: LegacyAliasTelemetryCallback;
   notifier?: LifecycleNotifier;
   stopFn?: () => Promise<void>;
   restartStopFn?: () => Promise<void>;
@@ -236,9 +238,18 @@ export function createSystemTool(
       params: SystemToolParams = {},
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
       let action: SystemAction;
       try {
         action = normalizeSystemAction(params);
+        if (rawAction && rawAction !== action) {
+          options.emitLegacyAliasTelemetry?.({
+            toolName: 'system',
+            alias: rawAction,
+            canonicalAction: action,
+            migrationSurface: 'system',
+          });
+        }
       } catch (error) {
         return textResultWithError(`system failed: ${toErrorMessage(error)}`, true);
       }

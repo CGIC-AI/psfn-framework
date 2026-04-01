@@ -31,6 +31,7 @@ import {
 import type { ChannelType } from '../types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
+import type { LegacyAliasTelemetryCallback } from '../tools/legacy-alias-telemetry.js';
 import { toErrorMessage } from '../utils/errors.js';
 import type { Scheduler } from './scheduler.js';
 import type { HeartbeatPolicyStore, ReflectionDeliberationConfig } from './heartbeat-policy.js';
@@ -60,7 +61,17 @@ const SCHEDULE_TOOL_ACTIONS = [
   'schedule_task',
 ] as const;
 
-type ScheduleToolAction = (typeof SCHEDULE_TOOL_ACTIONS)[number];
+type ScheduleToolActionName = (typeof SCHEDULE_TOOL_ACTIONS)[number];
+type ScheduleToolAction =
+  | 'list'
+  | 'create_follow_up'
+  | 'activate_follow_up'
+  | 'create_reminder'
+  | 'trigger_reminder'
+  | 'list_templates'
+  | 'update_template'
+  | 'run_template'
+  | 'schedule_prompt';
 
 interface ScheduleTaskAgentLoop {
   handleMessage(message: {
@@ -85,7 +96,7 @@ interface HeartbeatRunTemplateResult {
 }
 
 interface ScheduleToolParams {
-  action?: ScheduleToolAction;
+  action?: ScheduleToolActionName;
   limit?: number;
   contact_id?: string;
   include_activated?: boolean;
@@ -142,6 +153,7 @@ export interface ScheduleToolOptions {
     CareReminderStore,
     'create' | 'list' | 'markTriggered'
   > | null;
+  emitLegacyAliasTelemetry?: LegacyAliasTelemetryCallback;
 }
 
 function errorMessage(error: unknown): string {
@@ -154,8 +166,23 @@ function normalizeAction(value: unknown): ScheduleToolAction {
     throw new Error(`action must be one of: ${SCHEDULE_TOOL_ACTIONS.join(', ')}`);
   }
   const normalized = value.trim();
-  if ((SCHEDULE_TOOL_ACTIONS as readonly string[]).includes(normalized)) {
-    return normalized as ScheduleToolAction;
+  switch (normalized) {
+    case 'list':
+    case 'create_follow_up':
+    case 'activate_follow_up':
+    case 'create_reminder':
+    case 'trigger_reminder':
+    case 'list_templates':
+    case 'update_template':
+    case 'run_template':
+    case 'schedule_prompt':
+      return normalized;
+    case 'get_policy':
+      return 'list_templates';
+    case 'update_policy':
+      return 'update_template';
+    case 'schedule_task':
+      return 'schedule_prompt';
   }
   throw new Error(`action must be one of: ${SCHEDULE_TOOL_ACTIONS.join(', ')}`);
 }
@@ -462,9 +489,18 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
       params: ScheduleToolParams = {},
       signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
       let action: ScheduleToolAction;
       try {
         action = normalizeAction(params.action);
+        if (rawAction && rawAction !== action) {
+          options.emitLegacyAliasTelemetry?.({
+            toolName: 'schedule',
+            alias: rawAction,
+            canonicalAction: action,
+            migrationSurface: 'schedule',
+          });
+        }
       } catch (error) {
         return textResultWithError(`schedule failed: ${errorMessage(error)}`, true);
       }
@@ -615,15 +651,11 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
           }
 
           case 'list_templates':
-          case 'get_policy':
             return heartbeatGetPolicyTool.execute(toolCallId, {}, signal);
 
           case 'update_template':
-          case 'update_policy':
             return heartbeatUpdatePolicyTool.execute(toolCallId, {
-              ...(action === 'update_policy'
-                ? {}
-                : { action: params.id ? 'add' as const : undefined }),
+              action: params.id ? 'add' as const : undefined,
               ...(params.template_id ? { templateId: params.template_id } : {}),
               ...(params.id ? { id: params.id } : {}),
               ...(params.name ? { name: params.name } : {}),
@@ -647,7 +679,6 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
             }, signal);
 
           case 'schedule_prompt':
-          case 'schedule_task':
             return scheduleTaskTool.execute(toolCallId, {
               name: normalizeNonEmptyString(params.name, 'name'),
               prompt: normalizeNonEmptyString(params.prompt, 'prompt'),

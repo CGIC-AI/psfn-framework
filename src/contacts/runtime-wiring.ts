@@ -1,8 +1,10 @@
 import type Database from 'better-sqlite3';
+import type { EventBus } from '../event-bus.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
+import { createLegacyAliasTelemetryEmitter } from '../tools/legacy-alias-telemetry.js';
 import { ContactStore } from './store.js';
 import type { ChannelPrivacyLevel } from './types.js';
-import { createContactTool } from './tools.js';
+import { createContactToolWithOptions } from './tools.js';
 
 export interface ContactRuntimeTarget {
   contactStore: ContactStore | null;
@@ -17,6 +19,7 @@ export interface ContactRuntimeIdentityLink {
 
 export interface ContactRuntimeOptions {
   bootstrapPrimaryIdentityLinks?: ContactRuntimeIdentityLink[];
+  eventBus?: EventBus;
   exportDir?: string;
 }
 
@@ -47,7 +50,9 @@ export function wireContactRuntime(
     }
   }
 
-  target.registerTool(createContactTool(contactStore));
+  target.registerTool(createContactToolWithOptions(contactStore, {
+    emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(options.eventBus),
+  }));
 
   return contactStore;
 }

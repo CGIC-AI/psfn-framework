@@ -310,6 +310,36 @@ describe('capability tool gating', () => {
     expect(session.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('gates unified fs actions using git read/write capability requirements', async () => {
+    const fsTool = createTool('fs');
+    const readGated = gateToolWithCapabilities(
+      fsTool.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const readDenied = await readGated.execute('fs-read', { action: 'read', path: 'src/runtime.ts' });
+    expect(fsTool.executeSpy).not.toHaveBeenCalled();
+    expect((readDenied.content[0] as any).text).toContain('git.read');
+
+    const writeGated = gateToolWithCapabilities(
+      fsTool.tool,
+      () => accessForTier('apprentice'),
+    );
+    const writeDenied = await writeGated.execute('fs-write', {
+      action: 'write',
+      path: 'notes.txt',
+      content: 'hello',
+    });
+    expect(fsTool.executeSpy).not.toHaveBeenCalled();
+    expect((writeDenied.content[0] as any).text).toContain('git.write');
+
+    const allowedRead = gateToolWithCapabilities(
+      fsTool.tool,
+      () => accessForTier('nursery'),
+    );
+    await allowedRead.execute('fs-list', {});
+    expect(fsTool.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('gates issue tools by issue.* capability tokens', async () => {
     const issueReady = createTool('issue_ready');
     const readyGated = gateToolWithCapabilities(

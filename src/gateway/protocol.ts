@@ -18,6 +18,7 @@ import type {
   ImageGenerationResult,
   ImageProviderPreference,
 } from '../images/types.js';
+import type { FilesystemSearchMode, FilesystemSearchMatch } from '../filesystem/ops.js';
 import type { JournalEntry } from '../session/types.js';
 import type { JournalIntegrityVerificationResult } from '../session/journal-utils.js';
 import type { RuntimeServiceHealthSnapshot } from '../tool-health/types.js';
@@ -106,6 +107,7 @@ export interface WebFetchBinaryParams {
 
 export interface FsReadParams {
   path: string;
+  maxBytes?: number;
 }
 
 export interface FsWriteParams {
@@ -116,6 +118,23 @@ export interface FsWriteParams {
 export interface FsListParams {
   glob?: string;
   maxEntries?: number;
+}
+
+export interface FsSearchParams {
+  query: string;
+  glob?: string;
+  mode?: FilesystemSearchMode;
+  maxMatches?: number;
+  maxFiles?: number;
+  maxBytesPerFile?: number;
+  contextLines?: number;
+}
+
+export interface FsEditParams {
+  path: string;
+  oldText: string;
+  newText: string;
+  replaceAll?: boolean;
 }
 
 export type GitStatusParams = Record<string, never>;
@@ -373,6 +392,7 @@ export interface WebFetchBinaryResult {
 
 export interface FsReadResult {
   content: string;
+  truncated?: boolean;
 }
 
 export interface FsWriteResult {
@@ -381,6 +401,21 @@ export interface FsWriteResult {
 
 export interface FsListResult {
   paths: string[];
+}
+
+export interface FsSearchResult {
+  query: string;
+  glob: string;
+  mode: FilesystemSearchMode;
+  scannedFiles: number;
+  hitLimit: boolean;
+  truncatedFiles: string[];
+  matches: FilesystemSearchMatch[];
+}
+
+export interface FsEditResult {
+  success: boolean;
+  replacements: number;
 }
 
 export interface GitStatusResult {
@@ -541,6 +576,8 @@ export interface GatewayMethods {
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];
   'fs.list': [FsListParams, FsListResult];
+  'fs.search': [FsSearchParams, FsSearchResult];
+  'fs.edit': [FsEditParams, FsEditResult];
   'git.status': [GitStatusParams, GitStatusResult];
   'git.diff': [GitDiffParams, GitDiffResult];
   'git.create_branch': [GitCreateBranchParams, GitCreateBranchResult];

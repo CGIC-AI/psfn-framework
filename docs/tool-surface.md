@@ -58,6 +58,25 @@ The runtime now exposes a unified model-facing `schedule` tool for time-based co
 
 This keeps durable reminders, proactive follow-ups, birthdays, anniversaries, self-reminders, and timed work under one semantic faculty instead of scattering them across ad hoc timer micro-tools.
 
+## Live Filesystem Surface
+
+The runtime now exposes a single model-facing `fs` tool for common workspace inspection and safe file mutation.
+
+- Inspection actions: `list`, `read`, `search`
+- Mutation actions: `write`, `edit`
+
+The surface is designed to keep routine codebase inspection out of `think`:
+
+- use `fs action="list"` for bounded discovery
+- use `fs action="search"` for targeted content lookup before broad reasoning
+- use `fs action="read"` for bounded file inspection
+
+Mutation guardrails remain explicit:
+
+- `write` refuses to overwrite changed files unless `overwrite=true`
+- `edit` requires an exact `old_text` match and fails closed on ambiguous replacements unless `replace_all=true`
+- gateway-side path policy and workspace boundaries remain authoritative
+
 ## Live Session Surface
 
 The runtime now exposes a unified model-facing `session` tool for continuity, transcript lookup, resumption, and focus workflow.
@@ -130,8 +149,8 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `promoted_tools_remove` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="unpin"`. |
 | `promoted_tools_swap` | `toolset` | hidden | Legacy slot-reorder helper is no longer model-facing. |
 | `load_tools` | `toolset` | hidden | Legacy exact-name activation path now collapses into `toolset action="activate"`. |
-| `fs_read` | `fs` | always-on | File read/list/search collapse into one primitive family. |
-| `fs_list` | `fs` | always-on | Same family. |
+| `fs_read` | `fs` | always-on | Collapsed into `fs action="read"`. |
+| `fs_list` | `fs` | always-on | Collapsed into `fs action="list"`. |
 | `repo_status` | `repo` | always-on | Repository inspection belongs under one primitive. |
 | `repo_diff` | `repo` | always-on | Same family. |
 | `repo_apply_patch` | `repo` | extended | Mutation stays gated. |

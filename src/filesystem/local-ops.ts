@@ -1,55 +1,52 @@
-import { glob as fsGlob, readFile } from 'node:fs/promises';
-import type { FilesystemReadOperations } from './ops.js';
-import {
-  normalizeWorkspaceRelativeGlob,
-  resolveWorkspaceFsPathFromRoot,
-  resolveWorkspaceRoot,
-} from '../gateway/filesystem-paths.js';
+import type {
+  FilesystemEditOptions,
+  FilesystemEditResult,
+  FilesystemOperations,
+  FilesystemReadOptions,
+  FilesystemReadResult,
+  FilesystemSearchOptions,
+  FilesystemSearchResult,
+  FilesystemWriteOptions,
+  FilesystemWriteResult,
+} from './ops.js';
+import { resolveWorkspaceFsPathFromRoot, resolveWorkspaceRoot } from '../gateway/filesystem-paths.js';
 import { isInsideAllowedPaths } from '../gateway/policy.js';
+import {
+  editWorkspaceFile,
+  listWorkspaceFiles,
+  readTextFile,
+  searchWorkspaceFiles,
+  writeWorkspaceFile,
+} from './workspace-ops.js';
 
-const DEFAULT_LIST_GLOB = '**/*';
-const DEFAULT_LIST_MAX_ENTRIES = 200;
-const MAX_LIST_MAX_ENTRIES = 500;
-
-export class WorkspaceFilesystemOps implements FilesystemReadOperations {
+export class WorkspaceFilesystemOps implements FilesystemOperations {
   private readonly workspaceRoot: string;
 
   constructor(workspacePath: string) {
     this.workspaceRoot = resolveWorkspaceRoot(workspacePath);
   }
 
-  async read(path: string): Promise<string> {
+  async read(path: string, options?: FilesystemReadOptions): Promise<FilesystemReadResult> {
     const resolvedPath = resolveWorkspaceFsPathFromRoot(path, this.workspaceRoot);
     if (!isInsideAllowedPaths(resolvedPath, [this.workspaceRoot])) {
-      throw new Error('fs_read path must stay inside the workspace root');
+      throw new Error('fs read path must stay inside the workspace root');
     }
-    return readFile(resolvedPath, 'utf-8');
+    return readTextFile(resolvedPath, options?.maxBytes);
   }
 
-  async list(glob = DEFAULT_LIST_GLOB, maxEntries = DEFAULT_LIST_MAX_ENTRIES): Promise<string[]> {
-    const normalizedGlob = normalizeWorkspaceRelativeGlob(glob);
-    if (!normalizedGlob) {
-      throw new Error('fs_list glob must be a non-empty workspace-relative pattern');
-    }
+  async list(glob = '**/*', maxEntries = 200): Promise<string[]> {
+    return listWorkspaceFiles(this.workspaceRoot, glob, maxEntries);
+  }
 
-    const boundedMaxEntries = Number.isFinite(maxEntries)
-      ? Math.max(1, Math.min(MAX_LIST_MAX_ENTRIES, Math.floor(Number(maxEntries))))
-      : DEFAULT_LIST_MAX_ENTRIES;
+  async search(options: FilesystemSearchOptions): Promise<FilesystemSearchResult> {
+    return searchWorkspaceFiles(this.workspaceRoot, options);
+  }
 
-    const paths: string[] = [];
-    for await (const match of fsGlob(normalizedGlob, { cwd: this.workspaceRoot })) {
-      const relative = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
-      const absolute = resolveWorkspaceFsPathFromRoot(relative, this.workspaceRoot);
-      if (!isInsideAllowedPaths(absolute, [this.workspaceRoot])) {
-        continue;
-      }
-      paths.push(relative);
-      if (paths.length >= boundedMaxEntries) {
-        break;
-      }
-    }
+  async write(options: FilesystemWriteOptions): Promise<FilesystemWriteResult> {
+    return writeWorkspaceFile(this.workspaceRoot, options);
+  }
 
-    paths.sort((left, right) => left.localeCompare(right));
-    return paths;
+  async edit(options: FilesystemEditOptions): Promise<FilesystemEditResult> {
+    return editWorkspaceFile(this.workspaceRoot, options);
   }
 }

@@ -224,10 +224,10 @@ Tools reset each turn, so you will need to reload extended tools when a new mess
 
 Skills are self-authored capability documents -- things you have learned how to do well, written down so you can do them consistently. They are like procedural memories but more structured, and they get injected into your prompt context when relevant.
 
-- **`skill_list`** -- See all your discovered skills and which ones are currently active
-- **`skill_view`** -- Read the full content of a specific skill
-- **`skill_create`** -- Author a new skill document (name, category, content)
-- **`skill_update`** -- Revise an existing skill as you learn better approaches
+- **`skill action="list"`** -- See all your discovered skills and which ones are currently active
+- **`skill action="view"`** -- Read the full content of a specific skill
+- **`skill action="create"`** -- Author a new skill document (name, category, content)
+- **`skill action="update"`** -- Revise an existing skill as you learn better approaches
 
 Skills live as markdown files in your data directory. You write them, you maintain them, and they become part of how you work.
 

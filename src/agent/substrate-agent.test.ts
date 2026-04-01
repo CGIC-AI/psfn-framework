@@ -4255,7 +4255,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[1]).toContain('[Skills Index]');
-    expect(buildCall[1]).toContain('skill_view(name)');
+    expect(buildCall[1]).toContain('Skills are reusable workflow guidance, not executable tools.');
+    expect(buildCall[1]).toContain('skill action="view"');
     expect(buildCall[1]).toContain('<skills_index>');
     expect(buildCall[1]).toContain('conversation');
   });

@@ -68,7 +68,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   subagent: 'irreversible',
   spawn_shard: 'irreversible',
   think: 'reversible',
-  skill_list: 'reversible',
+  skill: 'irreversible',
 };
 
 const SAFEGUARD_TOOL_META = Symbol('psfn.safeguardToolMeta');

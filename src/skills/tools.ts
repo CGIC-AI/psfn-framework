@@ -4,206 +4,271 @@ import { textResult, textResultWithError } from '../tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
 import { toErrorMessage } from '../utils/errors.js';
 
+const SKILL_TOOL_ACTION_NAMES = [
+  'list',
+  'skill_list',
+  'view',
+  'skill_view',
+  'create',
+  'skill_create',
+  'update',
+  'skill_update',
+] as const;
+const SKILL_TOOL_ACTION_HELP = [
+  'list',
+  'view',
+  'create',
+  'update',
+].join(', ');
+
+type SkillToolActionName = (typeof SKILL_TOOL_ACTION_NAMES)[number];
+type SkillToolAction = 'list' | 'view' | 'create' | 'update';
+
 interface SkillListParams {
   includeSkipped?: boolean;
   includeContent?: boolean;
 }
 
-interface SkillViewParams {
-  name: string;
-}
-
-interface SkillCreateParams {
-  name: string;
-  category: string;
-  content: string;
+interface SkillToolParams extends SkillListParams {
+  action?: SkillToolActionName;
+  name?: string;
+  category?: string;
+  content?: string;
   description?: string;
 }
 
-interface SkillUpdateParams {
-  name: string;
-  content: string;
-  description?: string;
+function normalizeSkillAction(params: SkillToolParams): SkillToolAction {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    const hasNonListParams = Object.entries(params).some(([key, value]) => (
+      key !== 'action'
+      && key !== 'includeSkipped'
+      && key !== 'includeContent'
+      && value !== undefined
+    ));
+    if (!hasNonListParams) {
+      return 'list';
+    }
+    throw new Error(`action is required unless using the default list behavior (${SKILL_TOOL_ACTION_HELP})`);
+  }
+
+  switch (rawAction) {
+    case 'list':
+    case 'skill_list':
+      return 'list';
+    case 'view':
+    case 'skill_view':
+      return 'view';
+    case 'create':
+    case 'skill_create':
+      return 'create';
+    case 'update':
+    case 'skill_update':
+      return 'update';
+    default:
+      throw new Error(`action must be one of: ${SKILL_TOOL_ACTION_HELP}`);
+  }
 }
 
-export function createSkillListTool(runtime: SkillsRuntime): AgentTool<any> {
+function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams): Record<string, unknown> {
+  const snapshot = runtime.getSnapshot();
+  const evaluations = runtime.listSkillEvaluations();
+  const includeSkipped = params.includeSkipped ?? true;
+  const includeContent = params.includeContent ?? false;
+  const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
+
   return {
-    name: 'skill_list',
-    label: 'skill_list',
-    description: 'List discovered skills, eligibility outcomes, and currently injected skill context.',
-    parameters: Type.Object({
-      includeSkipped: Type.Optional(Type.Boolean({ description: 'Include filtered/omitted skills with reasons.' })),
-      includeContent: Type.Optional(Type.Boolean({ description: 'Include SKILL.md body content for included skills.' })),
-    }),
-    execute: async (_toolCallId: string, params: SkillListParams) => {
-      const snapshot = runtime.getSnapshot();
-      const evaluations = runtime.listSkillEvaluations();
-      const includeSkipped = params.includeSkipped ?? true;
-      const includeContent = params.includeContent ?? false;
-      const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
+    generatedAt: snapshot.generatedAt,
+    signature: snapshot.signature,
+    configEnabled: snapshot.configEnabled,
+    budget: snapshot.budget,
+    scannedFiles: snapshot.scannedFiles,
+    loadedSkills: snapshot.loadedSkills,
+    includedInPrompt: snapshot.includedSkills.map(skill => ({
+      name: skill.name,
+      category: skill.category,
+      description: skill.description,
+      version: skill.version ?? null,
+      always: skill.always,
+      source: skill.source,
+      path: skill.relativePath,
+      requires: skill.requires,
+    })),
+    skills: evaluations.map(({ entry, eligibility }) => ({
+      name: entry.name,
+      category: entry.category,
+      description: entry.description,
+      version: entry.version ?? null,
+      createdAt: entry.createdAt ?? null,
+      updatedAt: entry.updatedAt ?? null,
+      source: entry.source,
+      path: entry.relativePath,
+      inPromptIndex: includedNames.has(entry.name),
+      eligible: eligibility.eligible,
+      reasons: eligibility.reasons,
+      requires: entry.requires,
+      ...(includeContent ? { content: entry.content } : {}),
+    })),
+    ...(includeSkipped
+      ? {
+        skipped: snapshot.skipped.map(item => ({
+          kind: item.kind,
+          name: item.name,
+          source: item.source,
+          path: item.relativePath,
+          reason: item.reason,
+          details: item.details ?? [],
+        })),
+      }
+      : {}),
+  };
+}
 
-      const payload = {
-        generatedAt: snapshot.generatedAt,
-        signature: snapshot.signature,
-        configEnabled: snapshot.configEnabled,
-        budget: snapshot.budget,
-        scannedFiles: snapshot.scannedFiles,
-        loadedSkills: snapshot.loadedSkills,
-        includedInPrompt: snapshot.includedSkills.map(skill => ({
-          name: skill.name,
-          category: skill.category,
-          description: skill.description,
-          version: skill.version ?? null,
-          always: skill.always,
-          source: skill.source,
-          path: skill.relativePath,
-          requires: skill.requires,
-        })),
-        skills: evaluations.map(({ entry, eligibility }) => ({
-          name: entry.name,
-          category: entry.category,
-          description: entry.description,
-          version: entry.version ?? null,
-          createdAt: entry.createdAt ?? null,
-          updatedAt: entry.updatedAt ?? null,
-          source: entry.source,
-          path: entry.relativePath,
-          inPromptIndex: includedNames.has(entry.name),
-          eligible: eligibility.eligible,
-          reasons: eligibility.reasons,
-          requires: entry.requires,
-          ...(includeContent ? { content: entry.content } : {}),
-        })),
-        ...(includeSkipped
-          ? {
-            skipped: snapshot.skipped.map(item => ({
-              kind: item.kind,
-              name: item.name,
-              source: item.source,
-              path: item.relativePath,
-              reason: item.reason,
-              details: item.details ?? [],
-            })),
+function buildSkillViewPayload(runtime: SkillsRuntime, name: string): Record<string, unknown> | null {
+  const result = runtime.findSkill(name);
+  if (!result) {
+    return null;
+  }
+
+  const { entry, eligible } = result;
+  return {
+    name: entry.name,
+    category: entry.category,
+    description: entry.description,
+    version: entry.version ?? null,
+    createdAt: entry.createdAt ?? null,
+    updatedAt: entry.updatedAt ?? null,
+    source: entry.source,
+    path: entry.relativePath,
+    always: entry.always,
+    requires: entry.requires,
+    eligibility: {
+      eligible: eligible.eligible,
+      reasons: eligible.reasons,
+      missingBinaries: eligible.missingBinaries,
+      missingEnv: eligible.missingEnv,
+      missingConfig: eligible.missingConfig,
+      disabledByConfig: eligible.disabledByConfig,
+    },
+    content: entry.content,
+  };
+}
+
+export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
+  return {
+    name: 'skill',
+    label: 'skill',
+    description:
+      'Unified skill management surface for list/view/create/update. '
+      + 'Skills capture reusable workflow guidance; tools execute actions. '
+      + `Use action=${SKILL_TOOL_ACTION_HELP}. Legacy action aliases remain available during migration.`,
+    parameters: Type.Object({
+      action: Type.Optional(Type.Union(SKILL_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
+        description:
+          'Skill action. Defaults to list when omitted and no action-specific parameters are provided.',
+      })),
+      includeSkipped: Type.Optional(Type.Boolean({
+        description: 'Optional for action=list. Include filtered/omitted skills with reasons.',
+      })),
+      includeContent: Type.Optional(Type.Boolean({
+        description: 'Optional for action=list. Include full SKILL.md body content for included skills.',
+      })),
+      name: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Required for action=view|create|update. Skill name.',
+      })),
+      category: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Required for action=create. Category folder name.',
+      })),
+      content: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Required for action=create|update. Markdown skill instructions.',
+      })),
+      description: Type.Optional(Type.String({
+        description: 'Optional one-line summary used in prompt index.',
+      })),
+    }),
+    execute: async (_toolCallId: string, params: SkillToolParams) => {
+      try {
+        switch (normalizeSkillAction(params)) {
+          case 'list':
+            return textResult(JSON.stringify(buildSkillListPayload(runtime, params), null, 2));
+          case 'view': {
+            const name = typeof params.name === 'string' ? params.name.trim() : '';
+            if (!name) {
+              return textResultWithError('skill action=view requires a non-empty name.', true);
+            }
+
+            const payload = buildSkillViewPayload(runtime, name);
+            if (!payload) {
+              return textResultWithError(`Skill "${name}" not found`, true);
+            }
+            return textResult(JSON.stringify(payload, null, 2));
           }
-          : {}),
-      };
+          case 'create': {
+            const name = typeof params.name === 'string' ? params.name : '';
+            const category = typeof params.category === 'string' ? params.category : '';
+            const content = typeof params.content === 'string' ? params.content : '';
+            if (!name.trim()) {
+              return textResultWithError('skill action=create requires a non-empty name.', true);
+            }
+            if (!category.trim()) {
+              return textResultWithError('skill action=create requires a non-empty category.', true);
+            }
+            if (!content.trim()) {
+              return textResultWithError('skill action=create requires non-empty content.', true);
+            }
 
-      return textResult(JSON.stringify(payload, null, 2));
-    },
-  };
-}
+            const created = runtime.getStore().create({
+              name,
+              category,
+              description: params.description,
+              content,
+            });
+            runtime.invalidate();
 
-export function createSkillViewTool(runtime: SkillsRuntime): AgentTool<any> {
-  return {
-    name: 'skill_view',
-    label: 'skill_view',
-    description: 'Load full YAML + Markdown content for one skill by name.',
-    parameters: Type.Object({
-      name: Type.String({ description: 'Skill name to load.' }),
-    }),
-    execute: async (_toolCallId: string, params: SkillViewParams) => {
-      const result = runtime.findSkill(params.name);
-      if (!result) {
-        return textResultWithError(`Skill "${params.name}" not found`, true);
-      }
+            return textResult(JSON.stringify({
+              action: 'created',
+              name: created.name,
+              category: created.category,
+              version: created.version,
+              createdAt: created.createdAt,
+              updatedAt: created.updatedAt,
+              path: created.relativePath,
+            }, null, 2));
+          }
+          case 'update': {
+            const name = typeof params.name === 'string' ? params.name : '';
+            const content = typeof params.content === 'string' ? params.content : '';
+            if (!name.trim()) {
+              return textResultWithError('skill action=update requires a non-empty name.', true);
+            }
+            if (!content.trim()) {
+              return textResultWithError('skill action=update requires non-empty content.', true);
+            }
 
-      const { entry, eligible } = result;
-      const payload = {
-        name: entry.name,
-        category: entry.category,
-        description: entry.description,
-        version: entry.version ?? null,
-        createdAt: entry.createdAt ?? null,
-        updatedAt: entry.updatedAt ?? null,
-        source: entry.source,
-        path: entry.relativePath,
-        always: entry.always,
-        requires: entry.requires,
-        eligibility: {
-          eligible: eligible.eligible,
-          reasons: eligible.reasons,
-          missingBinaries: eligible.missingBinaries,
-          missingEnv: eligible.missingEnv,
-          missingConfig: eligible.missingConfig,
-          disabledByConfig: eligible.disabledByConfig,
-        },
-        content: entry.content,
-      };
+            const updated = runtime.getStore().update({
+              name,
+              description: params.description,
+              content,
+            });
+            runtime.invalidate();
 
-      return textResult(JSON.stringify(payload, null, 2));
-    },
-  };
-}
-
-export function createSkillCreateTool(runtime: SkillsRuntime): AgentTool<any> {
-  return {
-    name: 'skill_create',
-    label: 'skill_create',
-    description: 'Create a managed skill document in data/skills/<category>/<name>/SKILL.md.',
-    parameters: Type.Object({
-      name: Type.String({ description: 'Unique skill name (letters, numbers, _, -).' }),
-      category: Type.String({ description: 'Category folder (letters, numbers, _, -).' }),
-      content: Type.String({ description: 'Markdown skill instructions.' }),
-      description: Type.Optional(Type.String({ description: 'One-line summary used in prompt index.' })),
-    }),
-    execute: async (_toolCallId: string, params: SkillCreateParams) => {
-      try {
-        const created = runtime.getStore().create({
-          name: params.name,
-          category: params.category,
-          description: params.description,
-          content: params.content,
-        });
-        runtime.invalidate();
-
-        return textResult(JSON.stringify({
-          action: 'created',
-          name: created.name,
-          category: created.category,
-          version: created.version,
-          createdAt: created.createdAt,
-          updatedAt: created.updatedAt,
-          path: created.relativePath,
-        }, null, 2));
+            return textResult(JSON.stringify({
+              action: 'updated',
+              name: updated.name,
+              category: updated.category,
+              version: updated.version,
+              createdAt: updated.createdAt,
+              updatedAt: updated.updatedAt,
+              path: updated.relativePath,
+            }, null, 2));
+          }
+        }
       } catch (error) {
         const message = toErrorMessage(error);
-        return textResultWithError(`Unable to create skill: ${message}`, true);
-      }
-    },
-  };
-}
-
-export function createSkillUpdateTool(runtime: SkillsRuntime): AgentTool<any> {
-  return {
-    name: 'skill_update',
-    label: 'skill_update',
-    description: 'Update an existing managed skill by name and increment its version.',
-    parameters: Type.Object({
-      name: Type.String({ description: 'Existing skill name.' }),
-      content: Type.String({ description: 'Updated markdown instructions.' }),
-      description: Type.Optional(Type.String({ description: 'Optional updated one-line summary.' })),
-    }),
-    execute: async (_toolCallId: string, params: SkillUpdateParams) => {
-      try {
-        const updated = runtime.getStore().update({
-          name: params.name,
-          description: params.description,
-          content: params.content,
-        });
-        runtime.invalidate();
-
-        return textResult(JSON.stringify({
-          action: 'updated',
-          name: updated.name,
-          category: updated.category,
-          version: updated.version,
-          createdAt: updated.createdAt,
-          updatedAt: updated.updatedAt,
-          path: updated.relativePath,
-        }, null, 2));
-      } catch (error) {
-        const message = toErrorMessage(error);
-        return textResultWithError(`Unable to update skill: ${message}`, true);
+        return textResultWithError(`Unable to use skill tool: ${message}`, true);
       }
     },
   };

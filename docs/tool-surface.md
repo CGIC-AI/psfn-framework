@@ -104,6 +104,16 @@ The runtime now exposes a unified model-facing `notify` tool for operator briefs
 
 The surface keeps lightweight visible tool output separate from the heavier internal delivery work. Briefs remain fail-closed for scheduled/internal contexts, outbound sends require explicit delivery targets, and approval escalation stays explicit about what is awaiting review.
 
+## Live Skill Surface
+
+The runtime now exposes a unified model-facing `skill` tool for skill discovery, inspection, and managed-skill mutation.
+
+- Actions: `list`, `view`, `create`, `update`
+- Legacy migration aliases remain accepted at the action level for compatibility, but the model-facing tool name is now just `skill`
+- `list` preserves discovery metadata, eligibility outcomes, and filtered-skill reasons
+- `view` loads one skill's full YAML + Markdown body on demand
+- `create` and `update` write managed skills under `data/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals
@@ -192,10 +202,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
 | `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work; forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
 | `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |
-| `skill_list` | `skill` | always-on | Skill management stays explicit. |
-| `skill_view` | `skill` | always-on | Same family. |
-| `skill_create` | `skill` | extended | Mutation stays explicit. |
-| `skill_update` | `skill` | extended | Same family. |
+| `skill` | `skill` | always-on | Unified surface with `action=list|view|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
 | `vault_write` | `vault` | extended | Vault mutations stay explicit. |
 | `vault_read` | `vault` | always-on | Vault reads remain a semantic tool. |
 | `vault_search` | `vault` | always-on | Same family. |

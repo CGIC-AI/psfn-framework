@@ -24,7 +24,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
 - **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots (including vision)
 - **Capabilities System** — Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
-- **Skills System** — Self-authored capability documents (CRUD via agent tools, auto-filtered by eligibility)
+- **Skills System** — Self-authored workflow guidance documents managed through the unified `skill` tool and auto-filtered by eligibility
 - **Values Journal** — Agent-authored principles with persistence
 
 ### Privacy & Trust (Honne/Tatemae)
@@ -281,6 +281,8 @@ Gateway (host)                    Agent (container, --network=none)
 
 Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`. The current names below are a migration surface, not the final collapsed taxonomy; see [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and mapping.
 
+Skills are reusable workflow guidance, not world-execution tools. The runtime manages them through the unified `skill` surface while execution stays on the tool families below.
+
 | Category | Tools |
 |----------|-------|
 | **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
@@ -289,7 +291,7 @@ Your companion has access to these tools during conversation. Core tools are alw
 | **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
 | **Values** | `values_list`, `values_add`, `values_update` |
-| **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
+| **Skills** | `skill` (`action=list|view|create|update`) |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
 | **Shards** | `spawn_shard` (long-running shard runtime with explicit artifact delivery) |
 | **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |

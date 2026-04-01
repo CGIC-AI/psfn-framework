@@ -344,7 +344,7 @@ export function buildRuntimeContext(input: {
   if (input.skillsContext) {
     lines.push('');
     lines.push('[Skills Index]');
-    lines.push('Use skill_view(name) to load full instructions only when needed.');
+    lines.push('Skills are reusable workflow guidance, not executable tools. Use skill action="view" to load full instructions only when needed.');
     lines.push(input.skillsContext);
   }
 

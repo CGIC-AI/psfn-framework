@@ -26,7 +26,7 @@ describe('ReflectionNudgeTracker', () => {
     expect(tracker.evaluate({ toolCalls: 4, usedThinkTool: false })).toBeNull();
     // Turn 3: qualifying AND Nth — should nudge
     const result = tracker.evaluate({ toolCalls: 3, usedThinkTool: false });
-    expect(result).toContain('skill_create');
+    expect(result).toContain('skill action="create"');
     expect(result).toContain('complex multi-step work');
   });
 
@@ -35,7 +35,7 @@ describe('ReflectionNudgeTracker', () => {
     expect(tracker.evaluate({ toolCalls: 1, usedThinkTool: true })).toBeNull(); // 1st
     expect(tracker.evaluate({ toolCalls: 1, usedThinkTool: true })).toBeNull(); // 2nd
     const result = tracker.evaluate({ toolCalls: 1, usedThinkTool: true }); // 3rd
-    expect(result).toContain('skill_create');
+    expect(result).toContain('skill action="create"');
   });
 
   it('skips non-qualifying turns in count', () => {
@@ -45,7 +45,7 @@ describe('ReflectionNudgeTracker', () => {
     expect(tracker.evaluate({ toolCalls: 4, usedThinkTool: false })).toBeNull(); // qualifying: 2
     expect(tracker.evaluate({ toolCalls: 0, usedThinkTool: false })).toBeNull(); // non-qualifying
     const result = tracker.evaluate({ toolCalls: 3, usedThinkTool: false }); // qualifying: 3
-    expect(result).toContain('skill_create');
+    expect(result).toContain('skill action="create"');
   });
 
   it('continues cycling after Nth turn', () => {
@@ -78,7 +78,7 @@ describe('ReflectionNudgeTracker', () => {
 
     // Every qualifying turn nudges (N=1)
     const result = custom.evaluate({ toolCalls: 2, usedThinkTool: false });
-    expect(result).toContain('skill_create');
+    expect(result).toContain('skill action="create"');
   });
 
   it('does not qualify think tool when nudgeOnThinkTool is false', () => {

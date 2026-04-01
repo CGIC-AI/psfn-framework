@@ -3417,6 +3417,46 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
   });
 
+  it('searches non-default tools without activating them', async () => {
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      makeConfig(),
+    );
+
+    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
+    agent.registerTool({
+      name: 'heartbeat_run_template',
+      label: 'heartbeat_run_template',
+      description: 'Run a heartbeat reflection template.',
+      parameters: {} as any,
+      execute: vi.fn(async () => ({
+        role: 'tool',
+        content: [{ type: 'text', text: 'ok' }],
+      })),
+    } as any, 'extended');
+
+    const toolSearch = agent.getToolCatalog().core.find((tool) => tool.name === 'tool_search');
+    expect(toolSearch).toBeDefined();
+
+    const result = await (toolSearch as any).execute('tool-search-1', { query: 'heartbeat', limit: 5 });
+    const text = result.content?.[0]?.text as string;
+
+    expect(text).toContain('Tool search results for "heartbeat"');
+    expect(text).toContain('heartbeat_run_template');
+    expect(text).toContain('background_only');
+    expect(text).toContain('Use tool_search to discover non-default tools');
+
+    const runtimeState = agent.getAdaptiveToolRuntimeState();
+    expect(runtimeState.activeTools.map(tool => tool.toolName)).toEqual(
+      expect.arrayContaining(['tool_search', 'load_tools']),
+    );
+    expect(runtimeState.activeTools.map(tool => tool.toolName)).not.toContain('heartbeat_run_template');
+    expect(runtimeState.activeTools.map(tool => tool.toolName)).not.toContain('repo_status');
+  });
+
   it('captures deferred tool-handoff intent details from load_tools', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
@@ -3676,7 +3716,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toEqual(['load_tools']);
+    expect(toolNames).toEqual(['tool_search', 'load_tools']);
 
     const summary = autoloadSummaries.at(-1);
     expect(summary?.intent).toBe('dev');
@@ -3789,6 +3829,7 @@ describe('SubstrateAgent.handleMessage', () => {
     });
     expect(isTurnId(snapshot?.turnId)).toBe(true);
     expect(snapshot?.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
       expect.objectContaining({ toolName: 'load_tools', source: 'core' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded' }),
@@ -3801,12 +3842,12 @@ describe('SubstrateAgent.handleMessage', () => {
       expect.objectContaining({ toolName: 'repo_commit', source: 'autoload', reason: 'capability_denied' }),
     ]));
     expect(snapshot?.counts).toMatchObject({
-      core: 1,
+      core: 2,
       promoted: 1,
       autoload: 0,
       extendedLoaded: 1,
       deferred: 1,
-      total: 4,
+      total: 5,
     });
 
     expect(adaptiveDecisions).toEqual(expect.arrayContaining([
@@ -3815,6 +3856,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect.objectContaining({ toolName: 'repo_apply_patch', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'repo_commit', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'tool_search', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'load_tools', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),
     ]));

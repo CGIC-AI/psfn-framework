@@ -17,7 +17,13 @@ import { ShardManager } from '../../shards/manager.js';
 import { SubagentFaculty } from '../../subagents/faculty.js';
 import { ContactStore } from '../../contacts/store.js';
 import { PromptLayerStore } from '../../identity/prompt-store.js';
-import { PromptRegistryStore } from '../../identity/prompt-registry.js';
+import {
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  EXTRACTION_PROMPT_KEY,
+  PROFILE_SYNTHESIS_PROMPT_KEY,
+  PromptRegistryStore,
+  getDefaultPromptText,
+} from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
 import { loadSettings } from '../../settings.js';
 import { saveCapabilityTierConfig } from '../../config/capability-tier-config.js';
@@ -519,6 +525,38 @@ describe('AdminServer JSON API routes', () => {
       join(tempDir, 'prompt-history.jsonl'),
     );
     promptStore.seedFromCharacterCard('Base prompt');
+    writeFileSync(join(tempDir, 'prompt-registry.json'), JSON.stringify([
+      {
+        key: EXTRACTION_PROMPT_KEY,
+        text: getDefaultPromptText(EXTRACTION_PROMPT_KEY),
+        description: 'Memory extraction system prompt.',
+        consumers: ['src/memory/extraction.ts'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'system',
+        checksum: 'seed',
+      },
+      {
+        key: COMPACTION_SUMMARY_PROMPT_KEY,
+        text: getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY),
+        description: 'Session compaction system prompt used when conversation context exceeds budget.',
+        consumers: ['src/session/manager.ts'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'system',
+        checksum: 'seed',
+      },
+      {
+        key: PROFILE_SYNTHESIS_PROMPT_KEY,
+        text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
+        description: 'Canonical contact profile synthesis prompt.',
+        consumers: ['src/memory/extraction.ts'],
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        updatedBy: 'system',
+        checksum: 'seed',
+      },
+    ], null, 2), 'utf-8');
     promptRegistry = new PromptRegistryStore(
       join(tempDir, 'prompt-registry.json'),
       join(tempDir, 'prompt-registry-history.jsonl'),
@@ -549,7 +587,7 @@ describe('AdminServer JSON API routes', () => {
     const adaptiveToolsStateProvider = {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1_701_234_567_890,
-        coreTools: ['load_tools'],
+        coreTools: ['tool_search', 'load_tools'],
         extendedTools: ['repo_status', 'repo_diff', 'notify_operator'],
         promotedToolsConfigured: ['repo_status', 'notify_operator'],
         promotedToolsActive: ['repo_status'],
@@ -569,6 +607,7 @@ describe('AdminServer JSON API routes', () => {
           },
         ],
         activeTools: [
+          { toolName: 'tool_search', source: 'core' },
           { toolName: 'load_tools', source: 'core' },
           { toolName: 'repo_status', source: 'promoted' },
           { toolName: 'repo_diff', source: 'autoload' },
@@ -578,6 +617,11 @@ describe('AdminServer JSON API routes', () => {
       getToolCatalogSnapshot: () => ({
         generatedAt: 1_701_234_567_890,
         tools: [
+          {
+            name: 'tool_search',
+            description: 'Search non-default tools by name or description.',
+            scope: 'core',
+          },
           {
             name: 'load_tools',
             description: 'Load extended tools for the current session.',
@@ -1328,6 +1372,7 @@ describe('AdminServer JSON API routes', () => {
       taskKind: null,
       intent: 'dev',
       tools: [
+        { toolName: 'tool_search', source: 'core' },
         { toolName: 'load_tools', source: 'core' },
         { toolName: 'repo_status', source: 'promoted' },
         { toolName: 'repo_diff', source: 'autoload' },
@@ -1341,12 +1386,12 @@ describe('AdminServer JSON API routes', () => {
         },
       ],
       counts: {
-        core: 1,
+        core: 2,
         promoted: 1,
         extendedLoaded: 0,
         autoload: 1,
         deferred: 0,
-        total: 3,
+        total: 4,
       },
     });
 
@@ -1377,12 +1422,15 @@ describe('AdminServer JSON API routes', () => {
     };
 
     expect(adaptivePayload.state).not.toBeNull();
+    expect(adaptivePayload.state?.coreTools).toContain('tool_search');
     expect(adaptivePayload.state?.coreTools).toContain('load_tools');
     expect(adaptivePayload.state?.activeTools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
       expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
     ]));
     expect(adaptivePayload.catalog?.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'tool_search', scope: 'core' }),
       expect.objectContaining({ name: 'load_tools', scope: 'core' }),
       expect.objectContaining({ name: 'notify_operator', scope: 'extended' }),
     ]));

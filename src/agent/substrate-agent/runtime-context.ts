@@ -202,7 +202,7 @@ export function buildRuntimeContext(input: {
     + (promotedCount > 0 ? ` + ${promotedCount} promoted` : '')
     + (extendedBreakdown ? ` + ${extendedBreakdown}` : '')
     + ')'
-    + (extendedCount > 0 ? `, ${extendedCount} available via load_tools` : ''),
+    + (extendedCount > 0 ? `, ${extendedCount} discoverable via tool_search` : ''),
   ];
   if (!isInternalJournalChannel(input.message.channelId)) {
     lines.splice(
@@ -233,21 +233,25 @@ export function buildRuntimeContext(input: {
 
   if (extendedCount > 0) {
     lines.push('');
+    lines.push('[Tool Discovery]');
+    lines.push('Use tool_search first for non-default tools. Use load_tools only to activate overlay tools you already chose.');
+
+    lines.push('');
     lines.push('Available extended tools:');
     for (const t of input.extendedTools) {
       const loaded = input.loadedExtended.get(t.name);
       const turnClass = input.classifyExtendedToolForTurn(t.name);
-      let suffix = ' (use load_tools to activate)';
+      let suffix = ' (discover with tool_search; activate with load_tools)';
       if (turnClass !== 'overlay') {
-        suffix = ' (background-only; not callable in-turn)';
+        suffix = ' (background-only; discover with tool_search)';
       } else if (input.promotedExtendedToolNames.has(t.name)) {
-        suffix = ' (promoted, always active)';
+        suffix = ' (promoted, always active; discoverable via tool_search)';
       } else if (loaded?.source === 'autoload') {
-        suffix = ' (autoload active)';
+        suffix = ' (autoload active; discoverable via tool_search)';
       } else if (loaded?.source === 'deferred') {
-        suffix = ' (deferred active)';
+        suffix = ' (deferred active; discoverable via tool_search)';
       } else if (loaded?.source === 'extended_loaded') {
-        suffix = ' (loaded active)';
+        suffix = ' (loaded active; discoverable via tool_search)';
       }
       lines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
     }

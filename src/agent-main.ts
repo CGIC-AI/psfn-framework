@@ -525,6 +525,8 @@ async function main(): Promise<void> {
 
   // Prompt stack — layered, editable system prompt
   const promptStore = wirePromptRuntime(agentLoop, companionDataDir, composeSystemPromptTemplate(), {
+    cardStore: cardVersionStore,
+    confirmationQueue: cardProposalQueue,
     identityCoolingOff,
     getCapabilityTier: () => capabilityRuntime.getTier(),
   });

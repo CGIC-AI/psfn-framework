@@ -129,6 +129,7 @@ Current guidance:
 - Scratchpad promotion is selective: stable facts move to `memory`, durable notes move to repo docs or `vault`, and active canon belongs in `orient`.
 - `north_star` stays its own semantic tool surface, separate from `orient` and `identity`.
 - `north_star` is a unified action-based extended tool, not a core primitive or a transient session-state surface.
+- `identity` is the live unified surface for prompt-layer reads/mutations and persona mutation via explicit `action` semantics; write actions remain capability-gated and safeguard-audited.
 
 ## Validation Baseline
 

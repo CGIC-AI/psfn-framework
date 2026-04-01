@@ -622,6 +622,8 @@ export class SubstrateRuntime implements Lifecycle {
       companionDataDir,
       composeSystemPromptTemplate(),
       {
+        cardStore: cardVersionStore,
+        confirmationQueue: cardProposalQueue,
         identityCoolingOff,
         getCapabilityTier: () => this.capabilityRuntime.getTier(),
       },

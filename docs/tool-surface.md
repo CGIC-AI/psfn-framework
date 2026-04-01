@@ -35,6 +35,16 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `notify`
 - `media`
 
+## Live Identity Surface
+
+The runtime now exposes a single model-facing `identity` tool for prompt-layer and persona work.
+
+- Read actions: `list_layers`, `get_layer`, `diff_layer`, `history`
+- Prompt mutation actions: `update_layer`, `rollback_layer`, `toggle_layer`, `commit_stage`, `cancel_stage`
+- Persona mutation action: `update_persona`
+
+The surface is always on so the model does not have to discover or choose among prompt-stack micro-tools. Write actions remain capability-gated, and the existing confirmation/cooling-off safeguards still apply.
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals
@@ -73,14 +83,14 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `create_concern` | `orient` | background-only | Active concerns are orientation data, not a task board. |
 | `list_concerns` | `orient` | background-only | Concern visibility belongs to the same active-state lane. |
 | `resolve_concern` | `orient` | background-only | Concern resolution closes the loop on active-state tracking. |
-| `prompt_layer_list` | `identity` | always-on | Prompt/identity state should be one semantic surface. |
-| `prompt_layer_get` | `identity` | always-on | Same family. |
-| `prompt_layer_update` | `identity` | extended | Mutation remains explicit and gated. |
-| `prompt_layer_rollback` | `identity` | extended | Versioned rollback belongs with identity state. |
-| `prompt_layer_toggle` | `identity` | extended | Same family. |
-| `identity_diff` | `identity` | always-on | Identity introspection belongs with the identity surface. |
-| `identity_changelog` | `identity` | always-on | Same family. |
-| `persona_update` | `identity` | extended | Persona mutation remains explicit and guarded. |
+| `prompt_layer_list` | `identity` | always-on | Collapsed into `identity action=list_layers`. |
+| `prompt_layer_get` | `identity` | always-on | Collapsed into `identity action=get_layer`. |
+| `prompt_layer_update` | `identity` | always-on | Collapsed into `identity action=update_layer`; capability gating still distinguishes write scope. |
+| `prompt_layer_rollback` | `identity` | always-on | Collapsed into `identity action=rollback_layer`. |
+| `prompt_layer_toggle` | `identity` | always-on | Collapsed into `identity action=toggle_layer`. |
+| `identity_diff` | `identity` | always-on | Collapsed into `identity action=diff_layer`. |
+| `identity_changelog` | `identity` | always-on | Collapsed into `identity action=history`. |
+| `persona_update` | `identity` | always-on | Collapsed into `identity action=update_persona` with the existing review guards preserved. |
 | `character_card_update` | `identity` | extended | Character-card mutation belongs to identity. |
 | `north_star` | `north_star` | extended | Unified long-horizon guiding-intent surface with `action=list|create|update|delete|reorder`; keep it semantic and non-core. |
 | `settings_get` | `system` | always-on | Runtime-setting reads are system guidance, not identity. |

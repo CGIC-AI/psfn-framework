@@ -71,10 +71,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'vault_daily',
     'session_resume',
     'session_new',
-    'identity_changelog',
-    'prompt_layer_update',
-    'prompt_layer_rollback',
-    'prompt_layer_toggle',
+    'identity',
     'north_star',
   ],
   ops: [

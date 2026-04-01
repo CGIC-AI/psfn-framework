@@ -221,10 +221,116 @@ describe('runtime subject identity', () => {
     });
 
     expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
+    expect(runtimeContext).toContain('[Tool Stack]');
+    expect(runtimeContext).toContain('Treat the currently loaded tools as the live, collapsed stack for this turn. Use a direct tool first when one already fits the task.');
+    expect(runtimeContext).toContain('Use tool_search only when a needed semantic tool is missing from the active stack. Use toolset only to add an overlay for this runtime or pin it across turns.');
+    expect(runtimeContext).toContain('Additional active overlays: media.');
     expect(runtimeContext).toContain('[Self-Media Tool Guidance]');
     expect(runtimeContext).toContain('Use media action="generate" for a brand new selfie, portrait, or scene featuring you.');
     expect(runtimeContext).toContain('Load relevant creator skills with skill action="view" when you need detailed composition, prompt craft, appearance continuity cues, or provider/model quirks.');
     expect(runtimeContext).toContain('Image creation, music creation, and future creator workflows belong in skills layered on the unified media surface, not in new top-level tools.');
+    expect(runtimeContext).not.toContain('[Tool Discovery]');
+    expect(runtimeContext).not.toContain('Available extended tools:');
+    expect(runtimeContext).not.toContain('autoload active');
+  });
+
+  it('keeps internal/background tool bureaucracy out of ordinary direct turns', () => {
+    const runtimeContext = buildRuntimeContext({
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord',
+        authorId: 'user-alex',
+        authorName: 'Alex',
+        content: 'Can you send a quick update?',
+      }),
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {
+        char_name: 'Companion',
+      },
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 2,
+        promoted: 1,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 3,
+      },
+      extendedTools: [
+        { name: 'notify', description: 'Send lightweight operator updates.' } as any,
+        { name: 'heartbeat_run_template', description: 'Run a heartbeat reflection template.' } as any,
+      ],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: (toolName) => (toolName === 'heartbeat_run_template' ? 'background' : 'overlay'),
+      promotedExtendedToolNames: new Set(['notify']),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).toContain('Additional active overlays: notify.');
+    expect(runtimeContext).toContain('Internal/background tools stay out of ordinary direct turns unless the turn is scheduled or deferred.');
+    expect(runtimeContext).not.toContain('heartbeat_run_template');
+    expect(runtimeContext).not.toContain('promoted');
+    expect(runtimeContext).not.toContain('background-only');
+  });
+
+  it('surfaces active internal/background tools only when the turn is scheduled or deferred', () => {
+    const runtimeContext = buildRuntimeContext({
+      message: makeMessage({
+        id: 'deferred-tool-handoff:abc123',
+        channelId: 'internal:heartbeat',
+        channelType: 'terminal',
+        authorId: 'scheduler',
+        authorName: 'Whisper',
+        content: 'Finish the scheduled follow-up work.',
+      }),
+      resolvedUserName: 'Companion',
+      trustLevel: 'primary',
+      channelType: 'internal',
+      canonicalContactKey: undefined,
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      taskKind: 'deferred_tool_handoff',
+      templateVariables: {
+        char_name: 'Companion',
+      },
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 2,
+        promoted: 0,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 3,
+      },
+      extendedTools: [
+        { name: 'heartbeat_run_template', description: 'Run a heartbeat reflection template.' } as any,
+      ],
+      loadedExtended: new Map([
+        ['heartbeat_run_template', {
+          toolName: 'heartbeat_run_template',
+          source: 'autoload',
+          activatedAt: 1,
+          lastActivatedAt: 1,
+        }],
+      ]),
+      classifyExtendedToolForTurn: () => 'background',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).toContain('Internal/background tools active for this turn: heartbeat_run_template.');
+    expect(runtimeContext).not.toContain('autoload');
+    expect(runtimeContext).not.toContain('background-only');
   });
 
   it('surfaces attention counts for pending whispers and active concerns', () => {

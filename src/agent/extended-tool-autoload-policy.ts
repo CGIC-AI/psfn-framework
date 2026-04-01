@@ -75,10 +75,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'prompt_layer_update',
     'prompt_layer_rollback',
     'prompt_layer_toggle',
-    'north_star_create',
-    'north_star_update',
-    'north_star_delete',
-    'north_star_reorder',
+    'north_star',
   ],
   ops: [
     'heartbeat_update_policy',

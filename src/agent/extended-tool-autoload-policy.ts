@@ -59,10 +59,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'repo_commit',
     'repo_create_branch',
     'repo_open_pr',
-    'issue_create',
-    'issue_update',
-    'issue_close',
-    'issue_sync',
+    'beads',
   ],
   memory: [
     'vault',
@@ -73,7 +70,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'heartbeat_update_policy',
     'heartbeat_run_template',
     'schedule_task',
-    'issue_sync',
+    'beads',
   ],
   social: [
     'media',

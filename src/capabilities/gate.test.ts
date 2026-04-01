@@ -425,32 +425,30 @@ describe('capability tool gating', () => {
     expect(repoTool.executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('gates issue tools by issue.* capability tokens', async () => {
-    const issueReady = createTool('issue_ready');
+  it('gates unified beads actions by issue.* capability tokens', async () => {
+    const beads = createTool('beads');
     const readyGated = gateToolWithCapabilities(
-      issueReady.tool,
+      beads.tool,
       () => accessForTier('custom', ['identity.read']),
     );
-    const readyDenied = await readyGated.execute('issue-ready', {});
-    expect(issueReady.executeSpy).not.toHaveBeenCalled();
+    const readyDenied = await readyGated.execute('beads-ready', { action: 'ready' });
+    expect(beads.executeSpy).not.toHaveBeenCalled();
     expect((readyDenied.content[0] as any).text).toContain('issue.read');
 
-    const issueCreate = createTool('issue_create');
     const createGated = gateToolWithCapabilities(
-      issueCreate.tool,
+      beads.tool,
       () => accessForTier('custom', ['issue.read']),
     );
-    const createDenied = await createGated.execute('issue-create', {});
-    expect(issueCreate.executeSpy).not.toHaveBeenCalled();
+    const createDenied = await createGated.execute('beads-create', { action: 'create', title: 'Tracked work' });
+    expect(beads.executeSpy).not.toHaveBeenCalled();
     expect((createDenied.content[0] as any).text).toContain('issue.write');
 
-    const issueClose = createTool('issue_close');
     const closeGated = gateToolWithCapabilities(
-      issueClose.tool,
+      beads.tool,
       () => accessForTier('autonomous'),
     );
-    await closeGated.execute('issue-close', {});
-    expect(issueClose.executeSpy).toHaveBeenCalledTimes(1);
+    await closeGated.execute('beads-close', { action: 'close', id: 'PSFN-1', reason: 'done' });
+    expect(beads.executeSpy).toHaveBeenCalledTimes(1);
   });
 
   it('evaluates toolset capability requirements by action', async () => {

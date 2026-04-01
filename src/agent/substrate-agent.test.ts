@@ -3817,7 +3817,7 @@ describe('SubstrateAgent.handleMessage', () => {
     agent.registerTool(makeExtendedProbeTool('heartbeat_update_policy'), 'extended');
     agent.registerTool(makeExtendedProbeTool('heartbeat_run_template'), 'extended');
     agent.registerTool(makeExtendedProbeTool('schedule_task'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('issue_sync'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
 
     const autoloadSummaries: any[] = [];
     const autoloadSkips: any[] = [];

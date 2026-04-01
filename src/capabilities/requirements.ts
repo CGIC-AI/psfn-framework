@@ -59,6 +59,12 @@ const VAULT_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'identity.write.runtime',
 ] as const;
 
+const BEADS_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'issue.read',
+  'issue.write',
+  'issue.close',
+] as const;
+
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
   switch (action) {
@@ -258,6 +264,56 @@ function resolveUnifiedVaultRequirement(params: Record<string, unknown>): Capabi
   }
 }
 
+function resolveUnifiedBeadsRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case 'ready':
+    case 'issue_ready':
+    case 'show':
+    case 'issue_show':
+      return 'issue.read';
+    case 'create':
+    case 'issue_create':
+    case 'update':
+    case 'issue_update':
+      return 'issue.write';
+    case 'close':
+    case 'issue_close':
+    case 'sync':
+    case 'issue_sync':
+      return 'issue.close';
+    case '': {
+      const hasId = typeof params.id === 'string';
+      const hasTitle = typeof params.title === 'string';
+      const hasStatus = typeof params.status === 'string';
+      const hasPriority = typeof params.priority === 'number';
+      const hasReason = typeof params.reason === 'string';
+      const hasIssueType = typeof params.issue_type === 'string';
+      const hasDeps = Array.isArray(params.deps);
+      const hasParent = typeof params.parent === 'string';
+
+      if (!hasId && !hasTitle && !hasStatus && !hasPriority && !hasReason && !hasIssueType && !hasDeps && !hasParent) {
+        return 'issue.read';
+      }
+      if (hasId && hasReason && !hasTitle && !hasStatus && !hasPriority && !hasIssueType && !hasDeps && !hasParent) {
+        return 'issue.close';
+      }
+      if (hasId && (hasStatus || hasPriority) && !hasTitle && !hasReason && !hasIssueType && !hasDeps && !hasParent) {
+        return 'issue.write';
+      }
+      if (hasTitle && !hasId && !hasStatus && !hasReason) {
+        return 'issue.write';
+      }
+      if (hasId && !hasTitle && !hasStatus && !hasPriority && !hasReason && !hasIssueType && !hasDeps && !hasParent) {
+        return 'issue.read';
+      }
+      return BEADS_FAIL_CLOSED_REQUIREMENTS;
+    }
+    default:
+      return BEADS_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
@@ -293,12 +349,6 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   repo_diff: 'git.read',
   repo_open_pr: 'git.write',
   repo_status: 'git.read',
-  issue_ready: 'issue.read',
-  issue_show: 'issue.read',
-  issue_create: 'issue.write',
-  issue_update: 'issue.write',
-  issue_close: 'issue.close',
-  issue_sync: 'issue.close',
   media: 'external.web',
   web: 'external.web',
   schedule_task: 'identity.write.runtime',
@@ -358,6 +408,10 @@ export function resolveToolRequiredCapabilities(
 
   if (tool.name === 'vault') {
     return normalizeRequirement(resolveUnifiedVaultRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'beads') {
+    return normalizeRequirement(resolveUnifiedBeadsRequirement(toRecord(params)));
   }
 
   const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;

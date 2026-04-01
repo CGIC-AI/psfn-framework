@@ -157,10 +157,10 @@ describe('extended-tool-autoload-policy', () => {
       'heartbeat_update_policy',
       'heartbeat_run_template',
       'schedule_task',
-      'issue_sync',
+      'beads',
     ]);
     expect(selection.maxCount).toBe(2);
-    expect(selection.selected).toEqual(['heartbeat_update_policy', 'issue_sync']);
+    expect(selection.selected).toEqual(['heartbeat_update_policy', 'beads']);
     expect(selection.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({
         toolName: 'heartbeat_run_template',

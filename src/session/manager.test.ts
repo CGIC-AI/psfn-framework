@@ -1778,10 +1778,12 @@ describe('SessionManager', () => {
     mgr.appendSystemNote('ch1', 'Agent performed self-check');
     mgr.recordAssistantMessage('ch1', 'All good');
 
-    // System notes should appear in context as user-role messages with [System note] prefix
     const ctx = await mgr.buildContext('ch1', 'Sys', '');
-    const allContent = ctx.messages.map(m => m.content).join('\n');
-    expect(allContent).toContain('[System note] Agent performed self-check');
+    expect(ctx.messages).toEqual([
+      { role: 'user', content: 'Hello' },
+      { role: 'system', content: '[SYSTEM: System] Agent performed self-check' },
+      { role: 'assistant', content: 'All good' },
+    ]);
   });
 
   it('system notes are visible in getRecentMessages', () => {

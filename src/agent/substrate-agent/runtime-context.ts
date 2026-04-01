@@ -235,7 +235,8 @@ export function buildRuntimeContext(input: {
     lines.push('Use media action="edit" when modifying an existing image while keeping your identity consistent.');
     lines.push('Use media action="analyze" to inspect generated images or explicit remote image URLs so you can see what is actually there.');
     lines.push('If the current user message already includes an attached image, inspect that attachment directly instead of calling media action="analyze" for it.');
-    lines.push('Load relevant creator skills with skill_view(name) when you need detailed composition, prompt craft, appearance continuity cues, or current provider/model quirks.');
+    lines.push('Load relevant creator skills with skill action="view" when you need detailed composition, prompt craft, appearance continuity cues, or provider/model quirks.');
+    lines.push('Image creation, music creation, and future creator workflows belong in skills layered on the unified media surface, not in new top-level tools.');
     lines.push('Generate and edit actions already return a vision review, so do not ask the user to go check basic appearance consistency unless you need their subjective preference.');
   }
 
@@ -383,6 +384,7 @@ export function buildRuntimeContext(input: {
     lines.push('');
     lines.push('[Skills Index]');
     lines.push('Skills are reusable workflow guidance, not executable tools. Use skill action="view" to load full instructions only when needed.');
+    lines.push('Creator workflows such as image creation, music creation, and future media variants should load creator skills instead of expecting new top-level tools.');
     lines.push(input.skillsContext);
   }
 

@@ -370,7 +370,7 @@ export function createMediaTool(
     name: 'media',
     label: 'media',
     description:
-      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new outputs, action="edit" to transform existing inputs, and action="analyze" to inspect what is visible in source or generated media. Current implementation is image-backed. Keep detailed prompt craft and provider/model quirks in creator skills via skill_view rather than in this tool surface.',
+      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new outputs, action="edit" to transform existing inputs, and action="analyze" to inspect what is visible in source or generated media. Current implementation is image-backed. Keep detailed prompt craft and provider/model quirks in creator skills via skill action="view" rather than in this tool surface.',
     parameters: Type.Object({
       action: Type.Union(
         MEDIA_ACTION_VALUES.map((value) => Type.Literal(value)),

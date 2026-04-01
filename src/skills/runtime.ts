@@ -73,6 +73,29 @@ export class SkillsRuntime {
     return [...this.getOrCreateCache().evaluations];
   }
 
+  listCategorySummary(): Array<{ category: string; total: number; included: number }> {
+    const cache = this.getOrCreateCache();
+    const includedNames = new Set(cache.snapshot.includedSkills.map(skill => skill.name));
+    const counts = new Map<string, { total: number; included: number }>();
+    for (const evaluation of cache.evaluations) {
+      const category = evaluation.entry.category?.trim() || 'uncategorized';
+      const record = counts.get(category) ?? { total: 0, included: 0 };
+      record.total += 1;
+      if (includedNames.has(evaluation.entry.name)) {
+        record.included += 1;
+      }
+      counts.set(category, record);
+    }
+
+    return [...counts.entries()]
+      .map(([category, summary]) => ({
+        category,
+        total: summary.total,
+        included: summary.included,
+      }))
+      .sort((left, right) => left.category.localeCompare(right.category));
+  }
+
   findSkill(name: string): SkillLookupResult | null {
     const normalized = name.trim().toLowerCase();
     if (!normalized) return null;

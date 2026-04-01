@@ -86,9 +86,15 @@ describe('skills tools', () => {
         includeSkipped: false,
       });
       const listPayload = JSON.parse(readText(listResult)) as {
+        categories: Array<{ category: string; total: number; included: number }>;
         includedInPrompt: Array<{ name: string }>;
         skills: Array<{ name: string; inPromptIndex: boolean }>;
       };
+      expect(listPayload.categories).toContainEqual({
+        category: 'ops',
+        total: 1,
+        included: 1,
+      });
       expect(listPayload.includedInPrompt.some(skill => skill.name === 'incident-runbook')).toBe(true);
       const managedSkill = listPayload.skills.find(skill => skill.name === 'incident-runbook');
       expect(managedSkill?.inPromptIndex).toBe(true);

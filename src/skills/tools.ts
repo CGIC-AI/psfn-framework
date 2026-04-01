@@ -76,6 +76,7 @@ function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams):
   const includeSkipped = params.includeSkipped ?? true;
   const includeContent = params.includeContent ?? false;
   const includedNames = new Set(snapshot.includedSkills.map(skill => skill.name));
+  const categorySummary = runtime.listCategorySummary();
 
   return {
     generatedAt: snapshot.generatedAt,
@@ -84,6 +85,11 @@ function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams):
     budget: snapshot.budget,
     scannedFiles: snapshot.scannedFiles,
     loadedSkills: snapshot.loadedSkills,
+    categories: categorySummary.map(({ category, total, included }) => ({
+      category,
+      total,
+      included,
+    })),
     includedInPrompt: snapshot.includedSkills.map(skill => ({
       name: skill.name,
       category: skill.category,
@@ -161,6 +167,7 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
     description:
       'Unified skill management surface for list/view/create/update. '
       + 'Skills capture reusable workflow guidance; tools execute actions. '
+      + 'Creator workflows such as image or music creation should be modeled as skills loaded with action="view", not as new top-level tools. '
       + `Use action=${SKILL_TOOL_ACTION_HELP}. Legacy action aliases remain available during migration.`,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(SKILL_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {

@@ -223,7 +223,8 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
     expect(runtimeContext).toContain('[Self-Media Tool Guidance]');
     expect(runtimeContext).toContain('Use media action="generate" for a brand new selfie, portrait, or scene featuring you.');
-    expect(runtimeContext).toContain('Load relevant creator skills with skill_view(name) when you need detailed composition, prompt craft, appearance continuity cues, or current provider/model quirks.');
+    expect(runtimeContext).toContain('Load relevant creator skills with skill action="view" when you need detailed composition, prompt craft, appearance continuity cues, or provider/model quirks.');
+    expect(runtimeContext).toContain('Image creation, music creation, and future creator workflows belong in skills layered on the unified media surface, not in new top-level tools.');
   });
 
   it('surfaces attention counts for pending whispers and active concerns', () => {

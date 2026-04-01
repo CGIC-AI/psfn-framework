@@ -13,6 +13,21 @@ describe('createThinkTool', () => {
     vi.mocked(runRLMLoop).mockReset();
   });
 
+  it('describes think as an explicit fallback after direct tools', () => {
+    const tool = createThinkTool({
+      llmProvider: {} as any,
+      embeddingService: null,
+      memoryStore: null,
+      sessionManager: null,
+      config: DEFAULT_REPL_CONFIG,
+    });
+
+    expect(tool.description).toContain('Explicit fallback analytical thinking via code execution.');
+    expect(tool.description).toContain('Reach for direct tools first');
+    expect(tool.description).toContain('use tool_search/toolset before think when the active stack is missing the needed capability');
+    expect(tool.description).toContain('not for routine file lookup, simple reads, basic inspection, or routine state changes');
+  });
+
   it('records think evidence into the active focus session context when channel metadata is available', async () => {
     vi.mocked(runRLMLoop).mockResolvedValue({
       answer: 'done',

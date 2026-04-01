@@ -95,6 +95,21 @@ The runtime now exposes a unified model-facing `session` tool for continuity, tr
 
 This keeps transcript lookup, gentle checkpointing, wake/return recaps, and focus lifecycle behavior under one continuity surface instead of turning them into generic assistant status chatter.
 
+## Live Contact Surface
+
+The runtime now exposes a unified model-facing `contact` tool for relationship operations and canonical contact continuity.
+
+- Actions: `list`, `lookup`, `note`, `set_trust`, `link_identity`, `set_channel_privacy`
+- Legacy migration aliases remain available inside the same tool:
+  `contact_list` -> `list`
+  `contact_lookup` -> `lookup`
+  `contact_note` -> `note`
+  `contact_set_trust` -> `set_trust`
+  `contact_link_identity` -> `link_identity`
+  `contact_set_channel_privacy` -> `set_channel_privacy`
+
+This keeps contact lookup, typed notes, trust drift handling, cross-channel identity linking, and per-channel privacy on one semantic relationship surface instead of scattering them across micro-tools. Trust/disclosure invariants and typed contact semantics remain enforced by the underlying contact store.
+
 ## Live Notify Surface
 
 The runtime now exposes a unified model-facing `notify` tool for operator briefs, lightweight outbound delivery, and approval escalation.

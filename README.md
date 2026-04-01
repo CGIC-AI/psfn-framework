@@ -286,7 +286,7 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 | Category | Tools |
 |----------|-------|
 | **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
-| **Contacts** | `contact_set_trust`, `contact_note`, `contact_set_channel_privacy`, `contact_link_identity`, `contact_lookup`, `contact_list` |
+| **Contacts** | `contact` |
 | **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `north_star`, `identity_diff`, `identity_changelog`, `character_card_update` |
 | **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |

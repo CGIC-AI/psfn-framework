@@ -2,14 +2,7 @@ import type Database from 'better-sqlite3';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import { ContactStore } from './store.js';
 import type { ChannelPrivacyLevel } from './types.js';
-import {
-  createContactLinkIdentityTool,
-  createContactListTool,
-  createContactLookupTool,
-  createContactNoteTool,
-  createContactSetChannelPrivacyTool,
-  createContactSetTrustTool,
-} from './tools.js';
+import { createContactTool } from './tools.js';
 
 export interface ContactRuntimeTarget {
   contactStore: ContactStore | null;
@@ -54,12 +47,7 @@ export function wireContactRuntime(
     }
   }
 
-  target.registerTool(createContactSetTrustTool(contactStore), 'extended');
-  target.registerTool(createContactSetChannelPrivacyTool(contactStore), 'extended');
-  target.registerTool(createContactNoteTool(contactStore), 'extended');
-  target.registerTool(createContactLinkIdentityTool(contactStore), 'extended');
-  target.registerTool(createContactLookupTool(contactStore));
-  target.registerTool(createContactListTool(contactStore));
+  target.registerTool(createContactTool(contactStore));
 
   return contactStore;
 }

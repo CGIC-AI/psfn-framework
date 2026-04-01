@@ -36,6 +36,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   heartbeat_run_template: 'irreversible',
   heartbeat_update_policy: 'irreversible',
   schedule_task: 'irreversible',
+  contact: 'irreversible',
   contact_list: 'reversible',
   contact_lookup: 'reversible',
   contact_note: 'irreversible',

@@ -304,6 +304,18 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
         return 'DENY';
       }
 
+      const maxBytes = (params as Record<string, unknown>).maxBytes;
+      if (method === 'fs.read' && maxBytes !== undefined) {
+        if (
+          typeof maxBytes !== 'number'
+          || !Number.isFinite(maxBytes)
+          || Math.floor(maxBytes) < 1
+          || maxBytes > 200_000
+        ) {
+          return 'DENY';
+        }
+      }
+
       const workspaceRoot = resolveWorkspaceRoot(policyConfig.workspacePath);
       const normalizedPath = resolveWorkspaceFsPathFromRoot(path, workspaceRoot);
 
@@ -363,6 +375,82 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
         ) {
           return 'DENY';
         }
+      }
+
+      return 'ALLOW';
+    }
+
+    case 'fs.search': {
+      const query = (params as Record<string, unknown>).query;
+      if (typeof query !== 'string' || query.trim().length === 0) {
+        return 'DENY';
+      }
+
+      const glob = (params as Record<string, unknown>).glob;
+      if (glob !== undefined && typeof glob !== 'string') {
+        return 'DENY';
+      }
+      if (!normalizeWorkspaceRelativeGlob(glob as string | undefined)) {
+        return 'DENY';
+      }
+
+      const mode = (params as Record<string, unknown>).mode;
+      if (mode !== undefined && mode !== 'literal' && mode !== 'regex') {
+        return 'DENY';
+      }
+
+      for (const [field, max] of [
+        ['maxMatches', 200],
+        ['maxFiles', 500],
+        ['maxBytesPerFile', 200_000],
+        ['contextLines', 2],
+      ] as const) {
+        const value = (params as Record<string, unknown>)[field];
+        if (value === undefined) {
+          continue;
+        }
+        if (
+          typeof value !== 'number'
+          || !Number.isFinite(value)
+          || Math.floor(value) < 0
+          || value > max
+          || (field !== 'contextLines' && Math.floor(value) < 1)
+        ) {
+          return 'DENY';
+        }
+      }
+
+      return 'ALLOW';
+    }
+
+    case 'fs.edit': {
+      const path = (params as Record<string, unknown>).path;
+      const oldText = (params as Record<string, unknown>).oldText;
+      const newText = (params as Record<string, unknown>).newText;
+      const replaceAll = (params as Record<string, unknown>).replaceAll;
+      if (
+        typeof path !== 'string'
+        || path.trim().length === 0
+        || typeof oldText !== 'string'
+        || oldText.length === 0
+        || typeof newText !== 'string'
+        || (replaceAll !== undefined && typeof replaceAll !== 'boolean')
+      ) {
+        return 'DENY';
+      }
+
+      const workspaceRoot = resolveWorkspaceRoot(policyConfig.workspacePath);
+      const normalizedPath = resolveWorkspaceFsPathFromRoot(path, workspaceRoot);
+      if (!isInsideAllowedPaths(normalizedPath, [workspaceRoot])) {
+        return 'NEEDS_APPROVAL';
+      }
+
+      const canonical = resolveCanonicalPath(normalizedPath, true);
+      if (canonical === null) {
+        return 'DENY';
+      }
+      if (canonical !== normalizedPath && !isInsideAllowedPaths(canonical, [workspaceRoot])) {
+        return 'DENY';
       }
 
       return 'ALLOW';

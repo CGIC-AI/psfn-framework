@@ -28,6 +28,11 @@ const SCRATCHPAD_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'memory.write',
 ] as const;
 
+const FILESYSTEM_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'git.read',
+  'git.write',
+] as const;
+
 const IDENTITY_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'identity.read',
   'identity.write.runtime',
@@ -80,6 +85,25 @@ function resolveScratchpadRequirement(params: Record<string, unknown>): Capabili
       return 'memory.write';
     default:
       return SCRATCHPAD_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
+function resolveFilesystemRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!action) {
+    return Object.keys(params).length === 0 ? 'git.read' : FILESYSTEM_FAIL_CLOSED_REQUIREMENTS;
+  }
+
+  switch (action) {
+    case 'list':
+    case 'read':
+    case 'search':
+      return 'git.read';
+    case 'write':
+    case 'edit':
+      return 'git.write';
+    default:
+      return FILESYSTEM_FAIL_CLOSED_REQUIREMENTS;
   }
 }
 
@@ -201,6 +225,10 @@ export function resolveToolRequiredCapabilities(
   }
   if (tool.name === 'scratchpad') {
     return normalizeRequirement(resolveScratchpadRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'fs') {
+    return normalizeRequirement(resolveFilesystemRequirement(toRecord(params)));
   }
 
   if (tool.name === 'north_star') {

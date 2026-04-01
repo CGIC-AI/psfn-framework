@@ -324,6 +324,38 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('allows fs.search with bounded workspace-relative parameters', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.search',
+        params: {
+          query: 'needle',
+          glob: 'src/**/*.ts',
+          mode: 'literal',
+          maxMatches: 20,
+          maxFiles: 50,
+          maxBytesPerFile: 10_000,
+          contextLines: 1,
+        },
+      },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('allows fs.edit inside workspace', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: 'notes.txt',
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
   it('allows fs.read of workspace root', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: '/app/workspace' } },
@@ -407,6 +439,37 @@ describe('evaluatePolicy', () => {
       { method: 'fs.list', params: { glob: 'src/..' } },
       policyConfig,
     )).toBe('DENY');
+  });
+
+  it('denies invalid fs.search parameters', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.search', params: { query: '', glob: 'src/**/*.ts' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.search', params: { query: 'needle', glob: '../secrets/**' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.search', params: { query: 'needle', contextLines: 3 } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('requires approval for fs.edit outside workspace', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: '/tmp/evil.sh',
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
+      policyConfig,
+    )).toBe('NEEDS_APPROVAL');
   });
 
   // ── Allowed read paths ──

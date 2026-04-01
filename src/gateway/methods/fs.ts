@@ -1,7 +1,13 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
-import { readFile, writeFile, glob as fsGlob } from 'node:fs/promises';
+import { writeFile, glob as fsGlob } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
-import type { FsListParams, FsReadParams, FsWriteParams } from '../protocol.js';
+import type {
+  FsEditParams,
+  FsListParams,
+  FsReadParams,
+  FsSearchParams,
+  FsWriteParams,
+} from '../protocol.js';
 import { GatewayErrors } from '../protocol.js';
 import { isInsideAllowedPaths } from '../policy.js';
 import {
@@ -11,6 +17,11 @@ import {
 } from '../filesystem-paths.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
+import {
+  editWorkspaceFile,
+  readTextFile,
+  searchWorkspaceFiles,
+} from '../../filesystem/workspace-ops.js';
 
 function resolveReadRoot(runtime: GatewayMethodRuntime): string {
   const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
@@ -33,10 +44,9 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'fs.read',
     handler: async (params: FsReadParams, runtime) => {
       const resolvedPath = resolveReadPath(params.path, runtime);
-      const content = await readFile(resolvedPath, 'utf-8');
-      return { content };
+      return await readTextFile(resolvedPath, params.maxBytes);
     },
-    summary: (p: FsReadParams) => ({ path: p.path }),
+    summary: (p: FsReadParams) => ({ path: p.path, maxBytes: p.maxBytes }),
     approvalAction: 'read',
     approvalScope: (p: FsReadParams) => p.path,
   },
@@ -89,6 +99,47 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     summary: (p: FsListParams) => ({ glob: p.glob ?? '**/*', maxEntries: p.maxEntries ?? 200 }),
     approvalAction: 'read',
     approvalScope: (p: FsListParams) => p.glob ?? '**/*',
+  },
+  {
+    name: 'fs.search',
+    handler: async (params: FsSearchParams, runtime) => {
+      return await searchWorkspaceFiles(resolveReadRoot(runtime), {
+        query: params.query,
+        ...(typeof params.glob === 'string' ? { glob: params.glob } : {}),
+        ...(params.mode ? { mode: params.mode } : {}),
+        ...(typeof params.maxMatches === 'number' ? { maxMatches: params.maxMatches } : {}),
+        ...(typeof params.maxFiles === 'number' ? { maxFiles: params.maxFiles } : {}),
+        ...(typeof params.maxBytesPerFile === 'number' ? { maxBytesPerFile: params.maxBytesPerFile } : {}),
+        ...(typeof params.contextLines === 'number' ? { contextLines: params.contextLines } : {}),
+      });
+    },
+    summary: (p: FsSearchParams) => ({
+      query: p.query,
+      glob: p.glob ?? '**/*',
+      maxMatches: p.maxMatches ?? 50,
+      maxFiles: p.maxFiles ?? 200,
+    }),
+    approvalAction: 'read',
+    approvalScope: (p: FsSearchParams) => `${p.glob ?? '**/*'}:${p.query}`,
+  },
+  {
+    name: 'fs.edit',
+    handler: async (params: FsEditParams, runtime) => {
+      const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+      const result = await editWorkspaceFile(workspaceRoot, {
+        path: params.path,
+        oldText: params.oldText,
+        newText: params.newText,
+        replaceAll: params.replaceAll,
+      });
+      return {
+        success: true,
+        replacements: result.replacements,
+      };
+    },
+    summary: (p: FsEditParams) => ({ path: p.path, replaceAll: p.replaceAll === true }),
+    approvalAction: 'write',
+    approvalScope: (p: FsEditParams) => p.path,
   },
 ];
 

@@ -42,6 +42,10 @@ import type {
   FsReadResult,
   FsWriteResult,
   FsListResult,
+  FsSearchParams,
+  FsSearchResult,
+  FsEditParams,
+  FsEditResult,
   DiscordMessageNotification,
   LLMChunkNotification,
   VoiceHandleMessageResult,
@@ -676,8 +680,15 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
 
   // ── Filesystem ──
 
-  async fsRead(path: string): Promise<string> {
-    const result = await this.rpcInstance.request('fs.read', { path }) as FsReadResult;
+  async fsReadDetailed(path: string, options?: { maxBytes?: number }): Promise<FsReadResult> {
+    return await this.rpcInstance.request('fs.read', {
+      path,
+      ...(typeof options?.maxBytes === 'number' ? { maxBytes: options.maxBytes } : {}),
+    }) as FsReadResult;
+  }
+
+  async fsRead(path: string, options?: { maxBytes?: number }): Promise<string> {
+    const result = await this.fsReadDetailed(path, options);
     return result.content;
   }
 
@@ -691,6 +702,14 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       maxEntries,
     }) as FsListResult;
     return result.paths;
+  }
+
+  async fsSearch(params: FsSearchParams): Promise<FsSearchResult> {
+    return await this.rpcInstance.request('fs.search', params) as FsSearchResult;
+  }
+
+  async fsEdit(params: FsEditParams): Promise<FsEditResult> {
+    return await this.rpcInstance.request('fs.edit', params) as FsEditResult;
   }
 
   // ── Git operations ──

@@ -167,7 +167,8 @@ set -a && source .env && set +a && npm run agent
 **Containerized agent (maximum isolation):**
 ```bash
 npm run build
-npm run agent:docker    # --network=none Docker container
+npm run agent:docker          # Production profile (network_mode: "none")
+npm run agent:docker:continuous # Continuous/dev profile (isolated internal network)
 ```
 
 ### Optional Services

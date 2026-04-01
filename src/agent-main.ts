@@ -53,7 +53,7 @@ import { registerBeadsTools } from './beads/runtime-wiring.js';
 import { GatewayBeadsOps } from './beads/gateway-ops.js';
 import { registerFilesystemTools } from './filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from './filesystem/gateway-ops.js';
-import { registerImageTools } from './images/runtime-wiring.js';
+import { registerMediaTool } from './images/runtime-wiring.js';
 import { GatewayImageOps } from './images/gateway-ops.js';
 import { DefaultImageVisionReviewer } from './images/vision-reviewer.js';
 import {
@@ -534,7 +534,7 @@ async function main(): Promise<void> {
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
   });
-  registerImageTools(agentLoop, new GatewayImageOps(gateway), {
+  registerMediaTool(agentLoop, new GatewayImageOps(gateway), {
     gatewayMode: true,
     reviewer: imageVisionReviewer,
   });

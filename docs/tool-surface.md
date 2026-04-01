@@ -116,6 +116,16 @@ The runtime now exposes a unified model-facing `skill` tool for skill discovery,
 - `view` loads one skill's full YAML + Markdown body on demand
 - `create` and `update` write managed skills under `data/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot
 
+## Live Media Surface
+
+The runtime now exposes a unified model-facing `media` tool for image-backed generation, transformation, and inspection.
+
+- Actions: `generate`, `edit`, `analyze`
+- `generate` creates a new image from a prompt
+- `edit` transforms one or more existing input URLs
+- `analyze` inspects visible contents or appearance consistency on explicit inputs
+- Detailed composition guidance, prompt craft, and provider/model quirks belong in creator skills loaded with `skill action="view"`; the top-level tool surface stays intentionally generic
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals
@@ -134,6 +144,7 @@ The runtime now exposes a unified model-facing `skill` tool for skill discovery,
 - Keep scratchpad distinct from `orient` and `memory`: it is for temporary working context, not active canon or durable recall.
 - Promote scratchpad content only when it hardens into stable facts (`memory`), durable notes/artifacts (`vault` or repo docs), or orientation state (`orient`).
 - Use `think` as an explicit fallback for deep reasoning, not as the default escape hatch.
+- Keep creative prompt craft, appearance heuristics, and provider/model quirks in creator skills rather than top-level tool descriptions.
 - Keep bounded worker control on `subagent` with `action=spawn|message|wait|cancel|status`.
 - Keep shard and subagent names distinct because they model different work durations and isolation semantics.
 - Keep forked shard generation explicit so inherited parent context stays in shard prompt discipline rather than leaking into bounded subagent control.
@@ -211,9 +222,9 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `vault_read` | `vault` | always-on | Vault reads remain a semantic tool. |
 | `vault_search` | `vault` | always-on | Same family. |
 | `vault_daily` | `vault` | extended | Daily journal emission belongs with the vault surface. |
-| `image_create` | `media` | extended | Media generation should sit behind a single media surface. |
-| `image_edit` | `media` | extended | Same family. |
-| `image_analyze` | `media` | extended | Same family. |
+| `image_create` | `media` | extended | Collapsed into `media action="generate"`; detailed prompt craft belongs in creator skills, not runtime context. |
+| `image_edit` | `media` | extended | Collapsed into `media action="edit"` on the same surface. |
+| `image_analyze` | `media` | extended | Collapsed into `media action="analyze"` on the same surface. |
 
 ## Configuration Guidance
 

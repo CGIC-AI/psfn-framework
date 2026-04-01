@@ -71,7 +71,7 @@ import { DEFAULT_COMPANION_ID } from './identity/companion-naming.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { wireGitRuntime } from './git/runtime-wiring.js';
-import { wireImageRuntime } from './images/runtime-wiring.js';
+import { wireMediaRuntime } from './images/runtime-wiring.js';
 import { wireSkillsRuntime } from './skills/runtime-wiring.js';
 import {
   createIntentionAppraisalHooks,
@@ -622,7 +622,7 @@ export class SubstrateRuntime implements Lifecycle {
       repoRoot: process.cwd(),
     });
     wireFilesystemToolsRuntime(this.agentLoop, process.cwd());
-    wireImageRuntime(this.agentLoop, this.config);
+    wireMediaRuntime(this.agentLoop, this.config);
 
     // Prompt stack — layered, editable system prompt
     const promptStore = wirePromptRuntime(

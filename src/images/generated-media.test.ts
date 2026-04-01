@@ -16,7 +16,7 @@ describe('collectGeneratedImageAttachments', () => {
     }
   });
 
-  it('persists generated image tool results into companion storage', async () => {
+  it('persists generated media tool results into companion storage', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);
 
@@ -25,7 +25,7 @@ describe('collectGeneratedImageAttachments', () => {
       turnMessages: [
         {
           role: 'toolResult',
-          toolName: 'image_create',
+          toolName: 'media',
           content: [{
             type: 'text',
             text: JSON.stringify({
@@ -63,7 +63,7 @@ describe('collectGeneratedImageAttachments', () => {
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-bytes'));
   });
 
-  it('uses structured image tool details when available', async () => {
+  it('uses structured media tool details when available', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);
 
@@ -72,10 +72,10 @@ describe('collectGeneratedImageAttachments', () => {
       turnMessages: [
         {
           role: 'toolResult',
-          toolName: 'image_create',
+          toolName: 'media',
           content: [{ type: 'text', text: 'not-json' }],
           details: {
-            imageResult: {
+            mediaResult: {
               provider: 'fal',
               mode: 'create',
               requestId: 'req-456',
@@ -107,7 +107,7 @@ describe('collectGeneratedImageAttachments', () => {
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-two'));
   });
 
-  it('ignores non-image tool results and malformed payloads', async () => {
+  it('ignores non-media tool results and malformed payloads', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);
 
@@ -121,7 +121,7 @@ describe('collectGeneratedImageAttachments', () => {
         } as any,
         {
           role: 'toolResult',
-          toolName: 'image_create',
+          toolName: 'media',
           content: [{ type: 'text', text: 'not json' }],
         } as any,
       ],

@@ -60,7 +60,7 @@ const LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION = [
   'Inspect the current image attachment(s) directly and ground your reply in what is actually visible there.',
   'If prior session history, memory, or earlier replies describe a different image, treat that as stale and ignore it for this turn.',
   'Do not infer image contents from prior conversation, stale URLs, pasted CDN links, or earlier failed image attempts.',
-  'Do not call image_analyze for the current attachment unless the user explicitly asks you to inspect a different URL.',
+  'Do not call media action="analyze" for the current attachment unless the user explicitly asks you to inspect a different URL.',
 ].join(' ');
 const UNRESOLVED_ATTACHMENT_VISIBILITY_INSTRUCTION = [
   '[Runtime note]',

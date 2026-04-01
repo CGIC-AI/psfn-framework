@@ -292,6 +292,7 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
 | **Values** | `values_list`, `values_add`, `values_update` |
 | **Skills** | `skill` (`action=list|view|create|update`) |
+| **Media** | `media` (`action=generate|edit|analyze`; detailed prompt craft lives in creator skills loaded with `skill action="view"`) |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
 | **Shards** | `spawn_shard` (long-running shard runtime with explicit artifact delivery) |
 | **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |

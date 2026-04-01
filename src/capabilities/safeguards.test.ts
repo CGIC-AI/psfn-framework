@@ -30,6 +30,7 @@ describe('tool reversibility tagging', () => {
     expect(resolveToolReversibility('scratchpad')).toBe('irreversible');
     expect(resolveToolReversibility('self_restart')).toBe('irreversible');
     expect(resolveToolReversibility('repo_commit')).toBe('irreversible');
+    expect(resolveToolReversibility('skill')).toBe('irreversible');
   });
 
   it('defaults unknown tools to reversible and supports explicit override', () => {

@@ -83,8 +83,6 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'heartbeat_get_policy',
   'contact_lookup',
   'contact_list',
-  'skill_list',
-  'skill_view',
 ]);
 
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;

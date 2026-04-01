@@ -192,10 +192,10 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
 | `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work; forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
 | `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |
-| `skill_list` | `skill` | always-on | Skill management stays explicit. |
-| `skill_view` | `skill` | always-on | Same family. |
-| `skill_create` | `skill` | extended | Mutation stays explicit. |
-| `skill_update` | `skill` | extended | Same family. |
+| `skill_list` | `skill` | always-on | Unified `skill action="list|view|create|update"` now owns the whole surface; the old micro-tool name survives only as a migration alias. |
+| `skill_view` | `skill` | always-on | Same family. Skills are workflow strategy, not world-execution tools. |
+| `skill_create` | `skill` | always-on | Same family. Managed-skill mutation now routes through `skill action="create"` with the old name retained only as an accepted action alias. |
+| `skill_update` | `skill` | always-on | Same family. |
 | `vault_write` | `vault` | extended | Vault mutations stay explicit. |
 | `vault_read` | `vault` | always-on | Vault reads remain a semantic tool. |
 | `vault_search` | `vault` | always-on | Same family. |

@@ -3,12 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SkillsRuntime } from './runtime.js';
-import {
-  createSkillCreateTool,
-  createSkillListTool,
-  createSkillUpdateTool,
-  createSkillViewTool,
-} from './tools.js';
+import { createSkillTool } from './tools.js';
 
 function writeSeedConfig(seedDir: string): void {
   mkdirSync(seedDir, { recursive: true });
@@ -27,7 +22,7 @@ function readText(result: { content: Array<{ text?: string }> }): string {
 }
 
 describe('skills tools', () => {
-  it('supports create, view, update, and list for managed skills', async () => {
+  it('supports create, view, update, and list through the unified skill tool', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'config');
@@ -41,12 +36,13 @@ describe('skills tools', () => {
         repoRoot: root,
         isBinaryAvailable: () => true,
       });
-      const createTool = createSkillCreateTool(runtime);
-      const viewTool = createSkillViewTool(runtime);
-      const updateTool = createSkillUpdateTool(runtime);
-      const listTool = createSkillListTool(runtime);
+      const skillTool = createSkillTool(runtime);
 
-      const createResult = await createTool.execute('call-1', {
+      expect(skillTool.name).toBe('skill');
+      expect(skillTool.label).toBe('skill');
+
+      const createResult = await skillTool.execute('call-1', {
+        action: 'create',
         name: 'incident-runbook',
         category: 'ops',
         description: 'Incident response checklist.',
@@ -61,7 +57,10 @@ describe('skills tools', () => {
       expect(createdPayload.version).toBe(1);
       expect(createdPayload.path).toContain('data/skills/ops/incident-runbook/SKILL.md');
 
-      const viewCreated = await viewTool.execute('call-2', { name: 'incident-runbook' });
+      const viewCreated = await skillTool.execute('call-2', {
+        action: 'skill_view',
+        name: 'incident-runbook',
+      });
       const createdViewPayload = JSON.parse(readText(viewCreated)) as {
         name: string;
         content: string;
@@ -71,7 +70,8 @@ describe('skills tools', () => {
       expect(createdViewPayload.category).toBe('ops');
       expect(createdViewPayload.content).toContain('Gather logs');
 
-      const updateResult = await updateTool.execute('call-3', {
+      const updateResult = await skillTool.execute('call-3', {
+        action: 'update',
         name: 'incident-runbook',
         content: '# Incident Runbook\n\n- Gather logs\n- Escalate if needed\n- Postmortem',
       });
@@ -82,7 +82,7 @@ describe('skills tools', () => {
       expect(updatedPayload.action).toBe('updated');
       expect(updatedPayload.version).toBe(2);
 
-      const listResult = await listTool.execute('call-4', {
+      const listResult = await skillTool.execute('call-4', {
         includeSkipped: false,
       });
       const listPayload = JSON.parse(readText(listResult)) as {
@@ -97,7 +97,7 @@ describe('skills tools', () => {
     }
   });
 
-  it('returns explicit errors for invalid names and missing skills', async () => {
+  it('returns explicit errors for invalid actions, invalid names, and missing skills', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-errors-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'config');
@@ -110,18 +110,27 @@ describe('skills tools', () => {
         seedDir,
         repoRoot: root,
       });
-      const createTool = createSkillCreateTool(runtime);
-      const viewTool = createSkillViewTool(runtime);
+      const skillTool = createSkillTool(runtime);
 
-      const invalidCreate = await createTool.execute('call-1', {
+      const missingAction = await skillTool.execute('call-0', {
+        name: 'needs-action',
+      });
+      expect(readText(missingAction)).toContain('action is required unless using the default list behavior');
+      expect(missingAction.details.isError).toBe(true);
+
+      const invalidCreate = await skillTool.execute('call-1', {
+        action: 'skill_create',
         name: '../escape',
         category: 'ops',
         content: 'bad',
       });
-      expect(readText(invalidCreate)).toContain('Unable to create skill');
+      expect(readText(invalidCreate)).toContain('Unable to use skill tool');
       expect(invalidCreate.details.isError).toBe(true);
 
-      const missingView = await viewTool.execute('call-2', { name: 'not-found' });
+      const missingView = await skillTool.execute('call-2', {
+        action: 'view',
+        name: 'not-found',
+      });
       expect(readText(missingView)).toContain('not found');
       expect(missingView.details.isError).toBe(true);
     } finally {

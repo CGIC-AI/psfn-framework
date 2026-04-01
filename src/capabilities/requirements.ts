@@ -63,6 +63,12 @@ const BEADS_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'issue.read',
   'issue.write',
   'issue.close',
+];
+
+const SYSTEM_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'identity.read',
+  'lifecycle.restart',
+  'lifecycle.rebuild',
 ] as const;
 
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
@@ -314,6 +320,33 @@ function resolveUnifiedBeadsRequirement(params: Record<string, unknown>): Capabi
   }
 }
 
+function resolveUnifiedSystemRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case 'read':
+    case 'settings_get':
+      return 'identity.read';
+    case 'restart':
+    case 'self_restart':
+      return 'lifecycle.restart';
+    case 'rebuild':
+    case 'self_rebuild':
+      return 'lifecycle.rebuild';
+    case '': {
+      const hasReason = typeof params.reason === 'string' && params.reason.trim().length > 0;
+      const hasKey = typeof params.key === 'string';
+      const hasKeys = Array.isArray(params.keys);
+      const hasList = typeof params.list === 'boolean';
+      if (!hasReason && (hasKey || hasKeys || hasList || Object.keys(params).length === 0)) {
+        return 'identity.read';
+      }
+      return SYSTEM_FAIL_CLOSED_REQUIREMENTS;
+    }
+    default:
+      return SYSTEM_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
@@ -360,6 +393,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   self_rebuild: 'lifecycle.rebuild',
   self_restart: 'lifecycle.restart',
   settings_get: 'identity.read',
+  system: SYSTEM_FAIL_CLOSED_REQUIREMENTS,
   subagent: 'subagent.spawn',
   spawn_shard: 'shard.spawn',
   think: 'repl.execute',
@@ -412,6 +446,10 @@ export function resolveToolRequiredCapabilities(
 
   if (tool.name === 'beads') {
     return normalizeRequirement(resolveUnifiedBeadsRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'system') {
+    return normalizeRequirement(resolveUnifiedSystemRequirement(toRecord(params)));
   }
 
   const annotated = (tool as AgentTool<any> & CapabilityAnnotatedTool).requiredCapability;

@@ -192,6 +192,21 @@ The runtime now exposes a unified model-facing `vault` tool for durable notes, O
 
 This keeps durable note creation, retrieval, search, and daily-note workflows on one semantic surface instead of scattering them across vault micro-tools. `vault` stays distinct from `scratchpad` and `memory`: scratchpad is temporary working context, memory is structured recall, and vault is for durable notes and artifacts.
 
+## Live System Surface
+
+The runtime now exposes a unified model-facing `system` tool for safe runtime-setting reads and guarded lifecycle control.
+
+- Preferred actions:
+  `read`
+  `restart`
+  `rebuild`
+- Accepted legacy action aliases:
+  `settings_get` -> `read`
+  `self_restart` -> `restart`
+  `self_rebuild` -> `rebuild`
+
+`system action="read"` preserves the existing safe runtime-settings snapshot behavior. `system action="restart|rebuild"` preserves the existing restart safeguard checks, notification flow, and capability enforcement, but keeps lifecycle control on one semantic surface instead of separate micro-tools.
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals
@@ -279,8 +294,8 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `heartbeat_update_policy` | `schedule` | extended | Same family. |
 | `heartbeat_run_template` | `schedule` | background-only | Template execution is a background worker concern. |
 | `schedule_task` | `schedule` | extended | Durable tasking belongs here. |
-| `self_restart` | `system` | extended | Runtime control belongs under system. |
-| `self_rebuild` | `system` | extended | Same family. |
+| `self_restart` | `system` | always-on | Collapsed into `system action="restart"`; lifecycle safeguards and capability checks still gate execution. |
+| `self_rebuild` | `system` | always-on | Collapsed into `system action="rebuild"` with the same safeguards. |
 | `notify` | `notify` | extended | Unified notify surface with `action=brief|send|approval_request`. |
 | `notify_operator` | `notify` | hidden | Legacy operator alert behavior now maps to `notify action="brief"`. |
 | `web_fetch` | `web` | always-on | Collapsed into `web action="fetch"` for ordinary remote page retrieval through the default gateway lane. |

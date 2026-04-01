@@ -28,6 +28,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   prompt_layer_toggle: 'irreversible',
   north_star: 'irreversible',
   settings_get: 'reversible',
+  system: 'irreversible',
   promoted_tools_list: 'reversible',
   promoted_tools_add: 'irreversible',
   promoted_tools_remove: 'irreversible',

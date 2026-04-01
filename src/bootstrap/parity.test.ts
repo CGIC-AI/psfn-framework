@@ -143,7 +143,7 @@ describe('wireSessionToolsRuntime', () => {
 });
 
 describe('wireSettingsRuntime', () => {
-  it('registers only settings_get and leaves toolset registration to the agent runtime', () => {
+  it('registers only system and leaves toolset registration to the agent runtime', () => {
     const target = {
       registerTool: vi.fn(),
       setToolsetMemoryWriter: vi.fn(),
@@ -152,8 +152,8 @@ describe('wireSettingsRuntime', () => {
     wireSettingsRuntime(target as any, {} as any);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.map(([tool]) => tool.name)).toEqual(['settings_get']);
-    expect(calls.find(([tool]) => tool.name === 'settings_get')?.[1]).toBe('core');
+    expect(calls.map(([tool]) => tool.name)).toEqual(['system']);
+    expect(calls.find(([tool]) => tool.name === 'system')?.[1]).toBe('core');
     expect(target.setToolsetMemoryWriter).not.toHaveBeenCalled();
   });
 

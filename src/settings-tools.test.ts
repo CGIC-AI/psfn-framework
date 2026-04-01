@@ -4,7 +4,7 @@ import {
   createPromotedToolsListTool,
   createPromotedToolsRemoveTool,
   createPromotedToolsSwapTool,
-  createSettingsGetTool,
+  executeSystemReadAction,
 } from './settings-tools.js';
 import type { SubstrateConfig } from './types.js';
 
@@ -52,10 +52,9 @@ function readText(result: { content: Array<{ text?: string }> }): string {
   return result.content[0]?.text ?? '';
 }
 
-describe('createSettingsGetTool', () => {
+describe('executeSystemReadAction', () => {
   it('returns a single key value', async () => {
-    const tool = createSettingsGetTool(makeConfig());
-    const result = await tool.execute('call-1', { key: 'thinkMaxSubQueries' });
+    const result = executeSystemReadAction(makeConfig(), { key: 'thinkMaxSubQueries' });
     const payload = JSON.parse(readText(result));
 
     expect(payload.mode).toBe('single');
@@ -65,8 +64,7 @@ describe('createSettingsGetTool', () => {
   });
 
   it('returns discoverable key list mode', async () => {
-    const tool = createSettingsGetTool(makeConfig());
-    const result = await tool.execute('call-2', { list: true });
+    const result = executeSystemReadAction(makeConfig(), { list: true });
     const payload = JSON.parse(readText(result));
 
     expect(payload.mode).toBe('list');
@@ -75,8 +73,7 @@ describe('createSettingsGetTool', () => {
   });
 
   it('returns subset for keys mode', async () => {
-    const tool = createSettingsGetTool(makeConfig());
-    const result = await tool.execute('call-3', {
+    const result = executeSystemReadAction(makeConfig(), {
       keys: ['primaryModel', 'retryMaxAttempts'],
     });
     const payload = JSON.parse(readText(result));
@@ -88,8 +85,7 @@ describe('createSettingsGetTool', () => {
   });
 
   it('returns clear error for unknown keys', async () => {
-    const tool = createSettingsGetTool(makeConfig());
-    const result = await tool.execute('call-4', { key: 'discordToken' });
+    const result = executeSystemReadAction(makeConfig(), { key: 'discordToken' });
 
     expect(readText(result)).toContain('Unknown setting key');
     expect(result.details.isError).toBe(true);

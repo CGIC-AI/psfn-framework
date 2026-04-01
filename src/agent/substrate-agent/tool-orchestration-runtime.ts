@@ -76,7 +76,8 @@ export const DEFAULT_SPAWN_SHARD_PARALLEL_MAX = 5;
 const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'repo_status',
   'repo_diff',
-  'settings_get',
+  'issue_ready',
+  'issue_show',
   'tool_search',
   'heartbeat_get_policy',
   'contact_lookup',

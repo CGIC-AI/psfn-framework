@@ -11,6 +11,7 @@ import { TRUST_LEVELS, isHighTierTrustLevel } from '../trust/types.js';
 import type { TrustDriftBehaviorSignals } from '../trust/policy.js';
 import { CHANNEL_PRIVACY_LEVELS, type ChannelPrivacyLevel } from './types.js';
 import { resolvePreferredContactName } from './preferred-name.js';
+import type { LegacyAliasTelemetryCallback } from '../tools/legacy-alias-telemetry.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -415,6 +416,17 @@ async function executeUnifiedContactAction(
 }
 
 export function createContactTool(contactStore: ContactStore): AgentTool<any> {
+  return createContactToolWithOptions(contactStore);
+}
+
+interface ContactToolOptions {
+  emitLegacyAliasTelemetry?: LegacyAliasTelemetryCallback;
+}
+
+export function createContactToolWithOptions(
+  contactStore: ContactStore,
+  options: ContactToolOptions = {},
+): AgentTool<any> {
   const tool: AgentTool<any> = {
     name: 'contact',
     label: 'contact',
@@ -472,9 +484,18 @@ export function createContactTool(contactStore: ContactStore): AgentTool<any> {
       params: ContactToolParams = {},
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      let actionForError = typeof params.action === 'string' ? params.action : undefined;
+      const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+      let actionForError = rawAction || undefined;
       try {
         actionForError = normalizeContactAction(params);
+        if (rawAction && rawAction !== actionForError) {
+          options.emitLegacyAliasTelemetry?.({
+            toolName: 'contact',
+            alias: rawAction,
+            canonicalAction: actionForError,
+            migrationSurface: 'contact',
+          });
+        }
         return await executeUnifiedContactAction(contactStore, params);
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';

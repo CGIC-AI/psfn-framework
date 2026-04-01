@@ -2,6 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { BeadsActionResult } from '../gateway/protocol.js';
 import type { BeadsOperations } from './ops.js';
+import type { LegacyAliasTelemetryCallback } from '../tools/legacy-alias-telemetry.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 
@@ -102,7 +103,11 @@ function normalizeBeadsAction(params: BeadsToolParams): BeadsAction {
   throw new Error(`action is required. Supported actions: ${BEADS_ACTION_HELP}`);
 }
 
-export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
+interface BeadsToolOptions {
+  emitLegacyAliasTelemetry?: LegacyAliasTelemetryCallback;
+}
+
+export function createBeadsTool(ops: BeadsOperations, options: BeadsToolOptions = {}): AgentTool<any> {
   return {
     name: 'beads',
     label: 'beads',
@@ -170,9 +175,18 @@ export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
       _toolCallId: string,
       params: BeadsToolParams = {},
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      let actionForError = typeof params.action === 'string' ? params.action : undefined;
+      const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+      let actionForError = rawAction || undefined;
       try {
         actionForError = normalizeBeadsAction(params);
+        if (rawAction && rawAction !== actionForError) {
+          options.emitLegacyAliasTelemetry?.({
+            toolName: 'beads',
+            alias: rawAction,
+            canonicalAction: actionForError,
+            migrationSurface: 'beads',
+          });
+        }
         const result = await (async (): Promise<BeadsActionResult> => {
           switch (actionForError) {
             case 'ready':

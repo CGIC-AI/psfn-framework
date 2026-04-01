@@ -58,6 +58,7 @@ export class AdminServerTelemetryTransport {
       'broadcast.approval.required',
       'broadcast.provenance',
       'external.telemetry.ingested',
+      'agent.tools.legacy_alias',
       'agent.tools.adaptive.decision',
       'agent.tools.adaptive.snapshot',
       'wyoming.session.start',

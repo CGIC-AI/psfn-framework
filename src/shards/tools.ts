@@ -6,6 +6,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ArtifactReturnPort, ShardExecutionPort } from './port.js';
 import { shardArtifactReturnPort } from './artifact-policy.js';
 import { getRequestContext } from '../llm/request-context.js';
+import type { LegacyAliasTelemetryCallback } from '../tools/legacy-alias-telemetry.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
 import type { ShardRuntimeTaskView } from './types.js';
@@ -106,6 +107,7 @@ function formatShardStatus(
 export function createShardTool(
   shardPort: ShardExecutionPort,
   artifactReturnPort: ArtifactReturnPort = shardArtifactReturnPort,
+  options: { emitLegacyAliasTelemetry?: LegacyAliasTelemetryCallback } = {},
 ): AgentTool<any> {
   return {
     name: 'shard',
@@ -181,9 +183,18 @@ export function createShardTool(
       params: ShardToolParams = {},
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      let actionForError = typeof params.action === 'string' ? params.action : undefined;
+      const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+      let actionForError = rawAction || undefined;
       try {
         actionForError = normalizeShardAction(params);
+        if (rawAction && rawAction !== actionForError) {
+          options.emitLegacyAliasTelemetry?.({
+            toolName: 'shard',
+            alias: rawAction,
+            canonicalAction: actionForError,
+            migrationSurface: 'shard',
+          });
+        }
         switch (actionForError) {
           case 'spawn': {
             const requestContext = getRequestContext();

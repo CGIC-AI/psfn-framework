@@ -1425,6 +1425,33 @@ describe('createShardTool', () => {
     expect(text).toContain('tool output');
   });
 
+  it('emits legacy alias telemetry for shard spawn aliases', async () => {
+    const emitLegacyAliasTelemetry = vi.fn();
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+
+    const tool = createShardTool(manager, undefined, { emitLegacyAliasTelemetry });
+    await tool.execute('call-spawn-alias', {
+      action: 'spawn_shard',
+      name: 'legacy-shard',
+      task: 'do a thing',
+    });
+
+    expect(emitLegacyAliasTelemetry).toHaveBeenCalledWith({
+      toolName: 'shard',
+      alias: 'spawn_shard',
+      canonicalAction: 'spawn',
+      migrationSurface: 'shard',
+    });
+  });
+
   it('routes shard results through the artifact return port boundary', async () => {
     const artifactReturnPort = {
       portFamily: 'artifact' as const,

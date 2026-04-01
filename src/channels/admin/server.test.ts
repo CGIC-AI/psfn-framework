@@ -633,6 +633,42 @@ describe('AdminServer Garden routing', () => {
       ws.close();
     });
 
+    it('streams legacy alias telemetry over /api/admin/events', async () => {
+      const ws = await openWebSocket(harness.port, '/api/admin/events', bearerHeaders);
+      const messagePromise = readWebSocketMessage<{
+        type: string;
+        data: {
+          alias: string;
+          canonicalAction: string;
+          toolName: string;
+          migrationSurface: string;
+        };
+      }>(ws);
+
+      await harness.eventBus.emit('agent.tools.legacy_alias', {
+        timestamp: Date.now(),
+        toolName: 'vault',
+        alias: 'vault_read',
+        canonicalAction: 'read',
+        migrationSurface: 'vault',
+        channelId: 'test-channel',
+        requestId: 'legacy-alias-1',
+        turnId: 'legacy-alias-1',
+        callType: 'tool',
+        purpose: 'agent.tools.legacy_alias',
+      });
+
+      const telemetry = await messagePromise;
+      expect(telemetry.type).toBe('agent.tools.legacy_alias');
+      expect(telemetry.data).toEqual(expect.objectContaining({
+        toolName: 'vault',
+        alias: 'vault_read',
+        canonicalAction: 'read',
+        migrationSurface: 'vault',
+      }));
+      ws.close();
+    });
+
     it('streams sanitized turn observability telemetry over /api/admin/events', async () => {
       const ws = await openWebSocket(harness.port, '/api/admin/events', bearerHeaders);
       const turnId = 'turn-live-1';

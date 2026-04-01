@@ -1,7 +1,9 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { EventBus } from '../event-bus.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../agent/tool-wiring-validator.js';
 import type { BeadsOperations } from './ops.js';
+import { createLegacyAliasTelemetryEmitter } from '../tools/legacy-alias-telemetry.js';
 import { createBeadsTool } from './tools.js';
 
 export interface BeadsRuntimeTarget {
@@ -24,6 +26,7 @@ function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTo
 }
 
 export interface RegisterBeadsToolsOptions {
+  eventBus?: EventBus;
   gatewayMode?: boolean;
 }
 
@@ -32,7 +35,9 @@ export function registerBeadsTools(
   ops: BeadsOperations,
   options?: RegisterBeadsToolsOptions,
 ): void {
-  const tool: AgentTool<any> = createBeadsTool(ops);
+  const tool: AgentTool<any> = createBeadsTool(ops, {
+    emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(options?.eventBus),
+  });
   if (options?.gatewayMode) {
     attachWiringMeta(tool, { requiredGatewayMethods: [...BEADS_TOOL_GATEWAY_METHODS] });
   }

@@ -104,6 +104,19 @@ describe('createSystemTool', () => {
     expect(payload.keys).toContain('primaryModel');
   });
 
+  it('emits legacy alias telemetry for settings_get', async () => {
+    const emitLegacyAliasTelemetry = vi.fn();
+    const tool = createSystemTool(makeConfig(), { emitLegacyAliasTelemetry });
+    await tool.execute('call-read-legacy', { action: 'settings_get', list: true });
+
+    expect(emitLegacyAliasTelemetry).toHaveBeenCalledWith({
+      toolName: 'system',
+      alias: 'settings_get',
+      canonicalAction: 'read',
+      migrationSurface: 'system',
+    });
+  });
+
   it('sends pre-restart notification for action=restart', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;

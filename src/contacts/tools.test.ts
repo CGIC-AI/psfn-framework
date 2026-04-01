@@ -3,6 +3,7 @@ import Database from 'better-sqlite3';
 import { ContactStore } from './store.js';
 import {
   createContactTool,
+  createContactToolWithOptions,
   createContactLinkIdentityTool,
   createContactSetTrustTool,
   createContactNoteTool,
@@ -117,7 +118,8 @@ describe('contact tools', () => {
 
     it('accepts legacy action aliases inside the unified tool', async () => {
       const contact = store.upsert({ displayName: 'Alias User', notes: 'Alias works' });
-      const tool = createContactTool(store);
+      const emitLegacyAliasTelemetry = vi.fn();
+      const tool = createContactToolWithOptions(store, { emitLegacyAliasTelemetry });
 
       const result = await tool.execute('contact-legacy-alias', {
         action: 'contact_lookup',
@@ -126,6 +128,12 @@ describe('contact tools', () => {
 
       expect(resultText(result)).toContain(`Canonical ID: ${contact.id}`);
       expect(resultText(result)).toContain('Alias works');
+      expect(emitLegacyAliasTelemetry).toHaveBeenCalledWith({
+        toolName: 'contact',
+        alias: 'contact_lookup',
+        canonicalAction: 'lookup',
+        migrationSurface: 'contact',
+      });
     });
 
     it('fails closed when mutation-shaped params are supplied without an action', async () => {

@@ -25,7 +25,8 @@ describe('createBeadsTool', () => {
 
   it('accepts legacy issue_* aliases and preserves dispatch', async () => {
     const ops = createMockOps();
-    const tool = createBeadsTool(ops);
+    const emitLegacyAliasTelemetry = vi.fn();
+    const tool = createBeadsTool(ops, { emitLegacyAliasTelemetry });
 
     await tool.execute('call-2', { action: 'issue_show', id: 'PSFN-9' });
     await tool.execute('call-3', { action: 'issue_create', title: 'Refactor beads surface' });
@@ -50,6 +51,18 @@ describe('createBeadsTool', () => {
     });
     expect(ops.close).toHaveBeenCalledWith({ id: 'PSFN-9', reason: 'done', actor: undefined });
     expect(ops.sync).toHaveBeenCalledWith({ actor: 'agent-main' });
+    expect(emitLegacyAliasTelemetry).toHaveBeenNthCalledWith(1, {
+      toolName: 'beads',
+      alias: 'issue_show',
+      canonicalAction: 'show',
+      migrationSurface: 'beads',
+    });
+    expect(emitLegacyAliasTelemetry).toHaveBeenNthCalledWith(5, {
+      toolName: 'beads',
+      alias: 'issue_sync',
+      canonicalAction: 'sync',
+      migrationSurface: 'beads',
+    });
   });
 
   it('infers create, update, close, and show from unambiguous params', async () => {

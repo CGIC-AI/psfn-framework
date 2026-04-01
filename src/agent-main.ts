@@ -556,9 +556,10 @@ async function main(): Promise<void> {
   });
   let memoryWriter!: MemoryWriter;
   wireSettingsRuntime(agentLoop, config, {
+    eventBus,
     getMemoryWriter: () => memoryWriter,
   });
-  wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir, gateway);
+  wireSessionToolsRuntime(agentLoop, sessionManager, companionDataDir, gateway, eventBus);
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,
     sessionManager,
@@ -577,6 +578,7 @@ async function main(): Promise<void> {
     db,
     primaryUserId,
     {
+      eventBus,
       exportDir: resolveContactsDir(companionDataDir),
       ...(primaryTelegramUserId
         ? {
@@ -750,7 +752,7 @@ async function main(): Promise<void> {
   log.info('Git self-modification tools enabled');
 
   // Beads issue-management tools — policy-scoped gateway RPC access (no shell passthrough)
-  registerBeadsTools(agentLoop, new GatewayBeadsOps(gateway), { gatewayMode: true });
+  registerBeadsTools(agentLoop, new GatewayBeadsOps(gateway), { gatewayMode: true, eventBus });
   log.info('Beads issue-management tools enabled');
 
   // Vault tools — Obsidian note read/write via gateway shell.exec
@@ -762,7 +764,7 @@ async function main(): Promise<void> {
       cliPath: config.obsidianCliPath,
       timeoutMs: config.obsidianTimeoutMs,
     });
-    registerVaultTools(agentLoop, vaultOps, { gatewayMode: true });
+    registerVaultTools(agentLoop, vaultOps, { gatewayMode: true, eventBus });
     log.info('Obsidian vault tools enabled', { vault: config.obsidianVaultName });
   }
 

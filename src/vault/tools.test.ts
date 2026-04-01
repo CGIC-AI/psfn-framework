@@ -35,10 +35,17 @@ describe('vault tool', () => {
   it('accepts legacy vault_read action aliases', async () => {
     const ops = createMockOps();
     ops.read.mockResolvedValue({ name: 'Legacy', content: 'hello' });
-    const tool = createVaultTool(ops);
+    const emitLegacyAliasTelemetry = vi.fn();
+    const tool = createVaultTool(ops, { emitLegacyAliasTelemetry });
 
     await tool.execute('call-1', { action: 'vault_read', name: 'Legacy' });
     expect(ops.read).toHaveBeenCalledWith('Legacy');
+    expect(emitLegacyAliasTelemetry).toHaveBeenCalledWith({
+      toolName: 'vault',
+      alias: 'vault_read',
+      canonicalAction: 'read',
+      migrationSurface: 'vault',
+    });
   });
 
   it('truncates long read content', async () => {

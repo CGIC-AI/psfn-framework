@@ -51,6 +51,7 @@ import {
 } from './ntfy-notifier.js';
 import { executeQueuedAction, resolveCompanionReason } from './confirmation-actions.js';
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
+import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS = 90_000;
@@ -106,6 +107,7 @@ export interface GatewayServerOptions {
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
   wyomingShardRouting?: WyomingShardRoutingConfig;
+  companionId?: string;
 }
 
 export class GatewayServer {
@@ -120,6 +122,7 @@ export class GatewayServer {
   private readonly confirmationConfig: GatewayConfirmationConfig;
   private readonly capabilityTierProvider: () => CapabilityTier;
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
+  private readonly companionId: string;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
 
@@ -140,6 +143,7 @@ export class GatewayServer {
     });
     this.capabilityTierProvider = options.capabilityTierProvider ?? (() => 'nursery');
     this.wyomingShardRouting = options.wyomingShardRouting ?? parseWyomingShardRoutingConfigEnv(process.env);
+    this.companionId = options.companionId?.trim() || DEFAULT_COMPANION_ID;
     this.ntfyNotifier = new GatewayNtfyNotifier(options.ntfy);
     this.runtimeHealthTracker = new GatewayRuntimeHealthTracker({
       ntfyConfigured: Boolean(options.ntfy),
@@ -453,6 +457,7 @@ export class GatewayServer {
       message,
       options,
       wyomingShardRouting: this.wyomingShardRouting,
+      companionId: this.companionId,
       nextRequestCounter: () => ++this.streamRequestCounter,
     });
   }

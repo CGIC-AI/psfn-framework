@@ -17,6 +17,10 @@ function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
     content: 'hello from wyoming',
     timestamp: new Date('2026-03-02T00:00:00.000Z'),
     routing: {
+      gateway: {
+        schemaVersion: 1,
+        companionId: 'companion',
+      },
       wyoming: {
         connectionId: 'conn-1',
         sessionId: 'session-1',
@@ -51,6 +55,10 @@ function createHarness(overrides?: {
   delegateWyomingSession?: (request: {
     message: SubstrateMessage;
     routing?: WyomingRoutingMetadata;
+    gatewayRouting?: {
+      schemaVersion: 1;
+      companionId: string;
+    };
   }) => Promise<{
     shardId: string;
     content: string;
@@ -58,6 +66,22 @@ function createHarness(overrides?: {
     inputTokens: number;
     outputTokens: number;
     durationMs: number;
+    lineage: {
+      coreCompanionId: string;
+      shardCompanionId: string;
+      shardId: string;
+      parentShardId?: string;
+    };
+    gatewayRouting: {
+      schemaVersion: 1;
+      companionId: string;
+      shard: {
+        coreCompanionId: string;
+        shardCompanionId: string;
+        shardId: string;
+        parentShardId?: string;
+      };
+    };
   }>;
   handleMessage?: (message: SubstrateMessage) => Promise<AgentResponse>;
 }) {
@@ -91,6 +115,20 @@ function createHarness(overrides?: {
         inputTokens: 3,
         outputTokens: 7,
         durationMs: 42,
+        lineage: {
+          coreCompanionId: 'companion',
+          shardCompanionId: 'companion/shards/wyoming-shard-1',
+          shardId: 'wyoming-shard-1',
+        },
+        gatewayRouting: {
+          schemaVersion: 1,
+          companionId: 'companion',
+          shard: {
+            coreCompanionId: 'companion',
+            shardCompanionId: 'companion/shards/wyoming-shard-1',
+            shardId: 'wyoming-shard-1',
+          },
+        },
       })),
     ),
   };
@@ -144,6 +182,7 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.shardManager.delegateWyomingSession).toHaveBeenCalledWith({
       message,
       routing: message.routing?.wyoming,
+      gatewayRouting: message.routing?.gateway,
     });
     expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
     expect(response).toEqual({
@@ -171,6 +210,9 @@ describe('registerGatewayMessageHandlers', () => {
       channelId: message.channelId,
       messageId: message.id,
       shardId: 'wyoming-shard-1',
+      companionId: 'companion',
+      shardCompanionId: 'companion/shards/wyoming-shard-1',
+      parentShardId: undefined,
       connectionId: 'conn-1',
       sessionId: 'session-1',
       turnId: 'turn-1',

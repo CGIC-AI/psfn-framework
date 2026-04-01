@@ -1,4 +1,5 @@
 import type { SessionEntry } from '../session/types.js';
+import type { GatewayRoutingEnvelope, ShardLineage } from '../routing/envelope.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
@@ -38,6 +39,7 @@ export interface ShardConfig {
   requiredCapabilities?: string[]; // Required capability tokens to route this workload
   heartbeatStaleAfterMs?: number;  // Optional override for stale heartbeat threshold
   heartbeatDisconnectAfterMs?: number; // Optional override for stale-eviction timeout
+  gatewayRouting?: GatewayRoutingEnvelope;
 }
 
 export interface ShardResult {
@@ -55,6 +57,8 @@ export interface ShardResult {
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
+  lineage: ShardLineage;
+  gatewayRouting: GatewayRoutingEnvelope;
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';

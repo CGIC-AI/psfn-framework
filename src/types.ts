@@ -6,6 +6,7 @@ import type { CapabilityTier } from './capabilities/tier-types.js';
 import type { ModelContextBudgetConfig } from './context-budget-contracts.js';
 import type { ContextManifest } from './session/context-manifest.js';
 import type { TurnID } from './turns/types.js';
+import type { GatewayRoutingEnvelope } from './routing/envelope.js';
 import type { StreamingSttProvider } from './voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from './voice/connectors/tts/index.js';
 import type { ChannelVisibility, TrustLevel } from './trust/types.js';
@@ -19,6 +20,12 @@ import { parseOptionalStringEnv } from './utils/env.js';
 export const CHANNEL_TYPES = ['discord', 'terminal', 'api', 'telegram', 'psfn-amica'] as const;
 export type ChannelType = typeof CHANNEL_TYPES[number];
 export type { TurnID } from './turns/types.js';
+export type {
+  CompanionId,
+  GatewayRoutingEnvelope,
+  GatewaySubagentAddress,
+  ShardLineage,
+} from './routing/envelope.js';
 
 export interface TurnRecordMessage {
   role: 'user' | 'assistant' | 'system';
@@ -168,6 +175,7 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
 
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'unknown';
+  gateway?: GatewayRoutingEnvelope;
   wyoming?: WyomingRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelVisibility;

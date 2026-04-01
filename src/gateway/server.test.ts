@@ -681,7 +681,12 @@ describe('GatewayServer', () => {
 
       await server.requestAgentVoiceStream(makeWyomingVoiceMessage('hello from hallway'));
 
+      const gateway = (routedMessage?.routing as Record<string, unknown> | undefined)?.gateway as Record<string, unknown>;
       const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
+      expect(gateway).toEqual({
+        schemaVersion: 1,
+        companionId: 'companion',
+      });
       expect(routing).toMatchObject({
         connectionId: 'conn-hallway',
         siteId: 'ha-main',
@@ -752,7 +757,12 @@ describe('GatewayServer', () => {
 
       await server.requestAgentVoiceStream(makeWyomingVoiceMessage('route to shard'));
 
+      const gateway = (routedMessage?.routing as Record<string, unknown> | undefined)?.gateway as Record<string, unknown>;
       const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
+      expect(gateway).toEqual({
+        schemaVersion: 1,
+        companionId: 'companion',
+      });
       expect(routing.shardDelegation).toEqual({
         eligible: true,
         reason: 'eligible',

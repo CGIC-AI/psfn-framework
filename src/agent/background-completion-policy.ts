@@ -1,3 +1,5 @@
+import { DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX } from './deferred-tool-handoff.js';
+
 export type BackgroundCompletionNotificationReason =
   | 'notify_deferred_user_task'
   | 'suppress_empty_response'
@@ -39,6 +41,9 @@ export interface BackgroundCompletionPolicyDecision {
   context: BackgroundCompletionPolicyContext;
 }
 
+// This policy is intentionally scoped to deferred continuation completions that came from an
+// explicit user-delegated tool handoff. Arbitrary background watchers have different restart,
+// dedupe, and notification semantics and must not silently reuse this lane.
 const USER_FACING_TASK_KINDS = new Set<string>([
   'deferred_tool_handoff',
 ]);
@@ -49,7 +54,6 @@ const LOW_URGENCY_TASK_KINDS = new Set<string>([
   'maintenance',
 ]);
 const HIGH_URGENCY_TOKENS = ['urgent', 'critical', 'failed', 'error'];
-const USER_DELEGATED_SOURCE_PREFIX = 'deferred-tool-handoff:';
 const STALE_COMPLETION_MAX_AGE_MS = 15 * 60 * 1000;
 
 function normalizeToken(value: string | null | undefined): string | null {
@@ -88,7 +92,7 @@ function resolveOrigin(
     return 'internal';
   }
   const sourceMessageId = normalizeToken(input.sourceMessageId);
-  if (sourceMessageId?.startsWith(USER_DELEGATED_SOURCE_PREFIX)) {
+  if (sourceMessageId?.startsWith(DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX)) {
     return 'user_delegated';
   }
   return 'unknown';

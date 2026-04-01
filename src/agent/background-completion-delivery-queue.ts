@@ -12,6 +12,8 @@ export interface BackgroundCompletionDeliveryQueueCancelResult {
   queueDepth: number;
 }
 
+// This queue is for one-shot deferred continuation completions that can be delivered after the
+// next foreground turn for the same session. It is not a general background watcher registry.
 export class BackgroundCompletionDeliveryQueue<
   TEntry extends BackgroundCompletionDeliveryQueueEntry,
 > {

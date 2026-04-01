@@ -58,7 +58,7 @@ export interface ResolvedAuthorContext {
   continuityFallbackKeys: string[];
 }
 
-const SELF_IMAGE_TOOL_NAMES = ['image_create', 'image_edit', 'image_analyze'] as const;
+const SELF_MEDIA_TOOL_NAMES = ['media'] as const;
 
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
@@ -154,8 +154,8 @@ export function buildRuntimeContext(input: {
     ).trim();
   };
 
-  const hasActiveSelfImageTool = (): boolean => {
-    for (const toolName of SELF_IMAGE_TOOL_NAMES) {
+  const hasActiveSelfMediaTool = (): boolean => {
+    for (const toolName of SELF_MEDIA_TOOL_NAMES) {
       if (input.promotedExtendedToolNames.has(toolName)) {
         return true;
       }
@@ -215,20 +215,20 @@ export function buildRuntimeContext(input: {
   const isScheduledTask = input.taskKind === 'heartbeat'
     || input.taskKind === 'reflection'
     || input.message.channelId.startsWith('internal:');
-  const shouldIncludeAppearanceContext = isScheduledTask || hasActiveSelfImageTool();
+  const shouldIncludeAppearanceContext = isScheduledTask || hasActiveSelfMediaTool();
   if (shouldIncludeAppearanceContext) {
     const appearance = resolveAppearanceContext();
     if (appearance.length > 0) lines.push(`Appearance context: ${appearance}`);
   }
 
-  if (hasActiveSelfImageTool()) {
-    lines.push('[Self-Image Tool Guidance]');
-    lines.push('Use image_create for a brand new selfie, portrait, or scene featuring you.');
-    lines.push('Use image_edit when modifying an existing image while keeping your identity consistent.');
-    lines.push('Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.');
-    lines.push('If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.');
-    lines.push('Write the prompt as the full desired shot, then combine your Appearance context with pose, framing, lighting, background, mood, and style details.');
-    lines.push('Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.');
+  if (hasActiveSelfMediaTool()) {
+    lines.push('[Self-Media Tool Guidance]');
+    lines.push('Use media action="generate" for a brand new selfie, portrait, or scene featuring you.');
+    lines.push('Use media action="edit" when modifying an existing image while keeping your identity consistent.');
+    lines.push('Use media action="analyze" to inspect generated images or explicit remote image URLs so you can see what is actually there.');
+    lines.push('If the current user message already includes an attached image, inspect that attachment directly instead of calling media action="analyze" for it.');
+    lines.push('Load relevant creator skills with skill_view(name) when you need detailed composition, prompt craft, appearance continuity cues, or current provider/model quirks.');
+    lines.push('Generate and edit actions already return a vision review, so do not ask the user to go check basic appearance consistency unless you need their subjective preference.');
   }
 
   if (extendedCount > 0) {

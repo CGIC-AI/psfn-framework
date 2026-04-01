@@ -4,14 +4,14 @@ import type { ToolWiringMeta, WirableTool } from '../agent/tool-wiring-validator
 import type { SubstrateConfig } from '../types.js';
 import type { ImageOperations } from './ops.js';
 import { ImageService } from './service.js';
-import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool } from './tools.js';
+import { createMediaTool } from './tools.js';
 import {
   DefaultImageVisionReviewer,
   type ImageVisionReviewerOptions,
 } from './vision-reviewer.js';
 import type { ImageVisionReviewer } from './types.js';
 
-export interface ImagesRuntimeTarget {
+export interface MediaRuntimeTarget {
   registerTool: ToolRegistrar;
 }
 
@@ -21,67 +21,42 @@ function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTo
   return wirable;
 }
 
-function resolveRequiredGatewayMethods(
-  toolName: string,
-  includeVisionReview: boolean,
-): string[] {
-  switch (toolName) {
-    case 'image_create':
-      return includeVisionReview
-        ? ['image.create', 'web.fetch_binary']
-        : ['image.create'];
-    case 'image_edit':
-      return includeVisionReview
-        ? ['image.edit', 'web.fetch_binary']
-        : ['image.edit'];
-    case 'image_analyze':
-      return ['web.fetch_binary'];
-    default:
-      return [];
-  }
+function resolveRequiredGatewayMethods(): string[] {
+  return ['image.create', 'image.edit', 'web.fetch_binary'];
 }
 
-export interface RegisterImagesToolsOptions {
+export interface RegisterMediaToolOptions {
   gatewayMode?: boolean;
   reviewer?: ImageVisionReviewer;
 }
 
-export function registerImageTools(
-  target: ImagesRuntimeTarget,
+export function registerMediaTool(
+  target: MediaRuntimeTarget,
   ops: ImageOperations,
-  options?: RegisterImagesToolsOptions,
+  options?: RegisterMediaToolOptions,
 ): void {
-  const tools: AgentTool<any>[] = [
-    createImageCreateTool(ops, options?.reviewer),
-    createImageEditTool(ops, options?.reviewer),
-    ...(options?.reviewer ? [createImageAnalyzeTool(options.reviewer)] : []),
-  ];
+  const tool = createMediaTool(ops, options?.reviewer);
 
-  for (const tool of tools) {
-    if (options?.gatewayMode) {
-      attachWiringMeta(tool, {
-        requiredGatewayMethods: resolveRequiredGatewayMethods(
-          tool.name,
-          options.reviewer !== undefined,
-        ),
-      });
-    }
-    target.registerTool(tool, 'extended');
+  if (options?.gatewayMode) {
+    attachWiringMeta(tool, {
+      requiredGatewayMethods: resolveRequiredGatewayMethods(),
+    });
   }
+  target.registerTool(tool, 'extended');
 }
 
-export interface WireImageRuntimeOptions {
+export interface WireMediaRuntimeOptions {
   reviewer?: ImageVisionReviewer;
   reviewerOptions?: ImageVisionReviewerOptions;
 }
 
-export function wireImageRuntime(
-  target: ImagesRuntimeTarget,
+export function wireMediaRuntime(
+  target: MediaRuntimeTarget,
   config: SubstrateConfig,
-  options?: WireImageRuntimeOptions,
+  options?: WireMediaRuntimeOptions,
 ): ImageService {
   const service = new ImageService(config);
   const reviewer = options?.reviewer ?? new DefaultImageVisionReviewer(config, options?.reviewerOptions);
-  registerImageTools(target, service, { reviewer });
+  registerMediaTool(target, service, { reviewer });
   return service;
 }

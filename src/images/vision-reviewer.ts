@@ -166,7 +166,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       .filter((value) => value.length > 0)
       .slice(0, VISION_IMAGE_MAX_COUNT);
     if (imageUrls.length === 0) {
-      throw new Error('image_analyze requires at least one image URL');
+      throw new Error('media action "analyze" requires at least one image URL');
     }
 
     const model = resolveModel(this.config, 'vision');

@@ -8,11 +8,11 @@ import { resolveGeneratedImagesDir } from '../persistence/layout.js';
 import type {
   ImageGenerationResult,
   ImageResultAsset,
-  ImageToolResultDetails,
+  MediaToolResultDetails,
 } from './types.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
-const IMAGE_TOOL_NAMES = new Set(['image_create', 'image_edit']);
+const MEDIA_TOOL_NAMES = new Set(['media']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -102,7 +102,8 @@ function resolveImageResultFromDetails(details: unknown): ImageGenerationResult 
   if (!isRecord(details)) {
     return null;
   }
-  return normalizeImageGenerationResult((details as ImageToolResultDetails).imageResult);
+  const resultDetails = details as MediaToolResultDetails;
+  return normalizeImageGenerationResult(resultDetails.mediaResult);
 }
 
 function inferExtension(url: string, contentType: string | undefined): string {
@@ -202,7 +203,7 @@ export async function collectGeneratedImageAttachments(params: {
       isError?: boolean;
       content: unknown;
     } => isToolResultMessage(message))
-    .filter((message) => IMAGE_TOOL_NAMES.has(message.toolName))
+    .filter((message) => MEDIA_TOOL_NAMES.has(message.toolName))
     .filter((message) => message.isError !== true)
     .map((message) => (
       resolveImageResultFromDetails(message.details)

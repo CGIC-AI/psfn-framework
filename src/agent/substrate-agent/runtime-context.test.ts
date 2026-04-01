@@ -161,7 +161,7 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('Channel: api:admin-broadcast (type: api, visibility: broadcast)');
   });
 
-  it('exposes appearance context on ordinary turns when image tools are active', () => {
+  it('exposes appearance context on ordinary turns when the media tool is active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -201,15 +201,15 @@ describe('runtime subject identity', () => {
       activeToolCounts: {
         core: 0,
         promoted: 0,
-        extendedLoaded: 2,
-        autoload: 2,
+        extendedLoaded: 1,
+        autoload: 1,
         deferred: 0,
-        total: 2,
+        total: 1,
       },
       extendedTools: [],
       loadedExtended: new Map([
-        ['image_create', {
-          toolName: 'image_create',
+        ['media', {
+          toolName: 'media',
           source: 'autoload',
           activatedAt: 1,
           lastActivatedAt: 1,
@@ -221,8 +221,9 @@ describe('runtime subject identity', () => {
     });
 
     expect(runtimeContext).toContain('Appearance context: Silver eyes and a weathered jacket.');
-    expect(runtimeContext).toContain('[Self-Image Tool Guidance]');
-    expect(runtimeContext).toContain('Use image_create for a brand new selfie, portrait, or scene featuring you.');
+    expect(runtimeContext).toContain('[Self-Media Tool Guidance]');
+    expect(runtimeContext).toContain('Use media action="generate" for a brand new selfie, portrait, or scene featuring you.');
+    expect(runtimeContext).toContain('Load relevant creator skills with skill_view(name) when you need detailed composition, prompt craft, appearance continuity cues, or current provider/model quirks.');
   });
 
   it('surfaces attention counts for pending whispers and active concerns', () => {

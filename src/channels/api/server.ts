@@ -120,6 +120,20 @@ class RequestLifecycleError extends Error {
   }
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 const telemetryIngestSchema = Type.Object({
   source: Type.String({ minLength: 1, maxLength: 128 }),
   eventType: Type.String({ minLength: 1, maxLength: 128 }),
@@ -133,15 +147,28 @@ const telemetryIngestSchema = Type.Object({
 type TelemetryIngestInput = Static<typeof telemetryIngestSchema>;
 type AgentTurnResult = Awaited<ReturnType<SubstrateAgent['handleMessage']>>;
 
-interface PendingTurn {
+interface TurnRequest {
   channelId: string;
-  releaseChannel: () => void;
   substrateMsg: SubstrateMessage;
+}
+
+interface PendingTurn extends TurnRequest {
+  releaseChannel: () => void;
 }
 
 interface PreparedTurn {
   channelId: string;
   turnPromise: Promise<AgentTurnResult>;
+}
+
+interface QueuedApiTurn extends TurnRequest {
+  enqueuedAtMs: number;
+  startedAtMs: number | null;
+  started: boolean;
+  cancelled: boolean;
+  released: boolean;
+  startDeferred: ReturnType<typeof createDeferred<void>>;
+  turnDeferred: ReturnType<typeof createDeferred<AgentTurnResult>>;
 }
 
 interface TurnRoutingOverrides {
@@ -226,6 +253,7 @@ export class ApiServer implements ChannelAdapter {
   private seenTelemetryNonces = new Map<string, number>();
   private channelTurnLock = new FifoChannelLock();
   private processingChannels = new Set<string>();
+  private queuedTurnsByChannel = new Map<string, QueuedApiTurn[]>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHeartbeatStaleAfterMs: number;
@@ -397,17 +425,6 @@ export class ApiServer implements ChannelAdapter {
     return true;
   }
 
-  private attachTurnCleanup(
-    releaseChannel: () => void,
-    turnPromise: Promise<unknown>,
-  ): void {
-    turnPromise
-      .catch((err) => { log.debug('Turn promise rejected during cleanup', { error: String(err) }); })
-      .finally(() => {
-        releaseChannel();
-      });
-  }
-
   private emitQueueTelemetry(
     channelId: string,
     phase: 'acquired' | 'contended' | 'released',
@@ -512,6 +529,128 @@ export class ApiServer implements ChannelAdapter {
         waitMs: Math.max(0, Date.now() - lockStartMs),
       });
     };
+  }
+
+  private queuedTurnDepth(channelId: string): number {
+    return this.queuedTurnsByChannel.get(channelId)?.length ?? 0;
+  }
+
+  private hasPendingApiTurn(channelId: string): boolean {
+    return this.processingChannels.has(channelId) || this.queuedTurnDepth(channelId) > 0;
+  }
+
+  private createQueuedTurn(turn: TurnRequest): QueuedApiTurn {
+    return {
+      ...turn,
+      enqueuedAtMs: Date.now(),
+      startedAtMs: null,
+      started: false,
+      cancelled: false,
+      released: false,
+      startDeferred: createDeferred<void>(),
+      turnDeferred: createDeferred<AgentTurnResult>(),
+    };
+  }
+
+  private enqueueQueuedTurn(turn: TurnRequest): QueuedApiTurn {
+    const queue = this.queuedTurnsByChannel.get(turn.channelId) ?? [];
+    const queuedTurn = this.createQueuedTurn(turn);
+    queue.push(queuedTurn);
+    this.queuedTurnsByChannel.set(turn.channelId, queue);
+    this.emitQueueTelemetry(turn.channelId, 'contended', {
+      queueDepth: queue.length,
+      waitMs: 0,
+      reason: 'active_turn',
+    });
+    this.maybeStartQueuedTurn(turn.channelId);
+    return queuedTurn;
+  }
+
+  private cancelQueuedTurn(queuedTurn: QueuedApiTurn): void {
+    if (queuedTurn.started) return;
+    queuedTurn.cancelled = true;
+    this.maybeStartQueuedTurn(queuedTurn.channelId);
+  }
+
+  private observeQueuedTurnCompletion(
+    queuedTurn: QueuedApiTurn,
+  ): (action: () => void) => void {
+    let settled = false;
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      unsubscribeEnd();
+      unsubscribeError();
+      action();
+    };
+
+    const unsubscribeEnd = this.eventBus.on('agent.turn.end', ({ message, response }) => {
+      if (message.id !== queuedTurn.substrateMsg.id) return;
+      settle(() => {
+        queuedTurn.turnDeferred.resolve(response);
+      });
+    });
+    const unsubscribeError = this.eventBus.on('agent.error', ({ message, error }) => {
+      if (message.id !== queuedTurn.substrateMsg.id) return;
+      settle(() => {
+        queuedTurn.turnDeferred.reject(error);
+      });
+    });
+
+    void queuedTurn.turnDeferred.promise.catch(() => undefined);
+    return settle;
+  }
+
+  private async releaseQueuedTurn(queuedTurn: QueuedApiTurn): Promise<void> {
+    if (queuedTurn.released) return;
+    queuedTurn.released = true;
+    await queuedTurn.turnDeferred.promise.catch(() => undefined);
+    this.processingChannels.delete(queuedTurn.channelId);
+    this.emitQueueTelemetry(queuedTurn.channelId, 'released', {
+      queueDepth: this.queuedTurnDepth(queuedTurn.channelId),
+      waitMs: Math.max(0, Date.now() - (queuedTurn.startedAtMs ?? Date.now())),
+    });
+    this.maybeStartQueuedTurn(queuedTurn.channelId);
+  }
+
+  private maybeStartQueuedTurn(channelId: string): void {
+    if (this.processingChannels.has(channelId)) return;
+    const queue = this.queuedTurnsByChannel.get(channelId);
+    if (!queue || queue.length === 0) return;
+
+    while (queue.length > 0) {
+      const nextTurn = queue.shift();
+      if (!nextTurn) break;
+      if (nextTurn.cancelled) continue;
+
+      if (queue.length === 0) {
+        this.queuedTurnsByChannel.delete(channelId);
+      } else {
+        this.queuedTurnsByChannel.set(channelId, queue);
+      }
+
+      const startedAtMs = Date.now();
+      this.processingChannels.add(channelId);
+      this.emitQueueTelemetry(channelId, 'acquired', {
+        queueDepth: queue.length,
+        waitMs: Math.max(0, startedAtMs - nextTurn.enqueuedAtMs),
+      });
+      nextTurn.startedAtMs = startedAtMs;
+      const settle = this.observeQueuedTurnCompletion(nextTurn);
+      nextTurn.started = true;
+      nextTurn.startDeferred.resolve();
+
+      try {
+        this.agentLoop.followUp(nextTurn.substrateMsg);
+      } catch (error) {
+        settle(() => {
+          nextTurn.turnDeferred.reject(error);
+        });
+      }
+      return;
+    }
+
+    this.queuedTurnsByChannel.delete(channelId);
   }
 
   private isAgentBusyError(err: unknown): boolean {
@@ -1542,12 +1681,12 @@ export class ApiServer implements ChannelAdapter {
     }
   }
 
-  private async prepareTurn(
+  private async prepareTurnRequest(
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
     principal: ApiAuthPrincipal,
-  ): Promise<PendingTurn | null> {
+  ): Promise<TurnRequest | null> {
     const routingOverrides = this.parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {
       this.sendError(res, 400, 'invalid_request', routingOverrides.error);
@@ -1626,30 +1765,15 @@ export class ApiServer implements ChannelAdapter {
     });
     this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 
-    const releaseChannel = await this.acquireChannel(channelId, req, res);
-    if (!releaseChannel) return null;
-
-    return { channelId, releaseChannel, substrateMsg };
+    return { channelId, substrateMsg };
   }
 
   private beginPreparedTurn(turn: PendingTurn): PreparedTurn {
     const turnPromise = this.agentLoop.handleMessage(turn.substrateMsg);
-    this.attachTurnCleanup(turn.releaseChannel, turnPromise);
     return {
       channelId: turn.channelId,
       turnPromise,
     };
-  }
-
-  private async startTurn(
-    request: ChatCompletionRequest,
-    req: IncomingMessage,
-    res: ServerResponse,
-    principal: ApiAuthPrincipal,
-  ): Promise<PreparedTurn | null> {
-    const pending = await this.prepareTurn(request, req, res, principal);
-    if (!pending) return null;
-    return this.beginPreparedTurn(pending);
   }
 
   private handleNonStreamingTurnError(res: ServerResponse, err: unknown): void {
@@ -1734,8 +1858,51 @@ export class ApiServer implements ChannelAdapter {
     res: ServerResponse,
     principal: ApiAuthPrincipal,
   ): Promise<void> {
-    const turn = await this.startTurn(request, req, res, principal);
-    if (!turn) return;
+    const prepared = await this.prepareTurnRequest(request, req, res, principal);
+    if (!prepared) return;
+
+    if (this.hasPendingApiTurn(prepared.channelId)) {
+      const queuedTurn = this.enqueueQueuedTurn(prepared);
+      try {
+        await this.waitForQueueLeaseOrInterrupt(req, res, queuedTurn.startDeferred.promise);
+      } catch (err) {
+        this.cancelQueuedTurn(queuedTurn);
+        if (err instanceof RequestLifecycleError && err.reason === 'timeout' && this.canWriteResponse(res)) {
+          this.sendError(res, 504, 'request_timeout', 'Request timed out before turn started');
+        }
+        return;
+      }
+
+      try {
+        const agentResponse = await this.awaitTurnOrInterrupt(
+          queuedTurn.channelId,
+          req,
+          res,
+          queuedTurn.turnDeferred.promise,
+        );
+        if (!this.canWriteResponse(res)) return;
+
+        const response = buildChatCompletionResponse({
+          id: `chatcmpl-${randomUUID()}`,
+          created: Math.floor(Date.now() / 1000),
+          model: this.modelName,
+          content: agentResponse.content,
+          inputTokens: agentResponse.metadata.inputTokens,
+          outputTokens: agentResponse.metadata.outputTokens,
+        });
+
+        sendJson(res, 200, response);
+      } catch (err) {
+        this.handleNonStreamingTurnError(res, err);
+      } finally {
+        await this.releaseQueuedTurn(queuedTurn);
+      }
+      return;
+    }
+
+    const releaseChannel = await this.acquireChannel(prepared.channelId, req, res);
+    if (!releaseChannel) return;
+    const turn = this.beginPreparedTurn({ ...prepared, releaseChannel });
 
     try {
       const agentResponse = await this.awaitTurnOrInterrupt(
@@ -1758,6 +1925,10 @@ export class ApiServer implements ChannelAdapter {
       sendJson(res, 200, response);
     } catch (err) {
       this.handleNonStreamingTurnError(res, err);
+    } finally {
+      await turn.turnPromise.catch(() => undefined);
+      releaseChannel();
+      this.maybeStartQueuedTurn(turn.channelId);
     }
   }
 
@@ -1767,11 +1938,84 @@ export class ApiServer implements ChannelAdapter {
     res: ServerResponse,
     principal: ApiAuthPrincipal,
   ): Promise<void> {
-    const pendingTurn = await this.prepareTurn(request, req, res, principal);
-    if (!pendingTurn) return;
+    const prepared = await this.prepareTurnRequest(request, req, res, principal);
+    if (!prepared) return;
 
     const completionId = `chatcmpl-${randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
+
+    if (this.hasPendingApiTurn(prepared.channelId)) {
+      const queuedTurn = this.enqueueQueuedTurn(prepared);
+      const bufferedChunks: ChatCompletionChunk[] = [];
+      let headersWritten = false;
+      const unsubscribe = this.eventBus.on('agent.stream.delta', (data) => {
+        if (data.channelId !== queuedTurn.channelId || !queuedTurn.started) return;
+        const chunk = buildStreamingContentChunk({
+          completionId,
+          created,
+          model: this.modelName,
+        }, data.text);
+        if (headersWritten) {
+          this.writeStreamingChunk(res, chunk);
+        } else {
+          bufferedChunks.push(chunk);
+        }
+      });
+
+      try {
+        await this.waitForQueueLeaseOrInterrupt(req, res, queuedTurn.startDeferred.promise);
+      } catch (err) {
+        unsubscribe();
+        this.cancelQueuedTurn(queuedTurn);
+        if (err instanceof RequestLifecycleError && err.reason === 'timeout' && this.canWriteResponse(res)) {
+          this.sendError(res, 504, 'request_timeout', 'Request timed out before turn started');
+        }
+        return;
+      }
+
+      if (!this.canWriteResponse(res)) {
+        unsubscribe();
+        return;
+      }
+      res.writeHead(200, SSE_RESPONSE_HEADERS);
+      headersWritten = true;
+
+      const roleChunk = buildStreamingRoleChunk({
+        completionId,
+        created,
+        model: this.modelName,
+      });
+      this.writeStreamingChunk(res, roleChunk);
+      for (const chunk of bufferedChunks) {
+        this.writeStreamingChunk(res, chunk);
+      }
+
+      try {
+        await this.awaitTurnOrInterrupt(queuedTurn.channelId, req, res, queuedTurn.turnDeferred.promise);
+        if (!this.canWriteResponse(res)) return;
+
+        const finishChunk = buildStreamingFinishChunk({
+          completionId,
+          created,
+          model: this.modelName,
+        });
+        this.writeStreamingChunk(res, finishChunk);
+        this.writeStreamingDone(res);
+      } catch (err) {
+        this.handleStreamingTurnError(res, err, completionId, created);
+      } finally {
+        unsubscribe();
+        await this.releaseQueuedTurn(queuedTurn);
+        if (this.canWriteResponse(res)) {
+          res.end();
+        }
+      }
+      return;
+    }
+
+    const releaseChannel = await this.acquireChannel(prepared.channelId, req, res);
+    if (!releaseChannel) return;
+    const pendingTurn = { ...prepared, releaseChannel };
 
     // Set SSE headers
     res.writeHead(200, SSE_RESPONSE_HEADERS);
@@ -1812,6 +2056,9 @@ export class ApiServer implements ChannelAdapter {
       this.handleStreamingTurnError(res, err, completionId, created);
     } finally {
       unsubscribe();
+      await turn.turnPromise.catch(() => undefined);
+      releaseChannel();
+      this.maybeStartQueuedTurn(turn.channelId);
       if (this.canWriteResponse(res)) {
         res.end();
       }

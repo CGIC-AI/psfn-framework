@@ -230,6 +230,22 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function emitQueuedTurnResult(
+  eventBus: EventBus,
+  message: SubstrateMessage,
+  response: AgentResponse,
+  deltas: string[] = [],
+): void {
+  queueMicrotask(() => {
+    void (async () => {
+      for (const delta of deltas) {
+        await eventBus.emit('agent.stream.delta', { channelId: message.channelId, text: delta });
+      }
+      await eventBus.emit('agent.turn.end', { message, response });
+    })();
+  });
+}
+
 function toAuthSubprotocol(apiToken: string): string {
   const encoded = Buffer.from(apiToken, 'utf8')
     .toString('base64')
@@ -907,17 +923,17 @@ describe('ApiServer', () => {
       expect(body.error.type).toBe('invalid_json');
     });
 
-    it('queues same-session in-flight contention and runs requests in order', async () => {
+    it('queues same-session in-flight contention through follow-up delivery', async () => {
       const deferred = createDeferred<AgentResponse>();
       const mockAgent = {
-        handleMessage: vi
-          .fn()
-          .mockImplementationOnce(async () => deferred.promise)
-          .mockImplementationOnce(async () => ({
+        handleMessage: vi.fn().mockImplementationOnce(async () => deferred.promise),
+        followUp: vi.fn((message: SubstrateMessage) => {
+          emitQueuedTurnResult(eventBus, message, {
             content: 'Second done',
             channelId: insecureSessionChannel('same-session'),
             metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
-          })),
+          });
+        }),
       } as unknown as SubstrateAgent;
 
       await server.stop();
@@ -945,6 +961,7 @@ describe('ApiServer', () => {
 
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
+      expect(mockAgent.followUp).not.toHaveBeenCalled();
 
       deferred.resolve({
         content: 'First done',
@@ -956,7 +973,8 @@ describe('ApiServer', () => {
       const second = await secondRequest;
       expect(first.status).toBe(200);
       expect(second.status).toBe(200);
-      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(2);
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
+      expect(mockAgent.followUp).toHaveBeenCalledTimes(1);
       expect(JSON.parse(second.body).choices[0].message.content).toBe('Second done');
     });
 
@@ -967,14 +985,14 @@ describe('ApiServer', () => {
         queueEvents.push(event as unknown as Record<string, unknown>);
       });
       const mockAgent = {
-        handleMessage: vi
-          .fn()
-          .mockImplementationOnce(async () => deferred.promise)
-          .mockImplementationOnce(async () => ({
+        handleMessage: vi.fn().mockImplementationOnce(async () => deferred.promise),
+        followUp: vi.fn((message: SubstrateMessage) => {
+          emitQueuedTurnResult(eventBus, message, {
             content: 'Second telemetry turn',
             channelId: insecureSessionChannel('queue-telemetry'),
             metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
-          })),
+          });
+        }),
       } as unknown as SubstrateAgent;
 
       await server.stop();
@@ -1126,6 +1144,13 @@ describe('ApiServer', () => {
             channelId: insecureSessionChannel('disconnect-session'),
             metadata: { model: 'test', inputTokens: 2, outputTokens: 3, durationMs: 5 },
           })),
+        followUp: vi.fn((message: SubstrateMessage) => {
+          emitQueuedTurnResult(eventBus, message, {
+            content: 'After disconnect',
+            channelId: insecureSessionChannel('disconnect-session'),
+            metadata: { model: 'test', inputTokens: 2, outputTokens: 3, durationMs: 5 },
+          });
+        }),
         abort: abortSpy,
       } as unknown as SubstrateAgent;
 
@@ -1228,6 +1253,84 @@ describe('ApiServer', () => {
 
       // Final signal
       expect(res.chunks[res.chunks.length - 1]).toBe('[DONE]');
+    });
+
+    it('delivers queued streaming follow-ups after the active stream finishes', async () => {
+      const releaseFirst = createDeferred<void>();
+      const completionOrder: string[] = [];
+      const mockAgent = {
+        handleMessage: vi.fn(async (message: SubstrateMessage) => {
+          await eventBus.emit('agent.stream.delta', { channelId: message.channelId, text: 'First' });
+          await releaseFirst.promise;
+          await eventBus.emit('agent.stream.delta', { channelId: message.channelId, text: ' done' });
+          return {
+            content: 'First done',
+            channelId: insecureSessionChannel('stream-queue'),
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 2, durationMs: 2 },
+          } satisfies AgentResponse;
+        }),
+        followUp: vi.fn((message: SubstrateMessage) => {
+          emitQueuedTurnResult(eventBus, message, {
+            content: 'Second done',
+            channelId: insecureSessionChannel('stream-queue'),
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          }, ['Second done']);
+        }),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const firstStreamPromise = streamRequest(port, {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'First stream turn' }],
+        stream: true,
+      }, { 'X-Session-ID': 'stream-queue' }).then((value) => {
+        completionOrder.push('first');
+        return value;
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const secondStreamPromise = streamRequest(port, {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Second stream turn' }],
+        stream: true,
+      }, { 'X-Session-ID': 'stream-queue' }).then((value) => {
+        completionOrder.push('second');
+        return value;
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(mockAgent.followUp).not.toHaveBeenCalled();
+
+      releaseFirst.resolve();
+
+      const firstStream = await firstStreamPromise;
+      const secondStream = await secondStreamPromise;
+
+      const firstContent = firstStream.chunks
+        .filter((chunk) => chunk !== '[DONE]')
+        .map((chunk) => JSON.parse(chunk).choices[0].delta.content)
+        .filter(Boolean);
+      const secondContent = secondStream.chunks
+        .filter((chunk) => chunk !== '[DONE]')
+        .map((chunk) => JSON.parse(chunk).choices[0].delta.content)
+        .filter(Boolean);
+
+      expect(completionOrder).toEqual(['first', 'second']);
+      expect(firstContent).toEqual(['First', ' done']);
+      expect(secondContent).toEqual(['Second done']);
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
+      expect(mockAgent.followUp).toHaveBeenCalledTimes(1);
     });
   });
 

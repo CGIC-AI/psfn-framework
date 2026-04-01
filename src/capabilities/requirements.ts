@@ -50,6 +50,10 @@ const SESSION_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'identity.write.runtime',
 ] as const;
 
+const SHELL_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'repl.execute',
+] as const;
+
 function resolveUnifiedMemoryRequirement(params: Record<string, unknown>): CapabilityRequirement {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
   switch (action) {
@@ -198,6 +202,17 @@ function resolveUnifiedSessionRequirement(params: Record<string, unknown>): Capa
   }
 }
 
+function resolveUnifiedShellRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case '':
+    case 'exec':
+      return 'repl.execute';
+    default:
+      return SHELL_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
@@ -313,6 +328,10 @@ export function resolveToolRequiredCapabilities(
 
   if (tool.name === 'session') {
     return normalizeRequirement(resolveUnifiedSessionRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'shell') {
+    return normalizeRequirement(resolveUnifiedShellRequirement(toRecord(params)));
   }
 
   const fallback = STATIC_TOOL_REQUIREMENTS[tool.name];

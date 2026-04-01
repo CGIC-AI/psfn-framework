@@ -88,6 +88,20 @@ The runtime now exposes a unified model-facing `repo` tool for git-backed reposi
 
 This keeps repository work on one primitive while preserving the existing protected-branch checks, allowlisted patch paths, and gateway approval policy for write and publish flows.
 
+## Live Shell Surface
+
+The runtime now exposes a unified model-facing `shell` tool for direct command execution outside `think`.
+
+- Action: `exec`
+
+The surface stays intentionally narrow:
+
+- commands run without a shell parser; callers must pass explicit `command` and `args`
+- gateway policy remains authoritative for enablement, executable allowlists, cwd bounds, timeouts, and output caps
+- confirmation, auditing, and fail-closed denial stay on the underlying `shell.exec` gateway path
+- `shell` remains distinct from `fs` and `repo`; use those primitives for structured workspace and git operations instead of shelling out by default
+- `shell_exec` inside `think` remains a bounded helper, not the primary model-facing surface
+
 ## Live Session Surface
 
 The runtime now exposes a unified model-facing `session` tool for continuity, transcript lookup, resumption, and focus workflow.
@@ -211,6 +225,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `load_tools` | `toolset` | hidden | Legacy exact-name activation path now collapses into `toolset action="activate"`. |
 | `fs_read` | `fs` | always-on | Collapsed into `fs action="read"`. |
 | `fs_list` | `fs` | always-on | Collapsed into `fs action="list"`. |
+| `shell_exec` | `shell` | always-on | Direct command execution now belongs on `shell action="exec"`; the `think` helper remains bounded and secondary. |
 | `repo_status` | `repo` | always-on | Repository inspection belongs under one primitive. |
 | `repo_diff` | `repo` | always-on | Same family. |
 | `repo_apply_patch` | `repo` | extended | Mutation stays gated. |

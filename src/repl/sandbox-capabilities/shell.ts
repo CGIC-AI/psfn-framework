@@ -90,7 +90,7 @@ export function createShellCapabilities(
     if (typeof options.gatewayCaps.shellExec !== 'function') {
       return {
         ok: false,
-        error: 'shell_exec unavailable: requires gateway shell.exec policy and audit path',
+        error: 'shell_exec unavailable: think helper requires gateway shell.exec policy and audit path; direct model-facing use should prefer the shell tool',
         command: '',
         args: [],
         cwd: '',

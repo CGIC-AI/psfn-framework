@@ -52,6 +52,8 @@ import { GatewayGitOps } from './git/gateway-ops.js';
 import { registerBeadsTools } from './beads/runtime-wiring.js';
 import { GatewayBeadsOps } from './beads/gateway-ops.js';
 import { registerFilesystemTools } from './filesystem/runtime-wiring.js';
+import { registerShellTools } from './shell/runtime-wiring.js';
+import { GatewayShellOps } from './shell/gateway-ops.js';
 import { GatewayFilesystemOps } from './filesystem/gateway-ops.js';
 import { registerMediaTool } from './images/runtime-wiring.js';
 import { GatewayImageOps } from './images/gateway-ops.js';
@@ -531,6 +533,7 @@ async function main(): Promise<void> {
     repoRoot: process.cwd(),
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
+  registerShellTools(agentLoop, new GatewayShellOps(gateway), { gatewayMode: true });
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
   });

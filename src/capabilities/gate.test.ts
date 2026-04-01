@@ -181,6 +181,25 @@ describe('capability tool gating', () => {
     expect((updateDenied.content[0] as any).text).toContain('identity.write.runtime');
   });
 
+  it('gates shell by repl.execute capability token', async () => {
+    const shell = createTool('shell');
+    const deniedGated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('custom', ['git.read']),
+    );
+    const denied = await deniedGated.execute('call-shell-denied', { action: 'exec', command: 'node' });
+
+    expect(shell.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('repl.execute');
+
+    const allowedGated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('custom', ['repl.execute']),
+    );
+    await allowedGated.execute('call-shell-allowed', { action: 'exec', command: 'node' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('grants autonomous tier access for locked tools', async () => {
     const restart = createTool('self_restart');
     const restartGated = gateToolWithCapabilities(

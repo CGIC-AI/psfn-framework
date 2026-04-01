@@ -1382,25 +1382,29 @@ export function wireHeartbeatRuntime(
             metrics: motivationAssessment.metrics,
           });
         }
-        const activeConcerns = await Promise.resolve(
-          runtimeOptions.getActiveConcerns?.({
-            channelId: resolvedSessionId,
-            canonicalContactKey: context.canonicalContactKey,
-          }) ?? [],
-        );
-        const recentlyResolvedConcerns = await Promise.resolve(
-          runtimeOptions.getRecentResolvedConcerns?.({
-            channelId: resolvedSessionId,
-            canonicalContactKey: context.canonicalContactKey,
-          }) ?? [],
-        );
+        const activeConcerns = runtimeOptions.getActiveConcerns
+          ? await Promise.resolve(
+            runtimeOptions.getActiveConcerns({
+              channelId: resolvedSessionId,
+              canonicalContactKey: context.canonicalContactKey,
+            }),
+          )
+          : undefined;
+        const recentlyResolvedConcerns = runtimeOptions.getRecentResolvedConcerns
+          ? await Promise.resolve(
+            runtimeOptions.getRecentResolvedConcerns({
+              channelId: resolvedSessionId,
+              canonicalContactKey: context.canonicalContactKey,
+            }),
+          )
+          : undefined;
         const decisions = await intentionAppraisal.evaluate({
           sessionId: resolvedSessionId,
           internalState,
           currentEmotion,
           recentMessages,
-          activeConcerns,
-          recentlyResolvedConcerns,
+          ...(activeConcerns ? { activeConcerns } : {}),
+          ...(recentlyResolvedConcerns ? { recentlyResolvedConcerns } : {}),
           contactEmotionalSnapshot,
           conversationTrajectory: buildConversationTrajectory(context),
           ...(motivationAssessment?.shouldTriggerAppraisal
@@ -1692,7 +1696,7 @@ export function wireHeartbeatRuntime(
               if (Number.isFinite(nextRunAt) && nextRunAt > 0) {
                 const nextActions = toInferredPostTurnActions([{
                   kind: INTENTION_REMINDER_ACTION_KIND,
-                  dedupeKey: `${INTENTION_REMINDER_ACTION_KIND}:${triggered.reminderId}`,
+                  dedupeKey: `${INTENTION_REMINDER_ACTION_KIND}:${triggered.reminderId}:${nextRunAt}`,
                   payload: {
                     reminderId: triggered.reminderId,
                   },

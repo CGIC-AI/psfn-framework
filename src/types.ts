@@ -137,6 +137,15 @@ export interface MessagePromptOverride {
 }
 
 export type ResponseStyle = 'concise' | 'expressive';
+export type WorkerLaneId = 'subagent' | 'whisper';
+export type WorkerProfileClass = 'task_focused' | 'subconscious';
+
+export interface WorkerExecutionPolicy {
+  lane: WorkerLaneId;
+  profileClass: WorkerProfileClass;
+  modelPurpose: Extract<ModelPurpose, 'background' | 'memory'>;
+  failClosed: boolean;
+}
 
 export type TextEmotionDType =
   | 'auto'
@@ -188,6 +197,7 @@ export interface MessageRoutingMetadata {
   wyoming?: WyomingRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelVisibility;
+  workerExecution?: WorkerExecutionPolicy;
   modelOverride?: MessageModelOverride;
   promptOverride?: MessagePromptOverride;
   responseStyle?: ResponseStyle;

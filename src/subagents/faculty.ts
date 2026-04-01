@@ -12,7 +12,10 @@ import type {
 import type { EventBus } from '../event-bus.js';
 import type { EmbeddingService, LLMProvider, MemoryProvider } from '../agent/contracts.js';
 import { SubstrateAgent } from '../agent/substrate-agent.js';
-import { SUBAGENT_WORKER_LANE } from '../agent/worker-lanes.js';
+import {
+  SUBAGENT_WORKER_LANE,
+  createWorkerExecutionPolicy,
+} from '../agent/worker-lanes.js';
 import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../capabilities/tiers.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
@@ -125,6 +128,7 @@ export class SubagentFaculty implements SubagentExecutionPort {
 
     const executionChannelId = normalizeExecutionChannelId(request.executionChannelId)
       ?? `subagent:${subagentId}`;
+    const workerExecution = createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE);
     const baseMessage = this.buildBaseMessage(subagentId, executionChannelId, request);
     const task = this.taskRegistry.register({
       subagentId,
@@ -141,6 +145,8 @@ export class SubagentFaculty implements SubagentExecutionPort {
       to: 'queued',
       reason: task.stateReason,
       workerLane: SUBAGENT_WORKER_LANE,
+      workerProfileClass: workerExecution.profileClass,
+      modelPurpose: workerExecution.modelPurpose,
       channelId: executionChannelId,
     });
     this.auditTrail?.append('subagent.execute.start', {
@@ -151,6 +157,8 @@ export class SubagentFaculty implements SubagentExecutionPort {
       capabilities,
       requiredCapabilities,
       workerLane: SUBAGENT_WORKER_LANE,
+      workerProfileClass: workerExecution.profileClass,
+      modelPurpose: workerExecution.modelPurpose,
     });
 
     try {
@@ -370,10 +378,15 @@ export class SubagentFaculty implements SubagentExecutionPort {
     executionChannelId: string,
     request: SubagentExecutionRequest,
   ): SubstrateMessage {
+    const workerExecution = createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE);
     if (request.message) {
       return {
         ...request.message,
         content: request.task,
+        routing: {
+          ...(request.message.routing ?? {}),
+          workerExecution,
+        },
       };
     }
     return {
@@ -384,6 +397,9 @@ export class SubagentFaculty implements SubagentExecutionPort {
       authorName: 'SubagentFaculty',
       content: request.task,
       timestamp: new Date(),
+      routing: {
+        workerExecution,
+      },
     };
   }
 

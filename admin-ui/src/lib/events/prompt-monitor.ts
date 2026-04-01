@@ -60,12 +60,34 @@ function cloneStage(stage: AdminTurnStageTelemetry): AdminTurnStageTelemetry {
 function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
   return {
     ...snapshot,
-    ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
+    ...(snapshot.prompt
+      ? {
+        prompt: {
+          ...snapshot.prompt,
+          ...(snapshot.prompt.sectionCacheability
+            ? {
+              sectionCacheability: snapshot.prompt.sectionCacheability.map(section => ({
+                ...section,
+                cacheBreakers: [...section.cacheBreakers],
+              })),
+            }
+            : {}),
+        },
+      }
+      : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(message => ({ ...message })),
+          ...(snapshot.promptContext.sectionCacheability
+            ? {
+              sectionCacheability: snapshot.promptContext.sectionCacheability.map(section => ({
+                ...section,
+                cacheBreakers: [...section.cacheBreakers],
+              })),
+            }
+            : {}),
         },
       }
       : {}),

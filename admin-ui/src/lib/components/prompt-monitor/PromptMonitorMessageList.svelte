@@ -1,21 +1,53 @@
 <script lang="ts">
-  import type { AdminTurnPromptContextMessage } from '$lib/types';
+  import type { AdminPromptSectionCacheability, AdminTurnPromptContextMessage } from '$lib/types';
 
   interface Props {
     title: string;
     messages?: AdminTurnPromptContextMessage[];
     emptyText?: string;
+    cacheability?: AdminPromptSectionCacheability | null;
   }
 
   let {
     title,
     messages = [],
     emptyText = 'No context messages recorded.',
+    cacheability = null,
   }: Props = $props();
+
+  function cacheabilityTone(value: AdminPromptSectionCacheability['cacheability'] | undefined): string {
+    switch (value) {
+      case 'append_only':
+        return 'border-sky-300 bg-sky-50 text-sky-800';
+      case 'static':
+        return 'border-moss-300 bg-moss-50 text-moss-800';
+      case 'session_stable':
+        return 'border-gold-300 bg-gold-50 text-shadow-900';
+      case 'volatile':
+        return 'border-wilt-300 bg-wilt-50 text-wilt-800';
+      default:
+        return 'border-bark-300 bg-bark-100 text-shadow-700';
+    }
+  }
 </script>
 
 <div class="rounded-xl border border-bark-200 bg-white p-4">
-  <h3 class="font-medium text-shadow-900">{title}</h3>
+  <div class="flex flex-wrap items-center gap-2">
+    <h3 class="font-medium text-shadow-900">{title}</h3>
+    {#if cacheability}
+      <span class={`rounded-full border px-2 py-0.5 text-xs font-medium uppercase tracking-wide ${cacheabilityTone(cacheability.cacheability)}`}>
+        {cacheability.cacheability.replace('_', ' ')}
+      </span>
+      {#each cacheability.cacheBreakers as breaker (breaker)}
+        <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">
+          {breaker.replace('_', ' ')}
+        </span>
+      {/each}
+    {/if}
+  </div>
+  {#if cacheability}
+    <p class="mt-1 text-xs text-shadow-600">{cacheability.reason}</p>
+  {/if}
   {#if messages.length === 0}
     <p class="mt-3 text-sm text-shadow-600">{emptyText}</p>
   {:else}

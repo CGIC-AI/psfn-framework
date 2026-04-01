@@ -21,7 +21,11 @@
     resolvePromptMonitorSummary,
     type PromptMonitorTurn,
   } from '$lib/events/prompt-monitor';
-  import type { ChannelInfo } from '$lib/types';
+  import type {
+    AdminPromptSectionCacheability,
+    AdminPromptSectionKey,
+    ChannelInfo,
+  } from '$lib/types';
 
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
@@ -175,6 +179,16 @@
   function formatJson(value: unknown): string | null {
     if (value == null) return null;
     return JSON.stringify(value, null, 2);
+  }
+
+  function findPromptSectionCacheability(
+    turn: PromptMonitorTurn | null,
+    section: AdminPromptSectionKey,
+  ): AdminPromptSectionCacheability | null {
+    if (!turn?.snapshot) return null;
+    return turn.snapshot.prompt?.sectionCacheability?.find(entry => entry.section === section)
+      ?? turn.snapshot.promptContext?.sectionCacheability?.find(entry => entry.section === section)
+      ?? null;
   }
 
   function handlePromptEvent(event: Parameters<typeof mergePromptMonitorEvent>[1]): void {
@@ -495,11 +509,13 @@
                       <PromptMonitorTextBlock
                         title="Static Prefix Template"
                         value={selectedTurn.snapshot?.prompt?.staticPrefixTemplate}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'staticPrefixTemplate')}
                         emptyText="No static prompt snapshot recorded."
                       />
                       <PromptMonitorTextBlock
                         title="Dynamic Suffix Template"
                         value={selectedTurn.snapshot?.prompt?.dynamicSuffixTemplate}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'dynamicSuffixTemplate')}
                         emptyText="No dynamic prompt snapshot recorded."
                       />
                     </div>
@@ -511,28 +527,33 @@
                       <PromptMonitorTextBlock
                         title="Rendered Static Prefix"
                         value={selectedTurn.snapshot?.promptContext?.renderedStaticPrefix}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'renderedStaticPrefix')}
                         emptyText="No rendered static prefix recorded."
                       />
                       <PromptMonitorTextBlock
                         title="Rendered Dynamic Suffix"
                         value={selectedTurn.snapshot?.promptContext?.renderedDynamicSuffix}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'renderedDynamicSuffix')}
                         emptyText="No rendered dynamic suffix recorded."
                       />
                       <PromptMonitorTextBlock
                         title="Runtime Context Block"
                         value={selectedTurn.snapshot?.promptContext?.runtimeContext}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'runtimeContext')}
                         emptyText="No runtime context block recorded."
                         maxHeightClass="max-h-64"
                       />
                       <PromptMonitorTextBlock
                         title="Memory Context Block"
                         value={selectedTurn.snapshot?.promptContext?.memoryContextBlock}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'memoryContextBlock')}
                         emptyText="No memory context block recorded."
                         maxHeightClass="max-h-64"
                       />
                       <PromptMonitorTextBlock
                         title="Scratchpad Context"
                         value={selectedTurn.snapshot?.promptContext?.scratchpadContext}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'scratchpadContext')}
                         emptyText="No scratchpad context recorded."
                       />
                     </div>
@@ -546,12 +567,14 @@
                       <PromptMonitorTextBlock
                         title="Pre-Session Prompt"
                         value={selectedTurn.snapshot?.promptContext?.assembledPrompt}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'assembledPrompt')}
                         emptyText="No assembled prompt recorded."
                         maxHeightClass="max-h-[28rem]"
                       />
                       <PromptMonitorTextBlock
                         title="Final System Prompt"
                         value={selectedTurn.snapshot?.promptContext?.finalSystemPrompt}
+                        cacheability={findPromptSectionCacheability(selectedTurn, 'finalSystemPrompt')}
                         emptyText="No final system prompt recorded."
                         maxHeightClass="max-h-[28rem]"
                       />
@@ -561,6 +584,7 @@
                   <PromptMonitorMessageList
                     title="Model Context Messages"
                     messages={selectedTurn.snapshot?.promptContext?.messages ?? []}
+                    cacheability={findPromptSectionCacheability(selectedTurn, 'messages')}
                   />
                 </div>
 

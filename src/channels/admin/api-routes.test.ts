@@ -1749,6 +1749,14 @@ describe('AdminServer JSON API routes', () => {
           dynamicSuffixTemplate: 'Dynamic suffix',
           staticHash: 'static-hash',
           versionPointer: 'prompt-v1',
+          sectionCacheability: [
+            {
+              section: 'staticPrefixTemplate',
+              cacheability: 'static',
+              cacheBreakers: ['prompt_layer'],
+              reason: 'Frozen base/operator prompt layers only change when the prompt stack is edited.',
+            },
+          ],
         },
         promptContext: {
           renderedStaticPrefix: 'Rendered static prefix',
@@ -1761,6 +1769,20 @@ describe('AdminServer JSON API routes', () => {
           messages: [
             { role: 'user', content: 'hello' },
             { role: 'assistant', content: 'world' },
+          ],
+          sectionCacheability: [
+            {
+              section: 'memoryContextBlock',
+              cacheability: 'volatile',
+              cacheBreakers: ['retrieval'],
+              reason: 'Memory context depends on retrieval results and proactive recall selected for this turn.',
+            },
+            {
+              section: 'messages',
+              cacheability: 'append_only',
+              cacheBreakers: ['session_history'],
+              reason: 'Model context messages grow with session history and compaction rather than staying byte-for-byte static.',
+            },
           ],
         },
         toolContext: {
@@ -1947,9 +1969,21 @@ describe('AdminServer JSON API routes', () => {
           data: { candidateCount?: number; withheldCount?: number; withheldReasonCounts?: Record<string, number> };
         }>;
         snapshot: {
+          prompt?: {
+            sectionCacheability?: Array<{
+              section?: string;
+              cacheability?: string;
+              cacheBreakers?: string[];
+            }>;
+          };
           promptContext?: {
             finalSystemPrompt?: string;
             messages?: Array<{ role: string; content: string }>;
+            sectionCacheability?: Array<{
+              section?: string;
+              cacheability?: string;
+              cacheBreakers?: string[];
+            }>;
           };
           toolContext?: {
             activeTools?: Array<{ name: string }>;
@@ -1992,10 +2026,29 @@ describe('AdminServer JSON API routes', () => {
       },
     });
     expect(messagesPayload.turns[0]?.snapshot?.memory?.versionPointer).toBe('memory-v1');
+    expect(messagesPayload.turns[0]?.snapshot?.prompt?.sectionCacheability).toEqual([
+      expect.objectContaining({
+        section: 'staticPrefixTemplate',
+        cacheability: 'static',
+        cacheBreakers: ['prompt_layer'],
+      }),
+    ]);
     expect(messagesPayload.turns[0]?.snapshot?.promptContext?.finalSystemPrompt).toBe('Final system prompt');
     expect(messagesPayload.turns[0]?.snapshot?.promptContext?.messages).toEqual([
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'world' },
+    ]);
+    expect(messagesPayload.turns[0]?.snapshot?.promptContext?.sectionCacheability).toEqual([
+      expect.objectContaining({
+        section: 'memoryContextBlock',
+        cacheability: 'volatile',
+        cacheBreakers: ['retrieval'],
+      }),
+      expect.objectContaining({
+        section: 'messages',
+        cacheability: 'append_only',
+        cacheBreakers: ['session_history'],
+      }),
     ]);
     expect(messagesPayload.turns[0]?.snapshot?.toolContext?.activeTools).toEqual([
       expect.objectContaining({

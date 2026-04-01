@@ -630,7 +630,10 @@ export class SubstrateRuntime implements Lifecycle {
       getCapabilityTier: () => this.capabilityRuntime.getTier(),
       confirmationQueue: cardProposalQueue,
     });
-    wireSettingsRuntime(this.agentLoop, this.config);
+    let memoryWriter!: MemoryWriter;
+    wireSettingsRuntime(this.agentLoop, this.config, {
+      getMemoryWriter: () => memoryWriter,
+    });
     wireSessionToolsRuntime(this.agentLoop, this.sessionManager, companionDataDir, this.llmClient);
     const coreMemoryStore = wireCoreMemoryRuntime({
       agentLoop: this.agentLoop,
@@ -661,7 +664,7 @@ export class SubstrateRuntime implements Lifecycle {
           }
         : {}),
     },
-  );
+    );
     const intentionRuntime = wireIntentionRuntime(this.agentLoop, this.db);
     wireSelfModelRuntime(this.agentLoop);
     const intentionAppraisalHooks = createIntentionAppraisalHooks(
@@ -806,7 +809,7 @@ export class SubstrateRuntime implements Lifecycle {
     });
 
     // Memory write/import tools — intentional memory creation
-    const memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
+    memoryWriter = new MemoryWriter(this.memoryStore, embeddingProvider);
     intentionRuntime.behavioralPatternTracker.setPromotionHook(
       createBehavioralPatternMemoryPromotionHook(memoryWriter),
     );

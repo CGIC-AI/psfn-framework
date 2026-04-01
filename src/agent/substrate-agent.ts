@@ -518,6 +518,14 @@ export class SubstrateAgent {
     return this.toolRuntimeFacade.getPromotedExtendedTools();
   }
 
+  setPromotedExtendedTools(next: readonly string[]): string[] {
+    return this.toolRuntimeFacade.setPromotedExtendedTools(next);
+  }
+
+  persistPromotedExtendedTools(next: readonly string[]): string | null {
+    return this.toolRuntimeFacade.persistPromotedExtendedTools(next);
+  }
+
   addPromotedExtendedTool(toolName: string): PromotedToolMutationResult {
     return this.toolRuntimeFacade.addPromotedExtendedTool(toolName);
   }

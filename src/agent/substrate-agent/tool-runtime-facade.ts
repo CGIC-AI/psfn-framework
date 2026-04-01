@@ -146,6 +146,10 @@ export class ToolRuntimeFacade {
     return [...this.getPromotedExtendedToolNamesInternal()];
   }
 
+  persistPromotedExtendedTools(next: readonly string[]): string | null {
+    return this.persistPromotedExtendedToolNames(next);
+  }
+
   addPromotedExtendedTool(toolName: string): PromotedToolMutationResult {
     return addPromotedExtendedTool(toolName, {
       getPromotedExtendedToolNames: () => this.getPromotedExtendedToolNamesInternal(),
@@ -387,6 +391,10 @@ export class ToolRuntimeFacade {
 
   private setPromotedExtendedToolNamesInternal(next: readonly string[]): string[] {
     return setPromotedExtendedToolNames(this.config, next);
+  }
+
+  setPromotedExtendedTools(next: readonly string[]): string[] {
+    return this.setPromotedExtendedToolNamesInternal(next);
   }
 
   private persistPromotedExtendedToolNames(next: readonly string[]): string | null {

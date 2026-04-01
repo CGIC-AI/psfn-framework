@@ -33,6 +33,11 @@ const FILESYSTEM_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'git.write',
 ] as const;
 
+const REPO_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'git.read',
+  'git.write',
+] as const;
+
 const IDENTITY_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
   'identity.read',
   'identity.write.runtime',
@@ -109,6 +114,25 @@ function resolveFilesystemRequirement(params: Record<string, unknown>): Capabili
       return 'git.write';
     default:
       return FILESYSTEM_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
+function resolveRepoRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!action) {
+    return Object.keys(params).length === 0 ? 'git.read' : REPO_FAIL_CLOSED_REQUIREMENTS;
+  }
+
+  switch (action) {
+    case 'inspect':
+      return 'git.read';
+    case 'patch':
+    case 'branch':
+    case 'commit':
+    case 'publish':
+      return 'git.write';
+    default:
+      return REPO_FAIL_CLOSED_REQUIREMENTS;
   }
 }
 
@@ -265,6 +289,10 @@ export function resolveToolRequiredCapabilities(
 
   if (tool.name === 'fs') {
     return normalizeRequirement(resolveFilesystemRequirement(toRecord(params)));
+  }
+
+  if (tool.name === 'repo') {
+    return normalizeRequirement(resolveRepoRequirement(toRecord(params)));
   }
 
   if (tool.name === 'north_star') {

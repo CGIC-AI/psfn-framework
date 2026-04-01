@@ -27,21 +27,14 @@ class FakeTarget implements GitRuntimeTarget {
 }
 
 describe('wireGitRuntime', () => {
-  it('registers git read tools as core and git write tools as extended', () => {
+  it('registers the unified repo tool as core', () => {
     const target = new FakeTarget();
     wireGitRuntime(target, {
       repoRoot: '/test',
       allowedPaths: ['src/'],
     });
 
-    expect(target.tools.map(t => t.name).sort()).toEqual([
-      'repo_apply_patch',
-      'repo_commit',
-      'repo_create_branch',
-      'repo_diff',
-      'repo_open_pr',
-      'repo_status',
-    ]);
+    expect(target.tools.map(t => t.name)).toEqual(['repo']);
     const registerTool = vi.spyOn(target, 'registerTool');
     wireGitRuntime(target, {
       repoRoot: '/test',
@@ -49,10 +42,7 @@ describe('wireGitRuntime', () => {
     });
     const categories = registerTool.mock.calls.map(([tool, category]) => [tool.name, category]);
     expect(categories).toEqual(expect.arrayContaining([
-      ['repo_status', 'core'],
-      ['repo_diff', 'core'],
-      ['repo_apply_patch', 'extended'],
-      ['repo_commit', 'extended'],
+      ['repo', 'core'],
     ]));
   });
 

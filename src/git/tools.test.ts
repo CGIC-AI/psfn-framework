@@ -1,15 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { GitOperations, GitStatusResult, GitDiffResult, GitCommitResult } from './ops.js';
-import {
-  createRepoStatusTool,
-  createRepoDiffTool,
-  createRepoApplyPatchTool,
-  createRepoCommitTool,
-  createRepoCreateBranchTool,
-  createRepoOpenPRTool,
-} from './tools.js';
+import { createRepoTool } from './tools.js';
 
-/** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content.map(c => c.text).join('');
 }
@@ -25,287 +17,177 @@ function createMockGitOps(): Record<string, ReturnType<typeof vi.fn>> & GitOpera
   } as any;
 }
 
-describe('git tools', () => {
+describe('repo tool', () => {
   let mockOps: ReturnType<typeof createMockGitOps>;
 
   beforeEach(() => {
     mockOps = createMockGitOps();
   });
 
-  // ── repo_status ──
-
-  describe('repo_status', () => {
-    it('has correct tool metadata', () => {
-      const tool = createRepoStatusTool(mockOps);
-      expect(tool.name).toBe('repo_status');
-      expect(tool.description).toBeTruthy();
-    });
-
-    it('formats status output correctly', async () => {
-      const status: GitStatusResult = {
-        branch: 'feature/test',
-        ahead: 1,
-        behind: 0,
-        staged: ['src/foo.ts'],
-        modified: ['src/bar.ts'],
-        untracked: ['src/new.ts'],
-      };
-      mockOps.status.mockReturnValue(status);
-
-      const tool = createRepoStatusTool(mockOps);
-      const result = await tool.execute('call-1', {});
-      const text = resultText(result);
-
-      expect(text).toContain('Branch: feature/test');
-      expect(text).toContain('Ahead: 1');
-      expect(text).toContain('Staged (1): src/foo.ts');
-      expect(text).toContain('Modified (1): src/bar.ts');
-      expect(text).toContain('Untracked (1): src/new.ts');
-    });
-
-    it('shows "No staged changes" when nothing staged', async () => {
-      mockOps.status.mockReturnValue({
-        branch: 'main',
-        ahead: 0,
-        behind: 0,
-        staged: [],
-        modified: [],
-        untracked: [],
-      });
-
-      const tool = createRepoStatusTool(mockOps);
-      const result = await tool.execute('call-1', {});
-      const text = resultText(result);
-
-      expect(text).toContain('No staged changes');
-      expect(text).toContain('No unstaged modifications');
-    });
-
-    it('returns canonical error when status throws', async () => {
-      mockOps.status.mockRejectedValueOnce(new Error('status failed'));
-
-      const tool = createRepoStatusTool(mockOps);
-      const result = await tool.execute('call-status-error', {});
-
-      expect(resultText(result)).toContain('repo_status failed');
-      expect(resultText(result)).toContain('status failed');
-      expect(result.details?.isError).toBe(true);
-    });
+  it('has unified repo metadata', () => {
+    const tool = createRepoTool(mockOps);
+    expect(tool.name).toBe('repo');
+    expect(tool.description).toContain('action=inspect|patch|branch|commit|publish');
   });
 
-  // ── repo_diff ──
+  it('defaults empty calls to inspect status', async () => {
+    mockOps.status.mockReturnValue({
+      branch: 'feature/test',
+      ahead: 1,
+      behind: 0,
+      staged: ['src/foo.ts'],
+      modified: ['src/bar.ts'],
+      untracked: ['src/new.ts'],
+    } satisfies GitStatusResult);
 
-  describe('repo_diff', () => {
-    it('returns both staged and unstaged diffs', async () => {
-      mockOps.diff.mockReturnValue({
-        staged: 'staged diff',
-        unstaged: 'unstaged diff',
-      } satisfies GitDiffResult);
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-1', {});
+    const text = resultText(result);
 
-      const tool = createRepoDiffTool(mockOps);
-      const result = await tool.execute('call-1', {});
-      const text = resultText(result);
-
-      expect(text).toContain('=== Staged ===');
-      expect(text).toContain('staged diff');
-      expect(text).toContain('=== Unstaged ===');
-      expect(text).toContain('unstaged diff');
-    });
-
-    it('truncates at 8000 chars', async () => {
-      const longDiff = 'x'.repeat(9000);
-      mockOps.diff.mockReturnValue({
-        staged: longDiff,
-        unstaged: '',
-      } satisfies GitDiffResult);
-
-      const tool = createRepoDiffTool(mockOps);
-      const result = await tool.execute('call-1', {});
-      const text = resultText(result);
-
-      expect(text).toContain('... (truncated)');
-      expect(text.length).toBeLessThan(longDiff.length);
-    });
-
-    it('shows "No changes detected" when empty', async () => {
-      mockOps.diff.mockReturnValue({ staged: '', unstaged: '' });
-
-      const tool = createRepoDiffTool(mockOps);
-      const result = await tool.execute('call-1', {});
-      const text = resultText(result);
-
-      expect(text).toBe('No changes detected.');
-    });
-
-    it('returns canonical error when diff throws', async () => {
-      mockOps.diff.mockRejectedValueOnce(new Error('diff failed'));
-
-      const tool = createRepoDiffTool(mockOps);
-      const result = await tool.execute('call-diff-error', {});
-
-      expect(resultText(result)).toContain('repo_diff failed');
-      expect(resultText(result)).toContain('diff failed');
-      expect(result.details?.isError).toBe(true);
-    });
+    expect(mockOps.status).toHaveBeenCalledTimes(1);
+    expect(mockOps.diff).not.toHaveBeenCalled();
+    expect(text).toContain('Branch: feature/test');
+    expect(text).toContain('Staged (1): src/foo.ts');
+    expect(text).toContain('Modified (1): src/bar.ts');
+    expect(text).toContain('Untracked (1): src/new.ts');
   });
 
-  // ── repo_apply_patch ──
+  it('returns diff output for inspect target=diff', async () => {
+    mockOps.diff.mockReturnValue({
+      staged: 'staged diff',
+      unstaged: 'unstaged diff',
+    } satisfies GitDiffResult);
 
-  describe('repo_apply_patch', () => {
-    it('calls gitOps.applyPatch', async () => {
-      const tool = createRepoApplyPatchTool(mockOps);
-      const result = await tool.execute('call-1', {
-        file_path: 'src/foo.ts',
-        content: 'new content',
-      });
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-2', { action: 'inspect', target: 'diff' });
+    const text = resultText(result);
 
-      expect(mockOps.applyPatch).toHaveBeenCalledWith('src/foo.ts', 'new content');
-      expect(resultText(result)).toContain('Applied and staged: src/foo.ts');
-    });
-
-    it('returns canonical error when applyPatch throws', async () => {
-      mockOps.applyPatch.mockRejectedValueOnce(new Error('patch failed'));
-
-      const tool = createRepoApplyPatchTool(mockOps);
-      const result = await tool.execute('call-apply-error', {
-        file_path: 'src/foo.ts',
-        content: 'new content',
-      });
-
-      expect(resultText(result)).toContain('repo_apply_patch failed');
-      expect(resultText(result)).toContain('patch failed');
-      expect(result.details?.isError).toBe(true);
-    });
+    expect(mockOps.status).not.toHaveBeenCalled();
+    expect(mockOps.diff).toHaveBeenCalledWith({ staged: undefined });
+    expect(text).toContain('=== Staged ===');
+    expect(text).toContain('=== Unstaged ===');
   });
 
-  // ── repo_commit ──
+  it('returns status and diff for inspect target=both', async () => {
+    mockOps.status.mockReturnValue({
+      branch: 'feature/test',
+      ahead: 0,
+      behind: 0,
+      staged: [],
+      modified: [],
+      untracked: [],
+    } satisfies GitStatusResult);
+    mockOps.diff.mockReturnValue({
+      staged: 'cached',
+      unstaged: '',
+    } satisfies GitDiffResult);
 
-  describe('repo_commit', () => {
-    it('calls gitOps.commit and formats result', async () => {
-      const commitResult: GitCommitResult = {
-        hash: 'abc1234',
-        message: 'Fix bug',
-        filesChanged: 2,
-      };
-      mockOps.commit.mockReturnValue(commitResult);
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-3', { action: 'inspect', target: 'both', staged: false });
+    const text = resultText(result);
 
-      const tool = createRepoCommitTool(mockOps);
-      const result = await tool.execute('call-1', {
-        message: 'Fix bug',
-        intent: 'fix bug',
-        scope: 'core',
-      });
-
-      expect(mockOps.commit).toHaveBeenCalledWith('Fix bug', 'fix bug', 'core');
-      const text = resultText(result);
-      expect(text).toContain('abc1234');
-      expect(text).toContain('2 files changed');
-    });
-
-    it('returns canonical error when commit throws', async () => {
-      mockOps.commit.mockRejectedValueOnce(new Error('commit failed'));
-
-      const tool = createRepoCommitTool(mockOps);
-      const result = await tool.execute('call-commit-error', {
-        message: 'Fix bug',
-        intent: 'fix bug',
-      });
-
-      expect(resultText(result)).toContain('repo_commit failed');
-      expect(resultText(result)).toContain('commit failed');
-      expect(result.details?.isError).toBe(true);
-    });
+    expect(mockOps.status).toHaveBeenCalledTimes(1);
+    expect(mockOps.diff).toHaveBeenCalledWith({ staged: false });
+    expect(text).toContain('=== Status ===');
+    expect(text).toContain('=== Diff ===');
   });
 
-  // ── repo_create_branch ──
+  it('truncates long diff output', async () => {
+    const longDiff = 'x'.repeat(9000);
+    mockOps.diff.mockReturnValue({
+      staged: longDiff,
+      unstaged: '',
+    } satisfies GitDiffResult);
 
-  describe('repo_create_branch', () => {
-    it('calls gitOps.createBranch', async () => {
-      mockOps.createBranch.mockReturnValue('feature/new');
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-4', { action: 'inspect', target: 'diff' });
+    const text = resultText(result);
 
-      const tool = createRepoCreateBranchTool(mockOps);
-      const result = await tool.execute('call-1', { name: 'feature/new' });
-
-      expect(mockOps.createBranch).toHaveBeenCalledWith('feature/new', undefined);
-      expect(resultText(result)).toContain('Created and checked out branch: feature/new');
-    });
-
-    it('passes start_point when provided', async () => {
-      mockOps.createBranch.mockReturnValue('feature/new');
-
-      const tool = createRepoCreateBranchTool(mockOps);
-      await tool.execute('call-1', { name: 'feature/new', start_point: 'develop' });
-
-      expect(mockOps.createBranch).toHaveBeenCalledWith('feature/new', 'develop');
-    });
-
-    it('returns canonical error when createBranch throws', async () => {
-      mockOps.createBranch.mockRejectedValueOnce(new Error('branch failed'));
-
-      const tool = createRepoCreateBranchTool(mockOps);
-      const result = await tool.execute('call-branch-error', { name: 'feature/new' });
-
-      expect(resultText(result)).toContain('repo_create_branch failed');
-      expect(resultText(result)).toContain('branch failed');
-      expect(result.details?.isError).toBe(true);
-    });
+    expect(text).toContain('... (truncated)');
+    expect(text.length).toBeLessThan(longDiff.length);
   });
 
-  // ── repo_open_pr ──
-
-  describe('repo_open_pr', () => {
-    it('calls gitOps.openPR and returns URL', async () => {
-      mockOps.openPR.mockReturnValue('https://github.com/owner/repo/pull/42');
-
-      const tool = createRepoOpenPRTool(mockOps);
-      const result = await tool.execute('call-1', {
-        title: 'Fix bug',
-        body: 'Bug fix description',
-      });
-
-      expect(mockOps.openPR).toHaveBeenCalledWith('Fix bug', 'Bug fix description', undefined);
-      expect(resultText(result)).toContain('PR created: https://github.com/owner/repo/pull/42');
+  it('patches content through gitOps.applyPatch', async () => {
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-5', {
+      action: 'patch',
+      file_path: 'src/foo.ts',
+      content: 'new content',
     });
 
-    it('passes base branch when provided', async () => {
-      mockOps.openPR.mockReturnValue('https://github.com/owner/repo/pull/43');
+    expect(mockOps.applyPatch).toHaveBeenCalledWith('src/foo.ts', 'new content');
+    expect(resultText(result)).toContain('Applied and staged: src/foo.ts');
+  });
 
-      const tool = createRepoOpenPRTool(mockOps);
-      await tool.execute('call-1', {
-        title: 'Title',
-        body: 'Body',
-        base: 'develop',
-      });
+  it('creates branches through gitOps.createBranch', async () => {
+    mockOps.createBranch.mockReturnValue('feature/new');
 
-      expect(mockOps.openPR).toHaveBeenCalledWith('Title', 'Body', 'develop');
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-6', {
+      action: 'branch',
+      name: 'feature/new',
+      start_point: 'develop',
     });
 
-    it('returns canonical error when openPR throws', async () => {
-      mockOps.openPR.mockRejectedValueOnce(new Error('pr failed'));
+    expect(mockOps.createBranch).toHaveBeenCalledWith('feature/new', 'develop');
+    expect(resultText(result)).toContain('Created and checked out branch: feature/new');
+  });
 
-      const tool = createRepoOpenPRTool(mockOps);
-      const result = await tool.execute('call-pr-error', {
-        title: 'Title',
-        body: 'Body',
-      });
+  it('commits through gitOps.commit', async () => {
+    mockOps.commit.mockReturnValue({
+      hash: 'abc1234',
+      message: 'Fix bug',
+      filesChanged: 2,
+    } satisfies GitCommitResult);
 
-      expect(resultText(result)).toContain('repo_open_pr failed');
-      expect(resultText(result)).toContain('pr failed');
-      expect(result.details?.isError).toBe(true);
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-7', {
+      action: 'commit',
+      message: 'Fix bug',
+      intent: 'fix bug',
+      scope: 'core',
     });
 
-    it('surfaces protected-branch blocking errors', async () => {
-      mockOps.openPR.mockRejectedValueOnce(new Error('Operation blocked on protected branch: main'));
+    expect(mockOps.commit).toHaveBeenCalledWith('Fix bug', 'fix bug', 'core');
+    expect(resultText(result)).toContain('Committed abc1234: Fix bug (2 files changed)');
+  });
 
-      const tool = createRepoOpenPRTool(mockOps);
-      const result = await tool.execute('call-pr-protected', {
-        title: 'Title',
-        body: 'Body',
-      });
+  it('publishes through gitOps.openPR', async () => {
+    mockOps.openPR.mockReturnValue('https://github.com/owner/repo/pull/42');
 
-      expect(resultText(result)).toContain('repo_open_pr failed');
-      expect(resultText(result)).toContain('protected branch');
-      expect(result.details?.isError).toBe(true);
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-8', {
+      action: 'publish',
+      title: 'Title',
+      body: 'Body',
+      base: 'main',
     });
+
+    expect(mockOps.openPR).toHaveBeenCalledWith('Title', 'Body', 'main');
+    expect(resultText(result)).toContain('PR created: https://github.com/owner/repo/pull/42');
+  });
+
+  it('fails closed on unsupported action', async () => {
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-9', { action: 'unknown' });
+
+    expect(resultText(result)).toContain('repo failed');
+    expect(resultText(result)).toContain('Supported actions');
+    expect(result.details?.isError).toBe(true);
+  });
+
+  it('returns canonical errors from delegated operations', async () => {
+    mockOps.commit.mockRejectedValueOnce(new Error('commit failed'));
+
+    const tool = createRepoTool(mockOps);
+    const result = await tool.execute('call-10', {
+      action: 'commit',
+      message: 'Fix bug',
+      intent: 'fix bug',
+    });
+
+    expect(resultText(result)).toContain('repo failed');
+    expect(resultText(result)).toContain('commit failed');
+    expect(result.details?.isError).toBe(true);
   });
 });

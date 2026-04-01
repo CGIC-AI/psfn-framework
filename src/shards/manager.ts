@@ -92,8 +92,7 @@ const APPRENTICE_SHARD_TOOL_EXTRAS = [
 export const DEFAULT_SHARD_TOOLSET = [
   'memory',
   'contact_lookup',
-  'repo_status',
-  'repo_diff',
+  'repo',
 ] as const;
 
 const DEFAULT_SHARD_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly string[]>> = {

@@ -89,11 +89,12 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `north_star_delete` | `north_star` | extended | Same family. |
 | `north_star_reorder` | `north_star` | extended | Same family. |
 | `settings_get` | `system` | always-on | Runtime-setting reads are system guidance, not identity. |
+| `tool_search` | `tool_search` | always-on | Primary discovery surface for non-default tools; activation still happens through `load_tools` until `toolset` replaces it. |
 | `promoted_tools_list` | `toolset` | always-on | Current promoted-tool control should collapse into toolset management. |
 | `promoted_tools_add` | `toolset` | extended | Same family. |
 | `promoted_tools_remove` | `toolset` | extended | Same family. |
 | `promoted_tools_swap` | `toolset` | extended | Same family. |
-| `load_tools` | `toolset` | always-on | This is the current exact-name hot-swap path that `toolset` should replace. |
+| `load_tools` | `toolset` | always-on | This is the current exact-name activation path that `tool_search` should point toward until `toolset` replaces it. |
 | `fs_read` | `fs` | always-on | File read/list/search collapse into one primitive family. |
 | `fs_list` | `fs` | always-on | Same family. |
 | `repo_status` | `repo` | always-on | Repository inspection belongs under one primitive. |
@@ -140,7 +141,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 
 - Keep `promotedExtendedTools` small. It is a short-term exposure mechanism, not the long-term taxonomy.
 - Do not add more micro-tool-specific config keys as a substitute for `toolset`.
-- Treat `toolset` as the future semantic control plane for activating, pinning, and unpinning non-core tools.
+- Treat `tool_search` as the first discovery step for non-default tools and `toolset` as the future semantic control plane for activating, pinning, and unpinning them.
 - Keep `shardToolsets` shard-specific. It should not become a general companion tool-selection mechanism.
 - Preserve `north_star` as a dedicated semantic surface rather than folding it into `identity` or `orient`.
 - Leave `think` available as a fallback, but do not use it to hide missing tool taxonomy.

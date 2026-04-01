@@ -23,6 +23,7 @@ import {
 import {
   activateExtendedToolsForTurn,
   createLoadToolsTool,
+  createToolSearchTool,
   preloadExtendedToolsForTurn,
   type AutoloadTurnOutcome,
   type ExtendedToolActivationOptions,
@@ -253,6 +254,15 @@ export class ToolRuntimeFacade {
       resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
       withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),
       emitAdaptiveToolDecision: (payload) => this.emitAdaptiveToolDecision(payload),
+      emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
+    });
+  }
+
+  createToolSearchTool(): AgentTool<any> {
+    return createToolSearchTool({
+      getExtendedTools: () => this.extendedTools,
+      getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),
+      classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
     });
   }

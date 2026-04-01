@@ -11,6 +11,7 @@ import { textResultWithError } from '../../tools/results.js';
 import type {
   AdaptiveToolActivationSource,
   AdaptiveToolDecisionTelemetry,
+  AdaptiveToolRuntimeState,
   AdaptiveToolSnapshotSkip,
 } from '../adaptive-tools-telemetry.js';
 import {
@@ -44,6 +45,15 @@ export interface AutoloadTurnOutcome {
   skipped: AdaptiveToolSnapshotSkip[];
 }
 
+export interface ToolSearchResultEntry {
+  name: string;
+  description: string;
+  scope: 'extended';
+  turnClass: ExtendedToolTurnClass;
+  status: 'active' | 'available' | 'background_only';
+  activationHint: string;
+}
+
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;
 
 interface ActivateExtendedToolsParams {
@@ -60,6 +70,66 @@ interface ActivateExtendedToolsParams {
     purpose: string,
   ) => Partial<CorrelationMetadata>;
   applyActiveToolsToAgent: () => void;
+}
+
+function normalizeToolSearchQuery(query: unknown): string {
+  return typeof query === 'string' ? query.trim().toLowerCase() : '';
+}
+
+function scoreToolSearchMatch(
+  tool: AgentTool<any>,
+  query: string,
+): number {
+  if (!query) return 0;
+
+  const name = tool.name.toLowerCase();
+  const description = tool.description.toLowerCase();
+  const tokens = query.split(/\s+/).filter(Boolean);
+
+  if (name === query) return 100;
+  if (name.startsWith(query)) return 90;
+  if (name.includes(query)) return 80;
+  if (description.includes(query)) return 70;
+
+  let tokenScore = 0;
+  for (const token of tokens) {
+    if (name.includes(token)) {
+      tokenScore = Math.max(tokenScore, 60);
+    }
+    if (description.includes(token)) {
+      tokenScore = Math.max(tokenScore, 50);
+    }
+  }
+
+  return tokenScore;
+}
+
+function resolveToolSearchStatus(
+  toolName: string,
+  runtimeState: AdaptiveToolRuntimeState,
+  turnClass: ExtendedToolTurnClass,
+): ToolSearchResultEntry['status'] {
+  if (runtimeState.activeTools.some(tool => tool.toolName === toolName)) {
+    return 'active';
+  }
+  if (turnClass !== 'overlay') {
+    return 'background_only';
+  }
+  return 'available';
+}
+
+function buildToolSearchActivationHint(status: ToolSearchResultEntry['status']): string {
+  if (status === 'active') {
+    return 'Already active in the current runtime.';
+  }
+  if (status === 'background_only') {
+    return 'Discoverable, but not callable in-turn.';
+  }
+  return 'Use load_tools to activate this tool when you need it.';
+}
+
+function formatToolSearchLine(entry: ToolSearchResultEntry): string {
+  return `- ${entry.name} [${entry.status}, ${entry.turnClass}] - ${entry.description} ${entry.activationHint}`;
 }
 
 export function activateExtendedToolsForTurn(params: ActivateExtendedToolsParams): ExtendedToolActivationResult {
@@ -328,6 +398,127 @@ export function createLoadToolsTool(runtime: LoadToolsToolRuntime): AgentTool<an
         `No matching tools found. Available: ${runtime.getExtendedTools().map(t => t.name).join(', ')}`,
         true,
       );
+    },
+  };
+}
+
+interface SearchToolsToolRuntime {
+  getExtendedTools: () => readonly AgentTool<any>[];
+  getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
+  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
+  emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
+}
+
+export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool<any> {
+  return {
+    name: 'tool_search',
+    label: 'tool_search',
+    description: 'Search the non-default tool catalog by name or description so you can choose the right tool family before activating it.',
+    parameters: Type.Object({
+      query: Type.Optional(
+        Type.String({
+          description: 'Optional search terms for the non-default tool catalog.',
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Number({
+          description: 'Optional maximum number of results to return.',
+          minimum: 1,
+          maximum: 20,
+        }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      executeParams: {
+        query?: string;
+        limit?: number;
+      },
+    ): Promise<AgentToolResult<{ isError?: boolean; toolSearch?: { query: string; totalMatches: number; matches: ToolSearchResultEntry[] } }>> => {
+      const query = normalizeToolSearchQuery(executeParams.query);
+      const maxResults = Number.isFinite(executeParams.limit)
+        ? Math.max(1, Math.min(20, Math.floor(executeParams.limit ?? 0)))
+        : 8;
+      const runtimeState = runtime.getAdaptiveToolRuntimeState();
+      const extendedTools = [...runtime.getExtendedTools()];
+      const rankedMatches = extendedTools
+        .map((tool) => {
+          const turnClass = runtime.classifyExtendedToolForTurn(tool.name);
+          const status = resolveToolSearchStatus(tool.name, runtimeState, turnClass);
+          const score = scoreToolSearchMatch(tool, query);
+          return {
+            tool,
+            turnClass,
+            status,
+            score,
+          };
+        })
+        .filter((entry) => {
+          if (!query) return true;
+          return entry.score > 0;
+        })
+        .sort((left, right) => {
+          if (right.score !== left.score) return right.score - left.score;
+          if (left.status !== right.status) {
+            const weight: Record<ToolSearchResultEntry['status'], number> = {
+              active: 0,
+              available: 1,
+              background_only: 2,
+            };
+            return weight[left.status] - weight[right.status];
+          }
+          if (left.turnClass !== right.turnClass) {
+            return left.turnClass.localeCompare(right.turnClass);
+          }
+          return left.tool.name.localeCompare(right.tool.name);
+        })
+        .slice(0, maxResults)
+        .map((entry) => ({
+          name: entry.tool.name,
+          description: entry.tool.description,
+          scope: 'extended' as const,
+          turnClass: entry.turnClass,
+          status: entry.status,
+          activationHint: buildToolSearchActivationHint(entry.status),
+        }));
+
+      const totalMatches = query
+        ? extendedTools.filter(tool => scoreToolSearchMatch(tool, query) > 0).length
+        : extendedTools.length;
+      const contentLines = [
+        query
+          ? `Tool search results for "${query}" (${rankedMatches.length} of ${totalMatches} extended tools):`
+          : `Tool search results for the non-default tool catalog (${rankedMatches.length} of ${totalMatches} extended tools):`,
+        ...(rankedMatches.length > 0
+          ? rankedMatches.map(formatToolSearchLine)
+          : [query
+            ? `No extended tools matched "${query}". Try broader search terms or omit the query to browse the full non-default catalog.`
+            : 'No extended tools are currently registered.']),
+        'Use tool_search to discover non-default tools, then use load_tools to activate overlay tools.',
+      ];
+
+      runtime.emitTelemetry('agent.tools.discovery', {
+        timestamp: Date.now(),
+        query: query || null,
+        limit: maxResults,
+        totalMatches,
+        matchedTools: rankedMatches.map(match => ({
+          name: match.name,
+          status: match.status,
+          turnClass: match.turnClass,
+        })),
+      });
+
+      return {
+        content: [{ type: 'text', text: contentLines.join('\n') }],
+        details: {
+          toolSearch: {
+            query,
+            totalMatches,
+            matches: rankedMatches,
+          },
+        },
+      };
     },
   };
 }

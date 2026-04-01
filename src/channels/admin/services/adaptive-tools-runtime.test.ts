@@ -8,6 +8,11 @@ describe('deriveToolHealthViews', () => {
         generatedAt: 1,
         tools: [
           {
+            name: 'tool_search',
+            description: 'Search the non-default tool catalog.',
+            scope: 'core',
+          },
+          {
             name: 'notify_operator',
             description: 'Send an out-of-band operator alert via ntfy.',
             scope: 'extended',
@@ -55,7 +60,7 @@ describe('deriveToolHealthViews', () => {
       },
       state: {
         generatedAt: 2,
-        coreTools: ['load_tools'],
+        coreTools: ['tool_search', 'load_tools'],
         extendedTools: ['notify_operator', 'heartbeat_run_template'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
@@ -69,6 +74,7 @@ describe('deriveToolHealthViews', () => {
           },
         ],
         activeTools: [
+          { toolName: 'tool_search', source: 'core' },
           { toolName: 'load_tools', source: 'core' },
           { toolName: 'heartbeat_run_template', source: 'autoload' },
         ],
@@ -104,6 +110,19 @@ describe('deriveToolHealthViews', () => {
         internalHeartbeat: {
           status: 'not_applicable',
           detail: 'Blocked on internal channels.',
+        },
+      },
+    });
+
+    const toolSearch = views.find((entry) => entry.name === 'tool_search');
+    expect(toolSearch).toMatchObject({
+      health: {
+        status: 'healthy',
+      },
+      contexts: {
+        chat: {
+          status: 'active',
+          source: 'core',
         },
       },
     });

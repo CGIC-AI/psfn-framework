@@ -28,7 +28,7 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
     label: 'subagent',
     description:
       'Control bounded short-horizon subagents with action=spawn, message, wait, cancel, or status. '
-      + 'Use spawn_shard for long-horizon or distributed shard work.',
+      + 'Use shard action=spawn for long-horizon or distributed shard work.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('spawn'),

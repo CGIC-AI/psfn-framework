@@ -28,7 +28,7 @@ import { MemoryExtractor } from '../memory/extraction.js';
 import type { MemoryStore } from '../memory/store.js';
 import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
-import { createSpawnShardTool } from '../shards/tools.js';
+import { createShardTool } from '../shards/tools.js';
 import type { ShardBackendController } from '../shards/backend-controller.js';
 import { SubagentFaculty } from '../subagents/faculty.js';
 import { createSubagentTool } from '../subagents/tools.js';
@@ -306,7 +306,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardMana
       ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
       : undefined,
   });
-  options.agentLoop.registerTool(createSpawnShardTool(shardManager));
+  options.agentLoop.registerTool(createShardTool(shardManager));
 
   options.agentLoop.registerTool(createThinkTool({
     llmProvider: options.llmProvider,

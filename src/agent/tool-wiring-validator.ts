@@ -46,7 +46,7 @@ export interface ToolWiringMeta {
 export type ToolConcurrencyClass =
   | 'exclusive'
   | 'read_only'
-  | 'spawn_shard';
+  | 'shard';
 
 export type ToolExclusivityKeyPolicy =
   | 'none'
@@ -347,7 +347,7 @@ export function validateToolWiring(options: ValidateToolsOptions): ValidationRep
         if (
           concurrencyClass !== 'exclusive'
           && concurrencyClass !== 'read_only'
-          && concurrencyClass !== 'spawn_shard'
+          && concurrencyClass !== 'shard'
         ) {
           missingConcurrencyMetadata.push(
             `invalid concurrency.class "${String(concurrencyClass)}"`,

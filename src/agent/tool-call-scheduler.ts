@@ -278,7 +278,7 @@ function canRunConcurrently(a: ToolCallDescriptor, b: ToolCallDescriptor): boole
   if (a.metadata.class !== b.metadata.class) {
     return false;
   }
-  if (a.metadata.class !== 'spawn_shard') {
+  if (a.metadata.class !== 'shard') {
     return false;
   }
   if (
@@ -350,7 +350,7 @@ function resolveToolConcurrencyMetadata(
   if (
     concurrency.class !== 'exclusive'
     && concurrency.class !== 'read_only'
-    && concurrency.class !== 'spawn_shard'
+    && concurrency.class !== 'shard'
   ) {
     return {
       metadata: createFailClosedConcurrencyMetadata(`tool:${tool.name}`),

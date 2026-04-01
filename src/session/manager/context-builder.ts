@@ -55,6 +55,7 @@ interface BuildSessionContextParams {
   systemPrompt: string;
   coreMemoryBlock: string;
   memoriesBlock: string;
+  promptAssembly?: PromptAssemblyLayout;
   compactionPromptText?: string;
   llmProvider?: LLMProvider;
   userId?: string;
@@ -81,7 +82,21 @@ interface BuildSessionContextParams {
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
 }
 
+export interface PromptAssemblyLayout {
+  stablePrefix: string;
+  lateBlocks: string[];
+}
+
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
+  const structuredPromptAssembly = params.promptAssembly;
+  const stableSystemPrompt = structuredPromptAssembly?.stablePrefix.trim().length
+    ? structuredPromptAssembly.stablePrefix.trim()
+    : params.systemPrompt;
+  const lateSystemBlocks = structuredPromptAssembly?.lateBlocks
+    .map(block => block.trim())
+    .filter(block => block.length > 0)
+    ?? [];
+  const lateSystemPromptText = lateSystemBlocks.join('\n\n');
   const channelVisibility = classifyChannel(params.channelId, params.channelMeta);
   const adaptiveBudgetProfile = resolveAdaptiveContextBudgetProfile(
     params.config,
@@ -127,11 +142,12 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const focusKnowledgeTexts = params.turnSnapshot
     ? [...params.turnSnapshot.focusKnowledgeTexts]
     : [...params.focusKnowledgeTexts];
-  const baseSystemTokenCount = countTokens(params.systemPrompt);
+  const baseSystemTokenCount = countTokens(stableSystemPrompt);
   const hasCoreMemorySection = params.coreMemoryBlock.trim().length > 0;
   const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
   const coreMemoryTokenCount = countTokens(coreMemorySectionText);
   const memoryTokenCount = countTokens(params.memoriesBlock);
+  const lateSystemTokenCount = countTokens(lateSystemPromptText);
   const compactionThresholdTokenBudget = Math.floor(
     historyBudget.contextWindow * (params.config.compactionThresholdPct / 100),
   );
@@ -141,13 +157,13 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   let compactionManifest = {
     triggered: false,
     compactedEntryCount: 0,
-    totalTokensBefore: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + sessionMessageTokens,
-    totalTokensAfter: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + sessionMessageTokens,
+    totalTokensBefore: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + lateSystemTokenCount + sessionMessageTokens,
+    totalTokensAfter: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + lateSystemTokenCount + sessionMessageTokens,
   };
 
   // Explicit compaction remains available for callers that opt into it.
   if (params.llmProvider) {
-    const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
+    const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + lateSystemTokenCount;
     const preCompactionEntryCount = recent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
@@ -188,14 +204,14 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   }
 
   // Build system prompt with memories
-  let fullSystem = params.systemPrompt;
+  let fullSystem = stableSystemPrompt;
   if (hasCoreMemorySection) {
     fullSystem += '\n\n' + coreMemorySectionText;
   }
   const hasMemorySection = params.memoriesBlock.trim().length > 0;
   const memorySectionText = hasMemorySection ? params.memoriesBlock : '';
-  if (hasMemorySection) {
-    fullSystem += '\n\n' + params.memoriesBlock;
+  if (!structuredPromptAssembly && hasMemorySection) {
+    fullSystem += '\n\n' + memorySectionText;
   }
 
   // Prepend compaction summaries as context
@@ -248,6 +264,14 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       .join('\n');
     continuitySectionText = '[Recent activity from other channels]\n' + continuityBlock;
     fullSystem += '\n\n' + continuitySectionText;
+  }
+
+  if (structuredPromptAssembly && hasMemorySection) {
+    fullSystem += '\n\n' + memorySectionText;
+  }
+
+  if (lateSystemPromptText.length > 0) {
+    fullSystem += '\n\n' + lateSystemPromptText;
   }
 
   // Convert session entries to LLM messages

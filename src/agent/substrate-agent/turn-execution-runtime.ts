@@ -615,6 +615,12 @@ export async function handleMessageForTurn(
     let fullPrompt = '';
     let renderedStaticPrefix = '';
     let renderedDynamicSuffix = '';
+    let promptAssembly:
+      | {
+        stablePrefix: string;
+        lateBlocks: string[];
+      }
+      | undefined;
 
     if (promptOverride.mode === 'default') {
       const staticCacheKey = runtime.buildPromptPrefixCacheKey(
@@ -650,6 +656,10 @@ export async function handleMessageForTurn(
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
+      promptAssembly = {
+        stablePrefix: renderedStaticPrefix,
+        lateBlocks: [renderedDynamicSuffix, runtimeContext, scratchpadBlock],
+      };
     } else {
       const customPrompt = promptOverride.mode === 'custom'
         ? (promptOverride.systemPrompt ?? '')
@@ -658,6 +668,10 @@ export async function handleMessageForTurn(
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');
+      promptAssembly = {
+        stablePrefix: customPrompt.trim(),
+        lateBlocks: [runtimeContext, scratchpadBlock],
+      };
     }
 
     const contextStageStart = Date.now();
@@ -677,6 +691,7 @@ export async function handleMessageForTurn(
         turnSnapshot.sessionContext,
         memoryManifestSeed,
         turnBudgetCharacteristics,
+        promptAssembly,
       ),
     );
     turnSnapshot.capturedAt = Date.now();

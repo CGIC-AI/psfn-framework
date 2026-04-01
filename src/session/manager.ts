@@ -53,6 +53,7 @@ import {
   buildSessionContext,
   DEFAULT_OBSERVATION_MASKING_WINDOW,
   applyObservationMasking,
+  type PromptAssemblyLayout,
 } from './manager/context-builder.js';
 import {
   buildSessionMetadataWithTurn,
@@ -903,6 +904,7 @@ export class SessionManager {
     turnSnapshot?: TurnSessionContextSnapshot,
     memoryManifestSeed?: ContextManifestMemorySeed,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    promptAssembly?: PromptAssemblyLayout,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     await this.awaitPendingAutoCompaction(resolvedChannelId);
@@ -923,6 +925,7 @@ export class SessionManager {
       systemPrompt,
       coreMemoryBlock,
       memoriesBlock,
+      promptAssembly,
       compactionPromptText,
       llmProvider,
       userId,

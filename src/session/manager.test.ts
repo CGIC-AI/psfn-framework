@@ -128,6 +128,65 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Complete Phase V task PSFN-du0t.');
   });
 
+  it('reorders structured prompt overlays behind stable prefix and session context blocks', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('ch1', 'Hello', 'u1', 'User');
+    mgr.setCoreMemoryProvider({
+      formatForContext: () => '[Core Memory]\nStable companion memory',
+    });
+    store.insertCompaction('ch1', 'Summary of older turns.', Date.now());
+    const continuityStore = new UserContinuityStore(dir);
+    mgr.continuityStore = continuityStore;
+    continuityStore.append('u1', {
+      channelId: 'api:other',
+      role: 'user',
+      content: 'Cross-channel continuity',
+      timestamp: Date.now(),
+      channelVisibility: 'public',
+      originChannelId: 'api:other',
+    });
+
+    const ctx = await mgr.buildContext(
+      'ch1',
+      'Static prefix\n\nDynamic overlay\n\n[Runtime Context]\nLive runtime\n\n[Scratchpad]\nTransient notes',
+      'Retrieved memory block',
+      undefined,
+      'u1',
+      undefined,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      {
+        stablePrefix: 'Static prefix',
+        lateBlocks: [
+          'Dynamic overlay',
+          '[Runtime Context]\nLive runtime',
+          '[Scratchpad]\nTransient notes',
+        ],
+      },
+    );
+
+    const staticIndex = ctx.systemPrompt.indexOf('Static prefix');
+    const coreIndex = ctx.systemPrompt.indexOf('[Core Memory]');
+    const summaryIndex = ctx.systemPrompt.indexOf('[Previous conversation summary]');
+    const continuityIndex = ctx.systemPrompt.indexOf('[Recent activity from other channels]');
+    const memoryIndex = ctx.systemPrompt.indexOf('Retrieved memory block');
+    const dynamicIndex = ctx.systemPrompt.indexOf('Dynamic overlay');
+    const runtimeIndex = ctx.systemPrompt.indexOf('[Runtime Context]');
+    const scratchpadIndex = ctx.systemPrompt.indexOf('[Scratchpad]');
+
+    expect(staticIndex).toBeGreaterThanOrEqual(0);
+    expect(coreIndex).toBeGreaterThan(staticIndex);
+    expect(summaryIndex).toBeGreaterThan(coreIndex);
+    expect(continuityIndex).toBeGreaterThan(summaryIndex);
+    expect(memoryIndex).toBeGreaterThan(continuityIndex);
+    expect(dynamicIndex).toBeGreaterThan(memoryIndex);
+    expect(runtimeIndex).toBeGreaterThan(dynamicIndex);
+    expect(scratchpadIndex).toBeGreaterThan(runtimeIndex);
+  });
+
   it('records memory manifest details when retrieval seed metadata is provided', async () => {
     const config = makeConfig({
       memoryRetrievalBudgetPct: 15,

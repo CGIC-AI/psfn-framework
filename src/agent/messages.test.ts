@@ -36,6 +36,13 @@ function makeAssistant(text: string): AssistantMessage {
   };
 }
 
+function getAssistantText(message: AssistantMessage): string {
+  return message.content
+    .filter((content): content is { type: 'text'; text: string } => content.type === 'text')
+    .map(content => content.text)
+    .join('\n');
+}
+
 function makeCompaction(summary: string): CompactionMessage {
   return { role: 'custom', type: 'compaction', summary, coveredUpTo: 5, timestamp: NOW };
 }
@@ -120,12 +127,12 @@ describe('convertToLlm', () => {
     );
   });
 
-  it('converts system note to user message with prefix', () => {
+  it('converts system note to an assistant-side internal note', () => {
     const messages: AgentMessage[] = [makeSystemNote('Agent restarted')];
     const result = convertToLlm(messages);
     expect(result).toHaveLength(1);
-    expect(result[0].role).toBe('user');
-    expect((result[0] as UserMessage).content).toBe('[System note] Agent restarted');
+    expect(result[0].role).toBe('assistant');
+    expect(getAssistantText(result[0] as AssistantMessage)).toBe('[System note] Agent restarted');
   });
 
   it('converts whisper to an assistant-side internal note', () => {
@@ -161,7 +168,8 @@ describe('convertToLlm', () => {
     expect(result).toHaveLength(5);
     expect((result[0] as UserMessage).content).toContain('[Previous conversation summary]');
     expect((result[1] as UserMessage).content).toBe('hello');
-    expect((result[2] as UserMessage).content).toContain('[System note]');
+    expect(result[2].role).toBe('assistant');
+    expect(getAssistantText(result[2] as AssistantMessage)).toContain('[System note]');
     expect((result[3] as UserMessage).content).toContain('[Mirror note from api:other]');
     expect(result[4].role).toBe('assistant');
   });

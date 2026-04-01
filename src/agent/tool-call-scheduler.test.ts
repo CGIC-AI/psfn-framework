@@ -288,8 +288,8 @@ describe('tool-call-scheduler', () => {
   it('skips remaining queued calls when steering messages arrive mid-batch', async () => {
     let steeringPollCount = 0;
     const telemetry = vi.fn();
-    const issueShow = makeTool(
-      'issue_show',
+    const beads = makeTool(
+      'beads',
       async () => ({
         content: [{ type: 'text', text: 'show' }],
         details: {},
@@ -297,14 +297,14 @@ describe('tool-call-scheduler', () => {
       {
         concurrency: makeConcurrencyMeta('exclusive', {
           exclusivityKeyPolicy: 'category_tool_name',
-          exclusivityKey: 'extended:issue_show',
+          exclusivityKey: 'extended:beads',
         }),
       },
     );
 
     const result = await executeToolCallsWithScheduler(
-      [issueShow],
-      makeAssistantMessage(['issue_show', 'issue_show', 'issue_show']),
+      [beads],
+      makeAssistantMessage(['beads', 'beads', 'beads']),
       async () => {
         steeringPollCount += 1;
         return steeringPollCount >= 1
@@ -333,22 +333,22 @@ describe('tool-call-scheduler', () => {
     const controller = new AbortController();
     controller.abort();
 
-    const issueShow = makeTool(
-      'issue_show',
+    const beads = makeTool(
+      'beads',
       async () => {
         throw new Error('aborted');
       },
       {
         concurrency: makeConcurrencyMeta('exclusive', {
           exclusivityKeyPolicy: 'category_tool_name',
-          exclusivityKey: 'extended:issue_show',
+          exclusivityKey: 'extended:beads',
         }),
       },
     );
 
     const result = await executeToolCallsWithScheduler(
-      [issueShow],
-      makeAssistantMessage(['issue_show']),
+      [beads],
+      makeAssistantMessage(['beads']),
       undefined,
       {
         signal: controller.signal,
@@ -361,7 +361,7 @@ describe('tool-call-scheduler', () => {
     expect(telemetry).toHaveBeenCalledWith(
       'agent.tools.scheduler.cancelled',
       expect.objectContaining({
-        toolName: 'issue_show',
+        toolName: 'beads',
       }),
     );
   });

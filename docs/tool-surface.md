@@ -259,12 +259,13 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `repo_commit` | `repo` | extended | Mutation stays gated. |
 | `repo_create_branch` | `repo` | extended | Mutation stays gated. |
 | `repo_open_pr` | `repo` | extended | Mutation stays gated. |
-| `issue_ready` | `beads` | always-on | Current tracked-work operations collapse into `beads`. |
-| `issue_show` | `beads` | always-on | Same family. |
-| `issue_create` | `beads` | extended | Mutation stays explicit. |
-| `issue_update` | `beads` | extended | Same family. |
-| `issue_close` | `beads` | extended | Same family. |
-| `issue_sync` | `beads` | background-only | Sync is maintenance, not a companion turn action. |
+| `issue_ready` | `beads` | hidden | Legacy alias now maps to `beads action="ready"`. |
+| `issue_show` | `beads` | hidden | Legacy alias now maps to `beads action="show"`. |
+| `issue_create` | `beads` | hidden | Legacy alias now maps to `beads action="create"`. |
+| `issue_update` | `beads` | hidden | Legacy alias now maps to `beads action="update"`. |
+| `issue_close` | `beads` | hidden | Legacy alias now maps to `beads action="close"`. |
+| `issue_sync` | `beads` | hidden | Legacy alias now maps to `beads action="sync"`. |
+| `beads` | `beads` | extended | Unified tracked-work surface with `action=ready|show|create|update|close|sync`; read-style actions share one registration, but mutation remains explicit via `action`. |
 | `session_new` | `session` | always-on | Continuity and conversation workflow belong together. |
 | `session_list` | `session` | always-on | Same family. |
 | `session_resume` | `session` | extended | Resume is a workflow action, not a read-only query. |

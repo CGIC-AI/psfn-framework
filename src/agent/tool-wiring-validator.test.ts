@@ -185,6 +185,28 @@ describe('validateToolWiring', () => {
     expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('shell.exec');
   });
 
+  it('requires unified beads tools to declare all beads gateway methods', () => {
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools: [makeTool('beads')],
+      gatewayClientMethods: new Set([
+        'beadsReady',
+        'beadsShow',
+        'beadsCreate',
+        'beadsUpdate',
+        'beadsClose',
+        'beadsSync',
+      ]),
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+
+    expect(report.validTools).toBe(0);
+    expect(report.invalidTools).toHaveLength(1);
+    expect(report.invalidTools[0].toolName).toBe('beads');
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('beads.ready');
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('beads.sync');
+  });
+
   it('flags gateway-dependent tools with partial metadata coverage', () => {
     const tools = [
       makeTool('repo', {

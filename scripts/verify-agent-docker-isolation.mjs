@@ -48,6 +48,8 @@ const packageJson = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
 );
 const readme = await readFile(path.join(root, "README.md"), "utf8");
+const operations = await readFile(path.join(root, "docs", "operations.md"), "utf8");
+const setup = await readFile(path.join(root, "docs", "setup.md"), "utf8");
 const productionCompose = await readFile(
   path.join(root, "docker", "docker-compose.production.yml"),
   "utf8",
@@ -122,6 +124,36 @@ requireText(
   readme,
   /npm run agent:docker:continuous\s+# Continuous\/dev profile \(isolated internal network\)/,
   'README.md must document "npm run agent:docker:continuous" as the continuous isolated profile',
+);
+requireText(
+  operations,
+  /npm run agent:docker\s+# Production profile \(network_mode:\s*"none"\)/,
+  'docs/operations.md must document "npm run agent:docker" as the production network_mode "none" profile',
+);
+requireText(
+  operations,
+  /npm run agent:docker:continuous\s+# Continuous\/dev profile \(isolated internal network\)/,
+  'docs/operations.md must document "npm run agent:docker:continuous" as the continuous isolated profile',
+);
+requireText(
+  operations,
+  /npm run verify:agent-docker-isolation/,
+  'docs/operations.md must point operators to the Docker isolation verification script',
+);
+requireText(
+  setup,
+  /npm run agent:docker\s+# Production profile \(network_mode:\s*"none"\)/,
+  'docs/setup.md must document "npm run agent:docker" as the production network_mode "none" profile',
+);
+requireText(
+  setup,
+  /npm run agent:docker:continuous\s+# Continuous\/dev profile \(isolated internal network\)/,
+  'docs/setup.md must document "npm run agent:docker:continuous" as the continuous isolated profile',
+);
+requireText(
+  setup,
+  /npm run verify:agent-docker-isolation/,
+  'docs/setup.md must point readers to the Docker isolation verification script',
 );
 
 if (failures.length > 0) {

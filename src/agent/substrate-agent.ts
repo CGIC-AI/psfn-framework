@@ -48,6 +48,7 @@ import {
 } from './stream-adapter.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
 import { convertToLlm, type WhisperMessage } from './messages.js';
+import { WHISPER_WORKER_LANE } from './worker-lanes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
 import type { SkillsRuntime } from '../skills/runtime.js';
@@ -605,21 +606,22 @@ export class SubstrateAgent {
    * Queue a follow-up message processed after the agent finishes current work.
    * Non-interrupting — waits for idle before delivery.
    *
-   * Intention appraisal follow-ups are injected as internal Whisper notes to self
-   * and are never persisted into the external session journal.
+   * Intention appraisal follow-ups are injected on the whisper worker lane,
+   * which is the internal metacognitive lane, not a task-focused subagent lane.
+   * They are never persisted into the external session journal.
    */
   followUp(message: SubstrateMessage): void {
     if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
       this.agent.followUp({
         role: 'custom',
-        type: 'whisper',
+        type: WHISPER_WORKER_LANE,
         content: message.content,
         speakerName: message.authorName.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
         timestamp: Date.now(),
       } satisfies WhisperMessage);
       log.debug('Queued follow-up', {
         channelId: message.channelId,
-        internalKind: 'whisper',
+        internalKind: WHISPER_WORKER_LANE,
       });
       return;
     }

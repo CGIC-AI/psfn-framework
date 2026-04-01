@@ -413,6 +413,7 @@ Examples:
 - handling a compact research task
 
 Subagents are lower-tier than shards and may become a faculty of their own.
+Subagents are task workers. They are not the same runtime lane as internal whispers or metacognitive self-direction.
 
 ### 6.12 Shard
 
@@ -503,6 +504,7 @@ Whispers are not:
 - channel-specific side messages
 
 The term `whisper` should be reserved for this internal role.
+Whispers are a metacognitive lane, not a task delegation surface. Task-focused subagents must not reuse whisper semantics.
 
 ### 6.16 Musing
 

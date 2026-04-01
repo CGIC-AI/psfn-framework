@@ -12,6 +12,7 @@ import type {
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { SessionEntry, CompactionSummary } from '../session/types.js';
 import { parseToolObservationMetadata } from '../session/tool-observation.js';
+import { WHISPER_WORKER_LANE } from './worker-lanes.js';
 
 // ── Custom message types ──
 
@@ -32,7 +33,8 @@ export interface SystemNoteMessage {
 
 export interface WhisperMessage {
   role: 'custom';
-  type: 'whisper';
+  /** Internal metacognitive lane only. Task-focused subagents do not use this type. */
+  type: typeof WHISPER_WORKER_LANE;
   content: string;
   speakerName?: string;
   timestamp: number;
@@ -118,7 +120,7 @@ export function isCustomMessage(m: AgentMessage): boolean {
  * Custom messages are converted:
  * - compaction → user message with summary prefix
  * - systemNote → user message with [System note] prefix
- * - whisper → assistant-side internal note
+ * - whisper → assistant-side internal metacognitive note
  * - mirror → compact user-side mirror note
  * - continuity → filtered out (injected into system prompt instead)
  */

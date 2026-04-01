@@ -41,6 +41,8 @@ export function getModelSignatureForPurpose(
 export function resolveTurnModelPurpose(
   message?: SubstrateMessage,
 ): ModelPurpose {
+  // Internal heartbeat/reflection turns are the companion's metacognitive lane,
+  // not task-focused subagents, so they route through the memory purpose.
   const channelId = message?.channelId ?? '';
   if (
     channelId === 'internal:heartbeat'

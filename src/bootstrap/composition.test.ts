@@ -341,14 +341,14 @@ describe('module loader + tool wiring revalidation', () => {
 
     const root = mkdtempSync(join(tmpdir(), 'psfn-module-post-validate-'));
     const registryPath = join(root, 'registry.json');
-    writeFileSync(registryPath, JSON.stringify([
-      {
-        id: 'mod-1',
-        name: 'planner',
-        source: moduleWithMismatchedGatewayMetadata('repo_commit'),
-        enabled: true,
-        installedAt: 100,
-        updatedAt: 100,
+      writeFileSync(registryPath, JSON.stringify([
+        {
+          id: 'mod-1',
+          name: 'planner',
+          source: moduleWithMismatchedGatewayMetadata('repo'),
+          enabled: true,
+          installedAt: 100,
+          updatedAt: 100,
         version: 1,
       },
     ], null, 2), 'utf-8');
@@ -368,10 +368,10 @@ describe('module loader + tool wiring revalidation', () => {
       target.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
       const summary = await moduleLoader.loadEnabledModules();
       expect(summary).toEqual({ attempted: 1, loaded: 1, failed: 0 });
-      expect(target.tools.map((tool) => tool.name)).toContain('repo_commit');
+      expect(target.tools.map((tool) => tool.name)).toContain('repo');
 
       target.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
-      expect(target.tools.map((tool) => tool.name)).not.toContain('repo_commit');
+      expect(target.tools.map((tool) => tool.name)).not.toContain('repo');
     } finally {
       await moduleLoader.shutdown();
       rmSync(root, { recursive: true, force: true });

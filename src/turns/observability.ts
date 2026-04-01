@@ -14,6 +14,7 @@ import type {
 import {
   cloneAdaptiveToolSnapshotTelemetry,
   cloneContextMessage,
+  clonePromptSectionCacheability,
   cloneToolSchema,
 } from './snapshot.js';
 
@@ -192,6 +193,11 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
       ? {
         prompt: {
           ...snapshot.prompt,
+          ...(snapshot.prompt.sectionCacheability
+            ? {
+              sectionCacheability: snapshot.prompt.sectionCacheability.map(clonePromptSectionCacheability),
+            }
+            : {}),
         },
       }
       : {}),
@@ -200,6 +206,11 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+          ...(snapshot.promptContext.sectionCacheability
+            ? {
+              sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability),
+            }
+            : {}),
         },
       }
       : {}),
@@ -267,11 +278,24 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
   return {
     ...snapshot,
     ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
+    ...(snapshot.prompt?.sectionCacheability
+      ? {
+        prompt: {
+          ...snapshot.prompt,
+          sectionCacheability: snapshot.prompt.sectionCacheability.map(clonePromptSectionCacheability),
+        },
+      }
+      : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
           ...snapshot.promptContext,
           messages: snapshot.promptContext.messages.map(cloneContextMessage),
+          ...(snapshot.promptContext.sectionCacheability
+            ? {
+              sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability),
+            }
+            : {}),
         },
       }
       : {}),

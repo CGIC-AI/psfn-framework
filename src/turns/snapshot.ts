@@ -8,11 +8,44 @@ import type { SessionEntry } from '../session/types.js';
 import type { ContextMessage, ToolSchema, TurnID } from '../types.js';
 import type { TrustLevel } from '../trust/types.js';
 
+export type PromptCacheabilityClass = 'static' | 'session_stable' | 'append_only' | 'volatile';
+
+export type PromptCacheBreaker =
+  | 'prompt_layer'
+  | 'macro'
+  | 'runtime'
+  | 'channel'
+  | 'task'
+  | 'tool'
+  | 'retrieval'
+  | 'scratchpad'
+  | 'session_history';
+
+export type PromptSectionKey =
+  | 'staticPrefixTemplate'
+  | 'dynamicSuffixTemplate'
+  | 'renderedStaticPrefix'
+  | 'renderedDynamicSuffix'
+  | 'runtimeContext'
+  | 'memoryContextBlock'
+  | 'scratchpadContext'
+  | 'assembledPrompt'
+  | 'finalSystemPrompt'
+  | 'messages';
+
+export interface PromptSectionCacheability {
+  section: PromptSectionKey;
+  cacheability: PromptCacheabilityClass;
+  cacheBreakers: PromptCacheBreaker[];
+  reason: string;
+}
+
 export interface TurnPromptSnapshot {
   staticPrefixTemplate: string;
   dynamicSuffixTemplate: string;
   staticHash: string;
   versionPointer: string;
+  sectionCacheability?: PromptSectionCacheability[];
 }
 
 export interface TurnSessionContextSnapshot {
@@ -48,6 +81,7 @@ export interface TurnPromptContextSnapshot {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: ContextMessage[];
+  sectionCacheability?: PromptSectionCacheability[];
 }
 
 export interface TurnToolContextSnapshot {
@@ -96,6 +130,15 @@ export function cloneEmotionalSnapshot(snapshot: EmotionalSnapshot): EmotionalSn
 
 export function cloneContextMessage(message: ContextMessage): ContextMessage {
   return { ...message };
+}
+
+export function clonePromptSectionCacheability(
+  section: PromptSectionCacheability,
+): PromptSectionCacheability {
+  return {
+    ...section,
+    cacheBreakers: [...section.cacheBreakers],
+  };
 }
 
 function cloneUnknownSchemaValue<T>(value: T): T {

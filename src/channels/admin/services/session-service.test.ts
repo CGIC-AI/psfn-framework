@@ -148,6 +148,14 @@ describe('AdminSessionDataService', () => {
             dynamicSuffixTemplate: 'Dynamic suffix',
             staticHash: 'static-hash',
             versionPointer: 'prompt-v1',
+            sectionCacheability: [
+              {
+                section: 'staticPrefixTemplate',
+                cacheability: 'static',
+                cacheBreakers: ['prompt_layer'],
+                reason: 'Static prefix remains frozen until prompt layers change.',
+              },
+            ],
           },
           promptContext: {
             renderedStaticPrefix: 'Rendered static prefix',
@@ -160,6 +168,14 @@ describe('AdminSessionDataService', () => {
             messages: [
               { role: 'user', content: 'hello' },
               { role: 'assistant', content: 'world' },
+            ],
+            sectionCacheability: [
+              {
+                section: 'memoryContextBlock',
+                cacheability: 'volatile',
+                cacheBreakers: ['retrieval'],
+                reason: 'Retrieved memory changes per turn.',
+              },
             ],
           },
           toolContext: {
@@ -316,6 +332,24 @@ describe('AdminSessionDataService', () => {
         messages: [
           { role: 'user', content: 'hello' },
           { role: 'assistant', content: 'world' },
+        ],
+        sectionCacheability: [
+          {
+            section: 'memoryContextBlock',
+            cacheability: 'volatile',
+            cacheBreakers: ['retrieval'],
+            reason: 'Retrieved memory changes per turn.',
+          },
+        ],
+      },
+      prompt: {
+        sectionCacheability: [
+          {
+            section: 'staticPrefixTemplate',
+            cacheability: 'static',
+            cacheBreakers: ['prompt_layer'],
+            reason: 'Static prefix remains frozen until prompt layers change.',
+          },
         ],
       },
       toolContext: {

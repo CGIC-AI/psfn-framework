@@ -85,6 +85,7 @@ import {
   cloneObservedAdaptiveToolSnapshot,
   readActiveTurnToolSchemas,
 } from './turn-tool-context.js';
+import { buildPromptContextSectionCacheability } from './prompt-lifecycle.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -688,6 +689,17 @@ export async function handleMessageForTurn(
       assembledPrompt: fullPrompt,
       finalSystemPrompt: context.systemPrompt,
       messages: context.messages.map(contextMessage => ({ ...contextMessage })),
+      sectionCacheability: buildPromptContextSectionCacheability({
+        promptSnapshot: turnSnapshot.prompt,
+        renderedStaticPrefix,
+        renderedDynamicSuffix,
+        runtimeContext,
+        memoryContextBlock,
+        scratchpadContext: scratchpadBlock,
+        assembledPrompt: fullPrompt,
+        finalSystemPrompt: context.systemPrompt,
+        messageCount: context.messages.length,
+      }),
     };
     await emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {

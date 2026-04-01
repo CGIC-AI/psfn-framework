@@ -100,6 +100,14 @@ function buildTurn(seed: {
         dynamicSuffixTemplate: 'Dynamic suffix',
         staticHash: `${seed.promptVersionPointer}-hash`,
         versionPointer: seed.promptVersionPointer,
+        sectionCacheability: [
+          {
+            section: 'staticPrefixTemplate',
+            cacheability: 'static',
+            cacheBreakers: ['prompt_layer'],
+            reason: 'Static prompt prefix.',
+          },
+        ],
       },
       promptContext: {
         renderedStaticPrefix: 'Rendered static prefix',
@@ -112,6 +120,14 @@ function buildTurn(seed: {
         messages: [
           { role: 'user', content: 'hello' },
           { role: 'assistant', content: 'world' },
+        ],
+        sectionCacheability: [
+          {
+            section: 'messages',
+            cacheability: 'append_only',
+            cacheBreakers: ['session_history'],
+            reason: 'Messages append with session history.',
+          },
         ],
       },
       toolContext: {
@@ -223,6 +239,14 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
           dynamicSuffixTemplate: 'Live dynamic',
           staticHash: 'live-hash',
           versionPointer: 'prompt-live',
+          sectionCacheability: [
+            {
+              section: 'staticPrefixTemplate',
+              cacheability: 'session_stable',
+              cacheBreakers: ['prompt_layer', 'macro', 'runtime'],
+              reason: 'Live prompt prefix uses macros.',
+            },
+          ],
         },
         promptContext: {
           renderedStaticPrefix: 'Rendered live static',
@@ -235,6 +259,14 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
           messages: [
             { role: 'user', content: 'earlier' },
             { role: 'assistant', content: 'reply' },
+          ],
+          sectionCacheability: [
+            {
+              section: 'messages',
+              cacheability: 'append_only',
+              cacheBreakers: ['session_history'],
+              reason: 'Messages append with session history.',
+            },
           ],
         },
         toolContext: {
@@ -303,9 +335,25 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
   assert.equal(metrics.promptVersionPointer, 'prompt-live');
   assert.equal(metrics.isComplete, false);
   assert.equal(mergedStages[0]?.snapshot?.promptContext?.finalSystemPrompt, 'Live final system prompt');
+  assert.deepEqual(mergedStages[0]?.snapshot?.prompt?.sectionCacheability, [
+    {
+      section: 'staticPrefixTemplate',
+      cacheability: 'session_stable',
+      cacheBreakers: ['prompt_layer', 'macro', 'runtime'],
+      reason: 'Live prompt prefix uses macros.',
+    },
+  ]);
   assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.messages, [
     { role: 'user', content: 'earlier' },
     { role: 'assistant', content: 'reply' },
+  ]);
+  assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.sectionCacheability, [
+    {
+      section: 'messages',
+      cacheability: 'append_only',
+      cacheBreakers: ['session_history'],
+      reason: 'Messages append with session history.',
+    },
   ]);
   assert.deepEqual(mergedStages[0]?.snapshot?.toolContext?.activeTools, [
     {

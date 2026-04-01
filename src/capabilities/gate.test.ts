@@ -329,6 +329,42 @@ describe('capability tool gating', () => {
     expect(session.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('gates unified vault actions by read versus runtime-write capability tokens', async () => {
+    const vault = createTool('vault');
+    const readGated = gateToolWithCapabilities(
+      vault.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const readDenied = await readGated.execute('vault-read', { action: 'read', name: 'Inbox' });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((readDenied.content[0] as any).text).toContain('identity.read');
+
+    const searchDenied = await readGated.execute('vault-search', { action: 'vault_search', query: 'focus' });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((searchDenied.content[0] as any).text).toContain('identity.read');
+
+    const writeGated = gateToolWithCapabilities(
+      vault.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const writeDenied = await writeGated.execute('vault-write', {
+      action: 'write',
+      name: 'Inbox',
+      content: 'entry',
+    });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((writeDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const dailyDenied = await writeGated.execute('vault-daily', { action: 'daily', content: 'journal' });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((dailyDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const ambiguousDenied = await writeGated.execute('vault-ambiguous', { name: 'Inbox', query: 'focus' });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((ambiguousDenied.content[0] as any).text).toContain('identity.read');
+    expect((ambiguousDenied.content[0] as any).text).toContain('identity.write.runtime');
+  });
+
   it('gates unified fs actions using git read/write capability requirements', async () => {
     const fsTool = createTool('fs');
     const readGated = gateToolWithCapabilities(

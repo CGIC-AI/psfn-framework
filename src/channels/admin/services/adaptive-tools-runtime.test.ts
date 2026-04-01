@@ -151,4 +151,100 @@ describe('deriveToolHealthViews', () => {
       },
     });
   });
+
+  it('shows unified vault health and degrades when gateway action coverage is partial', () => {
+    const views = deriveToolHealthViews({
+      catalog: {
+        generatedAt: 1,
+        tools: [
+          {
+            name: 'vault',
+            description: 'Unified durable vault surface for Obsidian notes, search, and daily journaling.',
+            scope: 'extended',
+            wiringMeta: {
+              requiredServices: ['vault'],
+              requiredGatewayMethods: ['vault.write', 'vault.read', 'vault.search', 'vault.daily'],
+            },
+          },
+        ],
+      },
+      state: {
+        generatedAt: 2,
+        coreTools: [],
+        extendedTools: ['vault'],
+        promotedToolsConfigured: [],
+        promotedToolsActive: [],
+        promotedToolsSkipped: [],
+        loadedExtendedTools: [],
+        activeTools: [],
+        lastSnapshot: null,
+      },
+      serviceHealth: [
+        {
+          serviceId: 'gateway',
+          status: 'healthy',
+          detail: 'Gateway is configured.',
+          checkedAt: 1,
+        },
+        {
+          serviceId: 'vault',
+          status: 'healthy',
+          detail: 'Gateway vault RPC is enabled for read, search.',
+          checkedAt: 1,
+          availableActions: ['read', 'search'],
+        },
+      ],
+      recentFailures: [],
+    });
+
+    expect(views).toEqual([
+      expect.objectContaining({
+        name: 'vault',
+        health: {
+          status: 'degraded',
+          detail: 'Vault is missing actions required by the unified tool: write, daily.',
+        },
+        contexts: {
+          chat: {
+            status: 'available',
+            detail: 'Extended tool can be activated or pinned on demand.',
+          },
+          internalHeartbeat: {
+            status: 'available',
+            detail: 'Extended tool can be activated or pinned on demand.',
+          },
+        },
+      }),
+    ]);
+  });
+
+  it('adds a conditional unified vault tool when vault service health is unavailable', () => {
+    const views = deriveToolHealthViews({
+      catalog: {
+        generatedAt: 1,
+        tools: [],
+      },
+      state: null,
+      serviceHealth: [
+        {
+          serviceId: 'vault',
+          status: 'unavailable',
+          detail: 'Gateway vault RPC is enabled but operations are not configured.',
+          checkedAt: 1,
+        },
+      ],
+      recentFailures: [],
+    });
+
+    expect(views).toEqual([
+      expect.objectContaining({
+        name: 'vault',
+        scope: 'conditional',
+        health: {
+          status: 'unavailable',
+          detail: 'Gateway vault RPC is enabled but operations are not configured.',
+        },
+      }),
+    ]);
+  });
 });

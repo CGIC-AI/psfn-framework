@@ -178,6 +178,19 @@ The runtime now targets a unified model-facing `web` surface for outward web wor
 
 This keeps ordinary page retrieval, crawler-style browsing, and small-scope web research under one semantic tool family instead of exposing multiple near-duplicate web micro-tools to the model.
 
+## Live Vault Surface
+
+The runtime now exposes a unified model-facing `vault` tool for durable notes, Obsidian search, and daily journaling.
+
+- Actions: `read`, `write`, `search`, `daily`
+- Legacy migration aliases remain available inside the same tool:
+  `vault_read` -> `read`
+  `vault_write` -> `write`
+  `vault_search` -> `search`
+  `vault_daily` -> `daily`
+
+This keeps durable note creation, retrieval, search, and daily-note workflows on one semantic surface instead of scattering them across vault micro-tools. `vault` stays distinct from `scratchpad` and `memory`: scratchpad is temporary working context, memory is structured recall, and vault is for durable notes and artifacts.
+
 ### Hidden Or Background-Only Surfaces
 
 - reflection internals
@@ -275,10 +288,10 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work; forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
 | `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |
 | `skill` | `skill` | always-on | Unified surface with `action=list|view|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
-| `vault_write` | `vault` | extended | Vault mutations stay explicit. |
-| `vault_read` | `vault` | always-on | Vault reads remain a semantic tool. |
-| `vault_search` | `vault` | always-on | Same family. |
-| `vault_daily` | `vault` | extended | Daily journal emission belongs with the vault surface. |
+| `vault_write` | `vault` | extended | Collapsed into `vault action="write"`; vault stays for durable notes/artifacts, not scratchpad or memory. |
+| `vault_read` | `vault` | always-on | Collapsed into `vault action="read"`. |
+| `vault_search` | `vault` | always-on | Collapsed into `vault action="search"`. |
+| `vault_daily` | `vault` | extended | Collapsed into `vault action="daily"`; daily journaling stays on the same durable note surface. |
 | `image_create` | `media` | extended | Collapsed into `media action="generate"`; detailed prompt craft belongs in creator skills, not runtime context. |
 | `image_edit` | `media` | extended | Collapsed into `media action="edit"` on the same surface. |
 | `image_analyze` | `media` | extended | Collapsed into `media action="analyze"` on the same surface. |

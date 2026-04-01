@@ -429,6 +429,23 @@ describe('handleMessageForTurn compaction scheduling', () => {
 
     await handleMessageForTurn(runtime, createMessage('msg-full-context'));
 
+    const buildContextCall = buildContext.mock.calls[0];
+    expect(buildContextCall).toBeDefined();
+    expect(buildContextCall[0]).toBe('ch1');
+    expect(buildContextCall[1]).toBe(
+      'Rendered static prefix\n\nDynamic suffix template\n\nPersona hint\n\nRuntime context block\n\nScratchpad block',
+    );
+    expect(buildContextCall[2]).toBe('Retrieved memory block');
+    expect(buildContextCall[4]).toBe('contact-1');
+    expect(buildContextCall[10]).toEqual({
+      stablePrefix: 'Rendered static prefix',
+      lateBlocks: [
+        'Dynamic suffix template\n\nPersona hint',
+        'Runtime context block',
+        'Scratchpad block',
+      ],
+    });
+
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;

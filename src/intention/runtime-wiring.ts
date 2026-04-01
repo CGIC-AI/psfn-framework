@@ -13,7 +13,9 @@ import {
 } from './care-reminders.js';
 import {
   PendingFollowUpStore,
+  evaluatePendingFollowUpWakeState,
   type PendingFollowUpContextProvider,
+  type PendingFollowUp,
 } from './pending-follow-ups.js';
 import type {
   ActiveConcernSnapshot,
@@ -75,10 +77,19 @@ export interface IntentionAppraisalHooks {
     canonicalContactKey?: string;
     sourceMessageId: string;
   }): string | undefined;
+  getPendingFollowUpsForResurfacing(input: {
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    isBackgroundTurn: boolean;
+    now: number;
+    motivationSignals?: readonly string[];
+    currentMoodValence?: number | null;
+  }): readonly PendingFollowUp[];
   onIntentionFollowUpActivated(input: {
     pendingFollowUpId: string;
     activationReason?: string;
-  }): void;
+  }): boolean;
   onIntentionReminderDecision(input: {
     decision: IntentionActionDecision;
     channelId: string;
@@ -227,6 +238,13 @@ function normalizeObservedAtIso(value: number | undefined): string | undefined {
   return new Date(Math.floor(value)).toISOString();
 }
 
+function normalizeOptionalIsoTimestamp(value: number | undefined): string | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return new Date(Math.floor(value)).toISOString();
+}
+
 export function createIntentionAppraisalHooks(
   concernStore: ActiveConcernStore,
   pendingFollowUpStore: PendingFollowUpStore,
@@ -283,7 +301,9 @@ export function createIntentionAppraisalHooks(
         return undefined;
       }
       const content = resolveFollowUpDecisionContent(decision);
-      const followUp = pendingFollowUpStore.create({
+      const pendingFollowUpId = normalizeOptionalText(decision.followUp?.pendingFollowUpId);
+      const dueAt = normalizeOptionalIsoTimestamp(decision.dueAt);
+      const followUpInput = {
         content,
         priority: decision.priority,
         timing: decision.timing === 'none' ? 'immediate' : decision.timing,
@@ -291,19 +311,47 @@ export function createIntentionAppraisalHooks(
         channelType: decision.followUp?.channelType ?? channelType,
         authorId: 'system:intention',
         authorName: 'Whisper',
-        ...(decision.dueAt ? { dueAt: normalizeFutureIsoTimestamp(decision.dueAt) } : {}),
+        ...(dueAt ? { dueAt } : {}),
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         sourceMessageId,
-      });
+        contextSummary: normalizeOptionalText(decision.followUp?.contextSummary)
+          ?? normalizeOptionalText(decision.reason),
+        wakeConditions: decision.followUp?.wakeConditions,
+      } satisfies Parameters<PendingFollowUpStore['create']>[0];
+      const followUp = pendingFollowUpId
+        ? pendingFollowUpStore.update(pendingFollowUpId, followUpInput)
+          ?? pendingFollowUpStore.create(followUpInput)
+        : pendingFollowUpStore.create(followUpInput);
       return followUp.id;
     },
+    getPendingFollowUpsForResurfacing: ({
+      canonicalContactKey,
+      sourceMessageId,
+      isBackgroundTurn,
+      now,
+      motivationSignals,
+      currentMoodValence,
+    }) => (
+      pendingFollowUpStore
+        .getPendingFollowUps(canonicalContactKey)
+        .filter(followUp => followUp.sourceMessageId !== sourceMessageId)
+        .filter((followUp) => {
+          const wakeState = evaluatePendingFollowUpWakeState(followUp, {
+            now,
+            isBackgroundTurn,
+            motivationSignals,
+            currentMoodValence,
+          });
+          return wakeState.matchedWakeConditions.length > 0;
+        })
+    ),
     onIntentionFollowUpActivated: ({
       pendingFollowUpId,
       activationReason,
     }) => {
-      pendingFollowUpStore.markActivated(pendingFollowUpId, {
+      return pendingFollowUpStore.markActivated(pendingFollowUpId, {
         ...(activationReason ? { activationReason } : {}),
-      });
+      }) !== null;
     },
     onIntentionReminderDecision: ({
       decision,

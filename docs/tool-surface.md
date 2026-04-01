@@ -26,6 +26,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `schedule`
 - `north_star`
 - `identity`
+- `subagent`
 - `shard`
 - `vault`
 - `beads`
@@ -50,6 +51,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - Rename `core_memory` to `orient`; the companion should read that as active orientation, not deep archival memory.
 - Keep `scratchpad` as the ephemeral long-context workspace for large temporary material such as PDFs, articles, and working notes.
 - Use `think` as an explicit fallback for deep reasoning, not as the default escape hatch.
+- Keep bounded worker control on `subagent` with `action=spawn|message|wait|cancel|status`.
 - Keep shard and subagent names distinct because they model different work durations and isolation semantics.
 
 ## Current-To-Target Migration Map
@@ -123,6 +125,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `self_restart` | `system` | extended | Runtime control belongs under system. |
 | `self_rebuild` | `system` | extended | Same family. |
 | `notify_operator` | `notify` | extended | Operator escalation is its own primitive. |
+| `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
 | `spawn_shard` | `shard` | extended | Long-horizon clone work is shard work, not subagent work. |
 | `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |
 | `skill_list` | `skill` | always-on | Skill management stays explicit. |

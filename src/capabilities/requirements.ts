@@ -70,6 +70,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   self_rebuild: 'lifecycle.rebuild',
   self_restart: 'lifecycle.restart',
   settings_get: 'identity.read',
+  subagent: 'subagent.spawn',
   spawn_shard: 'shard.spawn',
   think: 'repl.execute',
   vault_write: 'identity.write.runtime',

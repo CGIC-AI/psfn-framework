@@ -82,6 +82,11 @@ export interface SubagentRuntimeTaskView {
   resume: SubagentRuntimeResumeView;
 }
 
+export interface SubagentRuntimeTaskDetail {
+  view: SubagentRuntimeTaskView;
+  result?: SubagentResult;
+}
+
 export interface SubagentRuntimeSnapshot {
   generatedAt: number;
   activeCount: number;

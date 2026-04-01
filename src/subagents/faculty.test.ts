@@ -186,6 +186,58 @@ describe('SubagentFaculty', () => {
     expect(entries[1]?.content).toBe('task completed');
   });
 
+  it('exposes operator-visible runtime snapshots with transcripts, artifacts, and resume state', async () => {
+    mockSubagentContent = 'task completed';
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const result = await faculty.execute({
+      name: 'snapshot',
+      task: 'capture runtime state',
+    });
+
+    const snapshot = faculty.getRuntimeSnapshot({ transcriptLimit: 10 });
+    expect(snapshot.activeCount).toBe(0);
+    expect(snapshot.recentTasks).toHaveLength(1);
+
+    const [taskView] = snapshot.recentTasks;
+    expect(taskView).toMatchObject({
+      task: expect.objectContaining({
+        subagentId: result.subagentId,
+        lifecycleState: 'completed',
+        workerLane: 'subagent',
+      }),
+      transcriptMessageCount: 2,
+      transcriptTruncated: false,
+      resume: {
+        channelId: `subagent:${result.subagentId}`,
+        lifecycleState: 'completed',
+        resumable: false,
+        transcriptAvailable: true,
+        transcriptMessageCount: 2,
+        transcriptTruncated: false,
+        lastActivityAt: expect.any(Number),
+        lastMessageId: expect.any(Number),
+      },
+    });
+    expect(taskView.transcript).toHaveLength(2);
+    expect(taskView.transcript[0]?.content).toBe('capture runtime state');
+    expect(taskView.transcript[1]?.content).toBe('task completed');
+    expect(taskView.artifacts).toEqual([
+      expect.objectContaining({
+        kind: 'final_output',
+        content: 'task completed',
+      }),
+    ]);
+  });
+
   it('delegates Wyoming sessions through subagent lifecycle without shard ids', async () => {
     mockSubagentContent = 'wyoming delegated response';
     const auditTrail = {

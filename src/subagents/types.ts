@@ -1,4 +1,5 @@
 import type { SubagentWorkerLane } from '../agent/worker-lanes.js';
+import type { SessionEntry } from '../session/types.js';
 import type { GatewayRoutingEnvelope, SubstrateMessage, WyomingRoutingMetadata } from '../types.js';
 
 export type SubagentTaskLifecycleState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -52,4 +53,47 @@ export interface SubagentResult {
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
+}
+
+export interface SubagentRuntimeArtifactView {
+  kind: 'final_output';
+  content: string;
+  timestamp: number;
+  sourceMessageId?: number;
+}
+
+export interface SubagentRuntimeResumeView {
+  channelId: string;
+  lifecycleState: SubagentTaskLifecycleState;
+  resumable: boolean;
+  transcriptAvailable: boolean;
+  transcriptMessageCount: number;
+  transcriptTruncated: boolean;
+  lastActivityAt?: number;
+  lastMessageId?: number;
+}
+
+export interface SubagentRuntimeTaskView {
+  task: SubagentTaskRecord;
+  transcript: SessionEntry[];
+  transcriptMessageCount: number;
+  transcriptTruncated: boolean;
+  artifacts: SubagentRuntimeArtifactView[];
+  resume: SubagentRuntimeResumeView;
+}
+
+export interface SubagentRuntimeSnapshot {
+  generatedAt: number;
+  activeCount: number;
+  activeTasks: SubagentRuntimeTaskView[];
+  recentTasks: SubagentRuntimeTaskView[];
+}
+
+export interface SubagentRuntimeSnapshotOptions {
+  taskLimit?: number;
+  transcriptLimit?: number;
+}
+
+export interface SubagentRuntimeSnapshotProvider {
+  getRuntimeSnapshot(options?: SubagentRuntimeSnapshotOptions): SubagentRuntimeSnapshot;
 }

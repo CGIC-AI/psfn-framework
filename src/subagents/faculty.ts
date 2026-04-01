@@ -28,6 +28,11 @@ import type { SubagentExecutionPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type {
   SubagentExecutionRequest,
+  SubagentRuntimeArtifactView,
+  SubagentRuntimeResumeView,
+  SubagentRuntimeSnapshot,
+  SubagentRuntimeSnapshotOptions,
+  SubagentRuntimeTaskView,
   SubagentResult,
   SubagentTaskRecord,
   WyomingSubagentDelegationRequest,
@@ -373,6 +378,35 @@ export class SubagentFaculty implements SubagentExecutionPort {
     return this.taskRegistry.getRecentTasks(limit);
   }
 
+  getRuntimeSnapshot(options: SubagentRuntimeSnapshotOptions = {}): SubagentRuntimeSnapshot {
+    const taskLimit = normalizePositiveInteger(options.taskLimit, 10);
+    const transcriptLimit = normalizePositiveInteger(options.transcriptLimit, 8);
+    const activeTasks = this.taskRegistry.getActiveTasks().map(task => this.buildRuntimeTaskView(task, transcriptLimit));
+    const recentTasks = this.taskRegistry.getRecentTasks(taskLimit).map(task => this.buildRuntimeTaskView(task, transcriptLimit));
+
+    return {
+      generatedAt: Date.now(),
+      activeCount: this.taskRegistry.getActiveCount(),
+      activeTasks,
+      recentTasks,
+    };
+  }
+
+  getRuntimeTaskView(subagentId: string, options: SubagentRuntimeSnapshotOptions = {}): SubagentRuntimeTaskView | null {
+    const transcriptLimit = normalizePositiveInteger(options.transcriptLimit, 8);
+    const active = this.taskRegistry.getActiveTask(subagentId);
+    if (active) {
+      return this.buildRuntimeTaskView(active, transcriptLimit);
+    }
+
+    const recent = this.taskRegistry.getRecentTasks(Number.MAX_SAFE_INTEGER).find(task => task.subagentId === subagentId);
+    if (!recent) {
+      return null;
+    }
+
+    return this.buildRuntimeTaskView(recent, transcriptLimit);
+  }
+
   private buildBaseMessage(
     subagentId: string,
     executionChannelId: string,
@@ -491,6 +525,53 @@ export class SubagentFaculty implements SubagentExecutionPort {
       channelId: task.channelId,
     });
   }
+
+  private buildRuntimeTaskView(
+    task: SubagentTaskRecord,
+    transcriptLimit: number,
+  ): SubagentRuntimeTaskView {
+    const transcript = this.deps.sessionStore.getRecent(task.channelId, transcriptLimit);
+    const transcriptMessageCount = this.deps.sessionStore.count(task.channelId);
+    const transcriptTruncated = transcriptMessageCount > transcriptLimit;
+    const latestAssistantEntry = [...transcript].reverse().find(entry => entry.role === 'assistant' && entry.content.trim().length > 0);
+    const artifacts: SubagentRuntimeArtifactView[] = latestAssistantEntry
+      ? [{
+        kind: 'final_output',
+        content: latestAssistantEntry.content,
+        timestamp: latestAssistantEntry.timestamp,
+        ...(typeof latestAssistantEntry.id === 'number' ? { sourceMessageId: latestAssistantEntry.id } : {}),
+      }]
+      : [];
+
+    const lastEntry = transcript.at(-1);
+    const lastActivityAt = lastEntry?.timestamp
+      ?? task.finishedAt
+      ?? task.startedAt
+      ?? task.createdAt;
+    const resume: SubagentRuntimeResumeView = {
+      channelId: task.channelId,
+      lifecycleState: task.lifecycleState,
+      resumable: task.lifecycleState === 'queued' || task.lifecycleState === 'running',
+      transcriptAvailable: transcriptMessageCount > 0,
+      transcriptMessageCount,
+      transcriptTruncated,
+    };
+    if (Number.isFinite(lastActivityAt)) {
+      resume.lastActivityAt = lastActivityAt;
+    }
+    if (lastEntry) {
+      resume.lastMessageId = lastEntry.id;
+    }
+
+    return {
+      task,
+      transcript,
+      transcriptMessageCount,
+      transcriptTruncated,
+      artifacts,
+      resume,
+    };
+  }
 }
 
 function normalizeExecutionChannelId(channelId: string | undefined): string | null {
@@ -518,4 +599,11 @@ function normalizeToolNames(
   fallback: readonly string[] = [],
 ): string[] {
   return normalizeCapabilityTokens(names, fallback);
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number): number {
+  const normalized = typeof value === 'number' && Number.isFinite(value)
+    ? Math.trunc(value)
+    : fallback;
+  return Math.max(1, normalized);
 }

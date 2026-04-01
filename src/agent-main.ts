@@ -69,7 +69,7 @@ import {
   toRuntimeStatusMetadata,
 } from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
-import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
+import { createSystemTool } from './tools/lifecycle.js';
 import {
   createGatewayDiscordNotifySender,
   createGatewayNtfyNotifier,
@@ -1100,26 +1100,14 @@ async function main(): Promise<void> {
     await stopPromise;
   };
 
-  agentLoop.registerTool(createRestartTool(
-    lifecycleNotifier,
+  agentLoop.registerTool(createSystemTool(config, {
+    notifier: lifecycleNotifier,
     stopFn,
-    {
-      restartSafeguard: lifecycleRestartSafeguard,
-      getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRuntimeContract.restart.command,
-      runtimeMode: lifecycleRuntimeContract.mode,
-    },
-  ));
-  agentLoop.registerTool(createRebuildTool(
-    lifecycleNotifier,
-    stopFn,
-    {
-      restartSafeguard: lifecycleRestartSafeguard,
-      getCapabilityTier: () => capabilityRuntime.getTier(),
-      restartCommand: lifecycleRuntimeContract.restart.command,
-      runtimeMode: lifecycleRuntimeContract.mode,
-    },
-  ));
+    restartSafeguard: lifecycleRestartSafeguard,
+    getCapabilityTier: () => capabilityRuntime.getTier(),
+    restartCommand: lifecycleRuntimeContract.restart.command,
+    runtimeMode: lifecycleRuntimeContract.mode,
+  }));
   agentLoop.registerTool(createNotifyTool(notifyDispatcher, { gatewayMode: true }));
 
   // Vault auto-publisher (for heartbeat reflections → Obsidian vault)

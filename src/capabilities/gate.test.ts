@@ -75,12 +75,12 @@ describe('capability tool gating', () => {
     await statusGated.execute('call-1', {});
     expect(repoStatus.executeSpy).toHaveBeenCalledTimes(1);
 
-    const restart = createTool('self_restart');
+    const restart = createTool('system');
     const restartGated = gateToolWithCapabilities(
       restart.tool,
       () => accessForTier('apprentice'),
     );
-    const denied = await restartGated.execute('call-2', {});
+    const denied = await restartGated.execute('call-2', { action: 'restart', reason: 'apply config' });
 
     expect(restart.executeSpy).not.toHaveBeenCalled();
     expect((denied.details as any).capabilityDenied).toBe(true);
@@ -201,12 +201,12 @@ describe('capability tool gating', () => {
   });
 
   it('grants autonomous tier access for locked tools', async () => {
-    const restart = createTool('self_restart');
+    const restart = createTool('system');
     const restartGated = gateToolWithCapabilities(
       restart.tool,
       () => accessForTier('autonomous'),
     );
-    await restartGated.execute('call-1', {});
+    await restartGated.execute('call-1', { action: 'restart', reason: 'apply config' });
     expect(restart.executeSpy).toHaveBeenCalledTimes(1);
 
     const repoCommit = createTool('repo_commit');

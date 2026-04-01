@@ -24,9 +24,6 @@ import type {
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import {
-  createSettingsGetTool,
-} from '../settings-tools.js';
 import type { MemoryWriter } from '../memory/writer.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../filesystem/runtime-wiring.js';
 import type { SessionManager } from '../session/manager.js';
@@ -140,6 +137,7 @@ import {
   WHISPER_WORKER_LANE,
   createWorkerExecutionPolicy,
 } from '../agent/worker-lanes.js';
+import { createSystemTool } from '../tools/lifecycle.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
@@ -399,7 +397,7 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
 }
 
 /**
- * Wire runtime settings introspection tool (read-only).
+ * Wire unified system tool with read-only settings access in parity mode.
  * Shared across runtime.ts and agent-main.ts.
  */
 export function wireSettingsRuntime(
@@ -409,7 +407,7 @@ export function wireSettingsRuntime(
     getMemoryWriter?: () => Pick<MemoryWriter, 'write'> | undefined;
   } = {},
 ): void {
-  target.registerTool(createSettingsGetTool(config), 'core');
+  target.registerTool(createSystemTool(config), 'core');
   if (options.getMemoryWriter && hasToolsetMemoryWriterTarget(target)) {
     target.setToolsetMemoryWriter(options.getMemoryWriter);
   }

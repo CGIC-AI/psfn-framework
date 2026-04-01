@@ -78,7 +78,6 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'repo_diff',
   'issue_ready',
   'issue_show',
-  'settings_get',
   'tool_search',
   'heartbeat_get_policy',
   'contact_lookup',

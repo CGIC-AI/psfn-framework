@@ -59,7 +59,7 @@ import {
   toRuntimeStatusMetadata,
 } from './lifecycle/runtime-mode.js';
 import { inferSessionChannelType } from './session/session-id.js';
-import { createRestartTool, createRebuildTool } from './tools/lifecycle.js';
+import { createSystemTool } from './tools/lifecycle.js';
 import {
   createHttpNtfyNotifierFromEnv,
   createNotifyDispatcher,
@@ -917,33 +917,22 @@ export class SubstrateRuntime implements Lifecycle {
       });
     });
 
-    // Lifecycle tools — self_restart and self_rebuild
-    this.agentLoop.registerTool(createRestartTool(
-      this.lifecycleNotifier,
-      () => this.stop({
+    // Unified system tool — settings reads plus restart/rebuild lifecycle actions
+    this.agentLoop.registerTool(createSystemTool(this.config, {
+      notifier: this.lifecycleNotifier,
+      restartStopFn: () => this.stop({
         notifyShutdown: false,
         shutdownReason: 'restart requested',
       }),
-      {
-        restartSafeguard: lifecycleRestartSafeguard,
-        getCapabilityTier: () => this.capabilityRuntime.getTier(),
-        restartCommand: lifecycleRuntimeContract.restart.command,
-        runtimeMode: lifecycleRuntimeContract.mode,
-      },
-    ));
-    this.agentLoop.registerTool(createRebuildTool(
-      this.lifecycleNotifier,
-      () => this.stop({
+      rebuildStopFn: () => this.stop({
         notifyShutdown: false,
         shutdownReason: 'rebuild restart requested',
       }),
-      {
-        restartSafeguard: lifecycleRestartSafeguard,
-        getCapabilityTier: () => this.capabilityRuntime.getTier(),
-        restartCommand: lifecycleRuntimeContract.restart.command,
-        runtimeMode: lifecycleRuntimeContract.mode,
-      },
-    ));
+      restartSafeguard: lifecycleRestartSafeguard,
+      getCapabilityTier: () => this.capabilityRuntime.getTier(),
+      restartCommand: lifecycleRuntimeContract.restart.command,
+      runtimeMode: lifecycleRuntimeContract.mode,
+    }));
     this.agentLoop.registerTool(createNotifyTool(
       createNotifyDispatcher({
         briefNotifier: operatorNotifier,

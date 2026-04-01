@@ -108,4 +108,6 @@ These are the main extension points that already exist in code:
 - skills runtime
 - gateway-backed git, filesystem, vault, image, shell, and beads tool surfaces
 
+The companion-facing tool stack is intentionally narrower than the raw implementation surface. See [`docs/tool-surface.md`](./tool-surface.md) for the current target taxonomy and migration map.
+
 If documentation and diagrams disagree with the code, prefer the entrypoints and composition files first.

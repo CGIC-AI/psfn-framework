@@ -550,6 +550,8 @@ That means:
 - the same conversation can continue across Discord, Telegram, admin chat, API, and future surfaces
 - context should flow across channels appropriately
 - short-term and long-term memory should preserve continuity rather than encouraging fake resets
+- low-stress checkpoint and wake/return surfaces should stay bounded, summary-like, and easy to revisit
+- those continuity aids must remain truthful about uncertainty; they are anchors for return, not license to pretend nothing changed
 
 This does not mean all channels are privacy-equivalent. Trust, privacy, and embodiment context still apply.
 

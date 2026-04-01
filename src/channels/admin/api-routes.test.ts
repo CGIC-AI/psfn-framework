@@ -25,6 +25,7 @@ import {
   getDefaultPromptText,
 } from '../../identity/prompt-registry.js';
 import { CharacterCardVersionStore } from '../../identity/card-versioning.js';
+import { SessionContinuityArtifactStore } from '../../session/continuity-artifacts.js';
 import { loadSettings } from '../../settings.js';
 import { saveCapabilityTierConfig } from '../../config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../config/models-config.js';
@@ -38,6 +39,7 @@ import type { ScheduledTask } from '../../scheduler/types.js';
 import { createTurnId } from '../../turns/id.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
+import { resolveSessionContinuityArtifactsDir } from '../../persistence/layout.js';
 
 function request(
   port: number,
@@ -2118,6 +2120,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('supports session list and messages endpoints', async () => {
     const turnId = createTurnId();
+    const continuityArtifactStore = new SessionContinuityArtifactStore(resolveSessionContinuityArtifactsDir(tempDir));
     sessionStore.append({
       channelId: 'api-session',
       role: 'user',
@@ -2174,6 +2177,22 @@ describe('AdminServer JSON API routes', () => {
         sessionState: 'session-v1',
       },
       provenanceRefs: [`turn:${turnId}`],
+    });
+    continuityArtifactStore.append({
+      sessionId: 'api-session',
+      kind: 'checkpoint',
+      summary: 'We are resuming the same thread with the practical next step still clear.',
+      facets: ['task', 'life'],
+      nextAnchor: 'Pick back up with the pending runtime-context assertions.',
+      createdAt: '2026-04-01T12:00:00.000Z',
+    });
+    continuityArtifactStore.append({
+      sessionId: 'api-session',
+      kind: 'wake_return',
+      occasion: 'return',
+      summary: 'Returning after a pause: the thread is calm, and there is no relational repair pending.',
+      facets: ['task', 'relational'],
+      createdAt: '2026-04-01T12:05:00.000Z',
     });
 
     await eventBus.emit('agent.turn.snapshot', {
@@ -2404,6 +2423,12 @@ describe('AdminServer JSON API routes', () => {
     expect(messagesRes.status).toBe(200);
     const messagesPayload = JSON.parse(messagesRes.body) as {
       messages: Array<{ content: string }>;
+      continuityArtifacts: Array<{
+        kind: string;
+        occasion?: string;
+        nextAnchor?: string;
+        facets: string[];
+      }>;
       turns: Array<{
         record: { turnId: string; versionPointers: { memoryState?: string } };
         stages: Array<{ stage: string; data: { memoryChars?: number } }>;
@@ -2448,6 +2473,17 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(messagesPayload.messages.map(message => message.content)).toContain('hello');
     expect(messagesPayload.messages.map(message => message.content)).toContain('world');
+    expect(messagesPayload.continuityArtifacts).toHaveLength(2);
+    expect(messagesPayload.continuityArtifacts[0]).toMatchObject({
+      kind: 'wake_return',
+      occasion: 'return',
+      facets: ['task', 'relational'],
+    });
+    expect(messagesPayload.continuityArtifacts[1]).toMatchObject({
+      kind: 'checkpoint',
+      nextAnchor: 'Pick back up with the pending runtime-context assertions.',
+      facets: ['task', 'life'],
+    });
     expect(messagesPayload.turns).toHaveLength(1);
     expect(messagesPayload.turns[0]?.record.turnId).toBe(turnId);
     expect(messagesPayload.turns[0]?.record.versionPointers.memoryState).toBe('memory-v1');

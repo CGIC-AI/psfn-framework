@@ -737,9 +737,13 @@ describe('schedule', () => {
       title: 'Alex birthday',
       classification: 'birthday',
       provenanceSource: 'companion_appraisal',
+      checkpointSummary: 'Mentioned explicitly in conversation.',
+      wakeReturnSummary: 'Returns annually; next due 2026-04-10T09:00:00.000Z.',
     });
     expect(payload.followUps[0]).toMatchObject({
       content: 'Check in when they next message about the move.',
+      checkpointSummary: 'Moving week follow-up.',
+      wakeReturnSummary: 'Returns on the next user turn, with a due fallback at 2026-04-05T12:00:00.000Z.',
       wakeConditions: ['next_user_turn'],
     });
     expect(payload.plannedTasks[0]).toMatchObject({

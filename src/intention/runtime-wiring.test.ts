@@ -4,6 +4,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import {
+  buildCareReminderCheckpointSummary,
+  buildCareReminderWakeReturnSummary,
+  buildPendingFollowUpCheckpointSummary,
+  buildPendingFollowUpWakeReturnSummary,
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
   wireIntentionRuntime,
@@ -90,6 +94,37 @@ describe('wireIntentionRuntime', () => {
     expect(target.pendingFollowUpProvider).toBeNull();
     expect(target.careReminderProvider).toBeNull();
     expect(target.behavioralPatternProvider).toBeNull();
+  });
+
+  it('builds bounded checkpoint and wake-return summaries for follow-ups and reminders', () => {
+    expect(buildPendingFollowUpCheckpointSummary({
+      content: 'Follow up about the interview once things settle.',
+      contextSummary: 'Interview thread is calm; pick it back up gently.',
+    })).toBe('Interview thread is calm; pick it back up gently.');
+    expect(buildPendingFollowUpWakeReturnSummary({
+      timing: 'scheduled',
+      dueAt: '2026-04-02T15:00:00.000Z',
+      wakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+    })).toBe(
+      'Returns on the next user turn or notably negative mood, with a due fallback at 2026-04-02T15:00:00.000Z.',
+    );
+    expect(buildPendingFollowUpWakeReturnSummary({
+      timing: 'soon',
+      activatedAt: '2026-04-02T15:05:00.000Z',
+      activationReason: 'post_turn_action',
+    })).toBe('Resurfaced at 2026-04-02T15:05:00.000Z via post_turn_action.');
+
+    expect(buildCareReminderCheckpointSummary({
+      title: 'Alex birthday',
+      content: 'Remember the birthday and send a warm note.',
+      provenanceReason: 'Birthday mentioned explicitly by the partner.',
+    })).toBe('Birthday mentioned explicitly by the partner.');
+    expect(buildCareReminderWakeReturnSummary({
+      dueAt: '2026-04-10T09:00:00.000Z',
+      schedule: 'annual',
+      status: 'active',
+      activationCount: 1,
+    })).toBe('Returns annually after 1 prior activation; next due 2026-04-10T09:00:00.000Z.');
   });
 
   it('builds appraisal hooks that expose active concerns and persist concern decisions', () => {

@@ -486,10 +486,22 @@ export interface AdminSessionRoleEnvelopePreview {
   preview: SessionRoleEnvelopePreview;
 }
 
+export interface AdminSessionContinuityArtifact {
+  id: string;
+  sessionId: string;
+  kind: 'checkpoint' | 'wake_return';
+  summary: string;
+  createdAt: string;
+  nextAnchor?: string;
+  facets: Array<'task' | 'relational' | 'life'>;
+  occasion?: 'wake' | 'return';
+}
+
 export interface AdminSessionMessagesData {
   sessionId: string;
   channelId: string;
   messages: SessionEntry[];
+  continuityArtifacts: AdminSessionContinuityArtifact[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
   compactionAuditViews: CompactionAuditView[];
   turns: AdminSessionTurnData[];

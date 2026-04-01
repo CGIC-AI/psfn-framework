@@ -468,6 +468,14 @@ export function resolveValuesJournalPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'values.jsonl');
 }
 
+export function resolveSessionContinuityArtifactsDir(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'session-continuity');
+}
+
+export function resolveSessionContinuityArtifactsPath(dataDir: string, sessionId: string): string {
+  return join(resolveSessionContinuityArtifactsDir(dataDir), `${sanitizeChannelId(sessionId)}.jsonl`);
+}
+
 export function resolveLegacyValuesJournalPath(dataDir: string): string {
   return join(dataDir, 'values.jsonl');
 }

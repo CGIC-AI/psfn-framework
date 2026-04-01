@@ -68,6 +68,7 @@ import type {
   AdminMemoryManagedScopeKind,
   AdminMemoryScopeEvidenceItem,
 } from './memory-scope-evidence.js';
+import type { SessionContinuityArtifact } from '../../../session/continuity-artifacts.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;
@@ -256,10 +257,13 @@ export interface AdminSessionMessagesData {
   sessionId: string;
   channelId: string;
   messages: SessionEntry[];
+  continuityArtifacts: AdminSessionContinuityArtifact[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
   compactionAuditViews: CompactionAuditView[];
   turns: AdminSessionTurnData[];
 }
+
+export type AdminSessionContinuityArtifact = SessionContinuityArtifact;
 
 export interface AdminSessionService {
   listSessions(): AdminSessionListData;

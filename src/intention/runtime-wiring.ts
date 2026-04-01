@@ -245,6 +245,114 @@ function normalizeOptionalIsoTimestamp(value: number | undefined): string | unde
   return new Date(Math.floor(value)).toISOString();
 }
 
+const CONTINUITY_SURFACE_MAX_CHARS = 180;
+
+function normalizeContinuitySurfaceText(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function clipContinuitySurfaceText(value: string, maxChars = CONTINUITY_SURFACE_MAX_CHARS): string {
+  const normalized = normalizeContinuitySurfaceText(value);
+  if (!normalized) return '';
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+function joinContinuityCueList(cues: readonly string[]): string {
+  if (cues.length === 0) return '';
+  if (cues.length === 1) return cues[0]!;
+  if (cues.length === 2) return `${cues[0]} or ${cues[1]}`;
+  return `${cues.slice(0, -1).join(', ')}, or ${cues[cues.length - 1]}`;
+}
+
+export function buildPendingFollowUpCheckpointSummary(
+  followUp: Pick<PendingFollowUp, 'content' | 'contextSummary'>,
+): string {
+  const summary = normalizeContinuitySurfaceText(followUp.contextSummary)
+    ?? normalizeContinuitySurfaceText(followUp.content)
+    ?? 'Follow-up pending.';
+  return clipContinuitySurfaceText(summary);
+}
+
+export function buildPendingFollowUpWakeReturnSummary(
+  followUp: Pick<PendingFollowUp, 'timing' | 'dueAt' | 'wakeConditions' | 'activatedAt' | 'activationReason'>,
+): string {
+  const activatedAt = normalizeContinuitySurfaceText(followUp.activatedAt);
+  if (activatedAt) {
+    const activationReason = normalizeContinuitySurfaceText(followUp.activationReason);
+    return clipContinuitySurfaceText(
+      `Resurfaced at ${activatedAt}${activationReason ? ` via ${activationReason}` : ''}.`,
+    );
+  }
+
+  const cues = (followUp.wakeConditions ?? []).map((condition) => {
+    switch (condition) {
+      case 'next_user_turn':
+        return 'the next user turn';
+      case 'background_recheck':
+        return 'a background recheck';
+      case 'sustained_negative_mood':
+        return 'notably negative mood';
+      default:
+        return undefined;
+    }
+  }).filter((cue): cue is string => typeof cue === 'string');
+  const dueAt = normalizeContinuitySurfaceText(followUp.dueAt);
+  if (cues.length > 0 && dueAt) {
+    return clipContinuitySurfaceText(
+      `Returns on ${joinContinuityCueList(cues)}, with a due fallback at ${dueAt}.`,
+    );
+  }
+  if (cues.length > 0) {
+    return clipContinuitySurfaceText(`Returns on ${joinContinuityCueList(cues)}.`);
+  }
+  if (dueAt) {
+    return clipContinuitySurfaceText(`Returns when due at ${dueAt}.`);
+  }
+
+  switch (followUp.timing) {
+    case 'immediate':
+      return 'Returns immediately when surfaced.';
+    case 'scheduled':
+      return 'Returns on its scheduled cue.';
+    case 'soon':
+    default:
+      return 'Returns after a short pause.';
+  }
+}
+
+export function buildCareReminderCheckpointSummary(
+  reminder: Pick<CareReminder, 'title' | 'content' | 'provenanceReason'>,
+): string {
+  const summary = normalizeContinuitySurfaceText(reminder.provenanceReason)
+    ?? normalizeContinuitySurfaceText(`${reminder.title}: ${reminder.content}`)
+    ?? 'Reminder remains active.';
+  return clipContinuitySurfaceText(summary);
+}
+
+export function buildCareReminderWakeReturnSummary(
+  reminder: Pick<CareReminder, 'dueAt' | 'schedule' | 'status' | 'activationCount'>,
+): string {
+  if (reminder.status === 'completed') {
+    return 'Already completed.';
+  }
+  if (reminder.status === 'dismissed') {
+    return 'Dismissed; do not resurface.';
+  }
+  const dueAt = normalizeContinuitySurfaceText(reminder.dueAt) ?? 'the stored due time';
+  if (reminder.schedule === 'annual') {
+    const activationNote = reminder.activationCount > 0
+      ? ` after ${String(reminder.activationCount)} prior activation${reminder.activationCount === 1 ? '' : 's'}`
+      : '';
+    return clipContinuitySurfaceText(`Returns annually${activationNote}; next due ${dueAt}.`);
+  }
+  return clipContinuitySurfaceText(`Returns when due at ${dueAt}.`);
+}
+
 export function createIntentionAppraisalHooks(
   concernStore: ActiveConcernStore,
   pendingFollowUpStore: PendingFollowUpStore,

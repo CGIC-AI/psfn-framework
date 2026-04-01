@@ -14,10 +14,12 @@ import { toErrorMessage } from '../../utils/errors.js';
 import { readBodyWithLimit, sendText } from '../http/primitives.js';
 import { ValuesJournalStore } from '../../values/store.js';
 import { NorthStarStore } from '../../north-star/store.js';
+import { SessionContinuityArtifactStore } from '../../session/continuity-artifacts.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
+  resolveSessionContinuityArtifactsDir,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import type { AdminServerConfig } from './types.js';
@@ -91,11 +93,15 @@ export class AdminServer implements Lifecycle {
       embeddingService: config.embeddingService,
       resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),
     });
+    const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
     this.sessionService = new AdminSessionDataService({
       sessionStore: config.sessionStore,
       sessionManager: config.sessionManager,
       eventBus: config.eventBus,
       contactStore: config.contactStore,
+      continuityArtifactStore: new SessionContinuityArtifactStore(
+        resolveSessionContinuityArtifactsDir(companionDataDir),
+      ),
     });
     this.contactsService = new AdminContactsDataService({
       contactStore: config.contactStore,
@@ -111,7 +117,6 @@ export class AdminServer implements Lifecycle {
       cardVersionStore: config.cardVersionStore,
       promptStore: config.promptStore,
     });
-    const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
     this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
       legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
     });

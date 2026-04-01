@@ -11,6 +11,12 @@ import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type { ActiveConcernContextProvider } from '../../intention/concerns.js';
 import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
 import type { BehavioralPatternContextProvider } from '../../intention/patterns.js';
+import {
+  buildCareReminderCheckpointSummary,
+  buildCareReminderWakeReturnSummary,
+  buildPendingFollowUpCheckpointSummary,
+  buildPendingFollowUpWakeReturnSummary,
+} from '../../intention/runtime-wiring.js';
 import { buildEmotionalAffectSection } from '../../emotion/persona-adaptation.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
@@ -34,6 +40,8 @@ const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
 const SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS = 240;
 const SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS = 1_600;
+const CONTINUITY_PROMPT_MAX_FOLLOW_UPS = 2;
+const CONTINUITY_PROMPT_MAX_REMINDERS = 2;
 
 interface RuntimeContextLogger {
   warn: (message: string, payload: Record<string, unknown>) => void;
@@ -320,6 +328,36 @@ export function buildRuntimeContext(input: {
       + ` interaction_frequency=${input.internalState.relational.recentInteractionFrequency.toFixed(3)},`
       + ` last_seen_delta_seconds=${input.internalState.relational.lastSeenDeltaSeconds ?? 'none'}`,
     );
+
+    const continuityLines = [
+      ...pendingFollowUps
+        .slice(0, CONTINUITY_PROMPT_MAX_FOLLOW_UPS)
+        .map((followUp) => (
+          `- follow-up ${followUp.id}: `
+          + `checkpoint=${buildPendingFollowUpCheckpointSummary(followUp)} `
+          + `| wake_return=${buildPendingFollowUpWakeReturnSummary(followUp)}`
+        )),
+      ...careReminders
+        .slice(0, CONTINUITY_PROMPT_MAX_REMINDERS)
+        .map((reminder) => (
+          `- reminder ${reminder.id}: `
+          + `checkpoint=${buildCareReminderCheckpointSummary(reminder)} `
+          + `| wake_return=${buildCareReminderWakeReturnSummary(reminder)}`
+        )),
+    ];
+    const omittedContinuityCount = Math.max(0, pendingFollowUps.length - CONTINUITY_PROMPT_MAX_FOLLOW_UPS)
+      + Math.max(0, careReminders.length - CONTINUITY_PROMPT_MAX_REMINDERS);
+    if (continuityLines.length > 0) {
+      lines.push('');
+      lines.push('[Low-Stress Continuity]');
+      lines.push(
+        'Bounded checkpoint and wake-return cues. Treat them as gentle continuity anchors, not proof that nothing changed.',
+      );
+      lines.push(...continuityLines);
+      if (omittedContinuityCount > 0) {
+        lines.push(`- (${omittedContinuityCount} additional continuity items omitted for context budget)`);
+      }
+    }
   }
 
   if (emotionAppraisalChain.length > 0) {

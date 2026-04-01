@@ -81,17 +81,19 @@ Mutation guardrails remain explicit:
 
 The runtime now exposes a unified model-facing `session` tool for continuity, transcript lookup, resumption, and focus workflow.
 
-- Primary actions: `list`, `new`, `resume`, `search`, `grep`, `start_focus`, `complete_focus`
+- Primary actions: `list`, `new`, `resume`, `search`, `grep`, `list_continuity`, `checkpoint`, `wake_return`, `start_focus`, `complete_focus`
 - Migration aliases remain available inside the same tool:
   `session_list` -> `list`
   `session_new` -> `new`
   `session_resume` -> `resume`
   `session_search` -> `search`
   `session_grep` -> `grep`
+  `continuity_list` -> `list_continuity`
+  `wake_return_summary` -> `wake_return`
   `focus_start` -> `start_focus`
   `focus_complete` -> `complete_focus`
 
-This keeps continuity choice simple for the model while preserving the existing session-management invariants and focus lifecycle behavior.
+This keeps transcript lookup, gentle checkpointing, wake/return recaps, and focus lifecycle behavior under one continuity surface instead of turning them into generic assistant status chatter.
 
 ## Live Notify Surface
 
@@ -189,6 +191,8 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `session_resume` | `session` | extended | Resume is a workflow action, not a read-only query. |
 | `session_search` | `session` | always-on | Same family. |
 | `session_grep` | `session` | always-on | Same family. |
+| `continuity_list` | `session` | always-on | Session-scoped low-stress continuity lookup now maps to `action="list_continuity"`. |
+| `wake_return_summary` | `session` | always-on | Wake/return continuity summaries now map to `action="wake_return"`. |
 | `start_focus` | `session` | extended | Focus sessions are workflow state. |
 | `complete_focus` | `session` | extended | Same family. |
 | `heartbeat_get_policy` | `schedule` | background-only | Policy reads belong to scheduling, but not as a frequent turn action. |

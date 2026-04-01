@@ -341,6 +341,15 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('Active concern refs: concern-1:medium, concern-2:low');
     expect(runtimeContext).toContain('Pending follow-up refs: follow-up-1:soon@2026-03-20T16:00:00.000Z[next_user_turn]');
     expect(runtimeContext).toContain('Care reminder refs: care-reminder-1:birthday:annual');
+    expect(runtimeContext).toContain('[Low-Stress Continuity]');
+    expect(runtimeContext).toContain(
+      '- follow-up follow-up-1: checkpoint=Check back on the unresolved follow-up. '
+      + '| wake_return=Returns on the next user turn, with a due fallback at 2026-03-20T16:00:00.000Z.',
+    );
+    expect(runtimeContext).toContain(
+      '- reminder care-reminder-1: checkpoint=Birthday mentioned by the partner. '
+      + '| wake_return=Returns annually; next due 2026-04-01T09:00:00.000Z.',
+    );
   });
 
   it('uses persisted conversation-channel privacy and records it on activity', () => {

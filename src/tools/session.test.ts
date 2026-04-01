@@ -564,4 +564,90 @@ describe('unified session tool', () => {
     expect(toolText(completed as any)).toContain('complete_focus: persisted knowledge block');
     expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
+
+  it('persists low-stress continuity checkpoints and wake-return summaries through the unified tool', async () => {
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: 'unused',
+        toolCalls: [],
+        model: 'mock',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
+    } as any;
+    const tool = createSessionTool({
+      manager,
+      llmProvider,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+    });
+
+    manager.setActiveContextSession('api:continuity-session');
+
+    const checkpoint = await tool.execute('continuity-checkpoint', {
+      action: 'checkpoint',
+      summary: 'The main thread is still the continuity UI wiring, and nothing emotionally urgent is hanging over it.',
+      facets: ['task', 'life'],
+      next_anchor: 'Resume with the admin session payload and UI panel.',
+    });
+    expect(toolText(checkpoint as any)).toContain('session checkpoint saved for "api:continuity-session"');
+
+    const wakeReturn = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn',
+        channelId: 'api:return-session',
+      },
+      () => tool.execute('continuity-return', {
+        action: 'wake_return_summary',
+        summary: 'Returning after a pause: the task remains clear and the relational thread is calm.',
+        occasion: 'return',
+        facets: ['task', 'relational'],
+      }),
+    );
+    expect(toolText(wakeReturn as any)).toContain('session return_summary saved for "api:return-session"');
+
+    const checkpointList = await tool.execute('continuity-list-checkpoint', {
+      action: 'list_continuity',
+      channelId: 'api:continuity-session',
+      kind: 'checkpoint',
+    });
+    const checkpointPayload = JSON.parse(toolText(checkpointList)) as {
+      sessionId: string;
+      count: number;
+      artifacts: Array<{
+        kind: string;
+        summary: string;
+        nextAnchor?: string;
+        facets: string[];
+      }>;
+    };
+    expect(checkpointPayload.sessionId).toBe('api:continuity-session');
+    expect(checkpointPayload.count).toBe(1);
+    expect(checkpointPayload.artifacts[0]?.kind).toBe('checkpoint');
+    expect(checkpointPayload.artifacts[0]?.facets).toEqual(['task', 'life']);
+    expect(checkpointPayload.artifacts[0]?.nextAnchor).toContain('admin session payload');
+
+    const wakeList = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn',
+        channelId: 'api:return-session',
+      },
+      () => tool.execute('continuity-list-return', {
+        action: 'continuity_list',
+        kind: 'wake_return',
+      }),
+    );
+    const wakePayload = JSON.parse(toolText(wakeList)) as {
+      sessionId: string;
+      count: number;
+      artifacts: Array<{ occasion?: string; summary: string }>;
+    };
+    expect(wakePayload.sessionId).toBe('api:return-session');
+    expect(wakePayload.count).toBe(1);
+    expect(wakePayload.artifacts[0]?.occasion).toBe('return');
+    expect(wakePayload.artifacts[0]?.summary).toContain('Returning after a pause');
+  });
 });

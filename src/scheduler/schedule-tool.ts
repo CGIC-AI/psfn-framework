@@ -13,6 +13,12 @@ import {
   type CareReminderStore,
 } from '../intention/care-reminders.js';
 import {
+  buildCareReminderCheckpointSummary,
+  buildCareReminderWakeReturnSummary,
+  buildPendingFollowUpCheckpointSummary,
+  buildPendingFollowUpWakeReturnSummary,
+} from '../intention/runtime-wiring.js';
+import {
   PENDING_FOLLOW_UP_PRIORITIES,
   PENDING_FOLLOW_UP_TIMINGS,
   PENDING_FOLLOW_UP_WAKE_CONDITIONS,
@@ -290,6 +296,8 @@ function mapReminder(reminder: CareReminder) {
     contactId: reminder.contactId ?? null,
     provenanceSource: reminder.provenanceSource,
     provenanceReason: reminder.provenanceReason,
+    checkpointSummary: buildCareReminderCheckpointSummary(reminder),
+    wakeReturnSummary: buildCareReminderWakeReturnSummary(reminder),
     activationCount: reminder.activationCount,
   };
 }
@@ -307,6 +315,8 @@ function mapFollowUp(followUp: PendingFollowUp) {
     contactId: followUp.contactId ?? null,
     sourceMessageId: followUp.sourceMessageId ?? null,
     contextSummary: followUp.contextSummary ?? null,
+    checkpointSummary: buildPendingFollowUpCheckpointSummary(followUp),
+    wakeReturnSummary: buildPendingFollowUpWakeReturnSummary(followUp),
     wakeConditions: followUp.wakeConditions ?? [],
     activatedAt: followUp.activatedAt ?? null,
     activationReason: followUp.activationReason ?? null,

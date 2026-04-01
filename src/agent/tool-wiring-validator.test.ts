@@ -69,6 +69,7 @@ describe('resolveClientMethod', () => {
     expect(resolveClientMethod('llm.chat')).toBe('stream');
     expect(resolveClientMethod('llm.complete')).toBe('complete');
     expect(resolveClientMethod('discord.send')).toBe('discordSend');
+    expect(resolveClientMethod('shell.exec')).toBe('shellExec');
   });
 
   it('falls back to the RPC name for unknown methods', () => {
@@ -173,6 +174,20 @@ describe('validateToolWiring', () => {
     expect(report.invalidTools).toHaveLength(1);
     expect(report.invalidTools[0].toolName).toBe('repo_commit');
     expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('git.commit');
+  });
+
+  it('includes shell in default gateway metadata coverage', () => {
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools: [makeTool('shell')],
+      gatewayClientMethods: new Set(['shellExec']),
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+
+    expect(report.validTools).toBe(0);
+    expect(report.invalidTools).toHaveLength(1);
+    expect(report.invalidTools[0].toolName).toBe('shell');
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('shell.exec');
   });
 
   it('flags gateway-dependent tools with partial metadata coverage', () => {

@@ -36,20 +36,23 @@ const DEFAULT_SYSTEM_PROMPT = [
   'Consider unresolved concerns, emotional needs, scheduled commitments, and relationship maintenance.',
   'Most turns should return noop unless concrete action is warranted.',
   'Return JSON only, no markdown, with shape:',
-  '{"decisions":[{"type":"followUp|concern|schedule|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?}}]}',
+  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
   'For followUp decisions, include followUp.content as a brief internal Whisper note to self, not a user-facing message.',
+  'Use reminder decisions for durable care reminders or important dates that must survive quiet periods and restart, not for one-shot follow-ups.',
   'Write Whisper notes in first person, in the companion\'s own private voice, grounded in the supplied persona context.',
   'Whisper notes should capture what she is noticing or intends to do next, not simulate a sent message to the user.',
   'Never set authorId or authorName for followUp decisions. Runtime labels them as internal Whisper notes to self.',
   'For schedule decisions, include schedule.templateId.',
   'For concern decisions, include concern.title and/or concern.summary.',
+  'For reminder decisions, include reminder.title, reminder.content, reminder.kind, reminder.classification, and reminder.schedule.',
 ].join('\n');
 
 export const INTENTION_FOLLOW_UP_ACTION_KIND = 'intention.follow_up';
 export const INTENTION_FOLLOW_UP_AUTHOR_ID = 'system:intention';
 export const INTENTION_FOLLOW_UP_AUTHOR_NAME = 'Whisper';
+export const INTENTION_REMINDER_ACTION_KIND = 'intention.reminder';
 
-export type IntentionDecisionType = 'followUp' | 'concern' | 'schedule' | 'noop';
+export type IntentionDecisionType = 'followUp' | 'concern' | 'schedule' | 'reminder' | 'noop';
 export type IntentionDecisionPriority = 'low' | 'medium' | 'high';
 export type IntentionDecisionTiming = 'immediate' | 'soon' | 'scheduled' | 'none';
 
@@ -67,6 +70,17 @@ export interface ActiveConcernSnapshot {
   dueAt?: number;
   resolvedAt?: number;
   priority?: IntentionDecisionPriority | number;
+}
+
+export interface ActiveCareReminderSnapshot {
+  id?: string;
+  kind?: 'important_date' | 'self_reminder';
+  classification?: 'birthday' | 'anniversary' | 'important_date' | 'check_in' | 'self_note';
+  title?: string;
+  content?: string;
+  schedule?: 'one_time' | 'annual';
+  dueAt?: number;
+  provenanceSource?: 'companion_appraisal' | 'operator';
 }
 
 export interface ConversationTrajectorySnapshot {
@@ -97,6 +111,17 @@ export interface IntentionScheduleDecision {
   sendToDiscordOverride?: boolean;
 }
 
+export interface IntentionReminderDecision {
+  kind: 'important_date' | 'self_reminder';
+  classification: 'birthday' | 'anniversary' | 'important_date' | 'check_in' | 'self_note';
+  title: string;
+  content: string;
+  schedule: 'one_time' | 'annual';
+  channelId?: string;
+  channelType?: ChannelType;
+  reminderId?: string;
+}
+
 export interface IntentionActionDecision {
   type: IntentionDecisionType;
   priority: IntentionDecisionPriority;
@@ -106,6 +131,7 @@ export interface IntentionActionDecision {
   followUp?: IntentionFollowUpDecision;
   concern?: IntentionConcernDecision;
   schedule?: IntentionScheduleDecision;
+  reminder?: IntentionReminderDecision;
 }
 
 export interface IntentionAppraisalInput {
@@ -114,6 +140,7 @@ export interface IntentionAppraisalInput {
   currentEmotion?: EmotionStateSnapshot | null;
   recentMessages: readonly IntentionAppraisalMessage[];
   activeConcerns?: readonly ActiveConcernSnapshot[];
+  activeCareReminders?: readonly ActiveCareReminderSnapshot[];
   recentlyResolvedConcerns?: readonly ActiveConcernSnapshot[];
   contactEmotionalSnapshot?: EmotionalSnapshot | null;
   conversationTrajectory?: ConversationTrajectorySnapshot;
@@ -146,6 +173,10 @@ export interface IntentionFollowUpActionPayload {
   pendingFollowUpId?: string;
 }
 
+export interface IntentionReminderActionPayload {
+  reminderId: string;
+}
+
 export interface IntentionDecisionActionContext {
   message: Pick<SubstrateMessage, 'id' | 'channelId' | 'channelType'>;
   fallbackAuthorId?: string;
@@ -171,6 +202,7 @@ interface NormalizedIntentionAppraisalInput {
   currentEmotion: EmotionStateSnapshot | null;
   recentMessages: IntentionAppraisalMessage[];
   activeConcerns: ActiveConcernSnapshot[];
+  activeCareReminders: ActiveCareReminderSnapshot[];
   recentlyResolvedConcerns: ActiveConcernSnapshot[];
   contactEmotionalSnapshot: EmotionalSnapshot | null;
   conversationTrajectory: ConversationTrajectorySnapshot | null;
@@ -302,6 +334,22 @@ function activeConcernsFromInternalState(state: InternalState): ActiveConcernSna
   });
 }
 
+function activeCareRemindersFromInternalState(state: InternalState): ActiveCareReminderSnapshot[] {
+  return (state.attention.careReminders ?? []).map((reminder) => {
+    const dueAtRaw = Date.parse(reminder.dueAt);
+    return {
+      id: reminder.id,
+      kind: reminder.kind,
+      classification: reminder.classification,
+      title: reminder.title,
+      content: reminder.content,
+      schedule: reminder.schedule,
+      ...(Number.isFinite(dueAtRaw) ? { dueAt: Math.floor(dueAtRaw) } : {}),
+      provenanceSource: reminder.provenanceSource,
+    };
+  });
+}
+
 function normalizeSessionId(value: unknown): string {
   if (typeof value !== 'string') {
     throw new Error(`sessionId must be a string, received ${String(value)}`);
@@ -404,6 +452,58 @@ function normalizeActiveConcerns(
   }
 
   return normalized.slice(0, maxConcernCount);
+}
+
+function normalizeActiveCareReminders(
+  value: readonly ActiveCareReminderSnapshot[] | undefined,
+  maxReminderCount: number,
+): ActiveCareReminderSnapshot[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('activeCareReminders must be an array when provided');
+  }
+
+  const normalized: ActiveCareReminderSnapshot[] = [];
+  for (const reminder of value) {
+    if (!isRecord(reminder)) continue;
+    const id = typeof reminder.id === 'string' ? reminder.id.trim() : undefined;
+    const title = typeof reminder.title === 'string' ? reminder.title.trim() : undefined;
+    const content = typeof reminder.content === 'string' ? reminder.content.trim() : undefined;
+    if (!title || !content) continue;
+    const kind = reminder.kind === 'important_date' || reminder.kind === 'self_reminder'
+      ? reminder.kind
+      : undefined;
+    const classification = (
+      reminder.classification === 'birthday'
+      || reminder.classification === 'anniversary'
+      || reminder.classification === 'important_date'
+      || reminder.classification === 'check_in'
+      || reminder.classification === 'self_note'
+    )
+      ? reminder.classification
+      : undefined;
+    const schedule = reminder.schedule === 'one_time' || reminder.schedule === 'annual'
+      ? reminder.schedule
+      : undefined;
+    const dueAt = (typeof reminder.dueAt === 'number' && Number.isFinite(reminder.dueAt) && reminder.dueAt > 0)
+      ? Math.floor(reminder.dueAt)
+      : undefined;
+    const provenanceSource = reminder.provenanceSource === 'companion_appraisal' || reminder.provenanceSource === 'operator'
+      ? reminder.provenanceSource
+      : undefined;
+    normalized.push({
+      ...(id ? { id } : {}),
+      ...(kind ? { kind } : {}),
+      ...(classification ? { classification } : {}),
+      title,
+      content,
+      ...(schedule ? { schedule } : {}),
+      ...(dueAt !== undefined ? { dueAt } : {}),
+      ...(provenanceSource ? { provenanceSource } : {}),
+    });
+  }
+
+  return normalized.slice(0, maxReminderCount);
 }
 
 function normalizeContactEmotionalSnapshot(value: EmotionalSnapshot | null | undefined): EmotionalSnapshot | null {
@@ -509,6 +609,10 @@ function normalizeInput(
     input.activeConcerns ?? (internalState ? activeConcernsFromInternalState(internalState) : undefined),
     options.maxConcernCount,
   );
+  const activeCareReminders = normalizeActiveCareReminders(
+    input.activeCareReminders ?? (internalState ? activeCareRemindersFromInternalState(internalState) : undefined),
+    options.maxConcernCount,
+  );
   const recentlyResolvedConcerns = normalizeActiveConcerns(
     input.recentlyResolvedConcerns,
     options.maxConcernCount,
@@ -531,6 +635,7 @@ function normalizeInput(
     currentEmotion,
     recentMessages,
     activeConcerns,
+    activeCareReminders,
     recentlyResolvedConcerns,
     contactEmotionalSnapshot,
     conversationTrajectory,
@@ -594,7 +699,7 @@ function formatPromptTimestamp(value: number | undefined): string | undefined {
 }
 
 function parseDecisionType(value: unknown): IntentionDecisionType | null {
-  if (value === 'followUp' || value === 'concern' || value === 'schedule' || value === 'noop') {
+  if (value === 'followUp' || value === 'concern' || value === 'schedule' || value === 'reminder' || value === 'noop') {
     return value;
   }
   if (typeof value !== 'string') return null;
@@ -606,6 +711,8 @@ function parseDecisionType(value: unknown): IntentionDecisionType | null {
       return 'concern';
     case 'schedule':
       return 'schedule';
+    case 'reminder':
+      return 'reminder';
     case 'noop':
       return 'noop';
     default:
@@ -700,6 +807,51 @@ function parseSchedulePayload(value: unknown): IntentionScheduleDecision | undef
   };
 }
 
+function parseReminderPayload(value: unknown): IntentionReminderDecision | undefined {
+  if (!isRecord(value)) return undefined;
+  const kind = value.kind === 'important_date' || value.kind === 'self_reminder'
+    ? value.kind
+    : undefined;
+  const classification = (
+    value.classification === 'birthday'
+    || value.classification === 'anniversary'
+    || value.classification === 'important_date'
+    || value.classification === 'check_in'
+    || value.classification === 'self_note'
+  )
+    ? value.classification
+    : undefined;
+  const title = typeof value.title === 'string' ? value.title.trim() : '';
+  const content = typeof value.content === 'string' ? value.content.trim() : '';
+  const schedule = value.schedule === 'one_time' || value.schedule === 'annual'
+    ? value.schedule
+    : undefined;
+  if (!kind || !classification || !title || !content || !schedule) {
+    return undefined;
+  }
+  const channelId = typeof value.channelId === 'string' ? value.channelId.trim() : '';
+  const channelType = (
+    value.channelType === 'terminal'
+    || value.channelType === 'api'
+    || value.channelType === 'discord'
+    || value.channelType === 'telegram'
+  )
+    ? value.channelType
+    : undefined;
+  const reminderId = typeof value.reminderId === 'string' ? value.reminderId.trim() : '';
+
+  return {
+    kind,
+    classification,
+    title,
+    content,
+    schedule,
+    ...(channelId ? { channelId } : {}),
+    ...(channelType ? { channelType } : {}),
+    ...(reminderId ? { reminderId } : {}),
+  };
+}
+
 function parseDecisionResponse(raw: string, maxDecisions: number): ParsedDecisionResponse {
   const jsonObject = extractJsonObject(raw);
 
@@ -767,6 +919,20 @@ function parseDecisionResponse(raw: string, maxDecisions: number): ParsedDecisio
         timing: normalizeTiming(rawDecision.timing),
         ...(dueAt !== undefined ? { dueAt } : {}),
         concern,
+      });
+      continue;
+    }
+
+    if (type === 'reminder') {
+      const reminder = parseReminderPayload(rawDecision.reminder);
+      if (!reminder) continue;
+      decisions.push({
+        type,
+        priority: normalizePriority(rawDecision.priority),
+        reason,
+        timing: normalizeTiming(rawDecision.timing),
+        ...(dueAt !== undefined ? { dueAt } : {}),
+        reminder,
       });
       continue;
     }
@@ -850,6 +1016,23 @@ function resolveFollowUpRunAt(
     return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
   }
 
+  return undefined;
+}
+
+function resolveReminderRunAt(
+  decision: IntentionActionDecision,
+  now: number,
+): number | undefined {
+  const runAt = normalizeActionRunAt(decision.dueAt);
+  if (runAt !== undefined) {
+    return Math.max(now, runAt);
+  }
+  if (decision.timing === 'immediate') {
+    return now;
+  }
+  if (decision.timing === 'soon' || decision.timing === 'scheduled') {
+    return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
+  }
   return undefined;
 }
 
@@ -1084,6 +1267,21 @@ export function decisionsToPostTurnActionCandidates(
       });
       continue;
     }
+
+    if (decision.type === 'reminder') {
+      const reminderId = decision.reminder?.reminderId?.trim() ?? '';
+      if (!reminderId) continue;
+      const runAt = resolveReminderRunAt(decision, Date.now());
+      candidates.push({
+        kind: INTENTION_REMINDER_ACTION_KIND,
+        dedupeKey: `${INTENTION_REMINDER_ACTION_KIND}:${reminderId}`,
+        payload: {
+          reminderId,
+        } satisfies IntentionReminderActionPayload,
+        maxRetries: 1,
+        ...(runAt !== undefined ? { runAt } : {}),
+      });
+    }
   }
 
   return candidates;
@@ -1118,6 +1316,15 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
     content,
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
   };
+}
+
+export function normalizeIntentionReminderActionPayload(payload: unknown): IntentionReminderActionPayload | null {
+  if (!isRecord(payload)) return null;
+  const reminderId = typeof payload.reminderId === 'string' ? payload.reminderId.trim() : '';
+  if (!reminderId) {
+    return null;
+  }
+  return { reminderId };
 }
 
 export function toInferredPostTurnActions(
@@ -1335,6 +1542,19 @@ export class IntentionAppraisal {
         ...(dueAtLabel ? { dueAt: dueAtLabel } : {}),
       };
     });
+    const promptActiveCareReminders = normalized.activeCareReminders.map((reminder) => {
+      const dueAtLabel = formatPromptTimestamp(reminder.dueAt);
+      return {
+        ...(reminder.id ? { id: reminder.id } : {}),
+        ...(reminder.kind ? { kind: reminder.kind } : {}),
+        ...(reminder.classification ? { classification: reminder.classification } : {}),
+        ...(reminder.schedule ? { schedule: reminder.schedule } : {}),
+        ...(reminder.provenanceSource ? { provenanceSource: reminder.provenanceSource } : {}),
+        ...(reminder.title ? { title: reminder.title } : {}),
+        ...(reminder.content ? { content: reminder.content } : {}),
+        ...(dueAtLabel ? { dueAt: dueAtLabel } : {}),
+      };
+    });
     const promptRecentlyResolvedConcerns = normalized.recentlyResolvedConcerns.map((concern) => {
       const resolvedAtLabel = formatPromptTimestamp(concern.resolvedAt);
       return {
@@ -1375,6 +1595,7 @@ export class IntentionAppraisal {
             conversationTrajectory: normalized.internalState.attention.conversationTrajectory,
             salientEntities: normalized.internalState.attention.salientEntities,
             activeConcernCount: normalized.internalState.attention.activeConcerns.length,
+            careReminderCount: normalized.internalState.attention.careReminders?.length ?? 0,
           },
           relational: normalized.internalState.relational,
         }
@@ -1389,6 +1610,7 @@ export class IntentionAppraisal {
         : null,
       contactEmotionalSnapshot: normalized.contactEmotionalSnapshot,
       activeConcerns: promptActiveConcerns,
+      activeCareReminders: promptActiveCareReminders,
       recentlyResolvedConcerns: promptRecentlyResolvedConcerns,
       conversationTrajectory: normalized.conversationTrajectory,
       ...(normalized.motivationSignals.length > 0 ? { motivationSignals: normalized.motivationSignals } : {}),

@@ -13,6 +13,7 @@ import {
 class FakeTarget implements IntentionRuntimeTarget {
   activeConcernProvider: IntentionRuntimeTarget['activeConcernProvider'] = null;
   pendingFollowUpProvider: IntentionRuntimeTarget['pendingFollowUpProvider'] = null;
+  careReminderProvider: IntentionRuntimeTarget['careReminderProvider'] = null;
   behavioralPatternProvider: IntentionRuntimeTarget['behavioralPatternProvider'] = null;
   tools: AgentTool<any>[] = [];
   registrations: Array<{ name: string; category: 'core' | 'extended' }> = [];
@@ -40,6 +41,7 @@ describe('wireIntentionRuntime', () => {
 
     expect(target.activeConcernProvider).toBe(runtime.concernStore);
     expect(target.pendingFollowUpProvider).toBe(runtime.pendingFollowUpStore);
+    expect(target.careReminderProvider).toBe(runtime.careReminderStore);
     expect(target.behavioralPatternProvider).toBe(runtime.behavioralPatternTracker);
     expect(target.tools.map(tool => tool.name).sort()).toEqual([
       'create_concern',
@@ -64,13 +66,16 @@ describe('wireIntentionRuntime', () => {
     const db = new Database(':memory:');
     const setActiveConcernProvider = vi.fn();
     const setPendingFollowUpProvider = vi.fn();
+    const setCareReminderProvider = vi.fn();
     const setBehavioralPatternProvider = vi.fn();
     const target = {
       activeConcernProvider: null,
       pendingFollowUpProvider: null,
+      careReminderProvider: null,
       behavioralPatternProvider: null,
       setActiveConcernProvider,
       setPendingFollowUpProvider,
+      setCareReminderProvider,
       setBehavioralPatternProvider,
       registerTool: vi.fn(),
     } satisfies IntentionRuntimeTarget;
@@ -79,9 +84,11 @@ describe('wireIntentionRuntime', () => {
 
     expect(setActiveConcernProvider).toHaveBeenCalledWith(runtime.concernStore);
     expect(setPendingFollowUpProvider).toHaveBeenCalledWith(runtime.pendingFollowUpStore);
+    expect(setCareReminderProvider).toHaveBeenCalledWith(runtime.careReminderStore);
     expect(setBehavioralPatternProvider).toHaveBeenCalledWith(runtime.behavioralPatternTracker);
     expect(target.activeConcernProvider).toBeNull();
     expect(target.pendingFollowUpProvider).toBeNull();
+    expect(target.careReminderProvider).toBeNull();
     expect(target.behavioralPatternProvider).toBeNull();
   });
 
@@ -89,7 +96,11 @@ describe('wireIntentionRuntime', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
-    const hooks = createIntentionAppraisalHooks(runtime.concernStore, runtime.pendingFollowUpStore);
+    const hooks = createIntentionAppraisalHooks(
+      runtime.concernStore,
+      runtime.pendingFollowUpStore,
+      runtime.careReminderStore,
+    );
 
     runtime.concernStore.create({
       text: 'Check hydration reminder',
@@ -199,13 +210,67 @@ describe('wireIntentionRuntime', () => {
     const activated = runtime.pendingFollowUpStore.getById(pendingFollowUpId!);
     expect(activated?.activatedAt).toBeTruthy();
     expect(activated?.activationReason).toBe('post_turn_action');
+
+    const reminderId = hooks.onIntentionReminderDecision({
+      decision: {
+        type: 'reminder',
+        priority: 'high',
+        reason: 'Store the birthday so it survives quiet periods.',
+        timing: 'scheduled',
+        dueAt: Date.parse('2026-04-01T09:00:00.000Z'),
+        reminder: {
+          kind: 'important_date',
+          classification: 'birthday',
+          title: 'Alex birthday',
+          content: 'Remember Alex birthday and plan a warm check-in.',
+          schedule: 'annual',
+        },
+      },
+      channelId: 'api:test',
+      channelType: 'api',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-4',
+    });
+    expect(reminderId).toBeTruthy();
+
+    const reminders = runtime.careReminderStore.getActiveCareReminders('contact-a');
+    expect(reminders).toHaveLength(1);
+    expect(reminders[0]).toMatchObject({
+      id: reminderId,
+      kind: 'important_date',
+      classification: 'birthday',
+      schedule: 'annual',
+      provenanceSource: 'companion_appraisal',
+      provenanceReason: 'Store the birthday so it survives quiet periods.',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-4',
+    });
+
+    const triggered = hooks.onIntentionReminderTriggered({
+      reminderId: reminderId!,
+    });
+    expect(triggered).toMatchObject({
+      reminderId,
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      content: 'Remember Alex birthday and plan a warm check-in.',
+    });
+    const advanced = runtime.careReminderStore.getById(reminderId!);
+    expect(advanced?.activationCount).toBe(1);
+    expect(advanced?.dueAt).not.toBe('2026-04-01T09:00:00.000Z');
   });
 
   it('includes recently resolved concerns in appraisal snapshots and suppresses near-duplicate recreation', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
-    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+    const hooks = createIntentionAppraisalHooks(
+      runtime.concernStore,
+      runtime.pendingFollowUpStore,
+      runtime.careReminderStore,
+    );
 
     const resolved = runtime.concernStore.create({
       text: 'Clean up the profile synthesis reminder',
@@ -260,7 +325,11 @@ describe('wireIntentionRuntime', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
-    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+    const hooks = createIntentionAppraisalHooks(
+      runtime.concernStore,
+      runtime.pendingFollowUpStore,
+      runtime.careReminderStore,
+    );
 
     const resolved = runtime.concernStore.create({
       text: 'Check back on the deployment cleanup',
@@ -302,7 +371,11 @@ describe('wireIntentionRuntime', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
-    const hooks = createIntentionAppraisalHooks(runtime.concernStore, runtime.pendingFollowUpStore);
+    const hooks = createIntentionAppraisalHooks(
+      runtime.concernStore,
+      runtime.pendingFollowUpStore,
+      runtime.careReminderStore,
+    );
 
     expect(() => hooks.onIntentionConcernDecision({
       decision: {
@@ -321,7 +394,11 @@ describe('wireIntentionRuntime', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
     const runtime = wireIntentionRuntime(target, db);
-    const hooks = createIntentionAppraisalHooks(runtime.concernStore);
+    const hooks = createIntentionAppraisalHooks(
+      runtime.concernStore,
+      runtime.pendingFollowUpStore,
+      runtime.careReminderStore,
+    );
 
     const resolved = runtime.concernStore.create({
       text: 'Clean up the profile synthesis follow-up',
@@ -438,6 +515,8 @@ describe('entrypoint composition', () => {
     expect(runtimeSource).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
     expect(runtimeSource).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
     expect(runtimeSource).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
+    expect(runtimeSource).toContain('onIntentionReminderDecision: intentionAppraisalHooks.onIntentionReminderDecision');
+    expect(runtimeSource).toContain('onIntentionReminderTriggered: intentionAppraisalHooks.onIntentionReminderTriggered');
     expect(runtimeSource).toContain('onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome');
   });
 
@@ -452,6 +531,8 @@ describe('entrypoint composition', () => {
     expect(source).toContain('onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision');
     expect(source).toContain('onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision');
     expect(source).toContain('onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated');
+    expect(source).toContain('onIntentionReminderDecision: intentionAppraisalHooks.onIntentionReminderDecision');
+    expect(source).toContain('onIntentionReminderTriggered: intentionAppraisalHooks.onIntentionReminderTriggered');
     expect(source).toContain('onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome');
   });
 });

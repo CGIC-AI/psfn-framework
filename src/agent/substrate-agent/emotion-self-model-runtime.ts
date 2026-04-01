@@ -3,6 +3,7 @@ import type { EmotionObserver, EmotionObserverResult } from '../../emotion/obser
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from '../../emotion/state.js';
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
 import type { ActiveConcern, ActiveConcernContextProvider } from '../../intention/concerns.js';
+import type { CareReminder, CareReminderContextProvider } from '../../intention/care-reminders.js';
 import type { PendingFollowUp, PendingFollowUpContextProvider } from '../../intention/pending-follow-ups.js';
 import type { ContactStore } from '../../contacts/store.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
@@ -40,6 +41,7 @@ export interface EmotionSelfModelRuntimeOptions {
   emotionRuntime?: EmotionSelfModelRuntimeWiring;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
+  getCareReminderProvider: () => CareReminderContextProvider | null;
   getContactStore: () => ContactStore | null;
   getSelfModelRuntimeRequired: () => boolean;
   logger: EmotionSelfModelRuntimeLogger;
@@ -58,6 +60,7 @@ export class EmotionSelfModelRuntime {
   private readonly sessionManager: SessionManager;
   private readonly getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   private readonly getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
+  private readonly getCareReminderProvider: () => CareReminderContextProvider | null;
   private readonly getContactStore: () => ContactStore | null;
   private readonly getSelfModelRuntimeRequired: () => boolean;
   private readonly logger: EmotionSelfModelRuntimeLogger;
@@ -66,6 +69,7 @@ export class EmotionSelfModelRuntime {
     this.sessionManager = options.sessionManager;
     this.getActiveConcernProvider = options.getActiveConcernProvider;
     this.getPendingFollowUpProvider = options.getPendingFollowUpProvider;
+    this.getCareReminderProvider = options.getCareReminderProvider;
     this.getContactStore = options.getContactStore;
     this.getSelfModelRuntimeRequired = options.getSelfModelRuntimeRequired;
     this.logger = options.logger;
@@ -106,6 +110,10 @@ export class EmotionSelfModelRuntime {
     const pendingFollowUpProvider = this.getPendingFollowUpProvider();
     if (!pendingFollowUpProvider) {
       throw new Error('Self-model runtime wiring is required but PendingFollowUpProvider is not configured');
+    }
+    const careReminderProvider = this.getCareReminderProvider();
+    if (!careReminderProvider) {
+      throw new Error('Self-model runtime wiring is required but CareReminderProvider is not configured');
     }
 
     const contactStore = this.getContactStore();
@@ -156,6 +164,7 @@ export class EmotionSelfModelRuntime {
   }): InternalState {
     const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
     const pendingFollowUps = this.resolveInternalStatePendingFollowUps(input.canonicalContactKey);
+    const careReminders = this.resolveInternalStateCareReminders(input.canonicalContactKey);
     const contactEmotionalSnapshot = this.resolveContactEmotionalSnapshot(input.canonicalContactKey);
     const recentTurnCount = this.resolveRecentTurnCount(input.sessionChannelId);
     const lastSeenDeltaSeconds = this.resolveContactLastSeenDeltaSeconds(
@@ -168,6 +177,7 @@ export class EmotionSelfModelRuntime {
       emotionState,
       activeConcerns,
       pendingFollowUps,
+      careReminders,
       trustLevel: input.trustLevel,
       ...(input.canonicalContactKey ? { contactId: input.canonicalContactKey } : {}),
       contactEmotionalSnapshot,
@@ -333,6 +343,16 @@ export class EmotionSelfModelRuntime {
       throw new Error('Pending follow-up provider returned an invalid payload for InternalState computation');
     }
     return followUps;
+  }
+
+  private resolveInternalStateCareReminders(canonicalContactKey?: string): CareReminder[] {
+    const careReminderProvider = this.getCareReminderProvider();
+    if (!careReminderProvider) return [];
+    const reminders = careReminderProvider.getActiveCareReminders(canonicalContactKey);
+    if (!Array.isArray(reminders)) {
+      throw new Error('Care reminder provider returned an invalid payload for InternalState computation');
+    }
+    return reminders;
   }
 
   private resolveContactEmotionalSnapshot(canonicalContactKey?: string): EmotionalSnapshot | null {

@@ -569,6 +569,7 @@ async function main(): Promise<void> {
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,
     intentionRuntime.pendingFollowUpStore,
+    intentionRuntime.careReminderStore,
   );
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
     intentionRuntime.behavioralPatternTracker,
@@ -1139,6 +1140,8 @@ async function main(): Promise<void> {
       onIntentionConcernDecision: intentionAppraisalHooks.onIntentionConcernDecision,
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
+      onIntentionReminderDecision: intentionAppraisalHooks.onIntentionReminderDecision,
+      onIntentionReminderTriggered: intentionAppraisalHooks.onIntentionReminderTriggered,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       coreMemoryStore,
       postTurnActions,

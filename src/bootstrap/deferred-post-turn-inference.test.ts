@@ -67,7 +67,7 @@ describe('inferDeferredPostTurnActions', () => {
       },
       turnMessages: [{
         role: 'toolResult',
-        toolName: 'load_tools',
+        toolName: 'toolset',
         result: {
           details: {
             deferredToolHandoff: {
@@ -126,7 +126,7 @@ describe('inferDeferredPostTurnActions', () => {
       },
       turnMessages: [{
         role: 'toolResult',
-        toolName: 'load_tools',
+        toolName: 'toolset',
         result: {
           details: {
             deferredToolHandoff: {
@@ -138,7 +138,7 @@ describe('inferDeferredPostTurnActions', () => {
         },
       }, {
         role: 'toolResult',
-        toolName: 'load_tools',
+        toolName: 'toolset',
         result: {
           details: {
             deferredToolHandoff: {

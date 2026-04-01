@@ -52,15 +52,15 @@ describe('deriveToolHealthViews', () => {
             },
           },
           {
-            name: 'load_tools',
-            description: 'Load extended tools for the current session.',
+            name: 'toolset',
+            description: 'Manage non-default tool activation and pinned tools.',
             scope: 'core',
           },
         ],
       },
       state: {
         generatedAt: 2,
-        coreTools: ['tool_search', 'load_tools'],
+        coreTools: ['tool_search', 'toolset'],
         extendedTools: ['notify_operator', 'heartbeat_run_template'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
@@ -75,7 +75,7 @@ describe('deriveToolHealthViews', () => {
         ],
         activeTools: [
           { toolName: 'tool_search', source: 'core' },
-          { toolName: 'load_tools', source: 'core' },
+          { toolName: 'toolset', source: 'core' },
           { toolName: 'heartbeat_run_template', source: 'autoload' },
         ],
         lastSnapshot: null,
@@ -90,9 +90,9 @@ describe('deriveToolHealthViews', () => {
       ],
       recentFailures: [
         {
-          toolName: 'load_tools',
+          toolName: 'toolset',
           channelId: 'api-session',
-          message: 'load_tools failed once',
+          message: 'toolset failed once',
           timestamp: 3,
         },
       ],
@@ -141,11 +141,11 @@ describe('deriveToolHealthViews', () => {
       },
     });
 
-    const loadTools = views.find((entry) => entry.name === 'load_tools');
-    expect(loadTools).toMatchObject({
+    const toolset = views.find((entry) => entry.name === 'toolset');
+    expect(toolset).toMatchObject({
       health: {
         status: 'degraded',
-        detail: 'Last failure: load_tools failed once',
+        detail: 'Last failure: toolset failed once',
       },
       contexts: {
         chat: {

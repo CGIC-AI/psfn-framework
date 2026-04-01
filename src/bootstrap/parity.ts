@@ -25,13 +25,9 @@ import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../repl/types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import {
-  createPromotedToolsAddTool,
-  createPromotedToolsListTool,
-  createPromotedToolsRemoveTool,
-  createPromotedToolsSwapTool,
   createSettingsGetTool,
-  type PromotedExtendedToolsManager,
 } from '../settings-tools.js';
+import type { MemoryWriter } from '../memory/writer.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../filesystem/runtime-wiring.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../core-memory/store.js';
@@ -76,7 +72,6 @@ import {
   createScheduleTaskTool,
 } from '../scheduler/heartbeat-tools.js';
 import type { ReflectionTemplate } from '../scheduler/heartbeat-policy.js';
-import type { MemoryWriter } from '../memory/writer.js';
 import { ValuesJournalStore } from '../values/store.js';
 import type { ValuesDeliberationMetadata } from '../values/store.js';
 import {
@@ -293,18 +288,14 @@ interface HeartbeatRuntimeOptions {
   }): Promise<void> };
 }
 
-function hasPromotedToolsManager(
+interface ToolsetMemoryWriterTarget extends ToolRegistrarTarget {
+  setToolsetMemoryWriter: (getMemoryWriter: () => Pick<MemoryWriter, 'write'> | undefined) => void;
+}
+
+function hasToolsetMemoryWriterTarget(
   target: ToolRegistrarTarget,
-): target is ToolRegistrarTarget & PromotedExtendedToolsManager {
-  return (
-    typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedToolsLimit === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedTools === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).setPromotedExtendedTools === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).persistPromotedExtendedTools === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).addPromotedExtendedTool === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).removePromotedExtendedTool === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).swapPromotedExtendedTools === 'function'
-  );
+): target is ToolsetMemoryWriterTarget {
+  return typeof (target as Partial<ToolsetMemoryWriterTarget>).setToolsetMemoryWriter === 'function';
 }
 
 export interface PromptRuntimeTarget extends ToolRegistrarTarget {
@@ -424,13 +415,9 @@ export function wireSettingsRuntime(
   } = {},
 ): void {
   target.registerTool(createSettingsGetTool(config), 'core');
-  if (!hasPromotedToolsManager(target)) {
-    return;
+  if (options.getMemoryWriter && hasToolsetMemoryWriterTarget(target)) {
+    target.setToolsetMemoryWriter(options.getMemoryWriter);
   }
-  target.registerTool(createPromotedToolsListTool(target), 'extended');
-  target.registerTool(createPromotedToolsAddTool(target, { getMemoryWriter: options.getMemoryWriter }), 'extended');
-  target.registerTool(createPromotedToolsRemoveTool(target, { getMemoryWriter: options.getMemoryWriter }), 'extended');
-  target.registerTool(createPromotedToolsSwapTool(target, { getMemoryWriter: options.getMemoryWriter }), 'extended');
 }
 
 export function wireSessionToolsRuntime(

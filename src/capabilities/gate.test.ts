@@ -287,24 +287,72 @@ describe('capability tool gating', () => {
     expect(issueClose.executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('evaluates promoted tools capability requirements', () => {
-    const promotedAdd = createTool('promoted_tools_add');
-    const deniedEligibility = evaluateToolCapabilityEligibility(
-      promotedAdd.tool,
-      {},
-      accessForTier('custom', ['identity.read']),
-    );
-    expect(deniedEligibility.allowed).toBe(false);
-    expect(deniedEligibility.requiredTokens).toEqual(['identity.write.runtime']);
-    expect(deniedEligibility.missingTokens).toEqual(['identity.write.runtime']);
+  it('evaluates toolset capability requirements by action', async () => {
+    const toolsetModule = await import('../agent/substrate-agent/adaptive-tools-runtime.js');
+    const toolset = toolsetModule.createToolsetTool({
+      getExtendedTools: () => [],
+      getExtendedToolAutoloadPolicy: () => null,
+      getAdaptiveToolRuntimeState: () => ({
+        generatedAt: 1,
+        coreTools: ['tool_search', 'toolset'],
+        extendedTools: [],
+        promotedToolsConfigured: [],
+        promotedToolsActive: [],
+        promotedToolsSkipped: [],
+        loadedExtendedTools: [],
+        activeTools: [
+          { toolName: 'tool_search', source: 'core' },
+          { toolName: 'toolset', source: 'core' },
+        ],
+        lastSnapshot: null,
+      }),
+      getActiveTurnCorrelation: () => null,
+      getActiveTurnTaskKind: () => null,
+      getActiveTurnIntent: () => null,
+      getPromotedExtendedToolsLimit: () => 4,
+      getPromotedExtendedTools: () => [],
+      setPromotedExtendedTools: (next: readonly string[]) => [...next],
+      persistPromotedExtendedTools: () => null,
+      addPromotedExtendedTool: () => ({
+        ok: true,
+        changed: false,
+        promotedTools: [],
+        message: 'ok',
+      }),
+      removePromotedExtendedTool: () => ({
+        ok: true,
+        changed: false,
+        promotedTools: [],
+        message: 'ok',
+      }),
+      applyActiveToolsToAgent: () => {},
+      activateExtendedTools: () => ({
+        requestedTools: [],
+        activatedTools: [],
+        alreadyActiveTools: [],
+        missingTools: [],
+      }),
+      resolveSessionChannelId: (channelId: string) => channelId,
+      withAdaptiveCorrelation: () => ({}),
+      emitAdaptiveToolDecision: () => {},
+      emitTelemetry: () => {},
+    });
 
-    const promotedList = createTool('promoted_tools_list');
-    const allowedEligibility = evaluateToolCapabilityEligibility(
-      promotedList.tool,
-      {},
+    const deniedPinEligibility = evaluateToolCapabilityEligibility(
+      toolset,
+      { action: 'pin', tool: 'repo_status' },
       accessForTier('custom', ['identity.read']),
     );
-    expect(allowedEligibility.allowed).toBe(true);
-    expect(allowedEligibility.missingTokens).toEqual([]);
+    expect(deniedPinEligibility.allowed).toBe(false);
+    expect(deniedPinEligibility.requiredTokens).toEqual(['identity.write.runtime']);
+    expect(deniedPinEligibility.missingTokens).toEqual(['identity.write.runtime']);
+
+    const allowedListEligibility = evaluateToolCapabilityEligibility(
+      toolset,
+      { action: 'list' },
+      accessForTier('custom', ['identity.read']),
+    );
+    expect(allowedListEligibility.allowed).toBe(true);
+    expect(allowedListEligibility.missingTokens).toEqual([]);
   });
 });

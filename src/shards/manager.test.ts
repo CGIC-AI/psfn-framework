@@ -849,7 +849,7 @@ describe('ShardManager', () => {
     await manager.spawn({ name: 'toolset-default', task: 'test' });
 
     const injected = lastSetToolNames();
-    expect(injected).toEqual(expect.arrayContaining(['load_tools', ...DEFAULT_SHARD_TOOLSET]));
+    expect(injected).toEqual(expect.arrayContaining(['toolset', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
     expect(injected).not.toContain('spawn_shard');
   });
@@ -998,7 +998,7 @@ describe('ShardManager', () => {
     });
 
     const injected = lastSetToolNames();
-    expect(injected).toEqual(expect.arrayContaining(['load_tools', ...DEFAULT_SHARD_TOOLSET]));
+    expect(injected).toEqual(expect.arrayContaining(['toolset', ...DEFAULT_SHARD_TOOLSET]));
     expect(injected).not.toContain('repo_commit');
     expect(injected).not.toContain('spawn_shard');
   });

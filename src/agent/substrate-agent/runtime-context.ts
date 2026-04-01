@@ -234,18 +234,18 @@ export function buildRuntimeContext(input: {
   if (extendedCount > 0) {
     lines.push('');
     lines.push('[Tool Discovery]');
-    lines.push('Use tool_search first for non-default tools. Use load_tools only to activate overlay tools you already chose.');
+    lines.push('Use tool_search first for non-default tools. Use toolset to activate overlay tools for this runtime or pin them across turns.');
 
     lines.push('');
     lines.push('Available extended tools:');
     for (const t of input.extendedTools) {
       const loaded = input.loadedExtended.get(t.name);
       const turnClass = input.classifyExtendedToolForTurn(t.name);
-      let suffix = ' (discover with tool_search; activate with load_tools)';
+      let suffix = ' (discover with tool_search; activate or pin with toolset)';
       if (turnClass !== 'overlay') {
         suffix = ' (background-only; discover with tool_search)';
       } else if (input.promotedExtendedToolNames.has(t.name)) {
-        suffix = ' (promoted, always active; discoverable via tool_search)';
+        suffix = ' (pinned, always active; discoverable via tool_search)';
       } else if (loaded?.source === 'autoload') {
         suffix = ' (autoload active; discoverable via tool_search)';
       } else if (loaded?.source === 'deferred') {

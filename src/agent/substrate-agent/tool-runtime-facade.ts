@@ -22,13 +22,14 @@ import {
 } from '../extended-tool-autoload-policy.js';
 import {
   activateExtendedToolsForTurn,
-  createLoadToolsTool,
+  createToolsetTool,
   createToolSearchTool,
   preloadExtendedToolsForTurn,
   type AutoloadTurnOutcome,
   type ExtendedToolActivationOptions,
   type ExtendedToolActivationResult,
 } from './adaptive-tools-runtime.js';
+import type { MemoryWriter } from '../../memory/writer.js';
 import {
   addPromotedExtendedTool,
   applyActiveToolsToAgent,
@@ -113,6 +114,7 @@ export class ToolRuntimeFacade {
   private loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>();
   private extendedToolAutoloadPolicy: ExtendedToolAutoloadPolicy | null = createDefaultExtendedToolAutoloadPolicy();
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
+  private getToolsetMemoryWriter: (() => Pick<MemoryWriter, 'write'> | undefined) | undefined;
 
   constructor(options: ToolRuntimeFacadeOptions) {
     this.config = options.config;
@@ -247,13 +249,26 @@ export class ToolRuntimeFacade {
     this.extendedToolAutoloadPolicy = policy;
   }
 
-  createLoadToolsTool(): AgentTool<any> {
-    return createLoadToolsTool({
+  setToolsetMemoryWriter(getMemoryWriter: () => Pick<MemoryWriter, 'write'> | undefined): void {
+    this.getToolsetMemoryWriter = getMemoryWriter;
+  }
+
+  createToolsetTool(): AgentTool<any> {
+    return createToolsetTool({
       getExtendedTools: () => this.extendedTools,
       getExtendedToolAutoloadPolicy: () => this.extendedToolAutoloadPolicy,
+      getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),
       getActiveTurnCorrelation: () => this.getActiveTurnCorrelation(),
       getActiveTurnTaskKind: () => this.getActiveTurnTaskKind(),
       getActiveTurnIntent: () => this.getActiveTurnIntent(),
+      getPromotedExtendedToolsLimit: () => this.getPromotedExtendedToolsLimit(),
+      getPromotedExtendedTools: () => this.getPromotedExtendedTools(),
+      setPromotedExtendedTools: (next) => this.setPromotedExtendedToolNamesInternal(next),
+      persistPromotedExtendedTools: (next) => this.persistPromotedExtendedToolNames(next),
+      addPromotedExtendedTool: (toolName) => this.addPromotedExtendedTool(toolName),
+      removePromotedExtendedTool: (toolName) => this.removePromotedExtendedTool(toolName),
+      getMemoryWriter: () => this.getToolsetMemoryWriter?.(),
+      applyActiveToolsToAgent: () => this.applyActiveToolsToAgent(),
       activateExtendedTools: (toolNames, options) => this.activateExtendedTools(toolNames, options),
       resolveSessionChannelId: (channelId) => this.resolveSessionChannelId(channelId),
       withAdaptiveCorrelation: (correlation, purpose) => this.withAdaptiveCorrelation(correlation, purpose),

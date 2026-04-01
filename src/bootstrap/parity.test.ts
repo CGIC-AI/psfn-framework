@@ -146,52 +146,21 @@ describe('wireSessionToolsRuntime', () => {
 });
 
 describe('wireSettingsRuntime', () => {
-  it('registers settings_get as core and promoted-tool helpers as extended', () => {
+  it('registers only settings_get and leaves toolset registration to the agent runtime', () => {
     const target = {
       registerTool: vi.fn(),
-      getPromotedExtendedToolsLimit: () => 4,
-      getPromotedExtendedTools: () => ['repo_status'],
-      setPromotedExtendedTools: () => ['repo_status'],
-      persistPromotedExtendedTools: () => null,
-      addPromotedExtendedTool: vi.fn(() => ({
-        ok: true,
-        changed: true,
-        promotedTools: ['repo_status'],
-        message: 'ok',
-      })),
-      removePromotedExtendedTool: vi.fn(() => ({
-        ok: true,
-        changed: true,
-        promotedTools: [],
-        message: 'ok',
-      })),
-      swapPromotedExtendedTools: vi.fn(() => ({
-        ok: true,
-        changed: true,
-        promotedTools: ['repo_status'],
-        message: 'ok',
-      })),
+      setToolsetMemoryWriter: vi.fn(),
     };
 
     wireSettingsRuntime(target as any, {} as any);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.map(([tool]) => tool.name).sort()).toEqual([
-      'promoted_tools_add',
-      'promoted_tools_list',
-      'promoted_tools_remove',
-      'promoted_tools_swap',
-      'settings_get',
-    ]);
+    expect(calls.map(([tool]) => tool.name)).toEqual(['settings_get']);
     expect(calls.find(([tool]) => tool.name === 'settings_get')?.[1]).toBe('core');
-    expect(
-      calls
-        .filter(([tool]) => tool.name !== 'settings_get')
-        .every(([, category]) => category === 'extended'),
-    ).toBe(true);
+    expect(target.setToolsetMemoryWriter).not.toHaveBeenCalled();
   });
 
-  it('writes durable autonomous-action memory when promoted tools change', async () => {
+  it('forwards the toolset memory writer hook when available', () => {
     const memoryWriter = {
       write: vi.fn(async (input: Record<string, unknown>) => ({
         action: 'created',
@@ -200,80 +169,16 @@ describe('wireSettingsRuntime', () => {
     };
     const target = {
       registerTool: vi.fn(),
-      getPromotedExtendedToolsLimit: () => 4,
-      getPromotedExtendedTools: () => ['repo_status'],
-      setPromotedExtendedTools: vi.fn((next: readonly string[]) => [...next]),
-      persistPromotedExtendedTools: vi.fn(() => null),
-      addPromotedExtendedTool: vi.fn(() => ({
-        ok: true,
-        changed: true,
-        promotedTools: ['repo_status', 'session_list'],
-        message: 'added',
-      })),
-      removePromotedExtendedTool: vi.fn(() => ({
-        ok: true,
-        changed: true,
-        promotedTools: ['session_list'],
-        message: 'removed',
-      })),
-      swapPromotedExtendedTools: vi.fn(() => ({
-        ok: true,
-        changed: true,
-        promotedTools: ['session_list', 'repo_status'],
-        message: 'swapped',
-      })),
+      setToolsetMemoryWriter: vi.fn(),
     };
 
     wireSettingsRuntime(target as any, {} as any, {
       getMemoryWriter: () => memoryWriter as any,
     });
-
-    const addTool = target.registerTool.mock.calls.find(([tool]) => tool.name === 'promoted_tools_add')?.[0] as
-      | { execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ details?: { isError?: boolean } }> }
-      | undefined;
-    expect(addTool).toBeDefined();
-
-    const result = await addTool!.execute('call-add', {
-      tool: 'session_list',
-      reason: 'Prefer the session surface on every turn.',
-    });
-    expect(result.details?.isError).toBeUndefined();
-    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
-    const payload = memoryWriter.write.mock.calls[0]?.[0] as {
-      sourceRef?: string;
-      provenanceRefs?: string[];
-      tags?: string[];
-      scopeRef?: { kind?: string; id?: string; label?: string };
-      scopeTags?: string[];
-      text?: string;
-    };
-    expect(payload.sourceRef).toContain('source:autonomous_action|tool:promoted_tools_add|action:add');
-    expect(payload.provenanceRefs).toEqual(expect.arrayContaining([
-      'source_type=autonomous_action',
-      'tool=promoted_tools_add',
-      'action=add',
-      'reason=Prefer the session surface on every turn.',
-    ]));
-    expect(payload.tags).toEqual(expect.arrayContaining([
-      'autonomous_action',
-      'self_configuration',
-      'promoted_tools_add',
-      'add',
-      'promoted_tools',
-      'toolset',
-    ]));
-    expect(payload.scopeRef).toEqual({
-      kind: 'system',
-      id: 'self-configuration',
-      label: 'Self-configuration',
-    });
-    expect(payload.scopeTags).toEqual(expect.arrayContaining([
-      'promoted_tools_add',
-      'add',
-      'promoted_tools',
-      'toolset',
-    ]));
-    expect(payload.text).toContain('Promoted extended tool "session_list"');
+    expect(target.setToolsetMemoryWriter).toHaveBeenCalledTimes(1);
+    const forwardedGetter = target.setToolsetMemoryWriter.mock.calls[0]?.[0] as (() => unknown) | undefined;
+    expect(forwardedGetter).toBeTypeOf('function');
+    expect(forwardedGetter?.()).toBe(memoryWriter);
   });
 });
 
@@ -968,7 +873,7 @@ describe('wireHeartbeatRuntime', () => {
     });
     const duplicateTurnMessages = [{
       role: 'toolResult',
-      toolName: 'load_tools',
+      toolName: 'toolset',
       result: {
         details: {
           deferredToolHandoff: {
@@ -980,7 +885,7 @@ describe('wireHeartbeatRuntime', () => {
       },
     }, {
       role: 'toolResult',
-      toolName: 'load_tools',
+      toolName: 'toolset',
       result: {
         details: {
           deferredToolHandoff: {
@@ -1151,7 +1056,7 @@ describe('wireHeartbeatRuntime', () => {
     }
   });
 
-  it('infers deferred tool-handoff actions from late load_tools discovery payloads', async () => {
+  it('infers deferred tool-handoff actions from late toolset activation payloads', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -1236,7 +1141,7 @@ describe('wireHeartbeatRuntime', () => {
       response: { content: 'ok' },
       turnMessages: [{
         role: 'toolResult',
-        toolName: 'load_tools',
+        toolName: 'toolset',
         result: {
           details: {
             deferredToolHandoff: {
@@ -1328,7 +1233,7 @@ describe('wireHeartbeatRuntime', () => {
       },
     ) => Promise<Array<any>>;
     const message = {
-      id: 'msg-load-tools-1',
+      id: 'msg-toolset-1',
       channelId: 'test-channel',
       channelType: 'terminal' as const,
       authorId: 'user-1',
@@ -1341,7 +1246,7 @@ describe('wireHeartbeatRuntime', () => {
       response: { content: 'ok' },
       turnMessages: [{
         role: 'toolResult',
-        toolName: 'load_tools',
+        toolName: 'toolset',
         result: {
           details: {
             deferredToolHandoff: {
@@ -1461,7 +1366,7 @@ describe('wireHeartbeatRuntime', () => {
         },
       ) => Promise<Array<any>>;
       const message = {
-        id: 'msg-load-tools-fail-1',
+        id: 'msg-toolset-fail-1',
         channelId: 'test-channel',
         channelType: 'terminal' as const,
         authorId: 'user-1',
@@ -1474,7 +1379,7 @@ describe('wireHeartbeatRuntime', () => {
         response: { content: 'ok' },
         turnMessages: [{
           role: 'toolResult',
-          toolName: 'load_tools',
+          toolName: 'toolset',
           result: {
             details: {
               deferredToolHandoff: {

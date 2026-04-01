@@ -3401,9 +3401,12 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(extendedProbeTool, 'extended');
 
-    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
-    expect(loadTools).toBeDefined();
-    await (loadTools as any).execute('load-1', { tools: ['extended_probe_tool'] });
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
+    await (toolset as any).execute('toolset-activate-1', {
+      action: 'activate',
+      tools: ['extended_probe_tool'],
+    });
 
     const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
     await agent.handleMessage(makeMessage({ id: 'msg-load-persist-1' }));
@@ -3451,13 +3454,13 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const runtimeState = agent.getAdaptiveToolRuntimeState();
     expect(runtimeState.activeTools.map(tool => tool.toolName)).toEqual(
-      expect.arrayContaining(['tool_search', 'load_tools']),
+      expect.arrayContaining(['tool_search', 'toolset']),
     );
     expect(runtimeState.activeTools.map(tool => tool.toolName)).not.toContain('heartbeat_run_template');
     expect(runtimeState.activeTools.map(tool => tool.toolName)).not.toContain('repo_status');
   });
 
-  it('captures deferred tool-handoff intent details from load_tools', async () => {
+  it('captures deferred tool-handoff intent details from toolset activate actions', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
@@ -3479,10 +3482,11 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(extendedProbeTool, 'extended');
 
-    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
-    expect(loadTools).toBeDefined();
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
 
-    const result = await (loadTools as any).execute('load-intent-1', {
+    const result = await (toolset as any).execute('toolset-intent-1', {
+      action: 'activate',
       tools: ['extended_probe_tool'],
       intendedAction: 'Use extended_probe_tool to gather diagnostics for this request.',
       deferUntilTurnBoundary: true,
@@ -3502,7 +3506,7 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
-  it('skips background-only load_tools candidates and emits same-turn activation diagnostics', async () => {
+  it('skips background-only toolset activate candidates and emits same-turn activation diagnostics', async () => {
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
       eventBus,
@@ -3530,13 +3534,14 @@ describe('SubstrateAgent.handleMessage', () => {
     (agent as any).activeTurnTaskKind = 'chat';
     (agent as any).activeTurnIntent = 'ops';
 
-    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
-    expect(loadTools).toBeDefined();
-    const result = await (loadTools as any).execute('load-background-skip', {
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
+    const result = await (toolset as any).execute('toolset-background-skip', {
+      action: 'activate',
       tools: ['schedule_task', 'repo_status'],
     });
-
-    expect(result.content[0]?.text).toContain('Background-only tools not activated in-turn: schedule_task');
+    const payload = JSON.parse(result.content[0]?.text as string);
+    expect(payload.backgroundOnlyTools).toEqual(['schedule_task']);
     const runtimeState = agent.getAdaptiveToolRuntimeState();
     const activeToolNames = runtimeState.activeTools.map(tool => tool.toolName);
     expect(activeToolNames).toContain('repo_status');
@@ -3560,7 +3565,7 @@ describe('SubstrateAgent.handleMessage', () => {
     ]));
   });
 
-  it('activates promoted extended tools each turn without load_tools calls', async () => {
+  it('activates promoted extended tools each turn without toolset activate calls', async () => {
     const config = makeConfig({
       promotedExtendedTools: ['extended_probe_tool'],
     });
@@ -3594,6 +3599,75 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(setToolNamesByCall.length).toBeGreaterThanOrEqual(2);
     expect(setToolNamesByCall[0]).toContain('extended_probe_tool');
     expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
+  });
+
+  it('lists, pins, and unpins tools through toolset while recording durable memory', async () => {
+    const persistPromotedExtendedTools = vi.fn();
+    const config = makeConfig({
+      runtimeHooks: {
+        persistPromotedExtendedTools,
+      },
+    });
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      makeMockSessionManager(),
+      'Base prompt',
+      config,
+    );
+    const memoryWriter = {
+      write: vi.fn(async () => ({ action: 'created', memory: { id: 'memory-1' } })),
+    };
+    agent.setToolsetMemoryWriter(() => memoryWriter as any);
+    agent.registerTool(makeExtendedProbeTool('tool_one'), 'extended');
+
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
+
+    const listResult = await (toolset as any).execute('toolset-list-1', { action: 'list' });
+    const listPayload = JSON.parse(listResult.content[0]?.text as string);
+    expect(listPayload.pinnedTools).toEqual([]);
+    expect(listPayload.activeTools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
+      expect.objectContaining({ toolName: 'toolset', source: 'core' }),
+    ]));
+
+    const pinResult = await (toolset as any).execute('toolset-pin-1', {
+      action: 'pin',
+      tool: 'tool_one',
+      reason: 'Keep it ready across turns.',
+    });
+    const pinPayload = JSON.parse(pinResult.content[0]?.text as string);
+    expect(pinPayload.pinnedTools).toEqual(['tool_one']);
+    expect(pinResult.details.isError).toBeUndefined();
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    expect(persistPromotedExtendedTools).toHaveBeenCalledWith(['tool_one']);
+    const pinMemory = memoryWriter.write.mock.calls[0]?.[0] as {
+      sourceRef?: string;
+      provenanceRefs?: string[];
+      text?: string;
+    };
+    expect(pinMemory.sourceRef).toContain('source:autonomous_action|tool:toolset|action:pin');
+    expect(pinMemory.provenanceRefs).toEqual(expect.arrayContaining([
+      'tool=toolset',
+      'action=pin',
+      'reason=Keep it ready across turns.',
+    ]));
+    expect(pinMemory.text).toContain('Pinned extended tool "tool_one"');
+
+    const unpinResult = await (toolset as any).execute('toolset-unpin-1', {
+      action: 'unpin',
+      tool: 'tool_one',
+    });
+    const unpinPayload = JSON.parse(unpinResult.content[0]?.text as string);
+    expect(unpinPayload.pinnedTools).toEqual([]);
+    expect(memoryWriter.write).toHaveBeenCalledTimes(2);
+    const unpinMemory = memoryWriter.write.mock.calls[1]?.[0] as {
+      sourceRef?: string;
+      text?: string;
+    };
+    expect(unpinMemory.sourceRef).toContain('source:autonomous_action|tool:toolset|action:unpin');
+    expect(unpinMemory.text).toContain('Unpinned extended tool "tool_one"');
   });
 
   it('autoloads bounded dev tools before prompt in deterministic candidate order', async () => {
@@ -3716,7 +3790,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toEqual(['tool_search', 'load_tools']);
+    expect(toolNames).toEqual(['tool_search', 'toolset']);
 
     const summary = autoloadSummaries.at(-1);
     expect(summary?.intent).toBe('dev');
@@ -3830,7 +3904,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(isTurnId(snapshot?.turnId)).toBe(true);
     expect(snapshot?.tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
-      expect.objectContaining({ toolName: 'load_tools', source: 'core' }),
+      expect.objectContaining({ toolName: 'toolset', source: 'core' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded' }),
       expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred' }),
@@ -3857,7 +3931,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect.objectContaining({ toolName: 'repo_commit', source: 'autoload', decision: 'skipped', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
       expect.objectContaining({ toolName: 'tool_search', source: 'core', decision: 'active', reason: 'turn_active_set' }),
-      expect.objectContaining({ toolName: 'load_tools', source: 'core', decision: 'active', reason: 'turn_active_set' }),
+      expect.objectContaining({ toolName: 'toolset', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),
     ]));
   });
@@ -3886,9 +3960,12 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(extendedProbeTool, 'extended');
 
-    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
-    expect(loadTools).toBeDefined();
-    await (loadTools as any).execute('load-promoted-dedupe', { tools: ['extended_probe_tool'] });
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
+    await (toolset as any).execute('toolset-promoted-dedupe', {
+      action: 'activate',
+      tools: ['extended_probe_tool'],
+    });
 
     const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
     await agent.handleMessage(makeMessage({ id: 'msg-promoted-dedupe' }));

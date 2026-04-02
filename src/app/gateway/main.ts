@@ -29,6 +29,7 @@ import { createGatewayVoiceSurfaces } from '../../boundary/gateway/voice-surface
 import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
+import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -224,6 +225,12 @@ async function main(): Promise<void> {
   // ── Create gateway server ──
 
   const gateway = createGatewayServer({ discordAdapter: discord });
+  const {
+    apiHost,
+    apiPort,
+    adminHost,
+    adminPort,
+  } = resolveGatewayApiSurfaceBindings(process.env);
   const voiceSurfaces = await createGatewayVoiceSurfaces({
     config,
     eventBus,
@@ -243,6 +250,16 @@ async function main(): Promise<void> {
 
   await initGatewayChannelSurfaces(channelSurfaces);
   gateway.start();
+  const apiServer = await startOptionalGatewayApiServer({
+    apiHost,
+    apiPort,
+    adminHost,
+    adminPort,
+    config,
+    env: process.env,
+    eligibilityGate,
+    gateway,
+  });
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);
 
@@ -261,6 +278,7 @@ async function main(): Promise<void> {
     stopPromise = (async () => {
       await runShutdownSequence([
         { step: 'stop debug observer', action: () => stopDebugObserver() },
+        { step: 'stop public api server', action: () => apiServer?.stop() },
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },

@@ -13,6 +13,15 @@ import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './ba
 import { registerReverseGatewayMethods } from './reverse-methods.js';
 const log = createComponentLogger('GatewayClient');
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
+import type {
+  ApiChatCompletionCancelRpcParams,
+  ApiChatCompletionCancelRpcResult,
+  ApiChatCompletionRpcParams,
+  ApiChatCompletionRpcResult,
+  ApiHealthRpcResult,
+  ApiTelemetryIngestRpcParams,
+  ApiTelemetryIngestRpcResult,
+} from '../../channels/api/types.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
 import type { JournalEntry } from '../../core/session/types.js';
 import type {
@@ -305,6 +314,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
   private requestCounter = 0;
   private reverseMethodsRegistered = false;
   private handleMessageHandler: ((message: SubstrateMessage) => Promise<AgentResponse>) | null = null;
+  private apiChatCompletionHandler: ((params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>) | null = null;
+  private apiChatCancelHandler: ((params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>) | null = null;
+  private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
+  private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
   private voiceStreams = new Map<string, VoiceStreamState>();
   private readonly voiceStreamQueueSize: number;
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
@@ -973,6 +986,34 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
     this.registerReverseMethods();
   }
 
+  onApiChatCompletion(handler: (params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>): void {
+    this.apiChatCompletionHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  onApiChatCancel(handler: (params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>): void {
+    this.apiChatCancelHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  onApiTelemetryIngest(handler: (params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>): void {
+    this.apiTelemetryIngestHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  onApiHealth(handler: () => Promise<ApiHealthRpcResult>): void {
+    this.apiHealthHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  notifyApiStreamDelta(requestId: string, text: string): void {
+    this.conn.send({
+      jsonrpc: '2.0',
+      method: 'api.stream.delta',
+      params: { requestId, text },
+    });
+  }
+
   private registerReverseMethods(): void {
     if (this.reverseMethodsRegistered) return;
     this.reverseMethodsRegistered = true;
@@ -984,6 +1025,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       handleVoiceStreamChunk: (params) => this.handleVoiceStreamChunk(params),
       handleVoiceStreamEnd: (params) => this.handleVoiceStreamEnd(params),
       handleVoiceStreamCancel: (params) => this.handleVoiceStreamCancel(params),
+      handleApiChatCompletion: (params) => this.handleApiChatCompletion(params),
+      handleApiChatCancel: (params) => this.handleApiChatCancel(params),
+      handleApiTelemetryIngest: (params) => this.handleApiTelemetryIngest(params),
+      handleApiHealth: () => this.handleApiHealth(),
     });
   }
 
@@ -1001,6 +1046,40 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       model: response.metadata.model,
       durationMs: response.metadata.durationMs,
     } satisfies VoiceHandleMessageResult;
+  }
+
+  private async handleApiChatCompletion(
+    params: ApiChatCompletionRpcParams,
+  ): Promise<ApiChatCompletionRpcResult> {
+    if (!this.apiChatCompletionHandler) {
+      throw new Error('No api.chat.completion handler registered');
+    }
+    return await this.apiChatCompletionHandler(params);
+  }
+
+  private async handleApiChatCancel(
+    params: ApiChatCompletionCancelRpcParams,
+  ): Promise<ApiChatCompletionCancelRpcResult> {
+    if (!this.apiChatCancelHandler) {
+      throw new Error('No api.chat.cancel handler registered');
+    }
+    return await this.apiChatCancelHandler(params);
+  }
+
+  private async handleApiTelemetryIngest(
+    params: ApiTelemetryIngestRpcParams,
+  ): Promise<ApiTelemetryIngestRpcResult> {
+    if (!this.apiTelemetryIngestHandler) {
+      throw new Error('No api.telemetry.ingest handler registered');
+    }
+    return await this.apiTelemetryIngestHandler(params);
+  }
+
+  private async handleApiHealth(): Promise<ApiHealthRpcResult> {
+    if (!this.apiHealthHandler) {
+      throw new Error('No api.health handler registered');
+    }
+    return await this.apiHealthHandler();
   }
 
   private handleVoiceStreamStart(params: VoiceStreamStartParams): VoiceStreamAckResult {

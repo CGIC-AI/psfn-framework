@@ -40,6 +40,7 @@ import {
 } from './approval-boundary.js';
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 import { evaluatePolicy } from './policy.js';
+import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS = 90_000;
@@ -108,6 +109,7 @@ export class GatewayServer {
   private readonly ntfyNotifier: GatewayNtfyNotifier;
   private readonly approvalBoundary: ApprovalBoundaryService;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
+  private readonly apiStreamListeners = new Map<string, Set<(text: string) => void>>();
 
   constructor(options: GatewayServerOptions) {
     this.options = options;
@@ -162,6 +164,26 @@ export class GatewayServer {
     };
   }
 
+  subscribeApiStream(requestId: string, listener: (text: string) => void): () => void {
+    const listeners = this.apiStreamListeners.get(requestId) ?? new Set();
+    listeners.add(listener);
+    this.apiStreamListeners.set(requestId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) {
+        this.apiStreamListeners.delete(requestId);
+      }
+    };
+  }
+
+  private dispatchApiStreamDelta(notification: ApiStreamDeltaNotification): void {
+    const listeners = this.apiStreamListeners.get(notification.requestId);
+    if (!listeners) return;
+    for (const listener of listeners) {
+      listener(notification.text);
+    }
+  }
+
   private registerMethods(target: JSONRPCServerAndClient): void {
     const runtime: GatewayMethodRuntime = {
       target,
@@ -191,6 +213,10 @@ export class GatewayServer {
     };
 
     registerGatewayMethods(runtime);
+    target.addMethod('api.stream.delta', (params: unknown) => {
+      this.dispatchApiStreamDelta(params as ApiStreamDeltaNotification);
+      return null;
+    });
   }
 
   // ── Connection management ──

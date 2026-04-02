@@ -1,5 +1,14 @@
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
 import type {
+  ApiChatCompletionCancelRpcParams,
+  ApiChatCompletionCancelRpcResult,
+  ApiChatCompletionRpcParams,
+  ApiChatCompletionRpcResult,
+  ApiHealthRpcResult,
+  ApiTelemetryIngestRpcParams,
+  ApiTelemetryIngestRpcResult,
+} from '../../channels/api/types.js';
+import type {
   RpcSubstrateMessage,
   VoiceHandleMessageResult,
   VoiceStreamStartParams,
@@ -18,6 +27,10 @@ export interface ReverseGatewayMethodRuntime {
   handleVoiceStreamChunk(params: VoiceStreamChunkParams): VoiceStreamAckResult;
   handleVoiceStreamEnd(params: VoiceStreamEndParams): Promise<VoiceStreamEndResult>;
   handleVoiceStreamCancel(params: VoiceStreamCancelParams): Promise<VoiceStreamCancelResult>;
+  handleApiChatCompletion(params: ApiChatCompletionRpcParams): Promise<ApiChatCompletionRpcResult>;
+  handleApiChatCancel(params: ApiChatCompletionCancelRpcParams): Promise<ApiChatCompletionCancelRpcResult>;
+  handleApiTelemetryIngest(params: ApiTelemetryIngestRpcParams): Promise<ApiTelemetryIngestRpcResult>;
+  handleApiHealth(): Promise<ApiHealthRpcResult>;
 }
 
 interface ReverseGatewayMethodDescriptor<P, R> {
@@ -45,6 +58,22 @@ const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = 
   {
     names: ['voice.stream.cancel'],
     handler: (params: VoiceStreamCancelParams, runtime) => runtime.handleVoiceStreamCancel(params),
+  },
+  {
+    names: ['api.chat.completion'],
+    handler: (params: ApiChatCompletionRpcParams, runtime) => runtime.handleApiChatCompletion(params),
+  },
+  {
+    names: ['api.chat.cancel'],
+    handler: (params: ApiChatCompletionCancelRpcParams, runtime) => runtime.handleApiChatCancel(params),
+  },
+  {
+    names: ['api.telemetry.ingest'],
+    handler: (params: ApiTelemetryIngestRpcParams, runtime) => runtime.handleApiTelemetryIngest(params),
+  },
+  {
+    names: ['api.health'],
+    handler: (_params: Record<string, never>, runtime) => runtime.handleApiHealth(),
   },
 ];
 

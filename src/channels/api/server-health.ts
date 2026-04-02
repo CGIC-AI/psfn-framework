@@ -6,7 +6,7 @@ import {
   type ApiHealthSubsystemStatus,
   type ApiServerHealthChecks,
 } from './types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 function mapSubsystemToContinuityCheck(
   source: ApiHealthSubsystemStatus,

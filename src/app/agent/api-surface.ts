@@ -61,7 +61,7 @@ export interface StartOptionalApiServerOptions extends AgentApiSurfaceBindings {
   runtimeStatusMeta: RuntimeStatusMetadata;
 }
 
-function buildApiHealthChecks(
+export function buildApiHealthChecks(
   options: Pick<
     StartOptionalApiServerOptions,
     'config' | 'memoryStore' | 'gateway' | 'scheduler' | 'runtimeStatusMeta'

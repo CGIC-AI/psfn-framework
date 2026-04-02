@@ -42,7 +42,7 @@ import {
   bootstrapAgentCoreRuntime,
 } from './core-bootstrap.js';
 import {
-  startOptionalApiServer,
+  buildApiHealthChecks,
   resolveAgentApiSurfaceBindings,
 } from './api-surface.js';
 import { startOptionalAdminServer } from './admin-surface.js';
@@ -59,6 +59,9 @@ import {
   registerOptionalVaultTools,
 } from './vault-runtime.js';
 import { prepareAgentStartupContext } from './startup-context.js';
+import { AgentApiBackend } from '../../channels/api/agent-backend.js';
+import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
+import { buildExternalChannelProfiles } from '../../channels/backplane/config.js';
 
 const log = createComponentLogger('Agent');
 ensureActiveTimezone();
@@ -292,7 +295,7 @@ async function main(): Promise<void> {
   });
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
 
-  // ── API server (optional) ──
+  // ── API backend (gateway-hosted edge) ──
 
   const {
     apiHost,
@@ -300,24 +303,26 @@ async function main(): Promise<void> {
     adminHost,
     adminPort,
   } = resolveAgentApiSurfaceBindings(process.env);
-  const apiServer = await startOptionalApiServer({
-    apiHost,
-    apiPort,
-    adminHost,
-    adminPort,
+  const apiHealthChecks = buildApiHealthChecks({
     config,
-    env: process.env,
-    channelsConfig,
-    agentLoop,
-    eventBus,
-    eligibilityGate,
-    sessionManager,
-    contactStore,
     memoryStore,
     gateway,
     scheduler,
     runtimeStatusMeta,
+  }, resolveActiveHealthProbeConfig(process.env));
+  const apiBackend = new AgentApiBackend({
+    agentLoop,
+    eventBus,
+    sessionManager,
+    contactStore,
+    healthChecks: apiHealthChecks,
+    externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
+    onStreamDelta: (requestId, text) => gateway.notifyApiStreamDelta(requestId, text),
   });
+  gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));
+  gateway.onApiChatCancel((params) => apiBackend.cancelChatCompletion(params));
+  gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
+  gateway.onApiHealth(() => apiBackend.handleHealth());
 
   // ── Admin GUI (optional) ──
 
@@ -379,8 +384,16 @@ async function main(): Promise<void> {
     shutdownTargets,
   });
   const { lifecycleNotifier } = controlPlane;
-  stopFn = controlPlane.stopFn;
-  shutdownTargets.apiServer = apiServer;
+  let apiBackendDisposed = false;
+  const disposeApiBackend = () => {
+    if (apiBackendDisposed) return;
+    apiBackendDisposed = true;
+    apiBackend.dispose();
+  };
+  stopFn = async () => {
+    disposeApiBackend();
+    await controlPlane.stopFn();
+  };
   shutdownTargets.adminServer = adminServer;
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),

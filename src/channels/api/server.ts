@@ -31,7 +31,9 @@ import type {
   ApiHealthResponse,
   ApiHealthSubsystem,
   ApiHealthSubsystemStatus,
+  ApiRuntimeChatRequest,
   ApiServerHealthChecks,
+  ApiServerRuntime,
   ChatCompletionRequest,
   ChatCompletionChunk,
   TelemetryIngestRequest,
@@ -180,6 +182,7 @@ export interface ApiServerConfig {
   voiceWebSocketPath?: string;
   voiceWebSocketRuntime?: VoiceWebSocketRuntime;
   voiceWebSocketHooks?: VoiceWebSocketRuntimeHooks;
+  runtime?: ApiServerRuntime;
   allowInsecureWithoutAuth?: boolean;
   corsAllowedOrigins?: string[];
   healthChecks?: ApiServerHealthChecks;
@@ -216,6 +219,7 @@ export class ApiServer implements ChannelAdapterPort {
   private sensorIngest: SensorIngestPort;
   private sessionManager: SessionManager;
   private contactStore: ContactStorePort | null;
+  private runtime: ApiServerRuntime | null;
   private apiKey?: string;
   private adminToken?: string;
   private allowInsecureWithoutAuth: boolean;
@@ -240,6 +244,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(this.eventBus);
     this.sessionManager = config.sessionManager;
     this.contactStore = config.contactStore ?? null;
+    this.runtime = config.runtime ?? null;
     this.apiKey = clampHeaderValue(config.apiKey, 512);
     this.adminToken = clampHeaderValue(config.adminToken, 512);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
@@ -583,6 +588,68 @@ export class ApiServer implements ChannelAdapterPort {
     }
   }
 
+  private async awaitRuntimeOrInterrupt<T>(
+    req: IncomingMessage,
+    res: ServerResponse,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const controller = new AbortController();
+    let settled = false;
+    let cleanup: () => void = () => {};
+
+    const interruptionPromise = new Promise<never>((_, reject) => {
+      const fail = (reason: LifecycleInterrupt) => {
+        if (settled) return;
+        settled = true;
+        controller.abort();
+        reject(new RequestLifecycleError(reason));
+      };
+
+      const onAborted = () => fail('client_disconnected');
+      const onClose = () => {
+        if (res.writableEnded) return;
+        fail('client_disconnected');
+      };
+
+      req.once('aborted', onAborted);
+      res.once('close', onClose);
+      const timer = setTimeout(() => fail('timeout'), this.requestTimeoutMs);
+      cleanup = () => {
+        req.off('aborted', onAborted);
+        res.off('close', onClose);
+        clearTimeout(timer);
+      };
+    });
+
+    try {
+      const result = await Promise.race([operation(controller.signal), interruptionPromise]);
+      settled = true;
+      return result;
+    } finally {
+      settled = true;
+      cleanup();
+    }
+  }
+
+  private extractRpcHeaders(req: IncomingMessage): ApiRuntimeChatRequest['headers'] {
+    const headers: ApiRuntimeChatRequest['headers'] = {};
+    for (const [name, value] of Object.entries(req.headers)) {
+      headers[name] = this.singleHeader(value);
+    }
+    return headers;
+  }
+
+  private sendRuntimeError(
+    res: ServerResponse,
+    status: number,
+    type: string,
+    message: string,
+    details?: Record<string, unknown>,
+  ): void {
+    if (!this.canWriteResponse(res)) return;
+    this.sendError(res, status, type, message, details);
+  }
+
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     if (!this.applyCorsPolicy(req, res)) return;
 
@@ -636,6 +703,12 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private async handleHealth(res: ServerResponse): Promise<void> {
+    if (this.runtime) {
+      const body = await this.runtime.handleHealth();
+      sendJson(res, body.status === 'healthy' ? 200 : 503, body);
+      return;
+    }
+
     const subsystemEntries = await Promise.all(
       API_HEALTH_SUBSYSTEMS.map(async (subsystem) => {
         const status = await this.evaluateSubsystemHealth(subsystem);
@@ -1008,6 +1081,22 @@ export class ApiServer implements ChannelAdapterPort {
       channelId: telemetry.channelId,
       scope: telemetry.scope,
     };
+
+    if (this.runtime) {
+      const result = await this.runtime.handleTelemetryIngest(normalizedEvent);
+      if (!result.ok) {
+        this.sendRuntimeError(
+          res,
+          result.error.status,
+          result.error.type,
+          result.error.message,
+          result.error.details,
+        );
+        return;
+      }
+      sendJson(res, 202, result.response);
+      return;
+    }
 
     const receipt = await this.sensorIngest.ingestTelemetry(normalizedEvent);
 
@@ -1716,6 +1805,46 @@ export class ApiServer implements ChannelAdapterPort {
     res: ServerResponse,
     principal: ApiAuthPrincipal,
   ): Promise<void> {
+    if (this.runtime) {
+      try {
+        const result = await this.awaitRuntimeOrInterrupt(
+          req,
+          res,
+          (signal) => this.runtime!.handleChatCompletion({
+            request,
+            principal,
+            headers: this.extractRpcHeaders(req),
+            signal,
+          }),
+        );
+        if (!this.canWriteResponse(res)) return;
+        if (!result.ok) {
+          this.sendRuntimeError(
+            res,
+            result.error.status,
+            result.error.type,
+            result.error.message,
+            result.error.details,
+          );
+          return;
+        }
+
+        const response = buildChatCompletionResponse({
+          id: `chatcmpl-${randomUUID()}`,
+          created: Math.floor(Date.now() / 1000),
+          model: this.modelName,
+          content: result.response.content,
+          inputTokens: result.response.inputTokens,
+          outputTokens: result.response.outputTokens,
+        });
+
+        sendJson(res, 200, response);
+      } catch (err) {
+        this.handleNonStreamingTurnError(res, err);
+      }
+      return;
+    }
+
     const turn = await this.startTurn(request, req, res, principal);
     if (!turn) return;
 
@@ -1742,13 +1871,71 @@ export class ApiServer implements ChannelAdapterPort {
       this.handleNonStreamingTurnError(res, err);
     }
   }
-
   private async handleStreaming(
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
     principal: ApiAuthPrincipal,
   ): Promise<void> {
+    if (this.runtime) {
+      const completionId = `chatcmpl-${randomUUID()}`;
+      const created = Math.floor(Date.now() / 1000);
+
+      res.writeHead(200, SSE_RESPONSE_HEADERS);
+      const roleChunk = buildStreamingRoleChunk({
+        completionId,
+        created,
+        model: this.modelName,
+      });
+      this.writeStreamingChunk(res, roleChunk);
+
+      try {
+        const result = await this.awaitRuntimeOrInterrupt(
+          req,
+          res,
+          (signal) => this.runtime!.handleChatCompletion({
+            request,
+            principal,
+            headers: this.extractRpcHeaders(req),
+            signal,
+            onDelta: (text) => {
+              const chunk = buildStreamingContentChunk({
+                completionId,
+                created,
+                model: this.modelName,
+              }, text);
+              this.writeStreamingChunk(res, chunk);
+            },
+          }),
+        );
+        if (!this.canWriteResponse(res)) return;
+        if (!result.ok) {
+          this.writeStreamingErrorAndDone(
+            res,
+            completionId,
+            created,
+            `\n[Error: ${result.error.message}]`,
+          );
+          return;
+        }
+
+        const finishChunk = buildStreamingFinishChunk({
+          completionId,
+          created,
+          model: this.modelName,
+        });
+        this.writeStreamingChunk(res, finishChunk);
+        this.writeStreamingDone(res);
+      } catch (err) {
+        this.handleStreamingTurnError(res, err, completionId, created);
+      } finally {
+        if (this.canWriteResponse(res)) {
+          res.end();
+        }
+      }
+      return;
+    }
+
     const pendingTurn = await this.prepareTurn(request, req, res, principal);
     if (!pendingTurn) return;
 

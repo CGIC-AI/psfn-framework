@@ -20,6 +20,16 @@ import type {
 } from '../../primitives/images/types.js';
 import type { JournalEntry } from '../../core/session/types.js';
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
+import type {
+  ApiChatCompletionCancelRpcParams,
+  ApiChatCompletionCancelRpcResult,
+  ApiChatCompletionRpcParams,
+  ApiChatCompletionRpcResult,
+  ApiHealthRpcResult,
+  ApiStreamDeltaNotification,
+  ApiTelemetryIngestRpcParams,
+  ApiTelemetryIngestRpcResult,
+} from '../../channels/api/types.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
 
 // ── Request parameter types (agent → gateway) ──
@@ -594,6 +604,7 @@ export interface GatewayMethods {
 export interface GatewayNotifications {
   'llm.chunk': LLMChunkNotification;
   'discord.message': DiscordMessageNotification;
+  'api.stream.delta': ApiStreamDeltaNotification;
 }
 
 // ── Policy types ──
@@ -680,6 +691,10 @@ export interface AgentMethods {
   'voice.stream.chunk': [VoiceStreamChunkParams, VoiceStreamAckResult];
   'voice.stream.end': [VoiceStreamEndParams, VoiceStreamEndResult];
   'voice.stream.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
+  'api.chat.completion': [ApiChatCompletionRpcParams, ApiChatCompletionRpcResult];
+  'api.chat.cancel': [ApiChatCompletionCancelRpcParams, ApiChatCompletionCancelRpcResult];
+  'api.telemetry.ingest': [ApiTelemetryIngestRpcParams, ApiTelemetryIngestRpcResult];
+  'api.health': [Record<string, never>, ApiHealthRpcResult];
 }
 
 // ── Error codes (JSON-RPC custom range: -32000 to -32099) ──

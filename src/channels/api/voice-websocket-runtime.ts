@@ -49,14 +49,25 @@ const log = createComponentLogger('ApiVoiceRuntime');
 
 const DEFAULT_CHANNEL_PREFIX = 'api-voice';
 
+export interface ApiVoiceAssistantTurnInput {
+  request: IncomingMessage;
+  principal: ApiAuthPrincipal;
+  transportSession: WebSocketVoiceSession;
+  sessionId: string;
+  transcript: string;
+  signal: AbortSignal;
+  channelPrefix: string;
+}
+
 interface ApiVoiceWebSocketRuntimeConfig {
-  agentLoop: SubstrateAgent;
-  eventBus: EventBus;
+  agentLoop?: SubstrateAgent;
+  eventBus?: EventBus;
   config: SubstrateConfig;
   gateway?: GatewayVoiceHttpClient;
   channelPrefix?: string;
   serverOptions?: Partial<WebSocketVoiceServerOptions>;
   eligibilityGate?: EligibilityGate;
+  handleAssistantTurn?: (input: ApiVoiceAssistantTurnInput) => Promise<string>;
 }
 
 interface VoiceActor {
@@ -373,7 +384,7 @@ function toCloseReason(
   }
 }
 
-async function runAssistantTurn(params: {
+async function runAgentAssistantTurn(params: {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   request: IncomingMessage;
@@ -573,6 +584,22 @@ export function createApiVoiceWebSocketRuntime(
   }
 
   const channelPrefix = options.channelPrefix ?? DEFAULT_CHANNEL_PREFIX;
+  const assistantTurnHandler = options.handleAssistantTurn ?? (async (input: ApiVoiceAssistantTurnInput) => {
+    if (!options.agentLoop || !options.eventBus) {
+      throw new Error('API voice websocket runtime requires agentLoop/eventBus or a handleAssistantTurn override');
+    }
+    return await runAgentAssistantTurn({
+      agentLoop: options.agentLoop,
+      eventBus: options.eventBus,
+      request: input.request,
+      principal: input.principal,
+      transportSession: input.transportSession,
+      sessionId: input.sessionId,
+      transcript: input.transcript,
+      signal: input.signal,
+      channelPrefix: input.channelPrefix,
+    });
+  });
   const contexts = new Map<string, VoiceWebSocketRuntimeContext>();
   const connections = new Map<string, WebSocketVoiceConnection>();
   const securityLimits = resolveVoiceSecurityLimits();
@@ -617,9 +644,7 @@ export function createApiVoiceWebSocketRuntime(
         throw new Error(`Missing websocket request context for ${transportSession.connectionId}`);
       }
 
-      return runAssistantTurn({
-        agentLoop: options.agentLoop,
-        eventBus: options.eventBus,
+      return assistantTurnHandler({
         request: context.request,
         principal: context.principal,
         transportSession,

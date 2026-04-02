@@ -4,7 +4,7 @@
 // Gateway mode: would use GatewayClient (future, PSFN-d5n).
 
 import { streamSimple, getEnvApiKey } from '@mariozechner/pi-ai';
-import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } from '@mariozechner/pi-ai';
+import type { AssistantMessage, AssistantMessageEvent, Model, SimpleStreamOptions, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type {
   ModelBudgetBlockedEvent,
@@ -172,7 +172,7 @@ interface ExecuteStreamCandidateParams {
   routingProxy: ConfiguredModelRoutingProxy | null;
   model: Model<any>;
   context: unknown;
-  options: Record<string, unknown> | undefined;
+  options: SimpleStreamOptions | undefined;
   purpose: RoutingPurpose;
   service: string;
   processName: string;
@@ -374,7 +374,7 @@ function supportsFullKnobPassthrough(
 
 function buildStreamRequestOptions(
   candidate: RoutingCandidate,
-  options: Record<string, unknown> | undefined,
+  options: SimpleStreamOptions | undefined,
   apiKey: string | undefined,
   routingProxy: ConfiguredModelRoutingProxy | null,
 ): Record<string, unknown> {

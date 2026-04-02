@@ -190,7 +190,7 @@ export class AdminContactsDataService implements AdminContactsService {
       };
     };
 
-    return new Map(contacts.map((contact) => {
+    return new Map<string, AdminContactSocialGraphView>(contacts.map((contact) => {
       const entity = entityByContactId.get(contact.id);
       if (!entity) {
         return [contact.id, {

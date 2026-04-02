@@ -217,6 +217,10 @@ export function createBeadsTool(ops: BeadsOperations, options: BeadsToolOptions 
               });
             case 'sync':
               return await ops.sync({ actor: params.actor });
+            default: {
+              const unreachableAction: never = actionForError;
+              throw new Error(`Unsupported beads action: ${unreachableAction}`);
+            }
           }
         })();
         return textResult(formatActionResult(result));

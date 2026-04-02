@@ -187,6 +187,11 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     example: '10:11 PM',
   },
   {
+    token: '{{runtime_last_message_received_timezone}}',
+    description: 'Timezone label for the most recent pre-turn message when available.',
+    example: 'America/New_York',
+  },
+  {
     token: '{{runtime_last_message_received_ago}}',
     description: 'Relative time since the most recent pre-turn message.',
     example: '16 minutes ago',
@@ -197,9 +202,44 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     example: '2 days 3 hours',
   },
   {
+    token: '{{runtime_last_message_received_missing_notice}}',
+    description: 'Fallback note when no earlier message is loaded for the current channel.',
+    example: 'No earlier message is loaded for this channel.',
+  },
+  {
+    token: '{{runtime_internal_turn_kind}}',
+    description: 'Internal task kind for heartbeat/reflection/planning/maintenance turns when applicable.',
+    example: 'reflection',
+  },
+  {
+    token: '{{runtime_speaking_with_trust_level}}',
+    description: 'Trust level for the current speaking partner when the turn is user-facing.',
+    example: 'trusted',
+  },
+  {
+    token: '{{runtime_channel_visibility}}',
+    description: 'Resolved channel visibility for the current speaking context when user-facing.',
+    example: 'private',
+  },
+  {
+    token: '{{runtime_response_style}}',
+    description: 'Resolved response style identifier for the current turn.',
+    example: 'expressive',
+  },
+  {
     token: '{{runtime_response_style_name}}',
     description: 'Human-readable response style name for the current turn.',
     example: 'Expressive',
+  },
+  {
+    token: '{{runtime_response_style_delivery_guidance}}',
+    description: 'Prompt fragment describing the default delivery for the current response style.',
+    example: 'Keep your voice warm and vivid.',
+  },
+  {
+    token: '{{runtime_response_style_expansion_guidance}}',
+    description: 'Prompt fragment describing when to expand or compress detail for the current response style.',
+    example: 'Add personality-rich detail when it helps clarity.',
   },
   {
     token: '{{runtime_response_style_guidance_body}}',
@@ -210,6 +250,31 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     token: '{{runtime_tooling_active_count}}',
     description: 'Count of currently active tools.',
     example: '6',
+  },
+  {
+    token: '{{runtime_tooling_core_count}}',
+    description: 'Count of active core tools.',
+    example: '4',
+  },
+  {
+    token: '{{runtime_tooling_promoted_count}}',
+    description: 'Count of promoted extended tools that are always active.',
+    example: '1',
+  },
+  {
+    token: '{{runtime_tooling_loaded_count}}',
+    description: 'Count of explicitly loaded extended tools active for the turn.',
+    example: '1',
+  },
+  {
+    token: '{{runtime_tooling_autoload_count}}',
+    description: 'Count of autoloaded extended tools active for the turn.',
+    example: '2',
+  },
+  {
+    token: '{{runtime_tooling_deferred_count}}',
+    description: 'Count of deferred tools still active for this turn.',
+    example: '0',
   },
   {
     token: '{{runtime_tooling_available_extended_count}}',

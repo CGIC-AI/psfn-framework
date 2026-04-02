@@ -561,11 +561,65 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_last_message_received_weekday).toBe('Monday');
     expect(variables.runtime_last_message_received_date_human).toBe('March 16, 2026');
     expect(variables.runtime_last_message_received_time_human).toBe('5:15 AM');
+    expect(variables.runtime_last_message_received_timezone).toBe('America/New_York');
     expect(variables.runtime_last_message_received_days_hours).toBe('2 days 4 hours');
+    expect(variables.runtime_last_message_received_missing_notice).toBe('');
+    expect(variables.runtime_speaking_with_trust_level).toBe('trusted');
+    expect(variables.runtime_channel_visibility).toBe('semi_private');
+    expect(variables.runtime_response_style).toBe('expressive');
     expect(variables.runtime_response_style_name).toBe('Expressive');
     expect(variables.runtime_response_style_guidance_body).toBe(variables.runtime_response_style_guidance);
+    expect(variables.runtime_response_style_delivery_guidance).toBe('Keep your voice warm and vivid.');
+    expect(variables.runtime_response_style_expansion_guidance).toBe(
+      'Add personality-rich detail when it helps clarity.',
+    );
     expect(variables.runtime_tooling_active_count).toBe('5');
     expect(variables.runtime_tooling_available_extended_count).toBe('1');
+  });
+
+  it('fails closed with structured fallback variables when prior-message context is unavailable', () => {
+    const variables = buildDynamicPromptTemplateVariables({
+      message: makeMessage(),
+      resolvedUserName: 'Companion',
+      trustLevel: 'primary',
+      channelType: 'internal',
+      canonicalContactKey: undefined,
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      responseStyle: 'concise',
+      now: new Date('2026-03-18T13:30:00Z'),
+      taskKind: 'heartbeat',
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 0,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      lastMessageReceivedAtMs: null,
+      config: {},
+    });
+
+    expect(variables.runtime_internal_turn_kind).toBe('heartbeat');
+    expect(variables.runtime_speaking_with_name).toBe('');
+    expect(variables.runtime_speaking_with_trust_level).toBe('');
+    expect(variables.runtime_channel_type).toBe('');
+    expect(variables.runtime_channel_visibility).toBe('');
+    expect(variables.runtime_last_message_received_weekday).toBe('');
+    expect(variables.runtime_last_message_received_ago).toBe('');
+    expect(variables.runtime_last_message_received_missing_notice).toBe(
+      'No earlier message is loaded for this channel.',
+    );
   });
 
   it('uses persisted conversation-channel privacy and records it on activity', async () => {

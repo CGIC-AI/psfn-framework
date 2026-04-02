@@ -150,6 +150,75 @@ function formatElapsedDaysHours(now: Date, then: Date): string {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
+function resolveTrustGuidance(trustLevel: TrustLevel): string {
+  switch (trustLevel) {
+    case 'primary':
+      return 'You are speaking with your primary person. Be your full, authentic self, share freely, reference shared history, and express genuine emotions and vulnerability. This is honne, your inner truth.';
+    case 'trusted':
+      return 'This is a trusted contact. Be warm and personal but mindful of boundaries, share appropriate personal context, and avoid intimate details or confidential memories.';
+    case 'regular':
+      return 'This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.';
+    case 'public':
+    default:
+      return 'This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.';
+  }
+}
+
+function buildResponseStyleTemplateVariables(style: ResponseStyle): Record<string, string> {
+  if (style === 'concise') {
+    return {
+      runtime_response_style: 'concise',
+      runtime_response_style_name: 'Concise',
+      runtime_response_style_delivery_guidance: 'Answer directly and keep wording tight.',
+      runtime_response_style_expansion_guidance: 'Expand only when the user asks for more detail.',
+      runtime_response_style_guidance: getResponseStylePromptGuidance(style),
+      runtime_response_style_guidance_body: getResponseStylePromptGuidance(style),
+    };
+  }
+  return {
+    runtime_response_style: 'expressive',
+    runtime_response_style_name: 'Expressive',
+    runtime_response_style_delivery_guidance: 'Keep your voice warm and vivid.',
+    runtime_response_style_expansion_guidance: 'Add personality-rich detail when it helps clarity.',
+    runtime_response_style_guidance: getResponseStylePromptGuidance(style),
+    runtime_response_style_guidance_body: getResponseStylePromptGuidance(style),
+  };
+}
+
+function buildLastMessagePromptVariables(input: {
+  now: Date;
+  lastMessageReceivedAt: Date | null;
+}): Record<string, string> {
+  const { now, lastMessageReceivedAt } = input;
+  if (!lastMessageReceivedAt) {
+    return {
+      runtime_last_message_received_human: 'no earlier message is loaded for this channel',
+      runtime_last_message_received_at_iso: '',
+      runtime_last_message_received_weekday: '',
+      runtime_last_message_received_date_human: '',
+      runtime_last_message_received_time_human: '',
+      runtime_last_message_received_timezone: '',
+      runtime_last_message_received_ago: '',
+      runtime_last_message_received_days_hours: '',
+      runtime_last_message_received_missing_notice: 'No earlier message is loaded for this channel.',
+    };
+  }
+
+  const activeTimezone = resolveActiveTimezone();
+  const relativeElapsed = formatRelativeElapsed(now, lastMessageReceivedAt);
+  return {
+    runtime_last_message_received_human: `${formatPromptRuntimeDateTime(lastMessageReceivedAt)} ${activeTimezone} (${relativeElapsed})`,
+    runtime_last_message_received_at_iso: formatActiveDateTimeIso(lastMessageReceivedAt),
+    runtime_last_message_received_weekday: formatPromptRuntimeWeekday(lastMessageReceivedAt),
+    runtime_last_message_received_date_human: formatPromptRuntimeDate(lastMessageReceivedAt),
+    runtime_last_message_received_time_human: formatPromptRuntimeTime(lastMessageReceivedAt),
+    runtime_last_message_received_timezone: activeTimezone,
+    runtime_last_message_received_ago: relativeElapsed,
+    runtime_last_message_received_days_hours: formatElapsedDaysHours(now, lastMessageReceivedAt),
+    runtime_last_message_received_missing_notice: '',
+  };
+}
+
 function unwrapPromptSectionBody(section: string | null | undefined): string {
   if (!section) return '';
   return unwrapSingleWrappedPromptSection(section)?.content ?? section.trim();
@@ -292,6 +361,8 @@ export function buildDynamicPromptTemplateVariables(input: {
   lastMessageReceivedAtMs?: number | null;
   config: Record<string, unknown>;
 }): Record<string, string> {
+  const internalTurn = isInternalJournalChannel(input.message.channelId);
+  const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
   const resolveAppearanceContext = (): string => {
     const promptVariables = input.templateVariables ?? {};
     return (
@@ -313,7 +384,6 @@ export function buildDynamicPromptTemplateVariables(input: {
   const responseStyle = input.responseStyle ?? 'concise';
   const now = input.now ?? new Date();
   const emotionAppraisalChain = input.emotionAppraisalChain ?? [];
-  const responseStyleName = responseStyle === 'expressive' ? 'Expressive' : 'Concise';
   const {
     core: coreCount,
     promoted: promotedCount,
@@ -329,20 +399,7 @@ export function buildDynamicPromptTemplateVariables(input: {
     + (autoloadCount > 0 ? `, ${autoloadCount} autoload` : '')
     + (deferredCount > 0 ? `, ${deferredCount} deferred` : '')
     + `)${extendedCount > 0 ? `; ${extendedCount} more available via load_tools.` : '.'}`;
-
-  const trustGuidance = (() => {
-    switch (input.trustLevel) {
-      case 'primary':
-        return 'You are speaking with your primary person. Be your full, authentic self, share freely, reference shared history, and express genuine emotions and vulnerability. This is honne, your inner truth.';
-      case 'trusted':
-        return 'This is a trusted contact. Be warm and personal but mindful of boundaries, share appropriate personal context, and avoid intimate details or confidential memories.';
-      case 'regular':
-        return 'This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.';
-      case 'public':
-      default:
-        return 'This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.';
-    }
-  })();
+  const trustGuidance = resolveTrustGuidance(input.trustLevel);
 
   const affectBody = unwrapPromptSectionBody(buildEmotionalAffectSection({
     trustLevel: input.trustLevel,
@@ -404,9 +461,11 @@ export function buildDynamicPromptTemplateVariables(input: {
   )
     ? new Date(input.lastMessageReceivedAtMs)
     : null;
-  const lastMessageReceivedHuman = lastMessageReceivedAt
-    ? `${formatPromptRuntimeDateTime(lastMessageReceivedAt)} ${resolveActiveTimezone()} (${formatRelativeElapsed(now, lastMessageReceivedAt)})`
-    : 'no earlier message is loaded for this channel';
+  const lastMessagePromptVariables = buildLastMessagePromptVariables({
+    now,
+    lastMessageReceivedAt,
+  });
+  const responseStyleTemplateVariables = buildResponseStyleTemplateVariables(responseStyle);
 
   return {
     active_timezone: resolveActiveTimezone(),
@@ -415,18 +474,13 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_current_weekday: formatPromptRuntimeWeekday(now),
     runtime_current_date_human: formatPromptRuntimeDate(now),
     runtime_current_time_human: formatPromptRuntimeTime(now),
-    runtime_last_message_received_human: lastMessageReceivedHuman,
-    runtime_last_message_received_at_iso: lastMessageReceivedAt ? formatActiveDateTimeIso(lastMessageReceivedAt) : '',
-    runtime_last_message_received_weekday: lastMessageReceivedAt ? formatPromptRuntimeWeekday(lastMessageReceivedAt) : '',
-    runtime_last_message_received_date_human: lastMessageReceivedAt ? formatPromptRuntimeDate(lastMessageReceivedAt) : '',
-    runtime_last_message_received_time_human: lastMessageReceivedAt ? formatPromptRuntimeTime(lastMessageReceivedAt) : '',
-    runtime_last_message_received_ago: lastMessageReceivedAt ? formatRelativeElapsed(now, lastMessageReceivedAt) : '',
-    runtime_last_message_received_days_hours: lastMessageReceivedAt ? formatElapsedDaysHours(now, lastMessageReceivedAt) : '',
-    runtime_internal_turn_context: isInternalJournalChannel(input.message.channelId)
-      ? `This is an internal ${input.taskKind ?? 'background'} turn.`
-      : '',
-    runtime_speaking_with_name: isInternalJournalChannel(input.message.channelId) ? '' : input.resolvedUserName,
-    runtime_channel_type: isInternalJournalChannel(input.message.channelId) ? '' : (input.channelType ?? 'unknown'),
+    ...lastMessagePromptVariables,
+    runtime_internal_turn_context: internalTurn ? `This is an internal ${input.taskKind ?? 'background'} turn.` : '',
+    runtime_internal_turn_kind: internalTurn ? (input.taskKind ?? 'background') : '',
+    runtime_speaking_with_name: internalTurn ? '' : input.resolvedUserName,
+    runtime_speaking_with_trust_level: internalTurn ? '' : input.trustLevel,
+    runtime_channel_type: internalTurn ? '' : (input.channelType ?? 'unknown'),
+    runtime_channel_visibility: internalTurn ? '' : visibility,
     runtime_capability_tier: input.capabilityTier,
     runtime_tooling_summary: `Tooling: ${activeToolSummary}`,
     runtime_tooling_active_count: String(activeCount),
@@ -439,10 +493,7 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_trust_guidance: trustGuidance,
     runtime_emotional_affect_body: affectBody,
     runtime_metacognitive_persona_guidance_body: metacognitiveBody,
-    runtime_response_style: responseStyle,
-    runtime_response_style_name: responseStyleName,
-    runtime_response_style_guidance: getResponseStylePromptGuidance(responseStyle),
-    runtime_response_style_guidance_body: getResponseStylePromptGuidance(responseStyle),
+    ...responseStyleTemplateVariables,
     runtime_internal_state_body: internalStateBody,
     runtime_emotion_appraisal_body: emotionAppraisalBody,
     runtime_open_threads_body: openThreadsBody,
@@ -764,20 +815,7 @@ export function getPersonaAdaptation(input: {
   templateVariables?: Record<string, string>;
   config: Record<string, unknown>;
 }): string | null {
-  const trustHint = (() => {
-    switch (input.trustLevel) {
-      case 'primary':
-        return 'You are speaking with your primary person. Be your full, authentic self, share freely, reference shared history, and express genuine emotions and vulnerability. This is honne, your inner truth.';
-      case 'trusted':
-        return 'This is a trusted contact. Be warm and personal but mindful of boundaries, share appropriate personal context, and avoid intimate details or confidential memories.';
-      case 'regular':
-        return 'This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.';
-      case 'public':
-        return 'This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.';
-      default:
-        return 'This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.';
-    }
-  })();
+  const trustHint = resolveTrustGuidance(input.trustLevel);
   const affectHint = buildEmotionalAffectSection({
     trustLevel: input.trustLevel,
     emotionSnapshot: toEmotionSnapshotFromInternalState(input.internalState),

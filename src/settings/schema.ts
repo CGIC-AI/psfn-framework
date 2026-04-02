@@ -2,11 +2,11 @@ import type { EditableSettings, SettingsDomainSplit } from './contracts.js';
 import {
   normalizeCanonicalModelRegistry,
   projectCanonicalModelRegistry,
-} from './model-registry-schema.js';
+} from './schema-model-registry.js';
 import {
   normalizeContextControlSettings,
   toPromotedToolList,
-} from './runtime-settings-schema.js';
+} from './schema-runtime-normalization.js';
 
 const MODEL_SETTINGS_KEYS: ReadonlyArray<keyof EditableSettings> = [
   'modelRegistry',

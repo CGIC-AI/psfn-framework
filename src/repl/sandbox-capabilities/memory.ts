@@ -2,10 +2,11 @@ import { MemoryWriter } from '../../memory/writer.js';
 import type { EmbeddingService, LLMProvider } from '../../agent/contracts.js';
 import type { MemoryStore } from '../../memory/store.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { MemoryType, MemoryRedactionOperation } from '../../memory/types.js';
+import type { MemoryType, MemoryRedactionOperation, SensitivityLevel } from '../../memory/types.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_MEMORY_REDACTION_OPERATIONS,
+  VALID_SENSITIVITY_LEVELS,
 } from '../../memory/types.js';
 import type { TrustLevel } from '../../trust/types.js';
 import type { ThinkEvidence } from '../types.js';
@@ -33,7 +34,15 @@ export interface MemoryCapabilities {
     tags?: string,
   ) => Promise<{ action: string; id: string }>;
   memory_import_batch: (
-    records: Array<{ text: string; type: string; importance?: number; emotional_valence?: number; tags?: string }>,
+    records: Array<{
+      text: string;
+      type: string;
+      importance?: number;
+      emotional_valence?: number;
+      tags?: string;
+      sensitivity?: string;
+      extracted_at?: number;
+    }>,
   ) => Promise<{ written: number; deduplicated: number; errors: number }>;
   memory_upsert: (
     text: string,
@@ -139,21 +148,39 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
   };
 
   const memory_import_batch = async (
-    records: Array<{ text: string; type: string; importance?: number; emotional_valence?: number; tags?: string }>,
+    records: Array<{
+      text: string;
+      type: string;
+      importance?: number;
+      emotional_valence?: number;
+      tags?: string;
+      sensitivity?: string;
+      extracted_at?: number;
+    }>,
   ): Promise<{ written: number; deduplicated: number; errors: number }> => {
     if (!writer) {
       return { written: 0, deduplicated: 0, errors: 0 };
     }
 
     const invocationId = nextReplInvocationId();
-    const opts = records.map(record => ({
-      text: record.text,
-      type: record.type as MemoryType,
-      importance: record.importance,
-      emotionalValence: record.emotional_valence,
-      tags: splitCsvTags(record.tags),
-      sourceRef: `source:repl|operation:memory_import_batch|invocation:${invocationId}`,
-    }));
+    const opts = records.map((record, index) => {
+      if (record.sensitivity !== undefined && !VALID_SENSITIVITY_LEVELS.includes(record.sensitivity as SensitivityLevel)) {
+        throw new Error(`invalid sensitivity in record[${index}]: ${record.sensitivity}`);
+      }
+      if (record.extracted_at !== undefined && (!Number.isFinite(record.extracted_at) || record.extracted_at <= 0)) {
+        throw new Error(`invalid extracted_at in record[${index}]: ${String(record.extracted_at)}`);
+      }
+      return {
+        text: record.text,
+        type: record.type as MemoryType,
+        importance: record.importance,
+        emotionalValence: record.emotional_valence,
+        tags: splitCsvTags(record.tags),
+        sensitivity: record.sensitivity as SensitivityLevel | undefined,
+        extractedAt: record.extracted_at !== undefined ? Math.floor(record.extracted_at) : undefined,
+        sourceRef: `source:repl|operation:memory_import_batch|invocation:${invocationId}`,
+      };
+    });
 
     const result = await writer.importBatch(opts);
     return {

@@ -755,6 +755,33 @@ describe('createMemoryImportTool', () => {
     expect(importedRecords[0].text).toBe('spaces around');
   });
 
+  it('passes extracted_at through for imported records', async () => {
+    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-11b', {
+      records: [
+        { text: 'Dated import', type: 'semantic', extracted_at: 1_700_000_000_000 },
+      ],
+    });
+
+    const importedRecords = writer.importBatch.mock.calls[0][0];
+    expect(importedRecords[0].extractedAt).toBe(1_700_000_000_000);
+  });
+
+  it('rejects invalid extracted_at values in imported records', async () => {
+    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    const result = await tool.execute('call-11c', {
+      records: [
+        { text: 'Bad timestamp', type: 'semantic', extracted_at: -1 },
+      ],
+    });
+
+    expect(resultText(result)).toContain('Error: record[0] has invalid extracted_at');
+    expect(result.details?.isError).toBe(true);
+    expect(writer.importBatch).not.toHaveBeenCalled();
+  });
+
   it('passes sensitivity through for imported records', async () => {
     const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
 

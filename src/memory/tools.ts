@@ -122,6 +122,17 @@ function parseTags(tags: string | undefined): string[] | undefined {
     : undefined;
 }
 
+function parseImportedTimestamp(value: number | undefined): number | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.floor(value);
+}
+
+function parseImportedSensitivity(value: string | undefined): SensitivityLevel | undefined | null {
+  if (value === undefined) return undefined;
+  return VALID_SENSITIVITY_LEVELS.includes(value as SensitivityLevel) ? value as SensitivityLevel : null;
+}
+
 export interface MemoryWriteToolOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
 }
@@ -145,6 +156,7 @@ interface MemoryToolParams {
     confidence?: number;
     tags?: string;
     sensitivity?: SensitivityLevel;
+    extracted_at?: number;
   }>;
   source?: string;
   memory_id?: string;
@@ -272,6 +284,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
           sensitivity: Type.Optional(
             Type.Unsafe<SensitivityLevel>({ type: 'string', enum: [...VALID_SENSITIVITY_LEVELS] }),
           ),
+          extracted_at: Type.Optional(Type.Number()),
         }),
         { description: 'Array of memory records to import' },
       ),
@@ -290,6 +303,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
           confidence?: number;
           tags?: string;
           sensitivity?: SensitivityLevel;
+          extracted_at?: number;
         }>;
         source?: string;
       },
@@ -317,6 +331,14 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
           if (!VALID_MEMORY_TYPES.includes(type)) {
             return textResultWithError(`Error: record[${i}] has invalid type "${type}"`, true);
           }
+          const sensitivity = parseImportedSensitivity(r.sensitivity);
+          if (sensitivity === null) {
+            return textResultWithError(`Error: record[${i}] has invalid sensitivity "${String(r.sensitivity)}"`, true);
+          }
+          const extractedAt = parseImportedTimestamp(r.extracted_at);
+          if (extractedAt === null) {
+            return textResultWithError(`Error: record[${i}] has invalid extracted_at "${String(r.extracted_at)}"`, true);
+          }
 
           records.push({
             text: text.trim(),
@@ -326,7 +348,8 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
             confidence: r.confidence !== undefined ? clamp(Number(r.confidence), 0, 1) : undefined,
             tags: r.tags ? r.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
             sourceRef: buildToolSourceRef(`memory_import:${source}`, toolCallId, internalSource),
-            sensitivity: r.sensitivity,
+            sensitivity,
+            extractedAt,
           });
         }
 
@@ -558,6 +581,7 @@ export function createMemoryTool(
             sensitivity: Type.Optional(
               Type.Unsafe<SensitivityLevel>({ type: 'string', enum: [...VALID_SENSITIVITY_LEVELS] }),
             ),
+            extracted_at: Type.Optional(Type.Number()),
           }),
           { description: 'Required for action=import. Array of memory records to import.' },
         ),
@@ -675,6 +699,14 @@ export function createMemoryTool(
               if (!VALID_MEMORY_TYPES.includes(type)) {
                 return textResultWithError(`Error: record[${i}] has invalid type "${type}"`, true);
               }
+              const sensitivity = parseImportedSensitivity(record.sensitivity);
+              if (sensitivity === null) {
+                return textResultWithError(`Error: record[${i}] has invalid sensitivity "${String(record.sensitivity)}"`, true);
+              }
+              const extractedAt = parseImportedTimestamp(record.extracted_at);
+              if (extractedAt === null) {
+                return textResultWithError(`Error: record[${i}] has invalid extracted_at "${String(record.extracted_at)}"`, true);
+              }
 
               records.push({
                 text,
@@ -686,7 +718,8 @@ export function createMemoryTool(
                 confidence: record.confidence !== undefined ? clamp(Number(record.confidence), 0, 1) : undefined,
                 tags: parseTags(record.tags),
                 sourceRef: buildMemorySourceRef(toolCallId, 'import', internalSource, [`import_source:${source}`]),
-                sensitivity: record.sensitivity,
+                sensitivity,
+                extractedAt,
               });
             }
 

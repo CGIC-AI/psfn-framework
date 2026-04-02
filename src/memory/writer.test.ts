@@ -877,6 +877,35 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).toHaveBeenCalledTimes(3);
     });
 
+    it('preserves imported timestamps when provided', async () => {
+      const extractedAt = 1_700_000_000_000;
+      const result = await writer.importBatch([
+        { text: 'Imported with source date', type: 'semantic', extractedAt },
+      ]);
+
+      expect(result.written).toBe(1);
+      expect(result.results[0].memory.extractedAt).toBe(extractedAt);
+      expect(result.results[0].memory.lastAccessed).toBe(extractedAt);
+      const [insertedMemory] = store.insertMemory.mock.calls[0];
+      expect(insertedMemory.extractedAt).toBe(extractedAt);
+      expect(insertedMemory.lastAccessed).toBe(extractedAt);
+    });
+
+    it('chunks large imports before batch embedding', async () => {
+      const records: MemoryWriteOptions[] = Array.from({ length: 401 }, (_, index) => ({
+        text: `Fact ${index}`,
+        type: 'semantic',
+      }));
+
+      const result = await writer.importBatch(records);
+
+      expect(result.written).toBe(401);
+      expect(embeddings.embedBatch).toHaveBeenCalledTimes(3);
+      expect((embeddings.embedBatch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toHaveLength(200);
+      expect((embeddings.embedBatch as ReturnType<typeof vi.fn>).mock.calls[1][0]).toHaveLength(200);
+      expect((embeddings.embedBatch as ReturnType<typeof vi.fn>).mock.calls[2][0]).toHaveLength(1);
+    });
+
     it('returns correct counts for mixed outcomes', async () => {
       const existingMemory = makeExistingMemory({ type: 'semantic' });
 

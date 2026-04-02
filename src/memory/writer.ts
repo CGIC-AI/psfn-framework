@@ -51,6 +51,7 @@ export interface MemoryWriteOptions {
   contactId?: string;
   scopeRef?: MemoryScopeRef;
   scopeTags?: string[];
+  extractedAt?: number;
 }
 
 export interface WriteResult {
@@ -67,6 +68,8 @@ export interface BatchImportResult {
   errors: number;
   results: WriteResult[];
 }
+
+const MEMORY_IMPORT_EMBED_CHUNK_SIZE = 200;
 
 export type MemoryWritePolicyReason =
   | 'default_allow'
@@ -164,6 +167,14 @@ function clampUnit(value: number, fallback = 0.5): number {
 function clampSigned(value: number, fallback = 0): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(-1, Math.min(1, value));
+}
+
+function normalizeExtractedAt(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`Invalid imported timestamp: ${String(value)}`);
+  }
+  return Math.floor(value);
 }
 
 function normalizeProvenanceRefs(
@@ -372,6 +383,7 @@ export class MemoryWriter {
       contactId,
       scopeRef,
       scopeTags,
+      extractedAt,
     } = opts;
 
     // Validate type
@@ -552,7 +564,7 @@ export class MemoryWriter {
     const didSupersede = supersededMemories.length > 0;
 
     // 3. Insert new memory
-    const now = Date.now();
+    const now = normalizeExtractedAt(extractedAt) ?? Date.now();
     const memory: PurrMemory = {
       id: uuidv4(),
       text,
@@ -845,54 +857,59 @@ export class MemoryWriter {
       return { written, deduplicated, superseded, errors, results };
     }
 
-    let batchEmbeddings: Float32Array[] | null = null;
-    try {
-      const embedded = await this.embeddingService.embedBatch(records.map(record => record.text));
-      if (embedded.length !== records.length) {
-        throw new Error(`Expected ${records.length} embeddings, received ${embedded.length}`);
-      }
-      batchEmbeddings = embedded;
-    } catch (error) {
-      log.warn('Batch embedding failed during import; falling back to per-record embedding', {
-        error: String(error),
-        total: records.length,
-      });
-    }
-
-    for (const [index, record] of records.entries()) {
+    for (let chunkStart = 0; chunkStart < records.length; chunkStart += MEMORY_IMPORT_EMBED_CHUNK_SIZE) {
+      const chunkRecords = records.slice(chunkStart, chunkStart + MEMORY_IMPORT_EMBED_CHUNK_SIZE);
+      let chunkEmbeddings: Float32Array[] | null = null;
       try {
-        const result = batchEmbeddings
-          ? await this.writeWithEmbedding(record, batchEmbeddings[index])
-          : await this.write(record);
-        results.push(result);
+        const embedded = await this.embeddingService.embedBatch(chunkRecords.map(record => record.text));
+        if (embedded.length !== chunkRecords.length) {
+          throw new Error(`Expected ${chunkRecords.length} embeddings, received ${embedded.length}`);
+        }
+        chunkEmbeddings = embedded;
+      } catch (error) {
+        log.warn('Batch embedding failed during import chunk; falling back to per-record embedding', {
+          error: String(error),
+          chunkStart,
+          chunkSize: chunkRecords.length,
+          total: records.length,
+        });
+      }
 
-        switch (result.action) {
-          case 'created':
-            written++;
-            break;
-          case 'deduplicated':
-            deduplicated++;
-            break;
-          case 'superseded':
-            written++;
-            superseded++;
-            break;
+      for (const [index, record] of chunkRecords.entries()) {
+        try {
+          const result = chunkEmbeddings
+            ? await this.writeWithEmbedding(record, chunkEmbeddings[index])
+            : await this.write(record);
+          results.push(result);
+
+          switch (result.action) {
+            case 'created':
+              written++;
+              break;
+            case 'deduplicated':
+              deduplicated++;
+              break;
+            case 'superseded':
+              written++;
+              superseded++;
+              break;
+          }
+        } catch (err) {
+          errors++;
+          if (err instanceof MemoryWritePolicyError) {
+            log.info('Rejected memory during batch import by sensitivity policy', {
+              reason: err.reason,
+              sensitivity: err.sensitivity,
+              salience: err.salience,
+              novelty: err.novelty,
+              minSalience: err.minSalience,
+              minNovelty: err.minNovelty,
+              text: record.text.slice(0, 60),
+            });
+            continue;
+          }
+          log.error('Error importing memory', { error: String(err), text: record.text.slice(0, 60) });
         }
-      } catch (err) {
-        errors++;
-        if (err instanceof MemoryWritePolicyError) {
-          log.info('Rejected memory during batch import by sensitivity policy', {
-            reason: err.reason,
-            sensitivity: err.sensitivity,
-            salience: err.salience,
-            novelty: err.novelty,
-            minSalience: err.minSalience,
-            minNovelty: err.minNovelty,
-            text: record.text.slice(0, 60),
-          });
-          continue;
-        }
-        log.error('Error importing memory', { error: String(err), text: record.text.slice(0, 60) });
       }
     }
 

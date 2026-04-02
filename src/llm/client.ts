@@ -18,7 +18,11 @@ import type {
   SubstrateConfig,
   ToolCall,
 } from '../types.js';
-import { createModel } from './models.js';
+import {
+  createLiteLLMModel,
+  createOpenAICompatibleEndpointModel,
+  resolveRegisteredModel,
+} from './models.js';
 import { withRetry, markErrorAsNonRetryable } from './retry.js';
 import { llmRetryConfig } from './retry-config.js';
 import {
@@ -31,7 +35,6 @@ import { createComponentLogger } from '../logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
 import { evaluateImportPolicy, resolveRoutingCandidates } from './routing.js';
-import { resolveRegisteredModel } from './models.js';
 import {
   EligibilityDeniedError,
   type EligibilityDecision,
@@ -45,7 +48,7 @@ import {
 import { ModelBudgetController, ModelBudgetExceededError } from './model-budget.js';
 import {
   resolveConfiguredLiteLLMApiKeyEnv,
-  resolveConfiguredLiteLLMBaseUrl,
+  resolveConfiguredModelRoutingProxy,
 } from '../config/providers-config.js';
 
 const log = createComponentLogger('LLMClient');
@@ -70,6 +73,7 @@ export interface LLMCompletionOptions {
 }
 
 export interface LLMClientRuntimeOptions {
+  /** Compatibility override for the currently configured routing proxy base URL. */
   litellmBaseUrl?: string;
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
@@ -107,8 +111,8 @@ export class LegacyModelHintError extends Error {
 
 export class LLMClient {
   private config: SubstrateConfig;
-  private litellmBaseUrl: string | null;
-  private litellmApiKeyEnv: string;
+  private routingProxyBaseUrl: string | null;
+  private routingProxyApiKeyEnv: string;
   private fallbackRunner: FallbackRunner;
   private budgetController: ModelBudgetController;
   private eligibilityGate?: EligibilityGate;
@@ -123,8 +127,9 @@ export class LLMClient {
       ? { litellmBaseUrl: litellmBaseUrlOrOptions }
       : (litellmBaseUrlOrOptions ?? {});
     this.config = config;
-    this.litellmBaseUrl = runtimeOptions.litellmBaseUrl ?? resolveConfiguredLiteLLMBaseUrl(config);
-    this.litellmApiKeyEnv = resolveConfiguredLiteLLMApiKeyEnv(config);
+    const configuredRoutingProxy = resolveConfiguredModelRoutingProxy(config);
+    this.routingProxyBaseUrl = runtimeOptions.litellmBaseUrl ?? configuredRoutingProxy?.baseUrl ?? null;
+    this.routingProxyApiKeyEnv = configuredRoutingProxy?.apiKeyEnv ?? resolveConfiguredLiteLLMApiKeyEnv(config);
     this.fallbackRunner = new FallbackRunner();
     this.budgetController = new ModelBudgetController(config);
     this.eligibilityGate = runtimeOptions.eligibilityGate;
@@ -140,22 +145,34 @@ export class LLMClient {
         ? process.env[candidate.requestApiKeyEnv] ?? undefined
         : undefined;
       return {
-        model: createModel(candidate.requestBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
+        model: createOpenAICompatibleEndpointModel({
+          baseUrl: candidate.requestBaseUrl,
+          modelId,
+          provider: candidate.provider,
+          routeLabel: candidate.provider === 'local_endpoint' ? 'local endpoint' : candidate.provider,
+          maxTokens: candidate.maxTokens,
+          contextWindow: candidate.contextWindow,
+        }),
         apiKey,
       };
     }
 
-    if (this.litellmBaseUrl) {
+    if (this.routingProxyBaseUrl) {
       return {
-        model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
-        apiKey: process.env[this.litellmApiKeyEnv] ?? undefined,
+        model: createLiteLLMModel({
+          baseUrl: this.routingProxyBaseUrl,
+          modelId,
+          maxTokens: candidate.maxTokens,
+          contextWindow: candidate.contextWindow,
+        }),
+        apiKey: process.env[this.routingProxyApiKeyEnv] ?? undefined,
       };
     }
     const model = resolveRegisteredModel(candidate.provider, modelId);
     if (!model) {
       throw new Error(
         `Unknown model "${modelId}" for provider "${candidate.provider}". `
-        + 'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
+        + 'Configure a routing proxy in providers.json (currently LiteLLM) or update the canonical model config in models.json.',
       );
     }
     return {
@@ -217,7 +234,7 @@ export class LLMClient {
   private supportsFullKnobPassthrough(candidate: RoutingCandidate): boolean {
     return FULL_KNOB_PASSTHROUGH_PROVIDERS.has(candidate.provider)
       || !!candidate.requestBaseUrl
-      || this.litellmBaseUrl !== null;
+      || this.routingProxyBaseUrl !== null;
   }
 
   private enforceImportRoutingPolicy(purpose: RoutingPurpose, candidate: RoutingCandidate): void {

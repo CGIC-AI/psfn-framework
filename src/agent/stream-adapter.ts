@@ -1,6 +1,6 @@
 // ── pi-agent-core Stream Adapter ──
-// Bridges our LLM configuration into pi-agent-core's StreamFn interface.
-// Single-process: wraps streamSimple with LiteLLM proxy / direct provider apiKey.
+// Bridges our model routing configuration into pi-agent-core's StreamFn interface.
+// Routed OpenAI-compatible endpoints, including LiteLLM, stay behind provider config.
 // Gateway mode: would use GatewayClient (future, PSFN-d5n).
 
 import { streamSimple, getEnvApiKey } from '@mariozechner/pi-ai';
@@ -13,7 +13,11 @@ import type {
   CorrelationMetadata,
   SubstrateConfig,
 } from '../types.js';
-import { createModel, resolveRegisteredModel } from '../llm/models.js';
+import {
+  createLiteLLMModel,
+  createOpenAICompatibleEndpointModel,
+  resolveRegisteredModel,
+} from '../llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../llm/routing.js';
 import {
   DEFAULT_BASE_DELAY_MS,
@@ -36,8 +40,8 @@ import {
   normalizeModelIdForProvider,
 } from '../llm/model-budget.js';
 import {
-  resolveConfiguredLiteLLMApiKeyEnv,
-  resolveConfiguredLiteLLMBaseUrl,
+  type ConfiguredModelRoutingProxy,
+  resolveConfiguredModelRoutingProxy,
 } from '../config/providers-config.js';
 
 const log = createComponentLogger('StreamAdapter');
@@ -63,7 +67,7 @@ export interface SubstrateStreamRuntimeOptions {
  * Create a StreamFn for pi-agent-core's Agent.
  *
  * The returned function wraps `streamSimple` with the API key resolved
- * from our config (LiteLLM proxy key or provider env key).
+ * from our config (current routing proxy key or provider env key).
  *
  * The model is passed in by the Agent — use `resolveModel()` to create it
  * from SubstrateConfig and set it via `agent.setModel()`.
@@ -72,7 +76,7 @@ export function createSubstrateStreamFn(
   config: SubstrateConfig,
   runtimeOptions: SubstrateStreamRuntimeOptions = {},
 ): StreamFn {
-  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
+  const routingProxy = resolveConfiguredModelRoutingProxy(config);
   const budgetController = new ModelBudgetController(config);
   const fallbackRunner = new FallbackRunner();
 
@@ -89,7 +93,7 @@ export function createSubstrateStreamFn(
       purpose,
       model,
       callerMaxTokens,
-      litellmBaseUrl,
+      routingProxy,
     );
 
     let lastAttemptCandidate: RoutingCandidate | undefined;
@@ -105,7 +109,7 @@ export function createSubstrateStreamFn(
           candidate: candidateTarget,
           attempt,
           config,
-          litellmBaseUrl,
+          routingProxy,
           model,
           context,
           options,
@@ -151,7 +155,7 @@ export function createSubstrateStreamFn(
         yield buildTerminalFailureEvent({
           candidate: lastAttemptCandidate,
           fallbackModel: model,
-          litellmBaseUrl,
+          routingProxy,
           correlation: requestContext,
           error: err,
         });
@@ -165,7 +169,7 @@ interface ExecuteStreamCandidateParams {
   candidate: RoutingCandidate;
   attempt: number;
   config: SubstrateConfig;
-  litellmBaseUrl: string | null;
+  routingProxy: ConfiguredModelRoutingProxy | null;
   model: Model<any>;
   context: unknown;
   options: Record<string, unknown> | undefined;
@@ -195,15 +199,14 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
   }
 
   const { model: candidateModel, apiKey } = getModelAndKey(
-    params.config,
-    params.litellmBaseUrl,
+    params.routingProxy,
     candidate,
   );
   const requestOptions = buildStreamRequestOptions(
     candidate,
     params.options,
     apiKey,
-    params.litellmBaseUrl,
+    params.routingProxy,
   );
   const retryConfig = llmRetryConfig(params.config);
   const maxRetries = Number.isFinite(retryConfig.maxRetries)
@@ -360,17 +363,20 @@ function resolveStreamReasoningLevel(candidate: RoutingCandidate): ThinkingLevel
   return undefined;
 }
 
-function supportsFullKnobPassthrough(candidate: RoutingCandidate, litellmBaseUrl: string | null): boolean {
+function supportsFullKnobPassthrough(
+  candidate: RoutingCandidate,
+  routingProxy: ConfiguredModelRoutingProxy | null,
+): boolean {
   return FULL_KNOB_PASSTHROUGH_PROVIDERS.has(candidate.provider)
     || !!candidate.requestBaseUrl
-    || litellmBaseUrl !== null;
+    || routingProxy !== null;
 }
 
 function buildStreamRequestOptions(
   candidate: RoutingCandidate,
   options: Record<string, unknown> | undefined,
   apiKey: string | undefined,
-  litellmBaseUrl: string | null,
+  routingProxy: ConfiguredModelRoutingProxy | null,
 ): Record<string, unknown> {
   const requestOptions: Record<string, unknown> = {
     ...(options ?? {}),
@@ -391,7 +397,7 @@ function buildStreamRequestOptions(
     requestOptions.reasoning = reasoning;
   }
 
-  if (supportsFullKnobPassthrough(candidate, litellmBaseUrl)) {
+  if (supportsFullKnobPassthrough(candidate, routingProxy)) {
     if (candidate.topP !== undefined && requestOptions.topP === undefined) {
       requestOptions.topP = candidate.topP;
     }
@@ -419,8 +425,7 @@ function buildStreamRequestOptions(
 }
 
 function getModelAndKey(
-  config: SubstrateConfig,
-  litellmBaseUrl: string | null,
+  routingProxy: ConfiguredModelRoutingProxy | null,
   candidate: RoutingCandidate,
 ): { model: Model<any>; apiKey: string | undefined } {
   if (candidate.requestBaseUrl) {
@@ -428,20 +433,27 @@ function getModelAndKey(
       ? process.env[candidate.requestApiKeyEnv] ?? undefined
       : undefined;
     return {
-      model: createModel(candidate.requestBaseUrl, candidate.model, candidate.maxTokens, candidate.contextWindow),
+      model: createOpenAICompatibleEndpointModel({
+        baseUrl: candidate.requestBaseUrl,
+        modelId: candidate.model,
+        provider: candidate.provider,
+        routeLabel: candidate.provider === 'local_endpoint' ? 'local endpoint' : candidate.provider,
+        maxTokens: candidate.maxTokens,
+        contextWindow: candidate.contextWindow,
+      }),
       apiKey,
     };
   }
 
-  if (litellmBaseUrl) {
+  if (routingProxy?.type === 'litellm_proxy') {
     return {
-      model: createModel(
-        litellmBaseUrl,
-        normalizeLiteLLMModelId(candidate.provider, candidate.model),
-        candidate.maxTokens,
-        candidate.contextWindow,
-      ),
-      apiKey: process.env[resolveConfiguredLiteLLMApiKeyEnv(config)] ?? undefined,
+      model: createLiteLLMModel({
+        baseUrl: routingProxy.baseUrl,
+        modelId: normalizeLiteLLMModelId(candidate.provider, candidate.model),
+        maxTokens: candidate.maxTokens,
+        contextWindow: candidate.contextWindow,
+      }),
+      apiKey: process.env[routingProxy.apiKeyEnv] ?? undefined,
     };
   }
 
@@ -449,7 +461,7 @@ function getModelAndKey(
   if (!model) {
     throw new Error(
       `Unknown model "${candidate.model}" for provider "${candidate.provider}". ` +
-      'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
+      'Configure a routing proxy in providers.json (currently LiteLLM) or update the canonical model config in models.json.',
     );
   }
   return {
@@ -467,13 +479,13 @@ function resolveStreamCandidates(
   purpose: RoutingPurpose,
   model: Model<any>,
   callerMaxTokens: number | undefined,
-  litellmBaseUrl: string | null,
+  routingProxy: ConfiguredModelRoutingProxy | null,
 ): RoutingCandidate[] {
   const currentCandidate = buildCurrentCandidate(
     config,
     model,
     callerMaxTokens,
-    litellmBaseUrl,
+    routingProxy,
   );
   const routingCandidates = resolveRoutingCandidates(config, purpose);
   if (routingCandidates.length === 0) {
@@ -512,16 +524,14 @@ function buildCurrentCandidate(
   config: SubstrateConfig,
   model: Model<any>,
   callerMaxTokens: number | undefined,
-  litellmBaseUrl: string | null,
+  routingProxy: ConfiguredModelRoutingProxy | null,
 ): RoutingCandidate {
   const modelProvider = resolveModelProvider(model);
-  const effectiveProvider = litellmBaseUrl
+  const effectiveProvider = routingProxy
     ? config.primaryProvider.trim().toLowerCase()
     : (modelProvider ?? config.primaryProvider).trim().toLowerCase();
   const rawModelId = String(model.id);
-  const normalizedModelId = litellmBaseUrl
-    ? normalizeModelIdForProvider(effectiveProvider, rawModelId)
-    : normalizeModelIdForProvider(effectiveProvider, rawModelId);
+  const normalizedModelId = normalizeModelIdForProvider(effectiveProvider, rawModelId);
   const resolvedMaxTokens = callerMaxTokens ?? resolveStreamMaxTokens(model, undefined, config.primaryMaxTokens);
   const registryEntry = findRegistryEntryByProviderModel(config, effectiveProvider, normalizedModelId)
     ?? findRegistryEntryByModelId(config, normalizedModelId);
@@ -584,16 +594,16 @@ function toUsageCount(value: unknown): number {
 function buildTerminalFailureEvent(input: {
   candidate?: RoutingCandidate;
   fallbackModel: Model<any>;
-  litellmBaseUrl: string | null;
+  routingProxy: ConfiguredModelRoutingProxy | null;
   correlation?: Partial<CorrelationMetadata>;
   error: Error;
 }): AssistantMessageEvent {
   const candidateProvider = input.candidate?.provider
     ?? resolveModelProvider(input.fallbackModel)
     ?? 'openrouter';
-  const provider = input.litellmBaseUrl ? 'litellm' : candidateProvider;
+  const provider = input.routingProxy?.type === 'litellm_proxy' ? 'litellm' : candidateProvider;
   const model = input.candidate
-    ? (input.litellmBaseUrl
+    ? (input.routingProxy?.type === 'litellm_proxy'
       ? normalizeLiteLLMModelId(input.candidate.provider, input.candidate.model)
       : input.candidate.model)
     : String(input.fallbackModel.id);
@@ -642,19 +652,24 @@ function resolveModelProvider(model: Model<any>): string | undefined {
 /**
  * Resolve a pi-ai Model object from SubstrateConfig for a given purpose.
  *
- * Uses LiteLLM proxy if providers.json or env config resolves one, otherwise falls back
- * to pi-ai's built-in model registry via resolveRegisteredModel().
+ * Uses the configured routing proxy when one is present (currently LiteLLM),
+ * otherwise falls back to pi-ai's built-in model registry via resolveRegisteredModel().
  */
 export function resolveModel(
   config: SubstrateConfig,
   purpose: ModelPurpose = 'chat',
 ): Model<any> {
-  const litellmBaseUrl = resolveConfiguredLiteLLMBaseUrl(config);
+  const routingProxy = resolveConfiguredModelRoutingProxy(config);
   const selection = resolveModelSelection(config, purpose);
 
-  if (litellmBaseUrl) {
+  if (routingProxy?.type === 'litellm_proxy') {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
-    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
+    const model = createLiteLLMModel({
+      baseUrl: routingProxy.baseUrl,
+      modelId,
+      maxTokens: selection.maxTokens,
+      contextWindow: selection.contextWindow,
+    });
     return ensurePurposeInputCapabilities(model, purpose);
   }
 
@@ -664,7 +679,7 @@ export function resolveModel(
   if (!model) {
     throw new Error(
       `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
-      'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
+      'Configure a routing proxy in providers.json (currently LiteLLM) or update the canonical model config in models.json.',
     );
   }
   return ensurePurposeInputCapabilities(model, purpose);
@@ -689,11 +704,16 @@ export function resolveModelSelection(
 export function resolveExplicitModel(
   selection: MessageModelOverride,
 ): Model<any> {
-  const litellmBaseUrl = process.env.LITELLM_BASE_URL ?? null;
+  const routingProxyBaseUrl = process.env.LITELLM_BASE_URL ?? null;
 
-  if (litellmBaseUrl) {
+  if (routingProxyBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
-    const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
+    const model = createLiteLLMModel({
+      baseUrl: routingProxyBaseUrl,
+      modelId,
+      maxTokens: selection.maxTokens,
+      contextWindow: selection.contextWindow,
+    });
     return ensurePurposeInputCapabilities(model, selection.purpose);
   }
 
@@ -701,7 +721,7 @@ export function resolveExplicitModel(
   if (!registered) {
     throw new Error(
       `Unknown model "${selection.model}" for provider "${selection.provider}". ` +
-      'Use a known direct provider model or configure LiteLLM.',
+      'Use a known direct provider model or configure a routing proxy (currently LiteLLM).',
     );
   }
 

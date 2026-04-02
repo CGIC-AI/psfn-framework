@@ -123,66 +123,77 @@ describe('HeartbeatPolicyStore', () => {
     });
   });
 
-  it('returns defaults for corrupt file', () => {
-    store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
-    const policy = store.load();
-    // Invalid templates (not an array) triggers default
-    expect(policy.templates).toHaveLength(6);
+  it('fails closed when persisted policy JSON is malformed', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    writeFileSync(policyPath, '{"templates":', 'utf-8');
+
+    expect(() => store.load()).toThrow('Refusing to load invalid heartbeat policy');
+    expect(readFileSync(policyPath, 'utf-8')).toBe('{"templates":');
   });
 
-  it('restores defaults when persisted template intervals are invalid', () => {
+  it('fails closed when persisted policy shape is malformed', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    const persisted = JSON.stringify({
+      templates: 'bad',
+      version: 1,
+      updatedAt: '',
+      updatedBy: '',
+    });
+    writeFileSync(policyPath, persisted, 'utf-8');
+
+    expect(() => store.load()).toThrow('templates must be an array');
+    expect(readFileSync(policyPath, 'utf-8')).toBe(persisted);
+  });
+
+  it('fails closed when persisted template intervals are invalid', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    const persisted = JSON.stringify({
+      templates: [
+        {
+          id: 'whisper',
+          name: 'Whisper',
+          prompt: 'This prompt is long enough to pass prompt validation.',
+          intervalMs: 0,
+          enabled: true,
+          sendToDiscord: true,
+        },
+      ],
+      version: 99,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'test',
+    });
+    writeFileSync(policyPath, persisted, 'utf-8');
+
+    expect(() => store.load()).toThrow('template "whisper" is invalid');
+    expect(readFileSync(policyPath, 'utf-8')).toBe(persisted);
+  });
+
+  it('fails closed when persisted template cadence is invalid', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    const persisted = JSON.stringify({
+      templates: [
+        {
+          id: 'whisper',
+          name: 'Whisper',
+          prompt: 'This prompt is long enough to pass prompt validation.',
+          intervalMs: 3_600_000,
+          cadence: { kind: 'hourly', minute: 99, timezone: 'local' },
+          enabled: true,
+          sendToDiscord: true,
+        },
+      ],
+      version: 99,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'test',
+    });
     writeFileSync(
-      join(tmpDir, 'heartbeat-policy.json'),
-      JSON.stringify({
-        templates: [
-          {
-            id: 'whisper',
-            name: 'Whisper',
-            prompt: 'This prompt is long enough to pass prompt validation.',
-            intervalMs: 0,
-            enabled: true,
-            sendToDiscord: true,
-          },
-        ],
-        version: 99,
-        updatedAt: new Date().toISOString(),
-        updatedBy: 'test',
-      }),
+      policyPath,
+      persisted,
       'utf-8',
     );
 
-    const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
-    expect(policy.version).toBe(1);
-    expect(policy.updatedBy).toBe('system');
-  });
-
-  it('restores defaults when persisted template cadence is invalid', () => {
-    writeFileSync(
-      join(tmpDir, 'heartbeat-policy.json'),
-      JSON.stringify({
-        templates: [
-          {
-            id: 'whisper',
-            name: 'Whisper',
-            prompt: 'This prompt is long enough to pass prompt validation.',
-            intervalMs: 3_600_000,
-            cadence: { kind: 'hourly', minute: 99, timezone: 'local' },
-            enabled: true,
-            sendToDiscord: true,
-          },
-        ],
-        version: 99,
-        updatedAt: new Date().toISOString(),
-        updatedBy: 'test',
-      }),
-      'utf-8',
-    );
-
-    const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
-    expect(policy.version).toBe(1);
-    expect(policy.updatedBy).toBe('system');
+    expect(() => store.load()).toThrow('template "whisper" is invalid');
+    expect(readFileSync(policyPath, 'utf-8')).toBe(persisted);
   });
 
   it('backfills and persists missing cadence for known default templates', () => {

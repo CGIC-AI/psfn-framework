@@ -4,11 +4,8 @@
 // The companion can read, edit, and extend its own reflection schedule.
 
 import { readFileSync } from 'node:fs';
-import { createComponentLogger } from '../logger.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 import type { RecurringCadence } from './types.js';
-
-const log = createComponentLogger('HeartbeatPolicy');
 
 // ── Types ──
 
@@ -30,6 +27,10 @@ export interface HeartbeatPolicy {
   version: number;
   updatedAt: string;    // ISO timestamp
   updatedBy: string;    // 'system' | 'agent' | 'admin'
+}
+
+interface NodeErrorLike {
+  code?: string;
 }
 
 // ── Validation constants ──
@@ -444,6 +445,20 @@ function normalizeKnownTemplatePrompts(policy: HeartbeatPolicy): { policy: Heart
   };
 }
 
+function isNodeErrorLike(value: unknown): value is NodeErrorLike {
+  return typeof value === 'object' && value !== null;
+}
+
+function isEnoent(error: unknown): boolean {
+  return isNodeErrorLike(error) && error.code === 'ENOENT';
+}
+
+function toInvalidHeartbeatPolicyError(filePath: string, reason: string): Error {
+  return new Error(
+    `Refusing to load invalid heartbeat policy at ${filePath}; fix or remove the file explicitly. Cause: ${reason}`,
+  );
+}
+
 // ── Default templates ──
 
 function getDefaults(): HeartbeatPolicy {
@@ -527,12 +542,15 @@ export class HeartbeatPolicyStore {
   load(): HeartbeatPolicy {
     try {
       const raw = readFileSync(this.filePath, 'utf-8');
-      const parsed = JSON.parse(raw) as HeartbeatPolicy;
+      let parsed: HeartbeatPolicy;
+      try {
+        parsed = JSON.parse(raw) as HeartbeatPolicy;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw toInvalidHeartbeatPolicyError(this.filePath, reason);
+      }
       if (!Array.isArray(parsed.templates)) {
-        log.warn('Invalid policy file, restoring defaults');
-        const defaults = getDefaults();
-        this.save(defaults);
-        return defaults;
+        throw toInvalidHeartbeatPolicyError(this.filePath, 'templates must be an array');
       }
       const cadenceNormalized = normalizeTemplateCadence(parsed);
       const promptNormalized = normalizeKnownTemplatePrompts(cadenceNormalized.policy);
@@ -540,13 +558,14 @@ export class HeartbeatPolicyStore {
       for (const template of normalized.policy.templates) {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {
-          log.warn('Invalid heartbeat template in policy file, restoring defaults', {
-            templateId: template.id,
-            errors,
-          });
-          const defaults = getDefaults();
-          this.save(defaults);
-          return defaults;
+          const templateId = typeof template.id === 'string' && template.id.trim().length > 0
+            ? template.id
+            : '<unknown>';
+          const reason = errors.map(error => `${error.field}: ${error.message}`).join('; ');
+          throw toInvalidHeartbeatPolicyError(
+            this.filePath,
+            `template "${templateId}" is invalid (${reason})`,
+          );
         }
       }
       if (cadenceNormalized.changed || normalized.changed) {
@@ -555,11 +574,13 @@ export class HeartbeatPolicyStore {
         this.save(normalized.policy);
       }
       return normalized.policy;
-    } catch {
-      // File doesn't exist or is corrupt — create with defaults
-      const defaults = getDefaults();
-      this.save(defaults);
-      return defaults;
+    } catch (error) {
+      if (isEnoent(error)) {
+        const defaults = getDefaults();
+        this.save(defaults);
+        return defaults;
+      }
+      throw error;
     }
   }
 

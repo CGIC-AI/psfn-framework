@@ -705,6 +705,23 @@ describe('AdminServer JSON API routes', () => {
       toolHealthProvider,
       skillsRuntime: {
         getSnapshot: () => null,
+        getManagedOwnership: () => ({
+          owner: 'companion',
+          managedRoot: 'companion-data/skills',
+          configPath: 'companion-data/skills.json',
+        }),
+        listManaged: () => [],
+        getDisabledSkills: () => [],
+        createSkill: () => {
+          throw new Error('not implemented');
+        },
+        updateSkill: () => {
+          throw new Error('not implemented');
+        },
+        deleteSkill: () => {
+          throw new Error('not implemented');
+        },
+        toggleSkill: () => true,
         invalidate: () => {},
       } as any,
       allowInsecureWithoutToken: false,
@@ -720,6 +737,20 @@ describe('AdminServer JSON API routes', () => {
     rmSync(tempDir, { recursive: true, force: true });
     testConfig.runtimeHooks = undefined;
     testConfig.capabilityTier = undefined;
+  });
+
+  it('reports companion-owned skill storage metadata from /api/admin/skills', async () => {
+    const res = await request(port, 'GET', '/api/admin/skills', undefined, authHeaders);
+
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as {
+      managedOwnership: { owner: string; managedRoot: string; configPath: string };
+    };
+    expect(payload.managedOwnership).toEqual({
+      owner: 'companion',
+      managedRoot: 'companion-data/skills',
+      configPath: 'companion-data/skills.json',
+    });
   });
 
   it('enforces auth on JSON API routes', async () => {

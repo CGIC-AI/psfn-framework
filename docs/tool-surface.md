@@ -154,7 +154,7 @@ The runtime now exposes a unified model-facing `skill` tool for skill discovery,
 - Legacy migration aliases remain accepted at the action level for compatibility, but the model-facing tool name is now just `skill`
 - `list` preserves discovery metadata, eligibility outcomes, and filtered-skill reasons
 - `view` loads one skill's full YAML + Markdown body on demand
-- `create` and `update` write managed skills under `data/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot
+- `create` and `update` write managed skills under `companion-data/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot
 - Creator workflows such as image creation, music creation, and future media variants belong here as creator-category skills loaded with `skill action="view"`
 
 ## Live Media Surface

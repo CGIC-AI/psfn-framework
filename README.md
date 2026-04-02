@@ -329,7 +329,7 @@ src/
   scheduler/                # Heartbeat, one-shot, maintenance
   voice/                    # Voice pipeline (STT, TTS connectors, WebSocket transport)
   vault/                    # Obsidian vault integration (ops, tools, auto-publish)
-  skills/                   # Self-authored skill store (CRUD, execution)
+  skills/                   # Runtime skill loading; companion-authored skills live under companion-data/skills
   capabilities/             # Runtime capability declarations
   values/                   # Values journal (agent-authored principles)
   modules/                  # Runtime module registry and loader

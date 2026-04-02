@@ -29,7 +29,7 @@ import {
   resolveDashboardCostWindow,
 } from './services/dashboard-cost-windows.js';
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../scheduler/types.js';
-import type { SkillSnapshot } from '../../skills/types.js';
+import type { ManagedSkillOwnership, SkillSnapshot } from '../../skills/types.js';
 import type { SubstrateConfig } from '../../types.js';
 import type {
   AdminAuditActionType,
@@ -104,6 +104,7 @@ export interface ManagedSkillRecord {
 /** Minimal skills runtime interface for JSON API routes. */
 export interface AdminSkillsApi {
   getSnapshot(): SkillSnapshot;
+  getManagedOwnership(): ManagedSkillOwnership;
   listManaged(): ManagedSkillRecord[];
   createSkill(input: { name: string; category: string; content: string; description?: string }): ManagedSkillRecord;
   updateSkill(input: { name: string; content: string; description?: string }): ManagedSkillRecord;
@@ -1744,9 +1745,10 @@ export function buildAdminApiRoutes(options: {
           return;
         }
         const snapshot = skillsRuntime.getSnapshot();
+        const managedOwnership = skillsRuntime.getManagedOwnership();
         const managed = skillsRuntime.listManaged();
         const disabledSkills = skillsRuntime.getDisabledSkills();
-        sendJson(res, 200, { snapshot, managed, disabledSkills });
+        sendJson(res, 200, { snapshot, managedOwnership, managed, disabledSkills });
       },
     },
     {

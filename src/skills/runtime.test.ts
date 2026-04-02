@@ -106,4 +106,39 @@ describe('skills runtime', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('reports managed skill ownership under the companion data root', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-managed-root-'));
+    const companionDataDir = join(root, 'companion-data');
+    const seedDir = join(root, 'config');
+
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+
+    writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify({
+      enabled: true,
+      directories: ['companion/skills', 'skills'],
+      extraDirectories: [],
+      maxLoadedSkills: 32,
+      maxSkillChars: 100_000,
+      disabledSkills: [],
+    }, null, 2));
+
+    try {
+      const runtime = new SkillsRuntime({
+        dataDir: companionDataDir,
+        seedDir,
+        repoRoot: root,
+        isBinaryAvailable: () => true,
+      });
+
+      expect(runtime.getManagedOwnership()).toEqual({
+        owner: 'companion',
+        managedRoot: 'companion-data/skills',
+        configPath: 'companion-data/skills.json',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

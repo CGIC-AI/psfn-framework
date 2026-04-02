@@ -533,7 +533,7 @@ async function main(): Promise<void> {
   });
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
-    dataDir: systemDataDir,
+    dataDir: companionDataDir,
     seedDir: process.env.CONFIG_DIR,
     repoRoot: workspaceRoot,
   });

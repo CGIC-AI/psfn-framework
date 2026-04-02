@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { relative, resolve, sep } from 'node:path';
 import {
+  SKILLS_FILE_NAME,
   loadSkillsConfig,
   saveSkillsConfig,
   type SkillsRuntimeConfig,
@@ -16,6 +17,7 @@ import {
 } from './loader.js';
 import { SkillStore } from './store.js';
 import type {
+  ManagedSkillOwnership,
   SkillDirectorySpec,
   SkillEvaluation,
   SkillLookupResult,
@@ -124,6 +126,14 @@ export class SkillsRuntime {
     return this.store.list().map(({ absolutePath: _, relativePath: __, ...rest }) => rest);
   }
 
+  getManagedOwnership(): ManagedSkillOwnership {
+    return {
+      owner: 'companion',
+      managedRoot: this.toRepoRelativePath(this.store.getManagedRootDir()),
+      configPath: this.toRepoRelativePath(resolve(this.options.dataDir, SKILLS_FILE_NAME)),
+    };
+  }
+
   /** Create a new managed skill. */
   createSkill(input: { name: string; category: string; content: string; description?: string }): { name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string } {
     const record = this.store.create(input);
@@ -172,7 +182,7 @@ export class SkillsRuntime {
     const runtimeConfig = this.loadRuntimeConfig();
     const repoRoot = requireSkillsRepoRoot(this.options.repoRoot);
     const configuredDirectories = resolveSkillDirectories(runtimeConfig, repoRoot);
-    const directories = this.mergeManagedDirectory(configuredDirectories, repoRoot);
+    const directories = this.mergeManagedDirectory(configuredDirectories);
     const files = scanSkillFiles(directories);
 
     const signaturePayload = JSON.stringify({
@@ -254,13 +264,9 @@ export class SkillsRuntime {
 
   private mergeManagedDirectory(
     configured: SkillDirectorySpec[],
-    repoRoot: string,
   ): SkillDirectorySpec[] {
     const managedRoot = this.store.getManagedRootDir();
-    const relativePath = toPosix(relative(repoRoot, managedRoot));
-    const displayPath = relativePath && !relativePath.startsWith('..')
-      ? relativePath
-      : toPosix(managedRoot);
+    const displayPath = this.toRepoRelativePath(managedRoot);
 
     const ordered: SkillDirectorySpec[] = [
       {
@@ -284,5 +290,12 @@ export class SkillsRuntime {
       ...directory,
       precedence: index,
     }));
+  }
+
+  private toRepoRelativePath(path: string): string {
+    const relativePath = toPosix(relative(requireSkillsRepoRoot(this.options.repoRoot), path));
+    return relativePath && !relativePath.startsWith('..')
+      ? relativePath
+      : toPosix(resolve(path));
   }
 }

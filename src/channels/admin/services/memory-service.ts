@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { EmbeddingService } from '../../../agent/contracts.js';
 import type { ContactStore } from '../../../contacts/store.js';
 import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
+import { MemoryWriter } from '../../../memory/writer.js';
 import { isInternalMemoryArtifact } from '../../../memory/internal-artifacts.js';
 import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
 import {
@@ -29,6 +30,7 @@ import type {
   AdminMemorySearchResult,
   AdminMemoryService,
   MemoryMutationResult,
+  type AdminMemoryPatchMutationResult,
 } from './types.js';
 
 const DEFAULT_MEMORY_LIST_LIMIT = 50;
@@ -322,6 +324,81 @@ export class AdminMemoryDataService implements AdminMemoryService {
         .filter(memory => !isInternalMemoryArtifact(memory)),
       contactsById: this.buildContactSummaryMap(),
     };
+  }
+
+  async patchMemory(
+    id: string,
+    fields: { text: string; reason?: string; referencePath?: string },
+  ): Promise<AdminMemoryPatchMutationResult> {
+    const embeddingService = this.deps.embeddingService;
+    if (!embeddingService) {
+      return {
+        ok: false,
+        message: 'Memory patching is unavailable',
+      };
+    }
+
+    const text = fields.text.trim();
+    if (!text) {
+      return {
+        ok: false,
+        message: 'Replacement text is required',
+      };
+    }
+
+    const writer = new MemoryWriter(this.deps.memoryStore, embeddingService);
+    try {
+      const result = await writer.patch({
+        memoryId: id,
+        text,
+        sourceRef: 'admin:memory_patch',
+        requestedBy: 'admin:api',
+        reason: fields.reason,
+        referencePath: fields.referencePath,
+      });
+      if (!result) {
+        this.deps.appendAuditTimelineEntry?.(
+          'memory_mutation',
+          'denied',
+          `Memory patch failed: memory "${id}" was not found or was already deleted.`,
+        );
+        return {
+          ok: false,
+          message: 'Memory not found',
+        };
+      }
+
+      this.deps.appendAuditTimelineEntry?.(
+        'memory_mutation',
+        'allowed',
+        `${this.resolveCompanionName()} corrected memory "${result.sourceMemory.id}" with replacement "${result.replacementMemory.id}".`,
+        [
+          `source=${result.sourceMemory.sourceRef}`,
+          `replacement_source=${result.replacementMemory.sourceRef}`,
+          fields.referencePath ? `reference=${fields.referencePath}` : null,
+          fields.reason ? `reason=${fields.reason}` : null,
+        ],
+      );
+
+      return {
+        ok: true,
+        sourceMemory: result.sourceMemory,
+        replacementMemory: result.replacementMemory,
+        ...(result.reviewReferencePath ? { reviewReferencePath: result.reviewReferencePath } : {}),
+        ...(result.reason ? { reason: result.reason } : {}),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.deps.appendAuditTimelineEntry?.(
+        'memory_mutation',
+        'denied',
+        `Memory patch failed for "${id}": ${message}`,
+      );
+      return {
+        ok: false,
+        message,
+      };
+    }
   }
 
   supersedeMemory(id: string): MemoryMutationResult {

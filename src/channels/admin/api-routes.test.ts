@@ -1957,6 +1957,35 @@ describe('AdminServer JSON API routes', () => {
     expect(searchPayload.results.length).toBeGreaterThan(0);
     expect(searchPayload.results.some(memory => memory.id === 'api-mem-cf')).toBe(false);
 
+    const patchRes = await request(
+      port,
+      'PATCH',
+      '/api/admin/memory/api-mem-1/patch',
+      JSON.stringify({
+        text: 'Corrected privacy boundary memory',
+        reason: 'privacy correction',
+        referencePath: 'companion_docs/privacy-boundary-reference.md',
+      }),
+      { ...authHeaders, 'Content-Type': 'application/json' },
+    );
+    expect(patchRes.status).toBe(200);
+    const patchPayload = JSON.parse(patchRes.body) as {
+      sourceMemory: { id: string; supersededBy?: string; provenanceRefs?: string[] };
+      replacementMemory: { id: string; text: string; provenanceRefs?: string[]; tags?: string[] };
+      reviewReferencePath?: string;
+    };
+    expect(patchPayload.sourceMemory.id).toBe('api-mem-1');
+    expect(patchPayload.sourceMemory.supersededBy).toBe(patchPayload.replacementMemory.id);
+    expect(patchPayload.replacementMemory.text).toBe('Corrected privacy boundary memory');
+    expect(patchPayload.replacementMemory.tags).toEqual(expect.arrayContaining(['api', 'corrected']));
+    expect(patchPayload.replacementMemory.provenanceRefs).toEqual(expect.arrayContaining([
+      'supersedes:api-mem-1',
+      'reference:companion_docs/privacy-boundary-reference.md',
+    ]));
+    expect(patchPayload.reviewReferencePath).toBe('companion_docs/privacy-boundary-reference.md');
+    expect(memoryStore.getById('api-mem-1')?.supersededBy).toBe(patchPayload.replacementMemory.id);
+    expect(memoryStore.getById(patchPayload.replacementMemory.id)?.text).toBe('Corrected privacy boundary memory');
+
     const deleteRes = await request(port, 'DELETE', '/api/admin/memory/api-mem-2', undefined, authHeaders);
     expect(deleteRes.status).toBe(200);
     expect(memoryStore.getById('api-mem-2')?.supersededBy).toMatch(/^admin-/);

@@ -823,6 +823,40 @@ export function buildAdminApiRoutes(options: {
       },
     },
     {
+      method: 'PATCH',
+      match: paramWithSuffix('/api/admin/memory/', 'id', '/patch'),
+      handle: (req, res, { id }) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+          const reason = typeof payload.reason === 'string' ? payload.reason.trim() : undefined;
+          const referencePath = typeof payload.referencePath === 'string' ? payload.referencePath.trim() : undefined;
+          if (!text) {
+            sendJson(res, 400, { error: 'Replacement text is required' });
+            return;
+          }
+
+          void memoryService.patchMemory(id, { text, reason, referencePath })
+            .then((result) => {
+              if (!result.ok) {
+                const status = result.message === 'Memory not found' ? 404 : 400;
+                sendJson(res, status, { error: result.message ?? 'Failed to patch memory' });
+                return;
+              }
+              sendJson(res, 200, result);
+            })
+            .catch((error) => {
+              sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+            });
+        });
+      },
+    },
+    {
       method: 'GET',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
       handle: (_req, res, { id }) => {

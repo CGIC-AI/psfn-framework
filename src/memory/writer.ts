@@ -127,6 +127,37 @@ export interface MemoryRedactionResult {
   externalProvenanceRef?: string;
 }
 
+export interface MemoryPatchOptions {
+  memoryId: string;
+  text: string;
+  type?: MemoryType;
+  importance?: number;
+  salience?: number;
+  emotionalValence?: number;
+  formationVAD?: MemoryFormationVAD;
+  confidence?: number;
+  tags?: string[];
+  sourceRef?: string;
+  provenanceRefs?: string[];
+  sensitivity?: SensitivityLevel;
+  consentFlags?: ConsentFlags;
+  retentionClass?: MemoryRetentionClass;
+  contactId?: string;
+  scopeRef?: MemoryScopeRef;
+  scopeTags?: string[];
+  extractedAt?: number;
+  requestedBy?: string;
+  reason?: string;
+  referencePath?: string;
+}
+
+export interface MemoryPatchResult {
+  sourceMemory: PurrMemory;
+  replacementMemory: PurrMemory;
+  reviewReferencePath?: string;
+  reason?: string;
+}
+
 function applyRetentionSemantics(input: {
   type: MemoryType;
   importance: number;
@@ -838,6 +869,138 @@ export class MemoryWriter {
       abstractedMemoryId: written.memory.id,
       abstractedText: written.memory.text,
       externalProvenanceRef: externalRef,
+    };
+  }
+
+  async patch(opts: MemoryPatchOptions): Promise<MemoryPatchResult | null> {
+    const memoryId = opts.memoryId.trim();
+    if (!memoryId) {
+      throw new Error('memoryId is required');
+    }
+
+    const source = this.memoryStore.getById(memoryId);
+    if (!source || source.deletedAt !== undefined) {
+      return null;
+    }
+    if (source.supersededBy) {
+      throw new Error(`Memory ${memoryId} is already superseded by ${source.supersededBy}`);
+    }
+
+    const text = opts.text.trim();
+    if (!text) {
+      throw new Error('text is required');
+    }
+
+    const normalizedSourceRef = normalizeSourceRef(opts.sourceRef, 'tool:memory_patch');
+    const requestedBy = normalizeSourceRef(opts.requestedBy, normalizedSourceRef);
+    const reason = opts.reason?.trim() || undefined;
+    const reviewReferencePath = opts.referencePath?.trim() || undefined;
+    const type = opts.type ?? source.type;
+
+    if (!VALID_MEMORY_TYPES.includes(type)) {
+      throw new Error(`Invalid memory type: ${type}. Must be one of: ${VALID_MEMORY_TYPES.join(', ')}`);
+    }
+
+    const importance = clampUnit(opts.importance ?? source.importance, source.importance);
+    const salience = clampUnit(
+      opts.salience ?? Math.max(source.salience, importance, 0.7),
+      Math.max(source.salience, importance, 0.7),
+    );
+    const confidence = clampUnit(
+      opts.confidence ?? Math.max(source.confidence, 0.85),
+      Math.max(source.confidence, 0.85),
+    );
+    const emotionalValence = clampSigned(opts.emotionalValence ?? source.emotionalValence, source.emotionalValence);
+    const retention = applyRetentionSemantics({
+      type,
+      importance,
+      tags: normalizeMemoryTags([...source.tags, ...(opts.tags ?? []), 'corrected']),
+      retentionClass: opts.retentionClass ?? source.retentionClass,
+    });
+    const normalizedFormationVAD = normalizeFormationVAD(opts.formationVAD ?? source.formationVAD);
+    const normalizedScopeRef = normalizeMemoryScopeRef(opts.scopeRef ?? source.scopeRef);
+    const normalizedScopeTags = normalizeMemoryScopeTags([
+      ...(source.scopeTags ?? []),
+      ...(opts.scopeTags ?? []),
+    ]);
+    const sourceProvenanceRefs = normalizeProvenanceRefs(source.provenanceRefs, source.sourceRef);
+    const correctionRefs = [
+      `memory:${source.id}`,
+      `supersedes:${source.id}`,
+      `superseded_from:${source.sourceRef}`,
+      `patched_by:${requestedBy}`,
+      ...(reviewReferencePath ? [`reference:${reviewReferencePath}`] : []),
+      ...(opts.provenanceRefs ?? []),
+    ];
+    const replacementProvenanceRefs = mergeProvenanceRefs(
+      sourceProvenanceRefs,
+      normalizeProvenanceRefs(correctionRefs, normalizedSourceRef),
+    );
+    const mergedConsentFlags = mergeConsentFlags(source.consentFlags, opts.consentFlags);
+    const now = normalizeExtractedAt(opts.extractedAt) ?? Date.now();
+
+    const replacementMemory: PurrMemory = {
+      id: uuidv4(),
+      text,
+      type,
+      importance,
+      confidence,
+      emotionalValence,
+      formationVAD: normalizedFormationVAD,
+      salience,
+      sourceRef: normalizedSourceRef,
+      extractedAt: now,
+      lastAccessed: now,
+      accessCount: 1,
+      tags: retention.tags,
+      ...(normalizedScopeRef ? { scopeRef: normalizedScopeRef } : {}),
+      ...(normalizedScopeTags.length > 0 ? { scopeTags: normalizedScopeTags } : {}),
+      provenanceRefs: replacementProvenanceRefs,
+      retentionClass: retention.retentionClass ?? source.retentionClass,
+      sensitivity: opts.sensitivity ?? source.sensitivity,
+      consentFlags: mergedConsentFlags,
+      contactId: opts.contactId ?? source.contactId,
+    };
+
+    const updatedSourceProvenanceRefs = mergeProvenanceRefs(
+      sourceProvenanceRefs,
+      normalizeProvenanceRefs([
+        `superseded_by:${replacementMemory.id}`,
+        `replacement_memory:${replacementMemory.id}`,
+        `patched_by:${requestedBy}`,
+        ...(reviewReferencePath ? [`reference:${reviewReferencePath}`] : []),
+      ], normalizedSourceRef),
+    );
+
+    const embedding = await this.embeddingService.embed(text);
+
+    this.memoryStore.runInTransaction(() => {
+      this.memoryStore.updateMemory(source.id, {
+        supersededBy: replacementMemory.id,
+        provenanceRefs: updatedSourceProvenanceRefs,
+      });
+      this.memoryStore.insertMemory(replacementMemory, embedding);
+    });
+
+    const patchedSourceMemory: PurrMemory = {
+      ...source,
+      supersededBy: replacementMemory.id,
+      provenanceRefs: updatedSourceProvenanceRefs,
+    };
+
+    log.debug('Patched memory', {
+      sourceId: source.id,
+      replacementId: replacementMemory.id,
+      requestedBy,
+      reviewReferencePath,
+      reason,
+    });
+
+    return {
+      sourceMemory: patchedSourceMemory,
+      replacementMemory,
+      ...(reviewReferencePath ? { reviewReferencePath } : {}),
+      ...(reason ? { reason } : {}),
     };
   }
 

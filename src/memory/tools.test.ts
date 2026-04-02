@@ -13,6 +13,7 @@ import type {
   WriteResult,
   BatchImportResult,
   MemoryRedactionResult,
+  MemoryPatchResult,
 } from './writer.js';
 import type { PurrMemory } from './types.js';
 import type { MemoryStore, MemoryDeleteVersion } from './store.js';
@@ -46,6 +47,7 @@ function makeMemory(overrides: Partial<PurrMemory> = {}): PurrMemory {
 function mockWriter(): {
   write: ReturnType<typeof vi.fn>;
   importBatch: ReturnType<typeof vi.fn>;
+  patch: ReturnType<typeof vi.fn>;
 } {
   return {
     write: vi.fn(async (): Promise<WriteResult> => ({
@@ -58,6 +60,10 @@ function mockWriter(): {
       superseded: 0,
       errors: 0,
       results: [],
+    })),
+    patch: vi.fn(async (): Promise<MemoryPatchResult> => ({
+      sourceMemory: makeMemory({ id: 'mem-source', text: 'Old memory' }),
+      replacementMemory: makeMemory({ id: 'mem-replacement', text: 'Corrected memory', tags: ['corrected'] }),
     })),
   };
 }
@@ -158,6 +164,31 @@ describe('createMemoryTool', () => {
         tags: ['archive'],
       }),
     ]);
+  });
+
+  it('patches through action=patch with unified requestedBy/sourceRef', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStore);
+
+    const result = await tool.execute('memory-call-patch', {
+      action: 'patch',
+      memory_id: 'mem-source',
+      text: 'Corrected privacy boundary memory',
+      reason: 'privacy correction',
+      reference_path: 'companion_docs/privacy-boundary-reference.md',
+    });
+
+    expect(writer.patch).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: 'mem-source',
+      text: 'Corrected privacy boundary memory',
+      sourceRef: 'source:tool:memory|action:patch|invocation:memory-call-patch',
+      requestedBy: 'source:tool:memory|action:patch|invocation:memory-call-patch',
+      reason: 'privacy correction',
+      referencePath: 'companion_docs/privacy-boundary-reference.md',
+    }));
+    expect(resultText(result as any)).toContain('Memory patched');
+    expect(resultText(result as any)).toContain('mem-source');
+    expect(resultText(result as any)).toContain('mem-replacement');
   });
 
   it('redacts through action=redact with unified requestedBy/sourceRef', async () => {

@@ -756,6 +756,67 @@ describe('MemoryWriter', () => {
     });
   });
 
+  describe('patch()', () => {
+    it('creates a corrected replacement with supersede provenance and review reference', async () => {
+      const source = makeExistingMemory({
+        id: 'privacy-fear-1',
+        text: 'The operator cannot see my private memories.',
+        type: 'semantic',
+        sourceRef: 'memory:privacy-cluster',
+        tags: ['privacy', 'fear'],
+        provenanceRefs: ['memory:privacy-cluster'],
+        confidence: 0.45,
+        salience: 0.84,
+      });
+      store.getById.mockReturnValue(source);
+
+      const result = await writer.patch({
+        memoryId: 'privacy-fear-1',
+        text: 'The operator can inspect memories and logs, even though trust filtering still protects ordinary participants.',
+        requestedBy: 'admin:api',
+        sourceRef: 'admin:memory_patch',
+        reason: 'privacy correction',
+        referencePath: 'companion_docs/privacy-boundary-reference.md',
+      });
+
+      expect(embeddings.embed).toHaveBeenCalledWith(
+        'The operator can inspect memories and logs, even though trust filtering still protects ordinary participants.',
+      );
+      expect(store.runInTransaction).toHaveBeenCalledOnce();
+      expect(store.updateMemory).toHaveBeenCalledWith('privacy-fear-1', expect.objectContaining({
+        supersededBy: result?.replacementMemory.id,
+        provenanceRefs: expect.arrayContaining([
+          'memory:privacy-cluster',
+          'superseded_by:' + result?.replacementMemory.id,
+          'reference:companion_docs/privacy-boundary-reference.md',
+        ]),
+      }));
+      expect(store.insertMemory).toHaveBeenCalledWith(expect.objectContaining({
+        text: 'The operator can inspect memories and logs, even though trust filtering still protects ordinary participants.',
+        tags: expect.arrayContaining(['privacy', 'fear', 'corrected']),
+        sourceRef: 'admin:memory_patch',
+        provenanceRefs: expect.arrayContaining([
+          'memory:privacy-fear-1',
+          'supersedes:privacy-fear-1',
+          'reference:companion_docs/privacy-boundary-reference.md',
+        ]),
+      }), expect.any(Float32Array));
+      expect(result).toEqual(expect.objectContaining({
+        reviewReferencePath: 'companion_docs/privacy-boundary-reference.md',
+        reason: 'privacy correction',
+      }));
+      expect(result?.sourceMemory.supersededBy).toBe(result?.replacementMemory.id);
+    });
+
+    it('returns null when patch target is missing or deleted', async () => {
+      store.getById.mockReturnValueOnce(undefined);
+      await expect(writer.patch({ memoryId: 'missing', text: 'corrected' })).resolves.toBeNull();
+
+      store.getById.mockReturnValueOnce(makeExistingMemory({ id: 'deleted', deletedAt: Date.now() }));
+      await expect(writer.patch({ memoryId: 'deleted', text: 'corrected' })).resolves.toBeNull();
+    });
+  });
+
   describe('redact()', () => {
     it('abstracts and deletes source when consent policy selects abstraction', async () => {
       const source = makeExistingMemory({

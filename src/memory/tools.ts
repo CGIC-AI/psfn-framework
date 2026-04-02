@@ -28,6 +28,7 @@ const MEMORY_TOOL_ACTIONS = [
   'write',
   'search',
   'import',
+  'patch',
   'redact',
   'delete',
   'restore',
@@ -162,6 +163,7 @@ interface MemoryToolParams {
   memory_id?: string;
   operation?: MemoryRedactionOperation;
   reason?: string;
+  reference_path?: string;
   delete_id?: string;
 }
 
@@ -532,16 +534,16 @@ export function createMemoryTool(
     name: 'memory',
     description:
       'Unified long-term memory tool. ' +
-      'Use action=write|search|import|redact|delete|restore to manage durable memory explicitly.',
+      'Use action=write|search|import|patch|redact|delete|restore to manage durable memory explicitly.',
     label: 'memory',
     parameters: Type.Object({
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
-        description: 'One of: write, search, import, redact, delete, restore.',
+        description: 'One of: write, search, import, patch, redact, delete, restore.',
       }),
       text: Type.Optional(
-        Type.String({ description: 'Required for action=write. The memory text to store.' }),
+        Type.String({ description: 'Required for action=write or action=patch. The memory text to store or corrected replacement text.' }),
       ),
       type: Type.Optional(
         Type.Unsafe<MemoryType>({
@@ -590,7 +592,7 @@ export function createMemoryTool(
         Type.String({ description: 'Optional import source label for action=import. Default: "import".' }),
       ),
       memory_id: Type.Optional(
-        Type.String({ description: 'Required for action=redact or action=delete. Memory ID to mutate.' }),
+        Type.String({ description: 'Required for action=patch, action=redact, or action=delete. Memory ID to mutate.' }),
       ),
       operation: Type.Optional(
         Type.Unsafe<MemoryRedactionOperation>({
@@ -600,7 +602,10 @@ export function createMemoryTool(
         }),
       ),
       reason: Type.Optional(
-        Type.String({ description: 'Optional reason logged for redact/delete operations.' }),
+        Type.String({ description: 'Optional reason logged for patch/redact/delete operations.' }),
+      ),
+      reference_path: Type.Optional(
+        Type.String({ description: 'Optional companion-doc or workspace path that explains a correction for action=patch.' }),
       ),
       delete_id: Type.Optional(
         Type.String({ description: 'Required for action=restore. Delete checkpoint ID to restore.' }),
@@ -727,6 +732,44 @@ export function createMemoryTool(
             return textResult(
               `Import complete: ${result.written} written, ${result.deduplicated} deduplicated, `
               + `${result.superseded} superseded, ${result.errors} errors (${records.length} total)`,
+            );
+          }
+
+          case 'patch': {
+            const memoryId = params.memory_id?.trim();
+            const text = params.text?.trim();
+            if (!memoryId) {
+              return textResultWithError('Error: memory_id is required for action=patch', true);
+            }
+            if (!text) {
+              return textResultWithError('Error: text is required for action=patch', true);
+            }
+
+            const patched = await writer.patch({
+              memoryId,
+              text,
+              type: params.type,
+              importance: params.importance !== undefined ? clamp(Number(params.importance), 0, 1) : undefined,
+              emotionalValence: params.emotional_valence !== undefined
+                ? clamp(Number(params.emotional_valence), -1, 1)
+                : undefined,
+              formationVAD: options.getFormationVAD?.(),
+              confidence: params.confidence !== undefined ? clamp(Number(params.confidence), 0, 1) : undefined,
+              tags: parseTags(params.tags),
+              sourceRef: buildMemorySourceRef(toolCallId, 'patch', internalSource),
+              sensitivity: params.sensitivity,
+              requestedBy: buildMemorySourceRef(toolCallId, 'patch', internalSource),
+              reason: params.reason?.trim(),
+              referencePath: params.reference_path?.trim(),
+            });
+
+            if (!patched) {
+              return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
+            }
+
+            return textResult(
+              `Memory patched (source: ${patched.sourceMemory.id}, replacement: ${patched.replacementMemory.id}).`
+              + (patched.reviewReferencePath ? ` Reference: ${patched.reviewReferencePath}.` : ''),
             );
           }
 

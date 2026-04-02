@@ -16,6 +16,7 @@ import {
 export interface ShellExecPolicyConfig {
   enabled?: boolean;
   allowlist?: string[];
+  envAllowlist?: string[];
   allowedCwd?: string[];
   defaultTimeoutMs?: number;
   maxTimeoutMs?: number;

@@ -62,6 +62,9 @@ export function createShellTool(ops: ShellOperations): AgentTool<any> {
         minimum: 1,
         description: 'Optional combined stdout/stderr cap, bounded by gateway policy.',
       })),
+      env_vars: Type.Optional(Type.Array(Type.String(), {
+        description: 'Optional environment variable names to request from the gateway-owned shell env allowlist.',
+      })),
     }),
     execute: async (
       _toolCallId: string,
@@ -81,6 +84,7 @@ export function createShellTool(ops: ShellOperations): AgentTool<any> {
             ...(typeof rawParams.max_output_chars === 'number'
               ? { maxOutputChars: rawParams.max_output_chars }
               : {}),
+            ...(Array.isArray(rawParams.env_vars) ? { envVars: requireArgs(rawParams.env_vars) } : {}),
           },
         );
 

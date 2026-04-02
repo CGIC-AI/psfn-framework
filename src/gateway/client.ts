@@ -614,6 +614,7 @@ export class GatewayClient implements LLMProvider, EmbeddingService {
       cwd?: string;
       timeoutMs?: number;
       maxOutputChars?: number;
+      envVars?: string[];
     } = {},
   ): Promise<ShellExecResult> {
     return await this.rpcInstance.request('shell.exec', {

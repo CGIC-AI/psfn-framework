@@ -490,6 +490,8 @@ describe('SubstrateAgent construction', () => {
     };
     const mockContactStore = {
       resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
+      getConversationChannelPrivacy: vi.fn().mockReturnValue(undefined),
+      updateLastSeen: vi.fn(),
     } as unknown as ContactStore;
 
     agent.memoryProvider = mockMemory;
@@ -2077,6 +2079,8 @@ describe('SubstrateAgent.handleMessage', () => {
           { channel: 'discord', userId: 'discord-user-1' },
         ],
       }),
+      getConversationChannelPrivacy: vi.fn().mockReturnValue(undefined),
+      updateLastSeen: vi.fn(),
     } as unknown as ContactStore;
 
     const agent = new SubstrateAgent(
@@ -2156,6 +2160,8 @@ describe('SubstrateAgent.handleMessage', () => {
           purpose: 'chat',
         },
       }),
+      undefined,
+      undefined,
     );
   });
 
@@ -2191,6 +2197,7 @@ describe('SubstrateAgent.handleMessage', () => {
           purpose: 'chat',
         },
       }),
+      undefined,
     );
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[2]).toContain('Relevant memories here');
@@ -2229,10 +2236,12 @@ describe('SubstrateAgent.handleMessage', () => {
         isDirectMessage: undefined,
         messageText: 'heartbeat check',
         modelSelection: {
-          purpose: 'chat',
+          purpose: 'memory',
         },
         taskKind: 'heartbeat',
       }),
+      undefined,
+      undefined,
     );
   });
 
@@ -3148,6 +3157,8 @@ describe('SubstrateAgent.handleMessage', () => {
     const sessionManager = makeMockSessionManager();
     const mockContactStore = {
       resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
+      getConversationChannelPrivacy: vi.fn().mockReturnValue(undefined),
+      updateLastSeen: vi.fn(),
     } as unknown as ContactStore;
 
     const agent = new SubstrateAgent(
@@ -3343,6 +3354,8 @@ describe('SubstrateAgent.handleMessage', () => {
     };
     const mockContactStore = {
       resolveChannelIdentity: vi.fn().mockImplementation((_channel: string, _userId: string) => sharedContact),
+      getConversationChannelPrivacy: vi.fn().mockReturnValue(undefined),
+      updateLastSeen: vi.fn(),
     } as unknown as ContactStore;
     const agent = new SubstrateAgent(
       new EventBus(),
@@ -4512,6 +4525,8 @@ describe('SubstrateAgent.handleMessage', () => {
         moodDrift: 0.05,
         moodSamples: 7,
       }),
+      getConversationChannelPrivacy: vi.fn().mockReturnValue(undefined),
+      updateLastSeen: vi.fn(),
     } as unknown as ContactStore;
 
     const response = await agent.handleMessage(makeMessage({
@@ -4718,6 +4733,8 @@ describe('SubstrateAgent.handleMessage', () => {
     );
     primaryAgent.contactStore = {
       resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
+      getConversationChannelPrivacy: vi.fn().mockReturnValue(undefined),
+      updateLastSeen: vi.fn(),
     } as unknown as ContactStore;
 
     const publicSessionManager = makeMockSessionManager();
@@ -4736,6 +4753,8 @@ describe('SubstrateAgent.handleMessage', () => {
     );
     publicAgent.contactStore = {
       resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'public' }),
+      getConversationChannelPrivacy: vi.fn().mockReturnValue(undefined),
+      updateLastSeen: vi.fn(),
     } as unknown as ContactStore;
 
     await primaryAgent.handleMessage(makeMessage({ id: 'affect-primary-turn' }));

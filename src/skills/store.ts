@@ -152,7 +152,7 @@ export interface SkillUpdateInput {
 }
 
 interface SkillStoreOptions {
-  repoRoot?: string;
+  repoRoot: string;
   now?: () => Date;
 }
 
@@ -164,14 +164,22 @@ export function normalizeSkillCategory(category: string): string {
   return normalizeSegment(category, 'category', SKILL_CATEGORY_PATTERN);
 }
 
+function requireSkillRepoRoot(repoRoot: string): string {
+  const normalized = repoRoot.trim();
+  if (!normalized) {
+    throw new Error('SkillStore requires an explicit repoRoot');
+  }
+  return resolve(normalized);
+}
+
 export class SkillStore {
   private readonly managedRootDir: string;
   private readonly repoRoot: string;
   private readonly now: () => Date;
 
-  constructor(dataDir: string, options: SkillStoreOptions = {}) {
+  constructor(dataDir: string, options: SkillStoreOptions) {
     this.managedRootDir = resolve(dataDir, MANAGED_SKILLS_DIR);
-    this.repoRoot = resolve(options.repoRoot ?? process.cwd());
+    this.repoRoot = requireSkillRepoRoot(options.repoRoot);
     this.now = options.now ?? (() => new Date());
   }
 

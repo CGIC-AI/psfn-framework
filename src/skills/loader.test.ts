@@ -91,6 +91,10 @@ describe('skills loader', () => {
     expect(directories.at(-1)?.relativePath).toBe('vendor/skills');
   });
 
+  it('fails clearly when repoRoot is missing', () => {
+    expect(() => resolveSkillDirectories(makeConfig(), '')).toThrow(/explicit repoRoot/i);
+  });
+
   it('keeps higher-precedence skill definitions when names collide', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-loader-'));
     try {

@@ -535,7 +535,7 @@ async function main(): Promise<void> {
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
     dataDir: systemDataDir,
     seedDir: process.env.CONFIG_DIR,
-    repoRoot: process.cwd(),
+    repoRoot: workspaceRoot,
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gateway), { gatewayMode: true });
   registerShellTools(agentLoop, new GatewayShellOps(gateway), { gatewayMode: true });

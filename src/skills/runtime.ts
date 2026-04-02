@@ -25,7 +25,7 @@ import type {
 export interface SkillsRuntimeOptions {
   dataDir: string;
   seedDir?: string;
-  repoRoot?: string;
+  repoRoot: string;
   environment?: NodeJS.ProcessEnv;
   isBinaryAvailable?: (binaryName: string) => boolean;
 }
@@ -43,6 +43,14 @@ function hashSignature(payload: string): string {
 
 function toPosix(path: string): string {
   return path.split(sep).join('/');
+}
+
+function requireSkillsRepoRoot(repoRoot: string): string {
+  const normalized = repoRoot.trim();
+  if (!normalized) {
+    throw new Error('SkillsRuntime requires an explicit repoRoot');
+  }
+  return resolve(normalized);
 }
 
 export class SkillsRuntime {
@@ -162,7 +170,7 @@ export class SkillsRuntime {
 
   private getOrCreateCache(): SkillSnapshotCache {
     const runtimeConfig = this.loadRuntimeConfig();
-    const repoRoot = this.options.repoRoot ?? process.cwd();
+    const repoRoot = requireSkillsRepoRoot(this.options.repoRoot);
     const configuredDirectories = resolveSkillDirectories(runtimeConfig, repoRoot);
     const directories = this.mergeManagedDirectory(configuredDirectories, repoRoot);
     const files = scanSkillFiles(directories);

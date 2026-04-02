@@ -17,6 +17,47 @@ function writeSkill(path: string, description: string, body: string): void {
 }
 
 describe('skills runtime', () => {
+  it('uses explicit repoRoot even when process cwd drifts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'skills-runtime-root-'));
+    const launchCwd = mkdtempSync(join(tmpdir(), 'skills-runtime-cwd-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'config');
+    const skillDir = join(root, 'skills', 'memory-management');
+
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+    mkdirSync(skillDir, { recursive: true });
+
+    writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify({
+      enabled: true,
+      directories: ['companion/skills', 'skills'],
+      extraDirectories: [],
+      maxLoadedSkills: 32,
+      maxSkillChars: 100_000,
+      disabledSkills: [],
+    }, null, 2));
+    writeSkill(join(skillDir, 'SKILL.md'), 'cwd proof', '# Memory cwd-proof');
+
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(launchCwd);
+      const runtime = new SkillsRuntime({
+        dataDir,
+        seedDir,
+        repoRoot: root,
+        isBinaryAvailable: () => true,
+      });
+
+      const snapshot = runtime.getSnapshot();
+      expect(snapshot.includedSkills[0]?.description).toBe('cwd proof');
+      expect(snapshot.includedSkills[0]?.relativePath).toContain('skills/memory-management/SKILL.md');
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(launchCwd, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('caches snapshots and invalidates when skill files change', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-'));
     const dataDir = join(root, 'data');

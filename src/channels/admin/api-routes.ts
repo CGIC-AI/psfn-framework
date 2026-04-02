@@ -18,6 +18,7 @@ import type {
   AdminDashboardService,
   AdminIdentityService,
   AdminMemoryService,
+  AdminResearchLibraryService,
   AdminPromptsService,
   AdminSessionService,
   AdminSettingsService,
@@ -210,6 +211,7 @@ const ADMIN_CHAT_BOOTSTRAP_API_PATH = '/api/admin/chat/bootstrap';
 const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/bootstrap';
 const ADMIN_SHARDS_API_PATH = '/api/admin/shards';
 const ADMIN_SUBAGENTS_API_PATH = '/api/admin/subagents';
+const ADMIN_RESEARCH_LIBRARY_API_PATH = '/api/admin/research-library';
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 
@@ -220,6 +222,7 @@ export function buildAdminApiRoutes(options: {
   subagentFaculty: SubagentFaculty;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
+  researchLibraryService?: AdminResearchLibraryService | null;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
   settingsService: AdminSettingsService;
@@ -247,6 +250,7 @@ export function buildAdminApiRoutes(options: {
     subagentFaculty,
     adaptiveToolsService,
     memoryService,
+    researchLibraryService,
     sessionService,
     contactsService,
     settingsService,
@@ -453,6 +457,33 @@ export function buildAdminApiRoutes(options: {
             });
           },
         );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_RESEARCH_LIBRARY_API_PATH),
+      handle: (_req, res) => {
+        if (!researchLibraryService) {
+          sendJson(res, 503, { error: 'Research library service unavailable' });
+          return;
+        }
+        sendJson(res, 200, researchLibraryService.listEntries());
+      },
+    },
+    {
+      method: 'GET',
+      match: prefixedParamPath(`${ADMIN_RESEARCH_LIBRARY_API_PATH}/`, 'entryId'),
+      handle: (_req, res, { entryId }) => {
+        if (!researchLibraryService) {
+          sendJson(res, 503, { error: 'Research library service unavailable' });
+          return;
+        }
+        const entry = researchLibraryService.getEntry(entryId);
+        if (!entry) {
+          sendJson(res, 404, { error: 'Research library entry not found' });
+          return;
+        }
+        sendJson(res, 200, entry);
       },
     },
     {

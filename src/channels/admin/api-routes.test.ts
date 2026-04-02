@@ -40,6 +40,7 @@ import { createTurnId } from '../../turns/id.js';
 import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
 import { resolveSessionContinuityArtifactsDir } from '../../persistence/layout.js';
+import { ResearchLibraryStore } from '../../research-library/store.js';
 
 function request(
   port: number,
@@ -1949,6 +1950,51 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(badRange.status).toBe(400);
+  });
+
+  it('lists and reads research-library entries through admin endpoints', async () => {
+    const store = new ResearchLibraryStore({ companionDataDir: tempDir });
+    const manifest = store.importText({
+      title: 'Durable field notes',
+      content: 'Key excerpt for later synthesis.',
+      provenance: {
+        sourceKind: 'direct_text',
+        sourceUrl: 'https://example.com/source',
+        importedBy: 'test',
+      },
+    });
+
+    const listRes = await request(port, 'GET', '/api/admin/research-library', undefined, authHeaders);
+    expect(listRes.status).toBe(200);
+    const listPayload = JSON.parse(listRes.body) as {
+      entries: Array<{ id: string; title: string; provenance: { sourceKind: string } }>;
+    };
+    expect(listPayload.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: manifest.id,
+        title: 'Durable field notes',
+        provenance: expect.objectContaining({ sourceKind: 'direct_text' }),
+      }),
+    ]));
+
+    const detailRes = await request(
+      port,
+      'GET',
+      `/api/admin/research-library/${manifest.id}`,
+      undefined,
+      authHeaders,
+    );
+    expect(detailRes.status).toBe(200);
+    const detailPayload = JSON.parse(detailRes.body) as {
+      manifest: { id: string; provenance: { sourceUrl?: string } };
+      previewText?: string;
+    };
+    expect(detailPayload.manifest.id).toBe(manifest.id);
+    expect(detailPayload.manifest.provenance.sourceUrl).toBe('https://example.com/source');
+    expect(detailPayload.previewText).toContain('Key excerpt for later synthesis.');
+
+    const missingRes = await request(port, 'GET', '/api/admin/research-library/missing-entry', undefined, authHeaders);
+    expect(missingRes.status).toBe(404);
   });
 
   it('supports memory bulk update/delete and link/unlink endpoints', async () => {

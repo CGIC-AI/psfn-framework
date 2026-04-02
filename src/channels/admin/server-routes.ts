@@ -21,6 +21,7 @@ import type {
   AdminDashboardService,
   AdminIdentityService,
   AdminMemoryService,
+  AdminResearchLibraryService,
   AdminPromptsService,
   AdminSessionService,
   AdminSettingsService,
@@ -44,6 +45,7 @@ interface AdminRouteDependencies {
   subagentFaculty: SubagentFaculty;
   adaptiveToolsService: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
+  researchLibraryService: AdminResearchLibraryService | null;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
   settingsService: AdminSettingsService;
@@ -191,6 +193,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       subagentFaculty: deps.subagentFaculty,
       adaptiveToolsService: deps.adaptiveToolsService,
       memoryService: deps.memoryService,
+      researchLibraryService: deps.researchLibraryService,
       sessionService: deps.sessionService,
       contactsService: deps.contactsService,
       settingsService: deps.settingsService,

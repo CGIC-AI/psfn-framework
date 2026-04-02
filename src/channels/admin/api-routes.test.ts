@@ -29,7 +29,7 @@ import { SessionContinuityArtifactStore } from '../../session/continuity-artifac
 import { loadSettings } from '../../settings.js';
 import { saveCapabilityTierConfig } from '../../config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../config/models-config.js';
-import { saveSchedulerConfig } from '../../config/scheduler-config.js';
+import { loadSchedulerConfig, saveSchedulerConfig } from '../../config/scheduler-config.js';
 import { saveSkillsConfig } from '../../config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../types.js';
@@ -3908,6 +3908,7 @@ describe('AdminServer JSON API routes', () => {
       defaultContextWindow: testConfig.defaultContextWindow,
     });
     const expectedScheduler = saveSchedulerConfig(tempDir, {
+      ...loadSchedulerConfig(tempDir),
       tickIntervalMs: 1500,
       heartbeatIntervalMs: 9000,
       salienceDecayIntervalMs: 12000,

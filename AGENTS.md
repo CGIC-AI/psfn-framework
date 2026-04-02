@@ -268,13 +268,18 @@ Required sequence:
    ```bash
    bd dolt push --json
    ```
-6. Verify the branch is up to date with origin.
-7. Clean up orchestration handles.
-8. Hand off with tests run, remaining risks, and any open beads.
+6. When a sprint or implementation wave is completed, refresh the kanban export:
+   ```bash
+   bd export > .beads/issues.jsonl
+   ```
+7. Verify the branch is up to date with origin.
+8. Clean up orchestration handles.
+9. Hand off with tests run, remaining risks, and any open beads.
 
 Rules:
 
 - Never stop at "ready to push". Push.
 - If push fails, resolve it and retry.
 - Keep bead state aligned with the shipped git state.
+- If a sprint or implementation wave closes tracked work, refresh `.beads/issues.jsonl` from the final bead database state before handoff.
 - Do not close a worker bead before its worktree has a passing `npm run lint` result.

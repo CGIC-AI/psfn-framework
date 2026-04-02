@@ -24,7 +24,7 @@ Then use `bd` for discovery, claiming, follow-up issues, and closure.
 bd ready --json
 bd show <id> --json
 bd update <id> --claim --json
-bd create "Title" --description "Self-contained task details" -t task -p 2 --json
+bd create 'Title' --description 'Self-contained task details' -t task -p 2 --json
 bd close <id> --reason "Completed" --json
 # if a Dolt remote is configured for beads
 bd dolt push --json
@@ -38,6 +38,30 @@ Rules:
 - If `bd ready --json` is empty but you are doing user-requested tracked work, create a self-contained issue before editing code.
 - Link discovered follow-up work with `discovered-from:<parent-id>`.
 - Keep issue descriptions self-contained: summary, files, concrete steps, and an example when useful.
+- Never put markdown-rich or user-derived text directly inside a double-quoted shell argument for `bd create`, `bd update`, or similar commands. Backticks, `$VAR`, and `$(...)` will be interpreted by the shell and can mangle the text or execute commands.
+- For multiline descriptions or any text that may contain backticks, dollar signs, or command-substitution syntax, prefer a quoted heredoc and pass the captured variable to `--description`.
+- Single-quoted inline arguments are acceptable only when the content is simple and does not itself contain single quotes.
+
+Safe pattern:
+
+```bash
+ISSUE_DESCRIPTION=$(cat <<'EOF'
+Summary:
+Keep `code`, $VARS, and $(subshell syntax) literal in bead text.
+
+Scope:
+- use a quoted heredoc for multiline or markdown-rich descriptions
+- avoid inline double-quoted descriptions for shell-facing commands
+EOF
+)
+bd create 'Title' --description "$ISSUE_DESCRIPTION" -t task -p 2 --json
+```
+
+Unsafe pattern:
+
+```bash
+bd create "Title" --description "Contains `code` and $(subshell syntax)" -t task -p 2 --json
+```
 
 ## Source Of Truth
 

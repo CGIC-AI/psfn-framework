@@ -1029,6 +1029,12 @@ describe('hydrateCanonicalStartupConfig', () => {
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
       salienceDecayIntervalMs: 123_000,
+      artifactLifecycle: {
+        scratchpadRetentionDays: 14,
+        generatedMediaRetentionDays: 30,
+        workspaceTempRetentionDays: 14,
+        cleanupBatchSize: 128,
+      },
     });
 
     const result = hydrateCanonicalStartupConfig(config, {
@@ -1090,6 +1096,12 @@ describe('hydrateCanonicalStartupConfig', () => {
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 7_000,
       salienceDecayIntervalMs: 222_000,
+      artifactLifecycle: {
+        scratchpadRetentionDays: 14,
+        generatedMediaRetentionDays: 30,
+        workspaceTempRetentionDays: 14,
+        cleanupBatchSize: 128,
+      },
     });
 
     const env = {

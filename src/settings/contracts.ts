@@ -83,9 +83,7 @@ export interface EditableSettings {
   memoryRetrievalBudgetPct?: number;
   moodCongruenceWeight?: number;
   adaptiveContextBudgetsEnabled?: boolean;
-  sessionMessageLimit?: number;
   sessionRestartBehavior?: SessionRestartBehavior;
-  memoryRetrievalLimit?: number;
   extractionInterval?: number;
   maintenanceIntervalMs?: number;
   extractionThresholdPct?: number;

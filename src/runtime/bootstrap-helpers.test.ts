@@ -8,7 +8,7 @@ import {
   createEligibilityGate,
   EligibilityDeniedError,
 } from '../capabilities/eligibility.js';
-import { loadSettings, saveSettings } from '../settings.js';
+import { loadSettings } from '../settings.js';
 import { saveModelsConfig } from '../config/models-config.js';
 import { loadCapabilityTierConfig } from '../config/capability-tier-config.js';
 import { loadProvidersConfig } from '../config/providers-config.js';
@@ -1009,12 +1009,16 @@ describe('hydrateCanonicalStartupConfig', () => {
     tempDirs.push(rootDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
-    saveSettings(systemDataDir, {
-      sessionMessageLimit: 44,
-      memoryRetrievalLimit: 11,
-      extractionThresholdPct: 34,
-      compactionThresholdPct: 76,
-    });
+    writeFileSync(
+      join(systemDataDir, 'settings.json'),
+      `${JSON.stringify({
+        sessionMessageLimit: 44,
+        memoryRetrievalLimit: 11,
+        extractionThresholdPct: 34,
+        compactionThresholdPct: 76,
+      }, null, 2)}\n`,
+      'utf-8',
+    );
     saveModelsConfig(systemDataDir, makeCanonicalModelsConfigForChatOverride(
       'openai/gpt-4.1-mini',
       'openrouter',
@@ -1068,10 +1072,14 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
 
-    saveSettings(systemDataDir, {
-      sessionMessageLimit: 41,
-      memoryRetrievalLimit: 17,
-    });
+    writeFileSync(
+      join(systemDataDir, 'settings.json'),
+      `${JSON.stringify({
+        sessionMessageLimit: 41,
+        memoryRetrievalLimit: 17,
+      }, null, 2)}\n`,
+      'utf-8',
+    );
     saveModelsConfig(systemDataDir, makeCanonicalModelsConfigForChatOverride(
       'openai/gpt-4.1-mini',
       'openrouter',

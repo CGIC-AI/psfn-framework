@@ -43,6 +43,12 @@ export interface ProvidersLoadResult {
   legacyDriftDetected: boolean;
 }
 
+export interface ConfiguredModelRoutingProxy {
+  type: 'litellm_proxy';
+  baseUrl: string;
+  apiKeyEnv: string;
+}
+
 function toNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -312,4 +318,20 @@ export function resolveConfiguredLiteLLMBaseUrl(config: SubstrateConfig): string
 
 export function resolveConfiguredLiteLLMApiKeyEnv(config: SubstrateConfig): string {
   return toNonEmptyString(config.litellmApiKeyEnv) ?? 'LITELLM_API_KEY';
+}
+
+/**
+ * Resolve the configured provider-routing proxy without making upper layers
+ * depend on LiteLLM as a conceptual default.
+ */
+export function resolveConfiguredModelRoutingProxy(
+  config: SubstrateConfig,
+): ConfiguredModelRoutingProxy | null {
+  const baseUrl = resolveConfiguredLiteLLMBaseUrl(config);
+  if (!baseUrl) return null;
+  return {
+    type: 'litellm_proxy',
+    baseUrl,
+    apiKeyEnv: resolveConfiguredLiteLLMApiKeyEnv(config),
+  };
 }

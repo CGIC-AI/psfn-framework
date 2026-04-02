@@ -32,7 +32,7 @@ Those helpers keep the supported split entrypoints aligned on core wiring:
 `src/gateway-main.ts` builds the privileged edge:
 
 - `GatewayServer` exposes JSON-RPC over the NDJSON Unix socket.
-- `LLMClient` and embedding creation happen on the gateway side so provider secrets stay out of the agent.
+- `LLMClient` and embedding creation happen on the gateway side so provider secrets stay out of the agent. pi-ai and pi-agent-core remain the primary substrate; routed OpenAI-compatible backends such as LiteLLM stay behind provider config seams.
 - Gateway policy resolves filesystem scope, URL policy, SSRF checks, and approval-gated actions.
 - Optional operator surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
 - Discord, Telegram, and Wyoming host-facing adapters are started from the gateway side when enabled.

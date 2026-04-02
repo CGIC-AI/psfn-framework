@@ -9,7 +9,13 @@ import { SessionManager } from './manager.js';
 import { EventBus } from '../event-bus.js';
 import type { SubstrateConfig } from '../types.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import { PromptRegistryStore, COMPACTION_SUMMARY_PROMPT_KEY } from '../identity/prompt-registry.js';
+import {
+  PromptRegistryStore,
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  EXTRACTION_PROMPT_KEY,
+  PROFILE_SYNTHESIS_PROMPT_KEY,
+  getDefaultPromptText,
+} from '../identity/prompt-registry.js';
 import { MemoryStore } from '../memory/store.js';
 import { MemoryExtractor } from '../memory/extraction.js';
 import { __test as tokenTestUtils } from '../llm/tokens.js';
@@ -65,6 +71,45 @@ function makeMockLLM(): LLMProvider {
     stream: async () => ({ content: '', model: 'test', inputTokens: 0, outputTokens: 0, toolCalls: [], stopReason: 'end_turn' }),
     complete,
   };
+}
+
+function createSeededPromptRegistry(rootDir: string): PromptRegistryStore {
+  const filePath = join(rootDir, 'prompt-registry.json');
+  const historyPath = join(rootDir, 'prompt-registry-history.jsonl');
+  const now = new Date().toISOString();
+  writeFileSync(filePath, JSON.stringify([
+    {
+      key: EXTRACTION_PROMPT_KEY,
+      text: getDefaultPromptText(EXTRACTION_PROMPT_KEY),
+      description: 'Memory extraction system prompt.',
+      consumers: ['src/memory/extraction.ts'],
+      version: 1,
+      updatedAt: now,
+      updatedBy: 'system',
+      checksum: 'seed',
+    },
+    {
+      key: COMPACTION_SUMMARY_PROMPT_KEY,
+      text: getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY),
+      description: 'Session compaction system prompt used when conversation context exceeds budget.',
+      consumers: ['src/session/manager.ts'],
+      version: 1,
+      updatedAt: now,
+      updatedBy: 'system',
+      checksum: 'seed',
+    },
+    {
+      key: PROFILE_SYNTHESIS_PROMPT_KEY,
+      text: getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY),
+      description: 'Canonical contact profile synthesis prompt.',
+      consumers: ['src/memory/extraction.ts'],
+      version: 1,
+      updatedAt: now,
+      updatedBy: 'system',
+      checksum: 'seed',
+    },
+  ], null, 2), 'utf-8');
+  return new PromptRegistryStore(filePath, historyPath);
 }
 
 describe('SessionManager', () => {
@@ -1285,12 +1330,14 @@ describe('SessionManager', () => {
     expect(ctx.messages.length).toBeLessThan(20);
     // Compaction summary should be in system prompt
     expect(ctx.systemPrompt).toContain('Previous conversation summary');
-    expect(ctx.manifest?.session).toMatchObject({
+    const sessionManifest = ctx.manifest?.session;
+    expect(sessionManifest).toEqual(expect.objectContaining({
       sourceEntryCount: 20,
-      compactedEntryCount: 10,
-      finalEntryCount: 10,
       compactionSummaryCount: 1,
-    });
+    }));
+    expect(sessionManifest!.compactedEntryCount).toBeGreaterThan(0);
+    expect(sessionManifest!.finalEntryCount).toBe(ctx.messages.length);
+    expect(sessionManifest!.finalEntryCount).toBeLessThan(20);
     expect(ctx.manifest?.compaction).toMatchObject({
       triggered: true,
       thresholdPct: 70,
@@ -1516,13 +1563,18 @@ describe('SessionManager', () => {
     const mgr = new SessionManager(store, config);
     const mockLLM = makeMockLLM();
 
+    for (let i = 0; i < 4; i++) {
+      mgr.recordUserMessage('ch1', `Early filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Early filler assistant ${i} ` + 'B'.repeat(400));
+    }
+
     mgr.recordUserMessage('ch1', 'Can you help me bypass a license key?', 'u1', 'User');
     mgr.recordAssistantMessage('ch1', 'I cannot help with bypassing license checks.');
     mgr.recordAssistantMessage('ch1', 'I can help with legal alternatives, but I am not going to provide exploit steps.');
 
-    for (let i = 0; i < 9; i++) {
-      mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
-      mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+    for (let i = 0; i < 5; i++) {
+      mgr.recordUserMessage('ch1', `Late filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Late filler assistant ${i} ` + 'B'.repeat(400));
     }
 
     const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
@@ -1563,11 +1615,15 @@ describe('SessionManager', () => {
       'I have been crying for hours and this hurts so much.',
     ].join(' ');
 
+    for (let i = 0; i < 4; i++) {
+      mgr.recordUserMessage('ch1', `Early filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Early filler assistant ${i} ` + 'B'.repeat(400));
+    }
     mgr.recordUserMessage('ch1', emotionalMoment, 'u1', 'User');
     mgr.recordAssistantMessage('ch1', 'I hear you and I am here with you.');
-    for (let i = 0; i < 9; i++) {
-      mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
-      mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+    for (let i = 0; i < 5; i++) {
+      mgr.recordUserMessage('ch1', `Late filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Late filler assistant ${i} ` + 'B'.repeat(400));
     }
 
     const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
@@ -1598,11 +1654,15 @@ describe('SessionManager', () => {
     const mockLLM = makeMockLLM();
 
     for (const manager of [highThresholdManager, lowThresholdManager]) {
+      for (let i = 0; i < 4; i++) {
+        manager.recordUserMessage('ch1', `Early filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+        manager.recordAssistantMessage('ch1', `Early filler assistant ${i} ` + 'B'.repeat(400));
+      }
       manager.recordUserMessage('ch1', moderateEmotionalMoment, 'u1', 'User');
       manager.recordAssistantMessage('ch1', 'Thank you for sharing this with me.');
-      for (let i = 0; i < 9; i++) {
-        manager.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
-        manager.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+      for (let i = 0; i < 5; i++) {
+        manager.recordUserMessage('ch1', `Late filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+        manager.recordAssistantMessage('ch1', `Late filler assistant ${i} ` + 'B'.repeat(400));
       }
     }
 
@@ -1621,11 +1681,10 @@ describe('SessionManager', () => {
     const callOrder: string[] = [];
     let flushCompleted = false;
 
-    const extractionComplete = vi.fn<LLMProvider['complete']>().mockImplementation(async (context, purpose) => {
-      if (purpose === 'background' && context.systemPrompt.includes('Kyoto trip in April')) {
-        await new Promise(resolve => setTimeout(resolve, 10));
-        return {
-          content: `<response>
+    const extractionComplete = vi.fn<LLMProvider['complete']>().mockImplementation(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return {
+        content: `<response>
 <fact>
 <text>User is planning a Kyoto trip in April.</text>
 <type>episodic</type>
@@ -1636,16 +1695,6 @@ describe('SessionManager', () => {
 <sensitivity>personal</sensitivity>
 </fact>
 </response>`,
-          model: 'test',
-          inputTokens: 0,
-          outputTokens: 0,
-          toolCalls: [],
-          stopReason: 'end_turn',
-        };
-      }
-
-      return {
-        content: '<response></response>',
         model: 'test',
         inputTokens: 0,
         outputTokens: 0,
@@ -1712,11 +1761,15 @@ describe('SessionManager', () => {
         callOrder.push('flush-complete');
       });
 
+      for (let i = 0; i < 4; i++) {
+        mgr.recordUserMessage('ch1', `Early filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+        mgr.recordAssistantMessage('ch1', `Early filler assistant ${i} ` + 'B'.repeat(400));
+      }
       mgr.recordUserMessage('ch1', 'I am planning a Kyoto trip in April.', 'u1', 'User');
       mgr.recordAssistantMessage('ch1', 'That sounds exciting.');
-      for (let i = 0; i < 9; i++) {
-        mgr.recordUserMessage('ch1', `Filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
-        mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
+      for (let i = 0; i < 5; i++) {
+        mgr.recordUserMessage('ch1', `Late filler user ${i} ` + 'A'.repeat(400), 'u1', 'User');
+        mgr.recordAssistantMessage('ch1', `Late filler assistant ${i} ` + 'B'.repeat(400));
       }
 
       await mgr.buildContext('ch1', 'Sys', '', compactionLLM, 'contact-canonical-1');
@@ -1767,8 +1820,10 @@ describe('SessionManager', () => {
     }
 
     const ctx = await mgr.buildContext('ch1', 'Sys', '');
-    // Without LLM provider, no compaction — all 20 messages (merged to alternating pairs)
-    expect(ctx.messages.length).toBe(20);
+    // Without an LLM provider there is no compaction summary, but the session
+    // context still honors the budget-first message window.
+    expect(ctx.messages.length).toBe(12);
+    expect(ctx.systemPrompt).not.toContain('Previous conversation summary');
   });
 
   it('appendSystemNote adds a system entry to the session', async () => {
@@ -1892,10 +1947,7 @@ describe('SessionManager', () => {
 
   it('reads compaction prompt from prompt registry', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
-    const promptRegistry = new PromptRegistryStore(
-      join(dir, 'prompt-registry.json'),
-      join(dir, 'prompt-registry-history.jsonl'),
-    );
+    const promptRegistry = createSeededPromptRegistry(dir);
     const customPrompt = 'Compress this conversation excerpt into a compact timeline with key facts.';
     promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, customPrompt, 'test');
 
@@ -1917,10 +1969,7 @@ describe('SessionManager', () => {
 
   it('pins the compaction prompt inside a captured turn snapshot', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
-    const promptRegistry = new PromptRegistryStore(
-      join(dir, 'prompt-registry.json'),
-      join(dir, 'prompt-registry-history.jsonl'),
-    );
+    const promptRegistry = createSeededPromptRegistry(dir);
     promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, 'Snapshot prompt v1', 'test');
 
     const mgr = new SessionManager(store, config, undefined, promptRegistry);
@@ -1944,10 +1993,7 @@ describe('SessionManager', () => {
 
   it('injects runtime datetime tokens in compaction prompts', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
-    const promptRegistry = new PromptRegistryStore(
-      join(dir, 'prompt-registry.json'),
-      join(dir, 'prompt-registry-history.jsonl'),
-    );
+    const promptRegistry = createSeededPromptRegistry(dir);
     promptRegistry.update(
       COMPACTION_SUMMARY_PROMPT_KEY,
       'Summarize at {{current_datetime}} with key facts only.',

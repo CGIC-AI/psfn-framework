@@ -20,7 +20,6 @@ import { normalizeCapabilityTier } from '../capabilities/tiers.js';
 import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
 import type { SessionStore } from '../session/store.js';
 import { SessionManager } from '../session/manager.js';
-import type { SessionEntry } from '../session/types.js';
 import {
   evaluateShardSessionMemorySyncPolicy,
   type ShardSessionMemorySyncDecision,
@@ -64,6 +63,31 @@ import {
   resolveRequestedShardBackend,
   type ShardBackendController,
 } from './backend-controller.js';
+import {
+  buildShardContextPackEntries,
+  buildShardPromptDiscipline,
+  normalizeShardSourceContext,
+  renderShardParentContextSnapshot,
+  renderShardPromptDiscipline,
+  resolveShardContextPackMemoryScopeQuery,
+  resolveShardSystemPrompt,
+  truncateShardContextText,
+} from './context-pack.js';
+import {
+  buildShardMemoryOutputProvenanceTags,
+  buildShardValidationPath,
+  cloneShardMergeReview,
+  cloneShardTaggedOutputs,
+  cloneShardWorkLog,
+  computeShardMergeReviewBlockingReasons,
+  createEmptyShardMergeReview,
+  createShardTaggedOutput,
+  createShardTaggedOutputProvenance,
+  isEmotionalOrRelationalShardMemory,
+  parseShardMemoryTags,
+  resolveStagedShardMemoryOutputs,
+  type StagedShardMemoryOutput,
+} from './output-review.js';
 
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
@@ -146,12 +170,6 @@ interface ResolvedShardConfig extends ShardConfig {
   gatewayRouting: GatewayRoutingEnvelope;
 }
 
-interface StagedShardMemoryOutput {
-  content: string;
-  label: string;
-  source: ShardTaggedOutputSource;
-  provenanceTags: string[];
-}
 
 export class ShardManager implements ShardExecutionPort {
   readonly portFamily = 'shard' as const;
@@ -1218,85 +1236,17 @@ export class ShardManager implements ShardExecutionPort {
   private normalizeSourceContext(
     sourceContext: ShardSourceContext | undefined,
   ): ShardSourceContext | null {
-    const channelId = sourceContext?.channelId.trim();
-    if (!channelId || !sourceContext) {
-      return null;
-    }
-
-    const requestId = sourceContext.requestId?.trim();
-    const turnId = sourceContext.turnId?.trim();
-    return {
-      channelId,
-      ...(requestId ? { requestId } : {}),
-      ...(turnId ? { turnId } : {}),
-    };
+    return normalizeShardSourceContext(sourceContext);
   }
 
   private buildContextPackEntries(source: ShardSourceContext): ShardContextPackEntry[] {
-    const recentEntries = this.deps.sessionStore.getRecent(
-      source.channelId,
-      CONTEXT_PACK_SESSION_SCAN_LIMIT,
-    );
-    const focusedEntries = this.selectContextPackEntries(recentEntries, source);
-    return focusedEntries.map(entry => ({
-      role: entry.role,
-      content: this.truncateContextText(entry.content, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS),
-      ...(entry.authorName ? { authorName: entry.authorName } : {}),
-      timestamp: entry.timestamp,
-    }));
-  }
-
-  private selectContextPackEntries(
-    recentEntries: readonly SessionEntry[],
-    source: ShardSourceContext,
-  ): SessionEntry[] {
-    if (recentEntries.length <= CONTEXT_PACK_SESSION_ENTRY_LIMIT) {
-      return [...recentEntries];
-    }
-
-    const anchorIndex = this.findContextPackAnchorIndex(recentEntries, source);
-    if (anchorIndex < 0) {
-      return recentEntries.slice(-CONTEXT_PACK_SESSION_ENTRY_LIMIT);
-    }
-
-    const endExclusive = anchorIndex + 1;
-    const start = Math.max(0, endExclusive - CONTEXT_PACK_SESSION_ENTRY_LIMIT);
-    return recentEntries.slice(start, endExclusive);
-  }
-
-  private findContextPackAnchorIndex(
-    recentEntries: readonly SessionEntry[],
-    source: ShardSourceContext,
-  ): number {
-    for (let index = recentEntries.length - 1; index >= 0; index -= 1) {
-      const entry = recentEntries.at(index);
-      if (!entry) continue;
-      if (this.sessionEntryMatchesSource(entry, source)) {
-        return index;
-      }
-    }
-    return -1;
-  }
-
-  private sessionEntryMatchesSource(entry: SessionEntry, source: ShardSourceContext): boolean {
-    const metadata = entry.metadata;
-    if (!metadata) {
-      return false;
-    }
-
-    return this.metadataIncludesField(metadata, 'requestId', source.requestId)
-      || this.metadataIncludesField(metadata, 'turnId', source.turnId);
-  }
-
-  private metadataIncludesField(
-    metadata: string,
-    field: 'requestId' | 'turnId',
-    value: string | undefined,
-  ): boolean {
-    if (!value) {
-      return false;
-    }
-    return metadata.includes(`\"${field}\":${JSON.stringify(value)}`);
+    return buildShardContextPackEntries({
+      sessionStore: this.deps.sessionStore,
+      source,
+      sessionScanLimit: CONTEXT_PACK_SESSION_SCAN_LIMIT,
+      sessionEntryLimit: CONTEXT_PACK_SESSION_ENTRY_LIMIT,
+      entryContentMaxChars: CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS,
+    });
   }
 
   private async buildContextPackMemoryBlock(
@@ -1326,7 +1276,7 @@ export class ShardManager implements ShardExecutionPort {
   private resolveContextPackMemoryScopeQuery(
     sourceChannelId: string,
   ): import('../memory/types.js').MemoryScopeQuery | undefined {
-    return this.deps.sessionManager?.getActiveFocusMemoryScopeQuery(sourceChannelId) ?? undefined;
+    return resolveShardContextPackMemoryScopeQuery(this.deps.sessionManager, sourceChannelId);
   }
 
   private buildPromptDiscipline(
@@ -1334,130 +1284,54 @@ export class ShardManager implements ShardExecutionPort {
     creationMode: ShardCreationMode,
     parentContext: ShardParentContextSnapshot | undefined,
   ): ShardPromptDiscipline {
-    const stablePrefix = this.deps.parentSystemPrompt.trim();
-    const remitSupplement = shardConfig.systemPrompt?.trim();
-
-    return {
-      stablePrefix,
-      remit: [
-        `Creation mode: ${creationMode}.`,
-        `Shard name: ${shardConfig.name.trim()}.`,
-        `Shard task: ${this.truncateContextText(shardConfig.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}.`,
-        ...(remitSupplement ? [`Remit notes: ${remitSupplement}`] : []),
-        ...(parentContext ? [`Inherited source channel: ${parentContext.source.channelId}.`] : []),
-      ].join('\n'),
-      guardrails: [
-        ...DEFAULT_SHARD_PROMPT_GUARDRAILS,
-        ...(creationMode === 'forked'
-          ? ['Treat inherited parent context as a read-only snapshot, not as a live conversation to continue.']
-          : ['Do not assume any hidden parent context beyond the shard remit.']),
-      ],
-    };
+    return buildShardPromptDiscipline({
+      parentSystemPrompt: this.deps.parentSystemPrompt,
+      shardConfig,
+      creationMode,
+      parentContext,
+      taskMaxChars: CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS,
+      defaultGuardrails: DEFAULT_SHARD_PROMPT_GUARDRAILS,
+    });
   }
 
   private resolveSystemPrompt(shardConfig: ResolvedShardConfig): string {
-    return [
-      shardConfig.promptDiscipline.stablePrefix,
-      this.renderPromptDiscipline(shardConfig.promptDiscipline),
-      ...(shardConfig.parentContext ? [this.renderParentContextSnapshot(shardConfig.parentContext)] : []),
-    ]
-      .map(section => section.trim())
-      .filter(section => section.length > 0)
-      .join('\n\n');
+    return resolveShardSystemPrompt({
+      promptDiscipline: shardConfig.promptDiscipline,
+      parentContext: shardConfig.parentContext,
+      taskMaxChars: CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS,
+    });
   }
 
   private renderPromptDiscipline(promptDiscipline: ShardPromptDiscipline): string {
-    return [
-      '[Shard remit]',
-      promptDiscipline.remit,
-      '',
-      '[Shard guardrails]',
-      ...promptDiscipline.guardrails.map(guardrail => `- ${guardrail}`),
-    ].join('\n');
+    return renderShardPromptDiscipline(promptDiscipline);
   }
 
   private renderParentContextSnapshot(parentContext: ShardParentContextSnapshot): string {
-    const sourceConversation = parentContext.transcript.entries
-      .map(entry => {
-        const speaker = entry.role === 'assistant'
-          ? 'Assistant'
-          : entry.role === 'system'
-            ? 'System'
-            : (entry.authorName?.trim() || 'User');
-        return `${speaker}: ${entry.content}`;
-      })
-      .join('\n');
-
-    return [
-      '[Forked shard parent context]',
-      'Use this inherited parent snapshot as read-only context while completing the shard remit.',
-      `Inherited from: ${parentContext.inheritedFrom}`,
-      `Source channel: ${parentContext.source.channelId}`,
-      ...(parentContext.source.requestId ? [`Source requestId: ${parentContext.source.requestId}`] : []),
-      ...(parentContext.source.turnId ? [`Source turnId: ${parentContext.source.turnId}`] : []),
-      `Task scope: ${this.truncateContextText(parentContext.task, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS)}`,
-      ...(sourceConversation
-        ? [
-          '',
-          '[Focused source conversation]',
-          sourceConversation,
-        ]
-        : []),
-      ...(parentContext.memory?.content
-        ? [
-          '',
-          '[Task-scoped memory]',
-          parentContext.memory.content,
-        ]
-        : []),
-    ].join('\n');
+    return renderShardParentContextSnapshot(parentContext, CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS);
   }
 
   private truncateContextText(value: string, maxChars: number): string {
-    const normalized = value.trim();
-    if (normalized.length <= maxChars) {
-      return normalized;
-    }
-    return `${normalized.slice(0, maxChars - 3)}...`;
+    return truncateShardContextText(value, maxChars);
   }
 
   private buildShardValidationPath(shardId: string): string {
-    return `/api/admin/shards/${encodeURIComponent(shardId)}`;
+    return buildShardValidationPath(shardId);
   }
 
   private createEmptyMergeReview(shardId: string, timestamp: number): ShardMergeReview {
-    return {
-      required: false,
-      status: 'none',
-      validationPath: this.buildShardValidationPath(shardId),
-      lastUpdatedAt: timestamp,
-      pendingTaggedOutputCount: 0,
-      blockingReasons: [],
-    };
+    return createEmptyShardMergeReview(shardId, timestamp);
   }
 
   private cloneTaggedOutputs(outputs: readonly ShardTaggedOutput[]): ShardTaggedOutput[] {
-    return outputs.map(output => ({
-      ...output,
-      provenance: {
-        ...output.provenance,
-        tags: [...output.provenance.tags],
-      },
-    }));
+    return cloneShardTaggedOutputs(outputs);
   }
 
   private cloneWorkLog(workLog: readonly ShardWorkLogEntry[]): ShardWorkLogEntry[] {
-    return workLog.map(entry => ({
-      ...entry,
-      details: [...entry.details],
-    }));
+    return cloneShardWorkLog(workLog);
   }
 
   private cloneMergeReview(review: ShardMergeReview): ShardMergeReview {
-    return {
-      ...review,
-      blockingReasons: [...review.blockingReasons],
-    };
+    return cloneShardMergeReview(review);
   }
 
   private appendWorkLog(
@@ -1489,17 +1363,7 @@ export class ShardManager implements ShardExecutionPort {
       provenanceTags?: string[];
     } = {},
   ): ShardTaggedOutputProvenance {
-    return {
-      coreCompanionId: shard.lineage.coreCompanionId,
-      shardCompanionId: shard.lineage.shardCompanionId,
-      shardId: shard.lineage.shardId,
-      channelId: shard.channelId,
-      task: shard.task,
-      source,
-      ...(options.sourceToolName ? { sourceToolName: options.sourceToolName } : {}),
-      ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
-      tags: [...new Set(options.provenanceTags?.filter(Boolean) ?? [])],
-    };
+    return createShardTaggedOutputProvenance(shard, source, options);
   }
 
   private createTaggedOutput(
@@ -1516,28 +1380,16 @@ export class ShardManager implements ShardExecutionPort {
       reviewState?: ShardTaggedOutput['reviewState'];
     } = {},
   ): ShardTaggedOutput {
-    const normalizedContent = content.trim();
-    const reviewState = options.reviewState ?? 'pending';
-    return {
-      outputId: `output-${randomUUID()}`,
+    return createShardTaggedOutput(
+      shard,
       kind,
       label,
-      content: normalizedContent,
-      preview: this.truncateContextText(normalizedContent, SHARD_TAGGED_OUTPUT_PREVIEW_MAX_CHARS),
+      content,
+      source,
       createdAt,
-      reviewRequired: true,
-      reviewState,
-      blockedCorePromotion: reviewState !== 'approved',
-      provenance: this.createTaggedOutputProvenance(shard, source, {
-        ...options,
-        provenanceTags: [
-          'fold_back',
-          `tagged_output_kind:${kind}`,
-          `tagged_output_source:${source}`,
-          ...(options.provenanceTags ?? []),
-        ],
-      }),
-    };
+      SHARD_TAGGED_OUTPUT_PREVIEW_MAX_CHARS,
+      options,
+    );
   }
 
   private approveTaggedOutputsByKind(
@@ -1575,18 +1427,7 @@ export class ShardManager implements ShardExecutionPort {
   }
 
   private computeMergeReviewBlockingReasons(shard: ShardRuntimeRecord): string[] {
-    const pendingOutputs = shard.taggedOutputs.filter(output => output.reviewRequired && output.reviewState === 'pending');
-    const reasons = new Set<string>();
-    if (pendingOutputs.some(output => output.kind === 'l0_output')) {
-      reasons.add('artifact_output_pending_merge_review');
-    }
-    if (pendingOutputs.some(output => output.kind === 'l2_memory')) {
-      reasons.add('staged_shard_memory_pending_merge_review');
-    }
-    if (pendingOutputs.some(output => output.provenance.tags.includes('interpretive:emotional_or_relational'))) {
-      reasons.add('emotional_or_relational_interpretation_requires_core_review');
-    }
-    return [...reasons];
+    return computeShardMergeReviewBlockingReasons(shard);
   }
 
   private refreshMergeReviewState(shardId: string, timestamp = Date.now()): void {
@@ -1646,32 +1487,11 @@ export class ShardManager implements ShardExecutionPort {
   }
 
   private parseShardMemoryTags(rawTags: unknown): string[] {
-    if (Array.isArray(rawTags)) {
-      return rawTags
-        .flatMap(tag => typeof tag === 'string' ? [tag.trim().toLowerCase()] : [])
-        .filter(Boolean);
-    }
-    if (typeof rawTags !== 'string') {
-      return [];
-    }
-    return rawTags
-      .split(',')
-      .map(tag => tag.trim().toLowerCase())
-      .filter(Boolean);
+    return parseShardMemoryTags(rawTags);
   }
 
   private isEmotionalOrRelationalMemory(memoryType: string | undefined, tags: readonly string[]): boolean {
-    if (memoryType?.trim().toLowerCase() === 'emotional') {
-      return true;
-    }
-    return tags.some(tag => (
-      tag.includes('relationship')
-      || tag.includes('relational')
-      || tag.includes('contact')
-      || tag.includes('partner')
-      || tag.includes('family')
-      || tag.includes('friend')
-    ));
+    return isEmotionalOrRelationalShardMemory(memoryType, tags);
   }
 
   private buildMemoryOutputProvenanceTags(
@@ -1679,100 +1499,14 @@ export class ShardManager implements ShardExecutionPort {
     rawTags: unknown,
     sensitivity: unknown,
   ): string[] {
-    const tags = this.parseShardMemoryTags(rawTags);
-    const normalizedType = typeof memoryType === 'string' ? memoryType.trim().toLowerCase() : '';
-    const normalizedSensitivity = typeof sensitivity === 'string' ? sensitivity.trim().toLowerCase() : '';
-    return [
-      ...(normalizedType ? [`memory_type:${normalizedType}`] : []),
-      ...(normalizedSensitivity ? [`sensitivity:${normalizedSensitivity}`] : []),
-      ...tags.map(tag => `memory_tag:${tag}`),
-      ...(this.isEmotionalOrRelationalMemory(normalizedType || undefined, tags)
-        ? ['interpretive:emotional_or_relational']
-        : []),
-    ];
+    return buildShardMemoryOutputProvenanceTags(memoryType, rawTags, sensitivity);
   }
 
   private resolveStagedShardMemoryOutputs(
     toolName: string,
     params: unknown,
   ): StagedShardMemoryOutput[] {
-    if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-      return [];
-    }
-    const input = params as Record<string, unknown>;
-
-    const toWriteOutput = (record: Record<string, unknown>, labelPrefix: string): StagedShardMemoryOutput[] => {
-      const text = typeof record.text === 'string' ? record.text.trim() : '';
-      if (!text) {
-        return [];
-      }
-      const memoryType = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
-      return [{
-        content: text,
-        label: `${labelPrefix}${memoryType ? ` (${memoryType})` : ''}`,
-        source: 'memory_write',
-        provenanceTags: this.buildMemoryOutputProvenanceTags(
-          record.type,
-          record.tags,
-          record.sensitivity,
-        ),
-      }];
-    };
-
-    const toImportOutputs = (
-      records: unknown,
-      sourceLabel: string,
-    ): StagedShardMemoryOutput[] => {
-      if (!Array.isArray(records)) {
-        return [];
-      }
-      return records.flatMap((record, index) => {
-        if (typeof record !== 'object' || record === null || Array.isArray(record)) {
-          return [];
-        }
-        const entry = record as Record<string, unknown>;
-        const text = typeof entry.text === 'string' ? entry.text.trim() : '';
-        if (!text) {
-          return [];
-        }
-        const memoryType = typeof entry.type === 'string' ? entry.type.trim().toLowerCase() : '';
-        return [{
-          content: text,
-          label: `Imported shard memory ${index + 1} from ${sourceLabel}${memoryType ? ` (${memoryType})` : ''}`,
-          source: 'memory_import_batch' as const,
-          provenanceTags: this.buildMemoryOutputProvenanceTags(
-            entry.type,
-            entry.tags,
-            entry.sensitivity,
-          ),
-        }];
-      });
-    };
-
-    if (toolName === 'memory') {
-      const action = typeof input.action === 'string' ? input.action.trim().toLowerCase() : '';
-      if (action === 'write') {
-        return toWriteOutput(input, 'Staged shard memory');
-      }
-      if (action === 'import') {
-        const source = typeof input.source === 'string' && input.source.trim()
-          ? input.source.trim().toLowerCase()
-          : 'import';
-        return toImportOutputs(input.records, source);
-      }
-      return [];
-    }
-
-    if (toolName === 'memory_write') {
-      return toWriteOutput(input, 'Staged shard memory');
-    }
-    if (toolName === 'memory_import_batch') {
-      const source = typeof input.source === 'string' && input.source.trim()
-        ? input.source.trim().toLowerCase()
-        : 'import';
-      return toImportOutputs(input.records, source);
-    }
-    return [];
+    return resolveStagedShardMemoryOutputs(toolName, params);
   }
 
   private captureShardFoldBackOutput(

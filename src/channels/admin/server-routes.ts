@@ -17,6 +17,7 @@ import { formatPossessiveCompanionName } from '../../identity/companion-naming.j
 import { resolveCompanionNameFromConfig } from '../../identity/companion-runtime.js';
 import type {
   AdminAdaptiveToolsService,
+  AdminArtifactLifecycleService,
   AdminContactsService,
   AdminDashboardService,
   AdminIdentityService,
@@ -44,6 +45,7 @@ interface AdminRouteDependencies {
   shardManager: ShardManager;
   subagentFaculty: SubagentFaculty;
   adaptiveToolsService: AdminAdaptiveToolsService | null;
+  artifactLifecycleService: AdminArtifactLifecycleService | null;
   memoryService: AdminMemoryService;
   researchLibraryService: AdminResearchLibraryService | null;
   sessionService: AdminSessionService;
@@ -192,6 +194,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       shardManager: deps.shardManager,
       subagentFaculty: deps.subagentFaculty,
       adaptiveToolsService: deps.adaptiveToolsService,
+      artifactLifecycleService: deps.artifactLifecycleService,
       memoryService: deps.memoryService,
       researchLibraryService: deps.researchLibraryService,
       sessionService: deps.sessionService,

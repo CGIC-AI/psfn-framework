@@ -587,6 +587,22 @@ export function resolveGeneratedImagesDir(companionDataDir: string): string {
   return join(companionDataDir, 'images');
 }
 
+export function resolveWorkspaceLifecycleDir(workspacePath: string): string {
+  return join(workspacePath, '.psfn');
+}
+
+export function resolveManagedWorkspaceTempDir(workspacePath: string): string {
+  return join(resolveWorkspaceLifecycleDir(workspacePath), 'temp-artifacts');
+}
+
+export function resolveArtifactLifecycleDir(companionDataDir: string): string {
+  return join(companionDataDir, 'artifact-lifecycle');
+}
+
+export function resolveArtifactLifecycleAuditPath(companionDataDir: string): string {
+  return join(resolveArtifactLifecycleDir(companionDataDir), 'cleanup-runs.jsonl');
+}
+
 export function resolveResearchLibraryDir(companionDataDir: string): string {
   return join(companionDataDir, 'research-library');
 }
@@ -616,6 +632,7 @@ export function ensurePersistenceLayout(dataDir: string): void {
   mkdirSync(resolveContactsDir(dataDir), { recursive: true });
   mkdirSync(resolveContinuityDir(dataDir), { recursive: true });
   mkdirSync(resolveInternalRoleEnvelopesDir(dataDir), { recursive: true });
+  mkdirSync(resolveArtifactLifecycleDir(dataDir), { recursive: true });
   mkdirSync(resolveResearchLibraryEntriesDir(dataDir), { recursive: true });
 }
 

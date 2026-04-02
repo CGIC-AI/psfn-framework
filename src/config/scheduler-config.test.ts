@@ -19,12 +19,24 @@ describe('scheduler config seed defaults', () => {
         tickIntervalMs: 60_000,
         heartbeatIntervalMs: 90_000,
         salienceDecayIntervalMs: 123_000,
+        artifactLifecycle: {
+          scratchpadRetentionDays: 10,
+          generatedMediaRetentionDays: 20,
+          workspaceTempRetentionDays: 30,
+          cleanupBatchSize: 40,
+        },
       });
 
       expect(loadSchedulerSeedDefaults({ seedDir })).toEqual({
         tickIntervalMs: 60_000,
         heartbeatIntervalMs: 90_000,
         salienceDecayIntervalMs: 123_000,
+        artifactLifecycle: {
+          scratchpadRetentionDays: 10,
+          generatedMediaRetentionDays: 20,
+          workspaceTempRetentionDays: 30,
+          cleanupBatchSize: 40,
+        },
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

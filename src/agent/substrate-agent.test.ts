@@ -5176,6 +5176,42 @@ describe('SubstrateAgent steering + follow-up', () => {
     followUpSpy.mockRestore();
   });
 
+  it('followUp keeps system-originated guidance on the system note lane', () => {
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', makeConfig(),
+    );
+
+    const followUpSpy = vi.spyOn(Agent.prototype, 'followUp').mockImplementation(() => {});
+
+    agent.followUp(makeMessage({
+      authorId: 'system:runtime',
+      authorName: 'Runtime',
+      content: 'tool notify is unavailable; choose another route',
+    }));
+
+    expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+    expect(sessionManager.recordSystemMessage).toHaveBeenCalledWith(
+      'test-channel',
+      '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
+      'system:runtime',
+      'Runtime',
+      undefined,
+      undefined,
+      expect.objectContaining({
+        requestId: 'msg-1',
+        sourceMessageId: 'msg-1',
+      }),
+    );
+    expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'custom',
+      type: 'systemNote',
+      content: '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
+    }));
+
+    followUpSpy.mockRestore();
+  });
+
   it('routes intention appraisal follow-ups as internal whispers instead of persisted chat messages', () => {
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(

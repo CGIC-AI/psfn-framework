@@ -48,7 +48,11 @@ import {
   type SubstrateStreamRuntimeOptions,
 } from './stream-adapter.js';
 import { installAgentToolSchedulerPatch } from './agent-loop-patch.js';
-import { convertToLlm, type WhisperMessage } from './messages.js';
+import {
+  convertToLlm,
+  type SystemNoteMessage,
+  type WhisperMessage,
+} from './messages.js';
 import { WHISPER_WORKER_LANE } from './worker-lanes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../logger.js';
@@ -665,11 +669,20 @@ export class SubstrateAgent {
         authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey,
       );
     }
-    this.agent.followUp({
-      role: 'user',
-      content: systemContent,
-      timestamp: Date.now(),
-    } satisfies UserMessage);
+    if (isSystemOriginated) {
+      this.agent.followUp({
+        role: 'custom',
+        type: 'systemNote',
+        content: systemContent,
+        timestamp: Date.now(),
+      } satisfies SystemNoteMessage);
+    } else {
+      this.agent.followUp({
+        role: 'user',
+        content: systemContent,
+        timestamp: Date.now(),
+      } satisfies UserMessage);
+    }
     log.debug('Queued follow-up', {
       channelId: message.channelId,
       systemOriginated: isSystemOriginated,

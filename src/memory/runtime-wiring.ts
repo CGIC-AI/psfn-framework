@@ -1,5 +1,5 @@
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
-import type { MemoryStore } from './store.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import type { MemoryWriter } from './writer.js';
 import {
   createMemoryTool,
@@ -14,7 +14,7 @@ export function registerMemoryTools(
   target: MemoryRuntimeTarget,
   options: {
     writer: MemoryWriter;
-    memoryStore: MemoryStore;
+    memoryStore: MemoryStorePort;
   },
 ): void {
   target.registerTool(createMemoryTool(options.writer, options.memoryStore), 'core');

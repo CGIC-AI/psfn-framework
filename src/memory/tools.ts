@@ -4,7 +4,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
-import type { MemoryStore } from './store.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import type {
   MemoryType,
   SensitivityLevel,
@@ -439,7 +439,7 @@ export function createMemoryRedactTool(writer: MemoryWriter): AgentTool<any> {
   };
 }
 
-export function createMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<any> {
+export function createMemoryDeleteTool(memoryStore: MemoryStorePort): AgentTool<any> {
   return {
     name: 'memory_delete',
     description:
@@ -485,7 +485,7 @@ export function createMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<any>
   };
 }
 
-export function createUndoMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<any> {
+export function createUndoMemoryDeleteTool(memoryStore: MemoryStorePort): AgentTool<any> {
   return {
     name: 'undo_memory_delete',
     description:
@@ -525,7 +525,7 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStore): AgentTool<
 
 export function createMemoryTool(
   writer: MemoryWriter,
-  memoryStore: MemoryStore,
+  memoryStore: MemoryStorePort,
   options: MemoryWriteToolOptions = {},
 ): AgentTool<any> {
   return {
@@ -814,7 +814,7 @@ export function createMemoryTool(
 type ScratchpadToolAction = 'list' | 'add' | 'replace' | 'append' | 'remove';
 const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'add', 'replace', 'append', 'remove'];
 
-export function createScratchpadTool(memoryStore: MemoryStore): AgentTool<any> {
+export function createScratchpadTool(memoryStore: MemoryStorePort): AgentTool<any> {
   return {
     name: 'scratchpad',
     description:

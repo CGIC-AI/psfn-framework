@@ -6,7 +6,7 @@ import {
   getDefaultPromptText,
 } from '../../identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
-import type { MemoryStore } from '../store.js';
+import type { MemoryStorePort } from '../memory-store-port.js';
 import { computeProfileNovelty } from './signals.js';
 import type {
   AcceptedFactWrite,
@@ -37,7 +37,7 @@ type ProfileStoreView = {
 export interface RefreshContactProfileOptions {
   llmClient: LLMProvider;
   promptRegistry: PromptRegistryStore | null;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId: string;

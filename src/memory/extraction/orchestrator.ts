@@ -12,7 +12,7 @@ import {
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { classifyChannel } from '../../trust/policy.js';
 import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
-import type { MemoryStore } from '../store.js';
+import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
 import type { WriteResult } from '../writer.js';
 import { parseFactsXml } from './parser.js';
@@ -81,7 +81,7 @@ export interface ExtractionRunOptions {
   ) => ExtractionParticipantNames;
   llmClient: LLMProvider;
   sessionManager: SessionManager;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   promptRegistry: PromptRegistryStore | null;
   gateConfig: ExtractionGateConfig;
   maxWrites: number;

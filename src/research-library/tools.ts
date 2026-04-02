@@ -1,6 +1,6 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { MemoryStore } from '../memory/store.js';
+import type { MemoryStorePort } from '../memory/memory-store-port.js';
 import { withCapabilityRequirement } from '../capabilities/requirements.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../utils/errors.js';
@@ -75,7 +75,7 @@ function describeEntry(store: ResearchLibraryStore, id: string): string {
 
 export function createResearchLibraryTool(
   store: ResearchLibraryStore,
-  memoryStore: MemoryStore,
+  memoryStore: MemoryStorePort,
 ): AgentTool<any> {
   const tool: AgentTool<any> = {
     name: 'library',

@@ -1,5 +1,5 @@
 import type { ContactStore } from '../../../contacts/store.js';
-import type { MemoryStore } from '../../../memory/store.js';
+import type { MemoryStorePort } from '../../../memory/memory-store-port.js';
 import {
   CHANNEL_PRIVACY_LEVELS,
   CONTACT_MUTATION_AUDIT_FIELDS,
@@ -70,7 +70,7 @@ function isMentionOnlyContact(contact: Contact | undefined): boolean {
 export class AdminContactsDataService implements AdminContactsService {
   constructor(private readonly deps: {
     contactStore?: ContactStore | null;
-    memoryStore: MemoryStore;
+    memoryStore: MemoryStorePort;
     sessionStore: SessionStore;
   }) {}
 

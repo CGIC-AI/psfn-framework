@@ -4,7 +4,8 @@ import type {
   LLMProvider,
   RetrievalVADInput,
 } from '../agent/contracts.js';
-import type { ContactProfileArtifact, MemoryStore } from './store.js';
+import type { ContactProfileArtifact } from './store.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import type { PurrMemory, MemoryPrivacyRiskBreakdown, MemoryScopeQuery } from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
 import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../types.js';
@@ -359,7 +360,7 @@ type ProactiveRecallRuntimeConfig = SubstrateConfig & {
 };
 
 export class MemoryRetriever implements MemoryProvider {
-  private memoryStore: MemoryStore;
+  private memoryStore: MemoryStorePort;
   private embeddingService: EmbeddingService;
   private runtimeConfig: SubstrateConfig | null;
   private fallbackBudgetConfig: ContextBudgetConfigLike | null;
@@ -375,7 +376,7 @@ export class MemoryRetriever implements MemoryProvider {
   private lastProactiveRecallTurn: number;
 
   constructor(
-    memoryStore: MemoryStore,
+    memoryStore: MemoryStorePort,
     embeddingService: EmbeddingService,
     config?: MemoryRetrieverConfig | SubstrateConfig,
     eventBus?: EventBus,

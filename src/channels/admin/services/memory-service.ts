@@ -3,7 +3,8 @@ import type { EmbeddingService } from '../../../agent/contracts.js';
 import type { ContactStore } from '../../../contacts/store.js';
 import { DEFAULT_COMPANION_NAME } from '../../../identity/companion-naming.js';
 import { isInternalMemoryArtifact } from '../../../memory/internal-artifacts.js';
-import type { MemoryLink, MemoryStore } from '../../../memory/store.js';
+import type { MemoryLink } from '../../../memory/store.js';
+import type { MemoryStorePort } from '../../../memory/memory-store-port.js';
 import {
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
@@ -108,7 +109,7 @@ function compareMemoryRecency(
 
 export class AdminMemoryDataService implements AdminMemoryService {
   constructor(private readonly deps: {
-    memoryStore: MemoryStore;
+    memoryStore: MemoryStorePort;
     contactStore?: ContactStore | null;
     embeddingService?: EmbeddingService | null;
     resolveCompanionName?: () => string;
@@ -134,7 +135,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return map;
   }
 
-  private listManagedScopeMemories(): ReturnType<MemoryStore['getAllActiveMemories']> {
+  private listManagedScopeMemories(): ReturnType<MemoryStorePort['getAllActiveMemories']> {
     return this.deps.memoryStore
       .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN)
       .filter(memory => !isInternalMemoryArtifact(memory));

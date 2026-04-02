@@ -1,6 +1,6 @@
 // ── Admin GUI Types ──
 
-import type { MemoryStore } from '../../memory/store.js';
+import type { MemoryStorePort } from '../../memory/memory-store-port.js';
 import type { SessionStore } from '../../session/store.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';
@@ -45,7 +45,7 @@ export interface AdminServerConfig {
   apiBaseUrl?: string;
   apiHost?: string;
   apiPort?: number;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
   scheduler: Scheduler;

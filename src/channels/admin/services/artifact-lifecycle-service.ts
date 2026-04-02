@@ -1,6 +1,6 @@
 import { ArtifactLifecycleManager } from '../../../artifact-lifecycle/manager.js';
 import { loadSchedulerConfig } from '../../../config/scheduler-config.js';
-import type { MemoryStore } from '../../../memory/store.js';
+import type { MemoryStorePort } from '../../../memory/memory-store-port.js';
 import { ResearchLibraryStore } from '../../../research-library/store.js';
 import type { SubstrateConfig } from '../../../types.js';
 import type {
@@ -10,7 +10,7 @@ import type {
 export class AdminArtifactLifecycleDataService implements AdminArtifactLifecycleService {
   constructor(private readonly deps: {
     config: SubstrateConfig;
-    memoryStore: MemoryStore;
+    memoryStore: MemoryStorePort;
     companionDataDir: string;
     researchLibraryStore: ResearchLibraryStore;
   }) {}

@@ -9,7 +9,8 @@ import {
 import { join, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../logger.js';
 import type { ArtifactLifecyclePolicyConfig } from '../config/scheduler-config.js';
-import type { MemoryStore, ScratchpadEntry } from '../memory/store.js';
+import type { ScratchpadEntry } from '../memory/store.js';
+import type { MemoryStorePort } from '../memory/memory-store-port.js';
 import {
   resolveArtifactLifecycleAuditPath,
   resolveGeneratedImagesDir,
@@ -94,7 +95,7 @@ export class ArtifactLifecycleManager {
     companionDataDir: string;
     workspacePath?: string | null;
     policy: ArtifactLifecyclePolicyConfig;
-    memoryStore: MemoryStore;
+    memoryStore: MemoryStorePort;
     researchLibraryStore: ResearchLibraryStore;
   }) {
     this.companionDataDir = resolve(deps.companionDataDir);

@@ -24,7 +24,7 @@ import {
 } from '../agent/substrate-agent.js';
 import { MemoryRetriever } from '../memory/retrieval.js';
 import { MemoryExtractor } from '../memory/extraction.js';
-import type { MemoryStore } from '../memory/store.js';
+import type { MemoryStorePort } from '../memory/memory-store-port.js';
 import type { ContactStore } from '../contacts/store.js';
 import { ShardManager } from '../shards/manager.js';
 import { createShardTool } from '../shards/tools.js';
@@ -186,7 +186,7 @@ export interface MemoryRuntimeOptions {
   llmProvider: LLMProvider;
   sessionManager: SessionManager;
   sessionStore?: SessionStore | null;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   embeddingService: EmbeddingService;
   eventBus: EventBus;
   config?: SubstrateConfig;
@@ -257,7 +257,7 @@ export interface ToolRuntimeOptions {
   llmProvider: LLMProvider;
   sessionStore: SessionStore;
   embeddingService: EmbeddingService;
-  memoryStore: MemoryStore;
+  memoryStore: MemoryStorePort;
   sessionManager: SessionManager;
   config: SubstrateConfig;
   parentSystemPrompt: string;

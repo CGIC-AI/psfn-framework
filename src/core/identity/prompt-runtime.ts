@@ -697,6 +697,37 @@ export class PromptRuntimeLayoutStore {
     return this.getLayout();
   }
 
+  setEditableBlockContents(
+    blocks: Partial<Record<PromptRuntimeEditableBlockId, string>>,
+    updatedBy: string,
+  ): PromptRuntimeLayout {
+    const nextContent = { ...this.layout.editableBlockContent };
+    for (const [blockId, content] of Object.entries(blocks)) {
+      if (!isPromptRuntimeEditableBlockId(blockId)) {
+        throw new Error(`Prompt runtime block is not companion-editable: ${blockId}`);
+      }
+      if (typeof content !== 'string') {
+        throw new Error(`Prompt runtime block content must be a string: ${blockId}`);
+      }
+      const trimmed = content.trim();
+      if (trimmed.length > 0) {
+        nextContent[blockId] = trimmed;
+      } else {
+        delete nextContent[blockId];
+      }
+    }
+
+    this.layout = {
+      version: PROMPT_RUNTIME_LAYOUT_VERSION,
+      systemPromptBlockOrder: [...this.layout.systemPromptBlockOrder],
+      editableBlockContent: nextContent,
+      updatedAt: new Date().toISOString(),
+      updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
+    };
+    this.save();
+    return this.getLayout();
+  }
+
   private load(): void {
     if (!existsSync(this.filePath)) {
       this.layout = buildDefaultPromptRuntimeLayout();

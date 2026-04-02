@@ -190,6 +190,70 @@ export function isRequiredRuntimePromptLayer(identifier: string): boolean {
   return RUNTIME_PROMPT_LAYER_DEFINITION_MAP.get(identifier)?.schema.required ?? false;
 }
 
+export interface RuntimePromptLayerCoverageIssue {
+  identifier: string;
+  name: string;
+  reason: 'missing' | 'disabled' | 'empty';
+}
+
+export interface RuntimePromptLayerCoverageResult {
+  ok: boolean;
+  issues: RuntimePromptLayerCoverageIssue[];
+}
+
+export function validateRuntimePromptLayerCoverage(
+  layers: readonly Array<{
+    type: string;
+    identifier?: string | null;
+    content: string;
+    enabled: boolean;
+  }>,
+): RuntimePromptLayerCoverageResult {
+  const issues: RuntimePromptLayerCoverageIssue[] = [];
+
+  for (const definition of RUNTIME_PROMPT_LAYER_DEFINITIONS) {
+    if (!definition.schema.required) {
+      continue;
+    }
+
+    const existing = layers.find(layer => (
+      layer.type === 'runtime'
+      && layer.identifier === definition.identifier
+    ));
+
+    if (!existing) {
+      issues.push({
+        identifier: definition.identifier,
+        name: definition.name,
+        reason: 'missing',
+      });
+      continue;
+    }
+
+    if (!existing.enabled) {
+      issues.push({
+        identifier: definition.identifier,
+        name: definition.name,
+        reason: 'disabled',
+      });
+      continue;
+    }
+
+    if (existing.content.trim().length === 0) {
+      issues.push({
+        identifier: definition.identifier,
+        name: definition.name,
+        reason: 'empty',
+      });
+    }
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
+}
+
 export function composeDefaultRuntimePromptTemplate(): string {
   return RUNTIME_PROMPT_LAYER_DEFINITIONS
     .map(definition => definition.content.trim())

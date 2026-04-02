@@ -71,7 +71,7 @@ describe('ApiServer runtime seam', () => {
           checks: {
             database: { status: 'healthy' },
             gatewayLink: { status: 'healthy' },
-            schedulerHeartbeat: { status: 'healthy' },
+            schedulerHealthcheck: { status: 'healthy' },
           },
         },
       }),
@@ -135,7 +135,7 @@ describe('ApiServer runtime seam', () => {
           checks: {
             database: { status: 'healthy' },
             gatewayLink: { status: 'healthy' },
-            schedulerHeartbeat: { status: 'healthy' },
+            schedulerHealthcheck: { status: 'healthy' },
           },
         },
       }),

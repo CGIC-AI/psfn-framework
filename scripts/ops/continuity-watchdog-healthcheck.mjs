@@ -3,7 +3,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-const REQUIRED_CONTINUITY_CHECKS = ['database', 'gatewayLink', 'schedulerHeartbeat'];
+const REQUIRED_CONTINUITY_CHECKS = ['database', 'gatewayLink', 'schedulerHealthcheck'];
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_FAILURES = 5;
 const DEFAULT_STATE_FILE = '/tmp/psfn-continuity-watchdog-state.json';

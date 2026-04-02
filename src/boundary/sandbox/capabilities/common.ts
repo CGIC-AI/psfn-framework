@@ -10,7 +10,7 @@ export const TOOL_CALL_BUDGET_EXCEEDED_MESSAGE = '[Budget exceeded: max tool cal
 export const REPL_EVENT_ALLOWLIST: ReadonlySet<EventName> = new Set([
   'schedule.tick',
   'schedule.task.run',
-  'schedule.heartbeat',
+  'schedule.healthcheck',
 ]);
 
 export const VALID_TASK_STATES: ReadonlySet<TaskState> = new Set([

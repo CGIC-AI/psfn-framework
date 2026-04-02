@@ -54,31 +54,31 @@ function evaluateGatewayLinkHealth(
   };
 }
 
-function evaluateSchedulerHeartbeatHealth(
+function evaluateSchedulerHealthcheckHealth(
   schedulerSubsystem: ApiHealthSubsystemStatus,
   checkedAtMs: number,
   options: {
-    lastSchedulerHeartbeatAtMs: number | null;
-    schedulerHeartbeatStaleAfterMs: number;
+    lastSchedulerHealthcheckAtMs: number | null;
+    schedulerHealthcheckStaleAfterMs: number;
   },
 ): ApiHealthSubsystemStatus {
   const schedulerDetail = schedulerSubsystem.detail?.trim();
-  const heartbeatObservedAtMs = options.lastSchedulerHeartbeatAtMs;
+  const healthcheckObservedAtMs = options.lastSchedulerHealthcheckAtMs;
   const uptimeMs = Math.max(0, Math.floor(process.uptime() * 1_000));
-  const heartbeatAgeMs = heartbeatObservedAtMs === null
+  const healthcheckAgeMs = healthcheckObservedAtMs === null
     ? null
-    : Math.max(0, checkedAtMs - heartbeatObservedAtMs);
+    : Math.max(0, checkedAtMs - healthcheckObservedAtMs);
 
   const baseMeta: Record<string, unknown> = {
     ...(schedulerSubsystem.meta ?? {}),
     sourceSubsystem: 'scheduler',
-    schedulerHeartbeatStaleAfterMs: options.schedulerHeartbeatStaleAfterMs,
-    ...(heartbeatObservedAtMs === null
-      ? { heartbeatObserved: false }
+    schedulerHealthcheckStaleAfterMs: options.schedulerHealthcheckStaleAfterMs,
+    ...(healthcheckObservedAtMs === null
+      ? { healthcheckObserved: false }
       : {
-        heartbeatObserved: true,
-        schedulerHeartbeatAt: new Date(heartbeatObservedAtMs).toISOString(),
-        schedulerHeartbeatAgeMs: heartbeatAgeMs,
+        healthcheckObserved: true,
+        schedulerHealthcheckAt: new Date(healthcheckObservedAtMs).toISOString(),
+        schedulerHealthcheckAgeMs: healthcheckAgeMs,
       }),
   };
 
@@ -90,27 +90,30 @@ function evaluateSchedulerHeartbeatHealth(
     };
   }
 
-  if (heartbeatObservedAtMs === null) {
-    if (uptimeMs <= options.schedulerHeartbeatStaleAfterMs) {
+  if (healthcheckObservedAtMs === null) {
+    if (uptimeMs <= options.schedulerHealthcheckStaleAfterMs) {
       return {
         status: 'healthy',
         meta: {
           ...baseMeta,
-          schedulerHeartbeatGraceMsRemaining: Math.max(0, options.schedulerHeartbeatStaleAfterMs - uptimeMs),
+          schedulerHealthcheckGraceMsRemaining: Math.max(
+            0,
+            options.schedulerHealthcheckStaleAfterMs - uptimeMs,
+          ),
         },
       };
     }
     return {
       status: 'degraded',
-      detail: `No scheduler heartbeat observed within ${options.schedulerHeartbeatStaleAfterMs}ms`,
+      detail: `No scheduler healthcheck observed within ${options.schedulerHealthcheckStaleAfterMs}ms`,
       meta: baseMeta,
     };
   }
 
-  if (heartbeatAgeMs !== null && heartbeatAgeMs > options.schedulerHeartbeatStaleAfterMs) {
+  if (healthcheckAgeMs !== null && healthcheckAgeMs > options.schedulerHealthcheckStaleAfterMs) {
     return {
       status: 'degraded',
-      detail: `Scheduler heartbeat stale: ${heartbeatAgeMs}ms since last pulse (limit ${options.schedulerHeartbeatStaleAfterMs}ms)`,
+      detail: `Scheduler healthcheck stale: ${healthcheckAgeMs}ms since last pulse (limit ${options.schedulerHealthcheckStaleAfterMs}ms)`,
       meta: baseMeta,
     };
   }
@@ -164,8 +167,8 @@ function evaluateContinuityWatchdogHealth(
   subsystems: ApiHealthResponse['subsystems'],
   checkedAtMs: number,
   options: {
-    lastSchedulerHeartbeatAtMs: number | null;
-    schedulerHeartbeatStaleAfterMs: number;
+    lastSchedulerHealthcheckAtMs: number | null;
+    schedulerHealthcheckStaleAfterMs: number;
   },
 ): ApiHealthResponse['continuity'] {
   const checks: Record<ApiContinuityWatchdogCheck, ApiHealthSubsystemStatus> = {
@@ -175,7 +178,7 @@ function evaluateContinuityWatchdogHealth(
       'Database-backed memory subsystem is degraded',
     ),
     gatewayLink: evaluateGatewayLinkHealth(subsystems),
-    schedulerHeartbeat: evaluateSchedulerHeartbeatHealth(
+    schedulerHealthcheck: evaluateSchedulerHealthcheckHealth(
       subsystems.scheduler,
       checkedAtMs,
       options,
@@ -196,8 +199,8 @@ function evaluateContinuityWatchdogHealth(
 
 export async function buildApiHealthResponse(options: {
   healthChecks: ApiServerHealthChecks;
-  lastSchedulerHeartbeatAtMs: number | null;
-  schedulerHeartbeatStaleAfterMs: number;
+  lastSchedulerHealthcheckAtMs: number | null;
+  schedulerHealthcheckStaleAfterMs: number;
 }): Promise<{ statusCode: number; body: ApiHealthResponse }> {
   const subsystemEntries = await Promise.all(
     API_HEALTH_SUBSYSTEMS.map(async (subsystem) => {

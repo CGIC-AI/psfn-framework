@@ -327,7 +327,7 @@ export interface EventMap {
     missingTokens: string[];
     minimumTier?: string;
   } & EventCorrelationFields;
-  'schedule.heartbeat': { timestamp: number; taskCount: number };
+  'schedule.healthcheck': { timestamp: number; taskCount: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };

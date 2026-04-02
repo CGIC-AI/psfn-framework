@@ -45,7 +45,7 @@ import {
 } from './http-policy.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
-const DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS = 65 * 60_000;
+const DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS = 65 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google']);
 
@@ -99,7 +99,7 @@ export interface AgentApiBackendConfig {
   sessionManager: SessionManager;
   contactStore?: ContactStorePort;
   healthChecks?: ApiServerHealthChecks;
-  schedulerHeartbeatStaleAfterMs?: number;
+  schedulerHealthcheckStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   sensorIngest?: SensorIngestPort;
   onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
@@ -111,15 +111,15 @@ export class AgentApiBackend {
   private readonly sessionManager: SessionManager;
   private readonly contactStore: ContactStorePort | null;
   private readonly healthChecks: ApiServerHealthChecks;
-  private readonly schedulerHeartbeatStaleAfterMs: number;
+  private readonly schedulerHealthcheckStaleAfterMs: number;
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private readonly sensorIngest: SensorIngestPort;
   private readonly onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
   private readonly activeRequests = new Map<string, ActiveRequestState>();
-  private lastSchedulerHeartbeatAtMs: number | null = null;
-  private readonly unregisterSchedulerHeartbeat: () => void;
+  private lastSchedulerHealthcheckAtMs: number | null = null;
+  private readonly unregisterSchedulerHealthcheck: () => void;
 
   constructor(config: AgentApiBackendConfig) {
     this.agentLoop = config.agentLoop;
@@ -127,30 +127,30 @@ export class AgentApiBackend {
     this.sessionManager = config.sessionManager;
     this.contactStore = config.contactStore ?? null;
     this.healthChecks = config.healthChecks ?? {};
-    this.schedulerHeartbeatStaleAfterMs = this.parseSchedulerHeartbeatStaleAfterMs(
-      config.schedulerHeartbeatStaleAfterMs,
+    this.schedulerHealthcheckStaleAfterMs = this.parseSchedulerHealthcheckStaleAfterMs(
+      config.schedulerHealthcheckStaleAfterMs,
     );
     this.externalChannelProfiles = config.externalChannelProfiles ?? {};
     this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(config.eventBus);
     this.onStreamDelta = config.onStreamDelta;
-    this.unregisterSchedulerHeartbeat = this.eventBus.on('schedule.heartbeat', ({ timestamp }) => {
+    this.unregisterSchedulerHealthcheck = this.eventBus.on('schedule.healthcheck', ({ timestamp }) => {
       if (Number.isFinite(timestamp) && timestamp > 0) {
-        this.lastSchedulerHeartbeatAtMs = Math.floor(timestamp);
+        this.lastSchedulerHealthcheckAtMs = Math.floor(timestamp);
       } else {
-        this.lastSchedulerHeartbeatAtMs = Date.now();
+        this.lastSchedulerHealthcheckAtMs = Date.now();
       }
     });
   }
 
   dispose(): void {
-    this.unregisterSchedulerHeartbeat();
+    this.unregisterSchedulerHealthcheck();
   }
 
   async handleHealth(): Promise<ApiHealthRpcResult> {
     return await buildApiHealthResponse({
       healthChecks: this.healthChecks,
-      lastSchedulerHeartbeatAtMs: this.lastSchedulerHeartbeatAtMs,
-      schedulerHeartbeatStaleAfterMs: this.schedulerHeartbeatStaleAfterMs,
+      lastSchedulerHealthcheckAtMs: this.lastSchedulerHealthcheckAtMs,
+      schedulerHealthcheckStaleAfterMs: this.schedulerHealthcheckStaleAfterMs,
     });
   }
 
@@ -287,11 +287,11 @@ export class AgentApiBackend {
     };
   }
 
-  private parseSchedulerHeartbeatStaleAfterMs(value: number | undefined): number {
+  private parseSchedulerHealthcheckStaleAfterMs(value: number | undefined): number {
     if (value !== undefined && Number.isFinite(value) && value >= 1_000) {
       return Math.floor(value);
     }
-    return DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
+    return DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS;
   }
 
   private attachTurnCleanup(releaseChannel: () => void, turnPromise: Promise<unknown>): void {

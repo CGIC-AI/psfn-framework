@@ -87,7 +87,7 @@ import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runt
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 90_000;
-const DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS = 65 * 60_000;
+const DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS = 65 * 60_000;
 const TELEMETRY_MAX_SKEW_MS = 5 * 60_000;
 const TELEMETRY_NONCE_TTL_MS = 10 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
@@ -186,7 +186,7 @@ export interface ApiServerConfig {
   allowInsecureWithoutAuth?: boolean;
   corsAllowedOrigins?: string[];
   healthChecks?: ApiServerHealthChecks;
-  schedulerHeartbeatStaleAfterMs?: number;
+  schedulerHealthcheckStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   sensorIngest?: SensorIngestPort;
 }
@@ -231,10 +231,10 @@ export class ApiServer implements ChannelAdapterPort {
   private processingChannels = new Set<string>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
-  private schedulerHeartbeatStaleAfterMs: number;
+  private schedulerHealthcheckStaleAfterMs: number;
   private externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
-  private lastSchedulerHeartbeatAtMs: number | null = null;
-  private unregisterSchedulerHeartbeat: (() => void) | null = null;
+  private lastSchedulerHealthcheckAtMs: number | null = null;
+  private unregisterSchedulerHealthcheck: (() => void) | null = null;
 
   constructor(config: ApiServerConfig) {
     this.port = config.port;
@@ -252,15 +252,15 @@ export class ApiServer implements ChannelAdapterPort {
     this.modelName = config.modelName ?? resolveCompanionIdFromConfig(config);
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
-    this.schedulerHeartbeatStaleAfterMs = this.parseSchedulerHeartbeatStaleAfterMs(
-      config.schedulerHeartbeatStaleAfterMs,
+    this.schedulerHealthcheckStaleAfterMs = this.parseSchedulerHealthcheckStaleAfterMs(
+      config.schedulerHealthcheckStaleAfterMs,
     );
     this.externalChannelProfiles = config.externalChannelProfiles ?? {};
-    this.unregisterSchedulerHeartbeat = this.eventBus.on('schedule.heartbeat', ({ timestamp }) => {
+    this.unregisterSchedulerHealthcheck = this.eventBus.on('schedule.healthcheck', ({ timestamp }) => {
       if (Number.isFinite(timestamp) && timestamp > 0) {
-        this.lastSchedulerHeartbeatAtMs = Math.floor(timestamp);
+        this.lastSchedulerHealthcheckAtMs = Math.floor(timestamp);
       } else {
-        this.lastSchedulerHeartbeatAtMs = Date.now();
+        this.lastSchedulerHealthcheckAtMs = Date.now();
       }
     });
     this.voiceWebSocket = new ApiVoiceWebSocketAdapter({
@@ -346,8 +346,8 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   async stop(): Promise<void> {
-    this.unregisterSchedulerHeartbeat?.();
-    this.unregisterSchedulerHeartbeat = null;
+    this.unregisterSchedulerHealthcheck?.();
+    this.unregisterSchedulerHealthcheck = null;
     await this.voiceWebSocket.stop();
     return new Promise((resolve, reject) => {
       this.server.close((err) => {
@@ -372,12 +372,12 @@ export class ApiServer implements ChannelAdapterPort {
     return Math.floor(value);
   }
 
-  private parseSchedulerHeartbeatStaleAfterMs(value: number | undefined): number {
+  private parseSchedulerHealthcheckStaleAfterMs(value: number | undefined): number {
     if (value !== undefined && Number.isFinite(value) && value >= 1_000) {
       return Math.floor(value);
     }
 
-    const envValue = process.env.API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
+    const envValue = process.env.API_HEALTH_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS;
     if (envValue) {
       const parsed = Number.parseInt(envValue, 10);
       if (Number.isFinite(parsed) && parsed >= 1_000) {
@@ -385,7 +385,7 @@ export class ApiServer implements ChannelAdapterPort {
       }
     }
 
-    return DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
+    return DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS;
   }
 
   private applyCorsPolicy(req: IncomingMessage, res: ServerResponse): boolean {
@@ -753,7 +753,7 @@ export class ApiServer implements ChannelAdapterPort {
         'Database-backed memory subsystem is degraded',
       ),
       gatewayLink: this.evaluateGatewayLinkHealth(subsystems),
-      schedulerHeartbeat: this.evaluateSchedulerHeartbeatHealth(subsystems.scheduler, checkedAtMs),
+      schedulerHealthcheck: this.evaluateSchedulerHealthcheckHealth(subsystems.scheduler, checkedAtMs),
     };
 
     const status: ApiHealthResponse['continuity']['status'] = API_CONTINUITY_WATCHDOG_CHECKS.every(
@@ -816,27 +816,27 @@ export class ApiServer implements ChannelAdapterPort {
     };
   }
 
-  private evaluateSchedulerHeartbeatHealth(
+  private evaluateSchedulerHealthcheckHealth(
     schedulerSubsystem: ApiHealthSubsystemStatus,
     checkedAtMs: number,
   ): ApiHealthSubsystemStatus {
     const schedulerDetail = schedulerSubsystem.detail?.trim();
-    const heartbeatObservedAtMs = this.lastSchedulerHeartbeatAtMs;
+    const healthcheckObservedAtMs = this.lastSchedulerHealthcheckAtMs;
     const uptimeMs = Math.max(0, Math.floor(process.uptime() * 1_000));
-    const heartbeatAgeMs = heartbeatObservedAtMs === null
+    const healthcheckAgeMs = healthcheckObservedAtMs === null
       ? null
-      : Math.max(0, checkedAtMs - heartbeatObservedAtMs);
+      : Math.max(0, checkedAtMs - healthcheckObservedAtMs);
 
     const baseMeta: Record<string, unknown> = {
       ...(schedulerSubsystem.meta ?? {}),
       sourceSubsystem: 'scheduler',
-      schedulerHeartbeatStaleAfterMs: this.schedulerHeartbeatStaleAfterMs,
-      ...(heartbeatObservedAtMs === null
-        ? { heartbeatObserved: false }
+      schedulerHealthcheckStaleAfterMs: this.schedulerHealthcheckStaleAfterMs,
+      ...(healthcheckObservedAtMs === null
+        ? { healthcheckObserved: false }
         : {
-          heartbeatObserved: true,
-          schedulerHeartbeatAt: new Date(heartbeatObservedAtMs).toISOString(),
-          schedulerHeartbeatAgeMs: heartbeatAgeMs,
+          healthcheckObserved: true,
+          schedulerHealthcheckAt: new Date(healthcheckObservedAtMs).toISOString(),
+          schedulerHealthcheckAgeMs: healthcheckAgeMs,
         }),
     };
 
@@ -848,30 +848,30 @@ export class ApiServer implements ChannelAdapterPort {
       };
     }
 
-    if (heartbeatObservedAtMs === null) {
-      if (uptimeMs <= this.schedulerHeartbeatStaleAfterMs) {
+    if (healthcheckObservedAtMs === null) {
+      if (uptimeMs <= this.schedulerHealthcheckStaleAfterMs) {
         return {
           status: 'healthy',
           meta: {
             ...baseMeta,
-            schedulerHeartbeatGraceMsRemaining: Math.max(
+            schedulerHealthcheckGraceMsRemaining: Math.max(
               0,
-              this.schedulerHeartbeatStaleAfterMs - uptimeMs,
+              this.schedulerHealthcheckStaleAfterMs - uptimeMs,
             ),
           },
         };
       }
       return {
         status: 'degraded',
-        detail: `No scheduler heartbeat observed within ${this.schedulerHeartbeatStaleAfterMs}ms`,
+        detail: `No scheduler healthcheck observed within ${this.schedulerHealthcheckStaleAfterMs}ms`,
         meta: baseMeta,
       };
     }
 
-    if (heartbeatAgeMs !== null && heartbeatAgeMs > this.schedulerHeartbeatStaleAfterMs) {
+    if (healthcheckAgeMs !== null && healthcheckAgeMs > this.schedulerHealthcheckStaleAfterMs) {
       return {
         status: 'degraded',
-        detail: `Scheduler heartbeat stale: ${heartbeatAgeMs}ms since last pulse (limit ${this.schedulerHeartbeatStaleAfterMs}ms)`,
+        detail: `Scheduler healthcheck stale: ${healthcheckAgeMs}ms since last pulse (limit ${this.schedulerHealthcheckStaleAfterMs}ms)`,
         meta: baseMeta,
       };
     }

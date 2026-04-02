@@ -97,7 +97,7 @@ export const API_HEALTH_SUBSYSTEMS = [
 export const API_CONTINUITY_WATCHDOG_CHECKS = [
   'database',
   'gatewayLink',
-  'schedulerHeartbeat',
+  'schedulerHealthcheck',
 ] as const;
 
 export type ApiHealthState = 'healthy' | 'degraded';

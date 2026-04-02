@@ -1068,7 +1068,7 @@ describe('REPLSandbox', () => {
   it('event_emit enforces allowlist', async () => {
     const eventBus = new EventBus();
     const seen: Array<{ timestamp: number; taskCount: number }> = [];
-    eventBus.on('schedule.heartbeat', payload => { seen.push(payload); });
+    eventBus.on('schedule.healthcheck', payload => { seen.push(payload); });
 
     const sandbox = new REPLSandbox({
       ...nullDeps(),
@@ -1077,7 +1077,7 @@ describe('REPLSandbox', () => {
     });
 
     const allowed = await sandbox.execute(
-      'const ok = await event_emit("schedule.heartbeat", { timestamp: 1, taskCount: 2 }); print(ok.ok);',
+      'const ok = await event_emit("schedule.healthcheck", { timestamp: 1, taskCount: 2 }); print(ok.ok);',
       5000,
       8192,
     );
@@ -1100,7 +1100,7 @@ describe('REPLSandbox', () => {
       eventBus: null,
     });
     const result = await sandbox.execute(
-      'const emitted = await event_emit("schedule.heartbeat", { timestamp: 1, taskCount: 1 }); print(emitted.ok); print(emitted.error);',
+      'const emitted = await event_emit("schedule.healthcheck", { timestamp: 1, taskCount: 1 }); print(emitted.ok); print(emitted.error);',
       5000,
       8192,
     );

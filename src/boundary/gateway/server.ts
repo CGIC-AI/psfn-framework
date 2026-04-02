@@ -43,7 +43,7 @@ import { evaluatePolicy } from './policy.js';
 import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
 
 const log = createComponentLogger('Gateway');
-const DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS = 90_000;
+const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
 const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
 const FRAME_PREVIEW_LIMIT = 200;
 export { evaluatePolicy };
@@ -58,9 +58,9 @@ interface GatewayConnectionStatus {
   stateReason: string;
   health: GatewayConnectionHealth;
   connectedAt: number;
-  lastHeartbeatAt: number;
+  lastHealthcheckAt: number;
   lastTransitionAt: number;
-  heartbeatStaleAfterMs: number;
+  healthcheckStaleAfterMs: number;
   failureReason?: string;
 }
 
@@ -230,9 +230,9 @@ export class GatewayServer {
         stateReason: 'connection_opened',
         health: 'healthy',
         connectedAt: Date.now(),
-        lastHeartbeatAt: Date.now(),
+        lastHealthcheckAt: Date.now(),
         lastTransitionAt: Date.now(),
-        heartbeatStaleAfterMs: DEFAULT_CONNECTION_HEARTBEAT_STALE_AFTER_MS,
+        healthcheckStaleAfterMs: DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS,
       });
       this.appendConnectionTransition(conn, 'none', 'registering', 'connection_opened');
 
@@ -253,7 +253,7 @@ export class GatewayServer {
         if (!this.connections.has(conn)) {
           return;
         }
-        this.touchConnectionHeartbeat(conn);
+        this.touchConnectionHealthcheck(conn);
         this.transitionConnectionState(conn, 'ready', 'rpc_message_received');
         const validationError = validateJsonRpcFrame(message);
         if (validationError) {
@@ -407,24 +407,24 @@ export class GatewayServer {
         continue;
       }
 
-      const staleForMs = now - status.lastHeartbeatAt;
-      if (staleForMs <= status.heartbeatStaleAfterMs) {
+      const staleForMs = now - status.lastHealthcheckAt;
+      if (staleForMs <= status.healthcheckStaleAfterMs) {
         continue;
       }
 
-      const reason = `No heartbeat observed for ${staleForMs}ms (limit ${status.heartbeatStaleAfterMs}ms).`;
-      this.transitionConnectionState(conn, 'degraded', 'heartbeat_stale', reason);
+      const reason = `No healthcheck observed for ${staleForMs}ms (limit ${status.healthcheckStaleAfterMs}ms).`;
+      this.transitionConnectionState(conn, 'degraded', 'healthcheck_stale', reason);
     }
   }
 
-  private touchConnectionHeartbeat(conn: NdjsonConnection): void {
+  private touchConnectionHealthcheck(conn: NdjsonConnection): void {
     const status = this.connectionStatuses.get(conn);
     if (!status || status.state === 'offline') {
       return;
     }
-    status.lastHeartbeatAt = Date.now();
-    if (status.state === 'degraded' && status.stateReason === 'heartbeat_stale') {
-      this.transitionConnectionState(conn, 'ready', 'heartbeat_recovered');
+    status.lastHealthcheckAt = Date.now();
+    if (status.state === 'degraded' && status.stateReason === 'healthcheck_stale') {
+      this.transitionConnectionState(conn, 'ready', 'healthcheck_recovered');
     }
   }
 
@@ -459,7 +459,7 @@ export class GatewayServer {
       status.health = 'healthy';
       delete status.failureReason;
     } else if (nextState === 'degraded') {
-      status.health = reason === 'heartbeat_stale' ? 'stale' : 'failed';
+      status.health = reason === 'healthcheck_stale' ? 'stale' : 'failed';
       if (failureReason) {
         status.failureReason = failureReason;
       }

@@ -90,7 +90,7 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
     '- `schedule_update(id, updates)` — Update a task\'s interval/state/name/runAt',
     '',
     '### Events',
-    '- `await event_emit(eventName, data)` — Emit an allowlisted event (`schedule.tick`, `schedule.task.run`, `schedule.heartbeat`)',
+    '- `await event_emit(eventName, data)` — Emit an allowlisted event (`schedule.tick`, `schedule.task.run`, `schedule.healthcheck`)',
     '',
     '### Modules',
     '- `await module_list()` — List installed modules (metadata + enabled state)',

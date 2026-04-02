@@ -1018,12 +1018,12 @@ describe('GatewayServer', () => {
       const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
       const status = statuses.get(mockConn.conn);
       expect(status).toBeDefined();
-      status.lastHeartbeatAt = Date.now() - status.heartbeatStaleAfterMs - 5;
+      status.lastHealthcheckAt = Date.now() - status.healthcheckStaleAfterMs - 5;
 
       await expect(server.requestAgent('test', {})).rejects.toThrow('No ready agent connected');
       expect(status.state).toBe('degraded');
       expect(status.health).toBe('stale');
-      expect(status.stateReason).toBe('heartbeat_stale');
+      expect(status.stateReason).toBe('healthcheck_stale');
     });
 
     it('fails closed and audits malformed JSON-RPC frames', async () => {

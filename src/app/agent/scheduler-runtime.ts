@@ -120,7 +120,7 @@ export function buildAgentSchedulerRuntime(
 
   scheduler.registerHeartbeat(async () => {
     const now = Date.now();
-    await options.eventBus.emit('schedule.heartbeat', {
+    await options.eventBus.emit('schedule.healthcheck', {
       timestamp: now,
       taskCount: scheduler.taskCount,
     });

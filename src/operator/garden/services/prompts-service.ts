@@ -6,13 +6,19 @@ import {
   PROMPT_LAYER_ROLES,
   type CompanionValuesLayerSnapshot,
   type LayerType,
+  type PromptLayer,
   type PromptLayerRole,
 } from '../../../core/identity/prompt-types.js';
+import {
+  validateRuntimePromptLayerCoverage,
+} from '../../../core/identity/runtime-prompt-layers.js';
 import {
   getPromptRuntimeBlockDefinition,
   getPromptRuntimeBlockDefinitions,
   isPromptRuntimeBlockCompanionEditable,
   PromptRuntimeLayoutStore,
+  validatePromptRuntimeEditableBlockContents,
+  type PromptRuntimeBlockId,
   type PromptRuntimeEditableBlockId,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../../core/identity/prompt-runtime.js';
@@ -223,6 +229,92 @@ export class AdminPromptsDataService implements AdminPromptsService {
     return { metadata };
   }
 
+  private buildRuntimePromptLayerValidationMessage(
+    layers: readonly Pick<PromptLayer, 'type' | 'identifier' | 'content' | 'enabled'>[],
+  ): string | null {
+    const validation = validateRuntimePromptLayerCoverage(layers);
+    if (validation.ok) {
+      return null;
+    }
+
+    const formatIssue = (
+      issue: { identifier: string; name: string },
+    ): string => `${issue.identifier} (${issue.name})`;
+    const missing = validation.issues
+      .filter(issue => issue.reason === 'missing')
+      .map(formatIssue);
+    const invalid = validation.issues
+      .filter(issue => issue.reason !== 'missing')
+      .map(formatIssue);
+    const parts: string[] = [];
+
+    if (missing.length > 0) {
+      parts.push(
+        `missing required runtime prompt block${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`,
+      );
+    }
+    if (invalid.length > 0) {
+      parts.push(
+        `invalid required runtime prompt block${invalid.length === 1 ? '' : 's'}: ${invalid.join(', ')} (required runtime prompt blocks must stay enabled with non-empty content)`,
+      );
+    }
+
+    return `Cannot save runtime prompt changes: ${parts.join('; ')}`;
+  }
+
+  private buildRuntimePromptBlockEditabilityMessage(blockId: string): string {
+    const definition = getPromptRuntimeBlockDefinition(blockId as PromptRuntimeBlockId);
+    if (!definition) {
+      return `Unknown runtime block "${blockId}"`;
+    }
+    if (definition.schema.providerManaged) {
+      return `block "${definition.id}" (${definition.label}) is provider-managed and cannot be edited`;
+    }
+    if (definition.schema.immutable) {
+      return `block "${definition.id}" (${definition.label}) is immutable and cannot be edited`;
+    }
+    return `block "${definition.id}" (${definition.label}) is not companion-editable`;
+  }
+
+  private buildRuntimePromptBlockValidationMessage(
+    blocks: Partial<Record<PromptRuntimeEditableBlockId, string>>,
+  ): string | null {
+    const validation = validatePromptRuntimeEditableBlockContents(blocks);
+    if (validation.ok) {
+      return null;
+    }
+
+    const formatIssue = (
+      issue: { id: PromptRuntimeEditableBlockId; label: string },
+    ): string => `${issue.id} (${issue.label})`;
+    const missing = validation.issues
+      .filter(issue => issue.reason === 'missing')
+      .map(formatIssue);
+    const blank = validation.issues
+      .filter(issue => issue.reason === 'empty')
+      .map(formatIssue);
+    const parts: string[] = [];
+
+    if (missing.length > 0) {
+      parts.push(
+        `missing required companion-editable runtime block${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`,
+      );
+    }
+    if (blank.length > 0) {
+      parts.push(
+        `blank required companion-editable runtime block${blank.length === 1 ? '' : 's'}: ${blank.join(', ')}`,
+      );
+    }
+
+    return `Cannot save runtime prompt changes: ${parts.join('; ')}`;
+  }
+
+  private replacePromptLayerPreview(
+    nextLayer: Pick<PromptLayer, 'id' | 'type' | 'identifier' | 'content' | 'enabled'>,
+  ): Array<Pick<PromptLayer, 'id' | 'type' | 'identifier' | 'content' | 'enabled'>> {
+    return this.deps.promptStore.getAll().map(layer => layer.id === nextLayer.id ? nextLayer : layer);
+  }
+
   private getPromptRegistry(): PromptRegistryStatePort {
     const registry = this.deps.promptRegistry;
     if (!registry) {
@@ -308,6 +400,9 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
 
     const updated: PromptRuntimeEditableBlockId[] = [];
+    const nextContent: Partial<Record<PromptRuntimeEditableBlockId, string>> = {};
+    const mergedContent = promptRuntimeLayoutStore.getEditableBlockContentMap();
+    const seen = new Set<PromptRuntimeEditableBlockId>();
     for (const entry of parsedBlocks) {
       if (!entry || typeof entry !== 'object') {
         return { ok: false, message: 'blocks entries must be objects' };
@@ -319,16 +414,48 @@ export class AdminPromptsDataService implements AdminPromptsService {
       if (typeof block.content !== 'string') {
         return { ok: false, message: `block "${block.id}" content must be a string` };
       }
-      const definition = getPromptRuntimeBlockDefinition(block.id as PromptRuntimeEditableBlockId);
+      const definition = getPromptRuntimeBlockDefinition(block.id as PromptRuntimeBlockId);
       if (!definition || !isPromptRuntimeBlockCompanionEditable(definition)) {
-        return { ok: false, message: `block "${block.id}" is not companion-editable` };
+        return { ok: false, message: this.buildRuntimePromptBlockEditabilityMessage(block.id) };
       }
-      promptRuntimeLayoutStore.setEditableBlockContent(
-        definition.id as PromptRuntimeEditableBlockId,
-        block.content,
-        'admin',
-      );
-      updated.push(definition.id as PromptRuntimeEditableBlockId);
+
+      const editableId = definition.id as PromptRuntimeEditableBlockId;
+      if (seen.has(editableId)) {
+        return { ok: false, message: `duplicate runtime block id: ${editableId}` };
+      }
+
+      const trimmedContent = block.content.trim();
+      if (definition.schema.required && trimmedContent.length === 0) {
+        return {
+          ok: false,
+          message: `block "${editableId}" (${definition.label}) is required and cannot be blank`,
+        };
+      }
+
+      seen.add(editableId);
+      nextContent[editableId] = block.content;
+      if (trimmedContent.length > 0) {
+        mergedContent[editableId] = trimmedContent;
+      } else {
+        delete mergedContent[editableId];
+      }
+      updated.push(editableId);
+    }
+
+    const validationMessage = this.buildRuntimePromptBlockValidationMessage(mergedContent);
+    if (validationMessage) {
+      return { ok: false, message: validationMessage };
+    }
+
+    try {
+      if (updated.length > 0) {
+        promptRuntimeLayoutStore.setEditableBlockContents(nextContent, 'admin');
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        message: String(error),
+      };
     }
 
     if (updated.length > 0) {
@@ -1051,15 +1178,32 @@ export class AdminPromptsDataService implements AdminPromptsService {
     }
 
     const priority = parseInt(params.get('priority') ?? '0', 10);
+    const normalizedPriority = Number.isFinite(priority) ? priority : 0;
     const channelType = params.get('channelType')?.trim() || undefined;
     const taskKind = params.get('taskKind')?.trim() || undefined;
+
+    if (type === 'runtime') {
+      const validationMessage = this.buildRuntimePromptLayerValidationMessage([
+        ...this.deps.promptStore.getAll(),
+        {
+          id: 'preview:runtime-layer',
+          type,
+          identifier: resolvedMetadata.metadata.identifier,
+          content,
+          enabled: true,
+        },
+      ]);
+      if (validationMessage) {
+        return { ok: false, message: validationMessage };
+      }
+    }
 
     try {
       const layer = this.deps.promptStore.create({
         type,
         name,
         content,
-        priority: Number.isFinite(priority) ? priority : 0,
+        priority: normalizedPriority,
         channelType,
         taskKind,
         identifier: resolvedMetadata.metadata.identifier,
@@ -1130,8 +1274,27 @@ export class AdminPromptsDataService implements AdminPromptsService {
     const hasContent = resolved.content !== undefined;
     const hasName = Boolean(name);
     const hasPriority = resolvedPriority.priority !== undefined;
+    const hasIdentifier = Object.prototype.hasOwnProperty.call(resolvedMetadata.metadata, 'identifier');
     if (!hasName && !hasContent && !hasMetadata && !hasPriority) {
       return { ok: false, message: 'No prompt update fields provided' };
+    }
+
+    const existingLayer = this.deps.promptStore.getById(layerId);
+    if (!existingLayer) {
+      return { ok: false, message: `Prompt layer not found: ${layerId}` };
+    }
+
+    if (existingLayer.type === 'runtime') {
+      const validationMessage = this.buildRuntimePromptLayerValidationMessage(this.replacePromptLayerPreview({
+        id: existingLayer.id,
+        type: existingLayer.type,
+        identifier: hasIdentifier ? resolvedMetadata.metadata.identifier : existingLayer.identifier,
+        content: hasContent ? (resolved.content ?? '') : existingLayer.content,
+        enabled: existingLayer.enabled,
+      }));
+      if (validationMessage) {
+        return { ok: false, message: validationMessage };
+      }
     }
 
     const patch: PromptLayerUpdatePatch = {};
@@ -1291,6 +1454,24 @@ export class AdminPromptsDataService implements AdminPromptsService {
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
 
+    const existingLayer = this.deps.promptStore.getById(layerId);
+    if (!existingLayer) {
+      return { ok: false, message: `Prompt layer not found: ${layerId}` };
+    }
+
+    if (existingLayer.type === 'runtime') {
+      const validationMessage = this.buildRuntimePromptLayerValidationMessage(this.replacePromptLayerPreview({
+        id: existingLayer.id,
+        type: existingLayer.type,
+        identifier: existingLayer.identifier,
+        content: existingLayer.content,
+        enabled: !existingLayer.enabled,
+      }));
+      if (validationMessage) {
+        return { ok: false, message: validationMessage };
+      }
+    }
+
     try {
       this.deps.promptStore.toggle(layerId);
       const toggledLayer = this.deps.promptStore.getById(layerId);
@@ -1311,6 +1492,31 @@ export class AdminPromptsDataService implements AdminPromptsService {
     const params = this.parseBody(body);
     const layerId = params.get('layerId') ?? '';
     const version = parseInt(params.get('version') ?? '0', 10);
+
+    const existingLayer = this.deps.promptStore.getById(layerId);
+    if (!existingLayer) {
+      return { ok: false, message: `Prompt layer not found: ${layerId}` };
+    }
+
+    if (existingLayer.type === 'runtime') {
+      const historyEntry = this.deps.promptStore.getLayerHistory(layerId)
+        .find(entry => entry.version === version);
+      if (!historyEntry) {
+        return { ok: false, message: `No history entry for layer ${layerId} version ${version}` };
+      }
+
+      const validationMessage = this.buildRuntimePromptLayerValidationMessage(this.replacePromptLayerPreview({
+        id: existingLayer.id,
+        type: existingLayer.type,
+        identifier: existingLayer.identifier,
+        content: historyEntry.previousContent,
+        enabled: existingLayer.enabled,
+      }));
+      if (validationMessage) {
+        return { ok: false, message: validationMessage };
+      }
+    }
+
     try {
       const rolledBackLayer = this.deps.promptStore.rollback(layerId, version);
       this.injectPromptEditSystemNote(

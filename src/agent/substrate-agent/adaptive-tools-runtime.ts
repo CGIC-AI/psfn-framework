@@ -12,6 +12,7 @@ import type {
   CorrelationMetadata,
   SubstrateMessage,
 } from '../../types.js';
+import type { RuntimeServiceHealthStatus } from '../../tool-health/types.js';
 import { toErrorMessage } from '../../utils/errors.js';
 import type {
   AdaptiveToolActivationSource,
@@ -57,6 +58,7 @@ export interface ToolSearchResultEntry {
   scope: 'extended';
   turnClass: ExtendedToolTurnClass;
   status: 'active' | 'available' | 'background_only';
+  healthStatus?: RuntimeServiceHealthStatus;
   activationHint: string;
 }
 
@@ -134,8 +136,36 @@ function buildToolSearchActivationHint(status: ToolSearchResultEntry['status']):
   return 'Use toolset with action="activate" to activate this tool when you need it.';
 }
 
+export function resolveToolHealthMarker(
+  status: RuntimeServiceHealthStatus | undefined,
+): 'o' | '!' | 'x' | null {
+  switch (status) {
+    case 'healthy':
+      return 'o';
+    case 'degraded':
+      return '!';
+    case 'unavailable':
+    case 'not_applicable':
+      return 'x';
+    default:
+      return null;
+  }
+}
+
+export function formatToolNameWithHealth(
+  name: string,
+  status: RuntimeServiceHealthStatus | undefined,
+): string {
+  const marker = resolveToolHealthMarker(status);
+  return marker ? `${name} (${marker})` : name;
+}
+
+export function formatToolHealthLegend(): string {
+  return 'Health markers: o=healthy, !=degraded, x=unavailable.';
+}
+
 function formatToolSearchLine(entry: ToolSearchResultEntry): string {
-  return `- ${entry.name} [${entry.status}, ${entry.turnClass}] - ${entry.description} ${entry.activationHint}`;
+  return `- ${formatToolNameWithHealth(entry.name, entry.healthStatus)} [${entry.status}, ${entry.turnClass}] - ${entry.description} ${entry.activationHint}`;
 }
 
 export function activateExtendedToolsForTurn(params: ActivateExtendedToolsParams): ExtendedToolActivationResult {
@@ -626,6 +656,7 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
 interface SearchToolsToolRuntime {
   getExtendedTools: () => readonly AgentTool<any>[];
   getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
+  getToolHealthStatusByName: () => ReadonlyMap<string, RuntimeServiceHealthStatus>;
   classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
 }
@@ -661,6 +692,7 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool
         ? Math.max(1, Math.min(20, Math.floor(executeParams.limit ?? 0)))
         : 8;
       const runtimeState = runtime.getAdaptiveToolRuntimeState();
+      const toolHealthStatusByName = runtime.getToolHealthStatusByName();
       const extendedTools = [...runtime.getExtendedTools()];
       const rankedMatches = extendedTools
         .map((tool) => {
@@ -700,6 +732,7 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool
           scope: 'extended' as const,
           turnClass: entry.turnClass,
           status: entry.status,
+          healthStatus: toolHealthStatusByName.get(entry.tool.name),
           activationHint: buildToolSearchActivationHint(entry.status),
         }));
 

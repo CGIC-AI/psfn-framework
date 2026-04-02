@@ -176,6 +176,7 @@ export interface TurnExecutionRuntime {
     subjectIdentityKey: string | undefined,
     now: Date,
   ) => Record<string, string>;
+  refreshToolHealthStatusByName: () => Promise<void>;
   setCurrentSelfModelState: (
     state: InternalState,
     snapshotRef: string,
@@ -597,6 +598,7 @@ export async function handleMessageForTurn(
       preTurnInternalStateSnapshotRef,
       preTurnMetacognitiveFlags,
     );
+    await runtime.refreshToolHealthStatusByName();
     const runtimeContext = runtime.buildRuntimeContext(
       message,
       authorContext.resolvedUserName,

@@ -18,14 +18,14 @@ import type { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import type { LifecycleRestartSafeguard, ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { ApiServer } from '../../channels/api/server.js';
-import type { AdminServer } from '../../operator/garden/server.js';
+import type { Lifecycle } from '../../shared/contracts/runtime.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 
 export interface AgentControlPlaneShutdownTargets {
   apiServer?: ApiServer;
-  adminServer?: AdminServer;
+  adminServer?: Lifecycle;
 }
 
 export interface BuildAgentControlPlaneOptions {

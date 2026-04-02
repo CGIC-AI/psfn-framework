@@ -5,6 +5,7 @@ export default defineConfig({
     index: 'src/app/startup/index.ts',
     'gateway-main': 'src/app/gateway/main.ts',
     'agent-main': 'src/app/agent/main.ts',
+    'operator-main': 'src/app/operator/main.ts',
   },
   format: ['esm'],
   target: 'node22',

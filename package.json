@@ -13,6 +13,8 @@
     "gateway:start": "node dist/gateway-main.js",
     "agent": "tsx src/app/agent/main.ts",
     "agent:start": "node dist/agent-main.js",
+    "operator": "tsx src/app/operator/main.ts",
+    "operator:start": "node dist/operator-main.js",
     "split": "./scripts/start-gateway-agent.sh",
     "split:debug": "./scripts/start-gateway-agent.sh --debug",
     "yolo": "./scripts/start-gateway-agent.sh --yolo",

@@ -117,9 +117,14 @@ if [ -z "${GATEWAY_SOCKET:-}" ]; then
   fi
 fi
 
+if [ -z "${ADMIN_TRANSPORT_SOCKET:-}" ]; then
+  export ADMIN_TRANSPORT_SOCKET="$(dirname "${GATEWAY_SOCKET}")/garden-admin.sock"
+fi
+
 SOCKET_PATH="${GATEWAY_SOCKET}"
 GATEWAY_PID=""
 AGENT_PID=""
+OPERATOR_PID=""
 
 start_gateway() {
   if [ -x "./node_modules/.bin/tsx" ]; then
@@ -139,6 +144,15 @@ start_agent() {
   AGENT_PID=$!
 }
 
+start_operator() {
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    ./node_modules/.bin/tsx src/app/operator/main.ts &
+  else
+    npm run operator &
+  fi
+  OPERATOR_PID=$!
+}
+
 stop_pid() {
   local pid="$1"
   if [ -z "${pid}" ]; then
@@ -152,6 +166,7 @@ stop_pid() {
 }
 
 cleanup() {
+  stop_pid "${OPERATOR_PID}"
   stop_pid "${AGENT_PID}"
   stop_pid "${GATEWAY_PID}"
 }
@@ -180,6 +195,9 @@ fi
 echo "[${MODE_LABEL}] starting agent..."
 start_agent
 
+echo "[${MODE_LABEL}] starting operator..."
+start_operator
+
 echo "[${MODE_LABEL}] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
-echo "[${MODE_LABEL}] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID})"
-wait -n "${GATEWAY_PID}" "${AGENT_PID}"
+echo "[${MODE_LABEL}] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID}, operator pid=${OPERATOR_PID})"
+wait -n "${GATEWAY_PID}" "${AGENT_PID}" "${OPERATOR_PID}"

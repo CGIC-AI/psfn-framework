@@ -45,7 +45,7 @@ import {
   buildApiHealthChecks,
   resolveAgentApiSurfaceBindings,
 } from './api-surface.js';
-import { startOptionalAdminServer } from './admin-surface.js';
+import { startOptionalAdminTransportServer } from './admin-surface.js';
 import {
   buildAgentSchedulerRuntime,
 } from './scheduler-runtime.js';
@@ -300,7 +300,6 @@ async function main(): Promise<void> {
   const {
     apiHost,
     apiPort,
-    adminHost,
     adminPort,
   } = resolveAgentApiSurfaceBindings(process.env);
   const apiHealthChecks = buildApiHealthChecks({
@@ -324,10 +323,9 @@ async function main(): Promise<void> {
   gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
   gateway.onApiHealth(() => apiBackend.handleHealth());
 
-  // ── Admin GUI (optional) ──
+  // ── Admin transport (optional) ──
 
-  const adminServer = await startOptionalAdminServer({
-    adminHost,
+  const adminServer = await startOptionalAdminTransportServer({
     adminPort,
     apiHost,
     apiPort,
@@ -351,7 +349,9 @@ async function main(): Promise<void> {
     },
   });
   if (adminServer) {
-    log.info(`Admin GUI listening on port ${adminPort}`);
+    log.info('Garden admin transport listening', {
+      adminPort,
+    });
   }
 
   const heartbeatChannelId = channelsConfig.discord.heartbeatChannelId || undefined;

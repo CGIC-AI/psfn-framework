@@ -14,6 +14,7 @@ import {
 } from './route-matchers.js';
 import type {
   AdminAdaptiveToolsService,
+  AdminArtifactLifecycleService,
   AdminContactsService,
   AdminDashboardService,
   AdminIdentityService,

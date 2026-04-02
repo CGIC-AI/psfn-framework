@@ -385,8 +385,9 @@ export function sanitizeTurnRetrievalTelemetry(
     return null;
   }
 
+  const normalizedTurnId = payload.turnId.trim();
   const {
-    turnId,
+    turnId: _turnId,
     requestId,
     channelId,
     callType,
@@ -399,7 +400,7 @@ export function sanitizeTurnRetrievalTelemetry(
 
   return {
     observedAt: Date.now(),
-    turnId: turnId.trim(),
+    turnId: normalizedTurnId,
     ...(typeof requestId === 'string' && requestId.trim().length > 0 ? { requestId: requestId.trim() } : {}),
     channelId,
     ...(typeof callType === 'string' ? { callType: callType as TurnObservabilityCallType } : {}),

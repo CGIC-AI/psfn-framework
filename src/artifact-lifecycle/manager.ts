@@ -233,7 +233,7 @@ export class ArtifactLifecycleManager {
   }
 
   private collectPromotedSourcePaths(): Set<string> {
-    const promoted = new Set();
+    const promoted = new Set<string>();
     for (const entry of this.deps.researchLibraryStore.listEntries()) {
       const sourcePath = entry.provenance.sourcePath?.trim();
       if (!sourcePath) continue;

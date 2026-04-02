@@ -205,8 +205,8 @@ function detectDestructivePatchRisks(
   patch: CharacterCardPatch,
 ): DestructivePatchRisk[] {
   const nextData = applyPatchToCharacterData(currentData, patch);
-  const currentRecord = currentData as Record<string, unknown>;
-  const nextRecord = nextData as Record<string, unknown>;
+  const currentRecord = currentData as unknown as Record<string, unknown>;
+  const nextRecord = nextData as unknown as Record<string, unknown>;
   const patchRecord = patch as Record<string, unknown>;
 
   return DESTRUCTIVE_REPLACE_FIELDS.flatMap((field) => {

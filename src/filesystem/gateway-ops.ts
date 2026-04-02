@@ -19,7 +19,11 @@ export class GatewayFilesystemOps implements FilesystemOperations {
   }
 
   async read(path: string, options?: FilesystemReadOptions): Promise<FilesystemReadResult> {
-    return this.gateway.fsReadDetailed(path, options);
+    const result = await this.gateway.fsReadDetailed(path, options);
+    return {
+      content: result.content,
+      truncated: result.truncated ?? false,
+    };
   }
 
   async list(glob = '**/*', maxEntries = 200): Promise<string[]> {
@@ -63,6 +67,10 @@ export class GatewayFilesystemOps implements FilesystemOperations {
   }
 
   async edit(options: FilesystemEditOptions): Promise<FilesystemEditResult> {
-    return this.gateway.fsEdit(options);
+    const result = await this.gateway.fsEdit(options);
+    return {
+      path: options.path,
+      replacements: result.replacements,
+    };
   }
 }

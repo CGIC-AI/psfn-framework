@@ -24,6 +24,8 @@ import type {
   AdminMemoryDetailData,
   AdminMemoryLinkResult,
   AdminMemoryListData,
+  AdminMemoryScopeDetailData,
+  AdminMemoryScopeRepairView,
   AdminMemorySearchResult,
   AdminMemoryService,
   MemoryMutationResult,
@@ -147,7 +149,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     }));
   }
 
-  private buildScopeRepair(memory: AdminMemoryDetailData['memory']): AdminMemoryDetailData['scopeRepair'] {
+  private buildScopeRepair(memory: AdminMemoryDetailData['memory']): AdminMemoryScopeRepairView {
     const preview = buildManagedScopeRepairPreview(memory);
     return {
       needsRepair: preview.needsRepair,
@@ -267,7 +269,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     };
   }
 
-  getManagedScopeDetail(kind: string, id: string) {
+  getManagedScopeDetail(kind: string, id: string): AdminMemoryScopeDetailData | null {
     const scope = parseManagedScopeParams(kind, id);
     if (!scope) return null;
 

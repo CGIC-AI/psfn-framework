@@ -1,11 +1,11 @@
 import type {
-  CapabilityTier,
-  CompositionalPolicyConfig,
   PostTurnActionCandidate,
   SubstrateMessage,
-} from '../types.js';
-import type { EventBus } from '../event-bus.js';
-import { createComponentLogger } from '../logger.js';
+} from '../../shared/contracts/runtime.js';
+import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
+import type { CompositionalPolicyConfig } from '../../system/config/runtime-config-contracts.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
 import type {
   ExtendedToolActivationOptions,
@@ -13,10 +13,11 @@ import type {
   PostTurnActionInferer,
 } from '../agent/substrate-agent.js';
 import type { LLMProvider } from '../agent/contracts.js';
-import type { MemoryWriter } from '../memory/writer.js';
+import type { MemoryWriter } from '../../faculties/memory/writer.js';
+import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
-import type { CoreMemoryStore } from '../core-memory/store.js';
-import type { MessageSender } from '../lifecycle/notifications.js';
+import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
+import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import type { Scheduler } from './scheduler.js';
 import {
   createHeartbeatGetPolicyTool,
@@ -29,7 +30,7 @@ import {
   createValuesAddTool,
   createValuesListTool,
   createValuesUpdateTool,
-} from '../values/tools.js';
+} from '../../faculties/values/tools.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type {
@@ -38,7 +39,7 @@ import type {
 } from '../intention/appraisal.js';
 import type { PendingFollowUp, PendingFollowUpStore } from '../intention/pending-follow-ups.js';
 import type { CareReminderStore } from '../intention/care-reminders.js';
-import type { PostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
+import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import type { InternalState } from '../self-model/state.js';
 import { createLegacyAliasTelemetryEmitter } from '../tools/legacy-alias-telemetry.js';
 import {
@@ -79,6 +80,7 @@ export interface HeartbeatRuntimeOptions {
   compositionalPolicy?: CompositionalPolicyConfig;
   characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
+  reflectionStore?: ReflectionMetacognitionJournalStore;
   sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
   emotionState?: { getState(): EmotionStateSnapshot };
   contactStore?: {
@@ -217,6 +219,7 @@ export function wireHeartbeatRuntime(
   }), 'core');
   target.registerTool(createHeartbeatUpdatePolicyTool(templateRuntime.policyStore, templateRuntime.syncReflectionTasks, {
     memoryWriter: runtimeOptions.memoryWriter,
+    reflectionStore: runtimeOptions.reflectionStore,
   }), 'extended');
   target.registerTool(createHeartbeatRunTemplateTool(templateRuntime.policyStore, templateRuntime.runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');

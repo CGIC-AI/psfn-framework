@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
   HeartbeatPolicyStore,
+  type HeartbeatPolicy,
+  type ReflectionDeliberationConfig,
   validateTemplate,
   type ReflectionTemplate,
   type ValidationError,
@@ -16,6 +18,8 @@ import type {
   ScheduledTask,
   TaskType,
 } from '../../../core/scheduler/types.js';
+import { resolveReflectionMetacognitionJournalPath } from '../../../persistence/layout.js';
+import { ReflectionMetacognitionJournalStore } from '../../../persistence/journals/reflection-metacognition-journal.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 
 const log = createComponentLogger('AdminSchedulerService');
@@ -42,6 +46,41 @@ function isRecurringCadenceTimezone(value: unknown): value is RecurringCadenceTi
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function cloneDeliberation(
+  deliberation: ReflectionDeliberationConfig | undefined,
+): ReflectionDeliberationConfig | undefined {
+  if (!deliberation) return undefined;
+  return {
+    ...(deliberation.maxRounds !== undefined ? { maxRounds: deliberation.maxRounds } : {}),
+    ...(deliberation.maxTotalTokens !== undefined ? { maxTotalTokens: deliberation.maxTotalTokens } : {}),
+    ...(deliberation.maxWallTimeMs !== undefined ? { maxWallTimeMs: deliberation.maxWallTimeMs } : {}),
+    ...(deliberation.voices !== undefined ? { voices: [...deliberation.voices] } : {}),
+    ...(deliberation.inputUsdPerMillionTokens !== undefined
+      ? { inputUsdPerMillionTokens: deliberation.inputUsdPerMillionTokens }
+      : {}),
+    ...(deliberation.outputUsdPerMillionTokens !== undefined
+      ? { outputUsdPerMillionTokens: deliberation.outputUsdPerMillionTokens }
+      : {}),
+  };
+}
+
+function cloneReflectionTemplate(template: ReflectionTemplate): ReflectionTemplate {
+  return {
+    ...template,
+    ...(template.cadence !== undefined ? { cadence: { ...template.cadence } } : {}),
+    ...(template.deliberation !== undefined
+      ? { deliberation: cloneDeliberation(template.deliberation) }
+      : {}),
+  };
+}
+
+function clonePolicy(policy: HeartbeatPolicy): HeartbeatPolicy {
+  return {
+    ...policy,
+    templates: policy.templates.map(template => cloneReflectionTemplate(template)),
+  };
 }
 
 function reflectionTemplateIdFromTaskId(taskId: string): string | null {
@@ -182,12 +221,16 @@ function toAdminTask(task: ScheduledTask): AdminScheduledTask {
 
 export class AdminSchedulerService {
   private policyStore: HeartbeatPolicyStore;
+  private reflectionMetacognitionJournal: ReflectionMetacognitionJournalStore;
 
   constructor(
     private readonly scheduler: Scheduler,
     private readonly dataDir: string,
   ) {
     this.policyStore = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
+    this.reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
+      resolveReflectionMetacognitionJournalPath(dataDir),
+    );
   }
 
   /** List all tasks and reflection templates. */
@@ -227,12 +270,14 @@ export class AdminSchedulerService {
 
     try {
       const policy = this.policyStore.load();
+      const policyBefore = clonePolicy(policy);
       const idx = policy.templates.findIndex(t => t.id === templateId);
       if (idx === -1) {
         return { ok: false, message: `Reflection template "${templateId}" not found for task "${taskId}"` };
       }
 
       const template = policy.templates[idx];
+      const templateBefore = cloneReflectionTemplate(template);
       if (updates.intervalMs !== undefined) template.intervalMs = updates.intervalMs;
       if (updates.enabled !== undefined) template.enabled = updates.enabled;
       if (updates.name !== undefined) template.name = updates.name;
@@ -242,6 +287,22 @@ export class AdminSchedulerService {
       policy.updatedAt = new Date().toISOString();
       policy.updatedBy = 'admin';
       this.policyStore.save(policy);
+      void this.reflectionMetacognitionJournal.append({
+        kind: 'reflection_mutation',
+        occurredAt: policy.updatedAt,
+        initiatorSurface: 'garden:scheduler_service',
+        initiatedBy: 'garden_operator',
+        reason: `Garden scheduler task update for reflection template "${templateId}"`,
+        templateId,
+        templateName: template.name,
+        mutationBefore: templateBefore,
+        mutationAfter: cloneReflectionTemplate(template),
+      }).catch((error) => {
+        this.policyStore.save(policyBefore);
+        log.error(`Failed to persist reflection mutation audit for "${templateId}"`, {
+          error: toErrorMessage(error),
+        });
+      });
       return { ok: true, message: `Reflection template "${templateId}" updated` };
     } catch (error) {
       return { ok: false, message: `Failed to persist reflection settings: ${toErrorMessage(error)}` };
@@ -452,6 +513,7 @@ export class AdminSchedulerService {
     updates: Partial<ReflectionTemplate>,
   ): SchedulerMutationResult & { errors?: ValidationError[] } {
     const policy = this.policyStore.load();
+    const policyBefore = clonePolicy(policy);
     const templateId = new RegExp(`^${LEGACY_WHISPER_TEMPLATE_ID}$`, 'i').test(id.trim())
       ? CANONICAL_MUSING_TEMPLATE_ID
       : id.trim();
@@ -466,6 +528,7 @@ export class AdminSchedulerService {
     }
 
     const template = policy.templates[idx];
+    const templateBefore = cloneReflectionTemplate(template);
     if (updates.name !== undefined) template.name = updates.name;
     if (updates.prompt !== undefined) template.prompt = updates.prompt;
     if (updates.intervalMs !== undefined) template.intervalMs = updates.intervalMs;
@@ -480,6 +543,22 @@ export class AdminSchedulerService {
     policy.updatedAt = new Date().toISOString();
     policy.updatedBy = 'admin';
     this.policyStore.save(policy);
+    void this.reflectionMetacognitionJournal.append({
+      kind: 'reflection_mutation',
+      occurredAt: policy.updatedAt,
+      initiatorSurface: 'garden:scheduler_service',
+      initiatedBy: 'garden_operator',
+      reason: `Garden scheduler reflection template update for "${templateId}"`,
+      templateId,
+      templateName: template.name,
+      mutationBefore: templateBefore,
+      mutationAfter: cloneReflectionTemplate(template),
+    }).catch((error) => {
+      this.policyStore.save(policyBefore);
+      log.error(`Failed to persist reflection mutation audit for "${templateId}"`, {
+        error: toErrorMessage(error),
+      });
+    });
 
     // Sync interval change to scheduler if this template has a corresponding task
     const taskId = `reflection:${id}`;

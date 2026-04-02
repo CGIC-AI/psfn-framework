@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { HeartbeatPolicyStore } from './heartbeat-policy.js';
+import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import {
   createHeartbeatGetPolicyTool,
   createHeartbeatRunTemplateTool,
@@ -294,6 +295,63 @@ describe('heartbeat_update_policy', () => {
     const tool = createHeartbeatUpdatePolicyTool(store, syncFn);
     await tool.execute('call-12', { templateId: 'musing', enabled: true }, new AbortController().signal);
     expect(syncFn).toHaveBeenCalledOnce();
+  });
+
+  it('records mutation provenance for direct policy updates', async () => {
+    const reflectionStore = new ReflectionMetacognitionJournalStore(join(tmpDir, 'reflection-metacognition.jsonl'));
+    const tool = createHeartbeatUpdatePolicyTool(store, syncFn, { reflectionStore });
+
+    await tool.execute('call-13', {
+      templateId: 'musing',
+      enabled: false,
+      reason: 'Reduce reflection pressure after repeated manual runs',
+    }, new AbortController().signal);
+
+    const raw = readFileSync(join(tmpDir, 'reflection-metacognition.jsonl'), 'utf-8').trim();
+    const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
+      kind: string;
+      initiatorSurface: string;
+      initiatedBy: string;
+      reason?: string;
+      templateId?: string;
+      mutationBefore?: { enabled?: boolean };
+      mutationAfter?: { enabled?: boolean };
+    };
+
+    expect(entry.kind).toBe('reflection_mutation');
+    expect(entry.initiatorSurface).toBe('tool:heartbeat_update_policy');
+    expect(entry.initiatedBy).toBe('companion');
+    expect(entry.reason).toBe('Reduce reflection pressure after repeated manual runs');
+    expect(entry.templateId).toBe('musing');
+    expect(entry.mutationBefore?.enabled).toBe(true);
+    expect(entry.mutationAfter?.enabled).toBe(false);
+  });
+
+  it('records mutation provenance for added templates', async () => {
+    const reflectionStore = new ReflectionMetacognitionJournalStore(join(tmpDir, 'reflection-metacognition-add.jsonl'));
+    const tool = createHeartbeatUpdatePolicyTool(store, syncFn, { reflectionStore });
+
+    await tool.execute('call-14', {
+      action: 'add',
+      id: 'custom-check',
+      name: 'Custom Check',
+      prompt: 'A custom check prompt for mutation provenance coverage.',
+      intervalMs: 600_000,
+      reason: 'Add an extra operator-requested reflection template',
+    }, new AbortController().signal);
+
+    const raw = readFileSync(join(tmpDir, 'reflection-metacognition-add.jsonl'), 'utf-8').trim();
+    const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
+      kind: string;
+      templateId?: string;
+      reason?: string;
+      mutationAfter?: { id?: string; name?: string };
+    };
+
+    expect(entry.kind).toBe('reflection_mutation');
+    expect(entry.templateId).toBe('custom-check');
+    expect(entry.reason).toBe('Add an extra operator-requested reflection template');
+    expect(entry.mutationAfter).toMatchObject({ id: 'custom-check', name: 'Custom Check' });
   });
 });
 

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { ScheduledTask } from '../../../core/scheduler/types.js';
+import { resolveReflectionMetacognitionJournalPath } from '../../../persistence/layout.js';
 import { AdminSchedulerService } from './scheduler-service.js';
 import type { HeartbeatPolicy } from '../../../core/scheduler/heartbeat-policy.js';
 
@@ -78,6 +79,24 @@ describe('AdminSchedulerService', () => {
 
     const data = service.getFullData();
     expect(data.reflections.find(template => template.id === 'musing')?.enabled).toBe(false);
+
+    const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
+    const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
+      kind: string;
+      initiatorSurface: string;
+      initiatedBy: string;
+      reason?: string;
+      templateId?: string;
+      mutationBefore?: { enabled?: boolean };
+      mutationAfter?: { enabled?: boolean };
+    };
+    expect(metacognitionEntry.kind).toBe('reflection_mutation');
+    expect(metacognitionEntry.initiatorSurface).toBe('garden:scheduler_service');
+    expect(metacognitionEntry.initiatedBy).toBe('garden_operator');
+    expect(metacognitionEntry.reason).toBe('Garden scheduler task update for reflection template "musing"');
+    expect(metacognitionEntry.templateId).toBe('musing');
+    expect(metacognitionEntry.mutationBefore?.enabled).toBe(true);
+    expect(metacognitionEntry.mutationAfter?.enabled).toBe(false);
   });
 
   it('normalizes legacy whisper reflection ids when mutating reflection templates directly', () => {
@@ -97,5 +116,23 @@ describe('AdminSchedulerService', () => {
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as HeartbeatPolicy;
     const musing = persisted.templates.find(template => template.id === 'musing');
     expect(musing?.name).toBe('Updated Musing');
+
+    const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
+    const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
+      kind: string;
+      initiatorSurface: string;
+      initiatedBy: string;
+      reason?: string;
+      templateId?: string;
+      mutationBefore?: { name?: string };
+      mutationAfter?: { name?: string };
+    };
+    expect(metacognitionEntry.kind).toBe('reflection_mutation');
+    expect(metacognitionEntry.initiatorSurface).toBe('garden:scheduler_service');
+    expect(metacognitionEntry.initiatedBy).toBe('garden_operator');
+    expect(metacognitionEntry.reason).toBe('Garden scheduler reflection template update for "musing"');
+    expect(metacognitionEntry.templateId).toBe('musing');
+    expect(metacognitionEntry.mutationBefore?.name).toBe('Musing');
+    expect(metacognitionEntry.mutationAfter?.name).toBe('Updated Musing');
   });
 });

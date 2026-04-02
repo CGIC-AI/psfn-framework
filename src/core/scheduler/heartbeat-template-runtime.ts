@@ -1,43 +1,43 @@
 import type { Scheduler } from './scheduler.js';
-import type { MessageSender } from '../lifecycle/notifications.js';
-import { createComponentLogger } from '../logger.js';
+import type { MessageSender } from '../../system/lifecycle/notifications.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   HEARTBEAT_SILENT_REFLECTION_TOKEN,
-  getHeartbeatTemplateAuditProfile,
   HeartbeatPolicyStore,
   type HeartbeatPolicy,
   type ReflectionTemplate,
 } from './heartbeat-policy.js';
-import { ValuesJournalStore } from '../values/store.js';
-import type { ValuesDeliberationMetadata } from '../values/store.js';
-import type { PostTurnActionCandidate } from '../types.js';
+import { ValuesJournalStore } from '../../faculties/values/store.js';
+import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
+import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import type {
   HeartbeatAgent,
   HeartbeatRunTemplateResult,
   HeartbeatRuntimeOptions,
 } from './heartbeat-runtime.js';
-import { DEFERRED_HEARTBEAT_ACTION_KIND } from './heartbeat-runtime.js';
 import {
   resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,
   resolveReflectionDailyJournalsDir,
   resolveReflectionJournalPath,
+  resolveReflectionMetacognitionJournalPath,
   resolveReflectionProcessLogsDir,
   resolveValuesJournalPath,
-} from '../persistence/layout.js';
+} from '../../persistence/layout.js';
 import {
   NON_CANONICAL_REFLECTION_SUBSTRATE,
   ReflectionJournalStore,
-} from '../notes/reflection-journal.js';
+} from '../../persistence/journals/reflection-journal.js';
+import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import {
   assembleReflectionSubstrateContext,
   buildReflectionProcessId,
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
-} from '../notes/reflection-substrate.js';
-import { isBusyTurnError } from '../lifecycle/turn-contention.js';
-import { runDeliberation } from '../llm/deliberation.js';
-import type { DeliberationResult } from '../llm/deliberation.js';
+} from '../../persistence/journals/reflection-substrate.js';
+import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
+import { runDeliberation } from '../../primitives/llm/deliberation.js';
+import type { DeliberationResult } from '../../primitives/llm/deliberation.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
@@ -52,6 +52,7 @@ import {
 const log = createComponentLogger('HeartbeatTemplates');
 
 const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
+const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
@@ -73,6 +74,12 @@ interface ReflectionSubstratePromptContext {
   canonicalTruthBoundary: typeof NON_CANONICAL_REFLECTION_SUBSTRATE;
   promptBlock: string;
   provenanceRefs: string[];
+}
+
+function getHeartbeatTemplateAuditProfile(
+  _template: ReflectionTemplate,
+): { allowSilentInterval: boolean } {
+  return { allowSilentInterval: false };
 }
 
 type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
@@ -143,6 +150,8 @@ export function createHeartbeatTemplateRuntime(
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });
   const reflectionJournal = new ReflectionJournalStore(resolveReflectionJournalPath(dataDir));
+  const reflectionMetacognitionJournal = runtimeOptions.reflectionStore
+    ?? new ReflectionMetacognitionJournalStore(resolveReflectionMetacognitionJournalPath(dataDir));
   const reflectionDailyJournal = new ReflectionDailyJournalStore(resolveReflectionDailyJournalsDir(dataDir));
   const reflectionProcessLog = new ReflectionProcessLogStore(resolveReflectionProcessLogsDir(dataDir));
   const initialPolicy = store.load();
@@ -379,6 +388,38 @@ export function createHeartbeatTemplateRuntime(
     estimatedCostUsd: result.estimatedCostUsd,
     durationMs: result.durationMs,
   });
+
+  const resolveReflectionInitiationContext = (
+    source: HeartbeatExecutionSource,
+  ): { initiatorSurface: string; initiatedBy: string; reason: string } => {
+    switch (source) {
+      case 'manual':
+        return {
+          initiatorSurface: 'tool:heartbeat_run_template',
+          initiatedBy: 'companion',
+          reason: 'Manual reflection run via heartbeat_run_template',
+        };
+      case 'deferred_scheduler':
+        return {
+          initiatorSurface: 'scheduler:reflection_template',
+          initiatedBy: 'scheduler',
+          reason: 'Scheduled reflection resumed after busy runtime deferral',
+        };
+      case 'deferred_post_turn':
+        return {
+          initiatorSurface: 'post_turn:reflection_template',
+          initiatedBy: 'post_turn_runtime',
+          reason: 'Post-turn reflection resumed after deferred execution',
+        };
+      case 'scheduled':
+      default:
+        return {
+          initiatorSurface: 'scheduler:reflection_template',
+          initiatedBy: 'scheduler',
+          reason: 'Scheduled reflection run',
+        };
+    }
+  };
 
   const persistDeliberationMemory = async (
     template: ReflectionTemplate,
@@ -627,6 +668,7 @@ export function createHeartbeatTemplateRuntime(
     }
 
     let reflectionJournalEntryId: string | undefined;
+    let dailyJournalEntryId: string | undefined;
     if (!silentInterval) {
       try {
         const reflectionEntry = reflectionJournal.append({
@@ -656,7 +698,7 @@ export function createHeartbeatTemplateRuntime(
       }
 
       try {
-        reflectionDailyJournal.append({
+        const dailyEntry = reflectionDailyJournal.append({
           source: 'heartbeat_template',
           executionSource: source,
           templateId: template.id,
@@ -670,11 +712,46 @@ export function createHeartbeatTemplateRuntime(
           ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
           tags: [template.id, 'reflection', reflectionMode],
         });
+        dailyJournalEntryId = dailyEntry.id;
       } catch (error) {
         log.warn(`Reflection "${template.id}" daily journal persistence skipped`, {
           error: String(error),
         });
       }
+
+      const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
+      const sendToDiscordEffective = Boolean(shouldSendToDiscord && heartbeatChannelId);
+      const initiationContext = resolveReflectionInitiationContext(source);
+
+      await reflectionMetacognitionJournal.append({
+        kind: 'reflection_run',
+        occurredAt: reflectionCreatedAt,
+        templateId: template.id,
+        templateName: template.name,
+        executionSource: source,
+        initiatorSurface: initiationContext.initiatorSurface,
+        initiatedBy: initiationContext.initiatedBy,
+        reason: initiationContext.reason,
+        channelId: reflectionChannelId,
+        sendToDiscordEffective,
+        mode: reflectionMode,
+        prompt: reflectionPrompt,
+        reflection: reflectionText,
+        ...(persistenceContext ? {
+          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+          ...(persistenceContext.metacognitiveFlags.length > 0
+            ? { metacognitiveFlags: persistenceContext.metacognitiveFlags }
+            : {}),
+        } : {}),
+        ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+        ...(dailyJournalEntryId ? { dailyJournalEntryId } : {}),
+        ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
+        ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+        ...(reflectionSubstrateContext ? {
+          substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary,
+          substrateProvenanceRefs: reflectionSubstrateContext.provenanceRefs,
+        } : {}),
+      });
 
       if (template.id === 'values-reflection') {
         valuesJournal.append({

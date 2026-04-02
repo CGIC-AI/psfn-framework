@@ -7,12 +7,16 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type {
+  HeartbeatPolicy,
   HeartbeatPolicyStore,
+  ReflectionTemplate,
   ReflectionDeliberationConfig,
 } from './heartbeat-policy.js';
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import type { PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { MemoryWriter } from '../../faculties/memory/writer.js';
+import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
@@ -58,6 +62,31 @@ function cloneDeliberation(config: ReflectionDeliberationConfig | undefined): Re
       ? { outputUsdPerMillionTokens: config.outputUsdPerMillionTokens }
       : {}),
   };
+}
+
+function cloneTemplate(template: ReflectionTemplate): ReflectionTemplate {
+  return {
+    ...template,
+    ...(template.cadence !== undefined ? { cadence: { ...template.cadence } } : {}),
+    ...(template.deliberation !== undefined
+      ? { deliberation: cloneDeliberation(template.deliberation) }
+      : {}),
+  };
+}
+
+function clonePolicy(policy: HeartbeatPolicy): HeartbeatPolicy {
+  return {
+    ...policy,
+    templates: policy.templates.map(template => cloneTemplate(template)),
+  };
+}
+
+function normalizeReason(reason: string | undefined, fallback: string): string {
+  if (typeof reason !== 'string') {
+    return fallback;
+  }
+  const normalized = reason.trim();
+  return normalized.length > 0 ? normalized : fallback;
 }
 
 interface HeartbeatRunTemplateResult {
@@ -118,6 +147,10 @@ export function createHeartbeatGetPolicyTool(
 export function createHeartbeatUpdatePolicyTool(
   store: HeartbeatPolicyStore,
   syncFn: () => void,
+  options: {
+    memoryWriter?: Pick<MemoryWriter, 'write'>;
+    reflectionStore?: ReflectionMetacognitionJournalStore;
+  } = {},
 ): AgentTool<any> {
   return {
     name: 'heartbeat_update_policy',
@@ -140,6 +173,7 @@ export function createHeartbeatUpdatePolicyTool(
       prompt: Type.Optional(Type.String({ description: 'Reflection prompt text' })),
       intervalMs: Type.Optional(Type.Number({ description: 'Interval in milliseconds' })),
       enabled: Type.Optional(Type.Boolean({ description: 'Enable or disable' })),
+      reason: Type.Optional(Type.String({ description: 'Optional provenance reason for this policy mutation' })),
       sendToDiscord: Type.Optional(
         Type.Boolean({ description: 'Whether to send the response to Discord' }),
       ),
@@ -185,6 +219,7 @@ export function createHeartbeatUpdatePolicyTool(
         prompt?: string;
         intervalMs?: number;
         enabled?: boolean;
+        reason?: string;
         sendToDiscord?: boolean;
         internalStateInput?: boolean;
         mode?: 'standard' | 'deliberation';
@@ -193,6 +228,7 @@ export function createHeartbeatUpdatePolicyTool(
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
         const policy = store.load();
+        const policyBefore = clonePolicy(policy);
 
         // ── Add mode ──
         if (params.action === 'add') {
@@ -233,6 +269,26 @@ export function createHeartbeatUpdatePolicyTool(
           policy.updatedAt = new Date().toISOString();
           policy.updatedBy = 'agent';
           store.save(policy);
+          if (options.reflectionStore) {
+            try {
+              await options.reflectionStore.append({
+                kind: 'reflection_mutation',
+                occurredAt: policy.updatedAt,
+                initiatorSurface: 'tool:heartbeat_update_policy',
+                initiatedBy: 'companion',
+                reason: normalizeReason(
+                  params.reason,
+                  `Added reflection template "${params.id}" via heartbeat_update_policy`,
+                ),
+                templateId: params.id,
+                templateName: params.name,
+                mutationAfter: cloneTemplate(newTemplate),
+              });
+            } catch (error) {
+              store.save(policyBefore);
+              throw error;
+            }
+          }
           syncFn();
 
           return textResult(`Added template "${params.id}" (${formatMs(params.intervalMs)} interval)`);
@@ -247,6 +303,7 @@ export function createHeartbeatUpdatePolicyTool(
         if (!template) {
           return textResultWithError(`Template "${params.templateId}" not found`, true);
         }
+        const templateBefore = cloneTemplate(template);
 
         // Build update object for validation
         const updates: Record<string, unknown> = {};
@@ -281,6 +338,27 @@ export function createHeartbeatUpdatePolicyTool(
         policy.updatedAt = new Date().toISOString();
         policy.updatedBy = 'agent';
         store.save(policy);
+        if (options.reflectionStore) {
+          try {
+            await options.reflectionStore.append({
+              kind: 'reflection_mutation',
+              occurredAt: policy.updatedAt,
+              initiatorSurface: 'tool:heartbeat_update_policy',
+              initiatedBy: 'companion',
+              reason: normalizeReason(
+                params.reason,
+                `Updated reflection template "${params.templateId}" via heartbeat_update_policy`,
+              ),
+              templateId: template.id,
+              templateName: template.name,
+              mutationBefore: templateBefore,
+              mutationAfter: cloneTemplate(template),
+            });
+          } catch (error) {
+            store.save(policyBefore);
+            throw error;
+          }
+        }
         syncFn();
 
         return textResult(

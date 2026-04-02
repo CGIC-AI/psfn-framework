@@ -434,7 +434,7 @@ describe('heartbeat_run_template', () => {
     const text = (result.content[0] as { text: string }).text;
 
     expect(runTemplate).toHaveBeenCalledWith('musing', { deferIfBusy: true });
-    expect(text).toContain('Queued reflection template');
+    expect(text).toContain('Queued manual reflection run');
     expect(text).toContain('Musing');
     expect(result.details.isError).toBeFalsy();
   });

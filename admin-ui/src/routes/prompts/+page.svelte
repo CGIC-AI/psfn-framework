@@ -18,6 +18,8 @@
     PromptLayer,
     PromptRegistryEntry,
     PromptRuntimeBlock,
+    PromptRuntimeLayerCoverageEntry,
+    PromptRuntimeMacroHint,
     AdminPromptDetailData,
     PromptHistoryEntry,
     PromptDiffResult,

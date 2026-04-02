@@ -175,6 +175,7 @@ export interface HeartbeatRunTemplateResult {
   reflection: string;
   silent?: boolean;
   queued?: boolean;
+  queuedVia?: 'scheduler' | 'post_turn';
   deferredAction?: PostTurnActionCandidate;
 }
 

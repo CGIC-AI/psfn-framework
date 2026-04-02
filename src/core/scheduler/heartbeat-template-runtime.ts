@@ -51,7 +51,8 @@ import {
 
 const log = createComponentLogger('HeartbeatTemplates');
 
-const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
+const DEFERRED_REFLECTION_RUN_TASK_PREFIX = 'reflection-run:deferred:';
+const LEGACY_DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
@@ -83,6 +84,7 @@ function getHeartbeatTemplateAuditProfile(
 }
 
 type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
+type ReflectionRequestSource = 'manual' | 'scheduled';
 
 class HeartbeatTemplateLoopGuardError extends Error {
   readonly templateId: string;
@@ -119,7 +121,7 @@ export interface HeartbeatTemplateRuntime {
   ): Promise<HeartbeatRunTemplateResult>;
   runDeferredTemplate(
     templateId: string,
-    options?: { sendToDiscordOverride?: boolean; actionId?: string },
+    options?: { sendToDiscordOverride?: boolean; actionId?: string; requestedSource?: ReflectionRequestSource },
   ): Promise<void>;
   syncReflectionTasks(): void;
 }
@@ -391,14 +393,33 @@ export function createHeartbeatTemplateRuntime(
 
   const resolveReflectionInitiationContext = (
     source: HeartbeatExecutionSource,
+    requestedSource: ReflectionRequestSource,
   ): { initiatorSurface: string; initiatedBy: string; reason: string } => {
+    if (requestedSource === 'manual') {
+      switch (source) {
+        case 'deferred_scheduler':
+          return {
+            initiatorSurface: 'tool:heartbeat_run_template',
+            initiatedBy: 'companion',
+            reason: 'Manual reflection run deferred to the scheduler while the runtime was busy',
+          };
+        case 'deferred_post_turn':
+          return {
+            initiatorSurface: 'tool:heartbeat_run_template',
+            initiatedBy: 'companion',
+            reason: 'Manual reflection run deferred to post-turn execution while the runtime was busy',
+          };
+        case 'manual':
+        default:
+          return {
+            initiatorSurface: 'tool:heartbeat_run_template',
+            initiatedBy: 'companion',
+            reason: 'Manual reflection run via heartbeat_run_template',
+          };
+      }
+    }
+
     switch (source) {
-      case 'manual':
-        return {
-          initiatorSurface: 'tool:heartbeat_run_template',
-          initiatedBy: 'companion',
-          reason: 'Manual reflection run via heartbeat_run_template',
-        };
       case 'deferred_scheduler':
         return {
           initiatorSurface: 'scheduler:reflection_template',
@@ -407,9 +428,9 @@ export function createHeartbeatTemplateRuntime(
         };
       case 'deferred_post_turn':
         return {
-          initiatorSurface: 'post_turn:reflection_template',
-          initiatedBy: 'post_turn_runtime',
-          reason: 'Post-turn reflection resumed after deferred execution',
+          initiatorSurface: 'scheduler:reflection_template',
+          initiatedBy: 'scheduler',
+          reason: 'Scheduled reflection resumed through post-turn execution after runtime deferral',
         };
       case 'scheduled':
       default:
@@ -537,11 +558,12 @@ export function createHeartbeatTemplateRuntime(
 
   const executeTemplate = async (
     template: ReflectionTemplate,
-    options: { sendToDiscordOverride?: boolean } = {},
+    options: { sendToDiscordOverride?: boolean; requestedSource?: ReflectionRequestSource } = {},
     source: HeartbeatExecutionSource = 'scheduled',
-  ): Promise<Omit<HeartbeatRunTemplateResult, 'queued' | 'deferredAction'>> => {
+  ): Promise<Omit<HeartbeatRunTemplateResult, 'queued' | 'queuedVia' | 'deferredAction'>> => {
     assertTemplateExecutionAllowed(template.id, source);
 
+    const requestedSource = options.requestedSource ?? (source === 'manual' ? 'manual' : 'scheduled');
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
     const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
@@ -721,7 +743,7 @@ export function createHeartbeatTemplateRuntime(
 
       const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
       const sendToDiscordEffective = Boolean(shouldSendToDiscord && heartbeatChannelId);
-      const initiationContext = resolveReflectionInitiationContext(source);
+      const initiationContext = resolveReflectionInitiationContext(source, requestedSource);
 
       await reflectionMetacognitionJournal.append({
         kind: 'reflection_run',
@@ -829,7 +851,7 @@ export function createHeartbeatTemplateRuntime(
       if (!isBusyTurnError(error)) {
         throw error;
       }
-      const deferred = queueDeferredTemplateRun(template.id);
+      const deferred = queueDeferredTemplateRun(template.id, { requestedSource: 'scheduled' });
       log.info('Deferred scheduled reflection template execution', {
         templateId: template.id,
         queuedNow: deferred.queuedNow,
@@ -858,23 +880,24 @@ export function createHeartbeatTemplateRuntime(
 
   const queueDeferredTemplateRun = (
     templateId: string,
-    options: { sendToDiscordOverride?: boolean } = {},
-  ): { templateName: string; queuedNow: boolean } => {
+    options: { sendToDiscordOverride?: boolean; requestedSource?: ReflectionRequestSource } = {},
+  ): { templateName: string; queuedNow: boolean; requestedSource: ReflectionRequestSource } => {
+    const requestedSource = options.requestedSource ?? 'scheduled';
     const current = store.load();
     const template = current.templates.find(candidate => candidate.id === templateId);
     if (!template) {
       throw new Error(`Template "${templateId}" not found`);
     }
     if (pendingDeferredTemplates.has(template.id)) {
-      return { templateName: template.name, queuedNow: false };
+      return { templateName: template.name, queuedNow: false, requestedSource };
     }
 
     pendingDeferredTemplates.add(template.id);
-    const taskId = `${DEFERRED_REFLECTION_TASK_PREFIX}${template.id}:${Date.now()}`;
+    const taskId = `${DEFERRED_REFLECTION_RUN_TASK_PREFIX}${requestedSource}:${template.id}:${Date.now()}`;
     try {
       scheduler.register({
         id: taskId,
-        name: `${template.name} (deferred)`,
+        name: `Deferred ${requestedSource} reflection run: ${template.name}`,
         type: 'one-shot',
         intervalMs: 0,
         runAt: Date.now() + 250,
@@ -890,7 +913,7 @@ export function createHeartbeatTemplateRuntime(
               });
               return;
             }
-            await executeTemplate(latestTemplate, options, 'deferred_scheduler');
+            await executeTemplate(latestTemplate, { ...options, requestedSource }, 'deferred_scheduler');
           } catch (error) {
             if (isHeartbeatTemplateLoopGuardError(error)) {
               log.warn(`Deferred reflection "${template.id}" suppressed by rapid-fire loop guard`, {
@@ -907,7 +930,7 @@ export function createHeartbeatTemplateRuntime(
         },
         state: 'idle',
       });
-      return { templateName: template.name, queuedNow: true };
+      return { templateName: template.name, queuedNow: true, requestedSource };
     } catch (error) {
       pendingDeferredTemplates.delete(template.id);
       throw error;
@@ -924,7 +947,7 @@ export function createHeartbeatTemplateRuntime(
       throw new Error(`Template "${templateId}" not found`);
     }
     try {
-      return await executeTemplate(template, options, 'manual');
+      return await executeTemplate(template, { ...options, requestedSource: 'manual' }, 'manual');
     } catch (error) {
       if (options.deferIfBusy === false || !isBusyTurnError(error)) {
         throw error;
@@ -940,12 +963,14 @@ export function createHeartbeatTemplateRuntime(
           templateName: template.name,
           reflection: '',
           queued: true,
+          queuedVia: 'post_turn',
           deferredAction,
         };
       }
 
       const deferred = queueDeferredTemplateRun(template.id, {
         sendToDiscordOverride: options.sendToDiscordOverride,
+        requestedSource: 'manual',
       });
       log.info('Deferred manual reflection template execution', {
         templateId: template.id,
@@ -956,6 +981,7 @@ export function createHeartbeatTemplateRuntime(
         templateName: deferred.templateName,
         reflection: '',
         queued: true,
+        queuedVia: 'scheduler',
         deferredAction: buildDeferredHeartbeatAction(template, options),
       };
     }
@@ -963,7 +989,7 @@ export function createHeartbeatTemplateRuntime(
 
   const runDeferredTemplate = async (
     templateId: string,
-    options: { sendToDiscordOverride?: boolean; actionId?: string } = {},
+    options: { sendToDiscordOverride?: boolean; actionId?: string; requestedSource?: ReflectionRequestSource } = {},
   ): Promise<void> => {
     const current = store.load();
     const template = current.templates.find(candidate => candidate.id === templateId);
@@ -975,6 +1001,7 @@ export function createHeartbeatTemplateRuntime(
         ...(options.sendToDiscordOverride !== undefined
           ? { sendToDiscordOverride: options.sendToDiscordOverride }
           : {}),
+        requestedSource: options.requestedSource ?? 'manual',
       }, 'deferred_post_turn');
     } catch (error) {
       if (isHeartbeatTemplateLoopGuardError(error)) {
@@ -991,7 +1018,7 @@ export function createHeartbeatTemplateRuntime(
 
   const syncReflectionTasks = (): void => {
     for (const task of scheduler.listTasks()) {
-      if (task.id.startsWith('reflection:') && !task.id.startsWith(DEFERRED_REFLECTION_TASK_PREFIX)) {
+      if (task.id.startsWith('reflection:') && !task.id.startsWith(LEGACY_DEFERRED_REFLECTION_TASK_PREFIX)) {
         scheduler.unregister(task.id);
       }
     }

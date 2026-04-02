@@ -94,6 +94,7 @@ interface HeartbeatRunTemplateResult {
   templateName: string;
   reflection: string;
   queued?: boolean;
+  queuedVia?: 'scheduler' | 'post_turn';
   deferredAction?: PostTurnActionCandidate;
 }
 
@@ -422,12 +423,14 @@ export function createHeartbeatRunTemplateTool(
           deferIfBusy: params.deferIfBusy ?? true,
         });
         if (result.queued) {
+          const queueDetail = result.queuedVia === 'scheduler'
+            ? 'on the deferred reflection queue.'
+            : 'for post-turn execution.';
           return {
             content: [{
               type: 'text',
               text:
-                `Queued reflection template "${result.templateName}" (${result.templateId}) `
-                + 'for post-reply execution.',
+                `Queued manual reflection run "${result.templateName}" (${result.templateId}) ${queueDetail}` ,
             }],
             details: {
               ...(result.deferredAction ? { deferredAction: result.deferredAction } : {}),

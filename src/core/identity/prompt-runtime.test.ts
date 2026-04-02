@@ -3,7 +3,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  getPromptRuntimeBlockDefinition,
+  getPromptRuntimeBlockIdsByClassification,
+  getPromptRuntimeImmutableAnchorDefinitions,
+  getPromptRuntimeRequiredBlockIds,
   injectPromptRuntimeTokens,
+  isPromptRuntimeBlockCompanionEditable,
+  isPromptRuntimeBlockImmutable,
+  isPromptRuntimeBlockRequired,
   orderPromptRuntimeSystemPromptSections,
   PromptRuntimeLayoutStore,
   renderPromptRuntimeTokens,
@@ -22,6 +29,48 @@ function makeTempDir(): string {
   tempDir = mkdtempSync(join(tmpdir(), 'psfn-prompt-runtime-'));
   return tempDir;
 }
+
+
+describe('runtime prompt block schema', () => {
+  it('classifies required, optional, immutable, and editable runtime blocks', () => {
+    const persona = getPromptRuntimeBlockDefinition('runtime.persona_adaptation');
+    const scratchpad = getPromptRuntimeBlockDefinition('runtime.scratchpad');
+    const currentMessages = getPromptRuntimeBlockDefinition('session.current_messages');
+
+    expect(persona?.schema.classification).toBe('required_runtime_aware');
+    expect(isPromptRuntimeBlockRequired(persona!)).toBe(true);
+    expect(isPromptRuntimeBlockCompanionEditable(persona!)).toBe(true);
+
+    expect(scratchpad?.schema.classification).toBe('optional_runtime_aware');
+    expect(isPromptRuntimeBlockRequired(scratchpad!)).toBe(false);
+    expect(isPromptRuntimeBlockImmutable(scratchpad!)).toBe(false);
+
+    expect(currentMessages?.schema.classification).toBe('immutable_provider_managed');
+    expect(isPromptRuntimeBlockImmutable(currentMessages!)).toBe(true);
+    expect(isPromptRuntimeBlockCompanionEditable(currentMessages!)).toBe(false);
+  });
+
+  it('exposes query helpers for follow-on save validation', () => {
+    expect(getPromptRuntimeRequiredBlockIds({ includeImmutable: false })).toEqual([
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'memory.core',
+      'memory.retrieval',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+      'session.continuity',
+    ]);
+    expect(getPromptRuntimeBlockIdsByClassification('immutable_provider_managed')).toEqual([
+      'session.current_messages',
+      'tools.active_schemas',
+    ]);
+    expect(getPromptRuntimeImmutableAnchorDefinitions().map(anchor => anchor.id)).toEqual([
+      'constitution.immutable_human_safety_amendments',
+      'foundation.card_backed_sections',
+      'persona.card_backed_identity',
+    ]);
+  });
+});
 
 describe('injectPromptRuntimeTokens', () => {
   const fixedNow = new Date('2026-02-20T13:45:27.000Z');

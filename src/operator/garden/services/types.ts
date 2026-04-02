@@ -10,6 +10,7 @@ import type {
 import type {
   PromptRuntimeBlockId,
   PromptRuntimeBlockPlacement,
+  PromptRuntimeBlockSchemaClassification,
   PromptRuntimeBlockVisibility,
   PromptRuntimeEditableBlockId,
 } from '../../../core/identity/prompt-runtime.js';
@@ -534,6 +535,10 @@ export interface AdminPromptRuntimeBlock {
   label: string;
   description: string;
   source: string;
+  schemaClassification: PromptRuntimeBlockSchemaClassification;
+  required: boolean;
+  immutable: boolean;
+  providerManaged: boolean;
   placement: PromptRuntimeBlockPlacement;
   visibility: PromptRuntimeBlockVisibility;
   reorderable: boolean;

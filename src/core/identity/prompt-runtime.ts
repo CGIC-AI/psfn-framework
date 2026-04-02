@@ -187,6 +187,18 @@ export type PromptRuntimeBlockVisibility =
   | 'runtime_generated'
   | 'provider_managed';
 
+export type PromptRuntimeBlockSchemaClassification =
+  | 'required_runtime_aware'
+  | 'optional_runtime_aware'
+  | 'immutable_provider_managed';
+
+export interface PromptRuntimeBlockSchema {
+  classification: PromptRuntimeBlockSchemaClassification;
+  required: boolean;
+  immutable: boolean;
+  providerManaged: boolean;
+}
+
 export type PromptRuntimeBlockId =
   | 'runtime.persona_adaptation'
   | 'runtime.context'
@@ -204,12 +216,26 @@ export interface PromptRuntimeBlockDefinition {
   label: string;
   description: string;
   source: string;
+  schema: PromptRuntimeBlockSchema;
   placement: PromptRuntimeBlockPlacement;
   visibility: PromptRuntimeBlockVisibility;
   reorderable: boolean;
   contentVisible: boolean;
   companionEditable?: boolean;
   lockedReason?: string;
+}
+
+export type PromptRuntimeImmutableAnchorId =
+  | 'constitution.immutable_human_safety_amendments'
+  | 'foundation.card_backed_sections'
+  | 'persona.card_backed_identity';
+
+export interface PromptRuntimeImmutableAnchorDefinition {
+  id: PromptRuntimeImmutableAnchorId;
+  label: string;
+  description: string;
+  classification: 'immutable_identity_anchor';
+  immutable: true;
 }
 
 export type PromptRuntimeSystemPromptBlockId = Extract<
@@ -238,12 +264,34 @@ export type PromptRuntimeEditableBlockId =
 
 const PROMPT_RUNTIME_LAYOUT_VERSION = 1;
 
+const REQUIRED_RUNTIME_AWARE_SCHEMA: PromptRuntimeBlockSchema = Object.freeze({
+  classification: 'required_runtime_aware',
+  required: true,
+  immutable: false,
+  providerManaged: false,
+});
+
+const OPTIONAL_RUNTIME_AWARE_SCHEMA: PromptRuntimeBlockSchema = Object.freeze({
+  classification: 'optional_runtime_aware',
+  required: false,
+  immutable: false,
+  providerManaged: false,
+});
+
+const IMMUTABLE_PROVIDER_MANAGED_SCHEMA: PromptRuntimeBlockSchema = Object.freeze({
+  classification: 'immutable_provider_managed',
+  required: true,
+  immutable: true,
+  providerManaged: true,
+});
+
 const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.freeze([
   {
     id: 'runtime.persona_adaptation',
     label: 'Persona Adaptation',
     description: 'Trust-tier and internal-state persona hint appended at turn time.',
     source: 'turn-execution-runtime:getPersonaAdaptation',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
@@ -255,6 +303,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Runtime Context',
     description: 'Datetime, channel, trust, model, and runtime metadata block.',
     source: 'turn-execution-runtime:buildRuntimeContext',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
@@ -266,6 +315,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Scratchpad Context',
     description: 'Scratchpad-derived notes included when available.',
     source: 'turn-execution-runtime:buildScratchpadContextBlock',
+    schema: OPTIONAL_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
@@ -276,6 +326,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Core Memory',
     description: 'Core persona and durable operator-maintained memory injected into context.',
     source: 'session-manager:coreMemoryProvider',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
@@ -286,6 +337,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Retrieved Memory',
     description: 'L2 retrieval and proactive recall block selected for the turn.',
     source: 'turn-execution-runtime:memoryProvider.retrieve',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
@@ -296,6 +348,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Previous Conversation Summary',
     description: 'Compaction summaries surfaced from prior context windows.',
     source: 'session-context:compaction summaries',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
@@ -306,6 +359,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Focus Knowledge',
     description: 'Focus session knowledge block derived from prior work.',
     source: 'session-context:focus knowledge store',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
@@ -316,6 +370,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Cross-Channel Continuity',
     description: 'Recent activity from other eligible channels.',
     source: 'session-context:continuity store',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
     visibility: 'runtime_generated',
     reorderable: true,
@@ -326,6 +381,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Current Conversation Messages',
     description: 'Current-session transcript passed as provider chat messages, not system prompt text.',
     source: 'session-context:entriesToMessages',
+    schema: IMMUTABLE_PROVIDER_MANAGED_SCHEMA,
     placement: 'context_messages',
     visibility: 'provider_managed',
     reorderable: false,
@@ -337,11 +393,36 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     label: 'Active Tool Schemas',
     description: 'Tool schema payload attached to the provider request.',
     source: 'tool-runtime:active turn tools',
+    schema: IMMUTABLE_PROVIDER_MANAGED_SCHEMA,
     placement: 'tool_schemas',
     visibility: 'provider_managed',
     reorderable: false,
     contentVisible: false,
     lockedReason: 'Tool schema delivery is provider-managed and not part of system prompt text.',
+  },
+]);
+
+const PROMPT_RUNTIME_IMMUTABLE_ANCHORS: readonly PromptRuntimeImmutableAnchorDefinition[] = Object.freeze([
+  {
+    id: 'constitution.immutable_human_safety_amendments',
+    label: 'Immutable Human Safety Amendments',
+    description: 'Constitution-layer human safety amendments that must remain fixed.',
+    classification: 'immutable_identity_anchor',
+    immutable: true,
+  },
+  {
+    id: 'foundation.card_backed_sections',
+    label: 'Card-Backed Foundation Sections',
+    description: 'Canonical Character Foundation sections mirrored from the authoritative card fields.',
+    classification: 'immutable_identity_anchor',
+    immutable: true,
+  },
+  {
+    id: 'persona.card_backed_identity',
+    label: 'Card-Backed Persona Identity',
+    description: 'Canonical persona anchors such as identity and personality that come from card-backed prompt soil.',
+    classification: 'immutable_identity_anchor',
+    immutable: true,
   },
 ]);
 
@@ -385,7 +466,8 @@ function buildDefaultPromptRuntimeLayout(): PromptRuntimeLayout {
 }
 
 function isPromptRuntimeEditableBlockId(value: string): value is PromptRuntimeEditableBlockId {
-  return value === 'runtime.persona_adaptation' || value === 'runtime.context';
+  const block = PROMPT_RUNTIME_BLOCK_MAP.get(value as PromptRuntimeBlockId);
+  return block?.companionEditable === true;
 }
 
 function normalizeSystemPromptBlockOrder(value: unknown): PromptRuntimeSystemPromptBlockId[] {
@@ -442,7 +524,50 @@ function parsePromptRuntimeLayout(raw: string): PromptRuntimeLayout {
 }
 
 export function getPromptRuntimeBlockDefinitions(): PromptRuntimeBlockDefinition[] {
-  return PROMPT_RUNTIME_BLOCKS.map(block => ({ ...block }));
+  return PROMPT_RUNTIME_BLOCKS.map(block => ({
+    ...block,
+    schema: { ...block.schema },
+  }));
+}
+
+export function getPromptRuntimeImmutableAnchorDefinitions(): PromptRuntimeImmutableAnchorDefinition[] {
+  return PROMPT_RUNTIME_IMMUTABLE_ANCHORS.map(anchor => ({ ...anchor }));
+}
+
+export function getPromptRuntimeRequiredBlockIds(options?: {
+  includeImmutable?: boolean;
+}): PromptRuntimeBlockId[] {
+  const includeImmutable = options?.includeImmutable ?? true;
+  return PROMPT_RUNTIME_BLOCKS
+    .filter(block => block.schema.required && (includeImmutable || !block.schema.immutable))
+    .map(block => block.id);
+}
+
+export function getPromptRuntimeBlockIdsByClassification(
+  classification: PromptRuntimeBlockSchemaClassification,
+): PromptRuntimeBlockId[] {
+  return PROMPT_RUNTIME_BLOCKS
+    .filter(block => block.schema.classification === classification)
+    .map(block => block.id);
+}
+
+export function isPromptRuntimeBlockRequired(
+  blockOrId: PromptRuntimeBlockDefinition | PromptRuntimeBlockId,
+): boolean {
+  return resolvePromptRuntimeBlockDefinition(blockOrId)?.schema.required ?? false;
+}
+
+export function isPromptRuntimeBlockImmutable(
+  blockOrId: PromptRuntimeBlockDefinition | PromptRuntimeBlockId,
+): boolean {
+  return resolvePromptRuntimeBlockDefinition(blockOrId)?.schema.immutable ?? false;
+}
+
+export function isPromptRuntimeBlockCompanionEditable(
+  blockOrId: PromptRuntimeBlockDefinition | PromptRuntimeBlockId,
+): boolean {
+  const block = resolvePromptRuntimeBlockDefinition(blockOrId);
+  return block?.companionEditable === true && !block.schema.immutable;
 }
 
 export class PromptRuntimeLayoutStore {
@@ -573,7 +698,15 @@ export function getPromptRuntimeBlockDefinition(
   id: PromptRuntimeBlockId,
 ): PromptRuntimeBlockDefinition | null {
   const block = PROMPT_RUNTIME_BLOCK_MAP.get(id);
-  return block ? { ...block } : null;
+  return block ? { ...block, schema: { ...block.schema } } : null;
+}
+
+function resolvePromptRuntimeBlockDefinition(
+  blockOrId: PromptRuntimeBlockDefinition | PromptRuntimeBlockId,
+): PromptRuntimeBlockDefinition | null {
+  return typeof blockOrId === 'string'
+    ? PROMPT_RUNTIME_BLOCK_MAP.get(blockOrId) ?? null
+    : blockOrId;
 }
 
 function toSnakeCase(value: string): string {

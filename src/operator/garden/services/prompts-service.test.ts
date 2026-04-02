@@ -175,8 +175,18 @@ describe('AdminPromptsDataService', () => {
       'tools.active_schemas',
     ]);
     expect(listed.runtimeBlocks.find(block => block.id === 'session.current_messages')).toMatchObject({
+      schemaClassification: 'immutable_provider_managed',
+      required: true,
+      immutable: true,
+      providerManaged: true,
       reorderable: false,
       placement: 'context_messages',
+    });
+    expect(listed.runtimeBlocks.find(block => block.id === 'runtime.scratchpad')).toMatchObject({
+      schemaClassification: 'optional_runtime_aware',
+      required: false,
+      immutable: false,
+      providerManaged: false,
     });
   });
 
@@ -205,10 +215,17 @@ describe('AdminPromptsDataService', () => {
     const locked = listed.runtimeBlocks.find(block => block.id === 'session.current_messages');
 
     expect(editable).toMatchObject({
+      schemaClassification: 'required_runtime_aware',
+      required: true,
+      immutable: false,
       companionEditable: true,
       customContent: 'Companion personality override.',
     });
     expect(locked).toMatchObject({
+      schemaClassification: 'immutable_provider_managed',
+      required: true,
+      immutable: true,
+      providerManaged: true,
       companionEditable: false,
       customContent: undefined,
     });

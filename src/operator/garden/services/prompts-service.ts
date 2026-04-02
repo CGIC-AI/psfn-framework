@@ -9,7 +9,9 @@ import {
   type PromptLayerRole,
 } from '../../../core/identity/prompt-types.js';
 import {
+  getPromptRuntimeBlockDefinition,
   getPromptRuntimeBlockDefinitions,
+  isPromptRuntimeBlockCompanionEditable,
   PromptRuntimeLayoutStore,
   type PromptRuntimeEditableBlockId,
   type PromptRuntimeSystemPromptBlockId,
@@ -249,7 +251,19 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     return getPromptRuntimeBlockDefinitions()
       .map((block): AdminPromptRuntimeBlock => ({
-        ...block,
+        id: block.id,
+        label: block.label,
+        description: block.description,
+        source: block.source,
+        schemaClassification: block.schema.classification,
+        required: block.schema.required,
+        immutable: block.schema.immutable,
+        providerManaged: block.schema.providerManaged,
+        placement: block.placement,
+        visibility: block.visibility,
+        reorderable: block.reorderable,
+        contentVisible: block.contentVisible,
+        lockedReason: block.lockedReason,
         companionEditable: block.companionEditable === true,
         effectiveOrder: block.placement === 'system_prompt'
           ? (systemOrderIndex.get(block.id as PromptRuntimeSystemPromptBlockId) ?? Number.MAX_SAFE_INTEGER)
@@ -305,15 +319,16 @@ export class AdminPromptsDataService implements AdminPromptsService {
       if (typeof block.content !== 'string') {
         return { ok: false, message: `block "${block.id}" content must be a string` };
       }
-      if (block.id !== 'runtime.persona_adaptation' && block.id !== 'runtime.context') {
+      const definition = getPromptRuntimeBlockDefinition(block.id as PromptRuntimeEditableBlockId);
+      if (!definition || !isPromptRuntimeBlockCompanionEditable(definition)) {
         return { ok: false, message: `block "${block.id}" is not companion-editable` };
       }
       promptRuntimeLayoutStore.setEditableBlockContent(
-        block.id as PromptRuntimeEditableBlockId,
+        definition.id as PromptRuntimeEditableBlockId,
         block.content,
         'admin',
       );
-      updated.push(block.id as PromptRuntimeEditableBlockId);
+      updated.push(definition.id as PromptRuntimeEditableBlockId);
     }
 
     if (updated.length > 0) {

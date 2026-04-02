@@ -19,6 +19,11 @@ import {
 } from './parity.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../../../core/agent/deferred-tool-handoff.js';
+import {
+  resolveReflectionJournalPath,
+  resolveReflectionMetacognitionJournalPath,
+  resolveValuesJournalPath,
+} from '../../../persistence/layout.js';
 
 function createInternalStateNarrativeFixture() {
   const internalState = new InternalStateComputer().computeState({
@@ -423,7 +428,7 @@ describe('wireHeartbeatRuntime', () => {
       nowSpy.mockReturnValue(1_700_000_000_000 + task!.intervalMs + 1);
       await scheduler.tick();
 
-      const raw = readFileSync(join(tempDir, 'notes', 'values.jsonl'), 'utf-8').trim();
+      const raw = readFileSync(resolveValuesJournalPath(tempDir), 'utf-8').trim();
       const lines = raw.split('\n');
       expect(lines).toHaveLength(1);
       const entry = JSON.parse(lines[0] ?? '{}') as {
@@ -585,7 +590,7 @@ describe('wireHeartbeatRuntime', () => {
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
       expect(memoryWriter.write).not.toHaveBeenCalled();
 
-      const raw = readFileSync(join(tempDir, 'notes', 'values.jsonl'), 'utf-8').trim();
+      const raw = readFileSync(resolveValuesJournalPath(tempDir), 'utf-8').trim();
       const entry = JSON.parse(raw) as {
         reflection: string;
         telemetry?: {
@@ -609,7 +614,7 @@ describe('wireHeartbeatRuntime', () => {
       expect(entry.telemetry?.deliberation?.totalTokens).toBe(190);
       expect(entry.telemetry?.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
 
-      const reflectionRaw = readFileSync(join(tempDir, 'notes', 'reflections', 'journal.jsonl'), 'utf-8').trim();
+      const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
       const reflectionLines = reflectionRaw.split('\n').filter(line => line.trim().length > 0);
       expect(reflectionLines.length).toBeGreaterThan(0);
       const reflectionEntry = JSON.parse(reflectionLines[reflectionLines.length - 1] ?? '{}') as {
@@ -624,6 +629,23 @@ describe('wireHeartbeatRuntime', () => {
       expect(reflectionEntry.templateId).toBe('values-reflection');
       expect(reflectionEntry.mode).toBe('deliberation');
       expect(reflectionEntry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+
+      const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
+      const metacognitionLines = metacognitionRaw.split('\n').filter(line => line.trim().length > 0);
+      const metacognitionEntry = JSON.parse(metacognitionLines[metacognitionLines.length - 1] ?? '{}') as {
+        kind: string;
+        executionSource: string;
+        initiatorSurface: string;
+        reason?: string;
+        reflectionJournalEntryId?: string;
+        prompt?: string;
+      };
+      expect(metacognitionEntry.kind).toBe('reflection_run');
+      expect(metacognitionEntry.executionSource).toBe('scheduled');
+      expect(metacognitionEntry.initiatorSurface).toBe('scheduler:reflection_template');
+      expect(metacognitionEntry.reason).toBe('Scheduled reflection run');
+      expect(metacognitionEntry.reflectionJournalEntryId).toBeDefined();
+      expect(metacognitionEntry.prompt).toContain('<internal_state_input>');
     } finally {
       nowSpy.mockRestore();
     }

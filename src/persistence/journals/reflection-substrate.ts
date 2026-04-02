@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { createComponentLogger } from '../logger.js';
-import { appendJsonLine } from '../persistence/jsonl.js';
-import { sanitizeChannelId } from '../session/store-primitives.js';
-import type { ValuesDeliberationMetadata } from '../values/store.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { appendJsonLine } from '../jsonl.js';
+import { sanitizeChannelId } from '../sessions/store-primitives.js';
+import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
 import type { ReflectionJournalEntry } from './reflection-journal.js';
 import { NON_CANONICAL_REFLECTION_SUBSTRATE } from './reflection-journal.js';
 

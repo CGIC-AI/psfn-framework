@@ -18,6 +18,7 @@ import {
   resolveContactsDir,
   resolveMemoryJournalPath,
   resolveNotesDir,
+  resolveReflectionMetacognitionJournalPath,
   resolveScratchpadMirrorPath,
   type RuntimePathSnapshot,
 } from './layout.js';
@@ -25,11 +26,16 @@ import {
   createSqliteCompanionStore,
   type SqliteCompanionStoreOptions,
 } from './sqlite-companion-store.js';
+import {
+  ReflectionMetacognitionJournalStore,
+} from './journals/reflection-metacognition-journal.js';
+import { PostgresReflectionMetacognitionMirrorStore } from './reflections/postgres-mirror.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
   db: Database.Database | null;
   memoryStore: MemoryStorePort;
+  reflectionStore: ReflectionMetacognitionJournalStore;
   contactStore?: ContactStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
@@ -63,6 +69,12 @@ export async function createAgentPersistenceRuntime(
         scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
         journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
       }),
+      reflectionStore: new ReflectionMetacognitionJournalStore(
+        resolveReflectionMetacognitionJournalPath(options.pathSnapshot.companionDataDir),
+        {
+          mirror: await PostgresReflectionMetacognitionMirrorStore.connect(databaseUrl),
+        },
+      ),
       contactStore: await createPostgresContactStore(databaseUrl, options.primaryUserId, {
         exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
       }),
@@ -81,5 +93,6 @@ export async function createAgentPersistenceRuntime(
     backend,
     db: sqliteCompanionStore.db,
     memoryStore: sqliteCompanionStore.memoryStore,
+    reflectionStore: sqliteCompanionStore.reflectionStore,
   };
 }

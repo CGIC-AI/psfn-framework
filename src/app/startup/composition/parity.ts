@@ -90,9 +90,11 @@ import {
   resolvePromptRegistryHistoryPath,
   resolvePromptRegistryPath,
   resolveReflectionJournalPath,
+  resolveReflectionMetacognitionJournalPath,
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
 import { ReflectionJournalStore } from '../../../persistence/journals/reflection-journal.js';
+import { ReflectionMetacognitionJournalStore } from '../../../persistence/journals/reflection-metacognition-journal.js';
 import type { PostTurnActionRuntime } from './post-turn-actions.js';
 import { isBusyTurnError } from '../../../system/lifecycle/turn-contention.js';
 import {
@@ -215,6 +217,7 @@ interface HeartbeatRuntimeOptions {
   sleeptimeCadenceTurns?: number;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;
+  reflectionStore?: ReflectionMetacognitionJournalStore;
   vaultAutoPublisher?: { publishReflection(input: {
     templateId: string;
     templateName: string;
@@ -421,6 +424,8 @@ export function wireHeartbeatRuntime(
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });
   const reflectionJournal = new ReflectionJournalStore(resolveReflectionJournalPath(dataDir));
+  const reflectionMetacognitionJournal = runtimeOptions.reflectionStore
+    ?? new ReflectionMetacognitionJournalStore(resolveReflectionMetacognitionJournalPath(dataDir));
   const policy = store.load();
   const pendingDeferredTemplates = new Set<string>();
   const lastScheduledRunAt = new Map<string, number>();
@@ -764,6 +769,38 @@ export function wireHeartbeatRuntime(
     durationMs: result.durationMs,
   });
 
+  const resolveReflectionInitiationContext = (
+    source: HeartbeatExecutionSource,
+  ): { initiatorSurface: string; initiatedBy: string; reason: string } => {
+    switch (source) {
+      case 'manual':
+        return {
+          initiatorSurface: 'tool:heartbeat_run_template',
+          initiatedBy: 'companion',
+          reason: 'Manual reflection run via heartbeat_run_template',
+        };
+      case 'deferred_scheduler':
+        return {
+          initiatorSurface: 'scheduler:reflection_template',
+          initiatedBy: 'scheduler',
+          reason: 'Scheduled reflection resumed after busy runtime deferral',
+        };
+      case 'deferred_post_turn':
+        return {
+          initiatorSurface: 'post_turn:reflection_template',
+          initiatedBy: 'post_turn_runtime',
+          reason: 'Post-turn reflection resumed after deferred execution',
+        };
+      case 'scheduled':
+      default:
+        return {
+          initiatorSurface: 'scheduler:reflection_template',
+          initiatedBy: 'scheduler',
+          reason: 'Scheduled reflection run',
+        };
+    }
+  };
+
   const shouldUseDeliberation = (template: ReflectionTemplate): boolean => {
     if (template.mode !== 'deliberation') return false;
     return Boolean(runtimeOptions.llmProvider);
@@ -819,6 +856,7 @@ export function wireHeartbeatRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
     const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext);
+    const reflectionOccurredAt = new Date().toISOString();
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
@@ -855,6 +893,7 @@ export function wireHeartbeatRuntime(
         reflection: reflectionText,
         channelId: reflectionChannelId,
         mode: reflectionMode,
+        createdAt: reflectionOccurredAt,
         telemetry: {
           ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
           ...(persistenceContext ? {
@@ -874,6 +913,34 @@ export function wireHeartbeatRuntime(
         error: String(error),
       });
     }
+
+    const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
+    const sendToDiscordEffective = Boolean(shouldSendToDiscord && heartbeatChannelId);
+    const initiationContext = resolveReflectionInitiationContext(source);
+
+    await reflectionMetacognitionJournal.append({
+      kind: 'reflection_run',
+      occurredAt: reflectionOccurredAt,
+      templateId: template.id,
+      templateName: template.name,
+      executionSource: source,
+      initiatorSurface: initiationContext.initiatorSurface,
+      initiatedBy: initiationContext.initiatedBy,
+      reason: initiationContext.reason,
+      channelId: reflectionChannelId,
+      sendToDiscordEffective,
+      mode: reflectionMode,
+      prompt: reflectionPrompt,
+      reflection: reflectionText,
+      ...(persistenceContext ? {
+        internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
+        ...(persistenceContext.metacognitiveFlags.length > 0
+          ? { metacognitiveFlags: persistenceContext.metacognitiveFlags }
+          : {}),
+      } : {}),
+      ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
+      ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+    });
 
     if (template.id === 'values-reflection') {
       valuesJournal.append({
@@ -919,7 +986,6 @@ export function wireHeartbeatRuntime(
       }
     }
 
-    const shouldSendToDiscord = options.sendToDiscordOverride ?? template.sendToDiscord;
     if (shouldSendToDiscord && heartbeatChannelId) {
       await sender.send(heartbeatChannelId, reflectionText);
     }

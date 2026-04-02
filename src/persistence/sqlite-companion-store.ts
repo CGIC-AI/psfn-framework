@@ -11,8 +11,13 @@ import {
   resolveMemoryJournalPath,
   resolveNotesDir,
   resolveCompanionStateDir,
+  resolveReflectionMetacognitionJournalPath,
   resolveScratchpadMirrorPath,
 } from './layout.js';
+import {
+  ReflectionMetacognitionJournalStore,
+} from './journals/reflection-metacognition-journal.js';
+import { SqliteReflectionMetacognitionMirrorStore } from './reflections/sqlite-mirror.js';
 import { initDatabase, type SqliteInitOptions } from './sqlite-utils.js';
 
 export interface SqliteCompanionStoreOptions {
@@ -25,6 +30,7 @@ export interface SqliteCompanionStoreOptions {
 export interface SqliteCompanionStore {
   db: Database.Database;
   memoryStore: MemoryStorePort;
+  reflectionStore: ReflectionMetacognitionJournalStore;
 }
 
 function migrateLegacySqliteDatabaseIfNeeded(
@@ -70,9 +76,16 @@ export function createSqliteCompanionStore(
       journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
     }),
   );
+  const reflectionStore = new ReflectionMetacognitionJournalStore(
+    resolveReflectionMetacognitionJournalPath(companionDataDir),
+    {
+      mirror: new SqliteReflectionMetacognitionMirrorStore(db),
+    },
+  );
 
   return {
     db,
     memoryStore,
+    reflectionStore,
   };
 }

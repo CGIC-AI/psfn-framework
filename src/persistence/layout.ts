@@ -564,6 +564,14 @@ export function resolveReflectionJournalPath(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'journal.jsonl');
 }
 
+export function resolveReflectionMetacognitionDir(dataDir: string): string {
+  return join(resolveReflectionNotesDir(dataDir), 'metacognition');
+}
+
+export function resolveReflectionMetacognitionJournalPath(dataDir: string): string {
+  return join(resolveReflectionMetacognitionDir(dataDir), 'journal.jsonl');
+}
+
 export function resolveReflectionDailyJournalsDir(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'daily');
 }
@@ -760,6 +768,7 @@ export function ensurePersistenceLayout(dataDir: string): void {
   mkdirSync(resolveSessionsDir(dataDir), { recursive: true });
   mkdirSync(resolveNotesDir(dataDir), { recursive: true });
   mkdirSync(resolveReflectionNotesDir(dataDir), { recursive: true });
+  mkdirSync(resolveReflectionMetacognitionDir(dataDir), { recursive: true });
   mkdirSync(resolveReflectionDailyJournalsDir(dataDir), { recursive: true });
   mkdirSync(resolveReflectionProcessLogsDir(dataDir), { recursive: true });
   mkdirSync(resolveContactsDir(dataDir), { recursive: true });

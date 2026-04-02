@@ -330,3 +330,40 @@ export const POSTGRES_TRANSCRIPT_MIGRATIONS = [
   `,
   `CREATE INDEX IF NOT EXISTS idx_session_projection_drift_marked_at ON session_projection_drift(marked_at DESC, channel_id ASC);`,
 ];
+
+export const POSTGRES_REFLECTION_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS reflections (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    template_id TEXT,
+    template_name TEXT,
+    execution_source TEXT,
+    initiator_surface TEXT NOT NULL,
+    initiated_by TEXT NOT NULL,
+    reason TEXT,
+    channel_id TEXT,
+    send_to_discord_effective BOOLEAN,
+    mode TEXT,
+    internal_state_snapshot_ref TEXT,
+    metacognitive_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    reflection_journal_entry_id TEXT,
+    daily_journal_entry_id TEXT,
+    process_id TEXT,
+    mutation_before JSONB,
+    mutation_after JSONB,
+    prompt TEXT,
+    reflection TEXT,
+    deliberation JSONB,
+    substrate_boundary TEXT,
+    substrate_provenance_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    payload JSONB NOT NULL,
+    mirrored_at TEXT NOT NULL
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_reflections_occurred_at ON reflections(occurred_at DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_reflections_kind ON reflections(kind, occurred_at DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_reflections_template ON reflections(template_id, occurred_at DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_reflections_process ON reflections(process_id, occurred_at DESC, id DESC);`,
+];

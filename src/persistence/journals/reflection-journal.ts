@@ -11,6 +11,8 @@ import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js
 const log = createComponentLogger('ReflectionJournal');
 const REFLECTION_JOURNAL_ERROR_PREFIX = 'Reflection journal';
 
+export const NON_CANONICAL_REFLECTION_SUBSTRATE = 'non_canonical_reflection_substrate' as const;
+
 function normalizeTemplateId(templateId: string): string {
   const normalized = templateId.trim();
   return /^whisper$/i.test(normalized) ? 'musing' : normalized;
@@ -45,9 +47,11 @@ export interface ReflectionJournalEntryInput {
   internalStateSnapshotRef?: string;
   internalState?: InternalState;
   metacognitiveFlags?: ValuesMetacognitiveFlag[];
+  substrateBoundary?: string;
+  substrateProvenanceRefs?: string[];
 }
 
-interface ReflectionJournalEntry {
+export interface ReflectionJournalEntry {
   id: string;
   templateId: string;
   templateName: string;
@@ -57,6 +61,8 @@ interface ReflectionJournalEntry {
   mode: 'agent' | 'deliberation';
   createdAt: string;
   telemetry?: ReflectionJournalTelemetry;
+  substrateBoundary?: string;
+  substrateProvenanceRefs?: string[];
 }
 
 function normalizeReflectionTelemetry(
@@ -118,6 +124,22 @@ function normalizeReflectionTelemetry(
   };
 }
 
+function normalizeProvenanceRefs(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('Reflection journal substrateProvenanceRefs must be an array when provided');
+  }
+  const normalized = [...new Set(value.map((entry, index) => {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      throw new Error(`Reflection journal substrateProvenanceRefs[${String(index)}] must be a non-empty string`);
+    }
+    return entry.trim();
+  }))];
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export class ReflectionJournalStore {
   private readonly filePath: string;
 
@@ -127,6 +149,8 @@ export class ReflectionJournalStore {
 
   append(input: ReflectionJournalEntryInput): ReflectionJournalEntry {
     const telemetry = normalizeReflectionTelemetry(input);
+    const substrateBoundary = input.substrateBoundary?.trim();
+    const substrateProvenanceRefs = normalizeProvenanceRefs(input.substrateProvenanceRefs);
     const entry: ReflectionJournalEntry = {
       id: `reflection-${Date.now()}-${Math.floor(Math.random() * 1_000_000).toString().padStart(6, '0')}`,
       templateId: normalizeTemplateId(input.templateId),
@@ -137,6 +161,8 @@ export class ReflectionJournalStore {
       mode: input.mode,
       createdAt: input.createdAt ?? new Date().toISOString(),
       ...(telemetry ? { telemetry } : {}),
+      ...(substrateBoundary ? { substrateBoundary } : {}),
+      ...(substrateProvenanceRefs ? { substrateProvenanceRefs } : {}),
     };
 
     if (!entry.templateId || !entry.templateName || !entry.prompt || !entry.channelId) {

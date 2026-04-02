@@ -42,6 +42,8 @@ import {
   resolvePromptRegistryHistoryPath,
   resolvePromptRegistryPath,
   resolveReflectionJournalPath,
+  resolveReflectionMetacognitionDir,
+  resolveReflectionMetacognitionJournalPath,
   resolveReflectionNotesDir,
   resolveRuntimeLayoutMode,
   resolveRuntimePathSnapshotFromConfig,
@@ -91,6 +93,8 @@ describe('persistence layout', () => {
     expect(resolveLegacyValuesJournalPath(dataDir)).toBe(join(dataDir, 'values.jsonl'));
     expect(resolveReflectionNotesDir(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections'));
     expect(resolveReflectionJournalPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections', 'journal.jsonl'));
+    expect(resolveReflectionMetacognitionDir(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections', 'metacognition'));
+    expect(resolveReflectionMetacognitionJournalPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'reflections', 'metacognition', 'journal.jsonl'));
     expect(resolveScratchpadMirrorPath(dataDir)).toBe(join(dataDir, 'state', 'notes', 'scratchpad.json'));
     expect(resolveCoreMemoryPath(dataDir)).toBe(join(dataDir, 'state', 'core_memory.json'));
     expect(resolveInternalRoleEnvelopesDir(dataDir)).toBe(join(dataDir, 'state', 'internal-role-envelopes'));
@@ -277,6 +281,7 @@ describe('persistence layout', () => {
       resolveSessionsDir(dataDir),
       resolveNotesDir(dataDir),
       resolveReflectionNotesDir(dataDir),
+      resolveReflectionMetacognitionDir(dataDir),
       resolveContactsDir(dataDir),
       resolveContinuityDir(dataDir),
       resolveInternalRoleEnvelopesDir(dataDir),

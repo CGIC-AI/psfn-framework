@@ -602,6 +602,39 @@ export class PromptRuntimeLayoutStore {
     return { ...this.layout.editableBlockContent };
   }
 
+  setEditableBlockContents(
+    updates: Partial<Record<PromptRuntimeEditableBlockId, string>>,
+    updatedBy: string,
+  ): PromptRuntimeLayout {
+    const nextContent = { ...this.layout.editableBlockContent };
+
+    for (const [blockId, content] of Object.entries(updates)) {
+      if (!isPromptRuntimeEditableBlockId(blockId)) {
+        throw new Error(`Prompt runtime block is not companion-editable: ${blockId}`);
+      }
+      if (typeof content !== 'string') {
+        throw new Error(`Prompt runtime block content must be a string: ${blockId}`);
+      }
+
+      const trimmed = content.trim();
+      if (trimmed.length > 0) {
+        nextContent[blockId] = trimmed;
+      } else {
+        delete nextContent[blockId];
+      }
+    }
+
+    this.layout = {
+      version: PROMPT_RUNTIME_LAYOUT_VERSION,
+      systemPromptBlockOrder: [...this.layout.systemPromptBlockOrder],
+      editableBlockContent: nextContent,
+      updatedAt: new Date().toISOString(),
+      updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
+    };
+    this.save();
+    return this.getLayout();
+  }
+
   reorderSystemPromptBlocks(
     blockIds: PromptRuntimeSystemPromptBlockId[],
     updatedBy: string,
@@ -627,27 +660,7 @@ export class PromptRuntimeLayoutStore {
     content: string,
     updatedBy: string,
   ): PromptRuntimeLayout {
-    const trimmed = content.trim();
-    if (!isPromptRuntimeEditableBlockId(blockId)) {
-      throw new Error(`Prompt runtime block is not companion-editable: ${blockId}`);
-    }
-
-    const nextContent = { ...this.layout.editableBlockContent };
-    if (trimmed.length > 0) {
-      nextContent[blockId] = trimmed;
-    } else {
-      delete nextContent[blockId];
-    }
-
-    this.layout = {
-      version: PROMPT_RUNTIME_LAYOUT_VERSION,
-      systemPromptBlockOrder: [...this.layout.systemPromptBlockOrder],
-      editableBlockContent: nextContent,
-      updatedAt: new Date().toISOString(),
-      updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
-    };
-    this.save();
-    return this.getLayout();
+    return this.setEditableBlockContents({ [blockId]: content }, updatedBy);
   }
 
   private load(): void {

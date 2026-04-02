@@ -1,4 +1,5 @@
 import type { PromptLayerStatePort } from './prompt-state-port.js';
+import type { PromptLayer } from './prompt-types.js';
 
 export type RuntimePromptLayerSchemaClassification =
   | 'required_runtime_aware'
@@ -15,6 +16,17 @@ export interface RuntimePromptLayerDefinition {
   content: string;
   priority: number;
   schema: RuntimePromptLayerSchema;
+}
+
+export interface RuntimePromptLayerCoverageIssue {
+  identifier: string;
+  name: string;
+  reason: 'missing' | 'disabled' | 'empty';
+}
+
+export interface RuntimePromptLayerCoverageValidationResult {
+  ok: boolean;
+  issues: RuntimePromptLayerCoverageIssue[];
 }
 
 const REQUIRED_RUNTIME_LAYER_SCHEMA: RuntimePromptLayerSchema = Object.freeze({
@@ -188,6 +200,51 @@ export function getRuntimePromptLayerDefinition(identifier: string): RuntimeProm
 
 export function isRequiredRuntimePromptLayer(identifier: string): boolean {
   return RUNTIME_PROMPT_LAYER_DEFINITION_MAP.get(identifier)?.schema.required ?? false;
+}
+
+export function validateRuntimePromptLayerCoverage(
+  layers: readonly Pick<PromptLayer, 'type' | 'identifier' | 'content' | 'enabled'>[],
+): RuntimePromptLayerCoverageValidationResult {
+  const runtimeLayers = layers.filter(layer => layer.type === 'runtime');
+  const issues: RuntimePromptLayerCoverageIssue[] = [];
+
+  for (const definition of RUNTIME_PROMPT_LAYER_DEFINITIONS) {
+    if (!definition.schema.required) continue;
+
+    const matches = runtimeLayers.filter(layer => layer.identifier === definition.identifier);
+    if (matches.length === 0) {
+      issues.push({
+        identifier: definition.identifier,
+        name: definition.name,
+        reason: 'missing',
+      });
+      continue;
+    }
+
+    const hasEnabledLayer = matches.some(layer => layer.enabled);
+    if (!hasEnabledLayer) {
+      issues.push({
+        identifier: definition.identifier,
+        name: definition.name,
+        reason: 'disabled',
+      });
+      continue;
+    }
+
+    const hasEnabledContent = matches.some(layer => layer.enabled && layer.content.trim().length > 0);
+    if (!hasEnabledContent) {
+      issues.push({
+        identifier: definition.identifier,
+        name: definition.name,
+        reason: 'empty',
+      });
+    }
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
 }
 
 export function composeDefaultRuntimePromptTemplate(): string {

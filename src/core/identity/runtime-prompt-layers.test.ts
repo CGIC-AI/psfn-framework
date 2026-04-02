@@ -3,6 +3,7 @@ import {
   getRuntimePromptLayerDefinition,
   getRuntimePromptLayerDefinitions,
   isRequiredRuntimePromptLayer,
+  validateRuntimePromptLayerCoverage,
 } from './runtime-prompt-layers.js';
 
 describe('runtime prompt layer schema', () => {
@@ -25,5 +26,43 @@ describe('runtime prompt layer schema', () => {
     expect(definitions).toHaveLength(20);
     definitions[0]!.schema.required = false;
     expect(getRuntimePromptLayerDefinition('runtime.current_datetime')?.schema.required).toBe(true);
+  });
+
+  it('reports missing and invalid required runtime prompt layers distinctly', () => {
+    const layers = getRuntimePromptLayerDefinitions().map(definition => ({
+      type: 'runtime' as const,
+      identifier: definition.identifier,
+      content: definition.content,
+      enabled: true,
+    }));
+    const filteredLayers = layers.filter(layer => layer.identifier !== 'runtime.internal_turn_context');
+    const currentDateLayer = filteredLayers.find(layer => layer.identifier === 'runtime.current_datetime');
+    const lastMessageLayer = filteredLayers.find(layer => layer.identifier === 'runtime.last_message_received');
+    expect(currentDateLayer).toBeTruthy();
+    expect(lastMessageLayer).toBeTruthy();
+
+    currentDateLayer!.content = '';
+    lastMessageLayer!.enabled = false;
+
+    const result = validateRuntimePromptLayerCoverage(filteredLayers);
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      {
+        identifier: 'runtime.current_datetime',
+        name: 'Current Date & Time',
+        reason: 'empty',
+      },
+      {
+        identifier: 'runtime.last_message_received',
+        name: 'Last Message Received',
+        reason: 'disabled',
+      },
+      {
+        identifier: 'runtime.internal_turn_context',
+        name: 'Internal Turn Context',
+        reason: 'missing',
+      },
+    ]);
   });
 });

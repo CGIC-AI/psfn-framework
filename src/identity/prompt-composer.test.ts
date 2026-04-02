@@ -277,19 +277,15 @@ describe('PromptComposer', () => {
       expect(cold.hash).not.toBe(warm.hash);
     });
 
-    it('does not reuse persisted snapshots when prompt layers are broken', () => {
+    it('fails closed instead of reusing persisted snapshots when prompt layers are broken', () => {
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
       composer.compose({ channelType: 'discord_text' });
       expect(existsSync(lastKnownGoodPath)).toBe(true);
 
       writeFileSync(layersPath, '{broken-json', 'utf-8');
-      const restartedStore = new PromptLayerStore(layersPath, historyPath);
-      const restartedComposer = new PromptComposer(restartedStore);
-      const fallback = restartedComposer.compose({ channelType: 'api' });
-
-      expect(fallback.text).toBe('');
-      expect(fallback.layerCount).toBe(0);
-      expect(fallback.layerIds).toEqual([]);
+      expect(() => new PromptLayerStore(layersPath, historyPath)).toThrow(
+        `Failed to load prompt layers from ${layersPath}:`,
+      );
     });
   });
 

@@ -15,6 +15,7 @@ export { createDefaultCompositionalPolicyConfig } from '../types.js';
 
 const CHANNEL_TYPE_SET = new Set<ChannelType>(CHANNEL_TYPES);
 const COMPOSITIONAL_PURPOSE_SET = new Set<CompositionalPurpose>(COMPOSITIONAL_PURPOSES);
+const NON_COMPOSITIONAL_CHANNEL_TYPES = new Set<ChannelType>(['internal', 'subagent', 'shard']);
 
 function uniqueValues<T>(values: Iterable<T>): T[] {
   return [...new Set(values)];
@@ -26,7 +27,10 @@ export function isChannelType(value: unknown): value is ChannelType {
 
 export function resolveCompositionalChannelType(channelId: string): ChannelType | undefined {
   const inferred = inferSessionChannelType(channelId);
-  return inferred && isChannelType(inferred) ? inferred : undefined;
+  if (!inferred || !isChannelType(inferred)) {
+    return undefined;
+  }
+  return NON_COMPOSITIONAL_CHANNEL_TYPES.has(inferred) ? undefined : inferred;
 }
 
 export function isCompositionalPurpose(value: unknown): value is CompositionalPurpose {

@@ -52,6 +52,7 @@ interface TurnExecutionAdapterCallbacks {
     subjectIdentityKey: string | undefined,
     now: Date,
   ) => Record<string, string>;
+  refreshToolHealthStatusByName: () => Promise<void>;
   setCurrentSelfModelState: (
     state: InternalState,
     snapshotRef: string,
@@ -191,6 +192,7 @@ export function createTurnExecutionRuntimeAdapter(
       subjectIdentityKey,
       now,
     ),
+    refreshToolHealthStatusByName: () => options.callbacks.refreshToolHealthStatusByName(),
     setCurrentSelfModelState: (
       state,
       snapshotRef,

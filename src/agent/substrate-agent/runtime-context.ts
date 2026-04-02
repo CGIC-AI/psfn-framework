@@ -29,6 +29,11 @@ import type { AdaptiveLoadedExtendedToolState } from '../adaptive-tools-telemetr
 import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { formatSignedDecimal } from '../substrate-agent-helpers.js';
+import {
+  formatToolHealthLegend,
+  formatToolNameWithHealth,
+} from './adaptive-tools-runtime.js';
+import type { RuntimeServiceHealthStatus } from '../../tool-health/types.js';
 import { toErrorMessage } from '../../utils/errors.js';
 import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
 import {
@@ -67,6 +72,7 @@ export interface ResolvedAuthorContext {
 }
 
 const SELF_MEDIA_TOOL_NAMES = ['media'] as const;
+const CORE_DISCOVERY_TOOL_NAMES = ['tool_search', 'toolset'] as const;
 
 interface CollapsedToolStackSummary {
   activeOverlayNames: string[];
@@ -144,6 +150,20 @@ function summarizeCollapsedToolStack(input: {
   };
 }
 
+function formatToolNamesWithHealth(
+  names: readonly string[],
+  toolHealthStatusByName?: ReadonlyMap<string, RuntimeServiceHealthStatus>,
+): string {
+  return names.map(name => formatToolNameWithHealth(name, toolHealthStatusByName?.get(name))).join(', ');
+}
+
+function hasAnyToolHealthMarkers(
+  names: readonly string[],
+  toolHealthStatusByName?: ReadonlyMap<string, RuntimeServiceHealthStatus>,
+): boolean {
+  return names.some(name => toolHealthStatusByName?.has(name));
+}
+
 export function buildPromptTemplateVariables(input: {
   message: SubstrateMessage;
   resolvedUserName: string;
@@ -211,6 +231,7 @@ export function buildRuntimeContext(input: {
   classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
   promotedExtendedToolNames: Set<string>;
   skillsContext?: string;
+  toolHealthStatusByName?: ReadonlyMap<string, RuntimeServiceHealthStatus>;
   activeConcernsBlock?: string;
   behavioralNotesBlock?: string;
   formatTopEmotions: (discrete: Record<string, number>) => string;
@@ -284,15 +305,19 @@ export function buildRuntimeContext(input: {
   lines.push('Treat the currently loaded tools as the live, collapsed stack for this turn. Use a direct tool first when one already fits the task.');
   lines.push('Use tool_search only when a needed semantic tool is missing from the active stack. Use toolset only to add an overlay for this runtime or pin it across turns.');
   lines.push('Use think only as an explicit fallback after direct tools and any needed tool_search/toolset step, not as the default escape hatch for simple reads, lookups, inspection, or routine state changes.');
+  if (hasAnyToolHealthMarkers(CORE_DISCOVERY_TOOL_NAMES, input.toolHealthStatusByName)) {
+    lines.push(formatToolHealthLegend());
+    lines.push(`Core discovery/control tools: ${formatToolNamesWithHealth(CORE_DISCOVERY_TOOL_NAMES, input.toolHealthStatusByName)}.`);
+  }
   if (collapsedToolStack.activeOverlayNames.length > 0) {
-    lines.push(`Additional active overlays: ${collapsedToolStack.activeOverlayNames.join(', ')}.`);
+    lines.push(`Additional active overlays: ${formatToolNamesWithHealth(collapsedToolStack.activeOverlayNames, input.toolHealthStatusByName)}.`);
   }
   if (collapsedToolStack.discoverableOverlayCount > 0) {
     lines.push(`${collapsedToolStack.discoverableOverlayCount} more non-default semantic tools are discoverable on demand.`);
   }
   if (isBackgroundRelevantTurn) {
     if (collapsedToolStack.activeInternalNames.length > 0) {
-      lines.push(`Internal/background tools active for this turn: ${collapsedToolStack.activeInternalNames.join(', ')}.`);
+      lines.push(`Internal/background tools active for this turn: ${formatToolNamesWithHealth(collapsedToolStack.activeInternalNames, input.toolHealthStatusByName)}.`);
     } else if (collapsedToolStack.discoverableInternalCount > 0) {
       lines.push(`${collapsedToolStack.discoverableInternalCount} internal/background tools are available for scheduled or deferred work.`);
     }

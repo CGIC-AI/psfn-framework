@@ -176,6 +176,7 @@ function createRuntime(params: {
     normalizeTurnPromptOverride: vi.fn(() => ({ mode: 'default' })),
     resolveResponseStyle: vi.fn(() => 'concise'),
     buildPromptTemplateVariables: vi.fn(() => ({})),
+    refreshToolHealthStatusByName: vi.fn(async () => undefined),
     setCurrentSelfModelState: vi.fn(),
     buildRuntimeContext: vi.fn(() => ''),
     buildPromptPrefixCacheKey: vi.fn(() => 'prompt-prefix'),
@@ -239,6 +240,36 @@ function createRuntime(params: {
 }
 
 describe('handleMessageForTurn compaction scheduling', () => {
+  it('refreshes tool health before building the runtime context', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const refreshToolHealthStatusByName = vi.fn(async () => undefined);
+    const buildRuntimeContext = vi.fn(() => '');
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.refreshToolHealthStatusByName = refreshToolHealthStatusByName;
+    runtime.buildRuntimeContext = buildRuntimeContext;
+
+    await handleMessageForTurn(runtime, createMessage('msg-refresh-health'));
+
+    expect(refreshToolHealthStatusByName).toHaveBeenCalledTimes(1);
+    expect(buildRuntimeContext).toHaveBeenCalledTimes(1);
+    expect(refreshToolHealthStatusByName.mock.invocationCallOrder[0]).toBeLessThan(
+      buildRuntimeContext.mock.invocationCallOrder[0],
+    );
+  });
+
   it('returns the response without waiting for post-turn compaction and does not pass an llm to buildContext', async () => {
     const eventBus = new EventBus();
     const deferredCompaction = createDeferred<void>();

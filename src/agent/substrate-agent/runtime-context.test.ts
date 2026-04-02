@@ -161,6 +161,61 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('Channel: api:admin-broadcast (type: api, visibility: broadcast)');
   });
 
+  it('shows compact health markers for core and active overlay tools', () => {
+    const runtimeContext = buildRuntimeContext({
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord',
+        authorId: 'user-alex',
+        authorName: 'Alex',
+        content: 'send me a selfie',
+      }),
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {
+        char_name: 'Companion',
+      },
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 2,
+        promoted: 0,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 3,
+      },
+      extendedTools: [
+        { name: 'media', description: 'Generate or inspect media.' } as any,
+      ],
+      loadedExtended: new Map([
+        ['media', {
+          toolName: 'media',
+          source: 'autoload',
+          activatedAt: 1,
+          lastActivatedAt: 1,
+        }],
+      ]),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      toolHealthStatusByName: new Map<string, 'healthy' | 'degraded' | 'unavailable'>([
+        ['tool_search', 'healthy'],
+        ['toolset', 'degraded'],
+        ['media', 'unavailable'],
+      ]),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).toContain('Health markers: o=healthy, !=degraded, x=unavailable.');
+    expect(runtimeContext).toContain('Core discovery/control tools: tool_search (o), toolset (!).');
+    expect(runtimeContext).toContain('Additional active overlays: media (x).');
+  });
+
   it('exposes appearance context on ordinary turns when the media tool is active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',

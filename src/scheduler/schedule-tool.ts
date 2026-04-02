@@ -28,7 +28,7 @@ import {
   type PendingFollowUpStore,
   type PendingFollowUpWakeCondition,
 } from '../intention/pending-follow-ups.js';
-import type { ChannelType } from '../types.js';
+import type { ChannelType, PostTurnActionCandidate } from '../types.js';
 import type { MessageSender } from '../lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import type { LegacyAliasTelemetryCallback } from '../tools/legacy-alias-telemetry.js';
@@ -92,7 +92,7 @@ interface HeartbeatRunTemplateResult {
   reflection: string;
   silent?: boolean;
   queued?: boolean;
-  deferredAction?: unknown;
+  deferredAction?: PostTurnActionCandidate;
 }
 
 interface ScheduleToolParams {
@@ -300,12 +300,15 @@ function normalizeReminderSchedule(value: unknown): CareReminderSchedule {
 }
 
 function mapPlannedTask(task: ReturnType<Scheduler['listTasks']>[number]) {
+  const runAt = typeof task.runAt === 'number' && Number.isFinite(task.runAt)
+    ? new Date(task.runAt).toISOString()
+    : null;
   return {
     id: task.id,
     name: task.name,
     type: task.type,
     state: task.state,
-    runAt: Number.isFinite(task.runAt) ? new Date(task.runAt).toISOString() : null,
+    runAt,
     intervalMs: task.intervalMs,
   };
 }

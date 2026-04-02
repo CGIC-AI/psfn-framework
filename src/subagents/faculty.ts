@@ -56,6 +56,7 @@ const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonl
   autonomous: [SUBAGENT_TOOLSET_ALL],
   custom: [SUBAGENT_TOOLSET_ALL],
 };
+const APPRENTICE_SUBAGENT_TOOL_EXTRAS = ['contact_list'] as const;
 
 const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['spawn_shard', 'shard', 'load_tools', 'toolset']);
 const SUBAGENT_CONTROL_AUTHOR_ID = 'system:subagent-control';
@@ -299,7 +300,7 @@ export class SubagentFaculty implements SubagentControlPort {
         handle.request.systemPrompt ?? this.deps.parentSystemPrompt,
         this.deps.config,
         {
-          runtimeMode: this.deps.runtimeMode ?? 'single',
+          runtimeMode: this.deps.runtimeMode ?? 'direct',
         },
       );
       handle.agentLoop = agentLoop;

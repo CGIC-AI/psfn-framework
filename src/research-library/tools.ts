@@ -20,13 +20,14 @@ interface ResearchLibraryToolParams {
 }
 
 function requireAction(value: string | undefined): ResearchLibraryAction {
-  switch (value?.trim()) {
+  const action = value?.trim();
+  switch (action) {
     case 'list':
     case 'read':
     case 'import_text':
     case 'import_file':
     case 'promote_scratchpad':
-      return value;
+      return action;
     default:
       throw new Error('action is required. Supported actions: list, read, import_text, import_file, promote_scratchpad');
   }

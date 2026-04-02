@@ -1,6 +1,7 @@
 import type {
   CapabilityTier,
   CompositionalPolicyConfig,
+  PostTurnActionCandidate,
   SubstrateMessage,
 } from '../types.js';
 import type { EventBus } from '../event-bus.js';
@@ -35,7 +36,7 @@ import type {
   ActiveConcernSnapshot,
   IntentionActionDecision,
 } from '../intention/appraisal.js';
-import type { PendingFollowUpStore } from '../intention/pending-follow-ups.js';
+import type { PendingFollowUp, PendingFollowUpStore } from '../intention/pending-follow-ups.js';
 import type { CareReminderStore } from '../intention/care-reminders.js';
 import type { PostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
 import type { InternalState } from '../self-model/state.js';
@@ -113,21 +114,7 @@ export interface HeartbeatRuntimeOptions {
     now: number;
     motivationSignals?: readonly string[];
     currentMoodValence?: number | null;
-  }) => Promise<readonly {
-    id: string;
-    content: string;
-    channelId: string;
-    channelType: SubstrateMessage['channelType'];
-    authorId: string;
-    authorName: string;
-  }[]> | readonly {
-    id: string;
-    content: string;
-    channelId: string;
-    channelType: SubstrateMessage['channelType'];
-    authorId: string;
-    authorName: string;
-  }[];
+  }) => Promise<readonly PendingFollowUp[]> | readonly PendingFollowUp[];
   onIntentionFollowUpActivated?: (input: {
     pendingFollowUpId: string;
     activationReason?: string;
@@ -186,7 +173,7 @@ export interface HeartbeatRunTemplateResult {
   reflection: string;
   silent?: boolean;
   queued?: boolean;
-  deferredAction?: unknown;
+  deferredAction?: PostTurnActionCandidate;
 }
 
 export function wireHeartbeatRuntime(

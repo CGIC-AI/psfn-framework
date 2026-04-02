@@ -1323,27 +1323,27 @@ export function decisionsToPostTurnActionCandidates(
 export function pendingFollowUpsToPostTurnActionCandidates(
   followUps: readonly PendingFollowUp[],
 ): PostTurnActionCandidate[] {
-  return followUps
-    .map((followUp) => {
-      const content = followUp.content.trim();
-      if (!content) {
-        return null;
-      }
-      return {
-        kind: INTENTION_FOLLOW_UP_ACTION_KIND,
-        dedupeKey: `${INTENTION_FOLLOW_UP_ACTION_KIND}:pending:${followUp.id}`,
-        payload: {
-          channelId: followUp.channelId,
-          channelType: followUp.channelType,
-          authorId: followUp.authorId,
-          authorName: followUp.authorName,
-          content,
-          pendingFollowUpId: followUp.id,
-        } satisfies IntentionFollowUpActionPayload,
-        maxRetries: 1,
-      } satisfies PostTurnActionCandidate;
-    })
-    .filter((candidate): candidate is PostTurnActionCandidate => candidate !== null);
+  const candidates: PostTurnActionCandidate[] = [];
+  for (const followUp of followUps) {
+    const content = followUp.content.trim();
+    if (!content) {
+      continue;
+    }
+    candidates.push({
+      kind: INTENTION_FOLLOW_UP_ACTION_KIND,
+      dedupeKey: `${INTENTION_FOLLOW_UP_ACTION_KIND}:pending:${followUp.id}`,
+      payload: {
+        channelId: followUp.channelId,
+        channelType: followUp.channelType,
+        authorId: followUp.authorId,
+        authorName: followUp.authorName,
+        content,
+        pendingFollowUpId: followUp.id,
+      } satisfies IntentionFollowUpActionPayload,
+      maxRetries: 1,
+    });
+  }
+  return candidates;
 }
 
 export function normalizeIntentionFollowUpActionPayload(payload: unknown): IntentionFollowUpActionPayload | null {

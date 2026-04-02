@@ -9,6 +9,7 @@ import {
 } from './concerns.js';
 import {
   CareReminderStore,
+  type CareReminder,
   type CareReminderContextProvider,
 } from './care-reminders.js';
 import {
@@ -289,18 +290,18 @@ export function buildPendingFollowUpWakeReturnSummary(
     );
   }
 
-  const cues = (followUp.wakeConditions ?? []).map((condition) => {
+  const cues = (followUp.wakeConditions ?? []).flatMap((condition) => {
     switch (condition) {
       case 'next_user_turn':
-        return 'the next user turn';
+        return ['the next user turn' as const];
       case 'background_recheck':
-        return 'a background recheck';
+        return ['a background recheck' as const];
       case 'sustained_negative_mood':
-        return 'notably negative mood';
+        return ['notably negative mood' as const];
       default:
-        return undefined;
+        return [];
     }
-  }).filter((cue): cue is string => typeof cue === 'string');
+  });
   const dueAt = normalizeContinuitySurfaceText(followUp.dueAt);
   if (cues.length > 0 && dueAt) {
     return clipContinuitySurfaceText(

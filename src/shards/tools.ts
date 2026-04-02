@@ -19,9 +19,12 @@ interface ShardToolParams {
   name?: string;
   task?: string;
   backend?: 'inline' | 'container' | 'orchestrated';
+  systemPrompt?: string;
   system_prompt?: string;
+  maxTurns?: number;
   max_turns?: number;
   capabilities?: string[];
+  requiredCapabilities?: string[];
   required_capabilities?: string[];
   shard_limit?: number;
   transcript_limit?: number;
@@ -264,6 +267,7 @@ export function createShardTool(
             );
           }
         }
+        throw new Error(`action must be one of: ${SHARD_ACTION_HELP}`);
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';
         return textResultWithError(`shard failed${suffix}: ${toErrorMessage(error)}`, true);

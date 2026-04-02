@@ -1,19 +1,15 @@
 import type { Agent, AgentMessage } from '@mariozechner/pi-agent-core';
-import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
+import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { resolveBroadcastVisibilityScope, classifyBroadcastDraft } from '../../broadcast/safety.js';
 import type { EventBus, EventMap } from '../../event-bus.js';
-import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { collectGeneratedImageAttachments } from '../../images/generated-media.js';
 import type { ImageVisionReviewer } from '../../images/types.js';
-import { runWithVisionToolRequestContext } from '../../images/request-context.js';
 import { runWithRequestContext } from '../../llm/request-context.js';
-import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
 import { createComponentLogger } from '../../logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';
 import {
   cloneMetacognitiveFlags,
   type MetacognitiveFlag,
@@ -45,35 +41,19 @@ import { toErrorMessage } from '../../utils/errors.js';
 import type { ContextBudgetTurnCharacteristics } from '../../context-budget.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
 import { createTurnId } from '../../turns/id.js';
-import type {
-  TurnObservabilityRecord,
-  TurnRetrievalTelemetryRecord,
-  TurnStageTelemetryRecord,
-} from '../../turns/observability.js';
-import {
-  sanitizeTurnRetrievalTelemetry,
-  sanitizeTurnSnapshot,
-  sanitizeTurnStageTelemetry,
-} from '../../turns/observability.js';
 import type { TurnPromptSnapshot, TurnSnapshot } from '../../turns/snapshot.js';
 import {
   parseDeferredToolHandoffActionId,
 } from '../deferred-tool-handoff.js';
 import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
-import { resolveModel } from '../stream-adapter.js';
 import type { LLMProvider, MemoryExtractor, MemoryProvider } from '../contracts.js';
 import type { MemoryScopeQuery } from '../../memory/types.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import {
   collectVisionTurnImageUrls,
   hasVisionTurnInputs,
-  buildTurnUserContent,
 } from './vision-attachments.js';
-import {
-  resolveMoaSettings,
-  runMoaTurn,
-} from './moa-turn.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ResolvedAuthorContext } from './runtime-context.js';
 import type { AutoloadTurnOutcome } from './adaptive-tools-runtime.js';
@@ -81,11 +61,9 @@ import type {
   BackgroundContinuationCompletionSignal,
   PendingBackgroundContinuationDelivery,
 } from './background-continuation-runtime.js';
-import {
-  cloneObservedAdaptiveToolSnapshot,
-  readActiveTurnToolSchemas,
-} from './turn-tool-context.js';
 import { buildPromptContextSectionCacheability } from './prompt-lifecycle.js';
+import { executePrimaryTurn } from './turn-execution-primary.js';
+import { createTurnExecutionObservability } from './turn-execution-observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -332,76 +310,14 @@ export async function handleMessageForTurn(
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
   const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
-  let retrievalProvenanceRefs: string[] = [];
-  let memoryManifestSeed: ContextManifestMemorySeed | undefined;
-  const observedTurnStages: TurnStageTelemetryRecord[] = [];
-  const observedTurnRetrievals: TurnRetrievalTelemetryRecord[] = [];
-  let observedTurnSnapshot: TurnObservabilityRecord['snapshot'] | undefined;
-  const emitObservedTurnStage = (
-    stage: 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end',
-    payload: Record<string, unknown>,
-  ): void => {
-    const telemetry = runtime.emitTurnStage(
-      message,
-      startTime,
-      turnId,
-      requestId,
-      stage,
-      turnCallType,
-      payload,
-    );
-    observedTurnStages.push(sanitizeTurnStageTelemetry(telemetry));
-  };
-  const emitTurnSnapshot = async (snapshot: TurnSnapshot): Promise<void> => {
-    observedTurnSnapshot = sanitizeTurnSnapshot(snapshot);
-    await runtime.eventBus.emit('agent.turn.snapshot', {
-      snapshot,
-      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
-    });
-  };
-  const unsubscribeRetrieval = runtime.eventBus.on('memory.retrieval', (telemetry) => {
-    if (telemetry.channelId !== message.channelId) return;
-    if (telemetry.requestId && telemetry.requestId !== requestId) return;
-    if (telemetry.turnId && telemetry.turnId !== turnId) return;
-
-    const observedRetrieval = sanitizeTurnRetrievalTelemetry(telemetry);
-    if (observedRetrieval) {
-      observedTurnRetrievals.push(observedRetrieval);
-    }
-
-    memoryManifestSeed = {
-      ...(telemetry.reason ? { reason: telemetry.reason } : {}),
-      ...(telemetry.retrievalSource ? { retrievalSource: telemetry.retrievalSource } : {}),
-      ...(telemetry.candidateCount !== undefined ? { candidateCount: telemetry.candidateCount } : {}),
-      ...(telemetry.policyAllowedCount !== undefined ? { policyAllowedCount: telemetry.policyAllowedCount } : {}),
-      ...(telemetry.rankedCount !== undefined ? { rankedCount: telemetry.rankedCount } : {}),
-      ...(telemetry.returnedCount !== undefined ? { returnedCount: telemetry.returnedCount } : {}),
-      ...(telemetry.retrievalLimit !== undefined ? { retrievalLimit: telemetry.retrievalLimit } : {}),
-      ...(telemetry.retrievalBudgetPct !== undefined ? { retrievalBudgetPct: telemetry.retrievalBudgetPct } : {}),
-      ...(telemetry.retrievalTokenBudget !== undefined ? { retrievalTokenBudget: telemetry.retrievalTokenBudget } : {}),
-      ...(telemetry.retrievalLimitMode ? { retrievalLimitMode: telemetry.retrievalLimitMode } : {}),
-      ...(telemetry.contactScopeRejectedCount !== undefined
-        ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }
-        : {}),
-      ...(telemetry.sensitivityRejectedCount !== undefined
-        ? { sensitivityRejectedCount: telemetry.sensitivityRejectedCount }
-        : {}),
-      ...(telemetry.policyRejectedCount !== undefined ? { policyRejectedCount: telemetry.policyRejectedCount } : {}),
-      ...(telemetry.policyRejectedReasonTags
-        ? { policyRejectedReasonTags: { ...telemetry.policyRejectedReasonTags } }
-        : {}),
-      ...(telemetry.withheldCount !== undefined ? { withheldCount: telemetry.withheldCount } : {}),
-      ...(telemetry.withheldReasonCounts
-        ? { withheldReasonCounts: { ...telemetry.withheldReasonCounts } }
-        : {}),
-      ...(telemetry.scoreRejectedCount !== undefined ? { scoreRejectedCount: telemetry.scoreRejectedCount } : {}),
-      ...(telemetry.budgetCappedCount !== undefined ? { budgetCappedCount: telemetry.budgetCappedCount } : {}),
-      ...(telemetry.selectedTypes ? { selectedTypes: { ...telemetry.selectedTypes } } : {}),
-      ...(telemetry.compositionalMode ? { compositionalMode: telemetry.compositionalMode } : {}),
-    };
-    const refs = telemetry.provenanceRefs ?? [];
-    if (refs.length === 0) return;
-    retrievalProvenanceRefs = [...new Set(refs.map(ref => ref.trim()).filter(Boolean))];
+  const observability = createTurnExecutionObservability({
+    runtime,
+    message,
+    startTime,
+    turnId,
+    requestId,
+    turnCallType,
+    turnCorrelationBase,
   });
 
   const trustStageStart = Date.now();
@@ -440,7 +356,7 @@ export async function handleMessageForTurn(
     ?? authorContext.canonicalContactKey
     ?? message.authorId;
   const continuityUserId = authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey;
-  emitObservedTurnStage('trust', {
+  observability.emitObservedTurnStage('trust', {
     durationMs: Date.now() - trustStageStart,
     trustLevel: authorContext.trustLevel,
     canonicalContactKey: authorContext.canonicalContactKey ?? null,
@@ -505,7 +421,7 @@ export async function handleMessageForTurn(
       ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
       ...(memorySnapshot ? { memory: memorySnapshot } : {}),
     };
-    await emitTurnSnapshot(turnSnapshot);
+    await observability.emitTurnSnapshot(turnSnapshot);
 
     const memoryStageStart = Date.now();
     const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
@@ -553,7 +469,7 @@ export async function handleMessageForTurn(
       .filter(section => section.length > 0)
       .join('\n\n');
     const scratchpadBlock = runtime.buildScratchpadContextBlock();
-    emitObservedTurnStage('memory', {
+    observability.emitObservedTurnStage('memory', {
       durationMs: Date.now() - memoryStageStart,
       hasMemoryProvider: memoryProvider != null,
       memoryChars: memoryContextBlock.length,
@@ -591,7 +507,7 @@ export async function handleMessageForTurn(
       responseText: '',
       toolCallCount: 0,
       sessionChannelId: emotionSessionId,
-      retrievalProvenanceRefs,
+      retrievalProvenanceRefs: observability.getRetrievalProvenanceRefs(),
     });
     runtime.setCurrentSelfModelState(
       preTurnInternalState,
@@ -691,7 +607,7 @@ export async function handleMessageForTurn(
         channelMeta,
         authorContext.continuityFallbackKeys,
         turnSnapshot.sessionContext,
-        memoryManifestSeed,
+        observability.getMemoryManifestSeed(),
         turnBudgetCharacteristics,
         promptAssembly,
       ),
@@ -718,8 +634,8 @@ export async function handleMessageForTurn(
         messageCount: context.messages.length,
       }),
     };
-    await emitTurnSnapshot(turnSnapshot);
-    emitObservedTurnStage('context', {
+    await observability.emitTurnSnapshot(turnSnapshot);
+    observability.emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: context.messages.length,
       systemPromptChars: context.systemPrompt.length,
@@ -727,266 +643,31 @@ export async function handleMessageForTurn(
     });
 
     const promptStageStart = Date.now();
-    let firstTokenAt: number;
-    let turnMessages: AgentMessage[] = [];
-    let turnUsage: TurnUsage;
-    let responseModel: string;
-    let responseText: string;
-    let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
-    let turnIntent: string | null = null;
+    const primaryTurn = await executePrimaryTurn({
+      runtime,
+      message,
+      context,
+      startTime,
+      promptStageStart,
+      turnId,
+      requestId,
+      taskKind,
+      turnCallType,
+      turnCorrelationBase,
+      viewerRequestContext,
+      baseVisionToolRequestContext,
+      turnSnapshot,
+      emitObservedTurnStage: observability.emitObservedTurnStage,
+      emitTurnSnapshot: observability.emitTurnSnapshot,
+    });
+    const firstTokenAt = primaryTurn.firstTokenAt;
+    const turnMessages = primaryTurn.turnMessages;
+    const turnUsage = primaryTurn.turnUsage;
+    const responseModel = primaryTurn.responseModel;
+    const responseText = primaryTurn.responseText;
+    const fallbackDiagnostics = primaryTurn.fallbackDiagnostics;
+    const turnIntent = primaryTurn.turnIntent;
 
-    const moaSettings = resolveMoaSettings(runtime.config, log);
-    if (moaSettings) {
-      const moaResult = await runMoaTurn({
-        llmClient: runtime.llmClient,
-        context,
-        message,
-        settings: moaSettings,
-        turnId,
-        requestId,
-        callType: turnCallType,
-        contextWindow: runtime.resolveContextWindow(),
-        emitTelemetry: (eventName, payload) => runtime.emitTelemetry(eventName, payload),
-      });
-      firstTokenAt = Date.now();
-      emitObservedTurnStage('first-token', {
-        ttftMs: firstTokenAt - startTime,
-        source: 'fallback',
-      });
-      emitObservedTurnStage('prompt', {
-        durationMs: Date.now() - promptStageStart,
-        ttftMs: firstTokenAt - startTime,
-        mode: 'moa',
-        rounds: moaResult.rounds,
-        stopReason: moaResult.stopReason,
-      });
-      turnUsage = moaResult.turnUsage;
-      responseModel = moaResult.model;
-      responseText = moaResult.output;
-    } else {
-      runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
-      const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
-      turnIntent = autoloadOutcome.intent;
-      runtime.applyActiveToolsToAgentForTurn(
-        message,
-        taskKind,
-        turnCallType,
-        turnCorrelationBase,
-        autoloadOutcome,
-      );
-      const adaptiveToolSnapshot = cloneObservedAdaptiveToolSnapshot(
-        runtime.getAdaptiveToolRuntimeState().lastSnapshot,
-      );
-      const activeTools = readActiveTurnToolSchemas(runtime.agent);
-      if (activeTools.length > 0 || adaptiveToolSnapshot) {
-        turnSnapshot.toolContext = {
-          activeTools,
-          ...(adaptiveToolSnapshot
-            ? { adaptiveSnapshot: adaptiveToolSnapshot }
-            : {}),
-        };
-        turnSnapshot.capturedAt = Date.now();
-        await emitTurnSnapshot(turnSnapshot);
-      }
-
-      const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
-      const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
-      runtime.agent.replaceMessages(historyMessages);
-      const turnStartMessageIndex = runtime.agent.state.messages.length;
-
-      let streamFirstTokenAt: number | null = null;
-      const streamTelemetryBus = runtime.eventBus as unknown as {
-        on: (event: string, handler: (data: { channelId: string; text: string }) => void) => () => void;
-      };
-      const unsubscribeFirstToken = streamTelemetryBus.on('agent.stream.delta', ({ channelId }) => {
-        if (channelId !== message.channelId || streamFirstTokenAt != null) return;
-        streamFirstTokenAt = Date.now();
-        emitObservedTurnStage('first-token', {
-          ttftMs: streamFirstTokenAt - startTime,
-          source: 'stream',
-        });
-      });
-
-      const bridgeToken = runtime.bridge.setChannel(message.channelId, {
-        turnId,
-        requestId,
-        callType: turnCallType,
-        originType: turnCallType,
-        originStage: 'agent.turn.prompt',
-        purpose: 'agent.turn.prompt',
-      });
-      runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, autoloadOutcome.intent);
-      const turnUserContentBuildResult = await buildTurnUserContent({
-        message,
-        llmClient: runtime.llmClient,
-        runtimeMode: runtime.runtimeMode,
-        logger: log,
-        visionReviewer: runtime.imageVisionReviewer,
-      });
-      const visionToolRequestContext = {
-        ...baseVisionToolRequestContext,
-        ...(turnUserContentBuildResult.currentTurnVisionReview
-          ? { currentTurnVisionReview: turnUserContentBuildResult.currentTurnVisionReview }
-          : {}),
-      };
-      try {
-        await runWithRequestContext(
-          {
-            ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.prompt'),
-            ...viewerRequestContext,
-          },
-          async () => runWithVisionToolRequestContext(
-            visionToolRequestContext,
-            async () => runtime.agent.prompt({
-              role: 'user',
-              content: turnUserContentBuildResult.content,
-              timestamp: Date.now(),
-            } satisfies UserMessage),
-          ),
-        );
-      } finally {
-        unsubscribeFirstToken();
-        runtime.bridge.clearChannel(bridgeToken);
-        runtime.clearActiveTurnContext();
-      }
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
-      if (streamFirstTokenAt == null) {
-        streamFirstTokenAt = Date.now();
-        emitObservedTurnStage('first-token', {
-          ttftMs: streamFirstTokenAt - startTime,
-          source: 'fallback',
-        });
-      }
-      emitObservedTurnStage('prompt', {
-        durationMs: Date.now() - promptStageStart,
-        ttftMs: streamFirstTokenAt - startTime,
-      });
-
-      turnMessages = runtime.agent.state.messages.slice(turnStartMessageIndex);
-      turnUsage = runtime.accumulateTurnUsage(turnMessages);
-      responseModel = runtime.agent.state.model.id;
-      firstTokenAt = streamFirstTokenAt;
-
-      responseText = runtime.extractResponseText();
-      if (hasVisionTurnInputs(message) && responseText.trim().length === 0) {
-        const assistantMessage = runtime.getLatestAssistantMessage();
-        log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
-          channelId: message.channelId,
-          model: runtime.agent.state.model.id,
-          stopReason: assistantMessage?.stopReason ?? null,
-          errorMessage: assistantMessage?.errorMessage ?? null,
-        });
-
-        try {
-          const recoveryModel = resolveModel(runtime.config, 'chat');
-          runtime.agent.setModel(recoveryModel);
-          responseModel = recoveryModel.id;
-        } catch (error) {
-          log.warn('Vision recovery model resolution failed; keeping current model', {
-            channelId: message.channelId,
-            error: toErrorMessage(error),
-          });
-        }
-
-        const replayTransportContent = message.content.trim();
-        let recoveryAttempts = 0;
-        const runVisionRecoveryPrompt = async (
-          content: UserMessage['content'],
-          requestSuffix: string,
-          originStage: string,
-        ): Promise<void> => {
-          const bridgeToken = runtime.bridge.setChannel(message.channelId, {
-            turnId,
-            requestId: `${requestId}:${requestSuffix}`,
-            callType: turnCallType,
-            originType: turnCallType,
-            originStage,
-            purpose: originStage,
-          });
-          runtime.setActiveTurnCorrelation(turnCorrelationBase);
-          try {
-            await runWithRequestContext(
-              {
-                ...runtime.withCorrelationPurpose(turnCorrelationBase, originStage),
-                ...viewerRequestContext,
-              },
-              async () => runWithVisionToolRequestContext(
-                visionToolRequestContext,
-                async () => runtime.agent.prompt({
-                  role: 'user',
-                  content,
-                  timestamp: Date.now(),
-                } satisfies UserMessage),
-              ),
-            );
-          } finally {
-            runtime.bridge.clearChannel(bridgeToken);
-            runtime.setActiveTurnCorrelation(null);
-          }
-        };
-
-        if (replayTransportContent.length > 0) {
-          await runVisionRecoveryPrompt(
-            replayTransportContent,
-            'vision-recovery',
-            'agent.turn.vision_recovery',
-          );
-          recoveryAttempts += 1;
-
-          turnMessages = runtime.agent.state.messages.slice(turnStartMessageIndex);
-          turnUsage = runtime.accumulateTurnUsage(turnMessages);
-          responseModel = runtime.agent.state.model.id;
-          responseText = runtime.extractResponseText();
-
-          if (responseText.trim().length === 0) {
-            log.warn('Vision recovery replay remained empty; retrying once with same transport content', {
-              channelId: message.channelId,
-              model: runtime.agent.state.model.id,
-            });
-            await runVisionRecoveryPrompt(
-              replayTransportContent,
-              'vision-recovery-retry',
-              'agent.turn.vision_recovery_retry',
-            );
-            recoveryAttempts += 1;
-
-            turnMessages = runtime.agent.state.messages.slice(turnStartMessageIndex);
-            turnUsage = runtime.accumulateTurnUsage(turnMessages);
-            responseModel = runtime.agent.state.model.id;
-            responseText = runtime.extractResponseText();
-          }
-        } else {
-          log.warn('Vision recovery replay skipped because transport-normalized content was empty', {
-            channelId: message.channelId,
-          });
-        }
-
-        const finalContentEmpty = responseText.trim().length === 0;
-        fallbackDiagnostics = {
-          fallback: {
-            code: 'vision_empty_response',
-            strategy: 'replay_transport_content',
-            attempts: recoveryAttempts,
-            finalContentEmpty,
-            ...(assistantMessage?.stopReason ? { previousStopReason: assistantMessage.stopReason } : {}),
-            ...(assistantMessage?.errorMessage ? { previousErrorMessage: assistantMessage.errorMessage } : {}),
-          },
-        };
-        runtime.emitTelemetry('agent.turn.fallback', {
-          channelId: message.channelId,
-          channelType: message.channelType,
-          ...fallbackDiagnostics.fallback,
-          ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.fallback'),
-        });
-
-        if (finalContentEmpty) {
-          log.warn('Vision turn remained empty after non-fabricating recovery replay', {
-            channelId: message.channelId,
-            model: runtime.agent.state.model.id,
-          });
-        }
-      }
-    }
     let safeResponseText = responseText;
     let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
     let assistantSessionEntryId: number | null = null;
@@ -996,7 +677,7 @@ export async function handleMessageForTurn(
       const classification = classifyBroadcastDraft(responseText);
       const operatorApproval = visibilityScope === 'approved_private_context';
       const approvalRequired = classification.risky && !operatorApproval;
-      const provenanceRefs = [...new Set(retrievalProvenanceRefs)];
+      const provenanceRefs = [...new Set(observability.getRetrievalProvenanceRefs())];
 
       broadcastSafetyMeta = {
         visibilityScope,
@@ -1060,7 +741,7 @@ export async function handleMessageForTurn(
       responseText,
       toolCallCount: turnUsage.toolCalls,
       sessionChannelId: emotionSessionId,
-      retrievalProvenanceRefs,
+      retrievalProvenanceRefs: observability.getRetrievalProvenanceRefs(),
     });
     runtime.setCurrentSelfModelState(
       internalState,
@@ -1140,7 +821,7 @@ export async function handleMessageForTurn(
         runtime.resolveSessionChannelId(message.channelId),
       )
       : [];
-    emitObservedTurnStage('end', {
+    observability.emitObservedTurnStage('end', {
       durationMs: completedAt - startTime,
       ttftMs: firstTokenAt - startTime,
       inputTokens: turnUsage.inputTokens,
@@ -1163,12 +844,12 @@ export async function handleMessageForTurn(
         memoryContextChars: memoryContextBlock.length,
         trustLevel: authorContext.trustLevel,
         canonicalContactKey: authorContext.canonicalContactKey,
-        retrievalProvenanceRefs,
+        retrievalProvenanceRefs: observability.getRetrievalProvenanceRefs(),
         turnSnapshot,
         turnObservability: {
-          stages: observedTurnStages,
-          retrievals: observedTurnRetrievals,
-          ...(observedTurnSnapshot ? { snapshot: observedTurnSnapshot } : {}),
+          stages: observability.getObservedTurnStages(),
+          retrievals: observability.getObservedTurnRetrievals(),
+          ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
         },
         internalStateSnapshotRef,
       }),
@@ -1290,7 +971,7 @@ export async function handleMessageForTurn(
     });
     throw err;
   } finally {
-    unsubscribeRetrieval();
+    observability.unsubscribe();
     restorePinnedSessionContext();
   }
 }

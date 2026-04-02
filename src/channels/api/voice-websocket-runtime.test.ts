@@ -66,6 +66,8 @@ type RuntimeVoiceTestOverrides = Partial<SubstrateConfig> & {
 
 function createTestOptions(configOverrides: RuntimeVoiceTestOverrides = {}) {
   const config = {
+    sttProvider: 'deepgram',
+    ttsProvider: 'elevenlabs',
     deepgramApiKey: 'deepgram-key',
     deepgramModel: 'nova-3',
     deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
@@ -151,13 +153,13 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
   });
 
-  it('fails closed when TTS provider is unset even if elevenlabs credentials exist', () => {
-    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+  it('throws when TTS provider selection is unset even if elevenlabs credentials exist', () => {
+    expect(() => createApiVoiceWebSocketRuntime(createTestOptions({
       ttsProvider: undefined,
       elevenLabsModelId: 'eleven_turbo_v2_5',
-    }));
-
-    expect(runtime).toBeUndefined();
+    }))).toThrow(
+      'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+    );
     expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
     expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
   });

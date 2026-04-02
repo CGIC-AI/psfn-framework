@@ -1365,20 +1365,19 @@ describe('DiscordVoiceRuntime', () => {
       expect(providers[0]).toBe('echo');
     });
 
-    it('disables runtime when no TTS provider is explicitly configured', () => {
+    it('throws when no TTS provider is explicitly configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
-      const runtime = new DiscordVoiceRuntime({
+      expect(() => new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
         config: makeConfig({
           ttsProvider: undefined,
         }),
         eventBus: new EventBus(),
         getHandler: () => null,
-      });
-
-      expect((runtime as any).preferredTtsProviderId).toBe('disabled');
-      expect((runtime as any).enabled).toBe(false);
+      })).toThrow(
+        'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+      );
     });
 
     it('skips elevenlabs connector when no voice ID is configured', () => {

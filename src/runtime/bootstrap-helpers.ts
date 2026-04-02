@@ -132,6 +132,32 @@ function hasExplicitRuntimeProviderSelection(provider: unknown): provider is str
   return normalized.length > 0 && normalized !== 'disabled';
 }
 
+function requireConfiguredRuntimeVoiceProvider<TProvider extends string>(
+  configured: unknown,
+  kind: 'STT' | 'TTS',
+  fieldName: 'sttProvider' | 'ttsProvider',
+  isSupportedProvider: (provider: string) => provider is TProvider,
+): TProvider | 'disabled' {
+  if (typeof configured !== 'string') {
+    throw new Error(
+      `Missing runtime voice ${kind} provider selection: set "${fieldName}" in settings.json to "disabled" or a registered ${kind} provider id`,
+    );
+  }
+
+  const normalized = configured.trim().toLowerCase();
+  if (!normalized) {
+    throw new Error(`Invalid runtime voice ${kind} provider: provider id cannot be empty`);
+  }
+  if (normalized === 'disabled') {
+    return 'disabled';
+  }
+  if (!isSupportedProvider(normalized)) {
+    throw new Error(`Unsupported runtime voice ${kind} provider: ${configured}`);
+  }
+
+  return normalized;
+}
+
 export interface RuntimeVoiceSttConnectorOptions extends RuntimeVoiceProviderGateOptions {
   provider?: RuntimeVoiceSttProvider;
   eligibilityGate?: EligibilityGate;
@@ -143,37 +169,21 @@ export interface RuntimeVoiceTtsConnectorOptions extends RuntimeVoiceProviderGat
 }
 
 export function resolveRuntimeVoiceSttProvider(config: SubstrateConfig): RuntimeVoiceSttProvider {
-  const configured = config.sttProvider;
-  if (configured === 'disabled') return configured;
-  if (typeof configured === 'string') {
-    const normalized = configured.trim().toLowerCase();
-    if (!normalized) {
-      throw new Error('Invalid runtime voice STT provider: provider id cannot be empty');
-    }
-    if (!isStreamingSttProvider(normalized)) {
-      throw new Error(`Unsupported runtime voice STT provider: ${configured}`);
-    }
-    return normalized;
-  }
-
-  return 'disabled';
+  return requireConfiguredRuntimeVoiceProvider(
+    config.sttProvider,
+    'STT',
+    'sttProvider',
+    isStreamingSttProvider,
+  );
 }
 
 export function resolveRuntimeVoiceTtsProvider(config: SubstrateConfig): RuntimeVoiceTtsProvider {
-  const configured = config.ttsProvider;
-  if (configured === 'disabled') return configured;
-  if (typeof configured === 'string') {
-    const normalized = configured.trim().toLowerCase();
-    if (!normalized) {
-      throw new Error('Invalid runtime voice TTS provider: provider id cannot be empty');
-    }
-    if (!isStreamingTtsProvider(normalized)) {
-      throw new Error(`Unsupported runtime voice TTS provider: ${configured}`);
-    }
-    return normalized;
-  }
-
-  return 'disabled';
+  return requireConfiguredRuntimeVoiceProvider(
+    config.ttsProvider,
+    'TTS',
+    'ttsProvider',
+    isStreamingTtsProvider,
+  );
 }
 
 export function resolveRuntimeVoiceProviderGate(

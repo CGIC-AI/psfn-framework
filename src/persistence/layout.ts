@@ -587,6 +587,18 @@ export function resolveGeneratedImagesDir(companionDataDir: string): string {
   return join(companionDataDir, 'images');
 }
 
+export function resolveResearchLibraryDir(companionDataDir: string): string {
+  return join(companionDataDir, 'research-library');
+}
+
+export function resolveResearchLibraryEntriesDir(companionDataDir: string): string {
+  return join(resolveResearchLibraryDir(companionDataDir), 'entries');
+}
+
+export function resolveResearchLibraryEntryDir(companionDataDir: string, entryId: string): string {
+  return join(resolveResearchLibraryEntriesDir(companionDataDir), sanitizeChannelId(entryId));
+}
+
 export function resolveBackupsDir(companionDataDir: string): string {
   return join(companionDataDir, 'backups');
 }
@@ -604,6 +616,7 @@ export function ensurePersistenceLayout(dataDir: string): void {
   mkdirSync(resolveContactsDir(dataDir), { recursive: true });
   mkdirSync(resolveContinuityDir(dataDir), { recursive: true });
   mkdirSync(resolveInternalRoleEnvelopesDir(dataDir), { recursive: true });
+  mkdirSync(resolveResearchLibraryEntriesDir(dataDir), { recursive: true });
 }
 
 export function migrateLegacyPersistenceLayout(dataDir: string): void {

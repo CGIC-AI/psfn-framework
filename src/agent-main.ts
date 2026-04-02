@@ -46,6 +46,8 @@ import { initDatabase } from './persistence/sqlite-utils.js';
 import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from './utils/env.js';
 import { MemoryWriter } from './memory/writer.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
+import { registerResearchLibraryTools } from './research-library/runtime-wiring.js';
+import { ResearchLibraryStore } from './research-library/store.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
@@ -744,6 +746,17 @@ async function main(): Promise<void> {
   registerMemoryTools(agentLoop, {
     writer: memoryWriter,
     memoryStore,
+  });
+  const researchLibraryStore = new ResearchLibraryStore({
+    companionDataDir,
+    workspacePath: workspaceRoot,
+  });
+  registerResearchLibraryTools(agentLoop, {
+    store: researchLibraryStore,
+    memoryStore,
+  });
+  log.info('Research library tools enabled', {
+    libraryDir: researchLibraryStore.libraryDir,
   });
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 

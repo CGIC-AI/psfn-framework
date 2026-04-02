@@ -25,6 +25,7 @@ import {
 import type { AdminServerConfig } from './types.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
+import { AdminResearchLibraryDataService } from './services/research-library-service.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
@@ -38,6 +39,7 @@ import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import { AdminChatBootstrapService } from './chat/bootstrap.js';
+import { ResearchLibraryStore } from '../../research-library/store.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -51,6 +53,7 @@ export class AdminServer implements Lifecycle {
   private eventBus: EventBus;
   private dashboardService: AdminDashboardDataService;
   private memoryService: AdminMemoryDataService;
+  private researchLibraryService: AdminResearchLibraryDataService;
   private sessionService: AdminSessionDataService;
   private contactsService: AdminContactsDataService;
   private settingsService: AdminSettingsDataService;
@@ -108,6 +111,9 @@ export class AdminServer implements Lifecycle {
       memoryStore: config.memoryStore,
       sessionStore: config.sessionStore,
     });
+    this.researchLibraryService = new AdminResearchLibraryDataService(
+      new ResearchLibraryStore({ companionDataDir }),
+    );
     this.settingsService = new AdminSettingsDataService({
       config: config.config,
     });
@@ -158,6 +164,7 @@ export class AdminServer implements Lifecycle {
       subagentFaculty: config.subagentFaculty,
       adaptiveToolsService: this.adaptiveToolsService,
       memoryService: this.memoryService,
+      researchLibraryService: this.researchLibraryService,
       sessionService: this.sessionService,
       contactsService: this.contactsService,
       settingsService: this.settingsService,

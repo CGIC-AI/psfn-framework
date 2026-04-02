@@ -69,6 +69,7 @@ import type {
   AdminMemoryScopeEvidenceItem,
 } from './memory-scope-evidence.js';
 import type { SessionContinuityArtifact } from '../../../session/continuity-artifacts.js';
+import type { ResearchLibraryEntryDetail, ResearchLibraryEntrySummary } from '../../../research-library/types.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;
@@ -129,6 +130,15 @@ export interface AdminAdaptiveToolsData {
 
 export interface AdminAdaptiveToolsService {
   getAdaptiveToolsData(): Promise<AdminAdaptiveToolsData>;
+}
+
+export interface AdminResearchLibraryData {
+  entries: ResearchLibraryEntrySummary[];
+}
+
+export interface AdminResearchLibraryService {
+  listEntries(): AdminResearchLibraryData;
+  getEntry(id: string): ResearchLibraryEntryDetail | null;
 }
 
 export interface AdminMemoryContactSummary {

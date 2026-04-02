@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { SessionEntry } from './types.js';
 import { appendJsonLine } from '../persistence/jsonl.js';
 import { createComponentLogger } from '../logger.js';
-import type { MemoryScopeQuery } from '../memory/types.js';
+import type { MemoryScopeQuery, MemoryScopeRef } from '../memory/types.js';
 import { normalizeMemoryScopeRefs, normalizeMemoryScopeTags } from '../memory/types.js';
 
 const log = createComponentLogger('FocusKnowledge');
@@ -91,8 +91,8 @@ export function buildFocusMemoryScopeQuery(scope: string): MemoryScopeQuery | nu
   const scopeKey = normalizeScopeKey(compactScope);
   const refs = normalizeMemoryScopeRefs([
     { kind: 'project', id: compactScope },
-    ...(scopeKey !== compactScope ? [{ kind: 'project', id: scopeKey }] : []),
-  ]);
+    ...(scopeKey !== compactScope ? [{ kind: 'project', id: scopeKey } satisfies MemoryScopeRef] : []),
+  ] satisfies MemoryScopeRef[]);
   const tags = normalizeMemoryScopeTags([
     `project:${scopeKey}`,
     `scope:${scopeKey}`,

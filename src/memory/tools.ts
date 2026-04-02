@@ -216,7 +216,7 @@ export function createMemoryWriteTool(
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const internalSource = extractInternalSource(params as Record<string, unknown>);
+        const internalSource = extractInternalSource(params as unknown as Record<string, unknown>);
         const { text, type } = params;
 
         if (!text || text.trim().length === 0) {
@@ -310,7 +310,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const internalSource = extractInternalSource(params as Record<string, unknown>);
+        const internalSource = extractInternalSource(params as unknown as Record<string, unknown>);
         const rawRecords = params.records;
         const source = params.source || 'import';
 
@@ -397,7 +397,7 @@ export function createMemoryRedactTool(writer: MemoryWriter): AgentTool<any> {
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const internalSource = extractInternalSource(params as Record<string, unknown>);
+        const internalSource = extractInternalSource(params as unknown as Record<string, unknown>);
         const memoryId = params.memory_id.trim();
         if (!memoryId) {
           return textResultWithError('Error: memory_id is required', true);
@@ -612,7 +612,7 @@ export function createMemoryTool(
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const internalSource = extractInternalSource(params as Record<string, unknown>);
+        const internalSource = extractInternalSource(params as unknown as Record<string, unknown>);
         const action = params.action;
 
         if (!MEMORY_TOOL_ACTIONS.includes(action)) {

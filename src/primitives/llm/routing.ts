@@ -1,4 +1,14 @@
-import type { CanonicalModelPurpose, ImportProcessingRouteMode, ModelRegistryCostMetadata, ModelRegistryEntry, ModelRegistryPurposeTag, ModelThinkingEffort } from '../../shared/contracts/runtime.js';
+import type {
+  CanonicalModelPurpose,
+  ImportProcessingRouteMode,
+  ModelRegistryCostMetadata,
+  ModelRegistryEntry,
+  ModelRegistryPurposeTag,
+  ModelThinkingEffort,
+  PromptCacheRetention,
+  PromptCacheScope,
+  PromptCacheStrategy,
+} from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 export type RoutingPurpose = CanonicalModelPurpose | 'context';
@@ -16,6 +26,9 @@ export interface RoutingCandidate {
   topK?: number;
   frequencyPenalty?: number;
   repetitionPenalty?: number;
+  promptCacheStrategy?: PromptCacheStrategy;
+  promptCacheRetention?: PromptCacheRetention;
+  promptCacheScope?: PromptCacheScope;
   slotKey?: string;
   requestBaseUrl?: string;
   requestApiKeyEnv?: string;
@@ -73,6 +86,9 @@ function uniquePush(
     String(candidate.topK ?? ''),
     String(candidate.frequencyPenalty ?? ''),
     String(candidate.repetitionPenalty ?? ''),
+    candidate.promptCacheStrategy ?? '',
+    candidate.promptCacheRetention ?? '',
+    candidate.promptCacheScope ?? '',
     candidate.requestBaseUrl ?? '',
     candidate.requestApiKeyEnv ?? '',
     candidate.openRouterZdrOnly ? 'zdr' : '',
@@ -124,6 +140,87 @@ function resolveThinkingEffort(value: unknown): ModelThinkingEffort | undefined 
   }
 }
 
+const PROMPT_CACHE_STRATEGIES: ReadonlySet<PromptCacheStrategy> = new Set(['openai_responses']);
+const PROMPT_CACHE_RETENTIONS: ReadonlySet<PromptCacheRetention> = new Set(['none', 'short', 'long']);
+const PROMPT_CACHE_SCOPES: ReadonlySet<PromptCacheScope> = new Set(['channel', 'request']);
+
+function resolvePromptCacheStrategy(value: unknown, fieldPath: string): PromptCacheStrategy | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid model registry model "${fieldPath}": promptCacheStrategy must be a string`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!PROMPT_CACHE_STRATEGIES.has(normalized as PromptCacheStrategy)) {
+    throw new Error(`Invalid model registry model "${fieldPath}": promptCacheStrategy must be one of ${[...PROMPT_CACHE_STRATEGIES].join(', ')}`);
+  }
+  return normalized as PromptCacheStrategy;
+}
+
+function resolvePromptCacheRetention(value: unknown, fieldPath: string): PromptCacheRetention | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid model registry model "${fieldPath}": promptCacheRetention must be a string`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!PROMPT_CACHE_RETENTIONS.has(normalized as PromptCacheRetention)) {
+    throw new Error(`Invalid model registry model "${fieldPath}": promptCacheRetention must be one of ${[...PROMPT_CACHE_RETENTIONS].join(', ')}`);
+  }
+  return normalized as PromptCacheRetention;
+}
+
+function resolvePromptCacheScope(value: unknown, fieldPath: string): PromptCacheScope | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid model registry model "${fieldPath}": promptCacheScope must be a string`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!PROMPT_CACHE_SCOPES.has(normalized as PromptCacheScope)) {
+    throw new Error(`Invalid model registry model "${fieldPath}": promptCacheScope must be one of ${[...PROMPT_CACHE_SCOPES].join(', ')}`);
+  }
+  return normalized as PromptCacheScope;
+}
+
+function resolvePromptCacheConfig(entry: ModelRegistryEntry): Pick<
+  RoutingCandidate,
+  'promptCacheStrategy' | 'promptCacheRetention' | 'promptCacheScope'
+> {
+  const capabilities = entry.capabilities;
+  const tuning = entry.tuning;
+  const fieldPath = entry.id;
+  const supportsPromptCachingRaw = capabilities?.supportsPromptCaching;
+  if (supportsPromptCachingRaw !== undefined && typeof supportsPromptCachingRaw !== 'boolean') {
+    throw new Error(`Invalid model registry model "${fieldPath}": supportsPromptCaching must be a boolean`);
+  }
+
+  const promptCacheStrategy = resolvePromptCacheStrategy(capabilities?.promptCacheStrategy, fieldPath);
+  const promptCacheRetention = resolvePromptCacheRetention(tuning?.promptCacheRetention, fieldPath);
+  const promptCacheScope = resolvePromptCacheScope(tuning?.promptCacheScope, fieldPath);
+
+  if (supportsPromptCachingRaw === true) {
+    if (!promptCacheStrategy) {
+      throw new Error(`Invalid model registry model "${fieldPath}": promptCacheStrategy is required when supportsPromptCaching is true`);
+    }
+    return {
+      promptCacheStrategy,
+      promptCacheRetention: promptCacheRetention ?? 'short',
+      promptCacheScope: promptCacheScope ?? 'channel',
+    };
+  }
+
+  if (supportsPromptCachingRaw === false) {
+    if (promptCacheStrategy || promptCacheRetention || promptCacheScope) {
+      throw new Error(`Invalid model registry model "${fieldPath}": prompt cache tuning requires supportsPromptCaching to be true`);
+    }
+    return {};
+  }
+
+  if (promptCacheStrategy || promptCacheRetention || promptCacheScope) {
+    throw new Error(`Invalid model registry model "${fieldPath}": prompt cache tuning requires supportsPromptCaching to be set`);
+  }
+
+  return {};
+}
+
 function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
   RoutingCandidate,
   'thinkingEnabled'
@@ -133,9 +230,13 @@ function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
   | 'topK'
   | 'frequencyPenalty'
   | 'repetitionPenalty'
+  | 'promptCacheStrategy'
+  | 'promptCacheRetention'
+  | 'promptCacheScope'
 > {
   const tuning = entry.tuning;
-  if (!tuning) return {};
+  const promptCaching = resolvePromptCacheConfig(entry);
+  if (!tuning) return promptCaching;
   const thinkingEnabled = typeof tuning.thinkingEnabled === 'boolean'
     ? tuning.thinkingEnabled
     : undefined;
@@ -154,6 +255,7 @@ function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
     ...(topK !== undefined ? { topK } : {}),
     ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
     ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
+    ...promptCaching,
   };
 }
 

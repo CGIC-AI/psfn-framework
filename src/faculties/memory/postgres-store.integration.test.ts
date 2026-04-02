@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { createPostgresPool, ensurePostgresSchema } from '../../persistence/postgres.js';
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
-import { startPostgresTestHarness, type PostgresTestHarness } from '../../test-support/postgres-test-harness.js';
+import {
+  DEFAULT_POSTGRES_TEST_IMAGE,
+  startPostgresTestHarness,
+  type PostgresTestHarness,
+} from '../../test-support/postgres-test-harness.js';
 import { createPostgresMemoryStoreFromPool } from './postgres-store.js';
 import type { PurrMemory } from './types.js';
 
@@ -81,7 +85,7 @@ async function seedMemoryRow(pool: Pool, memory: PurrMemory, embedding: readonly
       retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
       delete_reason, embedding
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27::vector
     )
   `, [
     memory.id,
@@ -110,7 +114,7 @@ async function seedMemoryRow(pool: Pool, memory: PurrMemory, embedding: readonly
     memory.deletedAt ?? null,
     memory.deletedBy ?? null,
     memory.deleteReason ?? null,
-    embedding,
+    `[${embedding.join(',')}]`,
   ]);
 }
 
@@ -138,7 +142,8 @@ describe('postgres memory store integration', () => {
       expect(embeddingColumn.rows).toHaveLength(1);
       expect(embeddingColumn.rows[0]).toMatchObject({
         column_name: 'embedding',
-        data_type: 'ARRAY',
+        data_type: 'USER-DEFINED',
+        udt_name: 'vector',
       });
 
       const seededMemory = makeMemory({
@@ -193,19 +198,15 @@ describe('postgres memory store integration', () => {
         text: string;
         salience: number;
         deleted_at: number | null;
-        embedding: number[] | null;
-      }>('SELECT id, text, salience, deleted_at, embedding FROM l2_memories WHERE id = $1', [memory.id]);
+        embedding: string | null;
+      }>('SELECT id, text, salience, deleted_at, embedding::text AS embedding FROM l2_memories WHERE id = $1', [memory.id]);
       expect(inserted.rows).toHaveLength(1);
       expect(inserted.rows[0]).toMatchObject({
         id: memory.id,
         text: memory.text,
         deleted_at: null,
       });
-      const expectedEmbedding = Array.from(DEFAULT_EMBEDDING);
-      expect(inserted.rows[0]?.embedding).toHaveLength(4);
-      inserted.rows[0]?.embedding?.forEach((value, index) => {
-        expect(value).toBeCloseTo(expectedEmbedding[index]!, 5);
-      });
+      expect(inserted.rows[0]?.embedding).toBe('[0.9,0.1,0.1,0.1]');
 
       expect(await store.getById(memory.id)).toMatchObject({
         id: memory.id,
@@ -305,5 +306,101 @@ describe('postgres memory store integration', () => {
         'PostgreSQL memory schema is missing l2_memories.embedding',
       );
     });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('upgrades legacy array embedding schemas during migration', async () => {
+    await withMemoryDatabase(async (pool) => {
+      await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+      await pool.query('ALTER TABLE l2_memories ALTER COLUMN embedding TYPE DOUBLE PRECISION[] USING ARRAY[0.1, 0.2, 0.3, 0.4]');
+
+      const legacyMemory = makeMemory({
+        id: 'legacy-array-memory',
+        text: 'Legacy array embedding memory',
+        sourceRef: 'legacy:array',
+        extractedAt: 1_700_000_300_000,
+        lastAccessed: 1_700_000_300_000,
+        tags: ['legacy', 'array'],
+      });
+      const legacyInsertSql = [
+        'INSERT INTO l2_memories (',
+        '  id, text, type, importance, confidence, emotional_valence, formation_vad, salience,',
+        '  source_ref, extracted_at, last_accessed, access_count, superseded_by, tags,',
+        '  scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,',
+        '  retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,',
+        '  delete_reason, embedding',
+        ') VALUES (',
+        '  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27',
+        ')',
+      ].join('\n');
+      await pool.query(legacyInsertSql, [
+        legacyMemory.id,
+        legacyMemory.text,
+        legacyMemory.type,
+        legacyMemory.importance,
+        legacyMemory.confidence,
+        legacyMemory.emotionalValence,
+        encodeJsonValue(legacyMemory.formationVAD),
+        legacyMemory.salience,
+        legacyMemory.sourceRef,
+        legacyMemory.extractedAt,
+        legacyMemory.lastAccessed,
+        legacyMemory.accessCount,
+        legacyMemory.supersededBy ?? null,
+        encodeJsonValue(legacyMemory.tags),
+        legacyMemory.scopeRef?.kind ?? null,
+        legacyMemory.scopeRef?.id ?? null,
+        legacyMemory.scopeRef?.label ?? null,
+        encodeJsonValue(legacyMemory.scopeTags ?? []),
+        encodeJsonValue(legacyMemory.provenanceRefs ?? []),
+        legacyMemory.retentionClass ?? null,
+        legacyMemory.sensitivity,
+        encodeJsonValue(legacyMemory.consentFlags ?? {}),
+        legacyMemory.contactId ?? null,
+        legacyMemory.deletedAt ?? null,
+        legacyMemory.deletedBy ?? null,
+        legacyMemory.deleteReason ?? null,
+        [0.9, 0.1, 0.1, 0.1],
+      ]);
+
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      const embeddingColumnSql = [
+        'SELECT data_type, udt_name',
+        'FROM information_schema.columns',
+        'WHERE table_schema = current_schema()',
+        "  AND table_name = 'l2_memories'",
+        "  AND column_name = 'embedding'",
+      ].join('\n');
+      const embeddingColumn = await pool.query<{ data_type: string; udt_name: string }>(embeddingColumnSql);
+      expect(embeddingColumn.rows).toHaveLength(1);
+      expect(embeddingColumn.rows[0]).toMatchObject({
+        data_type: 'USER-DEFINED',
+        udt_name: 'vector',
+      });
+
+      const embeddingSearch = await store.searchByEmbedding(DEFAULT_EMBEDDING, 0.99, 10);
+      expect(embeddingSearch).toHaveLength(1);
+      expect(embeddingSearch[0]).toMatchObject({
+        id: legacyMemory.id,
+        text: legacyMemory.text,
+      });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+  it('fails closed when pgvector extension is unavailable', async () => {
+    const plainHarness = await startPostgresTestHarness({ image: DEFAULT_POSTGRES_TEST_IMAGE });
+    try {
+      const database = await plainHarness.createDatabase();
+      const pool = createPostgresPool(database.databaseUrl, {
+        applicationName: 'psfn-memory-integration-missing-vector',
+        allowExitOnIdle: true,
+        max: 1,
+      });
+      try {
+        await expect(createPostgresMemoryStoreFromPool(pool, 4)).rejects.toThrow(/extension .*vector|could not open extension control file/i);
+      } finally {
+        await pool.end().catch(() => undefined);
+      }
+    } finally {
+      await plainHarness.stop();
+    }
   }, INTEGRATION_TIMEOUT_MS);
 });

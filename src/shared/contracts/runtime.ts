@@ -337,6 +337,20 @@ export interface LLMSystemRoleCapabilityMetadata {
   usesOutOfBandSystemPrompt: boolean;
 }
 
+export type PromptCacheStrategy = 'openai_responses';
+export type PromptCacheRetention = 'none' | 'short' | 'long';
+export type PromptCacheScope = 'channel' | 'request';
+
+export interface LLMPromptCacheObservability {
+  configured: boolean;
+  engaged: boolean;
+  strategy?: PromptCacheStrategy;
+  retention?: PromptCacheRetention;
+  scope?: PromptCacheScope;
+  sessionId?: string;
+  reason?: 'disabled' | 'missing_channel_id';
+}
+
 export interface LLMProviderObservability {
   routeKind: 'registered_model' | 'configured_litellm_proxy' | 'request_base_url';
   requestedProvider: string;
@@ -346,6 +360,7 @@ export interface LLMProviderObservability {
   backendApi: string;
   backendBaseUrl?: string;
   systemRole: LLMSystemRoleCapabilityMetadata;
+  promptCaching: LLMPromptCacheObservability;
   providerWireMessages: LLMProviderWireMessage[];
 }
 
@@ -432,11 +447,15 @@ export interface ModelRegistryCapabilityMetadata {
   contextWindow?: number;
   supportsVision?: boolean;
   supportsReasoning?: boolean;
+  supportsPromptCaching?: boolean;
+  promptCacheStrategy?: PromptCacheStrategy;
   [key: string]: unknown;
 }
 
 export interface ModelRegistryTuningMetadata extends ModelControlKnobs {
   maxOutputTokens?: number;
+  promptCacheRetention?: PromptCacheRetention;
+  promptCacheScope?: PromptCacheScope;
   [key: string]: unknown;
 }
 

@@ -23,7 +23,8 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - Embedded with the configured embeddings provider and indexed with `sqlite-vec`
 - Retrieved by `MemoryRetriever`
 - Written through `MemoryWriter` and `MemoryExtractor`
-- The storage contract should stay async-safe at the port level so a PostgreSQL implementation can use the same `MemoryStorePort` surface later.
+- The storage contract stays async-safe at the port level so SQLite and PostgreSQL share the same `MemoryStorePort` surface.
+- The supported PostgreSQL memory path stores embeddings in `l2_memories.embedding` via `pgvector` and performs database-side similarity search. Missing `pgvector` support is a fail-closed startup error, not a silent fallback to app-side array scanning.
 - Backends may optimize the internal implementation differently, but the caller contract must not assume SQLite-specific transaction or vector-index behavior.
 
 ### Parallel memory/state artifacts

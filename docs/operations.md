@@ -58,13 +58,14 @@ Production startup should not proceed until the cutover plan is clean.
 
 ## Persistence Backends
 
-SQLite remains the default backend for the repo-owned runtime, but the architecture is expected to support PostgreSQL behind ports without changing callers.
+SQLite remains the default backend for the repo-owned runtime, and PostgreSQL is supported behind the same ports for projection and memory surfaces without changing callers.
 
 Operational rules:
 
 - JSONL L0 remains authoritative even when a database mirror is enabled.
 - Fast-search tables and indices are projections that can be rebuilt from canonical archive truth.
 - Backend-specific adapter code stays behind the port/composition layer.
+- PostgreSQL long-term memory requires the `pgvector` extension. Startup and migrations fail closed when `pgvector` is unavailable; there is no supported fallback to `DOUBLE PRECISION[]` scanning.
 - If a backend or projection strategy changes, run `npm run lint`, `npm run build`, and targeted parity tests for the affected domains before treating the change as safe.
 - If projection drift is suspected, repair from the archive before trusting search results or operator views.
 - Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work.

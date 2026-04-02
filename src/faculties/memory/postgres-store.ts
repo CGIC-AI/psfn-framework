@@ -67,7 +67,7 @@ interface MemoryRow {
   deleted_at: number | null;
   deleted_by: string | null;
   delete_reason: string | null;
-  embedding: number[] | null;
+  embedding: string | null;
 }
 
 interface MemorySchemaTableRow {
@@ -77,6 +77,11 @@ interface MemorySchemaTableRow {
 interface MemorySchemaColumnRow {
   column_name: string;
   data_type: string;
+  udt_name: string;
+}
+
+interface MemoryEmbeddingSearchRow extends MemoryRow {
+  similarity: number;
 }
 
 interface MemoryDeleteVersionRow {
@@ -171,13 +176,31 @@ function decodeFormationVAD(value: unknown): PurrMemory['formationVAD'] {
   });
 }
 
-function encodeEmbedding(embedding: Float32Array): number[] {
-  return Array.from(embedding, value => Number(value));
+function encodeEmbeddingLiteral(embedding: Float32Array): string {
+  return `[${Array.from(embedding, value => Number(value)).join(',')}]`;
 }
 
 function decodeEmbedding(value: unknown): Float32Array | undefined {
-  if (!Array.isArray(value)) return undefined;
-  return new Float32Array(value.flatMap((entry) => (typeof entry === 'number' ? [entry] : [])));
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return undefined;
+  const inner = trimmed.slice(1, -1).trim();
+  if (!inner) return new Float32Array();
+  const parsedValues = inner.split(',').map((entry) => {
+    const normalized = entry.trim();
+    if (!normalized) return Number.NaN;
+    return Number(normalized);
+  });
+  if (parsedValues.some((entry) => !Number.isFinite(entry))) {
+    return undefined;
+  }
+  return new Float32Array(parsedValues);
+}
+
+function validateEmbeddingDimensions(embedding: Float32Array, expectedDims: number, operation: string): void {
+  if (embedding.length !== expectedDims) {
+    throw new Error(`PostgreSQL memory embedding ${operation} dimension mismatch: expected ${expectedDims}, got ${embedding.length}`);
+  }
 }
 
 function memoryKey(id1: string, id2: string): string {
@@ -217,7 +240,7 @@ function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): MemoryRow {
     deleted_at: memory.deletedAt ?? null,
     deleted_by: memory.deletedBy ?? null,
     delete_reason: memory.deleteReason ?? null,
-    embedding: embedding ? encodeEmbedding(embedding) : null,
+    embedding: embedding ? encodeEmbeddingLiteral(embedding) : null,
   };
 }
 
@@ -272,23 +295,6 @@ function lexicalScore(memory: PurrMemory, query: string): number {
   return score / tokens.length;
 }
 
-function cosineSimilarity(left: Float32Array, right: Float32Array): number {
-  const length = Math.min(left.length, right.length);
-  if (length === 0) return 0;
-  let dot = 0;
-  let leftNorm = 0;
-  let rightNorm = 0;
-  for (let index = 0; index < length; index += 1) {
-    const lv = left[index] ?? 0;
-    const rv = right[index] ?? 0;
-    dot += lv * rv;
-    leftNorm += lv * lv;
-    rightNorm += rv * rv;
-  }
-  if (leftNorm === 0 || rightNorm === 0) return 0;
-  return dot / Math.sqrt(leftNorm * rightNorm);
-}
-
 export async function createPostgresMemoryStore(
   databaseUrl: string,
   embeddingDims: number,
@@ -335,9 +341,9 @@ async function validatePostgresMemorySchema(pool: Pool): Promise<void> {
       'PostgreSQL memory schema is missing l2_memories.embedding; recreate the memory schema before starting the memory store',
     );
   }
-  if (embeddingColumn.data_type !== 'ARRAY') {
+  if (embeddingColumn.udt_name !== 'vector') {
     throw new Error(
-      `PostgreSQL memory schema column l2_memories.embedding must be an array type, got ${embeddingColumn.data_type}`,
+      `PostgreSQL memory schema column l2_memories.embedding must use pgvector, got ${embeddingColumn.udt_name || embeddingColumn.data_type}`,
     );
   }
 }
@@ -377,7 +383,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         salience, source_ref, extracted_at, last_accessed, access_count, superseded_by,
         tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
-        delete_reason, embedding
+        delete_reason, embedding::text AS embedding
       FROM l2_memories
       ORDER BY extracted_at DESC, id DESC
     `);
@@ -385,9 +391,11 @@ class PostgresMemoryStore implements MemoryStorePort {
       this.memories.set(row.id, fromMemoryRow(row));
       if (row.embedding) {
         const embedding = decodeEmbedding(row.embedding);
-        if (embedding) {
-          this.embeddings.set(row.id, embedding);
+        if (!embedding) {
+          throw new Error(`PostgreSQL memory schema returned an unreadable pgvector embedding for memory ${row.id}`);
         }
+        validateEmbeddingDimensions(embedding, this.embeddingDims, 'hydrate');
+        this.embeddings.set(row.id, embedding);
       }
     }
 
@@ -476,6 +484,9 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   private async upsertMemoryRow(memory: PurrMemory, embedding?: Float32Array): Promise<void> {
+    if (embedding) {
+      validateEmbeddingDimensions(embedding, this.embeddingDims, 'write');
+    }
     const row = toMemoryRow(memory, embedding);
     await executeQuery(this.pool, `
       INSERT INTO l2_memories (
@@ -485,7 +496,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
         delete_reason, embedding
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27::vector
       )
       ON CONFLICT (id) DO UPDATE SET
         text = EXCLUDED.text,
@@ -611,6 +622,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
+    validateEmbeddingDimensions(embedding, this.embeddingDims, 'insert');
     await this.persist(() => this.upsertMemoryRow(memory, embedding));
     this.memories.set(memory.id, memory);
     this.embeddings.set(memory.id, embedding);
@@ -630,41 +642,38 @@ class PostgresMemoryStore implements MemoryStorePort {
     limit: number,
     scopeQuery?: MemoryScopeQuery,
   ): Promise<Array<PurrMemory & { similarity: number }>> {
+    validateEmbeddingDimensions(embedding, this.embeddingDims, 'search');
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
-    const selected = Array.from(this.memories.values()).filter((memory) => {
-      if (memory.supersededBy || memory.deletedAt) return false;
-      if (
-        normalizedScopeQuery
-        && (
-          normalizedScopeQuery.mode === 'only'
-          || normalizedScopeQuery.refs?.length
-          || normalizedScopeQuery.tags?.length
-        )
-      ) {
+    const rows = await queryRows<MemoryEmbeddingSearchRow>(this.pool, `
+      SELECT
+        id, text, type, importance, confidence, emotional_valence, formation_vad,
+        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by,
+        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
+        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
+        delete_reason, embedding::text AS embedding,
+        1 - (embedding <=> $1::vector) AS similarity
+      FROM l2_memories
+      WHERE embedding IS NOT NULL
+        AND superseded_by IS NULL
+        AND deleted_at IS NULL
+        AND 1 - (embedding <=> $1::vector) >= $2
+      ORDER BY embedding <=> $1::vector ASC, salience DESC, extracted_at DESC
+    `, [encodeEmbeddingLiteral(embedding), threshold]);
+
+    return rows
+      .map((row) => ({ ...fromMemoryRow(row), similarity: row.similarity }))
+      .filter((memory) => {
+        if (!normalizedScopeQuery) return true;
         const refs = normalizedScopeQuery.refs ?? [];
         const tags = normalizedScopeQuery.tags ?? [];
+        if (refs.length === 0 && tags.length === 0) return true;
         const scopeMatch = refs.length === 0 || refs.some(ref => {
           const scope = memory.scopeRef;
           return scope?.kind === ref.kind && scope.id === ref.id;
         });
         const tagMatch = tags.length === 0 || tags.some(tag => memory.scopeTags?.includes(tag));
-        if (normalizedScopeQuery.mode === 'only') {
-          return scopeMatch && tagMatch;
-        }
-        return scopeMatch || tagMatch;
-      }
-      return true;
-    });
-
-    return selected
-      .map(memory => {
-        const memoryEmbedding = this.embeddings.get(memory.id);
-        if (!memoryEmbedding) return null;
-        const similarity = cosineSimilarity(embedding, memoryEmbedding);
-        if (similarity < threshold) return null;
-        return { ...memory, similarity };
+        return normalizedScopeQuery.mode === 'only' ? scopeMatch && tagMatch : scopeMatch || tagMatch;
       })
-      .filter((value): value is PurrMemory & { similarity: number } => value !== null)
       .sort((left, right) => right.similarity - left.similarity || right.salience - left.salience || right.extractedAt - left.extractedAt)
       .slice(0, limit);
   }

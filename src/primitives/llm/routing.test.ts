@@ -408,6 +408,72 @@ describe('resolveRoutingCandidates(memory)', () => {
   });
 });
 
+describe('resolveRoutingCandidates prompt caching', () => {
+  it('defaults prompt cache retention and scope when prompt caching is enabled', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'summary-cache',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'summary/cached',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'summary', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+              supportsPromptCaching: true,
+              promptCacheStrategy: 'openai_responses',
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+        ],
+      },
+    }), 'summary');
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      model: 'summary/cached',
+      promptCacheStrategy: 'openai_responses',
+      promptCacheRetention: 'short',
+      promptCacheScope: 'channel',
+    });
+  });
+
+  it('fails closed when prompt caching is enabled without a strategy', () => {
+    expect(() => resolveRoutingCandidates(makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'summary-cache',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'summary/cached',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'summary', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+              supportsPromptCaching: true,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+        ],
+      },
+    }), 'summary')).toThrow('promptCacheStrategy is required when supportsPromptCaching is true');
+  });
+});
 describe('resolveRoutingCandidates fail-closed behavior', () => {
   it('returns no candidates when no eligible registry models exist for the requested purpose', () => {
     const candidates = resolveRoutingCandidates(makeConfig({

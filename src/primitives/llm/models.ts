@@ -9,6 +9,8 @@ import type {
   LLMSystemRoleCapabilityMetadata,
 } from '../../shared/contracts/runtime.js';
 
+export type OpenAICompatibleApi = 'openai-completions' | 'openai-responses';
+
 export interface OpenAICompatibleEndpointModelConfig {
   /** OpenAI-compatible base URL, e.g. http://localhost:4000/v1 */
   baseUrl: string;
@@ -24,6 +26,8 @@ export interface OpenAICompatibleEndpointModelConfig {
   maxTokens?: number;
   /** Supports reasoning/thinking blocks */
   reasoning?: boolean;
+  /** OpenAI-compatible API shape to expose through pi-ai */
+  api?: OpenAICompatibleApi;
   /** Format for reasoning parameter — required when reasoning: true */
   thinkingFormat?: 'openai' | 'zai' | 'qwen';
 }
@@ -43,12 +47,12 @@ export function resolveRegisteredModel(provider: string, modelId: string): Model
  */
 export function createOpenAICompatibleEndpointModel(
   config: OpenAICompatibleEndpointModelConfig,
- ): Model<'openai-completions'> {
+ ): Model<OpenAICompatibleApi> {
   const routeLabel = config.routeLabel?.trim() || 'routed endpoint';
   return {
     id: config.modelId,
     name: `${config.modelId} (via ${routeLabel})`,
-    api: 'openai-completions',
+    api: config.api ?? 'openai-completions',
     provider: config.provider,
     baseUrl: config.baseUrl,
     reasoning: config.reasoning ?? false,
@@ -70,7 +74,7 @@ export function createOpenAICompatibleEndpointModel(
  */
 export function createLiteLLMModel(
   config: Omit<OpenAICompatibleEndpointModelConfig, 'provider' | 'routeLabel'>,
-): Model<'openai-completions'> {
+): Model<OpenAICompatibleApi> {
   return createOpenAICompatibleEndpointModel({
     ...config,
     provider: 'litellm',
@@ -83,7 +87,8 @@ export function createModel(
   modelId: string,
   maxTokens?: number,
   contextWindow?: number,
-): Model<'openai-completions'> {
+  api: OpenAICompatibleApi = 'openai-completions',
+): Model<OpenAICompatibleApi> {
   return createOpenAICompatibleEndpointModel({
     baseUrl,
     modelId,
@@ -91,6 +96,7 @@ export function createModel(
     routeLabel: 'LiteLLM',
     maxTokens,
     contextWindow,
+    api,
   });
 }
 

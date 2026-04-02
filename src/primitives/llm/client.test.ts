@@ -421,6 +421,175 @@ describe('LLMClient provider observability', () => {
   });
 });
 
+describe('LLMClient prompt caching', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+      reasoning: true,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('routes prompt-cached completions through openai-responses and exposes engaged observability', async () => {
+    const client = new LLMClient(makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'summary-cache',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'summary/cached',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'summary', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+              supportsPromptCaching: true,
+              promptCacheStrategy: 'openai_responses',
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+              promptCacheRetention: 'long',
+              promptCacheScope: 'channel',
+            },
+          },
+        ],
+      },
+    }), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'cached ok' }],
+      model: 'summary/cached',
+      usage: { input: 9, output: 4 },
+      stopReason: 'stop',
+    });
+
+    const response = await client.complete(
+      {
+        systemPrompt: 'System prompt',
+        messages: [{ role: 'user', content: 'Hi' }],
+        correlation: {
+          requestId: 'req-cache-1',
+          channelId: 'discord:cache-channel',
+          callType: 'summary',
+          originType: 'summary',
+          originStage: 'agent.summary',
+          purpose: 'summary',
+        },
+      },
+      'summary',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string; api: string };
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { cacheRetention?: string; sessionId?: string };
+    expect(model.id).toBe('summary/cached');
+    expect(model.api).toBe('openai-responses');
+    expect(requestOptions).toMatchObject({
+      cacheRetention: 'long',
+      sessionId: 'discord:cache-channel',
+    });
+    expect(response.providerObservability).toMatchObject({
+      backendApi: 'openai-responses',
+      promptCaching: {
+        configured: true,
+        engaged: true,
+        strategy: 'openai_responses',
+        retention: 'long',
+        scope: 'channel',
+        sessionId: 'discord:cache-channel',
+      },
+    });
+  });
+
+  it('fails closed on cache engagement when a channel-scoped cache key cannot be derived', async () => {
+    const client = new LLMClient(makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'summary-cache',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'summary/cached',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'summary', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+              supportsPromptCaching: true,
+              promptCacheStrategy: 'openai_responses',
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+              promptCacheRetention: 'long',
+              promptCacheScope: 'channel',
+            },
+          },
+        ],
+      },
+    }), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'cached ok' }],
+      model: 'summary/cached',
+      usage: { input: 9, output: 4 },
+      stopReason: 'stop',
+    });
+
+    const response = await client.complete(
+      {
+        systemPrompt: 'System prompt',
+        messages: [{ role: 'user', content: 'Hi' }],
+        correlation: {
+          requestId: 'req-cache-2',
+          callType: 'summary',
+          originType: 'summary',
+          originStage: 'agent.summary',
+          purpose: 'summary',
+        },
+      },
+      'summary',
+      { disableRetry: true },
+    );
+
+    const model = mocks.completeSimple.mock.calls[0][0] as { api: string };
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { cacheRetention?: string; sessionId?: string };
+    expect(model.api).toBe('openai-responses');
+    expect(requestOptions.cacheRetention).toBeUndefined();
+    expect(requestOptions.sessionId).toBeUndefined();
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: true,
+        engaged: false,
+        strategy: 'openai_responses',
+        retention: 'long',
+        scope: 'channel',
+        reason: 'missing_channel_id',
+      },
+    });
+  });
+});
 describe('LLMClient completion model hints', () => {
   beforeEach(() => {
     mocks.getModel.mockReset();

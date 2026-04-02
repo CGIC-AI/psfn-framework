@@ -10,6 +10,7 @@ import type {
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
+  LLMPromptCacheObservability,
   LLMProviderObservability,
   LLMModelHint,
   LLMResponse,
@@ -19,7 +20,7 @@ import type {
   ToolCall,
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createModel } from './models.js';
+import { createModel, createOpenAICompatibleEndpointModel, type OpenAICompatibleApi } from './models.js';
 import { withRetry, markErrorAsNonRetryable } from './retry.js';
 import { llmRetryConfig } from './retry-config.js';
 import {
@@ -151,14 +152,22 @@ export class LLMClient {
         ? resolveOptionalEnvCredential(this.config.credentialVault, candidate.requestApiKeyEnv)
         : undefined;
       return {
-        model: createModel(candidate.requestBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
+        model: createOpenAICompatibleEndpointModel({
+          baseUrl: candidate.requestBaseUrl,
+          modelId,
+          provider: candidate.provider,
+          routeLabel: candidate.provider.replace(/_/g, ' '),
+          maxTokens: candidate.maxTokens,
+          contextWindow: candidate.contextWindow,
+          api: this.resolveOpenAICompatibleApi(candidate),
+        }),
         apiKey,
       };
     }
 
     if (this.litellmBaseUrl) {
       return {
-        model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow),
+        model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow, this.resolveOpenAICompatibleApi(candidate)),
         apiKey: resolveConfiguredLiteLLMApiKey({
           credentialVault: this.config.credentialVault,
           litellmApiKeyRef: this.litellmApiKeyRef,
@@ -181,7 +190,7 @@ export class LLMClient {
   private buildRequestOptions(
     candidate: RoutingCandidate,
     apiKey: string | undefined,
-    extra: { signal?: AbortSignal } = {},
+    extra: { signal?: AbortSignal; correlation?: ResolvedCorrelationMetadata } = {},
   ): LLMRequestOptions {
     const requestOptions: LLMRequestOptions = {
       apiKey,
@@ -207,6 +216,12 @@ export class LLMClient {
       if (candidate.topK !== undefined) requestOptions.topK = candidate.topK;
       if (candidate.frequencyPenalty !== undefined) requestOptions.frequencyPenalty = candidate.frequencyPenalty;
       if (candidate.repetitionPenalty !== undefined) requestOptions.repetitionPenalty = candidate.repetitionPenalty;
+    }
+
+    const promptCaching = this.buildPromptCacheObservability(candidate, extra.correlation);
+    if (promptCaching.engaged && promptCaching.retention && promptCaching.sessionId) {
+      requestOptions.cacheRetention = promptCaching.retention;
+      requestOptions.sessionId = promptCaching.sessionId;
     }
 
     if (candidate.provider === 'openrouter') {
@@ -258,6 +273,71 @@ export class LLMClient {
     return FULL_KNOB_PASSTHROUGH_PROVIDERS.has(candidate.provider)
       || !!candidate.requestBaseUrl
       || this.litellmBaseUrl !== null;
+  }
+
+  private resolveOpenAICompatibleApi(candidate: RoutingCandidate): OpenAICompatibleApi {
+    return candidate.promptCacheStrategy === 'openai_responses'
+      ? 'openai-responses'
+      : 'openai-completions';
+  }
+
+  private resolvePromptCacheSessionId(
+    candidate: RoutingCandidate,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ): string | undefined {
+    if (!candidate.promptCacheStrategy || candidate.promptCacheRetention === 'none') {
+      return undefined;
+    }
+    if (candidate.promptCacheScope === 'request') {
+      return correlation?.requestId;
+    }
+    return correlation?.channelId;
+  }
+
+  private buildPromptCacheObservability(
+    candidate: RoutingCandidate,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ): LLMPromptCacheObservability {
+    if (!candidate.promptCacheStrategy) {
+      return {
+        configured: false,
+        engaged: false,
+      };
+    }
+
+    const retention = candidate.promptCacheRetention ?? 'short';
+    const scope = candidate.promptCacheScope ?? 'channel';
+    if (retention === 'none') {
+      return {
+        configured: true,
+        engaged: false,
+        strategy: candidate.promptCacheStrategy,
+        retention,
+        scope,
+        reason: 'disabled',
+      };
+    }
+
+    const sessionId = this.resolvePromptCacheSessionId(candidate, correlation);
+    if (!sessionId) {
+      return {
+        configured: true,
+        engaged: false,
+        strategy: candidate.promptCacheStrategy,
+        retention,
+        scope,
+        reason: 'missing_channel_id',
+      };
+    }
+
+    return {
+      configured: true,
+      engaged: true,
+      strategy: candidate.promptCacheStrategy,
+      retention,
+      scope,
+      sessionId,
+    };
   }
 
   private enforceImportRoutingPolicy(purpose: RoutingPurpose, candidate: RoutingCandidate): void {
@@ -364,6 +444,9 @@ export class LLMClient {
       String(candidate.topK ?? ''),
       String(candidate.frequencyPenalty ?? ''),
       String(candidate.repetitionPenalty ?? ''),
+      candidate.promptCacheStrategy ?? '',
+      candidate.promptCacheRetention ?? '',
+      candidate.promptCacheScope ?? '',
       candidate.requestBaseUrl ?? '',
       candidate.requestApiKeyEnv ?? '',
       candidate.openRouterZdrOnly ? 'zdr' : '',
@@ -432,6 +515,9 @@ export class LLMClient {
     if (baseCandidate.provider === provider) {
       if (baseCandidate.requestBaseUrl) hinted.requestBaseUrl = baseCandidate.requestBaseUrl;
       if (baseCandidate.requestApiKeyEnv) hinted.requestApiKeyEnv = baseCandidate.requestApiKeyEnv;
+      if (baseCandidate.promptCacheStrategy) hinted.promptCacheStrategy = baseCandidate.promptCacheStrategy;
+      if (baseCandidate.promptCacheRetention) hinted.promptCacheRetention = baseCandidate.promptCacheRetention;
+      if (baseCandidate.promptCacheScope) hinted.promptCacheScope = baseCandidate.promptCacheScope;
       if (baseCandidate.openRouterZdrOnly) hinted.openRouterZdrOnly = true;
       if (baseCandidate.importRouteMode) hinted.importRouteMode = baseCandidate.importRouteMode;
     }
@@ -526,6 +612,7 @@ export class LLMClient {
     candidate: RoutingCandidate,
     model: Model<any>,
     context: PiContext,
+    correlation: ResolvedCorrelationMetadata | undefined,
   ): LLMProviderObservability {
     const systemRole = resolveSystemRoleCapabilityMetadata(model);
     return {
@@ -537,6 +624,7 @@ export class LLMClient {
       backendApi: model.api,
       ...(model.baseUrl ? { backendBaseUrl: model.baseUrl } : {}),
       systemRole,
+      promptCaching: this.buildPromptCacheObservability(candidate, correlation),
       providerWireMessages: this.toProviderWireMessages(context, systemRole),
     };
   }
@@ -623,8 +711,8 @@ export class LLMClient {
             );
           }
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
-          const requestOptions = this.buildRequestOptions(candidateTarget, apiKey);
-          const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext);
+          const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, { correlation });
+          const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext, correlation);
 
           return withRetry(async () => {
             const eventStream = streamSimple(
@@ -789,8 +877,9 @@ export class LLMClient {
         const { model, apiKey } = this.getModelAndKey(candidateTarget);
         const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
           signal: options.signal,
+          correlation,
         });
-        const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext);
+        const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext, correlation);
 
         const request = async () => {
           try {

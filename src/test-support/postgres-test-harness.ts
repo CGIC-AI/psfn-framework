@@ -3,7 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createPostgresPool } from '../persistence/postgres.js';
 
-const POSTGRES_IMAGE = 'postgres:16.8-alpine';
+export const DEFAULT_POSTGRES_TEST_IMAGE = 'postgres:16.8-alpine';
+export const PGVECTOR_POSTGRES_TEST_IMAGE = 'pgvector/pgvector:0.8.2-pg16-bookworm@sha256:6f2fedef8e4311682b3a5989a21bf527d3310ab5421258ad6e41e52955c16294';
 const POSTGRES_USER = 'postgres';
 const POSTGRES_PASSWORD = 'postgres';
 const POSTGRES_DATABASE = 'postgres';
@@ -18,8 +19,13 @@ export interface PostgresTestDatabase {
 
 export interface PostgresTestHarness {
   readonly adminDatabaseUrl: string;
+  readonly image: string;
   createDatabase(): Promise<PostgresTestDatabase>;
   stop(): Promise<void>;
+}
+
+export interface PostgresTestHarnessOptions {
+  image?: string;
 }
 
 function runDocker(args: string[]): string {
@@ -62,7 +68,8 @@ function resolveDatabaseUrl(adminDatabaseUrl: string, databaseName: string): str
   return url.toString();
 }
 
-export async function startPostgresTestHarness(): Promise<PostgresTestHarness> {
+export async function startPostgresTestHarness(options: PostgresTestHarnessOptions = {}): Promise<PostgresTestHarness> {
+  const image = options.image?.trim() || PGVECTOR_POSTGRES_TEST_IMAGE;
   const containerId = runDocker([
     'run',
     '-d',
@@ -75,7 +82,7 @@ export async function startPostgresTestHarness(): Promise<PostgresTestHarness> {
     `POSTGRES_DB=${POSTGRES_DATABASE}`,
     '-p',
     `127.0.0.1::${POSTGRES_PORT}`,
-    POSTGRES_IMAGE,
+    image,
   ]);
 
   const mapping = runDocker(['port', containerId, `${POSTGRES_PORT}/tcp`]);
@@ -99,6 +106,7 @@ export async function startPostgresTestHarness(): Promise<PostgresTestHarness> {
 
   return {
     adminDatabaseUrl,
+    image,
     async createDatabase(): Promise<PostgresTestDatabase> {
       const databaseName = `psfn_${randomUUID().replaceAll('-', '')}`;
       await adminPool.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);

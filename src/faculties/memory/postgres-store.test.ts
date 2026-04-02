@@ -47,7 +47,33 @@ interface MemoryRow {
   deleted_at: number | null;
   deleted_by: string | null;
   delete_reason: string | null;
-  embedding: number[] | null;
+  embedding: string | null;
+}
+
+function decodeEmbeddingLiteral(value: string | null): number[] {
+  if (!value) return [];
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) return [];
+  const inner = trimmed.slice(1, -1).trim();
+  if (!inner) return [];
+  return inner.split(',').map(entry => Number(entry.trim())).filter(entry => Number.isFinite(entry));
+}
+
+function cosineSimilarity(left: readonly number[], right: readonly number[]): number {
+  const length = Math.min(left.length, right.length);
+  if (length === 0) return 0;
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let index = 0; index < length; index += 1) {
+    const lv = left[index] ?? 0;
+    const rv = right[index] ?? 0;
+    dot += lv * rv;
+    leftNorm += lv * lv;
+    rightNorm += rv * rv;
+  }
+  if (leftNorm === 0 || rightNorm === 0) return 0;
+  return dot / Math.sqrt(leftNorm * rightNorm);
 }
 
 class FakeMemoryPool {
@@ -55,14 +81,17 @@ class FakeMemoryPool {
   readonly queryFailures: Array<{ fragment: string; error: Error }>;
   readonly schemaHasEmbeddingColumn: boolean;
   readonly schemaHasLegacyEmbeddingTable: boolean;
+  readonly schemaUsesPgvector: boolean;
 
   constructor(options: {
     schemaHasEmbeddingColumn?: boolean;
     schemaHasLegacyEmbeddingTable?: boolean;
+    schemaUsesPgvector?: boolean;
     queryFailures?: Array<{ fragment: string; errorMessage: string }>;
   } = {}) {
     this.schemaHasEmbeddingColumn = options.schemaHasEmbeddingColumn ?? true;
     this.schemaHasLegacyEmbeddingTable = options.schemaHasLegacyEmbeddingTable ?? false;
+    this.schemaUsesPgvector = options.schemaUsesPgvector ?? true;
     this.queryFailures = (options.queryFailures ?? []).map(failure => ({
       fragment: failure.fragment,
       error: new Error(failure.errorMessage),
@@ -84,8 +113,10 @@ class FakeMemoryPool {
       normalized === 'begin'
       || normalized === 'commit'
       || normalized === 'rollback'
+      || normalized.startsWith('create extension')
       || normalized.startsWith('create table')
       || normalized.startsWith('create index')
+      || normalized.startsWith('do $')
       ) {
         return { rows: [], rowCount: 0, command: 'OK', oid: 0, fields: [] } as QueryResult;
       }
@@ -105,9 +136,34 @@ class FakeMemoryPool {
     if (normalized.includes('information_schema.columns') && normalized.includes("table_name = 'l2_memories'")) {
       return {
         rows: this.schemaHasEmbeddingColumn
-          ? [{ table_name: 'l2_memories', column_name: 'embedding', data_type: 'ARRAY', udt_name: '_float8' }]
+          ? [{
+            table_name: 'l2_memories',
+            column_name: 'embedding',
+            data_type: this.schemaUsesPgvector ? 'USER-DEFINED' : 'ARRAY',
+            udt_name: this.schemaUsesPgvector ? 'vector' : '_float8',
+          }]
           : [],
         rowCount: this.schemaHasEmbeddingColumn ? 1 : 0,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
+    if (normalized.includes('1 - (embedding <=> $1::vector) as similarity')) {
+      const queryEmbedding = decodeEmbeddingLiteral(typeof values[0] === 'string' ? values[0] : null);
+      const threshold = Number(values[1] ?? 0);
+      const rows = [...this.memories.values()]
+        .filter((row) => !row.superseded_by && row.deleted_at === null && row.embedding)
+        .map((row) => ({
+          ...row,
+          similarity: cosineSimilarity(queryEmbedding, decodeEmbeddingLiteral(row.embedding)),
+        }))
+        .filter((row) => row.similarity >= threshold)
+        .sort((left, right) => right.similarity - left.similarity || right.salience - left.salience || right.extracted_at - left.extracted_at);
+      return {
+        rows,
+        rowCount: rows.length,
         command: 'SELECT',
         oid: 0,
         fields: [],
@@ -172,7 +228,7 @@ class FakeMemoryPool {
         deleted_at: values[23] == null ? null : Number(values[23]),
         deleted_by: values[24] == null ? null : String(values[24]),
         delete_reason: values[25] == null ? null : String(values[25]),
-        embedding: Array.isArray(values[26]) ? (values[26] as number[]) : null,
+        embedding: typeof values[26] === 'string' ? values[26] : null,
       };
       this.memories.set(row.id, row);
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
@@ -207,7 +263,8 @@ afterEach(() => {
 describe('postgres memory store unit coverage', () => {
   it('keeps the supported postgres migration on l2_memories.embedding and omits the dead embeddings table', () => {
     const migrationSql = POSTGRES_MEMORY_MIGRATIONS.join('\n');
-    expect(migrationSql).toContain('embedding DOUBLE PRECISION[]');
+    expect(migrationSql).toContain('CREATE EXTENSION IF NOT EXISTS vector;');
+    expect(migrationSql).toContain('embedding VECTOR');
     expect(migrationSql).not.toContain('CREATE TABLE IF NOT EXISTS l2_memory_embeddings');
   });
 
@@ -319,6 +376,14 @@ describe('postgres memory store unit coverage', () => {
 
     await expect(createPostgresMemoryStore('postgres://unused', 4)).rejects.toThrow(
       'PostgreSQL memory schema is missing l2_memories.embedding',
+    );
+  });
+
+  it('rejects postgres memory schemas that still expose array embeddings', async () => {
+    postgresMocks.activePool = new FakeMemoryPool({ schemaUsesPgvector: false });
+
+    await expect(createPostgresMemoryStore('postgres://unused', 4)).rejects.toThrow(
+      'PostgreSQL memory schema column l2_memories.embedding must use pgvector',
     );
   });
 });

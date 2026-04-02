@@ -1,4 +1,5 @@
 export const POSTGRES_MEMORY_MIGRATIONS = [
+  `CREATE EXTENSION IF NOT EXISTS vector;`,
   `
   CREATE TABLE IF NOT EXISTS l2_memories (
     id TEXT PRIMARY KEY,
@@ -27,8 +28,31 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     deleted_at BIGINT,
     deleted_by TEXT,
     delete_reason TEXT,
-    embedding DOUBLE PRECISION[]
+    embedding VECTOR
   );
+  `,
+  `
+  DO $$
+  BEGIN
+    IF EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = current_schema()
+        AND table_name = 'l2_memories'
+        AND column_name = 'embedding'
+        AND udt_name = '_float8'
+    ) THEN
+      ALTER TABLE l2_memories
+      ALTER COLUMN embedding TYPE VECTOR
+      USING (
+        CASE
+          WHEN embedding IS NULL THEN NULL
+          ELSE ('[' || array_to_string(embedding, ',') || ']')::vector
+        END
+      );
+    END IF;
+  END
+  $$;
   `,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_active ON l2_memories(superseded_by, deleted_at, extracted_at DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_contact ON l2_memories(contact_id, deleted_at, extracted_at DESC, id DESC);`,

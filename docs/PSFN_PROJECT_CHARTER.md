@@ -95,6 +95,7 @@ Rules:
 
 - LiteLLM may be used as the current provider-routing and credential-isolation backend.
 - LiteLLM must not become a conceptual center of gravity for the architecture.
+- Code above the provider-routing seam should speak in terms of routed endpoints or routing proxies, with LiteLLM-specific behavior confined to the adapter boundary.
 - If a better dependency exists later, it should be replaceable behind the same architectural seams.
 
 ## 4. Core Architectural Laws

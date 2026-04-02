@@ -328,6 +328,53 @@ describe('tool-call-scheduler', () => {
     );
   });
 
+  it('preserves system attribution when queued system notes interrupt a batch', async () => {
+    let steeringPollCount = 0;
+    const telemetry = vi.fn();
+    const beads = makeTool(
+      'beads',
+      async () => ({
+        content: [{ type: 'text', text: 'show' }],
+        details: {},
+      }),
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:beads',
+        }),
+      },
+    );
+
+    const result = await executeToolCallsWithScheduler(
+      [beads],
+      makeAssistantMessage(['beads', 'beads']),
+      async () => {
+        steeringPollCount += 1;
+        return steeringPollCount >= 1
+          ? [{
+            role: 'custom',
+            type: 'systemNote',
+            content: '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
+            timestamp: Date.now(),
+          } as any]
+          : [];
+      },
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    expect((result.toolResults[1] as ToolResultMessage).content).toEqual([
+      { type: 'text', text: 'Skipped due to queued system message.' },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        skippedCount: 1,
+        reason: 'queued_system_message',
+      }),
+    );
+  });
+
   it('emits cancelled telemetry when execution aborts before a tool call runs', async () => {
     const telemetry = vi.fn();
     const controller = new AbortController();

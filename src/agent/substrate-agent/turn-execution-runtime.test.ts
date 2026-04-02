@@ -71,6 +71,7 @@ function createRuntime(params: {
   scheduleAutoCompactionBetweenTurns: ReturnType<typeof vi.fn>;
   awaitPendingAutoCompaction: ReturnType<typeof vi.fn>;
   recordUserMessage: ReturnType<typeof vi.fn>;
+  recordSystemMessage?: ReturnType<typeof vi.fn>;
   recordAssistantMessage: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
@@ -168,6 +169,7 @@ function createRuntime(params: {
       ...payload,
     })),
     recordUserMessage: params.recordUserMessage,
+    recordSystemMessage: params.recordSystemMessage ?? vi.fn(() => null),
     resolveSessionChannelId: vi.fn((channelId: string) => channelId),
     resolveChannelType: vi.fn(() => 'api'),
     ensureModel: vi.fn(),
@@ -291,6 +293,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
     const recordUserMessage = vi.fn(() => null);
+    const recordSystemMessage = vi.fn(() => null);
     const recordAssistantMessage = vi.fn(() => null);
     const runtime = createRuntime({
       eventBus,
@@ -299,6 +302,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       scheduleAutoCompactionBetweenTurns,
       awaitPendingAutoCompaction,
       recordUserMessage,
+      recordSystemMessage,
       recordAssistantMessage,
     });
     runtime.resolveTaskKind = vi.fn(() => taskKind);
@@ -327,11 +331,12 @@ describe('handleMessageForTurn compaction scheduling', () => {
       mock: { calls: unknown[][] };
     };
 
-    expect(recordUserMessage).toHaveBeenCalledWith(
+    expect(recordUserMessage).not.toHaveBeenCalled();
+    expect(recordSystemMessage).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
       expect.any(String),
-      'primary',
+      `[SYSTEM: ${taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper'}] ${taskKind} run`,
       DEFAULT_COMPANION_ID,
     );
     expect(buildPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
@@ -342,6 +347,52 @@ describe('handleMessageForTurn compaction scheduling', () => {
       channelId,
       userId: DEFAULT_COMPANION_ID,
     }));
+    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      role: 'custom',
+      type: 'systemNote',
+      content: `[SYSTEM: ${taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper'}] ${taskKind} run`,
+    });
+  });
+
+  it('routes runtime-authored repair guidance through system session + prompt lanes', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordUserMessage = vi.fn(() => null);
+    const recordSystemMessage = vi.fn(() => 1);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage,
+      recordSystemMessage,
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-runtime-guidance', {
+      authorId: 'system:runtime',
+      authorName: 'Runtime',
+      content: 'tool notify is unavailable; choose another route',
+    }));
+
+    expect(recordUserMessage).not.toHaveBeenCalled();
+    expect(recordSystemMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      'msg-runtime-guidance',
+      '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
+      'contact-1',
+    );
+    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      role: 'custom',
+      type: 'systemNote',
+      content: '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
+    });
   });
 
   it('captures the full model-facing prompt context in the turn snapshot', async () => {

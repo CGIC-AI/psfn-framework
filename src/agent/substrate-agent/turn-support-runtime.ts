@@ -355,6 +355,7 @@ export class TurnSupportRuntime {
     turnId: TurnID,
     requestId: string,
     content: string,
+    continuityUserId?: string,
   ): number | null {
     return this.sessionManager.recordSystemMessage(
       message.channelId,
@@ -362,7 +363,7 @@ export class TurnSupportRuntime {
       message.authorId,
       message.authorName,
       message.isDirectMessage,
-      undefined,
+      continuityUserId,
       {
         turnId,
         requestId,

@@ -13,6 +13,7 @@ import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
 import { createComponentLogger } from '../../logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import type { SessionManager } from '../../session/manager.js';
+import { formatAttributedSystemContent } from '../../session/entry-attribution.js';
 import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';
 import {
   cloneMetacognitiveFlags,
@@ -70,6 +71,7 @@ import {
   hasVisionTurnInputs,
   buildTurnUserContent,
 } from './vision-attachments.js';
+import type { SystemNoteMessage } from '../messages.js';
 import {
   resolveMoaSettings,
   runMoaTurn,
@@ -88,6 +90,30 @@ import {
 import { buildPromptContextSectionCacheability } from './prompt-lifecycle.js';
 
 const log = createComponentLogger('SubstrateAgent');
+
+function isSystemOriginatedMessage(message: SubstrateMessage): boolean {
+  return message.authorId.startsWith('system:') || message.authorId === 'scheduler';
+}
+
+function buildPromptMessage(
+  message: SubstrateMessage,
+  content: UserMessage['content'],
+): UserMessage | SystemNoteMessage {
+  if (!isSystemOriginatedMessage(message) || typeof content !== 'string') {
+    return {
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+    } satisfies UserMessage;
+  }
+
+  return {
+    role: 'custom',
+    type: 'systemNote',
+    content: formatAttributedSystemContent(content, message.authorName),
+    timestamp: Date.now(),
+  } satisfies SystemNoteMessage;
+}
 
 interface ProactiveMemoryProvider extends MemoryProvider {
   retrieveProactiveRecall?: (
@@ -154,6 +180,13 @@ export interface TurnExecutionRuntime {
     turnId: TurnID,
     requestId: string,
     trustLevel: TrustLevel,
+    continuityUserId?: string,
+  ) => number | null;
+  recordSystemMessage: (
+    message: SubstrateMessage,
+    turnId: TurnID,
+    requestId: string,
+    content: string,
     continuityUserId?: string,
   ) => number | null;
   resolveSessionChannelId: (channelId: string) => string;
@@ -435,6 +468,10 @@ export async function handleMessageForTurn(
     message,
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
   });
+  const systemOriginated = isSystemOriginatedMessage(message);
+  const systemAttributedContent = systemOriginated
+    ? formatAttributedSystemContent(message.content, message.authorName)
+    : null;
   const subjectIdentityKey = authorContext.subjectIdentityKey
     ?? authorContext.canonicalContactKey
     ?? message.authorId;
@@ -448,13 +485,21 @@ export async function handleMessageForTurn(
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
   await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
-  const userSessionEntryId = runtime.recordUserMessage(
-    message,
-    turnId,
-    requestId,
-    authorContext.trustLevel,
-    continuityUserId,
-  );
+  const userSessionEntryId = systemOriginated && systemAttributedContent
+    ? runtime.recordSystemMessage(
+      message,
+      turnId,
+      requestId,
+      systemAttributedContent,
+      continuityUserId,
+    )
+    : runtime.recordUserMessage(
+      message,
+      turnId,
+      requestId,
+      authorContext.trustLevel,
+      continuityUserId,
+    );
   const emotionSessionId = runtime.resolveSessionChannelId(message.channelId);
 
   try {
@@ -835,11 +880,7 @@ export async function handleMessageForTurn(
           },
           async () => runWithVisionToolRequestContext(
             visionToolRequestContext,
-            async () => runtime.agent.prompt({
-              role: 'user',
-              content: turnUserContentBuildResult.content,
-              timestamp: Date.now(),
-            } satisfies UserMessage),
+            async () => runtime.agent.prompt(buildPromptMessage(message, turnUserContentBuildResult.content)),
           ),
         );
       } finally {
@@ -910,11 +951,7 @@ export async function handleMessageForTurn(
               },
               async () => runWithVisionToolRequestContext(
                 visionToolRequestContext,
-                async () => runtime.agent.prompt({
-                  role: 'user',
-                  content,
-                  timestamp: Date.now(),
-                } satisfies UserMessage),
+                async () => runtime.agent.prompt(buildPromptMessage(message, content)),
               ),
             );
           } finally {

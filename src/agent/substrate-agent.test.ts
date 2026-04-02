@@ -2257,7 +2257,8 @@ describe('SubstrateAgent.handleMessage', () => {
       content: `${authorName} run`,
     }));
 
-    expect((sessionManager.recordUserMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
+    expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+    expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.scheduleAutoCompactionBetweenTurns as any).mock.calls[0][0]).toMatchObject({

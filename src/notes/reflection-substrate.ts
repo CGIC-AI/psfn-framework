@@ -181,15 +181,21 @@ function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata
       throw new Error(`deliberation.${fieldName} must be a finite number >= 0`);
     }
   }
+  const rounds = candidate.rounds as number;
+  const totalInputTokens = candidate.totalInputTokens as number;
+  const totalOutputTokens = candidate.totalOutputTokens as number;
+  const totalTokens = candidate.totalTokens as number;
+  const estimatedCostUsd = candidate.estimatedCostUsd as number;
+  const durationMs = candidate.durationMs as number;
   return {
     sessionId: candidate.sessionId.trim(),
     stopReason: candidate.stopReason.trim(),
-    rounds: Math.floor(candidate.rounds),
-    totalInputTokens: candidate.totalInputTokens,
-    totalOutputTokens: candidate.totalOutputTokens,
-    totalTokens: candidate.totalTokens,
-    estimatedCostUsd: candidate.estimatedCostUsd,
-    durationMs: candidate.durationMs,
+    rounds: Math.floor(rounds),
+    totalInputTokens,
+    totalOutputTokens,
+    totalTokens,
+    estimatedCostUsd,
+    durationMs,
   };
 }
 

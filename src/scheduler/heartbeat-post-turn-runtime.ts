@@ -326,6 +326,9 @@ export function wireHeartbeatPostTurnRuntime(
               sourceMessageId: context.message.id,
             });
             if (pendingFollowUpId) {
+              if (!decision.followUp) {
+                continue;
+              }
               decision.followUp = {
                 ...decision.followUp,
                 pendingFollowUpId,
@@ -344,6 +347,9 @@ export function wireHeartbeatPostTurnRuntime(
               sourceMessageId: context.message.id,
             });
             if (reminderId) {
+              if (!decision.reminder) {
+                continue;
+              }
               decision.reminder = {
                 ...decision.reminder,
                 reminderId,
@@ -602,6 +608,25 @@ export function wireHeartbeatPostTurnRuntime(
               });
               if (nextActions.length > 0) {
                 await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+                  message: {
+                    id: action.id,
+                    channelId: action.channelId,
+                    channelType: triggered.channelType,
+                    authorId: triggered.authorId,
+                    authorName: triggered.authorName,
+                    content: triggered.content,
+                    timestamp: new Date(),
+                  },
+                  response: {
+                    content: triggered.content,
+                    channelId: action.channelId,
+                    metadata: {
+                      model: 'scheduler:reminder-reschedule',
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      durationMs: 0,
+                    },
+                  },
                   actions: nextActions,
                 });
               }

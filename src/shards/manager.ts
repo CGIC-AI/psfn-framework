@@ -354,7 +354,7 @@ export class ShardManager implements ShardExecutionPort {
         systemPrompt,
         this.deps.config,
         {
-          runtimeMode: this.deps.runtimeMode ?? 'single',
+          runtimeMode: this.deps.runtimeMode ?? 'direct',
         },
       );
 

@@ -212,6 +212,7 @@ export function createNorthStarTool(store: NorthStarStore): AgentTool<any> {
             }, null, 2));
           }
         }
+        throw new Error('action is required. Supported actions: list, create, update, delete, reorder');
       } catch (error) {
         return textResultWithError(`north_star failed for action=${action}: ${errorMessage(error)}`, true);
       }

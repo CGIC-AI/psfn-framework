@@ -290,7 +290,7 @@ export class SubstrateAgent {
     this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
     this.config = config;
-    this.runtimeMode = options?.runtimeMode ?? 'single';
+    this.runtimeMode = options?.runtimeMode ?? 'direct';
     this.toolHealthProvider = options?.toolHealthProvider ?? null;
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({

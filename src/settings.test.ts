@@ -200,6 +200,8 @@ describe('settings', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, JSON.stringify({
         sessionHistoryBudgetPct: 7,
+        sessionMessageLimit: 44,
+        memoryRetrievalLimit: 11,
         memoryBudgetPct: 24,
         defaultContextWindow: 196_000,
         discordEnabled: true,
@@ -208,12 +210,16 @@ describe('settings', () => {
 
       const loaded = loadSettings(tempDir);
       expect(loaded.sessionHistoryBudgetPct).toBe(7);
+      expect((loaded as Record<string, unknown>).sessionMessageLimit).toBeUndefined();
+      expect((loaded as Record<string, unknown>).memoryRetrievalLimit).toBeUndefined();
       expect((loaded as Record<string, unknown>).memoryBudgetPct).toBeUndefined();
       expect((loaded as Record<string, unknown>).defaultContextWindow).toBeUndefined();
       expect((loaded as Record<string, unknown>).discordEnabled).toBeUndefined();
       expect((loaded as Record<string, unknown>).discordHeartbeatChannel).toBeUndefined();
       expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({
         sessionHistoryBudgetPct: 7,
+        sessionMessageLimit: 44,
+        memoryRetrievalLimit: 11,
         memoryBudgetPct: 24,
         defaultContextWindow: 196_000,
         discordEnabled: true,
@@ -656,12 +662,10 @@ describe('settings', () => {
       const config = makeConfig();
       applySettings(config, {
         extractionInterval: 9,
-        sessionMessageLimit: 55,
         extractionThresholdPct: 34,
         compactionThresholdPct: 76,
       });
       expect(config.extractionInterval).toBe(9);
-      expect(config.sessionMessageLimit).toBe(55);
       expect(config.extractionThresholdPct).toBe(34);
       expect(config.compactionThresholdPct).toBe(76);
     });
@@ -690,9 +694,7 @@ describe('settings', () => {
         memoryRetrievalBudgetPct: 3,
         moodCongruenceWeight: 0.4,
         adaptiveContextBudgetsEnabled: true,
-        sessionMessageLimit: 50,
         sessionRestartBehavior: 'new_session',
-        memoryRetrievalLimit: 25,
         extractionInterval: 10,
         compactionEmotionalSalienceThresholdPct: 55,
         retryMaxAttempts: 5,
@@ -702,9 +704,7 @@ describe('settings', () => {
       expect(config.memoryRetrievalBudgetPct).toBe(3);
       expect(config.moodCongruenceWeight).toBe(0.4);
       expect(config.adaptiveContextBudgetsEnabled).toBe(true);
-      expect(config.sessionMessageLimit).toBe(50);
       expect(config.sessionRestartBehavior).toBe('new_session');
-      expect(config.memoryRetrievalLimit).toBe(25);
       expect(config.extractionInterval).toBe(10);
       expect(config.compactionEmotionalSalienceThresholdPct).toBe(55);
       expect(config.retryMaxAttempts).toBe(5);
@@ -1004,9 +1004,7 @@ describe('settings', () => {
       const expected = {
         sessionHistoryBudgetPct: 9,
         memoryRetrievalBudgetPct: 4,
-        sessionMessageLimit: 42,
         sessionRestartBehavior: 'new_session' as const,
-        memoryRetrievalLimit: 11,
         extractionInterval: 6,
         extractionThresholdPct: 34,
         compactionThresholdPct: 76,
@@ -1114,7 +1112,6 @@ describe('settings', () => {
         sessionHistoryBudgetPct: '7',
         memoryRetrievalBudgetPct: '3',
         moodCongruenceWeight: '0.35',
-        sessionMessageLimit: '50',
         retryMaxAttempts: '4',
       });
       const [settings, errors] = parseSettingsForm(params);
@@ -1122,6 +1119,20 @@ describe('settings', () => {
       expect(errors[0]).toContain('Legacy model settings');
       expect(settings.primaryModel).toBeUndefined();
       expect(settings.primaryMaxTokens).toBe(4096);
+    });
+
+    it('rejects removed context control form fields', () => {
+      const params = new URLSearchParams({
+        sessionMessageLimit: '50',
+        memoryRetrievalLimit: '25',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+
+      expect(errors).toEqual(expect.arrayContaining([
+        'sessionMessageLimit has been removed; session history now trims by token budget only',
+        'memoryRetrievalLimit has been removed; memory retrieval now trims by token budget only',
+      ]));
     });
 
     it('parses canonical model registry JSON', () => {
@@ -1354,17 +1365,15 @@ describe('settings', () => {
       const params = new URLSearchParams({
         primaryMaxTokens: '100',
         sessionHistoryBudgetPct: '0',
-        sessionMessageLimit: '999',
         extractionThresholdPct: '101',
         compactionThresholdPct: '0',
         retryBaseDelayMs: '100',
         moodCongruenceWeight: '1.2',
       });
       const [, errors] = parseSettingsForm(params);
-      expect(errors.length).toBe(7);
+      expect(errors.length).toBe(6);
       expect(errors.some(err => err.includes('primaryMaxTokens'))).toBe(true);
       expect(errors.some(err => err.includes('sessionHistoryBudgetPct'))).toBe(true);
-      expect(errors.some(err => err.includes('sessionMessageLimit'))).toBe(true);
       expect(errors.some(err => err.includes('extractionThresholdPct'))).toBe(true);
       expect(errors.some(err => err.includes('compactionThresholdPct'))).toBe(true);
       expect(errors.some(err => err.includes('retryBaseDelayMs'))).toBe(true);
@@ -1548,18 +1557,14 @@ describe('settings', () => {
       expect(snapshot.textEmotionDtype).toBe('q8');
     });
 
-    it('resolves budget percentages and nullable hard overrides', () => {
+    it('resolves budget percentages when legacy hard overrides are absent', () => {
       const config = makeConfig();
       config.sessionHistoryBudgetPct = undefined;
       config.memoryRetrievalBudgetPct = undefined;
-      config.sessionMessageLimit = undefined;
-      config.memoryRetrievalLimit = undefined;
 
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.sessionHistoryBudgetPct).toBe(6);
       expect(snapshot.memoryRetrievalBudgetPct).toBe(2);
-      expect(snapshot.sessionMessageLimit).toBeNull();
-      expect(snapshot.memoryRetrievalLimit).toBeNull();
     });
 
     it('validates setting key membership', () => {

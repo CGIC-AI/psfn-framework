@@ -75,6 +75,12 @@ const TEXT_EMOTION_DTYPE_VALUES = [
   'q4f16',
 ] as const;
 const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
+const REMOVED_CONTEXT_CONTROL_FIELD_MESSAGES = {
+  sessionMessageLimit:
+    'sessionMessageLimit has been removed; session history now trims by token budget only',
+  memoryRetrievalLimit:
+    'memoryRetrievalLimit has been removed; memory retrieval now trims by token budget only',
+} as const;
 
 /** Validate and parse form data into EditableSettings. Returns [settings, errors]. */
 export function parseSettingsForm(params: URLSearchParams): [EditableSettings, string[]] {
@@ -522,6 +528,11 @@ export function parseSettingsForm(params: URLSearchParams): [EditableSettings, s
     } else {
       (settings as Record<string, number>)[field] = val;
     }
+  }
+
+  for (const [field, message] of Object.entries(REMOVED_CONTEXT_CONTROL_FIELD_MESSAGES)) {
+    if (!params.has(field)) continue;
+    errors.push(message);
   }
 
   const modelRegistryJson = params.get('modelRegistryJson')?.trim();

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { relative, resolve, sep } from 'node:path';
 import {
+  SKILLS_FILE_NAME,
   loadSkillsConfig,
   saveSkillsConfig,
   type SkillsRuntimeConfig,
@@ -16,6 +17,7 @@ import {
 } from './loader.js';
 import { SkillStore } from './store.js';
 import type {
+  ManagedSkillOwnership,
   SkillDirectorySpec,
   SkillEvaluation,
   SkillLookupResult,
@@ -25,7 +27,7 @@ import type {
 export interface SkillsRuntimeOptions {
   dataDir: string;
   seedDir?: string;
-  repoRoot?: string;
+  repoRoot: string;
   environment?: NodeJS.ProcessEnv;
   isBinaryAvailable?: (binaryName: string) => boolean;
 }
@@ -43,6 +45,14 @@ function hashSignature(payload: string): string {
 
 function toPosix(path: string): string {
   return path.split(sep).join('/');
+}
+
+function requireSkillsRepoRoot(repoRoot: string): string {
+  const normalized = repoRoot.trim();
+  if (!normalized) {
+    throw new Error('SkillsRuntime requires an explicit repoRoot');
+  }
+  return resolve(normalized);
 }
 
 export class SkillsRuntime {
@@ -73,6 +83,29 @@ export class SkillsRuntime {
     return [...this.getOrCreateCache().evaluations];
   }
 
+  listCategorySummary(): Array<{ category: string; total: number; included: number }> {
+    const cache = this.getOrCreateCache();
+    const includedNames = new Set(cache.snapshot.includedSkills.map(skill => skill.name));
+    const counts = new Map<string, { total: number; included: number }>();
+    for (const evaluation of cache.evaluations) {
+      const category = evaluation.entry.category?.trim() || 'uncategorized';
+      const record = counts.get(category) ?? { total: 0, included: 0 };
+      record.total += 1;
+      if (includedNames.has(evaluation.entry.name)) {
+        record.included += 1;
+      }
+      counts.set(category, record);
+    }
+
+    return [...counts.entries()]
+      .map(([category, summary]) => ({
+        category,
+        total: summary.total,
+        included: summary.included,
+      }))
+      .sort((left, right) => left.category.localeCompare(right.category));
+  }
+
   findSkill(name: string): SkillLookupResult | null {
     const normalized = name.trim().toLowerCase();
     if (!normalized) return null;
@@ -91,6 +124,14 @@ export class SkillsRuntime {
   /** List managed (user-created) skills. */
   listManaged(): Array<{ name: string; description: string; category: string; version: number; content: string; createdAt: string; updatedAt: string }> {
     return this.store.list().map(({ absolutePath: _, relativePath: __, ...rest }) => rest);
+  }
+
+  getManagedOwnership(): ManagedSkillOwnership {
+    return {
+      owner: 'companion',
+      managedRoot: this.toRepoRelativePath(this.store.getManagedRootDir()),
+      configPath: this.toRepoRelativePath(resolve(this.options.dataDir, SKILLS_FILE_NAME)),
+    };
   }
 
   /** Create a new managed skill. */
@@ -139,9 +180,9 @@ export class SkillsRuntime {
 
   private getOrCreateCache(): SkillSnapshotCache {
     const runtimeConfig = this.loadRuntimeConfig();
-    const repoRoot = this.options.repoRoot ?? process.cwd();
+    const repoRoot = requireSkillsRepoRoot(this.options.repoRoot);
     const configuredDirectories = resolveSkillDirectories(runtimeConfig, repoRoot);
-    const directories = this.mergeManagedDirectory(configuredDirectories, repoRoot);
+    const directories = this.mergeManagedDirectory(configuredDirectories);
     const files = scanSkillFiles(directories);
 
     const signaturePayload = JSON.stringify({
@@ -223,13 +264,9 @@ export class SkillsRuntime {
 
   private mergeManagedDirectory(
     configured: SkillDirectorySpec[],
-    repoRoot: string,
   ): SkillDirectorySpec[] {
     const managedRoot = this.store.getManagedRootDir();
-    const relativePath = toPosix(relative(repoRoot, managedRoot));
-    const displayPath = relativePath && !relativePath.startsWith('..')
-      ? relativePath
-      : toPosix(managedRoot);
+    const displayPath = this.toRepoRelativePath(managedRoot);
 
     const ordered: SkillDirectorySpec[] = [
       {
@@ -253,5 +290,12 @@ export class SkillsRuntime {
       ...directory,
       precedence: index,
     }));
+  }
+
+  private toRepoRelativePath(path: string): string {
+    const relativePath = toPosix(relative(requireSkillsRepoRoot(this.options.repoRoot), path));
+    return relativePath && !relativePath.startsWith('..')
+      ? relativePath
+      : toPosix(resolve(path));
   }
 }

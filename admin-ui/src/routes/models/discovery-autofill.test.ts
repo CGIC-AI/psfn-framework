@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  backfillDiscoveredMetadata,
   buildUniqueModelId,
   deriveDiscoveryAutofill,
   resolveDiscoveredModelSelection,
@@ -119,6 +120,116 @@ test('resolveDiscoveredModelSelection falls back to unique description matches',
 
   assert.equal(resolveDiscoveredModelSelection('gpt-4o mini', discovered), discovered[0]);
   assert.equal(resolveDiscoveredModelSelection('missing model', discovered), undefined);
+});
+
+test('backfillDiscoveredMetadata fills only missing registry metadata from discovery', () => {
+  const entry = {
+    identity: {
+      provider: '',
+      source: {
+        type: '',
+      },
+    },
+  };
+
+  const changed = backfillDiscoveredMetadata(entry, {
+    id: 'openrouter/z-ai/glm-5',
+    providerHints: ['proxy', 'openrouter'],
+    contextLength: 128_000,
+    maxCompletionTokens: 16_384,
+    supportsReasoning: true,
+    supportsVision: true,
+    pricing: {
+      prompt: '0.0000025',
+      completion: '0.00001',
+    },
+  });
+
+  assert.equal(changed, true);
+  assert.deepEqual(entry, {
+    identity: {
+      provider: 'openrouter',
+      source: {
+        type: 'openrouter',
+        label: 'openrouter',
+      },
+    },
+    capabilities: {
+      contextWindow: 128_000,
+      maxOutputTokens: 16_384,
+      supportsReasoning: true,
+      supportsVision: true,
+    },
+    tuning: {
+      maxOutputTokens: 16_384,
+    },
+    cost: {
+      inputPer1MUsd: 2.5,
+      outputPer1MUsd: 10,
+    },
+  });
+});
+
+test('backfillDiscoveredMetadata preserves existing registry metadata values', () => {
+  const entry = {
+    identity: {
+      provider: 'anthropic',
+      source: {
+        type: 'openrouter',
+        label: 'Custom label',
+      },
+    },
+    capabilities: {
+      contextWindow: 200_000,
+      maxOutputTokens: 4_096,
+      supportsReasoning: false,
+      supportsVision: false,
+    },
+    tuning: {
+      maxOutputTokens: 8_192,
+    },
+    cost: {
+      inputPer1MUsd: 0,
+      outputPer1MUsd: 12,
+    },
+  };
+
+  const changed = backfillDiscoveredMetadata(entry, {
+    id: 'openrouter/anthropic/claude-sonnet-4',
+    providerHints: ['openrouter', 'anthropic'],
+    contextLength: 128_000,
+    maxCompletionTokens: 16_384,
+    supportsReasoning: true,
+    supportsVision: true,
+    pricing: {
+      prompt: '0.000003',
+      completion: '0.000015',
+    },
+  });
+
+  assert.equal(changed, false);
+  assert.deepEqual(entry, {
+    identity: {
+      provider: 'anthropic',
+      source: {
+        type: 'openrouter',
+        label: 'Custom label',
+      },
+    },
+    capabilities: {
+      contextWindow: 200_000,
+      maxOutputTokens: 4_096,
+      supportsReasoning: false,
+      supportsVision: false,
+    },
+    tuning: {
+      maxOutputTokens: 8_192,
+    },
+    cost: {
+      inputPer1MUsd: 0,
+      outputPer1MUsd: 12,
+    },
+  });
 });
 
 test('buildUniqueModelId appends deterministic numeric suffixes', () => {

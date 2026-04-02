@@ -31,7 +31,7 @@ export function normalizeIdentity(channel: ContactChannel, userId: string): Cont
 
 export function defaultPrivacyForChannel(channel: ContactChannel): ChannelPrivacyLevel {
   const normalized = channel.trim().toLowerCase();
-  if (normalized === 'api' || normalized === 'internal' || normalized === 'shard') {
+  if (normalized === 'api' || normalized === 'internal' || normalized === 'subagent' || normalized === 'shard') {
     return 'private';
   }
   if (normalized === 'twitter' || normalized === 'rss' || normalized === 'broadcast') {

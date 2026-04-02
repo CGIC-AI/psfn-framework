@@ -10,6 +10,11 @@ export interface LoadOrSeedJsonOptions<T> {
   validate: JsonValidator<T>;
 }
 
+export interface LoadSeedJsonOptions<T> {
+  seedPath: string;
+  validate: JsonValidator<T>;
+}
+
 interface NodeErrorLike {
   code?: string;
 }
@@ -106,6 +111,12 @@ export function loadOrSeedJson<T>(options: LoadOrSeedJsonOptions<T>): T {
       `Refusing to reseed invalid JSON config at ${dataPath}; fix or remove the file explicitly. Cause: ${reason}`,
     );
   }
+}
+
+export function loadSeedJson<T>(options: LoadSeedJsonOptions<T>): T {
+  const { seedPath, validate } = options;
+  const seedRaw = parseJsonFile(seedPath);
+  return validate(seedRaw, seedPath);
 }
 
 export function invalidateCachedJsonValue(path: string): void {

@@ -197,6 +197,8 @@ describe('settings', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, JSON.stringify({
         sessionHistoryBudgetPct: 7,
+        sessionMessageLimit: 44,
+        memoryRetrievalLimit: 11,
         memoryBudgetPct: 24,
         defaultContextWindow: 196_000,
         discordEnabled: true,
@@ -205,12 +207,16 @@ describe('settings', () => {
 
       const loaded = loadSettings(tempDir);
       expect(loaded.sessionHistoryBudgetPct).toBe(7);
+      expect((loaded as Record<string, unknown>).sessionMessageLimit).toBeUndefined();
+      expect((loaded as Record<string, unknown>).memoryRetrievalLimit).toBeUndefined();
       expect((loaded as Record<string, unknown>).memoryBudgetPct).toBeUndefined();
       expect((loaded as Record<string, unknown>).defaultContextWindow).toBeUndefined();
       expect((loaded as Record<string, unknown>).discordEnabled).toBeUndefined();
       expect((loaded as Record<string, unknown>).discordHeartbeatChannel).toBeUndefined();
       expect(JSON.parse(readFileSync(path, 'utf-8'))).toEqual({
         sessionHistoryBudgetPct: 7,
+        sessionMessageLimit: 44,
+        memoryRetrievalLimit: 11,
         memoryBudgetPct: 24,
         defaultContextWindow: 196_000,
         discordEnabled: true,
@@ -1128,7 +1134,6 @@ describe('settings', () => {
         sessionHistoryBudgetPct: '7',
         memoryRetrievalBudgetPct: '3',
         moodCongruenceWeight: '0.35',
-        sessionMessageLimit: '50',
         retryMaxAttempts: '4',
       });
       const [settings, errors] = parseSettingsForm(params);
@@ -1136,6 +1141,20 @@ describe('settings', () => {
       expect(errors[0]).toContain('Legacy model settings');
       expect(settings.primaryModel).toBeUndefined();
       expect(settings.primaryMaxTokens).toBe(4096);
+    });
+
+    it('rejects removed context control form fields', () => {
+      const params = new URLSearchParams({
+        sessionMessageLimit: '50',
+        memoryRetrievalLimit: '25',
+      });
+
+      const [, errors] = parseSettingsForm(params);
+
+      expect(errors).toEqual(expect.arrayContaining([
+        'sessionMessageLimit has been removed; session history now trims by token budget only',
+        'memoryRetrievalLimit has been removed; memory retrieval now trims by token budget only',
+      ]));
     });
 
     it('parses canonical model registry JSON', () => {
@@ -1560,7 +1579,7 @@ describe('settings', () => {
       expect(snapshot.textEmotionDtype).toBe('q8');
     });
 
-    it('resolves budget percentages and nullable hard overrides', () => {
+    it('resolves budget percentages when legacy hard overrides are absent', () => {
       const config = makeConfig();
       config.sessionHistoryBudgetPct = undefined;
       config.memoryRetrievalBudgetPct = undefined;

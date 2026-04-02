@@ -16,6 +16,7 @@ export const CAPABILITY_TOKENS = [
   'lifecycle.restart',
   'lifecycle.rebuild',
   'repl.execute',
+  'subagent.spawn',
   'shard.spawn',
 ] as const;
 

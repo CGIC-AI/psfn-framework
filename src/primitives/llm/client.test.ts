@@ -260,6 +260,59 @@ describe('LLMClient import-processing routing policy', () => {
     expect(requestOptions.zdr).toBe(true);
     expect(requestOptions.provider).toEqual({ order: ['parasail', 'openai'] });
   });
+
+  it('keeps local import-processing endpoint routes distinct from LiteLLM proxy routing', async () => {
+    const previousApiKey = process.env.IMPORT_PROCESSING_LOCAL_API_KEY;
+    process.env.IMPORT_PROCESSING_LOCAL_API_KEY = 'local-endpoint-key';
+
+    try {
+      const config = makeConfig({
+        importProcessingRouteMode: 'local_endpoint',
+        importProcessingLocalEndpointUrl: 'http://localhost:11434/v1',
+        importProcessingLocalModel: 'qwen2.5-coder:14b',
+      });
+      const client = new LLMClient(config, {
+        litellmBaseUrl: 'http://litellm.test/v1',
+      });
+
+      mocks.completeSimple.mockResolvedValue({
+        content: [{ type: 'text', text: 'ok' }],
+        model: 'qwen2.5-coder:14b',
+        usage: { input: 11, output: 7 },
+        stopReason: 'stop',
+      });
+
+      const response = await client.complete(
+        {
+          systemPrompt: 'System',
+          messages: [{ role: 'user', content: 'Process import batch locally' }],
+        },
+        'import_processing',
+        { disableRetry: true },
+      );
+
+      expect(response.content).toBe('ok');
+      expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+
+      const model = mocks.completeSimple.mock.calls[0][0] as {
+        baseUrl: string;
+        provider: string;
+        name: string;
+      };
+      const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
+
+      expect(model.baseUrl).toBe('http://localhost:11434/v1');
+      expect(model.provider).toBe('local_endpoint');
+      expect(model.name).toBe('qwen2.5-coder:14b (via local endpoint)');
+      expect(requestOptions.apiKey).toBe('local-endpoint-key');
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.IMPORT_PROCESSING_LOCAL_API_KEY;
+      } else {
+        process.env.IMPORT_PROCESSING_LOCAL_API_KEY = previousApiKey;
+      }
+    }
+  });
 });
 
 describe('LLMClient provider observability', () => {

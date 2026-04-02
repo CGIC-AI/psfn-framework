@@ -17,6 +17,7 @@
     ProviderRegistryEntry,
   } from '$lib/types';
   import {
+    backfillDiscoveredMetadata,
     buildUniqueModelId,
     deriveDiscoveryAutofill,
     resolveDiscoveredModelSelection,
@@ -1017,6 +1018,26 @@
     flashMessage = `Added ${discovered.id} with discovery autofill.`;
   }
 
+  function backfillExistingModelsFromDiscovery(discovered: readonly DiscoveredModel[]): number {
+    let backfilled = 0;
+    const nextModels = models.map((entry) => {
+      const normalizedModel = entry.identity.model.trim();
+      if (!normalizedModel) return entry;
+      const matched = resolveDiscoveredModelSelection(normalizedModel, discovered);
+      if (!matched) return entry;
+      const cloned = cloneModelEntry(entry);
+      if (!backfillDiscoveredMetadata(cloned, matched)) {
+        return entry;
+      }
+      backfilled += 1;
+      return cloned;
+    });
+    if (backfilled > 0) {
+      models = nextModels;
+    }
+    return backfilled;
+  }
+
   function removeModel(index: number): void {
     const target = models[index];
     if (!target) return;
@@ -1219,9 +1240,12 @@
     try {
       await refreshDiscoveredModels();
       discoveredModels = await listDiscoveredModels();
+      const backfilledCount = backfillExistingModelsFromDiscovery(discoveredModels);
       discoveryError = '';
       flashOk = true;
-      flashMessage = `Discovered ${discoveredModels.length} model(s).`;
+      flashMessage = backfilledCount > 0
+        ? `Discovered ${discoveredModels.length} model(s); backfilled ${backfilledCount} existing registry entr${backfilledCount === 1 ? 'y' : 'ies'}.`
+        : `Discovered ${discoveredModels.length} model(s).`;
     } catch (refreshError) {
       discoveredModels = [];
       discoveryError = toErrorMessage(refreshError, 'Model discovery unavailable');

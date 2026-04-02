@@ -14,7 +14,7 @@ export interface ResolveProfileAttributionOptions {
   authorName?: string;
 }
 
-function normalizeOptionalString(value: string | undefined): string | undefined {
+function normalizeOptionalString(value: string | null | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
 }

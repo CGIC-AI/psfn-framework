@@ -4,11 +4,15 @@ import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { buildRelatedConversationChannelMap } from './contact-session-linker.js';
 
 function createSessionStoreStub(options: {
-  channels?: Array<{ channelId: string }>;
+  channels?: Array<{ sessionId?: string; channelId: string }>;
   entries?: Record<string, { authorId?: string; timestamp: number }>;
 }): SessionStore {
   return {
-    listChannels: () => options.channels ?? [],
+    listChannels: () => (options.channels ?? []).map(channel => ({
+      sessionId: channel.sessionId ?? channel.channelId,
+      channelId: channel.channelId,
+      messageCount: 0,
+    })),
     getLastEntry: (channelId: string) => options.entries?.[channelId],
   } as unknown as SessionStore;
 }

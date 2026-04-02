@@ -75,12 +75,12 @@ describe('capability tool gating', () => {
     await statusGated.execute('call-1', {});
     expect(repoStatus.executeSpy).toHaveBeenCalledTimes(1);
 
-    const restart = createTool('self_restart');
+    const restart = createTool('system');
     const restartGated = gateToolWithCapabilities(
       restart.tool,
       () => accessForTier('apprentice'),
     );
-    const denied = await restartGated.execute('call-2', {});
+    const denied = await restartGated.execute('call-2', { action: 'restart', reason: 'apply config' });
 
     expect(restart.executeSpy).not.toHaveBeenCalled();
     expect((denied.details as any).capabilityDenied).toBe(true);
@@ -105,6 +105,24 @@ describe('capability tool gating', () => {
     expect(memoryDelete.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('gates unified memory delete-like actions by memory.delete capability token', async () => {
+    const memory = createTool('memory');
+    const nurseryGated = gateToolWithCapabilities(
+      memory.tool,
+      () => accessForTier('nursery'),
+    );
+    const denied = await nurseryGated.execute('call-1b', { action: 'delete' });
+    expect(memory.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('memory.delete');
+
+    const apprenticeGated = gateToolWithCapabilities(
+      memory.tool,
+      () => accessForTier('apprentice'),
+    );
+    await apprenticeGated.execute('call-2b', { action: 'restore' });
+    expect(memory.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('gates memory_redact by memory.delete capability token', async () => {
     const memoryRedact = createTool('memory_redact');
     const nurseryGated = gateToolWithCapabilities(
@@ -123,13 +141,72 @@ describe('capability tool gating', () => {
     expect(memoryRedact.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('gates unified memory search and write actions by their specific tokens', async () => {
+    const memorySearch = createTool('memory');
+    const searchGated = gateToolWithCapabilities(
+      memorySearch.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const searchDenied = await searchGated.execute('call-search', { action: 'search' });
+    expect(memorySearch.executeSpy).not.toHaveBeenCalled();
+    expect((searchDenied.content[0] as any).text).toContain('identity.read');
+
+    const memoryWrite = createTool('memory');
+    const writeGated = gateToolWithCapabilities(
+      memoryWrite.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const writeDenied = await writeGated.execute('call-write', { action: 'write' });
+    expect(memoryWrite.executeSpy).not.toHaveBeenCalled();
+    expect((writeDenied.content[0] as any).text).toContain('memory.write');
+  });
+
+  it('gates unified north_star actions by read versus runtime-write capability tokens', async () => {
+    const northStarList = createTool('north_star');
+    const listGated = gateToolWithCapabilities(
+      northStarList.tool,
+      () => accessForTier('custom', ['identity.write.runtime']),
+    );
+    const listDenied = await listGated.execute('call-north-star-list', { action: 'list' });
+    expect(northStarList.executeSpy).not.toHaveBeenCalled();
+    expect((listDenied.content[0] as any).text).toContain('identity.read');
+
+    const northStarUpdate = createTool('north_star');
+    const updateGated = gateToolWithCapabilities(
+      northStarUpdate.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const updateDenied = await updateGated.execute('call-north-star-update', { action: 'update' });
+    expect(northStarUpdate.executeSpy).not.toHaveBeenCalled();
+    expect((updateDenied.content[0] as any).text).toContain('identity.write.runtime');
+  });
+
+  it('gates shell by repl.execute capability token', async () => {
+    const shell = createTool('shell');
+    const deniedGated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('custom', ['git.read']),
+    );
+    const denied = await deniedGated.execute('call-shell-denied', { action: 'exec', command: 'node' });
+
+    expect(shell.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('repl.execute');
+
+    const allowedGated = gateToolWithCapabilities(
+      shell.tool,
+      () => accessForTier('custom', ['repl.execute']),
+    );
+    await allowedGated.execute('call-shell-allowed', { action: 'exec', command: 'node' });
+    expect(shell.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('grants autonomous tier access for locked tools', async () => {
-    const restart = createTool('self_restart');
+    const restart = createTool('system');
     const restartGated = gateToolWithCapabilities(
       restart.tool,
       () => accessForTier('autonomous'),
     );
-    await restartGated.execute('call-1', {});
+    await restartGated.execute('call-1', { action: 'restart', reason: 'apply config' });
     expect(restart.executeSpy).toHaveBeenCalledTimes(1);
 
     const repoCommit = createTool('repo_commit');
@@ -185,126 +262,261 @@ describe('capability tool gating', () => {
     expect(dynamic.executeSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('gates scratchpad tools using static capability requirements', async () => {
-    const scratchpadRead = createTool('scratchpad_read');
+  it('gates scratchpad actions using dynamic capability requirements', async () => {
+    const scratchpad = createTool('scratchpad');
     const readGated = gateToolWithCapabilities(
-      scratchpadRead.tool,
+      scratchpad.tool,
       () => accessForTier('custom', ['memory.write']),
     );
-    const readDenied = await readGated.execute('call-read', {});
-    expect(scratchpadRead.executeSpy).not.toHaveBeenCalled();
+    const readDenied = await readGated.execute('call-read', { action: 'list' });
+    expect(scratchpad.executeSpy).not.toHaveBeenCalled();
     expect((readDenied.content[0] as any).text).toContain('identity.read');
 
-    const scratchpadWrite = createTool('scratchpad_write');
     const writeGated = gateToolWithCapabilities(
-      scratchpadWrite.tool,
+      scratchpad.tool,
       () => accessForTier('custom', ['identity.read']),
     );
-    const writeDenied = await writeGated.execute('call-write', {});
-    expect(scratchpadWrite.executeSpy).not.toHaveBeenCalled();
+    const writeDenied = await writeGated.execute('call-write', { action: 'add' });
+    expect(scratchpad.executeSpy).not.toHaveBeenCalled();
     expect((writeDenied.content[0] as any).text).toContain('memory.write');
   });
 
-  it('gates session tools using static capability requirements', async () => {
-    const sessionList = createTool('session_list');
-    const listGated = gateToolWithCapabilities(
-      sessionList.tool,
+  it('gates unified session actions by read versus runtime-write capability tokens', async () => {
+    const session = createTool('session');
+    const readGated = gateToolWithCapabilities(
+      session.tool,
       () => accessForTier('custom', ['memory.write']),
     );
-    const listDenied = await listGated.execute('session-list', {});
-    expect(sessionList.executeSpy).not.toHaveBeenCalled();
+    const listDenied = await readGated.execute('session-list', { action: 'list' });
+    expect(session.executeSpy).not.toHaveBeenCalled();
     expect((listDenied.content[0] as any).text).toContain('identity.read');
 
-    const sessionSearch = createTool('session_search');
-    const searchGated = gateToolWithCapabilities(
-      sessionSearch.tool,
-      () => accessForTier('custom', ['memory.write']),
-    );
-    const searchDenied = await searchGated.execute('session-search', {});
-    expect(sessionSearch.executeSpy).not.toHaveBeenCalled();
+    const searchDenied = await readGated.execute('session-search', { action: 'search', query: 'orion' });
+    expect(session.executeSpy).not.toHaveBeenCalled();
     expect((searchDenied.content[0] as any).text).toContain('identity.read');
 
-    const sessionGrep = createTool('session_grep');
-    const grepGated = gateToolWithCapabilities(
-      sessionGrep.tool,
-      () => accessForTier('custom', ['memory.write']),
-    );
-    const grepDenied = await grepGated.execute('session-grep', {});
-    expect(sessionGrep.executeSpy).not.toHaveBeenCalled();
+    const grepDenied = await readGated.execute('session-grep', { action: 'session_grep', pattern: 'orion' });
+    expect(session.executeSpy).not.toHaveBeenCalled();
     expect((grepDenied.content[0] as any).text).toContain('identity.read');
 
-    const sessionNew = createTool('session_new');
-    const deniedGated = gateToolWithCapabilities(
-      sessionNew.tool,
+    const writeGated = gateToolWithCapabilities(
+      session.tool,
       () => accessForTier('custom', ['identity.read']),
     );
-    const denied = await deniedGated.execute('call-denied', {});
-    expect(sessionNew.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('identity.write.runtime');
+    const newDenied = await writeGated.execute('session-new', { action: 'new' });
+    expect(session.executeSpy).not.toHaveBeenCalled();
+    expect((newDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const resumeDenied = await writeGated.execute('session-resume', {
+      action: 'session_resume',
+      sessionId: 'api:resume-me',
+    });
+    expect(session.executeSpy).not.toHaveBeenCalled();
+    expect((resumeDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const focusDenied = await writeGated.execute('session-focus', {
+      action: 'start_focus',
+      scope: 'Investigate continuity',
+    });
+    expect(session.executeSpy).not.toHaveBeenCalled();
+    expect((focusDenied.content[0] as any).text).toContain('identity.write.runtime');
 
     const allowedGated = gateToolWithCapabilities(
-      sessionNew.tool,
+      session.tool,
       () => accessForTier('nursery'),
     );
-    await allowedGated.execute('call-allowed', {});
-    expect(sessionNew.executeSpy).toHaveBeenCalledTimes(1);
-
-    const sessionResume = createTool('session_resume');
-    const resumeGated = gateToolWithCapabilities(
-      sessionResume.tool,
-      () => accessForTier('custom', ['identity.read']),
-    );
-    const resumeDenied = await resumeGated.execute('session-resume', {});
-    expect(sessionResume.executeSpy).not.toHaveBeenCalled();
-    expect((resumeDenied.content[0] as any).text).toContain('identity.write.runtime');
+    await allowedGated.execute('session-allowed', { action: 'complete_focus' });
+    expect(session.executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('gates issue tools by issue.* capability tokens', async () => {
-    const issueReady = createTool('issue_ready');
-    const readyGated = gateToolWithCapabilities(
-      issueReady.tool,
+  it('gates unified vault actions by read versus runtime-write capability tokens', async () => {
+    const vault = createTool('vault');
+    const readGated = gateToolWithCapabilities(
+      vault.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const readDenied = await readGated.execute('vault-read', { action: 'read', name: 'Inbox' });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((readDenied.content[0] as any).text).toContain('identity.read');
+
+    const searchDenied = await readGated.execute('vault-search', { action: 'vault_search', query: 'focus' });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((searchDenied.content[0] as any).text).toContain('identity.read');
+
+    const writeGated = gateToolWithCapabilities(
+      vault.tool,
       () => accessForTier('custom', ['identity.read']),
     );
-    const readyDenied = await readyGated.execute('issue-ready', {});
-    expect(issueReady.executeSpy).not.toHaveBeenCalled();
+    const writeDenied = await writeGated.execute('vault-write', {
+      action: 'write',
+      name: 'Inbox',
+      content: 'entry',
+    });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((writeDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const dailyDenied = await writeGated.execute('vault-daily', { action: 'daily', content: 'journal' });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((dailyDenied.content[0] as any).text).toContain('identity.write.runtime');
+
+    const ambiguousDenied = await writeGated.execute('vault-ambiguous', { name: 'Inbox', query: 'focus' });
+    expect(vault.executeSpy).not.toHaveBeenCalled();
+    expect((ambiguousDenied.content[0] as any).text).toContain('identity.read');
+    expect((ambiguousDenied.content[0] as any).text).toContain('identity.write.runtime');
+  });
+
+  it('gates unified fs actions using git read/write capability requirements', async () => {
+    const fsTool = createTool('fs');
+    const readGated = gateToolWithCapabilities(
+      fsTool.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const readDenied = await readGated.execute('fs-read', { action: 'read', path: 'src/agent-main.ts' });
+    expect(fsTool.executeSpy).not.toHaveBeenCalled();
+    expect((readDenied.content[0] as any).text).toContain('git.read');
+
+    const writeGated = gateToolWithCapabilities(
+      fsTool.tool,
+      () => accessForTier('apprentice'),
+    );
+    const writeDenied = await writeGated.execute('fs-write', {
+      action: 'write',
+      path: 'notes.txt',
+      content: 'hello',
+    });
+    expect(fsTool.executeSpy).not.toHaveBeenCalled();
+    expect((writeDenied.content[0] as any).text).toContain('git.write');
+
+    const allowedRead = gateToolWithCapabilities(
+      fsTool.tool,
+      () => accessForTier('nursery'),
+    );
+    await allowedRead.execute('fs-list', {});
+    expect(fsTool.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates unified repo actions using git read/write capability requirements', async () => {
+    const repoTool = createTool('repo');
+    const readGated = gateToolWithCapabilities(
+      repoTool.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const inspectDenied = await readGated.execute('repo-inspect', { action: 'inspect', target: 'status' });
+    expect(repoTool.executeSpy).not.toHaveBeenCalled();
+    expect((inspectDenied.content[0] as any).text).toContain('git.read');
+
+    const writeGated = gateToolWithCapabilities(
+      repoTool.tool,
+      () => accessForTier('apprentice'),
+    );
+    const patchDenied = await writeGated.execute('repo-patch', {
+      action: 'patch',
+      file_path: 'src/agent-main.ts',
+      content: 'patched',
+    });
+    expect(repoTool.executeSpy).not.toHaveBeenCalled();
+    expect((patchDenied.content[0] as any).text).toContain('git.write');
+
+    const allowedRead = gateToolWithCapabilities(
+      repoTool.tool,
+      () => accessForTier('nursery'),
+    );
+    await allowedRead.execute('repo-allowed', {});
+    expect(repoTool.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates unified beads actions by issue.* capability tokens', async () => {
+    const beads = createTool('beads');
+    const readyGated = gateToolWithCapabilities(
+      beads.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const readyDenied = await readyGated.execute('beads-ready', { action: 'ready' });
+    expect(beads.executeSpy).not.toHaveBeenCalled();
     expect((readyDenied.content[0] as any).text).toContain('issue.read');
 
-    const issueCreate = createTool('issue_create');
     const createGated = gateToolWithCapabilities(
-      issueCreate.tool,
+      beads.tool,
       () => accessForTier('custom', ['issue.read']),
     );
-    const createDenied = await createGated.execute('issue-create', {});
-    expect(issueCreate.executeSpy).not.toHaveBeenCalled();
+    const createDenied = await createGated.execute('beads-create', { action: 'create', title: 'Tracked work' });
+    expect(beads.executeSpy).not.toHaveBeenCalled();
     expect((createDenied.content[0] as any).text).toContain('issue.write');
 
-    const issueClose = createTool('issue_close');
     const closeGated = gateToolWithCapabilities(
-      issueClose.tool,
+      beads.tool,
       () => accessForTier('autonomous'),
     );
-    await closeGated.execute('issue-close', {});
-    expect(issueClose.executeSpy).toHaveBeenCalledTimes(1);
+    await closeGated.execute('beads-close', { action: 'close', id: 'PSFN-1', reason: 'done' });
+    expect(beads.executeSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('evaluates promoted tools capability requirements', () => {
-    const promotedAdd = createTool('promoted_tools_add');
-    const deniedEligibility = evaluateToolCapabilityEligibility(
-      promotedAdd.tool,
-      {},
-      accessForTier('custom', ['identity.read']),
-    );
-    expect(deniedEligibility.allowed).toBe(false);
-    expect(deniedEligibility.requiredTokens).toEqual(['identity.write.runtime']);
-    expect(deniedEligibility.missingTokens).toEqual(['identity.write.runtime']);
+  it('evaluates toolset capability requirements by action', async () => {
+    const toolsetModule = await import('../agent/substrate-agent/adaptive-tools-runtime.js');
+    const toolset = toolsetModule.createToolsetTool({
+      getExtendedTools: () => [],
+      getExtendedToolAutoloadPolicy: () => null,
+      getAdaptiveToolRuntimeState: () => ({
+        generatedAt: 1,
+        coreTools: ['tool_search', 'toolset'],
+        extendedTools: [],
+        promotedToolsConfigured: [],
+        promotedToolsActive: [],
+        promotedToolsSkipped: [],
+        loadedExtendedTools: [],
+        activeTools: [
+          { toolName: 'tool_search', source: 'core' },
+          { toolName: 'toolset', source: 'core' },
+        ],
+        lastSnapshot: null,
+      }),
+      getActiveTurnCorrelation: () => null,
+      getActiveTurnTaskKind: () => null,
+      getActiveTurnIntent: () => null,
+      getPromotedExtendedToolsLimit: () => 4,
+      getPromotedExtendedTools: () => [],
+      setPromotedExtendedTools: (next: readonly string[]) => [...next],
+      persistPromotedExtendedTools: () => null,
+      addPromotedExtendedTool: () => ({
+        ok: true,
+        changed: false,
+        promotedTools: [],
+        message: 'ok',
+      }),
+      removePromotedExtendedTool: () => ({
+        ok: true,
+        changed: false,
+        promotedTools: [],
+        message: 'ok',
+      }),
+      applyActiveToolsToAgent: () => {},
+      activateExtendedTools: () => ({
+        requestedTools: [],
+        activatedTools: [],
+        alreadyActiveTools: [],
+        missingTools: [],
+      }),
+      resolveSessionChannelId: (channelId: string) => channelId,
+      withAdaptiveCorrelation: () => ({}),
+      emitAdaptiveToolDecision: () => {},
+      emitTelemetry: () => {},
+    });
 
-    const promotedList = createTool('promoted_tools_list');
-    const allowedEligibility = evaluateToolCapabilityEligibility(
-      promotedList.tool,
-      {},
+    const deniedPinEligibility = evaluateToolCapabilityEligibility(
+      toolset,
+      { action: 'pin', tool: 'repo_status' },
       accessForTier('custom', ['identity.read']),
     );
-    expect(allowedEligibility.allowed).toBe(true);
-    expect(allowedEligibility.missingTokens).toEqual([]);
+    expect(deniedPinEligibility.allowed).toBe(false);
+    expect(deniedPinEligibility.requiredTokens).toEqual(['identity.write.runtime']);
+    expect(deniedPinEligibility.missingTokens).toEqual(['identity.write.runtime']);
+
+    const allowedListEligibility = evaluateToolCapabilityEligibility(
+      toolset,
+      { action: 'list' },
+      accessForTier('custom', ['identity.read']),
+    );
+    expect(allowedListEligibility.allowed).toBe(true);
+    expect(allowedListEligibility.missingTokens).toEqual([]);
   });
 });

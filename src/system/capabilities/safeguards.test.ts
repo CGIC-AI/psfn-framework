@@ -22,12 +22,16 @@ function mockTool(name: string): AgentTool<any> {
 
 describe('tool reversibility tagging', () => {
   it('classifies known irreversible tools', () => {
+    expect(resolveToolReversibility('memory')).toBe('irreversible');
     expect(resolveToolReversibility('memory_write')).toBe('irreversible');
     expect(resolveToolReversibility('memory_redact')).toBe('irreversible');
     expect(resolveToolReversibility('memory_delete')).toBe('irreversible');
-    expect(resolveToolReversibility('scratchpad_write')).toBe('irreversible');
-    expect(resolveToolReversibility('self_restart')).toBe('irreversible');
+    expect(resolveToolReversibility('north_star')).toBe('irreversible');
+    expect(resolveToolReversibility('scratchpad')).toBe('irreversible');
+    expect(resolveToolReversibility('system')).toBe('irreversible');
+    expect(resolveToolReversibility('repo')).toBe('irreversible');
     expect(resolveToolReversibility('repo_commit')).toBe('irreversible');
+    expect(resolveToolReversibility('skill')).toBe('irreversible');
   });
 
   it('defaults unknown tools to reversible and supports explicit override', () => {

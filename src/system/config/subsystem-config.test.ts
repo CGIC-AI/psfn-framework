@@ -224,6 +224,12 @@ describe('subsystem config round-trip', () => {
       tickIntervalMs: 1_500,
       heartbeatIntervalMs: 9_000,
       salienceDecayIntervalMs: 12_000,
+      artifactLifecycle: {
+        scratchpadRetentionDays: 14,
+        generatedMediaRetentionDays: 30,
+        workspaceTempRetentionDays: 14,
+        cleanupBatchSize: 128,
+      },
     };
 
     expect(saveSchedulerConfig(dataDir, expected)).toEqual(expected);

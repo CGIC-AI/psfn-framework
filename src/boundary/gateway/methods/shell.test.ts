@@ -215,6 +215,66 @@ describe('registerShellMethods', () => {
     });
   });
 
+  it('passes through only explicitly allowlisted env vars to sandboxed shell execution', async () => {
+    const previousAllowed = process.env.PSFN_ALLOWED_TOKEN;
+    const previousBlocked = process.env.PSFN_BLOCKED_TOKEN;
+    process.env.PSFN_ALLOWED_TOKEN = 'visible-token';
+    process.env.PSFN_BLOCKED_TOKEN = 'hidden-token';
+
+    try {
+      const harness = createHarness({
+        workspacePath: process.cwd(),
+        shellExec: {
+          enabled: true,
+          allowlist: ['node'],
+          envAllowlist: ['PSFN_ALLOWED_TOKEN'],
+          allowedCwd: [process.cwd()],
+        },
+      });
+
+      const result = await harness.invoke({
+        command: 'node',
+        args: [
+          '-e',
+          'process.stdout.write(JSON.stringify({allowed: process.env.PSFN_ALLOWED_TOKEN ?? null, blocked: Object.prototype.hasOwnProperty.call(process.env, "PSFN_BLOCKED_TOKEN"), home: Object.prototype.hasOwnProperty.call(process.env, "HOME")}))',
+        ],
+        envVars: ['PSFN_ALLOWED_TOKEN'],
+      });
+
+      expect(JSON.parse(result.stdout)).toEqual({
+        allowed: 'visible-token',
+        blocked: false,
+        home: false,
+      });
+    } finally {
+      if (previousAllowed === undefined) delete process.env.PSFN_ALLOWED_TOKEN;
+      else process.env.PSFN_ALLOWED_TOKEN = previousAllowed;
+      if (previousBlocked === undefined) delete process.env.PSFN_BLOCKED_TOKEN;
+      else process.env.PSFN_BLOCKED_TOKEN = previousBlocked;
+    }
+  });
+
+  it('denies unallowlisted env var passthrough requests', async () => {
+    const harness = createHarness({
+      workspacePath: process.cwd(),
+      shellExec: {
+        enabled: true,
+        allowlist: ['node'],
+        envAllowlist: ['PSFN_ALLOWED_TOKEN'],
+        allowedCwd: [process.cwd()],
+      },
+    });
+
+    await expect(harness.invoke({
+      command: 'node',
+      args: ['-e', 'process.stdout.write("never")'],
+      envVars: ['PSFN_BLOCKED_TOKEN'],
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('env var not allowlisted'),
+    });
+  });
+
   it('denies cwd symlink escapes via canonical path checks', async () => {
     const allowedRoot = makeTempDir('psfn-shell-allowed-root-');
     const outsideRoot = makeTempDir('psfn-shell-outside-root-');

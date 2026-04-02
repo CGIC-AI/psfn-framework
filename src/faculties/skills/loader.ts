@@ -466,8 +466,12 @@ export function parseSkillDocument(document: string, sourcePath: string): {
 
 export function resolveSkillDirectories(
   config: SkillsRuntimeConfig,
-  repoRoot = process.cwd(),
+  repoRoot: string,
 ): SkillDirectorySpec[] {
+  const normalizedRepoRoot = repoRoot.trim();
+  if (!normalizedRepoRoot) {
+    throw new Error('resolveSkillDirectories requires an explicit repoRoot');
+  }
   const configuredBase = config.directories.length > 0
     ? config.directories
     : DEFAULT_DIRECTORIES;
@@ -479,9 +483,9 @@ export function resolveSkillDirectories(
   ]);
 
   return ordered.map((path, index) => {
-    const absolutePath = resolve(repoRoot, path);
+    const absolutePath = resolve(normalizedRepoRoot, path);
     const displayPath = isAbsolute(path)
-      ? toDisplayPath(repoRoot, normalize(path))
+      ? toDisplayPath(normalizedRepoRoot, normalize(path))
       : toPosix(normalize(path));
 
     return {

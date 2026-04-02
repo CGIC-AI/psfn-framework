@@ -544,6 +544,14 @@ export function resolveValuesJournalPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'values.jsonl');
 }
 
+export function resolveSessionContinuityArtifactsDir(dataDir: string): string {
+  return join(resolveNotesDir(dataDir), 'session-continuity');
+}
+
+export function resolveSessionContinuityArtifactsPath(dataDir: string, sessionId: string): string {
+  return join(resolveSessionContinuityArtifactsDir(dataDir), `${sanitizeChannelId(sessionId)}.jsonl`);
+}
+
 export function resolveLegacyValuesJournalPath(dataDir: string): string {
   return join(dataDir, 'values.jsonl');
 }
@@ -554,6 +562,22 @@ export function resolveReflectionNotesDir(dataDir: string): string {
 
 export function resolveReflectionJournalPath(dataDir: string): string {
   return join(resolveReflectionNotesDir(dataDir), 'journal.jsonl');
+}
+
+export function resolveReflectionDailyJournalsDir(dataDir: string): string {
+  return join(resolveReflectionNotesDir(dataDir), 'daily');
+}
+
+export function resolveReflectionDailyJournalPath(dataDir: string, date: string): string {
+  return join(resolveReflectionDailyJournalsDir(dataDir), `${date}.jsonl`);
+}
+
+export function resolveReflectionProcessLogsDir(dataDir: string): string {
+  return join(resolveReflectionNotesDir(dataDir), 'process-logs');
+}
+
+export function resolveReflectionProcessLogPath(dataDir: string, processId: string): string {
+  return join(resolveReflectionProcessLogsDir(dataDir), `${sanitizeChannelId(processId)}.jsonl`);
 }
 
 export function resolveFocusKnowledgePath(dataDir: string): string {
@@ -643,6 +667,34 @@ export function resolveGeneratedImagesDir(companionDataDir: string): string {
   return resolveCompanionImagesDir(companionDataDir);
 }
 
+export function resolveWorkspaceLifecycleDir(workspacePath: string): string {
+  return join(workspacePath, '.psfn');
+}
+
+export function resolveManagedWorkspaceTempDir(workspacePath: string): string {
+  return join(resolveWorkspaceLifecycleDir(workspacePath), 'temp-artifacts');
+}
+
+export function resolveArtifactLifecycleDir(companionDataDir: string): string {
+  return join(companionDataDir, 'artifact-lifecycle');
+}
+
+export function resolveArtifactLifecycleAuditPath(companionDataDir: string): string {
+  return join(resolveArtifactLifecycleDir(companionDataDir), 'cleanup-runs.jsonl');
+}
+
+export function resolveResearchLibraryDir(companionDataDir: string): string {
+  return join(companionDataDir, 'research-library');
+}
+
+export function resolveResearchLibraryEntriesDir(companionDataDir: string): string {
+  return join(resolveResearchLibraryDir(companionDataDir), 'entries');
+}
+
+export function resolveResearchLibraryEntryDir(companionDataDir: string, entryId: string): string {
+  return join(resolveResearchLibraryEntriesDir(companionDataDir), sanitizeChannelId(entryId));
+}
+
 export function resolveBackupsDir(companionDataDir: string): string {
   return join(companionDataDir, 'backups');
 }
@@ -708,9 +760,13 @@ export function ensurePersistenceLayout(dataDir: string): void {
   mkdirSync(resolveSessionsDir(dataDir), { recursive: true });
   mkdirSync(resolveNotesDir(dataDir), { recursive: true });
   mkdirSync(resolveReflectionNotesDir(dataDir), { recursive: true });
+  mkdirSync(resolveReflectionDailyJournalsDir(dataDir), { recursive: true });
+  mkdirSync(resolveReflectionProcessLogsDir(dataDir), { recursive: true });
   mkdirSync(resolveContactsDir(dataDir), { recursive: true });
   mkdirSync(resolveContinuityDir(dataDir), { recursive: true });
   mkdirSync(resolveInternalRoleEnvelopesDir(dataDir), { recursive: true });
+  mkdirSync(resolveArtifactLifecycleDir(dataDir), { recursive: true });
+  mkdirSync(resolveResearchLibraryEntriesDir(dataDir), { recursive: true });
 }
 
 export function migrateLegacyPersistenceLayout(dataDir: string): void {

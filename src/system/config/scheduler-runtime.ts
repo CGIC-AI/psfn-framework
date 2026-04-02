@@ -27,5 +27,6 @@ export function resolveRuntimeSchedulerConfig(
     tickIntervalMs: persisted.tickIntervalMs,
     heartbeatIntervalMs: persisted.heartbeatIntervalMs,
     salienceDecayIntervalMs: persisted.salienceDecayIntervalMs,
+    artifactLifecycle: { ...persisted.artifactLifecycle },
   };
 }

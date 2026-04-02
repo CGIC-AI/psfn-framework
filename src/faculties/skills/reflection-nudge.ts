@@ -1,6 +1,6 @@
 // ── Skill Reflection Nudge ──
 // After complex multi-tool turns, nudge the agent to consider saving
-// the successful approach as a skill via skill_create.
+// the successful approach as a skill via the unified skill tool.
 
 export interface ReflectionNudgeConfig {
   /** Minimum tool calls in a turn to qualify as "complex". Default: 3. */
@@ -46,7 +46,7 @@ export class ReflectionNudgeTracker {
 
     return (
       '[System: This turn involved complex multi-step work. ' +
-      'Consider using skill_create to save this approach for future reference ' +
+      'Consider using skill action="create" to save this approach as reusable workflow guidance ' +
       'if it was successful.]'
     );
   }

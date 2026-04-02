@@ -428,6 +428,106 @@ describe('createSubstrateStreamFn', () => {
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
   });
 
+  it('routes tool-side reasoning streams through the reasoning candidate instead of the mounted chat model', async () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'chat-model', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+        reasoning: { model: 'reasoning-model', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
+      },
+    });
+
+    streamAdapterMocks.streamSimple.mockImplementation((resolvedModel: { id: string }) => (
+      (async function* success() {
+        yield {
+          type: 'done',
+          reason: 'stop',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'reasoned' }],
+            api: 'openai-completions',
+            provider: 'litellm',
+            model: resolvedModel.id,
+            usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 8, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        };
+      })()
+    ) as any);
+
+    const streamFn = createSubstrateStreamFn(config);
+    const mountedChatModel = resolveModel(config, 'chat');
+    const events = await runWithRequestContext(
+      {
+        turnId: 'turn-reasoning-stream-1',
+        requestId: 'req-reasoning-stream-1',
+        channelId: 'channel-reasoning-stream-1',
+        callType: 'tool',
+        originType: 'tool',
+        originStage: 'repl.sandbox.llm_query',
+        purpose: 'repl.sandbox.reasoning',
+      },
+      async () => {
+        const stream = await streamFn(mountedChatModel, {
+          systemPrompt: 'System',
+          messages: [{ role: 'user', content: 'think hard' }],
+        } as any, {});
+        return await collectStreamEvents(stream as AsyncIterable<unknown>);
+      },
+    );
+
+    expect(events).toHaveLength(1);
+    expect((events[0] as { type: string }).type).toBe('done');
+    expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(1);
+    expect((streamAdapterMocks.streamSimple.mock.calls[0]?.[0] as { id: string }).id).toBe('reasoning-model');
+  });
+
+  it('fails closed for tool-side reasoning streams when no reasoning candidate is configured', async () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chat-only',
+            rank: 1,
+            identity: {
+              provider: 'openrouter',
+              model: 'chat-only-model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: { maxOutputTokens: 16384, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 16384, contextWindow: 128_000 },
+          },
+        ],
+      },
+    });
+
+    const streamFn = createSubstrateStreamFn(config);
+    const mountedChatModel = resolveModel(config, 'chat');
+    await expect(runWithRequestContext(
+      {
+        turnId: 'turn-reasoning-stream-missing',
+        requestId: 'req-reasoning-stream-missing',
+        channelId: 'channel-reasoning-stream-missing',
+        callType: 'tool',
+        originType: 'tool',
+        originStage: 'repl.sandbox.llm_query',
+        purpose: 'repl.sandbox.reasoning',
+      },
+      async () => {
+        const stream = await streamFn(mountedChatModel, {
+          systemPrompt: 'System',
+          messages: [{ role: 'user', content: 'think hard' }],
+        } as any, {});
+        return await collectStreamEvents(stream as AsyncIterable<unknown>);
+      },
+    )).rejects.toThrow("No eligible model configured for purpose 'reasoning'");
+    expect(streamAdapterMocks.streamSimple).not.toHaveBeenCalled();
+  });
+
   it('emits a terminal failure hook when all configured candidates fail', async () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const baseConfig = makeConfig();

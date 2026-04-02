@@ -314,7 +314,7 @@ function parseTurnSnapshotRecord(
 
   parseRequiredTimestamp(value.capturedAt, `${fieldName}.capturedAt`);
   parseRequiredString(value.trustLevel, `${fieldName}.trustLevel`);
-  return cloneUnknownValue(value) as TurnSnapshotRecord;
+  return cloneUnknownValue(value) as unknown as TurnSnapshotRecord;
 }
 
 function parseTurnObservability(

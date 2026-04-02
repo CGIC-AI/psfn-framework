@@ -76,6 +76,14 @@ export interface MemoryScopeQuery {
   mode?: MemoryScopeQueryMode;
 }
 
+export interface AutonomousActionMemoryContext {
+  sourceRef: string;
+  provenanceRefs: string[];
+  tags: string[];
+  scopeRef: MemoryScopeRef;
+  scopeTags: string[];
+}
+
 export const VALID_MEMORY_SCOPE_KINDS: MemoryScopeKind[] = [
   'conversation',
   'contact',
@@ -229,7 +237,7 @@ const SENSITIVE_PRIVACY_TAG_HINTS = new Set<string>([
 const SENSITIVE_PRIVACY_TAG_HINT_LIST = [...SENSITIVE_PRIVACY_TAG_HINTS];
 
 const PUBLIC_SOURCE_PREFIXES = ['twitter:', 'x:', 'mastodon:', 'bluesky:', 'public:'] as const;
-const PRIVATE_SOURCE_PREFIXES = ['api:', 'shard:', 'discord:', 'telegram:', 'signal:', 'dm:'] as const;
+const PRIVATE_SOURCE_PREFIXES = ['api:', 'subagent:', 'shard:', 'discord:', 'telegram:', 'signal:', 'dm:'] as const;
 
 // Decay half-lives in milliseconds
 export const DECAY_HALFLIFE: Record<MemoryType, number> = {
@@ -362,6 +370,62 @@ export function normalizeMemoryScopeRef(
     kind,
     id,
     ...(label.length > 0 ? { label } : {}),
+  };
+}
+
+function normalizeStructuredProvenanceText(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/\s+/g, ' ');
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+export function buildAutonomousActionMemoryContext(input: {
+  toolName: string;
+  action: string;
+  reason?: string;
+  timestampMs?: number;
+}): AutonomousActionMemoryContext {
+  const toolName = input.toolName.trim();
+  const action = input.action.trim();
+  if (!toolName) {
+    throw new Error('toolName is required for autonomous action provenance');
+  }
+  if (!action) {
+    throw new Error('action is required for autonomous action provenance');
+  }
+
+  const timestampMs = typeof input.timestampMs === 'number' && Number.isFinite(input.timestampMs)
+    ? input.timestampMs
+    : Date.now();
+  const timestamp = new Date(timestampMs).toISOString();
+  const reason = normalizeStructuredProvenanceText(input.reason);
+  const provenanceRefs = [
+    'source_type=autonomous_action',
+    `tool=${toolName}`,
+    `action=${action}`,
+    `timestamp=${timestamp}`,
+    ...(reason ? [`reason=${reason}`] : []),
+  ];
+
+  return {
+    sourceRef: `source:autonomous_action|tool:${toolName}|action:${action}|timestamp:${timestamp}`,
+    provenanceRefs,
+    tags: normalizeMemoryTags([
+      'autonomous_action',
+      'self_configuration',
+      toolName,
+      action,
+    ]),
+    scopeRef: {
+      kind: 'system',
+      id: 'self-configuration',
+      label: 'Self-configuration',
+    },
+    scopeTags: normalizeMemoryScopeTags([
+      'autonomous_action',
+      'self_configuration',
+      toolName,
+      action,
+    ]),
   };
 }
 

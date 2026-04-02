@@ -740,7 +740,12 @@ export class AdminChatBootstrapService {
 
   private defaultPrivacyForChannel(channel: string): ChannelPrivacyLevel {
     const normalizedChannel = normalizeChannel(channel);
-    if (normalizedChannel === 'api' || normalizedChannel === 'internal' || normalizedChannel === 'shard') {
+    if (
+      normalizedChannel === 'api'
+      || normalizedChannel === 'internal'
+      || normalizedChannel === 'subagent'
+      || normalizedChannel === 'shard'
+    ) {
       return 'private';
     }
     if (normalizedChannel === 'twitter' || normalizedChannel === 'rss' || normalizedChannel === 'broadcast') {

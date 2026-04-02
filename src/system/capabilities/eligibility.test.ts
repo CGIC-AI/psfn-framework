@@ -59,7 +59,7 @@ describe('EligibilityGate', () => {
   it('allows tool execution when required tokens are granted', () => {
     const decision = evaluateEligibilityDecision(
       accessForTier('apprentice'),
-      { kind: 'tool.execute', toolName: 'memory_write' },
+      { kind: 'tool.execute', toolName: 'memory' },
       { requiredTokens: ['memory.write'] },
     );
     expect(decision.allowed).toBe(true);

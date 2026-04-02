@@ -14,7 +14,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 ### L1: Active context assembly
 
 - Built on demand by `SessionManager`
-- Mixes recent session entries, continuity, prompt layers, core memory, and retrieved long-term memory
+- Mixes recent session entries, continuity, prompt layers, active orientation, and retrieved long-term memory
 - Applies token budgets, compaction thresholds, and observation masking
 
 ### L2: Typed long-term memories
@@ -29,11 +29,34 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 ### Parallel memory/state artifacts
 
 - `contacts/` continuity files
-- reflection journal entries under `notes/reflections/`
-- `core_memory.json`
+- reflection journal entries under `notes/reflections/journal.jsonl`
+- append-only daily reflection journals under `notes/reflections/daily/`
+- append-only long-process reflection logs under `notes/reflections/process-logs/`
+- active orientation persisted in `core_memory.json`
 - contact profiles and social graph state in SQLite/contact stores
 - scratchpad mirror at `notes/scratchpad.json`
 - memory mutation journal at `notes/memories.jsonl`
+
+## Orientation, Long-Term Memory, And Scratchpad
+
+- `orient` is the model-facing surface for active orientation: persona, human, and goals blocks kept hot in context.
+- Orientation storage intentionally remains on legacy `core_memory.json` paths for now; the runtime rename is model-facing rather than a persistence migration.
+- Long-term memory lives in the typed `memory` store and is retrieved selectively; it is not the same thing as active orientation.
+- `scratchpad` remains an explicit ephemeral workspace for bulky temporary material and working notes, not canonical memory.
+- Ephemeral scratchpad notes and managed temp artifacts now follow an explicit retention policy from `scheduler.json`. Durable artifacts promoted into the research library are exempt from lifecycle cleanup.
+
+### Scratchpad
+
+Scratchpad is a separate semantic surface, not a subtype of long-term memory.
+
+- Lives in SQLite `scratchpad_entries` with an optional mirror at `notes/scratchpad.json`
+- Holds temporary long-context notes, excerpts, rolling summaries, and working hypotheses for large source material
+- Is bounded and intentionally ephemeral; it helps the current work, not durable recall
+- Must stay distinct from `orient`, which is active canon, and from typed long-term `memory`, which is durable retrieval state
+- Should be promoted only when the content stabilizes:
+  - stable facts or relational knowledge go to `memory`
+  - durable operator-authored notes or artifacts go to repo docs or `vault`
+  - active self-orientation belongs in `orient`
 
 ## Memory Types
 
@@ -112,7 +135,7 @@ The memory system is actively maintained by runtime jobs:
 
 - salience decay
 - profile synthesis refresh
-- reflection writes promoted into memory
+- reflection writes promoted into long-term memory
 - extraction marker updates
 - database integrity and embedding-dimension checks at startup
 

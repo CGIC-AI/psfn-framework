@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActiveConcern } from '../intention/concerns.js';
+import type { CareReminder } from '../intention/care-reminders.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import {
   buildInternalStateSnapshotRef,
@@ -35,6 +36,28 @@ function makePendingFollowUp(overrides?: Partial<PendingFollowUp>): PendingFollo
   };
 }
 
+function makeCareReminder(overrides?: Partial<CareReminder>): CareReminder {
+  return {
+    id: 'care-reminder-1',
+    kind: 'important_date',
+    classification: 'birthday',
+    title: 'Alex birthday',
+    content: 'Remember to celebrate Alex on their birthday.',
+    schedule: 'annual',
+    status: 'active',
+    dueAt: '2026-04-01T09:00:00.000Z',
+    createdAt: '2026-03-01T10:00:00.000Z',
+    channelId: 'api:test',
+    channelType: 'api',
+    authorId: 'system:intention',
+    authorName: 'Whisper',
+    provenanceSource: 'companion_appraisal',
+    provenanceReason: 'Partner birthday mentioned explicitly.',
+    activationCount: 0,
+    ...overrides,
+  };
+}
+
 describe('InternalStateComputer', () => {
   it('computes deterministic state from emotion, concern, relational, and turn metrics', () => {
     const computer = new InternalStateComputer();
@@ -56,6 +79,9 @@ describe('InternalStateComputer', () => {
       ],
       pendingFollowUps: [
         makePendingFollowUp(),
+      ],
+      careReminders: [
+        makeCareReminder(),
       ],
       trustLevel: 'trusted',
       contactId: 'contact-123',
@@ -80,6 +106,7 @@ describe('InternalStateComputer', () => {
       'concern-medium',
     ]);
     expect(state.attention.pendingFollowUps?.map(followUp => followUp.id)).toEqual(['follow-up-1']);
+    expect(state.attention.careReminders?.map(reminder => reminder.id)).toEqual(['care-reminder-1']);
     expect(state.attention.conversationTrajectory).toBe('deepening');
     expect(state.cognitive.processingQuality).toBe('deliberate');
     expect(state.relational).toMatchObject({
@@ -109,6 +136,10 @@ describe('InternalStateComputer', () => {
         makePendingFollowUp({ id: 'follow-up-b' }),
         makePendingFollowUp({ id: 'follow-up-a', dueAt: '2026-03-01T09:30:00.000Z' }),
       ],
+      careReminders: [
+        makeCareReminder({ id: 'care-reminder-b', dueAt: '2026-05-01T09:00:00.000Z' }),
+        makeCareReminder({ id: 'care-reminder-a', dueAt: '2026-04-01T09:00:00.000Z' }),
+      ],
       trustLevel: 'regular',
       sessionMetrics: {
         userMessageText: 'Switching gears, what about backups?',
@@ -131,6 +162,10 @@ describe('InternalStateComputer', () => {
       pendingFollowUps: [
         makePendingFollowUp({ id: 'follow-up-a', dueAt: '2026-03-01T09:30:00.000Z' }),
         makePendingFollowUp({ id: 'follow-up-b' }),
+      ],
+      careReminders: [
+        makeCareReminder({ id: 'care-reminder-a', dueAt: '2026-04-01T09:00:00.000Z' }),
+        makeCareReminder({ id: 'care-reminder-b', dueAt: '2026-05-01T09:00:00.000Z' }),
       ],
       trustLevel: 'regular',
       sessionMetrics: {
@@ -156,6 +191,7 @@ describe('InternalStateComputer', () => {
       },
       activeConcerns: [],
       pendingFollowUps: [],
+      careReminders: [],
       trustLevel: 'public',
       sessionMetrics: {
         userMessageText: 'hello',
@@ -179,6 +215,7 @@ describe('InternalStateComputer', () => {
         makeConcern({ createdAt: 'not-a-date' }),
       ],
       pendingFollowUps: [],
+      careReminders: [],
       trustLevel: 'public',
       sessionMetrics: {
         userMessageText: 'hello',

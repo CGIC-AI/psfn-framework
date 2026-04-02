@@ -24,7 +24,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
 - **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots (including vision)
 - **Capabilities System** — Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
-- **Skills System** — Self-authored capability documents (CRUD via agent tools, auto-filtered by eligibility)
+- **Skills System** — Self-authored workflow guidance documents managed through the unified `skill` tool and auto-filtered by eligibility
 - **Values Journal** — Agent-authored principles with persistence
 
 ### Privacy & Trust (Honne/Tatemae)
@@ -165,7 +165,8 @@ set -a && source .env && set +a && npm run agent
 **Containerized agent (maximum isolation):**
 ```bash
 npm run build
-npm run agent:docker    # --network=none Docker container
+npm run agent:docker          # Production profile (network_mode: "none")
+npm run agent:docker:continuous # Continuous/dev profile (isolated internal network)
 ```
 
 ### Optional Services
@@ -276,19 +277,22 @@ Gateway (host)                    Agent (container, --network=none)
 
 ### Agent Tools
 
-Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`.
+Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`. The current names below are a migration surface, not the final collapsed taxonomy; see [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and mapping.
+
+Skills are reusable workflow guidance, not world-execution tools. The runtime manages them through the unified `skill` surface while execution stays on the tool families below.
 
 | Category | Tools |
 |----------|-------|
 | **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
-| **Contacts** | `contact_set_trust`, `contact_note`, `contact_set_channel_privacy`, `contact_link_identity`, `contact_lookup`, `contact_list` |
-| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `north_star_list`, `north_star_create`, `north_star_update`, `north_star_delete`, `north_star_reorder`, `identity_diff`, `identity_changelog`, `character_card_update` |
+| **Contacts** | `contact` |
+| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `north_star`, `identity_diff`, `identity_changelog`, `character_card_update` |
 | **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
 | **Values** | `values_list`, `values_add`, `values_update` |
-| **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
+| **Skills** | `skill` (`action=list|view|create|update`) |
+| **Media** | `media` (`action=generate|edit|analyze`; detailed prompt craft lives in creator skills loaded with `skill action="view"`) |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
-| **Shards** | `spawn_shard` (parallel sub-agents) |
+| **Shards** | `spawn_shard` (long-running shard runtime with explicit artifact delivery) |
 | **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
 | **Sessions** | `session_new`, `session_list`, `session_resume` |
 | **Settings** | `settings_get`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap` |
@@ -322,7 +326,7 @@ src/
   scheduler/                # Heartbeat, one-shot, maintenance
   voice/                    # Voice pipeline (STT, TTS connectors, WebSocket transport)
   vault/                    # Obsidian vault integration (ops, tools, auto-publish)
-  skills/                   # Self-authored skill store (CRUD, execution)
+  skills/                   # Runtime skill loading; companion-authored skills live under companion-data/skills
   capabilities/             # Runtime capability declarations
   values/                   # Values journal (agent-authored principles)
   modules/                  # Runtime module registry and loader

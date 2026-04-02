@@ -205,8 +205,8 @@ function detectDestructivePatchRisks(
   patch: CharacterCardPatch,
 ): DestructivePatchRisk[] {
   const nextData = applyPatchToCharacterData(currentData, patch);
-  const currentRecord = currentData as Record<string, unknown>;
-  const nextRecord = nextData as Record<string, unknown>;
+  const currentRecord = currentData as unknown as Record<string, unknown>;
+  const nextRecord = nextData as unknown as Record<string, unknown>;
   const patchRecord = patch as Record<string, unknown>;
 
   return DESTRUCTIVE_REPLACE_FIELDS.flatMap((field) => {
@@ -396,6 +396,91 @@ export interface PersonaUpdateToolOptions {
   confirmationQueue?: ApprovalQueuePort;
 }
 
+export function executePersonaUpdateAction(
+  store: CharacterCardVersionStore,
+  params: Record<string, unknown>,
+  options: PersonaUpdateToolOptions = {},
+): AgentToolResult<{ isError?: boolean }> {
+  const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
+  const confirmationQueue = options.confirmationQueue;
+  const patch = extractCardPatchFromRecord(params);
+
+  if (!hasPatchFields(patch)) {
+    return textResultWithError('Provide at least one persona field to update.', true);
+  }
+
+  const reason = typeof params.reason === 'string' ? params.reason : undefined;
+  const tier = getCapabilityTier();
+
+  if (tier === 'autonomous') {
+    const protectedAutonomousFields = resolveProtectedAutonomousUpdateFields(patch);
+    if (protectedAutonomousFields.length > 0) {
+      if (!confirmationQueue) {
+        return textResultWithError(
+          'Protected persona fields require confirmation queue support: '
+          + `${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}.`,
+          true,
+        );
+      }
+
+      const entry = enqueueCharacterCardUpdateProposal(
+        store,
+        confirmationQueue,
+        patch,
+        tier,
+        reason,
+        `Protected identity fields (${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}) require operator confirmation.`,
+      );
+      return textResult(
+        `Persona update queued for confirmation (id: ${entry.id}). `
+        + `Protected identity fields (${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}) cannot be updated autonomously.`,
+      );
+    }
+
+    const destructivePatchRisks = detectDestructivePatchRisks(store.getCurrent().card.data, patch);
+    const allowDestructiveReplace = params.allow_destructive_replace === true;
+
+    if (destructivePatchRisks.length > 0 && !allowDestructiveReplace) {
+      return textResultWithError(
+        'Dangerous persona update blocked: '
+        + `${formatDestructivePatchRisks(destructivePatchRisks)}. `
+        + 'Retry with allow_destructive_replace=true only if you intend to replace the full field content.',
+        true,
+      );
+    }
+
+    try {
+      const snapshot = store.updateData(patch, 'agent', reason);
+      return textResult(
+        `Updated persona to v${snapshot.version} (checksum: ${snapshot.checksum}).`,
+      );
+    } catch (error) {
+      const message = toErrorMessage(error);
+      return textResultWithError(`Persona update failed: ${message}`, true);
+    }
+  }
+
+  if (!confirmationQueue) {
+    return textResultWithError(
+      `Persona updates in ${tier} tier require confirmation queue support, but no queue is configured.`,
+      true,
+    );
+  }
+
+  const entry = enqueueCharacterCardUpdateProposal(
+    store,
+    confirmationQueue,
+    patch,
+    tier,
+    reason,
+  );
+
+  return textResult(
+    `Persona update queued for confirmation (id: ${entry.id}). ` +
+    'Use the admin Confirmations page to approve, deny, or modify.',
+  );
+}
+
 function proposalScope(snapshot: CharacterCardSnapshot): string {
   return `${snapshot.card.data.name} (v${snapshot.version})`;
 }
@@ -446,9 +531,6 @@ export function createPersonaUpdateTool(
   store: CharacterCardVersionStore,
   options: PersonaUpdateToolOptions = {},
 ): AgentTool<any> {
-  const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
-  const confirmationQueue = options.confirmationQueue;
-
   const tool: AgentTool<any> = {
     name: 'persona_update',
     description:
@@ -478,81 +560,7 @@ export function createPersonaUpdateTool(
       params: Record<string, unknown>,
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const patch = extractCardPatchFromRecord(params);
-      if (!hasPatchFields(patch)) {
-        return textResultWithError('Provide at least one persona field to update.', true);
-      }
-
-      const reason = typeof params.reason === 'string' ? params.reason : undefined;
-      const tier = getCapabilityTier();
-
-      if (tier === 'autonomous') {
-        const protectedAutonomousFields = resolveProtectedAutonomousUpdateFields(patch);
-        if (protectedAutonomousFields.length > 0) {
-          if (!confirmationQueue) {
-            return textResultWithError(
-              'Protected persona fields require confirmation queue support: '
-              + `${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}.`,
-              true,
-            );
-          }
-
-          const entry = enqueueCharacterCardUpdateProposal(
-            store,
-            confirmationQueue,
-            patch,
-            tier,
-            reason,
-            `Protected identity fields (${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}) require operator confirmation.`,
-          );
-          return textResult(
-            `Persona update queued for confirmation (id: ${entry.id}). `
-            + `Protected identity fields (${formatProtectedAutonomousUpdateFields(protectedAutonomousFields)}) cannot be updated autonomously.`,
-          );
-        }
-
-        const destructivePatchRisks = detectDestructivePatchRisks(store.getCurrent().card.data, patch);
-        const allowDestructiveReplace = params.allow_destructive_replace === true;
-
-        if (destructivePatchRisks.length > 0 && !allowDestructiveReplace) {
-          return textResultWithError(
-            'Dangerous persona update blocked: '
-            + `${formatDestructivePatchRisks(destructivePatchRisks)}. `
-            + 'Retry with allow_destructive_replace=true only if you intend to replace the full field content.',
-            true,
-          );
-        }
-
-        try {
-          const snapshot = store.updateData(patch, 'agent', reason);
-          return textResult(
-            `Updated persona to v${snapshot.version} (checksum: ${snapshot.checksum}).`,
-          );
-        } catch (error) {
-          const message = toErrorMessage(error);
-          return textResultWithError(`Persona update failed: ${message}`, true);
-        }
-      }
-
-      if (!confirmationQueue) {
-        return textResultWithError(
-          `Persona updates in ${tier} tier require confirmation queue support, but no queue is configured.`,
-          true,
-        );
-      }
-
-      const entry = enqueueCharacterCardUpdateProposal(
-        store,
-        confirmationQueue,
-        patch,
-        tier,
-        reason,
-      );
-
-      return textResult(
-        `Persona update queued for confirmation (id: ${entry.id}). ` +
-        'Use the admin Confirmations page to approve, deny, or modify.',
-      );
+      return executePersonaUpdateAction(store, params, options);
     },
   };
 

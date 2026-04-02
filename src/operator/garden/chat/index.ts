@@ -5,7 +5,7 @@ export type {
   AdminChatBootstrapUpdateInput,
   AdminChatContactOption,
   AdminChatLinkedChannelOption,
-  AdminChatSelectedIdentity,
+  AdminChatSelectedTarget,
   AdminModelRoomBootstrapResponse,
   AdminModelRoomParticipant,
 } from './types.js';

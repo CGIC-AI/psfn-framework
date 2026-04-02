@@ -116,12 +116,12 @@ describe('SleeptimeMemoryAgent', () => {
     expect(agent.inferPostTurnAction({ id: 'm4', channelId: 'internal:reflection:whisper' })).toBeNull();
   });
 
-  it('rewrites core memory and writes memory facts from a sleeptime plan', async () => {
+  it('reorients active blocks and writes long-term memory facts from a sleeptime plan', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'sleeptime-core-memory-'));
     try {
       const coreMemoryStore = new CoreMemoryStore(join(tempDir, 'core-memory.json'));
       const llmProvider = makeLLMProvider(JSON.stringify({
-        core_memory: {
+        orient: {
           persona: 'Warm, direct, and practical conversational style.',
           human: 'Primary user prefers concise answers and values follow-through.',
           goals: 'Maintain continuity and proactively track unresolved commitments.',
@@ -219,7 +219,7 @@ describe('SleeptimeMemoryAgent', () => {
       });
       const coreMemoryStore = new CoreMemoryStore(join(tempDir, 'core-memory.json'));
       const llmProvider = makeLLMProvider(JSON.stringify({
-        core_memory: {
+        orient: {
           persona: 'Calm and clear.',
           human: 'User is focused on implementation details.',
           goals: 'Preserve continuity across turns.',

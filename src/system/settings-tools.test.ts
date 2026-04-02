@@ -4,7 +4,7 @@ import {
   createPromotedToolsListTool,
   createPromotedToolsRemoveTool,
   createPromotedToolsSwapTool,
-  createSettingsGetTool,
+  executeSystemReadAction,
 } from './settings-tools.js';
 import type { SubstrateConfig } from './config/runtime-config-contracts.js';
 
@@ -52,10 +52,9 @@ function readText(result: { content: Array<{ text?: string }> }): string {
   return result.content[0]?.text ?? '';
 }
 
-describe('createSettingsGetTool', () => {
+describe('executeSystemReadAction', () => {
   it('returns a single key value', async () => {
-    const tool = createSettingsGetTool(makeConfig());
-    const result = await tool.execute('call-1', { key: 'thinkMaxSubQueries' });
+    const result = executeSystemReadAction(makeConfig(), { key: 'thinkMaxSubQueries' });
     const payload = JSON.parse(readText(result));
 
     expect(payload.mode).toBe('single');
@@ -65,8 +64,7 @@ describe('createSettingsGetTool', () => {
   });
 
   it('returns discoverable key list mode', async () => {
-    const tool = createSettingsGetTool(makeConfig());
-    const result = await tool.execute('call-2', { list: true });
+    const result = executeSystemReadAction(makeConfig(), { list: true });
     const payload = JSON.parse(readText(result));
 
     expect(payload.mode).toBe('list');
@@ -75,8 +73,7 @@ describe('createSettingsGetTool', () => {
   });
 
   it('returns subset for keys mode', async () => {
-    const tool = createSettingsGetTool(makeConfig());
-    const result = await tool.execute('call-3', {
+    const result = executeSystemReadAction(makeConfig(), {
       keys: ['primaryModel', 'retryMaxAttempts'],
     });
     const payload = JSON.parse(readText(result));
@@ -88,8 +85,7 @@ describe('createSettingsGetTool', () => {
   });
 
   it('returns clear error for unknown keys', async () => {
-    const tool = createSettingsGetTool(makeConfig());
-    const result = await tool.execute('call-4', { key: 'discordToken' });
+    const result = executeSystemReadAction(makeConfig(), { key: 'discordToken' });
 
     expect(readText(result)).toContain('Unknown setting key');
     expect(result.details.isError).toBe(true);
@@ -101,6 +97,8 @@ describe('promoted tools settings helpers', () => {
     const listTool = createPromotedToolsListTool({
       getPromotedExtendedToolsLimit: () => 4,
       getPromotedExtendedTools: () => ['repo_status', 'session_list'],
+      setPromotedExtendedTools: () => ['repo_status', 'session_list'],
+      persistPromotedExtendedTools: () => null,
       addPromotedExtendedTool: () => {
         throw new Error('not used');
       },
@@ -123,6 +121,8 @@ describe('promoted tools settings helpers', () => {
     const addTool = createPromotedToolsAddTool({
       getPromotedExtendedToolsLimit: () => 4,
       getPromotedExtendedTools: () => ['repo_status'],
+      setPromotedExtendedTools: () => ['repo_status'],
+      persistPromotedExtendedTools: () => null,
       addPromotedExtendedTool: () => ({
         ok: false,
         changed: false,
@@ -154,6 +154,8 @@ describe('promoted tools settings helpers', () => {
     const manager = {
       getPromotedExtendedToolsLimit: () => 4,
       getPromotedExtendedTools: () => ['repo_status', 'session_list'],
+      setPromotedExtendedTools: (next: readonly string[]) => [...next],
+      persistPromotedExtendedTools: () => null,
       addPromotedExtendedTool: () => ({
         ok: true,
         changed: true,
@@ -181,13 +183,13 @@ describe('promoted tools settings helpers', () => {
     };
 
     const removeTool = createPromotedToolsRemoveTool(manager);
-    const removeResult = await removeTool.execute('call-remove', { tool: 'repo_status' });
+    const removeResult = await removeTool.execute('call-remove', { tool: 'repo_status', reason: 'prefer direct lookup' });
     const removePayload = JSON.parse(readText(removeResult));
     expect(removePayload.action).toBe('remove');
     expect(removed).toEqual(['repo_status']);
 
     const swapTool = createPromotedToolsSwapTool(manager);
-    const swapResult = await swapTool.execute('call-swap', { fromSlot: 1, toSlot: 2 });
+    const swapResult = await swapTool.execute('call-swap', { fromSlot: 1, toSlot: 2, reason: 'reorder for shorter prefix' });
     const swapPayload = JSON.parse(readText(swapResult));
     expect(swapPayload.action).toBe('swap');
     expect(swapped).toEqual([[1, 2]]);

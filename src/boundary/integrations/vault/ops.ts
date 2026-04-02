@@ -198,8 +198,10 @@ export class VaultOps implements VaultOperations {
       if (msg.includes('IPC') || msg.includes('connect')) {
         if (!isRetry) {
           log.warn('Obsidian IPC not available — restarting services and retrying');
-          await this.restartObsidianServices();
-          return this.exec(args, true);
+          const restarted = await this.restartObsidianServices();
+          if (restarted) {
+            return this.exec(args, true);
+          }
         }
         throw new Error('Obsidian desktop app is not running (services restarted but IPC still unavailable)');
       }
@@ -211,7 +213,7 @@ export class VaultOps implements VaultOperations {
     }
   }
 
-  private async restartObsidianServices(): Promise<void> {
+  private async restartObsidianServices(): Promise<boolean> {
     try {
       execSync(`systemctl --user restart ${OBSIDIAN_SERVICES.join(' ')}`, {
         timeout: 15_000,
@@ -221,10 +223,12 @@ export class VaultOps implements VaultOperations {
         services: OBSIDIAN_SERVICES,
         waitMs: OBSIDIAN_RESTART_WAIT_MS,
       });
+      await new Promise(resolve => setTimeout(resolve, OBSIDIAN_RESTART_WAIT_MS));
+      return true;
     } catch (err) {
       log.warn('Failed to restart Obsidian services', { error: toErrorMessage(err) });
+      return false;
     }
-    await new Promise(resolve => setTimeout(resolve, OBSIDIAN_RESTART_WAIT_MS));
   }
 
   private shellEscape(str: string): string {

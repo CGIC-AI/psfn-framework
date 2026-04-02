@@ -5,11 +5,13 @@ import { InternalStateComputer } from '../self-model/state.js';
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
+  INTENTION_REMINDER_ACTION_KIND,
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
   decisionsToPostTurnActionCandidates,
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
+  normalizeIntentionReminderActionPayload,
   sessionEntriesToIntentionMessages,
   toInferredPostTurnActions,
   type IntentionActionDecision,
@@ -72,6 +74,38 @@ function makeInternalState() {
       createdAt: '2026-03-01T00:00:00.000Z',
       expiresAt: '2026-03-02T00:00:00.000Z',
       contactId: 'contact-primary',
+    }],
+    pendingFollowUps: [{
+      id: 'pending-follow-up-1',
+      content: 'Check in if they come back still sounding discouraged.',
+      priority: 'medium',
+      timing: 'soon',
+      createdAt: '2026-03-01T00:05:00.000Z',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-primary',
+      contextSummary: 'They wanted a gentle re-check after sitting with the plan.',
+      wakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+    }],
+    careReminders: [{
+      id: 'care-reminder-1',
+      kind: 'important_date',
+      classification: 'birthday',
+      title: 'Alex birthday',
+      content: 'Remember Alex birthday and plan a check-in.',
+      schedule: 'annual',
+      status: 'active',
+      dueAt: '2026-04-01T09:00:00.000Z',
+      createdAt: '2026-03-01T00:00:00.000Z',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      provenanceSource: 'companion_appraisal',
+      provenanceReason: 'The user mentioned their birthday.',
+      activationCount: 0,
     }],
     trustLevel: 'primary',
     contactId: 'contact-primary',
@@ -318,6 +352,89 @@ describe('IntentionAppraisal', () => {
     expect(promptPayload.recentlyResolvedConcerns?.[0]?.resolvedAt).toBeTypeOf('string');
   });
 
+  it('includes active durable care reminders in the appraisal prompt', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'noop',
+          priority: 'low',
+          reason: 'No new action required',
+          timing: 'none',
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:care-reminders',
+      internalState: makeInternalState(),
+      recentMessages: [{ role: 'user', content: 'Thanks for remembering that.' }],
+    });
+
+    const promptPayload = JSON.parse((complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}') as string) as {
+      activeCareReminders?: Array<Record<string, unknown>>;
+      internalState?: {
+        attention?: {
+          careReminderCount?: number;
+        };
+      };
+    };
+    expect(promptPayload.internalState?.attention?.careReminderCount).toBe(1);
+    expect(promptPayload.activeCareReminders?.[0]).toMatchObject({
+      id: 'care-reminder-1',
+      kind: 'important_date',
+      classification: 'birthday',
+      schedule: 'annual',
+      provenanceSource: 'companion_appraisal',
+      title: 'Alex birthday',
+    });
+  });
+
+  it('includes pending follow-up resurfacing context in the appraisal prompt', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'noop',
+          priority: 'low',
+          reason: 'No new action required',
+          timing: 'none',
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:pending-follow-ups',
+      internalState: makeInternalState(),
+      currentEmotion: makeEmotionSnapshot({
+        mood: { valence: -0.25, arousal: 0.05, dominance: -0.1 },
+      }),
+      triggerOverride: 'motivation',
+      motivationSignals: ['sustained_negative_valence'],
+      recentMessages: [{ role: 'user', content: 'I still feel pretty low about this.' }],
+    });
+
+    const promptPayload = JSON.parse((complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}') as string) as {
+      pendingFollowUps?: Array<Record<string, unknown>>;
+    };
+    expect(promptPayload.pendingFollowUps?.[0]).toMatchObject({
+      id: 'pending-follow-up-1',
+      timing: 'soon',
+      contextSummary: 'They wanted a gentle re-check after sitting with the plan.',
+      wakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+      eligibleNow: true,
+      matchedWakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+    });
+  });
+
   it('fails closed when model output is malformed', async () => {
     const { provider } = makeProvider(['not valid json']);
     const onEvaluationError = vi.fn();
@@ -452,6 +569,20 @@ describe('intention appraisal action mapping', () => {
           templateId: 'emotional-check',
         },
       }, {
+        type: 'reminder',
+        priority: 'high',
+        reason: 'Store the birthday durably.',
+        timing: 'scheduled',
+        dueAt: 1_700_000_860_000,
+        reminder: {
+          kind: 'important_date',
+          classification: 'birthday',
+          title: 'Alex birthday',
+          content: 'Remember Alex birthday and plan a warm message.',
+          schedule: 'annual',
+          reminderId: 'care-reminder-1',
+        },
+      }, {
         type: 'concern',
         priority: 'medium',
         reason: 'Track recurring stressor.',
@@ -468,19 +599,24 @@ describe('intention appraisal action mapping', () => {
           channelType: 'api',
         },
       });
-      expect(candidates).toHaveLength(2);
+      expect(candidates).toHaveLength(3);
       expect(candidates[0]?.kind).toBe(INTENTION_FOLLOW_UP_ACTION_KIND);
       expect(candidates[0]?.runAt).toBe(1_700_000_460_000);
       expect(candidates[1]).toMatchObject({
         kind: 'heartbeat.run_template',
         payload: { templateId: 'emotional-check' },
       });
+      expect(candidates[2]).toMatchObject({
+        kind: INTENTION_REMINDER_ACTION_KIND,
+        payload: { reminderId: 'care-reminder-1' },
+        runAt: 1_700_000_860_000,
+      });
 
       const inferred = toInferredPostTurnActions(candidates, {
         id: 'msg-intention-1',
         channelId: 'api:test',
       });
-      expect(inferred).toHaveLength(2);
+      expect(inferred).toHaveLength(3);
       expect(normalizeIntentionFollowUpActionPayload(inferred[0]?.payload)).toMatchObject({
         channelId: 'api:test',
         channelType: 'api',
@@ -489,6 +625,10 @@ describe('intention appraisal action mapping', () => {
         content: 'Checking in after our last conversation.',
       });
       expect(inferred[0]?.runAt).toBe(1_700_000_460_000);
+      expect(normalizeIntentionReminderActionPayload(inferred[2]?.payload)).toEqual({
+        reminderId: 'care-reminder-1',
+      });
+      expect(inferred[2]?.runAt).toBe(1_700_000_860_000);
     } finally {
       nowSpy.mockRestore();
     }
@@ -552,6 +692,27 @@ describe('intention appraisal action mapping', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('keeps follow-ups pending when they only specify state-based wake conditions', () => {
+    const candidates = decisionsToPostTurnActionCandidates([{
+      type: 'followUp',
+      priority: 'medium',
+      reason: 'Wait until the partner returns or mood stays low.',
+      timing: 'soon',
+      followUp: {
+        content: 'Check back in when the conversation naturally reopens.',
+        wakeConditions: ['next_user_turn', 'sustained_negative_mood'],
+      },
+    }], {
+      message: {
+        id: 'msg-intention-state-wake',
+        channelId: 'api:test',
+        channelType: 'api',
+      },
+    });
+
+    expect(candidates).toEqual([]);
   });
 
   it('forces intention follow-ups to system attribution even if the model supplies user authors', () => {

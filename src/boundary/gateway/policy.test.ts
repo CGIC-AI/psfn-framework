@@ -197,6 +197,55 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('denies shard.backend.request when shell policy is disabled', () => {
+    expect(evaluatePolicy(
+      { method: 'shard.backend.request', params: { backend: 'container' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies shard.backend.request when required backend command is not allowlisted', () => {
+    const configWithShell: PolicyConfig = {
+      ...policyConfig,
+      shellExec: {
+        enabled: true,
+        allowlist: ['node'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'shard.backend.request', params: { backend: 'container' } },
+      configWithShell,
+    )).toBe('DENY');
+  });
+
+  it('allows container shard backend mediation when docker is allowlisted', () => {
+    const configWithShell: PolicyConfig = {
+      ...policyConfig,
+      shellExec: {
+        enabled: true,
+        allowlist: ['/usr/bin/docker'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'shard.backend.request', params: { backend: 'container' } },
+      configWithShell,
+    )).toBe('ALLOW');
+  });
+
+  it('allows orchestrated shard backend mediation when kubectl is allowlisted', () => {
+    const configWithShell: PolicyConfig = {
+      ...policyConfig,
+      shellExec: {
+        enabled: true,
+        allowlist: ['kubectl'],
+      },
+    };
+    expect(evaluatePolicy(
+      { method: 'shard.backend.request', params: { backend: 'orchestrated' } },
+      configWithShell,
+    )).toBe('ALLOW');
+  });
+
   it('denies vault.read when vault policy is disabled', () => {
     expect(evaluatePolicy(
       { method: 'vault.read', params: { name: 'Daily.md' } },
@@ -325,6 +374,38 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('allows fs.search with bounded workspace-relative parameters', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.search',
+        params: {
+          query: 'needle',
+          glob: 'src/**/*.ts',
+          mode: 'literal',
+          maxMatches: 20,
+          maxFiles: 50,
+          maxBytesPerFile: 10_000,
+          contextLines: 1,
+        },
+      },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('allows fs.edit inside workspace', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: 'notes.txt',
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
   it('allows fs.read of workspace root', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: '/app/companion' } },
@@ -408,6 +489,37 @@ describe('evaluatePolicy', () => {
       { method: 'fs.list', params: { glob: 'src/..' } },
       policyConfig,
     )).toBe('DENY');
+  });
+
+  it('denies invalid fs.search parameters', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.search', params: { query: '', glob: 'src/**/*.ts' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.search', params: { query: 'needle', glob: '../secrets/**' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.search', params: { query: 'needle', contextLines: 3 } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('requires approval for fs.edit outside workspace', () => {
+    expect(evaluatePolicy(
+      {
+        method: 'fs.edit',
+        params: {
+          path: '/tmp/evil.sh',
+          oldText: 'before',
+          newText: 'after',
+        },
+      },
+      policyConfig,
+    )).toBe('NEEDS_APPROVAL');
   });
 
   // ── Allowed read paths ──

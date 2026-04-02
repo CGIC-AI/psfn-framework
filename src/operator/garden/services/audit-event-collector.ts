@@ -12,6 +12,14 @@ const AGENT_IDENTITY_EDIT_TOOLS = new Set([
   'persona_update',
 ]);
 
+const IDENTITY_MUTATION_ACTIONS = new Set([
+  'update_layer',
+  'rollback_layer',
+  'toggle_layer',
+  'update_persona',
+  'commit_stage',
+]);
+
 export interface ActiveToolInvocation {
   toolName: string;
   channelId: string;
@@ -42,6 +50,7 @@ export function registerAuditTimelineSources(options: {
     resolveCompanionName = () => DEFAULT_COMPANION_NAME,
     now = () => Date.now(),
   } = options;
+  const pendingToolArgs = new Map<string, Record<string, unknown>>();
 
   eventBus.on('agent.tool.start', ({ toolCallId, toolName, channelId }) => {
     activeToolInvocations.set(toolCallId, {
@@ -51,10 +60,19 @@ export function registerAuditTimelineSources(options: {
     });
   });
 
+  eventBus.on('agent.toolcall.end', ({ toolCallId, toolName, arguments: toolArgs }) => {
+    if (toolName !== 'identity') return;
+    pendingToolArgs.set(toolCallId, toolArgs);
+  });
+
   eventBus.on('agent.tool.end', ({ toolCallId, toolName, channelId, isError, shardId }) => {
     const active = activeToolInvocations.get(toolCallId);
     if (active) {
       activeToolInvocations.delete(toolCallId);
+    }
+    const toolArgs = pendingToolArgs.get(toolCallId);
+    if (toolArgs) {
+      pendingToolArgs.delete(toolCallId);
     }
     const durationMs = active ? Math.max(0, now() - active.startedAt) : null;
     const decision: AdminAuditDecision = isError ? 'denied' : 'allowed';
@@ -75,13 +93,19 @@ export function registerAuditTimelineSources(options: {
       'companion',
     );
 
-    if (AGENT_IDENTITY_EDIT_TOOLS.has(toolLabel)) {
+    const identityAction = typeof toolArgs?.action === 'string' ? toolArgs.action.trim() : '';
+    const isUnifiedIdentityEdit = toolLabel === 'identity' && IDENTITY_MUTATION_ACTIONS.has(identityAction);
+
+    if (AGENT_IDENTITY_EDIT_TOOLS.has(toolLabel) || isUnifiedIdentityEdit) {
+      const identityToolLabel = isUnifiedIdentityEdit
+        ? `${toolLabel}:${identityAction}`
+        : toolLabel;
       appendAuditTimelineEntry(
         'identity_edit',
         decision,
         isError
-          ? `${companionName} attempted identity edit via "${toolLabel}" in ${channelLabel}, but it failed.`
-          : `${companionName} edited identity via "${toolLabel}" in ${channelLabel}.`,
+          ? `${companionName} attempted identity edit via "${identityToolLabel}" in ${channelLabel}, but it failed.`
+          : `${companionName} edited identity via "${identityToolLabel}" in ${channelLabel}.`,
         [
           `callId=${toolCallId}`,
           shardId ? `shard=${shardId}` : null,

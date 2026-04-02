@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { wireSkillsRuntime } from './runtime-wiring.js';
 
 describe('skills runtime wiring', () => {
-  it('attaches skills runtime and registers all skill tools', () => {
+  it('attaches skills runtime and registers the unified skill tool', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-wire-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'config');
@@ -35,15 +35,9 @@ describe('skills runtime wiring', () => {
       });
 
       expect(runtime).toBe(target.skillsRuntime);
-      expect(registerTool).toHaveBeenCalledTimes(4);
-      const names = registerTool.mock.calls
-        .map(call => call[0]?.name)
-        .sort();
-      expect(names).toEqual(['skill_create', 'skill_list', 'skill_update', 'skill_view']);
-      expect(registerTool.mock.calls.find(call => call[0]?.name === 'skill_list')?.[1]).toBeUndefined();
-      expect(registerTool.mock.calls.find(call => call[0]?.name === 'skill_view')?.[1]).toBeUndefined();
-      expect(registerTool.mock.calls.find(call => call[0]?.name === 'skill_create')?.[1]).toBe('extended');
-      expect(registerTool.mock.calls.find(call => call[0]?.name === 'skill_update')?.[1]).toBe('extended');
+      expect(registerTool).toHaveBeenCalledTimes(1);
+      expect(registerTool.mock.calls[0]?.[0]?.name).toBe('skill');
+      expect(registerTool.mock.calls[0]?.[1]).toBe('core');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -8,19 +8,21 @@ describe('deriveToolHealthViews', () => {
         generatedAt: 1,
         tools: [
           {
-            name: 'notify_operator',
-            description: 'Send an out-of-band operator alert via ntfy.',
+            name: 'tool_search',
+            description: 'Search the non-default tool catalog.',
+            scope: 'core',
+          },
+          {
+            name: 'notify',
+            description: 'Unified notification surface for operator briefs, lightweight outbound sends, and approval escalation.',
             scope: 'extended',
             wiringMeta: {
               requiredServices: ['ntfy'],
-              contextRestrictions: {
-                disallowInternal: true,
-                disallowScheduled: true,
-              },
+              requiredGatewayMethods: ['discord.send', 'notify.ntfy'],
               concurrency: {
                 class: 'exclusive',
                 exclusivityKeyPolicy: 'category_tool_name',
-                exclusivityKey: 'extended:notify_operator',
+                exclusivityKey: 'extended:notify',
                 interruptibility: 'cooperative',
                 eligibility: {
                   foreground: true,
@@ -47,16 +49,16 @@ describe('deriveToolHealthViews', () => {
             },
           },
           {
-            name: 'load_tools',
-            description: 'Load extended tools for the current session.',
+            name: 'toolset',
+            description: 'Manage non-default tool activation and pinned tools.',
             scope: 'core',
           },
         ],
       },
       state: {
         generatedAt: 2,
-        coreTools: ['load_tools'],
-        extendedTools: ['notify_operator', 'heartbeat_run_template'],
+        coreTools: ['tool_search', 'toolset'],
+        extendedTools: ['notify', 'heartbeat_run_template'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
@@ -69,7 +71,8 @@ describe('deriveToolHealthViews', () => {
           },
         ],
         activeTools: [
-          { toolName: 'load_tools', source: 'core' },
+          { toolName: 'tool_search', source: 'core' },
+          { toolName: 'toolset', source: 'core' },
           { toolName: 'heartbeat_run_template', source: 'autoload' },
         ],
         lastSnapshot: null,
@@ -84,15 +87,15 @@ describe('deriveToolHealthViews', () => {
       ],
       recentFailures: [
         {
-          toolName: 'load_tools',
+          toolName: 'toolset',
           channelId: 'api-session',
-          message: 'load_tools failed once',
+          message: 'toolset failed once',
           timestamp: 3,
         },
       ],
     });
 
-    const notifyOperator = views.find((entry) => entry.name === 'notify_operator');
+    const notifyOperator = views.find((entry) => entry.name === 'notify');
     expect(notifyOperator).toMatchObject({
       health: {
         status: 'healthy',
@@ -102,8 +105,20 @@ describe('deriveToolHealthViews', () => {
           status: 'available',
         },
         internalHeartbeat: {
-          status: 'not_applicable',
-          detail: 'Blocked on internal channels.',
+          status: 'available',
+        },
+      },
+    });
+
+    const toolSearch = views.find((entry) => entry.name === 'tool_search');
+    expect(toolSearch).toMatchObject({
+      health: {
+        status: 'healthy',
+      },
+      contexts: {
+        chat: {
+          status: 'active',
+          source: 'core',
         },
       },
     });
@@ -122,11 +137,11 @@ describe('deriveToolHealthViews', () => {
       },
     });
 
-    const loadTools = views.find((entry) => entry.name === 'load_tools');
-    expect(loadTools).toMatchObject({
+    const toolset = views.find((entry) => entry.name === 'toolset');
+    expect(toolset).toMatchObject({
       health: {
         status: 'degraded',
-        detail: 'Last failure: load_tools failed once',
+        detail: 'Last failure: toolset failed once',
       },
       contexts: {
         chat: {
@@ -135,5 +150,101 @@ describe('deriveToolHealthViews', () => {
         },
       },
     });
+  });
+
+  it('shows unified vault health and degrades when gateway action coverage is partial', () => {
+    const views = deriveToolHealthViews({
+      catalog: {
+        generatedAt: 1,
+        tools: [
+          {
+            name: 'vault',
+            description: 'Unified durable vault surface for Obsidian notes, search, and daily journaling.',
+            scope: 'extended',
+            wiringMeta: {
+              requiredServices: ['vault'],
+              requiredGatewayMethods: ['vault.write', 'vault.read', 'vault.search', 'vault.daily'],
+            },
+          },
+        ],
+      },
+      state: {
+        generatedAt: 2,
+        coreTools: [],
+        extendedTools: ['vault'],
+        promotedToolsConfigured: [],
+        promotedToolsActive: [],
+        promotedToolsSkipped: [],
+        loadedExtendedTools: [],
+        activeTools: [],
+        lastSnapshot: null,
+      },
+      serviceHealth: [
+        {
+          serviceId: 'gateway',
+          status: 'healthy',
+          detail: 'Gateway is configured.',
+          checkedAt: 1,
+        },
+        {
+          serviceId: 'vault',
+          status: 'healthy',
+          detail: 'Gateway vault RPC is enabled for read, search.',
+          checkedAt: 1,
+          availableActions: ['read', 'search'],
+        },
+      ],
+      recentFailures: [],
+    });
+
+    expect(views).toEqual([
+      expect.objectContaining({
+        name: 'vault',
+        health: {
+          status: 'degraded',
+          detail: 'Vault is missing actions required by the unified tool: write, daily.',
+        },
+        contexts: {
+          chat: {
+            status: 'available',
+            detail: 'Extended tool can be activated or pinned on demand.',
+          },
+          internalHeartbeat: {
+            status: 'available',
+            detail: 'Extended tool can be activated or pinned on demand.',
+          },
+        },
+      }),
+    ]);
+  });
+
+  it('adds a conditional unified vault tool when vault service health is unavailable', () => {
+    const views = deriveToolHealthViews({
+      catalog: {
+        generatedAt: 1,
+        tools: [],
+      },
+      state: null,
+      serviceHealth: [
+        {
+          serviceId: 'vault',
+          status: 'unavailable',
+          detail: 'Gateway vault RPC is enabled but operations are not configured.',
+          checkedAt: 1,
+        },
+      ],
+      recentFailures: [],
+    });
+
+    expect(views).toEqual([
+      expect.objectContaining({
+        name: 'vault',
+        scope: 'conditional',
+        health: {
+          status: 'unavailable',
+          detail: 'Gateway vault RPC is enabled but operations are not configured.',
+        },
+      }),
+    ]);
   });
 });

@@ -127,6 +127,23 @@ describe('registerWebMethods', () => {
     });
   });
 
+  it('rejects unknown fetch lanes instead of coercing them to default', async () => {
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        allowHttp: true,
+      },
+    });
+
+    await expect(harness.invoke({
+      url: 'https://example.com',
+      lane: 'search_mode',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('Unsupported web lane'),
+    });
+  });
+
   it('allows discovery lane only for configured discovery URL allowlist', async () => {
     const { server, url } = await listenHttp((reqUrl) => {
       if (reqUrl !== '/v1/models') {
@@ -342,6 +359,23 @@ describe('registerWebMethods', () => {
       dataBase64: 'AQID',
       mimeType: 'image/png',
       sizeBytes: 3,
+    });
+  });
+
+  it('rejects unknown binary fetch lanes instead of coercing them to default', async () => {
+    const harness = createRuntimeHarness({
+      workspacePath: process.cwd(),
+      urlPolicy: {
+        allowHttp: true,
+      },
+    });
+
+    await expect(harness.invokeBinary({
+      url: 'https://example.com/image.png',
+      lane: 'browse_mode',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('Unsupported web lane'),
     });
   });
 

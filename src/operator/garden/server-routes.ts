@@ -17,14 +17,18 @@ import { formatPossessiveCompanionName } from '../../core/identity/companion-nam
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import type {
   AdminAdaptiveToolsService,
+  AdminArtifactLifecycleService,
   AdminContactsService,
   AdminDashboardService,
   AdminIdentityService,
   AdminMemoryService,
+  AdminResearchLibraryService,
   AdminPromptsService,
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
+import type { ShardManager } from '../../shards/manager.js';
+import type { SubagentFaculty } from '../../subagents/faculty.js';
 import type { ConfirmationQueueAdminApi } from './types.js';
 import { GARDEN_PREFIX } from './server-request-routing.js';
 import { sendJson, sendRedirect, sendText } from '../../channels/backplane/http/primitives.js';
@@ -38,8 +42,12 @@ export interface AdminRoute {
 interface AdminRouteDependencies {
   token?: string;
   dashboardService: AdminDashboardService;
+  shardManager: ShardManager;
+  subagentFaculty: SubagentFaculty;
   adaptiveToolsService: AdminAdaptiveToolsService | null;
+  artifactLifecycleService: AdminArtifactLifecycleService | null;
   memoryService: AdminMemoryService;
+  researchLibraryService: AdminResearchLibraryService | null;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
   settingsService: AdminSettingsService;
@@ -183,8 +191,12 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
     },
     ...buildAdminApiRoutes({
       dashboardService: deps.dashboardService,
+      shardManager: deps.shardManager,
+      subagentFaculty: deps.subagentFaculty,
       adaptiveToolsService: deps.adaptiveToolsService,
+      artifactLifecycleService: deps.artifactLifecycleService,
       memoryService: deps.memoryService,
+      researchLibraryService: deps.researchLibraryService,
       sessionService: deps.sessionService,
       contactsService: deps.contactsService,
       settingsService: deps.settingsService,

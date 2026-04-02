@@ -36,7 +36,7 @@ interface NormalizedMemoryWrite {
 }
 
 interface NormalizedSleeptimePlan {
-  coreMemory: {
+  orient: {
     persona: string;
     human: string;
     goals: string;
@@ -156,16 +156,16 @@ function normalizeSleeptimePlan(raw: string, maxMemoryWrites: number): Normalize
   }
 
   const record = parsed as Record<string, unknown>;
-  const coreMemoryRaw = record['core_memory'];
-  if (!coreMemoryRaw || typeof coreMemoryRaw !== 'object' || Array.isArray(coreMemoryRaw)) {
-    throw new Error('Sleeptime plan is missing core_memory object');
+  const orientRaw = record['orient'];
+  if (!orientRaw || typeof orientRaw !== 'object' || Array.isArray(orientRaw)) {
+    throw new Error('Sleeptime plan is missing orient object');
   }
 
-  const coreMemoryRecord = coreMemoryRaw as Record<string, unknown>;
-  const coreMemory = {
-    persona: normalizeText(coreMemoryRecord['persona']),
-    human: normalizeText(coreMemoryRecord['human']),
-    goals: normalizeText(coreMemoryRecord['goals']),
+  const orientRecord = orientRaw as Record<string, unknown>;
+  const orient = {
+    persona: normalizeText(orientRecord['persona']),
+    human: normalizeText(orientRecord['human']),
+    goals: normalizeText(orientRecord['goals']),
   };
 
   const memoryWritesRaw = Array.isArray(record['memory_writes'])
@@ -193,7 +193,7 @@ function normalizeSleeptimePlan(raw: string, maxMemoryWrites: number): Normalize
   }
 
   return {
-    coreMemory,
+    orient,
     memoryWrites,
   };
 }
@@ -286,7 +286,7 @@ export class SleeptimeMemoryAgent {
     const currentSnapshot = this.coreMemoryStore.getSnapshot();
     const transcript = recentEntries.map(summarizeSessionEntry).join('\n');
     const requestPrompt = [
-      'Current core memory blocks:',
+      'Current orientation blocks:',
       `persona:\n${currentSnapshot.blocks.persona.content || '[empty]'}`,
       `human:\n${currentSnapshot.blocks.human.content || '[empty]'}`,
       `goals:\n${currentSnapshot.blocks.goals.content || '[empty]'}`,
@@ -294,19 +294,19 @@ export class SleeptimeMemoryAgent {
       'Recent transcript:',
       transcript,
       '',
-      `Return strict JSON with keys "core_memory" and "memory_writes" (max ${this.maxMemoryWrites}).`,
+      `Return strict JSON with keys "orient" and "memory_writes" (max ${this.maxMemoryWrites}).`,
     ].join('\n');
 
     const response = await this.llmProvider.complete(
       {
         systemPrompt: [
-          'You are a sleeptime memory maintainer.',
-          'Rewrite core memory blocks (persona, human, goals) using only grounded transcript evidence.',
+          'You are a sleeptime orientation maintainer.',
+          'Reorient the active persona, human, and goals blocks using only grounded transcript evidence.',
           'Propose optional durable memory writes for the long-term memory store.',
-          'Never invent facts. Keep core memory concise and stable.',
+          'Never invent facts. Keep orientation concise, stable, and action-guiding.',
           'Respond with JSON only:',
           '{',
-          '  "core_memory": { "persona": "...", "human": "...", "goals": "..." },',
+          '  "orient": { "persona": "...", "human": "...", "goals": "..." },',
           '  "memory_writes": [',
           '    {',
           '      "text": "...",',
@@ -335,9 +335,9 @@ export class SleeptimeMemoryAgent {
     const plan = normalizeSleeptimePlan(response.content, this.maxMemoryWrites);
 
     this.coreMemoryStore.rethink({
-      persona: plan.coreMemory.persona,
-      human: plan.coreMemory.human,
-      goals: plan.coreMemory.goals,
+      persona: plan.orient.persona,
+      human: plan.orient.human,
+      goals: plan.orient.goals,
     });
 
     let writtenCount = 0;

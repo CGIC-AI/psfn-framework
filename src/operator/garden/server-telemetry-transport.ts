@@ -58,6 +58,7 @@ export class AdminServerTelemetryTransport {
       'broadcast.approval.required',
       'broadcast.provenance',
       'external.telemetry.ingested',
+      'agent.tools.legacy_alias',
       'agent.tools.adaptive.decision',
       'agent.tools.adaptive.snapshot',
       'wyoming.session.start',
@@ -105,12 +106,12 @@ function sanitizeAdminTelemetryPayload<E extends EventName>(
   }
 
   if (eventName === 'agent.turn.stage') {
-    return sanitizeTurnStageTelemetry(data as EventMap['agent.turn.stage']);
+    return { ...sanitizeTurnStageTelemetry(data as EventMap['agent.turn.stage']) };
   }
 
   if (eventName === 'memory.retrieval') {
-    return sanitizeTurnRetrievalTelemetry(data as EventMap['memory.retrieval'])
-      ?? (data as Record<string, unknown>);
+    const sanitized = sanitizeTurnRetrievalTelemetry(data as EventMap['memory.retrieval']);
+    return sanitized ? { ...sanitized } : (data as Record<string, unknown>);
   }
 
   return data as Record<string, unknown>;

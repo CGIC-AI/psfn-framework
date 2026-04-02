@@ -402,6 +402,43 @@ describe('GatewayServer', () => {
     }
   });
 
+  it('serves bounded fs.search and guarded fs.edit operations', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-search-edit-'));
+    writeFileSync(join(workspace, 'notes.txt'), 'alpha\nbeta\nalpha\n', 'utf-8');
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+        },
+      });
+
+      const searchResponse = await invokeRpc(conn, 965, 'fs.search', {
+        query: 'alpha',
+        glob: '*.txt',
+        maxMatches: 1,
+        contextLines: 1,
+      });
+      expect(searchResponse.result).toMatchObject({
+        query: 'alpha',
+        glob: '*.txt',
+        hitLimit: true,
+      });
+      expect(searchResponse.result.matches).toHaveLength(1);
+
+      const editResponse = await invokeRpc(conn, 966, 'fs.edit', {
+        path: 'notes.txt',
+        oldText: 'beta',
+        newText: 'gamma',
+      });
+      expect(editResponse.result).toEqual({ success: true, replacements: 1 });
+      expect(readFileSync(join(workspace, 'notes.txt'), 'utf-8')).toBe('alpha\ngamma\nalpha\n');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it('roots relative fs.read and fs.list to full codebase root in yolo mode while keeping writes in workspace', async () => {
     const codebaseRoot = mkdtempSync(join(tmpdir(), 'gw-yolo-root-'));
     const workspace = join(codebaseRoot, 'workspace');
@@ -711,7 +748,12 @@ describe('GatewayServer', () => {
 
       await server.requestAgentVoiceStream(makeWyomingVoiceMessage('hello from hallway'));
 
+      const gateway = (routedMessage?.routing as Record<string, unknown> | undefined)?.gateway as Record<string, unknown>;
       const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
+      expect(gateway).toEqual({
+        schemaVersion: 1,
+        companionId: 'companion',
+      });
       expect(routing).toMatchObject({
         connectionId: 'conn-hallway',
         siteId: 'ha-main',
@@ -782,7 +824,12 @@ describe('GatewayServer', () => {
 
       await server.requestAgentVoiceStream(makeWyomingVoiceMessage('route to shard'));
 
+      const gateway = (routedMessage?.routing as Record<string, unknown> | undefined)?.gateway as Record<string, unknown>;
       const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
+      expect(gateway).toEqual({
+        schemaVersion: 1,
+        companionId: 'companion',
+      });
       expect(routing.shardDelegation).toEqual({
         eligible: true,
         reason: 'eligible',

@@ -107,6 +107,13 @@ export interface EventMap {
     missingTokens?: string[];
     tier?: string;
   } & EventCorrelationFields;
+  'agent.tools.legacy_alias': {
+    timestamp: number;
+    toolName: string;
+    alias: string;
+    canonicalAction: string;
+    migrationSurface: string;
+  } & EventCorrelationFields;
   'agent.tools.adaptive.decision': AdaptiveToolDecisionTelemetry & EventCorrelationFields;
   'agent.tools.adaptive.snapshot': AdaptiveToolSnapshotTelemetry & EventCorrelationFields;
   'agent.turn.stage': {

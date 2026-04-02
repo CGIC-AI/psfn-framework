@@ -14,4 +14,4 @@ Use this skill for normal user-facing turns.
 
 ## Tooling Notes
 - Use `load_tools` to activate specialized tools when needed.
-- Use `skill_list` to inspect available skills and why any were filtered.
+- Use `skill` with `action="list"` to inspect available skills and why any were filtered.

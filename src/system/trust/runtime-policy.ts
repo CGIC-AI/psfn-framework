@@ -14,7 +14,7 @@ const DEFAULT_POLICY: TrustPolicyConfig = {
     broadcast: ['public'],
   },
   channelClassification: {
-    privatePrefixes: ['api:', 'sillytavern:', 'openwebui:', 'shard:', 'internal:'],
+    privatePrefixes: ['api:', 'sillytavern:', 'openwebui:', 'subagent:', 'shard:', 'internal:'],
     broadcastPrefixes: ['twitter:', 'social:'],
     defaultVisibility: 'semi_private',
     visibilityOverrides: {

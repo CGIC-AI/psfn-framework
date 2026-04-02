@@ -101,4 +101,21 @@ describe('decideBackgroundCompletionNotification', () => {
       },
     });
   });
+
+  it('does not reuse deferred completion notification semantics for arbitrary watcher sources', () => {
+    const decision = decideBackgroundCompletionNotification({
+      ...baseInput,
+      sourceMessageId: 'process-watcher:job-7',
+      taskKind: 'deferred_tool_handoff',
+      intent: 'critical repair',
+    });
+    expect(decision).toMatchObject({
+      shouldNotify: false,
+      reason: 'suppress_non_user_task',
+      context: {
+        origin: 'unknown',
+        urgency: 'high',
+      },
+    });
+  });
 });

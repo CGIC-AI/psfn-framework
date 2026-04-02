@@ -29,48 +29,30 @@ describe('registerBeadsTools', () => {
     target = createMockTarget();
   });
 
-  it('registers read-only beads tools as core and mutation beads tools as extended', () => {
+  it('registers the unified beads tool as extended', () => {
     registerBeadsTools(target, createMockOps());
-    expect(target.registerTool).toHaveBeenCalledTimes(6);
+    expect(target.registerTool).toHaveBeenCalledTimes(1);
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const names = target.registerTool.mock.calls.map((call: any[]) => call[0].name);
-    expect(names).toEqual([
-      'issue_ready',
-      'issue_show',
-      'issue_create',
-      'issue_update',
-      'issue_close',
-      'issue_sync',
-    ]);
-
-    expect(target.registerTool.mock.calls.find((call: any[]) => call[0].name === 'issue_ready')?.[1]).toBe('core');
-    expect(target.registerTool.mock.calls.find((call: any[]) => call[0].name === 'issue_show')?.[1]).toBe('core');
-    for (const call of target.registerTool.mock.calls.filter((entry: any[]) => !['issue_ready', 'issue_show'].includes(entry[0].name))) {
-      expect(call[1]).toBe('extended');
-    }
+    const [tool, category] = target.registerTool.mock.calls[0] as [{ name: string }, string];
+    expect(tool.name).toBe('beads');
+    expect(category).toBe('extended');
   });
 
   it('attaches gateway wiring metadata in gateway mode', () => {
     registerBeadsTools(target, createMockOps(), { gatewayMode: true });
 
-    const expectedMethodsByTool: Record<string, string> = {
-      issue_ready: 'beads.ready',
-      issue_show: 'beads.show',
-      issue_create: 'beads.create',
-      issue_update: 'beads.update',
-      issue_close: 'beads.close',
-      issue_sync: 'beads.sync',
-    };
-
-    for (const call of target.registerTool.mock.calls) {
-      const tool = call[0] as {
-        name: string;
-        wiringMeta?: { requiredGatewayMethods: string[] };
-      };
-      expect(tool.wiringMeta).toBeDefined();
-      expect(tool.wiringMeta?.requiredGatewayMethods).toContain(expectedMethodsByTool[tool.name]);
-    }
+    const [tool] = target.registerTool.mock.calls[0] as [
+      { wiringMeta?: { requiredGatewayMethods: string[] } },
+    ];
+    expect(tool.wiringMeta).toBeDefined();
+    expect(tool.wiringMeta?.requiredGatewayMethods).toEqual([
+      'beads.ready',
+      'beads.show',
+      'beads.create',
+      'beads.update',
+      'beads.close',
+      'beads.sync',
+    ]);
   });
 });
 

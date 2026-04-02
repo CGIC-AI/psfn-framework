@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { FOUNDATION_SECTION_DEFINITIONS } from './foundation-sections.js';
@@ -233,6 +233,20 @@ describe('PromptLayerStore', () => {
 
     it('throws for unknown layer', () => {
       expect(() => store.update('nonexistent', 'content', 'admin')).toThrow('Prompt layer not found');
+    });
+
+    it('throws and preserves the layer when history persistence fails', () => {
+      const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
+      mkdirSync(historyPath, { recursive: true });
+
+      expect(() => store.update(layer.id, 'v2', 'admin')).toThrow(
+        `Failed to write prompt history to ${historyPath}:`,
+      );
+      expect(store.getById(layer.id)).toMatchObject({
+        content: 'v1',
+        version: 1,
+        updatedBy: 'system',
+      });
     });
 
     it('validates role enum values', () => {
@@ -521,6 +535,33 @@ describe('PromptLayerStore', () => {
       expect(existsSync(filePath + '.tmp')).toBe(false);
       // But the actual file should
       expect(existsSync(filePath)).toBe(true);
+    });
+
+    it('throws when existing prompt layers JSON is malformed', () => {
+      writeFileSync(filePath, '{"broken":', 'utf-8');
+
+      expect(() => new PromptLayerStore(filePath, historyPath)).toThrow(
+        `Failed to load prompt layers from ${filePath}:`,
+      );
+    });
+
+    it('throws when existing prompt layers data is structurally invalid', () => {
+      writeFileSync(filePath, JSON.stringify([{
+        id: 'layer-1',
+        type: 'base',
+        name: 'Base',
+        content: 'persisted content',
+        enabled: true,
+        priority: 0,
+        updatedAt: '2026-03-08T00:00:00.000Z',
+        updatedBy: 'system',
+        checksum: 'bad-checksum',
+        version: 1,
+      }]), 'utf-8');
+
+      expect(() => new PromptLayerStore(filePath, historyPath)).toThrow(
+        `Failed to load prompt layers from ${filePath}: layers[0].checksum does not match content`,
+      );
     });
   });
 });

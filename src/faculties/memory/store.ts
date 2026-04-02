@@ -46,7 +46,7 @@ import {
 } from './types.js';
 
 const SCRATCHPAD_MAX_ENTRIES = 64;
-const SCRATCHPAD_MAX_CONTENT_CHARS = 1_000;
+const SCRATCHPAD_MAX_CONTENT_CHARS = 4_000;
 const LEXICAL_QUERY_MAX_TOKENS = 10;
 const LEXICAL_SCAN_MAX_ROWS = 500;
 const LEXICAL_STOPWORDS = new Set([
@@ -1591,6 +1591,38 @@ export class MemoryStore {
       SET content = ?, updated_at = ?
       WHERE id = ?
     `).run(normalizedContent, now, normalizedId);
+
+    if (result.changes === 0) return null;
+    this.syncScratchpadMirror();
+    return this.getScratchpadEntry(normalizedId) ?? null;
+  }
+
+  appendScratchpadEntry(
+    id: string,
+    content: string,
+    options: {
+      now?: number;
+    } = {},
+  ): ScratchpadEntry | null {
+    const normalizedId = id.trim();
+    if (!normalizedId) return null;
+    const normalizedAppendix = content.trim();
+    if (!normalizedAppendix) {
+      throw new Error('Scratchpad content is required');
+    }
+
+    const existing = this.getScratchpadEntry(normalizedId);
+    if (!existing) return null;
+
+    const separator = existing.content.length > 0 ? '\n' : '';
+    const nextContent = this.normalizeScratchpadContent(`${existing.content}${separator}${normalizedAppendix}`);
+    const now = options.now ?? Date.now();
+
+    const result = this.db.prepare(`
+      UPDATE scratchpad_entries
+      SET content = ?, updated_at = ?
+      WHERE id = ?
+    `).run(nextContent, now, normalizedId);
 
     if (result.changes === 0) return null;
     this.syncScratchpadMirror();

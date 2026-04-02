@@ -92,9 +92,9 @@ export interface ImageGenerationResult {
   images: ImageResultAsset[];
 }
 
-export interface ImageToolResultDetails {
+export interface MediaToolResultDetails {
   isError?: boolean;
-  imageResult?: ImageGenerationResult;
+  mediaResult?: ImageGenerationResult;
   visionReview?: ImageVisionReview;
   visionReviewError?: string;
 }

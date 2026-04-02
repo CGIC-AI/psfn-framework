@@ -831,6 +831,70 @@ describe('GatewayClient git RPC wrappers', () => {
   });
 });
 
+describe('GatewayClient filesystem RPC wrappers', () => {
+  let conn: ReturnType<typeof createMockConnection>;
+  let client: GatewayClient;
+
+  beforeEach(() => {
+    conn = createMockConnection();
+    client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('routes filesystem methods with typed payloads', async () => {
+    const readPromise = client.fsReadDetailed('notes.txt', { maxBytes: 12 });
+    const readReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+    expect(readReq.method).toBe('fs.read');
+    expect(readReq.params).toEqual({ path: 'notes.txt', maxBytes: 12 });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: readReq.id,
+      result: { content: 'hello', truncated: false },
+    });
+    await expect(readPromise).resolves.toEqual({ content: 'hello', truncated: false });
+
+    const searchPromise = client.fsSearch({ query: 'alpha', glob: '*.txt', maxMatches: 2 });
+    const searchReq = conn.sent[1] as { id: number; method: string; params: Record<string, unknown> };
+    expect(searchReq.method).toBe('fs.search');
+    expect(searchReq.params).toEqual({ query: 'alpha', glob: '*.txt', maxMatches: 2 });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: searchReq.id,
+      result: {
+        query: 'alpha',
+        glob: '*.txt',
+        mode: 'literal',
+        scannedFiles: 1,
+        hitLimit: false,
+        truncatedFiles: [],
+        matches: [{ path: 'notes.txt', line: 1, column: 1, preview: 'alpha' }],
+      },
+    });
+    await expect(searchPromise).resolves.toMatchObject({
+      query: 'alpha',
+      matches: [{ path: 'notes.txt', line: 1, column: 1, preview: 'alpha' }],
+    });
+
+    const editPromise = client.fsEdit({
+      path: 'notes.txt',
+      oldText: 'alpha',
+      newText: 'beta',
+    });
+    const editReq = conn.sent[2] as { id: number; method: string; params: Record<string, unknown> };
+    expect(editReq.method).toBe('fs.edit');
+    expect(editReq.params).toEqual({
+      path: 'notes.txt',
+      oldText: 'alpha',
+      newText: 'beta',
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: editReq.id,
+      result: { success: true, replacements: 1 },
+    });
+    await expect(editPromise).resolves.toEqual({ success: true, replacements: 1 });
+  });
+});
+
 describe('GatewayClient vault RPC wrappers', () => {
   let conn: ReturnType<typeof createMockConnection>;
   let client: GatewayClient;

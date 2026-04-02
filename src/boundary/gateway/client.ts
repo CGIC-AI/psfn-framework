@@ -28,6 +28,8 @@ import type {
   WebRequestBinaryResult,
   WebFetchLane,
   ShellExecResult,
+  ShardBackendRequestParams,
+  ShardBackendRequestResult,
   VaultWriteResult,
   VaultReadResult,
   VaultSearchResult,
@@ -35,6 +37,10 @@ import type {
   FsReadResult,
   FsWriteResult,
   FsListResult,
+  FsSearchParams,
+  FsSearchResult,
+  FsEditParams,
+  FsEditResult,
   DiscordMessageNotification,
   LLMChunkNotification,
   VoiceHandleMessageResult,
@@ -636,6 +642,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       cwd?: string;
       timeoutMs?: number;
       maxOutputChars?: number;
+      envVars?: string[];
     } = {},
   ): Promise<ShellExecResult> {
     return await this.rpcInstance.request('shell.exec', {
@@ -643,6 +650,12 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       args,
       ...options,
     }) as ShellExecResult;
+  }
+
+  async shardBackendRequest(
+    params: ShardBackendRequestParams,
+  ): Promise<ShardBackendRequestResult> {
+    return await this.rpcInstance.request('shard.backend.request', params) as ShardBackendRequestResult;
   }
 
   async vaultWrite(
@@ -704,8 +717,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
 
   // ── Filesystem ──
 
-  async fsRead(path: string): Promise<string> {
-    const result = await this.rpcInstance.request('fs.read', { path }) as FsReadResult;
+  async fsReadDetailed(path: string, options?: { maxBytes?: number }): Promise<FsReadResult> {
+    return await this.rpcInstance.request('fs.read', {
+      path,
+      ...(typeof options?.maxBytes === 'number' ? { maxBytes: options.maxBytes } : {}),
+    }) as FsReadResult;
+  }
+
+  async fsRead(path: string, options?: { maxBytes?: number }): Promise<string> {
+    const result = await this.fsReadDetailed(path, options);
     return result.content;
   }
 
@@ -719,6 +739,14 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       maxEntries,
     }) as FsListResult;
     return result.paths;
+  }
+
+  async fsSearch(params: FsSearchParams): Promise<FsSearchResult> {
+    return await this.rpcInstance.request('fs.search', params) as FsSearchResult;
+  }
+
+  async fsEdit(params: FsEditParams): Promise<FsEditResult> {
+    return await this.rpcInstance.request('fs.edit', params) as FsEditResult;
   }
 
   // ── Git operations ──

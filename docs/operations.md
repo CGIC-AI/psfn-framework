@@ -9,13 +9,15 @@ npm run split
 npm run yolo
 npm run gateway
 npm run agent
-npm run agent:docker
-npm run agent:docker:continuous
+npm run agent:docker          # Production profile (network_mode: "none")
+npm run agent:docker:continuous # Continuous/dev profile (isolated internal network)
 ```
 
 - `split` is the standard gateway + agent launcher.
 - `yolo` keeps the split runtime but broadens gateway `fs.read` scope across the codebase.
-- `agent:docker` is the production-style isolated agent path.
+- `agent:docker` is the production profile (`network_mode: "none"`).
+- `agent:docker:continuous` is the continuous/dev profile on an isolated internal network.
+- Use `npm run verify:agent-docker-isolation` after changing compose files or operator docs.
 
 ## Production Deployment
 
@@ -78,6 +80,19 @@ Operational rules:
 ```bash
 npm run verify:backup-restore
 ```
+
+## Heartbeat Audit Posture
+
+Use `heartbeat_get_policy` when you need the live heartbeat classification, not just the raw prompt text.
+
+The default heartbeat set is intentionally split by purpose:
+
+- `whisper` / `Musing`: optional outward Discord note; silence is acceptable when nothing genuinely worth sharing surfaces.
+- `daily-review`, `emotional-check`, `goal-update`: background/private scans; they should only emit notes when they produce real carry-forward value.
+- `experiential-review`: private internal-state narrative; extraction should be grounded in actual internal-state deltas or uncertainty.
+- `values-reflection`: background deliberation; extraction should capture durable value signal, not a forced recital.
+
+Operational rule: silent/background intervals are valid outcomes for the audited defaults. Do not treat every cadence tick as requiring a visible note or a durable extraction artifact.
 
 ## Re-Embedding
 

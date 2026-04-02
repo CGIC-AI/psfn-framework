@@ -78,6 +78,8 @@
   let layers = $state<PromptLayer[]>([]);
   let staticPrompts = $state<PromptRegistryEntry[]>([]);
   let runtimeBlocks = $state<PromptRuntimeBlock[]>([]);
+  let runtimeLayerCoverage = $state<{ ok: boolean; entries: PromptRuntimeLayerCoverageEntry[] }>({ ok: true, entries: [] });
+  let runtimeMacroHints = $state<PromptRuntimeMacroHint[]>([]);
   let runtimeBlockDrafts = $state<Record<string, string>>({});
   let runtimeBlockSaving = $state<Record<string, boolean>>({});
   let runtimeBlockMessages = $state<Record<string, string>>({});
@@ -279,6 +281,22 @@
     return block.customContent?.trim() ? 'Companion override active' : 'Using built-in guidance';
   }
 
+  function runtimeSchemaLabel(block: PromptRuntimeBlock): string {
+    if (block.immutable) return 'Immutable';
+    return block.required ? 'Required' : 'Optional';
+  }
+
+  function runtimeSchemaBadge(block: PromptRuntimeBlock): string {
+    if (block.immutable) return 'bg-bark-300 text-shadow-700';
+    return block.required ? 'bg-wilt-100 text-wilt-700' : 'bg-moss-100 text-moss-700';
+  }
+
+  function runtimeLayerStatusBadge(entry: PromptRuntimeLayerCoverageEntry): string {
+    if (entry.status === 'valid') return 'bg-moss-100 text-moss-700';
+    if (entry.status === 'missing') return 'bg-wilt-100 text-wilt-700';
+    return 'bg-gold-100 text-gold-800';
+  }
+
   function runtimePlacementBadge(block: PromptRuntimeBlock): string {
     if (block.placement === 'system_prompt') return 'bg-[#4A5C8B] text-white';
     if (block.placement === 'context_messages') return 'bg-[#4A7C59] text-white';
@@ -440,6 +458,8 @@
     layers = data?.layers ?? [];
     staticPrompts = data?.staticPrompts ?? [];
     runtimeBlocks = data?.runtimeBlocks ?? [];
+    runtimeLayerCoverage = data?.runtimeLayerCoverage ?? { ok: true, entries: [] };
+    runtimeMacroHints = data?.runtimeMacroHints ?? [];
     syncRuntimeBlockDrafts(runtimeBlocks);
   }
 

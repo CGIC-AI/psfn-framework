@@ -188,6 +188,16 @@ describe('AdminPromptsDataService', () => {
       immutable: false,
       providerManaged: false,
     });
+    expect(listed.runtimeLayerCoverage.ok).toBe(false);
+    expect(listed.runtimeLayerCoverage.entries.find(entry => entry.identifier === 'runtime.current_datetime')).toMatchObject({
+      classification: 'required_runtime_aware',
+      required: true,
+      status: 'missing',
+    });
+    expect(listed.runtimeMacroHints.find(entry => entry.token === '{{runtime_current_datetime_human}}')).toMatchObject({
+      description: expect.any(String),
+      example: expect.any(String),
+    });
   });
 
   it('lists and saves companion-editable runtime guidance blocks without exposing immutable blocks', () => {

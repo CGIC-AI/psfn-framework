@@ -10,9 +10,11 @@ import {
   type PromptLayerRole,
 } from '../../../core/identity/prompt-types.js';
 import {
+  getRuntimePromptLayerDefinitions,
   validateRuntimePromptLayerCoverage,
 } from '../../../core/identity/runtime-prompt-layers.js';
 import {
+  PROMPT_RUNTIME_MACRO_HINTS,
   getPromptRuntimeBlockDefinition,
   getPromptRuntimeBlockDefinitions,
   isPromptRuntimeBlockCompanionEditable,
@@ -329,6 +331,8 @@ export class AdminPromptsDataService implements AdminPromptsService {
       layers: this.deps.promptStore.getAll(),
       staticPrompts: this.deps.promptRegistry?.list() ?? [],
       runtimeBlocks,
+      runtimeLayerCoverage: this.listRuntimeLayerCoverage(),
+      runtimeMacroHints: PROMPT_RUNTIME_MACRO_HINTS.map((hint) => ({ ...hint })),
     };
   }
 
@@ -374,6 +378,32 @@ export class AdminPromptsDataService implements AdminPromptsService {
         }
         return left.label.localeCompare(right.label);
       });
+  }
+
+  private listRuntimeLayerCoverage() {
+    const layers = this.deps.promptStore.getAll();
+    const validation = validateRuntimePromptLayerCoverage(layers);
+    const issueByIdentifier = new Map(
+      validation.issues.map((issue) => [issue.identifier, issue.reason] as const),
+    );
+
+    return {
+      ok: validation.ok,
+      entries: getRuntimePromptLayerDefinitions().map((definition) => {
+        const layer = layers.find((entry) => (
+          entry.type === 'runtime'
+          && entry.identifier === definition.identifier
+        ));
+        return {
+          identifier: definition.identifier,
+          name: definition.name,
+          classification: definition.schema.classification,
+          required: definition.schema.required,
+          status: issueByIdentifier.get(definition.identifier) ?? 'valid',
+          ...(layer ? { layerId: layer.id } : {}),
+        };
+      }),
+    };
   }
 
   saveRuntimePromptBlocks(body: string): RuntimePromptUpdateResult {

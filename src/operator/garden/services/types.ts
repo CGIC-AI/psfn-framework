@@ -13,9 +13,11 @@ import type {
   PromptRuntimeBlockSchemaClassification,
   PromptRuntimeBlockVisibility,
   PromptRuntimeEditableBlockId,
+  PromptRuntimeMacroHint,
 } from '../../../core/identity/prompt-runtime.js';
 import type { PromptHistoryEntry, PromptLayer } from '../../../core/identity/prompt-types.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
+import type { RuntimePromptLayerSchemaClassification } from '../../../core/identity/runtime-prompt-layers.js';
 import type { EditableSettings } from '../../../system/settings.js';
 import type {
   ContactProfileArtifact,
@@ -528,6 +530,8 @@ export interface AdminPromptListData {
   layers: PromptLayer[];
   staticPrompts: PromptRegistryEntry[];
   runtimeBlocks: AdminPromptRuntimeBlock[];
+  runtimeLayerCoverage: AdminRuntimePromptLayerCoverage;
+  runtimeMacroHints: AdminPromptRuntimeMacroHint[];
 }
 
 export interface AdminPromptRuntimeBlock {
@@ -548,6 +552,22 @@ export interface AdminPromptRuntimeBlock {
   lockedReason?: string;
   effectiveOrder: number;
 }
+
+export interface AdminRuntimePromptLayerCoverageEntry {
+  identifier: string;
+  name: string;
+  classification: RuntimePromptLayerSchemaClassification;
+  required: boolean;
+  status: 'valid' | 'missing' | 'disabled' | 'empty';
+  layerId?: string;
+}
+
+export interface AdminRuntimePromptLayerCoverage {
+  ok: boolean;
+  entries: AdminRuntimePromptLayerCoverageEntry[];
+}
+
+export interface AdminPromptRuntimeMacroHint extends PromptRuntimeMacroHint {}
 
 export interface AdminConstitutionImmutableBlock {
   id: string;

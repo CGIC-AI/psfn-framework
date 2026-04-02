@@ -910,6 +910,10 @@ export interface PromptRuntimeBlock {
   label: string;
   description: string;
   source: string;
+  schemaClassification: 'required_runtime_aware' | 'optional_runtime_aware' | 'immutable_provider_managed';
+  required: boolean;
+  immutable: boolean;
+  providerManaged: boolean;
   placement: 'system_prompt' | 'context_messages' | 'tool_schemas';
   visibility: 'hidden' | 'runtime_generated' | 'provider_managed';
   reorderable: boolean;
@@ -920,10 +924,30 @@ export interface PromptRuntimeBlock {
   effectiveOrder: number;
 }
 
+export interface PromptRuntimeLayerCoverageEntry {
+  identifier: string;
+  name: string;
+  classification: 'required_runtime_aware' | 'optional_runtime_aware';
+  required: boolean;
+  status: 'valid' | 'missing' | 'disabled' | 'empty';
+  layerId?: string;
+}
+
+export interface PromptRuntimeMacroHint {
+  token: string;
+  description: string;
+  example: string;
+}
+
 export interface AdminPromptListData {
   layers: PromptLayer[];
   staticPrompts: PromptRegistryEntry[];
   runtimeBlocks: PromptRuntimeBlock[];
+  runtimeLayerCoverage: {
+    ok: boolean;
+    entries: PromptRuntimeLayerCoverageEntry[];
+  };
+  runtimeMacroHints: PromptRuntimeMacroHint[];
 }
 
 export interface ConstitutionImmutableBlock {

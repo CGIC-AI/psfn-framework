@@ -90,15 +90,28 @@ export function wirePromptRuntime(
   baseSystemPrompt: string,
   options: IdentityToolOptions = {},
 ): PromptLayerStore {
-  const promptStore = new PromptLayerStore(
-    resolvePromptLayersPath(dataDir),
-    resolvePromptHistoryPath(dataDir),
-  );
+  const promptLayersPath = resolvePromptLayersPath(dataDir);
+  const promptHistoryPath = resolvePromptHistoryPath(dataDir);
+  let promptStore: PromptLayerStore;
+
+  try {
+    promptStore = new PromptLayerStore(promptLayersPath, promptHistoryPath);
+    promptStore.seedFromCharacterCard(baseSystemPrompt);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.error('Prompt runtime initialization failed', {
+      dataDir,
+      promptLayersPath,
+      promptHistoryPath,
+      error: message,
+    });
+    throw new Error(`Failed to initialize prompt runtime from ${promptLayersPath}: ${message}`);
+  }
+
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
   });
   const northStarStore = new NorthStarStore(resolveNorthStarPath(dataDir));
-  promptStore.seedFromCharacterCard(baseSystemPrompt);
 
   target.promptComposer = new PromptComposer(promptStore, undefined, undefined, {
     enableConstitution: true,

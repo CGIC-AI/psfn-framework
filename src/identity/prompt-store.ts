@@ -26,11 +26,16 @@ import { writeJsonAtomic } from '../utils/fs.js';
 const log = createComponentLogger('PromptStore');
 const HISTORY_SCAN_CHUNK_BYTES = 32 * 1024;
 const HISTORY_CORRUPTION_DETAIL_LIMIT = 5;
+const PROMPT_LAYER_TYPES = ['base', 'operator', 'runtime', 'channel', 'task'] as const;
 
 interface HistoryCorruptionDetail {
   lineNumber: number;
   error: string;
   linePreview: string;
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function contentChecksum(content: string): string {
@@ -70,6 +75,93 @@ function validatePriority(priority: unknown): number {
     throw new Error('priority must be an integer');
   }
   return priority;
+}
+
+function validateLayerType(type: unknown): LayerType {
+  if (typeof type !== 'string' || !PROMPT_LAYER_TYPES.includes(type as LayerType)) {
+    throw new Error(`Invalid prompt layer type "${String(type)}". Expected one of: ${PROMPT_LAYER_TYPES.join(', ')}`);
+  }
+  return type as LayerType;
+}
+
+function validatePersistedString(
+  value: unknown,
+  field: string,
+  options: { allowEmpty?: boolean } = {},
+): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${field} must be a string`);
+  }
+  if (options.allowEmpty !== true && value.length === 0) {
+    throw new Error(`${field} must not be empty`);
+  }
+  return value;
+}
+
+function validatePersistedOptionalString(value: unknown, field: string): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`${field} must be a string when provided`);
+  }
+  if (value.trim().length === 0) {
+    throw new Error(`${field} must not be blank when provided`);
+  }
+  return value;
+}
+
+function validatePersistedPromptLayer(value: unknown, index: number): PromptLayer {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`layers[${String(index)}] must be an object`);
+  }
+
+  const layer = value as Record<string, unknown>;
+  const id = validatePersistedString(layer.id, `layers[${String(index)}].id`);
+  const type = validateLayerType(layer.type);
+  const name = validatePersistedString(layer.name, `layers[${String(index)}].name`);
+  const identifier = validatePersistedOptionalString(layer.identifier, `layers[${String(index)}].identifier`);
+  const role = validatePromptRole(layer.role);
+  const promptOrder = validatePromptOrder(layer.promptOrder);
+  const content = validatePersistedString(layer.content, `layers[${String(index)}].content`, { allowEmpty: true });
+  if (typeof layer.enabled !== 'boolean') {
+    throw new Error(`layers[${String(index)}].enabled must be a boolean`);
+  }
+  const priority = validatePriority(layer.priority);
+  const channelType = validatePersistedOptionalString(layer.channelType, `layers[${String(index)}].channelType`);
+  const taskKind = validatePersistedOptionalString(layer.taskKind, `layers[${String(index)}].taskKind`);
+  const updatedAt = validatePersistedString(layer.updatedAt, `layers[${String(index)}].updatedAt`);
+  const updatedBy = validatePersistedString(layer.updatedBy, `layers[${String(index)}].updatedBy`);
+  const checksum = validatePersistedString(layer.checksum, `layers[${String(index)}].checksum`);
+  if (contentChecksum(content) !== checksum) {
+    throw new Error(`layers[${String(index)}].checksum does not match content`);
+  }
+  if (typeof layer.version !== 'number' || !Number.isInteger(layer.version) || layer.version < 1) {
+    throw new Error(`layers[${String(index)}].version must be an integer >= 1`);
+  }
+
+  return {
+    id,
+    type,
+    name,
+    identifier,
+    role,
+    promptOrder,
+    content,
+    enabled: layer.enabled,
+    priority,
+    channelType,
+    taskKind,
+    updatedAt,
+    updatedBy,
+    checksum,
+    version: layer.version,
+  };
+}
+
+function validatePersistedPromptLayers(value: unknown): PromptLayer[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Prompt layers file must contain a JSON array');
+  }
+  return value.map((layer, index) => validatePersistedPromptLayer(layer, index));
 }
 
 function historyLinePreview(line: string): string {
@@ -118,14 +210,18 @@ export class PromptLayerStore {
   }
 
   private load(): void {
+    if (!existsSync(this.filePath)) return;
+
     try {
-      if (existsSync(this.filePath)) {
-        const raw = readFileSync(this.filePath, 'utf-8');
-        this.layers = JSON.parse(raw);
-      }
-    } catch (err) {
-      log.error('Failed to load prompt layers', { error: String(err) });
-      this.layers = [];
+      const raw = readFileSync(this.filePath, 'utf-8');
+      this.layers = validatePersistedPromptLayers(JSON.parse(raw) as unknown);
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      log.error('Failed to load prompt layers', {
+        filePath: this.filePath,
+        error: message,
+      });
+      throw new Error(`Failed to load prompt layers from ${this.filePath}: ${message}`);
     }
   }
 
@@ -136,8 +232,8 @@ export class PromptLayerStore {
   private appendHistory(entry: PromptHistoryEntry): void {
     try {
       appendJsonLine(this.historyPath, entry);
-    } catch (err) {
-      log.error('Failed to write prompt history', { error: String(err) });
+    } catch (error) {
+      throw new Error(`Failed to write prompt history to ${this.historyPath}: ${formatErrorMessage(error)}`);
     }
   }
 
@@ -481,9 +577,9 @@ export class PromptLayerStore {
 
     const normalizedReason = normalizeReason(reason);
     const timestamp = new Date().toISOString();
-    const touched: PromptLayer[] = [];
+    const touched: Array<{ layer: PromptLayer; nextPriority: number }> = [];
 
-    for (let nextPriority = 0; nextPriority < targetOrder.length; nextPriority++) {
+    for (let nextPriority = 0; nextPriority < targetOrder.length; nextPriority += 1) {
       const layer = targetOrder[nextPriority];
       if (layer.priority === nextPriority) continue;
 
@@ -500,11 +596,14 @@ export class PromptLayerStore {
         version: layer.version,
       });
 
+      touched.push({ layer, nextPriority });
+    }
+
+    for (const { layer, nextPriority } of touched) {
       layer.priority = nextPriority;
       layer.version += 1;
       layer.updatedAt = timestamp;
       layer.updatedBy = updatedBy;
-      touched.push(layer);
     }
 
     if (touched.length > 0) {
@@ -512,7 +611,7 @@ export class PromptLayerStore {
       log.info(`Reordered prompt layers (${touched.length} touched)`);
     }
 
-    return touched;
+    return touched.map(({ layer }) => layer);
   }
 
   toggle(id: string): PromptLayer {

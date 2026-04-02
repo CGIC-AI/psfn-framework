@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../event-bus.js';
@@ -19,6 +19,7 @@ import {
   toReflectionJournalProvenanceRef,
   toReflectionProcessLogProvenanceRef,
 } from '../notes/reflection-substrate.js';
+import { resolvePromptLayersPath } from '../persistence/layout.js';
 import {
   wireFilesystemToolsRuntime,
   wireExtendedToolAutoloadPolicy,
@@ -210,6 +211,21 @@ describe('wirePromptRuntime', () => {
       'identity',
       'north_star',
     ]));
+  });
+
+  it('fails explicitly when persisted prompt layers are corrupt', () => {
+    const target = {
+      promptComposer: null,
+      registerTool: vi.fn(),
+    };
+    const promptLayersPath = resolvePromptLayersPath(tempDir);
+    writeFileSync(promptLayersPath, '{"broken":', 'utf-8');
+
+    expect(() => wirePromptRuntime(target as any, tempDir, 'Base prompt')).toThrow(
+      `Failed to initialize prompt runtime from ${promptLayersPath}:`,
+    );
+    expect(target.registerTool).not.toHaveBeenCalled();
+    expect(target.promptComposer).toBeNull();
   });
 });
 

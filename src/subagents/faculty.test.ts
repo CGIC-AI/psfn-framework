@@ -446,6 +446,7 @@ describe('SubagentFaculty', () => {
       coreCompanionId: 'companion-alpha',
       shardCompanionId: 'companion-alpha/shards/shard-parent',
       shardId: 'shard-parent',
+      creationMode: 'fresh',
       parentShardId: 'shard-grandparent',
     });
     expect(result.gatewayRouting.subagentAddress).toEqual({

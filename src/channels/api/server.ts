@@ -32,17 +32,12 @@ import type {
   OutboundContext,
 } from '../types.js';
 import type {
-  ApiContinuityWatchdogCheck,
-  ApiHealthResponse,
-  ApiHealthSubsystem,
-  ApiHealthSubsystemStatus,
   ApiServerHealthChecks,
   ChatCompletionRequest,
   ChatCompletionChunk,
   TelemetryIngestRequest,
   TelemetryIngestResponse,
 } from './types.js';
-import { API_CONTINUITY_WATCHDOG_CHECKS, API_HEALTH_SUBSYSTEMS } from './types.js';
 import { createComponentLogger } from '../../logger.js';
 import { type ApiAuthPrincipal } from '../http/auth.js';
 import {
@@ -84,7 +79,18 @@ import {
   formatSseDoneEvent,
 } from './response-format.js';
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
+import { hasCallerProvidedPrimaryTrust } from './request-validation.js';
+import {
+  buildIdentityChallengePayload,
+  readIdentityClaimHeaders,
+} from './identity-claim.js';
+import { buildApiHealthResponse } from './server-health.js';
 import type { ExternalChannelProfileConfig } from '../config.js';
+import {
+  createDeferred,
+  RequestLifecycleError,
+  type LifecycleInterrupt,
+} from './server-lifecycle.js';
 
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
@@ -99,40 +105,6 @@ const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
   'external.telemetry.incident',
 ]);
 const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google']);
-
-const IDENTITY_CLAIM_HEADERS = {
-  canonicalContactId: 'x-canonical-contact-id',
-  sourceChannel: 'x-identity-claim-channel',
-  sourceUserId: 'x-identity-claim-user-id',
-  nonce: 'x-identity-claim-nonce',
-  expires: 'x-identity-claim-expires',
-  signature: 'x-identity-claim-signature',
-} as const;
-
-type LifecycleInterrupt = 'timeout' | 'client_disconnected';
-
-class RequestLifecycleError extends Error {
-  readonly reason: LifecycleInterrupt;
-
-  constructor(reason: LifecycleInterrupt) {
-    super(reason);
-    this.reason = reason;
-  }
-}
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error?: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (error?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 const telemetryIngestSchema = Type.Object({
   source: Type.String({ minLength: 1, maxLength: 128 }),
@@ -185,15 +157,6 @@ interface ChannelPrivacyResolution {
 interface ChannelPrivacyError {
   ok: false;
   error: string;
-}
-
-interface IdentityClaimHeaders {
-  canonicalContactId: string;
-  sourceChannel: string;
-  sourceUserId: string;
-  nonce?: string;
-  expiresAt?: string;
-  signature?: string;
 }
 
 export interface ApiServerConfig {
@@ -775,215 +738,12 @@ export class ApiServer implements ChannelAdapter {
   }
 
   private async handleHealth(res: ServerResponse): Promise<void> {
-    const subsystemEntries = await Promise.all(
-      API_HEALTH_SUBSYSTEMS.map(async (subsystem) => {
-        const status = await this.evaluateSubsystemHealth(subsystem);
-        return [subsystem, status] as const;
-      }),
-    );
-    const checkedAtMs = Date.now();
-
-    const subsystems = Object.fromEntries(subsystemEntries) as ApiHealthResponse['subsystems'];
-    const subsystemStatus: ApiHealthResponse['status'] = API_HEALTH_SUBSYSTEMS.every(
-      (subsystem) => subsystems[subsystem].status === 'healthy',
-    )
-      ? 'healthy'
-      : 'degraded';
-    const continuity = this.evaluateContinuityWatchdogHealth(subsystems, checkedAtMs);
-    const status: ApiHealthResponse['status'] = (
-      subsystemStatus === 'healthy'
-      && continuity.status === 'healthy'
-    )
-      ? 'healthy'
-      : 'degraded';
-
-    const body: ApiHealthResponse = {
-      status,
-      checkedAt: new Date(checkedAtMs).toISOString(),
-      uptimeSeconds: Math.floor(process.uptime()),
-      subsystems,
-      continuity,
-    };
-
-    sendJson(res, status === 'healthy' ? 200 : 503, body);
-  }
-
-  private evaluateContinuityWatchdogHealth(
-    subsystems: ApiHealthResponse['subsystems'],
-    checkedAtMs: number,
-  ): ApiHealthResponse['continuity'] {
-    const checks: Record<ApiContinuityWatchdogCheck, ApiHealthSubsystemStatus> = {
-      database: this.mapSubsystemToContinuityCheck(
-        subsystems.memory,
-        'memory',
-        'Database-backed memory subsystem is degraded',
-      ),
-      gatewayLink: this.evaluateGatewayLinkHealth(subsystems),
-      schedulerHeartbeat: this.evaluateSchedulerHeartbeatHealth(subsystems.scheduler, checkedAtMs),
-    };
-
-    const status: ApiHealthResponse['continuity']['status'] = API_CONTINUITY_WATCHDOG_CHECKS.every(
-      (check) => checks[check].status === 'healthy',
-    )
-      ? 'healthy'
-      : 'degraded';
-
-    return {
-      status,
-      checks,
-    };
-  }
-
-  private mapSubsystemToContinuityCheck(
-    source: ApiHealthSubsystemStatus,
-    sourceSubsystem: ApiHealthSubsystem,
-    degradedFallbackDetail: string,
-  ): ApiHealthSubsystemStatus {
-    const detail = source.detail?.trim();
-    return {
-      status: source.status === 'healthy' ? 'healthy' : 'degraded',
-      ...(source.status === 'degraded'
-        ? { detail: detail || degradedFallbackDetail }
-        : {}),
-      meta: {
-        ...(source.meta ?? {}),
-        sourceSubsystem,
-      },
-    };
-  }
-
-  private evaluateGatewayLinkHealth(
-    subsystems: ApiHealthResponse['subsystems'],
-  ): ApiHealthSubsystemStatus {
-    const llmHealthy = subsystems.llm.status === 'healthy';
-    const embeddingsHealthy = subsystems.embeddings.status === 'healthy';
-    if (llmHealthy || embeddingsHealthy) {
-      return {
-        status: 'healthy',
-        meta: {
-          sourceSubsystems: ['llm', 'embeddings'],
-          llmStatus: subsystems.llm.status,
-          embeddingsStatus: subsystems.embeddings.status,
-        },
-      };
-    }
-
-    const llmDetail = subsystems.llm.detail?.trim();
-    const embeddingsDetail = subsystems.embeddings.detail?.trim();
-    const detailParts = [llmDetail, embeddingsDetail].filter((value): value is string => Boolean(value));
-    return {
-      status: 'degraded',
-      detail: detailParts.join(' | ') || 'Gateway-linked LLM and embeddings checks are degraded',
-      meta: {
-        sourceSubsystems: ['llm', 'embeddings'],
-        llmStatus: subsystems.llm.status,
-        embeddingsStatus: subsystems.embeddings.status,
-      },
-    };
-  }
-
-  private evaluateSchedulerHeartbeatHealth(
-    schedulerSubsystem: ApiHealthSubsystemStatus,
-    checkedAtMs: number,
-  ): ApiHealthSubsystemStatus {
-    const schedulerDetail = schedulerSubsystem.detail?.trim();
-    const heartbeatObservedAtMs = this.lastSchedulerHeartbeatAtMs;
-    const uptimeMs = Math.max(0, Math.floor(process.uptime() * 1_000));
-    const heartbeatAgeMs = heartbeatObservedAtMs === null
-      ? null
-      : Math.max(0, checkedAtMs - heartbeatObservedAtMs);
-
-    const baseMeta: Record<string, unknown> = {
-      ...(schedulerSubsystem.meta ?? {}),
-      sourceSubsystem: 'scheduler',
+    const { statusCode, body } = await buildApiHealthResponse({
+      healthChecks: this.healthChecks,
+      lastSchedulerHeartbeatAtMs: this.lastSchedulerHeartbeatAtMs,
       schedulerHeartbeatStaleAfterMs: this.schedulerHeartbeatStaleAfterMs,
-      ...(heartbeatObservedAtMs === null
-        ? { heartbeatObserved: false }
-        : {
-          heartbeatObserved: true,
-          schedulerHeartbeatAt: new Date(heartbeatObservedAtMs).toISOString(),
-          schedulerHeartbeatAgeMs: heartbeatAgeMs,
-        }),
-    };
-
-    if (schedulerSubsystem.status !== 'healthy') {
-      return {
-        status: 'degraded',
-        detail: schedulerDetail || 'Scheduler subsystem is degraded',
-        meta: baseMeta,
-      };
-    }
-
-    if (heartbeatObservedAtMs === null) {
-      if (uptimeMs <= this.schedulerHeartbeatStaleAfterMs) {
-        return {
-          status: 'healthy',
-          meta: {
-            ...baseMeta,
-            schedulerHeartbeatGraceMsRemaining: Math.max(
-              0,
-              this.schedulerHeartbeatStaleAfterMs - uptimeMs,
-            ),
-          },
-        };
-      }
-      return {
-        status: 'degraded',
-        detail: `No scheduler heartbeat observed within ${this.schedulerHeartbeatStaleAfterMs}ms`,
-        meta: baseMeta,
-      };
-    }
-
-    if (heartbeatAgeMs !== null && heartbeatAgeMs > this.schedulerHeartbeatStaleAfterMs) {
-      return {
-        status: 'degraded',
-        detail: `Scheduler heartbeat stale: ${heartbeatAgeMs}ms since last pulse (limit ${this.schedulerHeartbeatStaleAfterMs}ms)`,
-        meta: baseMeta,
-      };
-    }
-
-    return {
-      status: 'healthy',
-      meta: baseMeta,
-    };
-  }
-
-  private async evaluateSubsystemHealth(
-    subsystem: ApiHealthSubsystem,
-  ): Promise<ApiHealthSubsystemStatus> {
-    const startedAt = Date.now();
-    const check = this.healthChecks[subsystem];
-    if (!check) {
-      return this.normalizeSubsystemHealth({
-        status: 'degraded',
-        detail: 'Health check not configured',
-      }, 0);
-    }
-
-    try {
-      const result = await Promise.resolve(check());
-      return this.normalizeSubsystemHealth(result, Date.now() - startedAt);
-    } catch (error) {
-      return this.normalizeSubsystemHealth({
-        status: 'degraded',
-        detail: toErrorMessage(error),
-      }, Date.now() - startedAt);
-    }
-  }
-
-  private normalizeSubsystemHealth(
-    result: ApiHealthSubsystemStatus,
-    checkLatencyMs: number,
-  ): ApiHealthSubsystemStatus {
-    const detail = result.detail?.trim();
-    return {
-      status: result.status === 'healthy' ? 'healthy' : 'degraded',
-      ...(detail ? { detail } : {}),
-      meta: {
-        ...(result.meta ?? {}),
-        checkLatencyMs: Math.max(0, Math.round(checkLatencyMs)),
-      },
-    };
+    });
+    sendJson(res, statusCode, body);
   }
 
   private async handleChatCompletions(
@@ -1020,7 +780,7 @@ export class ApiServer implements ChannelAdapter {
     }
 
     const parsed = parsedBody.value;
-    if (this.hasCallerProvidedPrimaryTrust(parsed)) {
+    if (hasCallerProvidedPrimaryTrust(parsed)) {
       log.warn('Rejected caller-provided primary trust field in API payload', {
         path: req.url ?? '/v1/chat/completions',
         remoteAddress: req.socket.remoteAddress,
@@ -1047,23 +807,6 @@ export class ApiServer implements ChannelAdapter {
     }
   }
 
-  private isPrimaryTrustLevelValue(value: unknown): boolean {
-    return typeof value === 'string' && value.trim().toLowerCase() === 'primary';
-  }
-
-  private hasCallerProvidedPrimaryTrust(payload: unknown): boolean {
-    if (!payload || typeof payload !== 'object') return false;
-    const record = payload as Record<string, unknown>;
-    if (this.isPrimaryTrustLevelValue(record.trustLevel) || this.isPrimaryTrustLevelValue(record.trust_level)) {
-      return true;
-    }
-
-    const contact = record.contact;
-    if (!contact || typeof contact !== 'object') return false;
-    const contactRecord = contact as Record<string, unknown>;
-    return this.isPrimaryTrustLevelValue(contactRecord.trustLevel)
-      || this.isPrimaryTrustLevelValue(contactRecord.trust_level);
-  }
 
   private async handleTelemetryIngest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const parsedBody = await readJsonBodyWithLimit(req, res, {
@@ -1443,73 +1186,12 @@ export class ApiServer implements ChannelAdapter {
     };
   }
 
-  private readIdentityClaimHeaders(req: IncomingMessage): IdentityClaimHeaders | null {
-    const canonicalContactId = this.clampHeader(
-      this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.canonicalContactId]),
-      128,
-    );
-    if (!canonicalContactId) return null;
-
-    return {
-      canonicalContactId,
-      sourceChannel: this.clampHeader(
-        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.sourceChannel]),
-        64,
-      ) ?? '',
-      sourceUserId: this.clampHeader(
-        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.sourceUserId]),
-        256,
-      ) ?? '',
-      nonce: this.clampHeader(
-        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.nonce]),
-        128,
-      ),
-      expiresAt: this.clampHeader(
-        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.expires]),
-        64,
-      ),
-      signature: this.clampHeader(
-        this.singleHeader(req.headers[IDENTITY_CLAIM_HEADERS.signature]),
-        256,
-      ),
-    };
-  }
-
-  private challengePayload(
-    claim: IdentityClaimHeaders,
-    authorId: string,
-    challenge: {
-      nonce: string;
-      expiresAt: string;
-      signature: string;
-    },
-  ): Record<string, unknown> {
-    return {
-      canonicalContactId: claim.canonicalContactId,
-      sourceChannel: claim.sourceChannel,
-      sourceUserId: claim.sourceUserId,
-      targetChannel: 'api',
-      targetUserId: authorId,
-      nonce: challenge.nonce,
-      expiresAt: challenge.expiresAt,
-      signature: challenge.signature,
-      requiredHeaders: {
-        canonicalContactId: 'X-Canonical-Contact-ID',
-        sourceChannel: 'X-Identity-Claim-Channel',
-        sourceUserId: 'X-Identity-Claim-User-ID',
-        nonce: 'X-Identity-Claim-Nonce',
-        expiresAt: 'X-Identity-Claim-Expires',
-        signature: 'X-Identity-Claim-Signature',
-      },
-    };
-  }
-
   private enforceIdentityClaim(
     req: IncomingMessage,
     res: ServerResponse,
     authorId: string,
   ): boolean {
-    const claim = this.readIdentityClaimHeaders(req);
+    const claim = readIdentityClaimHeaders(req.headers);
     if (!claim) return true;
 
     if (!this.contactStore) {
@@ -1561,7 +1243,7 @@ export class ApiServer implements ChannelAdapter {
       switch (challengeResult.status) {
         case 'challenge_created':
         case 'pending_exists': {
-          const payload = this.challengePayload(claim, authorId, challengeResult.verification);
+          const payload = buildIdentityChallengePayload(claim, authorId, challengeResult.verification);
           this.sendError(
             res,
             428,

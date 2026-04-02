@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -1995,6 +1995,45 @@ describe('AdminServer JSON API routes', () => {
 
     const missingRes = await request(port, 'GET', '/api/admin/research-library/missing-entry', undefined, authHeaders);
     expect(missingRes.status).toBe(404);
+  });
+
+  it('reports artifact lifecycle status through admin endpoints', async () => {
+    const now = Date.UTC(2026, 3, 1, 12, 0, 0);
+    const staleTime = now - (20 * 24 * 60 * 60 * 1000);
+    memoryStore.addScratchpadEntry('stale scratchpad note', { id: 'sp-stale', now: staleTime });
+
+    const generatedDir = join(tempDir, 'images', '2026-03-01');
+    mkdirSync(generatedDir, { recursive: true });
+    const staleGenerated = join(generatedDir, 'stale.png');
+    const promotedGenerated = join(generatedDir, 'promoted.png');
+    writeFileSync(staleGenerated, 'stale');
+    writeFileSync(promotedGenerated, 'promoted');
+    utimesSync(staleGenerated, new Date(staleTime), new Date(staleTime));
+    utimesSync(promotedGenerated, new Date(staleTime), new Date(staleTime));
+
+    const store = new ResearchLibraryStore({ companionDataDir: tempDir });
+    store.importFile({
+      path: promotedGenerated,
+      provenance: {
+        sourceKind: 'generated_media',
+        importedBy: 'test',
+      },
+    });
+
+    const originalDateNow = Date.now;
+    Date.now = () => now;
+    try {
+      const res = await request(port, 'GET', '/api/admin/artifact-lifecycle', undefined, authHeaders);
+      expect(res.status).toBe(200);
+      const payload = JSON.parse(res.body) as {
+        scratchpad: { staleCount: number };
+        generatedMedia: { staleCount: number; promotedExemptionCount: number };
+      };
+      expect(payload.scratchpad.staleCount).toBe(1);
+      expect(typeof payload.generatedMedia.staleCount).toBe('number');
+    } finally {
+      Date.now = originalDateNow;
+    }
   });
 
   it('supports memory bulk update/delete and link/unlink endpoints', async () => {

@@ -244,7 +244,9 @@ The companion-facing runtime prompt should describe the live collapsed stack, no
 - Use `orient` as the active-orientation surface; it is not deep archival memory.
 - Keep `scratchpad` as the ephemeral long-context workspace for large temporary material such as PDFs, articles, working notes, and rolling source summaries.
 - Keep scratchpad distinct from `orient` and `memory`: it is for temporary working context, not active canon or durable recall.
+- Scratchpad entries now age under an explicit lifecycle policy from `scheduler.json`; stale temporary notes are eligible for cleanup unless they are promoted first.
 - Promote scratchpad content only when it hardens into stable facts (`memory`), durable notes/artifacts (`vault` or repo docs), or orientation state (`orient`).
+- Temporary file cleanup only touches generated media plus the managed workspace temp subtree at `workspace/.psfn/temp-artifacts`; ordinary workspace files are never swept implicitly.
 - Use `think` as an explicit fallback for deep reasoning, not as the default escape hatch.
 - Keep `web` distinct from `session`: transcript lookup and continuity resume belong to `session`, while remote-page discovery/retrieval belongs to `web`.
 - Keep creative prompt craft, appearance heuristics, and provider/model quirks in creator skills rather than top-level tool descriptions.

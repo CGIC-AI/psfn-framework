@@ -212,6 +212,7 @@ const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/boo
 const ADMIN_SHARDS_API_PATH = '/api/admin/shards';
 const ADMIN_SUBAGENTS_API_PATH = '/api/admin/subagents';
 const ADMIN_RESEARCH_LIBRARY_API_PATH = '/api/admin/research-library';
+const ADMIN_ARTIFACT_LIFECYCLE_API_PATH = '/api/admin/artifact-lifecycle';
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 
@@ -221,6 +222,7 @@ export function buildAdminApiRoutes(options: {
   shardManager: ShardManager;
   subagentFaculty: SubagentFaculty;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
+  artifactLifecycleService?: AdminArtifactLifecycleService | null;
   memoryService: AdminMemoryService;
   researchLibraryService?: AdminResearchLibraryService | null;
   sessionService: AdminSessionService;
@@ -249,6 +251,7 @@ export function buildAdminApiRoutes(options: {
     shardManager,
     subagentFaculty,
     adaptiveToolsService,
+    artifactLifecycleService,
     memoryService,
     researchLibraryService,
     sessionService,
@@ -484,6 +487,17 @@ export function buildAdminApiRoutes(options: {
           return;
         }
         sendJson(res, 200, entry);
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(ADMIN_ARTIFACT_LIFECYCLE_API_PATH),
+      handle: (_req, res) => {
+        if (!artifactLifecycleService) {
+          sendJson(res, 503, { error: 'Artifact lifecycle service unavailable' });
+          return;
+        }
+        sendJson(res, 200, artifactLifecycleService.getArtifactLifecycleData());
       },
     },
     {

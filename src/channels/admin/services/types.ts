@@ -31,6 +31,7 @@ import type { SettingsContractData } from '../../../config/settings-contract.js'
 import type { BackupJsonConfig } from '../../../config/backup-config.js';
 import type { ModelsRuntimeConfig } from '../../../config/models-config.js';
 import type { ProvidersRuntimeConfig } from '../../../config/providers-config.js';
+import type { ArtifactLifecycleStatus } from '../../../artifact-lifecycle/manager.js';
 import type { SchedulerRuntimeConfig } from '../../../config/scheduler-config.js';
 import type { SkillsRuntimeConfig } from '../../../config/skills-config.js';
 import type { TrustPolicyConfig } from '../../../config/trust-policy-config.js';
@@ -139,6 +140,10 @@ export interface AdminResearchLibraryData {
 export interface AdminResearchLibraryService {
   listEntries(): AdminResearchLibraryData;
   getEntry(id: string): ResearchLibraryEntryDetail | null;
+}
+
+export interface AdminArtifactLifecycleService {
+  getArtifactLifecycleData(): ArtifactLifecycleStatus;
 }
 
 export interface AdminMemoryContactSummary {

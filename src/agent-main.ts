@@ -48,6 +48,7 @@ import { MemoryWriter } from './memory/writer.js';
 import { registerMemoryTools } from './memory/runtime-wiring.js';
 import { registerResearchLibraryTools } from './research-library/runtime-wiring.js';
 import { ResearchLibraryStore } from './research-library/store.js';
+import { ArtifactLifecycleManager } from './artifact-lifecycle/manager.js';
 import { wireContactRuntime } from './contacts/runtime-wiring.js';
 import { registerGitTools } from './git/runtime-wiring.js';
 import { GatewayGitOps } from './git/gateway-ops.js';
@@ -759,6 +760,41 @@ async function main(): Promise<void> {
   });
   log.info('Research library tools enabled', {
     libraryDir: researchLibraryStore.libraryDir,
+  });
+  const artifactLifecycleManager = new ArtifactLifecycleManager({
+    companionDataDir,
+    workspacePath: workspaceRoot,
+    policy: schedulerConfig.artifactLifecycle,
+    memoryStore,
+    researchLibraryStore,
+  });
+  scheduler.register({
+    id: 'artifact-lifecycle-cleanup',
+    name: 'Artifact Lifecycle Cleanup',
+    type: 'every',
+    intervalMs: config.maintenanceIntervalMs,
+    handler: () => {
+      const result = artifactLifecycleManager.runCleanup();
+      if (
+        result.deletedScratchpadEntryIds.length > 0
+        || result.deletedGeneratedMediaPaths.length > 0
+        || result.deletedWorkspaceTempPaths.length > 0
+        || result.skippedPromotedPaths.length > 0
+      ) {
+        log.info('Artifact lifecycle cleanup sweep completed', {
+          deletedScratchpadEntries: result.deletedScratchpadEntryIds.length,
+          deletedGeneratedMedia: result.deletedGeneratedMediaPaths.length,
+          deletedWorkspaceTemp: result.deletedWorkspaceTempPaths.length,
+          skippedPromoted: result.skippedPromotedPaths.length,
+        });
+      }
+    },
+    eligibility: { requiredTokens: ['memory.write'] },
+    state: 'idle',
+  });
+  log.info('Artifact lifecycle cleanup enabled', {
+    generatedMediaDir: artifactLifecycleManager.generatedMediaDir,
+    workspaceTempDir: artifactLifecycleManager.workspaceTempDir,
   });
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 

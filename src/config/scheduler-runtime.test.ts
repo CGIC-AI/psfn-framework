@@ -28,11 +28,23 @@ describe('resolveRuntimeSchedulerConfig', () => {
         tickIntervalMs: 60_000,
         heartbeatIntervalMs: 1_800_000,
         salienceDecayIntervalMs: 300_000,
+        artifactLifecycle: {
+          scratchpadRetentionDays: 14,
+          generatedMediaRetentionDays: 30,
+          workspaceTempRetentionDays: 14,
+          cleanupBatchSize: 128,
+        },
       });
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 45_000,
         heartbeatIntervalMs: 900_000,
         salienceDecayIntervalMs: 120_000,
+        artifactLifecycle: {
+          scratchpadRetentionDays: 7,
+          generatedMediaRetentionDays: 21,
+          workspaceTempRetentionDays: 9,
+          cleanupBatchSize: 64,
+        },
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -44,6 +56,12 @@ describe('resolveRuntimeSchedulerConfig', () => {
         tickIntervalMs: 45_000,
         heartbeatIntervalMs: 900_000,
         salienceDecayIntervalMs: 120_000,
+        artifactLifecycle: {
+          scratchpadRetentionDays: 7,
+          generatedMediaRetentionDays: 21,
+          workspaceTempRetentionDays: 9,
+          cleanupBatchSize: 64,
+        },
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -62,11 +80,23 @@ describe('resolveRuntimeSchedulerConfig', () => {
         tickIntervalMs: 60_000,
         heartbeatIntervalMs: 1_800_000,
         salienceDecayIntervalMs: 300_000,
+        artifactLifecycle: {
+          scratchpadRetentionDays: 14,
+          generatedMediaRetentionDays: 30,
+          workspaceTempRetentionDays: 14,
+          cleanupBatchSize: 128,
+        },
       });
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 10_000,
         heartbeatIntervalMs: 20_000,
         salienceDecayIntervalMs: 30_000,
+        artifactLifecycle: {
+          scratchpadRetentionDays: 3,
+          generatedMediaRetentionDays: 4,
+          workspaceTempRetentionDays: 5,
+          cleanupBatchSize: 6,
+        },
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -78,6 +108,12 @@ describe('resolveRuntimeSchedulerConfig', () => {
         tickIntervalMs: 10_000,
         heartbeatIntervalMs: 20_000,
         salienceDecayIntervalMs: 30_000,
+        artifactLifecycle: {
+          scratchpadRetentionDays: 3,
+          generatedMediaRetentionDays: 4,
+          workspaceTempRetentionDays: 5,
+          cleanupBatchSize: 6,
+        },
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

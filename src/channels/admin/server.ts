@@ -24,6 +24,7 @@ import {
 } from '../../persistence/layout.js';
 import type { AdminServerConfig } from './types.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
+import { AdminArtifactLifecycleDataService } from './services/artifact-lifecycle-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
 import { AdminResearchLibraryDataService } from './services/research-library-service.js';
 import { AdminSessionDataService } from './services/session-service.js';
@@ -54,6 +55,7 @@ export class AdminServer implements Lifecycle {
   private dashboardService: AdminDashboardDataService;
   private memoryService: AdminMemoryDataService;
   private researchLibraryService: AdminResearchLibraryDataService;
+  private artifactLifecycleService: AdminArtifactLifecycleDataService;
   private sessionService: AdminSessionDataService;
   private contactsService: AdminContactsDataService;
   private settingsService: AdminSettingsDataService;
@@ -111,9 +113,17 @@ export class AdminServer implements Lifecycle {
       memoryStore: config.memoryStore,
       sessionStore: config.sessionStore,
     });
-    this.researchLibraryService = new AdminResearchLibraryDataService(
-      new ResearchLibraryStore({ companionDataDir }),
-    );
+    const researchLibraryStore = new ResearchLibraryStore({
+      companionDataDir,
+      workspacePath: typeof config.config.workspacePath === 'string' ? config.config.workspacePath : undefined,
+    });
+    this.researchLibraryService = new AdminResearchLibraryDataService(researchLibraryStore);
+    this.artifactLifecycleService = new AdminArtifactLifecycleDataService({
+      config: config.config,
+      memoryStore: config.memoryStore,
+      companionDataDir,
+      researchLibraryStore,
+    });
     this.settingsService = new AdminSettingsDataService({
       config: config.config,
     });
@@ -163,6 +173,7 @@ export class AdminServer implements Lifecycle {
       shardManager: config.shardManager,
       subagentFaculty: config.subagentFaculty,
       adaptiveToolsService: this.adaptiveToolsService,
+      artifactLifecycleService: this.artifactLifecycleService,
       memoryService: this.memoryService,
       researchLibraryService: this.researchLibraryService,
       sessionService: this.sessionService,

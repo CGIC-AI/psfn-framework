@@ -40,6 +40,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - Orientation storage intentionally remains on legacy `core_memory.json` paths for now; the runtime rename is model-facing rather than a persistence migration.
 - Long-term memory lives in the typed `memory` store and is retrieved selectively; it is not the same thing as active orientation.
 - `scratchpad` remains an explicit ephemeral workspace for bulky temporary material and working notes, not canonical memory.
+- Ephemeral scratchpad notes and managed temp artifacts now follow an explicit retention policy from `scheduler.json`. Durable artifacts promoted into the research library are exempt from lifecycle cleanup.
 
 ### Scratchpad
 

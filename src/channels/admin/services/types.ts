@@ -242,12 +242,20 @@ export interface AdminMemoryScopeMutationResult extends MemoryMutationResult {
   scopeRepair?: AdminMemoryScopeRepairView;
 }
 
+export interface AdminMemoryPatchMutationResult extends MemoryMutationResult {
+  sourceMemory?: AdminMemoryDetailData['memory'];
+  replacementMemory?: AdminMemoryDetailData['memory'];
+  reviewReferencePath?: string;
+  reason?: string;
+}
+
 export interface AdminMemoryService {
   listMemories(params?: URLSearchParams): AdminMemoryListData;
   getMemoryDetail(id: string): AdminMemoryDetailData | null;
   listManagedScopes(params?: URLSearchParams): AdminMemoryScopeListData;
   getManagedScopeDetail(kind: string, id: string): AdminMemoryScopeDetailData | null;
   searchMemories(query: string): Promise<AdminMemorySearchResult>;
+  patchMemory(id: string, fields: { text: string; reason?: string; referencePath?: string }): Promise<AdminMemoryPatchMutationResult>;
   supersedeMemory(id: string): MemoryMutationResult;
   updateMemoryScope(
     id: string,

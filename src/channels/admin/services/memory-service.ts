@@ -31,7 +31,7 @@ import type {
   AdminMemorySearchResult,
   AdminMemoryService,
   MemoryMutationResult,
-  type AdminMemoryPatchMutationResult,
+  AdminMemoryPatchMutationResult,
 } from './types.js';
 
 const DEFAULT_MEMORY_LIST_LIMIT = 50;

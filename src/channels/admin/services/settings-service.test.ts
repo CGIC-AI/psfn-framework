@@ -180,6 +180,21 @@ describe('AdminSettingsDataService', () => {
     expect(persistedSettings).toEqual(expect.objectContaining(payload));
   });
 
+  it('reports local API and admin auth status from runtime config instead of direct env reads', async () => {
+    const root = makeTempDir();
+    const config = {
+      ...buildConfig(root),
+      localApiKey: 'local-api-key',
+      adminAuthToken: 'admin-token',
+    } satisfies SubstrateConfig;
+    const service = new AdminSettingsDataService({ config });
+
+    const settingsData = await service.getSettingsData();
+
+    expect(settingsData.env.apiKey).toBe('[set]');
+    expect(settingsData.env.adminToken).toBe('[set]');
+  });
+
   it('round-trips model-control runtime settings with persistence and reload guarantees', async () => {
     const root = makeTempDir();
     const refreshModelsSpy = vi.fn();

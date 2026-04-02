@@ -840,7 +840,7 @@ async function main(): Promise<void> {
   const adminHost = process.env.ADMIN_HOST || undefined;
   const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (apiPort) {
-    const allowInsecureWithoutAuth = isExplicitTrue(process.env.ALLOW_INSECURE_LOCAL_API);
+    const allowInsecureWithoutAuth = config.localApiAllowInsecureWithoutAuth ?? false;
     const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
       explicitAllowlist: parseCommaSeparatedEnv(process.env.API_CORS_ALLOWLIST),
       adminHost,
@@ -871,8 +871,8 @@ async function main(): Promise<void> {
         eventBus,
         sessionManager,
         contactStore,
-        apiKey: process.env.API_KEY || undefined,
-        adminToken: process.env.ADMIN_TOKEN || undefined,
+        apiKey: config.localApiKey,
+        adminToken: config.adminAuthToken,
         allowInsecureWithoutAuth,
         corsAllowedOrigins,
         modelName: process.env.API_MODEL_NAME,
@@ -1043,8 +1043,8 @@ async function main(): Promise<void> {
 
   let adminServer: AdminServer | undefined;
   if (adminPort) {
-    const adminToken = process.env.ADMIN_TOKEN || undefined;
-    const allowInsecureWithoutToken = isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE);
+    const adminToken = config.adminAuthToken;
+    const allowInsecureWithoutToken = config.adminAllowInsecureWithoutToken ?? false;
     const confirmationQueueApi = {
       listConfirmationQueue: async () => {
         const [gatewayList, localEntries] = await Promise.all([

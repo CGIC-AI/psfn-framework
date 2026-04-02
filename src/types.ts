@@ -645,6 +645,10 @@ export interface SubstrateConfig {
   modelRoleAssignments?: ModelRoleAssignments;
   modelRegistry?: CanonicalModelRegistry;
   providerRegistry?: CanonicalProviderRegistry;
+  localApiKey?: string;
+  localApiAllowInsecureWithoutAuth?: boolean;
+  adminAuthToken?: string;
+  adminAllowInsecureWithoutToken?: boolean;
   litellmBaseUrl?: string;
   litellmApiKeyEnv?: string;
   openRouterApiBaseUrl?: string;
@@ -969,6 +973,10 @@ export function loadConfig(): SubstrateConfig {
     modelCatalog,
     modelRoleAssignments,
     modelRegistry,
+    localApiKey: process.env.API_KEY,
+    localApiAllowInsecureWithoutAuth: parseOptionalBooleanEnv(process.env.ALLOW_INSECURE_LOCAL_API) ?? false,
+    adminAuthToken: process.env.ADMIN_TOKEN,
+    adminAllowInsecureWithoutToken: parseOptionalBooleanEnv(process.env.ADMIN_ALLOW_INSECURE) ?? false,
     modelRoster: {
       chat: { model: primaryModel, provider: primaryProvider, maxTokens: primaryMaxTokens, contextWindow: defaultContextWindow },
       background: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },

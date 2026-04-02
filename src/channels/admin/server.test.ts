@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { EventBus } from '../../event-bus.js';
 import { AdminServer } from './server.js';
+import { ContactStore } from '../../contacts/store.js';
 import { MemoryStore } from '../../memory/store.js';
 import { SessionStore } from '../../session/store.js';
 import { SessionManager } from '../../session/manager.js';
@@ -236,11 +237,36 @@ async function createHarness(options: {
     modelRoster: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
     },
+    modelCatalog: {
+      primary: {
+        model: 'test-model-room',
+        provider: 'openai',
+        defaults: {
+          description: 'Test Model Room',
+          maxTokens: 16384,
+          contextWindow: 128_000,
+        },
+      },
+    },
+    modelRoleAssignments: {
+      chat: 'primary',
+    },
   };
 
   const db = new Database(':memory:');
   sqliteVec.load(db);
   const eventBus = new EventBus();
+  const contactStore = new ContactStore(db, 'primary-user');
+  contactStore.upsert({
+    displayName: 'Admin User',
+    trustLevel: 'regular',
+    relationshipType: 'friend',
+    channelIdentities: [{
+      channel: 'api',
+      userId: 'admin-user',
+      privacyLevel: 'private',
+    }],
+  });
   const memoryStore = new MemoryStore(db, 3);
   const sessionStore = new SessionStore(sessionsDir);
   const sessionManager = new SessionManager(sessionStore, config, eventBus);
@@ -281,6 +307,7 @@ async function createHarness(options: {
     eventBus,
     characterCard: testCard,
     config,
+    contactStore,
     embeddingService: null,
     modelDiscovery: options.modelDiscovery ?? null,
   });

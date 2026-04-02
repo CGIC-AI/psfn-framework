@@ -157,7 +157,22 @@ describe('ContextEvaluator', () => {
       },
     });
 
-    expect(complete).toHaveBeenCalledWith(expect.anything(), 'context');
+    expect(complete).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: expect.stringContaining('Return JSON only, no markdown'),
+      messages: [expect.objectContaining({
+        role: 'user',
+        content: expect.stringContaining('\"turnId\": \"turn-ctx-1\"'),
+      })],
+      correlation: expect.objectContaining({
+        requestId: 'turn-ctx-1',
+        turnId: 'turn-ctx-1',
+        channelId: 'terminal:test',
+        callType: 'memory',
+        originType: 'memory',
+        originStage: 'context.feedback',
+        purpose: 'context.feedback',
+      }),
+    }), 'memory');
     expect(result).toEqual({
       effectivenessScore: 0.67,
       signals: {

@@ -271,6 +271,12 @@ describe('loadConfig path defaults', () => {
       tickIntervalMs: 60_000,
       heartbeatIntervalMs: 180_000,
       salienceDecayIntervalMs: 654_000,
+      artifactLifecycle: {
+        scratchpadRetentionDays: 14,
+        generatedMediaRetentionDays: 30,
+        workspaceTempRetentionDays: 14,
+        cleanupBatchSize: 128,
+      },
     });
     writeJson(join(seedDir, 'capability-tier.seed.json'), {
       tier: 'apprentice',

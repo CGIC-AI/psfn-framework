@@ -73,6 +73,13 @@ interface PendingLastActiveWrite {
 
 const pendingLastActiveWrites = new Map<string, PendingLastActiveWrite>();
 
+function isMissingLastActiveSessionFile(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 'ENOENT';
+}
+
 async function flushLastActiveWrite(path: string, state: PendingLastActiveWrite): Promise<void> {
   while (state.dirty) {
     state.dirty = false;
@@ -164,8 +171,12 @@ export function readLastActiveSession(dataDir: string): LastActiveSessionData | 
     const raw = readFileSync(path, 'utf-8');
     const data = JSON.parse(raw) as LastActiveData | LastActiveSessionData;
     return normalizeLastActiveData(data);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingLastActiveSessionFile(error)) {
+      return null;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error('Failed to read last-active session state from ' + path + ': ' + message);
   }
 }
 

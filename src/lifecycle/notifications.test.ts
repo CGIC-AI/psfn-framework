@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -292,6 +292,15 @@ describe('Last-active channel tracking', () => {
       channelType: 'discord',
       timestamp: 1234,
     });
+  });
+
+  it('throws when persisted last-active session state is malformed', () => {
+    const lastActivePath = join(tempDir, 'last_active_channel.json');
+    writeFileSync(lastActivePath, '{"channelId":', 'utf-8');
+
+    expect(() => readLastActiveSession(tempDir)).toThrow(
+      new RegExp('Failed to read last-active session state'),
+    );
   });
 
   it('preserves transport channel id separately from session id when provided', () => {

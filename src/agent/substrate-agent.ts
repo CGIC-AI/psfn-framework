@@ -38,6 +38,9 @@ import {
   type ChannelMeta,
 } from '../trust/policy.js';
 import type { ChannelPromptDock } from '../channels/types.js';
+import type { AdminToolHealthProvider } from '../channels/admin/tool-health-provider.js';
+import type { AdminToolFailureEvent } from '../channels/admin/services/types.js';
+import { deriveToolHealthViews } from '../channels/admin/services/adaptive-tools-runtime.js';
 import {
   type PromptComposer,
 } from '../identity/prompt-composer.js';
@@ -190,10 +193,12 @@ export interface SubstrateAgentOptions {
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
   runtimeMode?: RuntimeMode;
+  toolHealthProvider?: AdminToolHealthProvider | null;
   emotionRuntime?: EmotionRuntimeWiring;
   selfModelRuntime?: SelfModelRuntimeWiring;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
+const DEFAULT_RUNTIME_TOOL_FAILURE_LIMIT = 50;
 
 // ── SubstrateAgent ──
 
@@ -218,6 +223,8 @@ export class SubstrateAgent {
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private selfModelRuntimeRequired = false;
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
+  private readonly toolHealthProvider: AdminToolHealthProvider | null;
+  private readonly recentToolFailures: AdminToolFailureEvent[] = [];
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
@@ -284,6 +291,7 @@ export class SubstrateAgent {
       ?? (() => fallbackPromptVariables);
     this.config = config;
     this.runtimeMode = options?.runtimeMode ?? 'single';
+    this.toolHealthProvider = options?.toolHealthProvider ?? null;
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
@@ -356,6 +364,22 @@ export class SubstrateAgent {
     });
 
     this.installRuntimeHooks();
+
+    this.eventBus.on('agent.tool.end', ({ toolName, channelId, isError, errorMessage }) => {
+      if (!isError || !errorMessage?.trim()) return;
+      this.recentToolFailures.push({
+        toolName,
+        channelId,
+        message: errorMessage.trim(),
+        timestamp: Date.now(),
+      });
+      if (this.recentToolFailures.length > DEFAULT_RUNTIME_TOOL_FAILURE_LIMIT) {
+        this.recentToolFailures.splice(
+          0,
+          this.recentToolFailures.length - DEFAULT_RUNTIME_TOOL_FAILURE_LIMIT,
+        );
+      }
+    });
 
     // Persistent event bridge: pi-agent-core events → EventBus
     this.bridge = createEventBridge(this.agent, eventBus);
@@ -792,6 +816,7 @@ export class SubstrateAgent {
           subjectIdentityKey,
           now,
         ),
+        refreshToolHealthStatusByName: () => this.refreshToolHealthStatusByName(),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
           this.currentInternalStateSnapshotRef = snapshotRef;
@@ -992,10 +1017,25 @@ export class SubstrateAgent {
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
       skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
+      toolHealthStatusByName: this.toolRuntimeFacade.getToolHealthStatusByName(),
       activeConcernsBlock: this.buildActiveConcernsContextBlock(canonicalContactKey),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
     });
+  }
+
+  private async refreshToolHealthStatusByName(): Promise<void> {
+    const healthSnapshot = await this.toolHealthProvider?.getRuntimeServiceHealth()
+      ?? { checkedAt: Date.now(), services: [] };
+    const toolHealth = deriveToolHealthViews({
+      catalog: this.getToolCatalogSnapshot(),
+      state: this.getAdaptiveToolRuntimeState(),
+      serviceHealth: healthSnapshot.services,
+      recentFailures: this.recentToolFailures,
+    });
+    this.toolRuntimeFacade.setToolHealthStatusByName(
+      new Map(toolHealth.map(view => [view.name, view.health.status])),
+    );
   }
 
   private buildActiveConcernsContextBlock(canonicalContactKey?: string): string {

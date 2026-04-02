@@ -62,6 +62,7 @@ import {
   type ValidateToolsOptions,
   type WirableTool,
 } from '../tool-wiring-validator.js';
+import type { RuntimeServiceHealthStatus } from '../../tool-health/types.js';
 import type { RuntimeToolCatalogSnapshot } from '../tool-catalog.js';
 
 interface ToolRuntimeFacadeOptions {
@@ -115,6 +116,7 @@ export class ToolRuntimeFacade {
   private extendedToolAutoloadPolicy: ExtendedToolAutoloadPolicy | null = createDefaultExtendedToolAutoloadPolicy();
   private lastAdaptiveToolSnapshot: AdaptiveToolSnapshotTelemetry | null = null;
   private getToolsetMemoryWriter: (() => Pick<MemoryWriter, 'write'> | undefined) | undefined;
+  private toolHealthStatusByName = new Map<string, RuntimeServiceHealthStatus>();
 
   constructor(options: ToolRuntimeFacadeOptions) {
     this.config = options.config;
@@ -230,6 +232,14 @@ export class ToolRuntimeFacade {
     });
   }
 
+  getToolHealthStatusByName(): ReadonlyMap<string, RuntimeServiceHealthStatus> {
+    return this.toolHealthStatusByName;
+  }
+
+  setToolHealthStatusByName(next: ReadonlyMap<string, RuntimeServiceHealthStatus>): void {
+    this.toolHealthStatusByName = new Map(next);
+  }
+
   activateExtendedTools(
     toolNames: readonly string[],
     options: ExtendedToolActivationOptions = {},
@@ -281,6 +291,7 @@ export class ToolRuntimeFacade {
     return createToolSearchTool({
       getExtendedTools: () => this.extendedTools,
       getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),
+      getToolHealthStatusByName: () => this.getToolHealthStatusByName(),
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
     });

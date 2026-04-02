@@ -49,6 +49,7 @@ import type { SubagentAuditTrail } from '../subagents/faculty.js';
 import type { ConfirmationQueue } from '../capabilities/confirmation-queue.js';
 import type { ModuleRegistryMutation } from '../modules/types.js';
 import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
+import type { AdminToolHealthProvider } from '../channels/admin/tool-health-provider.js';
 import {
   ensurePersistenceLayout,
   migrateLegacyPersistenceLayout,
@@ -132,6 +133,7 @@ export interface SubstrateAgentCompositionOptions {
   characterPromptVariablesProvider?: () => Record<string, string>;
   config: SubstrateConfig;
   runtimeMode?: RuntimeMode;
+  toolHealthProvider?: AdminToolHealthProvider | null;
   emotionRuntime?: EmotionRuntimeWiring;
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
 }
@@ -150,6 +152,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
         ? { characterPromptVariablesProvider: options.characterPromptVariablesProvider }
         : {}),
       ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
+      ...(options.toolHealthProvider ? { toolHealthProvider: options.toolHealthProvider } : {}),
       ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
     },

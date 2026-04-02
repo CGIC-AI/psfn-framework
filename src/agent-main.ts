@@ -490,6 +490,7 @@ async function main(): Promise<void> {
   const operatorAlertDispatcher = createNotifyDispatcher({
     briefNotifier: operatorNotifier,
   });
+  const adminToolHealthProvider = createGatewayAdminToolHealthProvider(gateway);
   const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider: gateway,
@@ -499,6 +500,7 @@ async function main(): Promise<void> {
     characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
     config,
     runtimeMode: 'gateway',
+    toolHealthProvider: adminToolHealthProvider,
     streamRuntimeOptions: {
       onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorAlertDispatcher, card.data.name),
     },
@@ -1051,7 +1053,7 @@ async function main(): Promise<void> {
       confirmationQueueApi,
       cardVersionStore,
       adaptiveToolsStateProvider: agentLoop,
-      toolHealthProvider: createGatewayAdminToolHealthProvider(gateway),
+      toolHealthProvider: adminToolHealthProvider,
     });
     await adminServer.init();
     await adminServer.start();

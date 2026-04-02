@@ -1,12 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import {
-  buildAdminApiRoutes,
-  type AdminChatBootstrapApi,
-  type AdminModelDiscoveryApi,
-  type AdminSchedulerApi,
-  type AdminSkillsApi,
-  type AdminValuesJournalApi,
-} from './api-routes.js';
+import { buildAdminApiRoutes } from './api-routes.js';
+import type { GardenAdminDomainServices } from './admin-contract.js';
 import {
   exactPath,
   type RouteMatcher,
@@ -15,21 +9,6 @@ import {
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { formatPossessiveCompanionName } from '../../core/identity/companion-naming.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
-import type {
-  AdminAdaptiveToolsService,
-  AdminArtifactLifecycleService,
-  AdminContactsService,
-  AdminDashboardService,
-  AdminIdentityService,
-  AdminMemoryService,
-  AdminResearchLibraryService,
-  AdminPromptsService,
-  AdminSessionService,
-  AdminSettingsService,
-} from './services/types.js';
-import type { ShardManager } from '../../faculties/shards/manager.js';
-import type { SubagentFaculty } from '../../faculties/subagents/faculty.js';
-import type { ConfirmationQueueAdminApi } from './types.js';
 import { GARDEN_PREFIX } from './server-request-routing.js';
 import { sendJson, sendRedirect, sendText } from '../../channels/backplane/http/primitives.js';
 
@@ -41,25 +20,8 @@ export interface AdminRoute {
 
 interface AdminRouteDependencies {
   token?: string;
-  dashboardService: AdminDashboardService;
-  shardManager: ShardManager;
-  subagentFaculty: SubagentFaculty;
-  adaptiveToolsService: AdminAdaptiveToolsService | null;
-  artifactLifecycleService: AdminArtifactLifecycleService | null;
-  memoryService: AdminMemoryService;
-  researchLibraryService: AdminResearchLibraryService | null;
-  sessionService: AdminSessionService;
-  contactsService: AdminContactsService;
-  settingsService: AdminSettingsService;
-  identityService: AdminIdentityService;
-  promptsService: AdminPromptsService;
-  scheduler: AdminSchedulerApi;
-  skillsRuntime: AdminSkillsApi | null;
-  confirmationQueueApi: ConfirmationQueueAdminApi | null;
-  valuesJournal: AdminValuesJournalApi;
+  services: GardenAdminDomainServices;
   config: SubstrateConfig;
-  modelDiscovery: AdminModelDiscoveryApi | null;
-  chatBootstrapService: AdminChatBootstrapApi;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }
 
@@ -190,25 +152,21 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       },
     },
     ...buildAdminApiRoutes({
-      dashboardService: deps.dashboardService,
-      shardManager: deps.shardManager,
-      subagentFaculty: deps.subagentFaculty,
-      adaptiveToolsService: deps.adaptiveToolsService,
-      artifactLifecycleService: deps.artifactLifecycleService,
-      memoryService: deps.memoryService,
-      researchLibraryService: deps.researchLibraryService,
-      sessionService: deps.sessionService,
-      contactsService: deps.contactsService,
-      settingsService: deps.settingsService,
-      identityService: deps.identityService,
-      promptsService: deps.promptsService,
-      scheduler: deps.scheduler,
-      skillsRuntime: deps.skillsRuntime,
-      confirmationQueueApi: deps.confirmationQueueApi,
-      valuesJournal: deps.valuesJournal,
+      dashboardService: deps.services.dashboard,
+      adaptiveToolsService: deps.services.adaptiveTools,
+      memoryService: deps.services.memory,
+      sessionService: deps.services.sessions,
+      contactsService: deps.services.contacts,
+      settingsService: deps.services.settings,
+      identityService: deps.services.identity,
+      promptsService: deps.services.prompts,
+      scheduler: deps.services.scheduler,
+      skillsRuntime: deps.services.skills,
+      confirmationQueueApi: deps.services.confirmations,
+      valuesJournal: deps.services.values,
       config: deps.config,
-      modelDiscovery: deps.modelDiscovery,
-      chatBootstrapService: deps.chatBootstrapService,
+      modelDiscovery: deps.services.modelDiscovery,
+      chatBootstrapService: deps.services.chatBootstrap,
       withBody: deps.withBody,
     }),
   ];

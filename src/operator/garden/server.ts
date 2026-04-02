@@ -4,43 +4,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
-import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
-import type { PromptStatePort } from '../../core/identity/prompt-state-port.js';
-import type { EventBus } from '../../shared/event-bus.js';
-import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { readBodyWithLimit, sendText } from '../../channels/backplane/http/primitives.js';
-import { ValuesJournalStore } from '../../faculties/values/store.js';
-import { NorthStarStore } from '../../faculties/north-star/store.js';
-import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
-import {
-  PromptRuntimeLayoutStore,
-  resolvePromptRuntimeLayoutPath,
-} from '../../core/identity/prompt-runtime.js';
-import {
-  resolveConfiguredCompanionDataDir,
-  resolveLegacyValuesJournalPath,
-  resolveNorthStarPath,
-  resolveValuesJournalPath,
-} from '../../persistence/layout.js';
-import type { AdminServerConfig } from './types.js';
-import { AdminDashboardDataService } from './services/dashboard-service.js';
-import { AdminMemoryDataService } from './services/memory-service.js';
-import { AdminSessionDataService } from './services/session-service.js';
-import { AdminContactsDataService } from './services/contacts-service.js';
-import { AdminSettingsDataService } from './services/settings-service.js';
-import { AdminIdentityDataService } from './services/identity-service.js';
-import { AdminPromptsDataService } from './services/prompts-service.js';
-import { AdminSchedulerService } from './services/scheduler-service.js';
-import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service.js';
-import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
+import type { AdminServerConfig } from './admin-contract.js';
 import { buildAdminRoutes, dispatchAdminRoute, type AdminRoute } from './server-routes.js';
 import { checkAdminRequestAuth, checkAdminUpgradeAuth } from './server-auth.js';
 import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
-import { AdminChatBootstrapService } from './chat/bootstrap.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -51,133 +23,24 @@ export class AdminServer implements Lifecycle {
   private host: string;
   private token?: string;
   private allowInsecureWithoutToken: boolean;
-  private eventBus: EventBus;
-  private dashboardService: AdminDashboardDataService;
-  private memoryService: AdminMemoryDataService;
-  private sessionService: AdminSessionDataService;
-  private contactsService: AdminContactsDataService;
-  private settingsService: AdminSettingsDataService;
-  private identityService: AdminIdentityDataService;
-  private promptsService: AdminPromptsDataService;
-  private adaptiveToolsService: AdminAdaptiveToolsDataService;
-  private valuesJournal!: ValuesJournalStore;
-  private schedulerService!: AdminSchedulerService;
-  private scheduler!: import('../../core/scheduler/scheduler.js').Scheduler;
-  private skillsRuntimeRef!: import('../../faculties/skills/runtime.js').SkillsRuntime | null;
-  private confirmationQueueApiRef!: import('./types.js').ConfirmationQueueAdminApi | null;
-  private chatBootstrapService: AdminChatBootstrapService;
   private routes: AdminRoute[];
   private transport: AdminServerTransport;
   private telemetryTransport: AdminServerTelemetryTransport;
 
-  constructor(config: AdminServerConfig & {
-    contactStore?: ContactStorePort | null;
-    promptState?: PromptStatePort | null;
-    allowInsecureWithoutToken?: boolean;
-  }) {
-    const promptState = config.promptState ?? createPromptStatePort({});
-
+  constructor(config: AdminServerConfig) {
     this.port = config.port;
     this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
     this.allowInsecureWithoutToken = config.allowInsecureWithoutToken ?? false;
-    this.eventBus = config.eventBus;
-    this.dashboardService = new AdminDashboardDataService({
-      memoryStore: config.memoryStore,
-      sessionStore: config.sessionStore,
-      sessionManager: config.sessionManager,
-      scheduler: config.scheduler,
-      shardManager: config.shardManager,
-      eventBus: config.eventBus,
-    });
-    this.memoryService = new AdminMemoryDataService({
-      memoryStore: config.memoryStore,
-      contactStore: config.contactStore,
-      embeddingService: config.embeddingService,
-      resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),
-    });
-    this.sessionService = new AdminSessionDataService({
-      sessionStore: config.sessionStore,
-      sessionManager: config.sessionManager,
-      eventBus: config.eventBus,
-      contactStore: config.contactStore,
-    });
-    this.contactsService = new AdminContactsDataService({
-      contactStore: config.contactStore,
-      memoryStore: config.memoryStore,
-      sessionStore: config.sessionStore,
-    });
-    const configStore = createOwnerFileConfigStore({
-      dataDir: config.config.dataDir,
-      seedDir: process.env.CONFIG_DIR,
-      defaultContextWindow: config.config.defaultContextWindow,
-    });
-    this.settingsService = new AdminSettingsDataService({
-      config: config.config,
-      configStore,
-    });
-    this.identityService = new AdminIdentityDataService({
-      characterCard: config.characterCard,
-      config: config.config,
-      cardVersionStore: config.cardVersionStore,
-      promptStore: promptState.layers,
-    });
-    const companionDataDir = resolveConfiguredCompanionDataDir(config.config);
-    this.valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
-      legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
-    });
-    const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
-    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
-      resolvePromptRuntimeLayoutPath(companionDataDir),
-    );
-    this.promptsService = new AdminPromptsDataService({
-      promptStore: promptState.layers,
-      promptRegistry: promptState.registry,
-      northStarStore,
-      promptRuntimeLayoutStore,
-      sessionStore: config.sessionStore,
-      sessionManager: config.sessionManager,
-      resolveCompanionName: () => resolveCompanionNameFromConfig(config.config),
-      companionValuesLayerProvider: () => this.valuesJournal.buildCompanionDerivedLayer(),
-    });
-    this.adaptiveToolsService = new AdminAdaptiveToolsDataService({
-      eventBus: config.eventBus,
-      stateProvider: config.adaptiveToolsStateProvider ?? null,
-      toolHealthProvider: config.toolHealthProvider ?? null,
-    });
-    this.chatBootstrapService = new AdminChatBootstrapService(config.contactStore, {
-      apiBaseUrl: config.apiBaseUrl,
-      apiHost: config.apiHost,
-      apiPort: config.apiPort,
-      config: config.config,
-      resolveGlobalDefaultSessionId: () => config.sessionStore.getLatestSessionByTimestamp()?.sessionId ?? null,
-    });
-    this.scheduler = config.scheduler;
-    this.schedulerService = new AdminSchedulerService(config.scheduler, config.config.dataDir);
-    this.skillsRuntimeRef = config.skillsRuntime ?? null;
-    this.confirmationQueueApiRef = config.confirmationQueueApi ?? null;
     this.transport = new AdminServerTransport(log);
     this.telemetryTransport = new AdminServerTelemetryTransport(
-      this.eventBus,
+      config.eventBus,
       (req) => this.checkUpgradeAuth(req),
     );
     this.routes = buildAdminRoutes({
       token: this.token,
-      dashboardService: this.dashboardService,
-      adaptiveToolsService: this.adaptiveToolsService,
-      memoryService: this.memoryService,
-      sessionService: this.sessionService,
-      contactsService: this.contactsService,
-      settingsService: this.settingsService,
-      identityService: this.identityService,
-      promptsService: this.promptsService,
-      scheduler: this.schedulerService,
-      skillsRuntime: this.skillsRuntimeRef,
-      confirmationQueueApi: this.confirmationQueueApiRef,
-      valuesJournal: this.valuesJournal,
+      services: config.services,
       config: config.config,
-      modelDiscovery: config.modelDiscovery ?? null,
-      chatBootstrapService: this.chatBootstrapService,
       withBody: (req, res, cb) => this.withBody(req, res, cb),
     });
     this.server = createServer((req, res) => this.handleRequest(req, res));
@@ -228,7 +91,6 @@ export class AdminServer implements Lifecycle {
 
   async stop(): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Force-close any open connections (SSE streams, etc.)
       this.server.closeAllConnections();
       this.telemetryTransport.close(() => {
         this.server.close((err) => {

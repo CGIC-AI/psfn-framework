@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
+import { createInProcessGardenAdminContract } from './local-admin-contract.js';
 import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
@@ -290,10 +291,7 @@ async function createHarness(options: {
   });
 
   const port = await allocatePort();
-  const server = new AdminServer({
-    port,
-    token: options.token,
-    allowInsecureWithoutToken: options.allowInsecureWithoutToken ?? false,
+  const services = createInProcessGardenAdminContract({
     memoryStore,
     sessionStore,
     sessionManager,
@@ -306,6 +304,14 @@ async function createHarness(options: {
     embeddingService: null,
     promptState: createPromptStatePort({}),
     modelDiscovery: options.modelDiscovery ?? null,
+  });
+  const server = new AdminServer({
+    port,
+    token: options.token,
+    allowInsecureWithoutToken: options.allowInsecureWithoutToken ?? false,
+    eventBus,
+    config,
+    services,
   });
   await server.init();
   await server.start();

@@ -1,5 +1,5 @@
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
-import type { ConfirmationQueueAdminApi } from '../../../operator/garden/types.js';
+import type { ConfirmationQueueAdminApi } from '../../../operator/garden/admin-contract.js';
 import type {
   ConfirmationListResult,
   ConfirmationResolveParams,

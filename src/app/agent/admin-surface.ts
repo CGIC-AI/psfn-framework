@@ -1,5 +1,6 @@
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import { AdminServer } from '../../operator/garden/server.js';
+import { createInProcessGardenAdminContract } from '../../operator/garden/local-admin-contract.js';
 import { createGatewayAdminToolHealthProvider } from '../../operator/garden/tool-health-provider.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { GatewayModelDiscovery } from '../../primitives/llm/discovery.js';
@@ -50,11 +51,7 @@ export async function startOptionalAdminServer(
   const adminToken = env.ADMIN_TOKEN || undefined;
   const allowInsecureWithoutToken = isExplicitTrue(env.ADMIN_ALLOW_INSECURE);
   const modelDiscovery = new GatewayModelDiscovery(options.gateway);
-  const adminServer = new AdminServer({
-    port: options.adminPort,
-    host: options.adminHost,
-    token: adminToken,
-    allowInsecureWithoutToken,
+  const services = createInProcessGardenAdminContract({
     apiBaseUrl: env.API_BASE_URL,
     apiHost: options.apiHost,
     apiPort: options.apiPort,
@@ -64,11 +61,11 @@ export async function startOptionalAdminServer(
     scheduler: options.scheduler,
     shardManager: options.shardManager,
     eventBus: options.eventBus,
+    contactStore: options.coreRuntime.contactStore,
     characterCard: options.card,
     config: options.config,
     embeddingService: options.gateway,
     modelDiscovery,
-    contactStore: options.coreRuntime.contactStore,
     promptState: options.coreRuntime.promptState,
     skillsRuntime: options.coreRuntime.skillsRuntime,
     confirmationQueueApi: createGatewayConfirmationQueueAdminApi(
@@ -78,6 +75,15 @@ export async function startOptionalAdminServer(
     cardVersionStore: options.cardVersionStore,
     adaptiveToolsStateProvider: options.coreRuntime.agentLoop,
     toolHealthProvider: createGatewayAdminToolHealthProvider(options.gateway),
+  });
+  const adminServer = new AdminServer({
+    port: options.adminPort,
+    host: options.adminHost,
+    token: adminToken,
+    allowInsecureWithoutToken,
+    eventBus: options.eventBus,
+    config: options.config,
+    services,
   });
   await adminServer.init();
   await adminServer.start();

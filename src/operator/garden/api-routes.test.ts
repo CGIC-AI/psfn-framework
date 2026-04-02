@@ -9,6 +9,7 @@ import * as sqliteVec from 'sqlite-vec';
 import WebSocket from 'ws';
 import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
+import { createInProcessGardenAdminContract } from './local-admin-contract.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
@@ -633,9 +634,7 @@ describe('AdminServer JSON API routes', () => {
     };
 
     port = await allocatePort();
-    server = new AdminServer({
-      port,
-      token,
+    const services = createInProcessGardenAdminContract({
       memoryStore,
       sessionStore,
       sessionManager,
@@ -657,7 +656,14 @@ describe('AdminServer JSON API routes', () => {
         getSnapshot: () => null,
         invalidate: () => {},
       } as any,
+    });
+    server = new AdminServer({
+      port,
+      token,
       allowInsecureWithoutToken: false,
+      eventBus,
+      config: testConfig,
+      services,
     });
 
     await server.init();

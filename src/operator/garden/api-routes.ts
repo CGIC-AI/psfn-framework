@@ -26,108 +26,21 @@ import {
   isDashboardCostWindow,
   resolveDashboardCostWindow,
 } from './services/dashboard-cost-windows.js';
-import type { RecurringCadence, ScheduledTask, TaskType } from '../../core/scheduler/types.js';
-import type { SkillSnapshot } from '../../faculties/skills/types.js';
+import type {
+  AdminChatBootstrapApi,
+  AdminModelDiscoveryApi,
+  AdminSchedulerApi,
+  AdminSkillsApi,
+  AdminValuesJournalApi,
+  ConfirmationQueueAdminApi,
+} from './admin-contract.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
   AdminAuditDecision,
-  ConfirmationQueueAdminApi,
 } from './types.js';
-import type { ValuesJournalEntry } from '../../faculties/values/store.js';
-import type { ReflectionTemplate } from '../../core/scheduler/heartbeat-policy.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
-
-export type AdminTaskCadence = RecurringCadence;
-
-type ScheduledTaskWithCadence = ScheduledTask & { cadence?: AdminTaskCadence };
-
-/** Wire-safe task shape (no handler function). */
-export interface AdminScheduledTaskView {
-  id: string;
-  name: string;
-  type: TaskType;
-  intervalMs: number;
-  runAt?: number;
-  state: string;
-  cadence?: AdminTaskCadence;
-}
-
-/** Minimal scheduler interface for JSON API routes. */
-export interface AdminSchedulerApi {
-  listTasks(): ScheduledTask[];
-  /** Extended: full data with reflections. */
-  getFullData?(): {
-    tasks: AdminScheduledTaskView[];
-    reflections: ReflectionTemplate[];
-  };
-  /** Extended: update a scheduler task. */
-  updateTask?(id: string, updates: {
-    intervalMs?: number;
-    enabled?: boolean;
-    name?: string;
-    cadence?: unknown;
-  }): { ok: boolean; message: string };
-  /** Extended: create a new task. */
-  createTask?(input: {
-    id: string;
-    name: string;
-    type: TaskType;
-    intervalMs?: number;
-    runAt?: number;
-    cadence?: unknown;
-  }): { ok: boolean; message: string };
-  /** Extended: remove a task. */
-  removeTask?(id: string): { ok: boolean; message: string };
-  /** Extended: update a reflection template. */
-  updateReflection?(id: string, updates: Partial<ReflectionTemplate>): { ok: boolean; message: string };
-}
-
-/** Managed skill record shape returned by the store. */
-export interface ManagedSkillRecord {
-  name: string;
-  description: string;
-  category: string;
-  version: number;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** Minimal skills runtime interface for JSON API routes. */
-export interface AdminSkillsApi {
-  getSnapshot(): SkillSnapshot;
-  listManaged(): ManagedSkillRecord[];
-  createSkill(input: { name: string; category: string; content: string; description?: string }): ManagedSkillRecord;
-  updateSkill(input: { name: string; content: string; description?: string }): ManagedSkillRecord;
-  deleteSkill(name: string): void;
-  toggleSkill(name: string): boolean;
-  getDisabledSkills(): string[];
-  invalidate(): void;
-}
-
-/** Minimal values journal interface for JSON API routes. */
-export interface AdminValuesJournalApi {
-  list(options?: { limit?: number }): ValuesJournalEntry[];
-}
-
-export interface AdminModelDiscoveryApi {
-  getAvailableModels(): Promise<unknown[]>;
-  invalidateCache(): void;
-}
-
-export interface AdminChatBootstrapApi {
-  buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): Promise<unknown>;
-  updateSelection(
-    input: AdminChatBootstrapUpdateInput,
-    options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
-  ): Promise<unknown>;
-  buildModelRoomBootstrap(
-    config: SubstrateConfig,
-    options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
-  ): Promise<unknown>;
-}
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';

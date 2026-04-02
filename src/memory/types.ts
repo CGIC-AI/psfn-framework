@@ -304,7 +304,9 @@ export function buildAutonomousActionMemoryContext(input: {
     throw new Error('action is required for autonomous action provenance');
   }
 
-  const timestampMs = Number.isFinite(input.timestampMs) ? input.timestampMs : Date.now();
+  const timestampMs = typeof input.timestampMs === 'number' && Number.isFinite(input.timestampMs)
+    ? input.timestampMs
+    : Date.now();
   const timestamp = new Date(timestampMs).toISOString();
   const reason = normalizeStructuredProvenanceText(input.reason);
   const provenanceRefs = [

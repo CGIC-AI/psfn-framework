@@ -176,7 +176,7 @@ export function createBeadsTool(ops: BeadsOperations, options: BeadsToolOptions 
       params: BeadsToolParams = {},
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
-      let actionForError = rawAction || undefined;
+      let actionForError: BeadsAction | undefined;
       try {
         actionForError = normalizeBeadsAction(params);
         if (rawAction && rawAction !== actionForError) {

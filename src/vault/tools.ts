@@ -200,7 +200,7 @@ export function createVaultTool(ops: VaultOperations, options: VaultToolOptions 
       params: VaultToolParams = {},
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
-      let actionForError = rawAction || undefined;
+      let actionForError: VaultAction | undefined;
       try {
         actionForError = normalizeVaultAction(params);
         if (rawAction && rawAction !== actionForError) {
@@ -220,6 +220,10 @@ export function createVaultTool(ops: VaultOperations, options: VaultToolOptions 
             return await executeVaultSearch(ops, params);
           case 'daily':
             return await executeVaultDaily(ops, params);
+          default: {
+            const unreachableAction: never = actionForError;
+            throw new Error(`Unsupported vault action: ${unreachableAction}`);
+          }
         }
       } catch (error) {
         const suffix = actionForError ? ` for action=${actionForError}` : '';

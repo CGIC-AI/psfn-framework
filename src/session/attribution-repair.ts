@@ -117,7 +117,7 @@ function repairMetadataRole(metadata: string | undefined, role: 'user' | 'assist
 }
 
 function repairJournalEntry(entry: JournalEntry): { entry: JournalEntry; modified: boolean } {
-  if (entry.type !== 'message' || typeof entry.content !== 'string') {
+  if (entry.type !== 'message' || typeof entry.content !== 'string' || typeof entry.role !== 'string') {
     return { entry, modified: false };
   }
 

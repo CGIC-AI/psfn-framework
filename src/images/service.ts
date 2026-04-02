@@ -44,20 +44,24 @@ export class ImageService implements ImageOperations {
   ): Promise<ImageGenerationResult> {
     const provider = params.provider ?? 'auto';
     if (provider === 'comfyui') {
-      return await this.runComfy(mode, params);
+      return mode === 'create'
+        ? await this.runComfy('create', params as ImageCreateParams)
+        : await this.runComfy('edit', params as ImageEditParams);
     }
 
     if (!this.config.falApiKey?.trim()) {
       if (provider === 'fal') {
         throw new Error('FAL_API_KEY is not configured');
       }
-      return await this.runComfy(mode, params);
+      return mode === 'create'
+        ? await this.runComfy('create', params as ImageCreateParams)
+        : await this.runComfy('edit', params as ImageEditParams);
     }
 
     try {
       return mode === 'create'
-        ? await new FalImageClient(this.config.falApiKey, this.fetchImpl).create(params)
-        : await new FalImageClient(this.config.falApiKey, this.fetchImpl).edit(params);
+        ? await new FalImageClient(this.config.falApiKey, this.fetchImpl).create(params as ImageCreateParams)
+        : await new FalImageClient(this.config.falApiKey, this.fetchImpl).edit(params as ImageEditParams);
     } catch (error) {
       if (
         provider === 'auto'
@@ -65,7 +69,9 @@ export class ImageService implements ImageOperations {
         && this.config.comfyUiBaseUrl
         && hasWorkflowForMode(this.config, mode)
       ) {
-        const fallbackResult = await this.runComfy(mode, params);
+        const fallbackResult = mode === 'create'
+          ? await this.runComfy('create', params as ImageCreateParams)
+          : await this.runComfy('edit', params as ImageEditParams);
         return {
           ...fallbackResult,
           fallbackUsed: true,
@@ -99,7 +105,7 @@ export class ImageService implements ImageOperations {
       this.fetchImpl,
     );
     return mode === 'create'
-      ? await client.create(params)
-      : await client.edit(params);
+      ? await client.create(params as ImageCreateParams)
+      : await client.edit(params as ImageEditParams);
   }
 }

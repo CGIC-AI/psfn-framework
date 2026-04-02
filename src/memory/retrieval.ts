@@ -1296,12 +1296,9 @@ export class MemoryRetriever implements MemoryProvider {
 
     const contact = this.contactStore?.getById(contactId);
     if (contact && querySuggestsContactFocus(queryTokens, {
-      contactId,
       displayName: contact.displayName,
-      trustLevel: contact.trustLevel,
       relationshipType: contact.relationshipType,
       relationshipLabels: [],
-      relatedToCanonical: false,
     })) {
       return 0.9;
     }
@@ -1836,8 +1833,9 @@ function renderPromptBlock(
   if (profile && profile.summary.trim().length > 0) {
     sections.push(`Core profile for this person:\n${profile.summary.trim()}`);
   }
-  if ((options?.socialContext?.relatedContactsById.size ?? 0) > 0) {
-    sections.push(renderSocialContext(options.socialContext!));
+  const socialContext = options?.socialContext;
+  if (socialContext && socialContext.relatedContactsById.size > 0) {
+    sections.push(renderSocialContext(socialContext));
   }
   if (options?.emotionalSnapshot) {
     sections.push(renderEmotionalSnapshot(options.emotionalSnapshot));

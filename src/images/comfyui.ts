@@ -298,9 +298,10 @@ export class ComfyUiImageClient {
   ): Promise<UploadedComfyImage> {
     const asset = await this.downloadImage(url, fallbackBaseName);
     const formData = new FormData();
+    const uploadBytes = new Uint8Array(asset.bytes);
     formData.append(
       'image',
-      new Blob([asset.bytes], { type: asset.contentType }),
+      new Blob([uploadBytes], { type: asset.contentType }),
       asset.fileName,
     );
     formData.append('type', 'input');

@@ -150,7 +150,7 @@ async function fetchImageContentDirect(
 
 export class DefaultImageVisionReviewer implements ImageVisionReviewer {
   private readonly fetchImpl: typeof fetch;
-  private readonly completeImpl: ImageVisionReviewerOptions['completeImpl'];
+  private readonly completeImpl: NonNullable<ImageVisionReviewerOptions['completeImpl']>;
 
   constructor(
     private readonly config: SubstrateConfig,

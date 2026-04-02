@@ -1,4 +1,4 @@
-import { SUBAGENT_WORKER_LANE } from '../agent/worker-lanes.js';
+import { SUBAGENT_WORKER_LANE } from '../../core/agent/worker-lanes.js';
 import type { SubagentTaskLifecycleState, SubagentTaskRecord } from './types.js';
 
 const DEFAULT_COMPLETED_TASK_LIMIT = 25;

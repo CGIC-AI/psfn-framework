@@ -1,6 +1,6 @@
-import type { GatewayClient } from '../gateway/client.js';
+import type { GatewayClient } from '../../gateway/client.js';
 import type { ShellOperations, ShellExecOptions } from './ops.js';
-import type { ShellExecResult } from '../gateway/protocol.js';
+import type { ShellExecResult } from '../../gateway/protocol.js';
 
 export class GatewayShellOps implements ShellOperations {
   constructor(private readonly gateway: GatewayClient) {}

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendJson } from '../http/primitives.js';
-import { VALID_MEMORY_TYPES, type MemoryType } from '../../memory/types.js';
-import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../trust/types.js';
+import { sendJson } from '../../channels/backplane/http/primitives.js';
+import { VALID_MEMORY_TYPES, type MemoryType } from '../../faculties/memory/types.js';
+import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../system/trust/types.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl } from './request-url.js';
 import {
@@ -148,12 +148,18 @@ export function buildAdminMemoryRoutes(options: {
         const separator = scopeKey.indexOf(':');
         const kind = separator >= 0 ? scopeKey.slice(0, separator) : '';
         const id = separator >= 0 ? scopeKey.slice(separator + 1) : '';
-        const detail = memoryService.getManagedScopeDetail(kind, id);
-        if (!detail) {
-          sendJson(res, 404, { error: 'Managed memory scope not found' });
-          return;
-        }
-        sendJson(res, 200, detail);
+        memoryService.getManagedScopeDetail(kind, id).then(
+          (detail) => {
+            if (!detail) {
+              sendJson(res, 404, { error: 'Managed memory scope not found' });
+              return;
+            }
+            sendJson(res, 200, detail);
+          },
+          (error) => {
+            sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+          },
+        );
       },
     },
     {
@@ -373,12 +379,18 @@ export function buildAdminMemoryRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
       handle: (_req, res, { id }) => {
-        const detail = memoryService.getMemoryDetail(id);
-        if (!detail) {
-          sendJson(res, 404, { error: 'Memory not found' });
-          return;
-        }
-        sendJson(res, 200, detail);
+        memoryService.getMemoryDetail(id).then(
+          (detail) => {
+            if (!detail) {
+              sendJson(res, 404, { error: 'Memory not found' });
+              return;
+            }
+            sendJson(res, 200, detail);
+          },
+          (error) => {
+            sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+          },
+        );
       },
     },
     {

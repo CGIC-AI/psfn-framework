@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GatewayClient } from '../gateway/client.js';
+import type { GatewayClient } from '../../gateway/client.js';
 import { GatewayShellOps } from './gateway-ops.js';
 import { registerShellTools, type ShellRuntimeTarget } from './runtime-wiring.js';
 

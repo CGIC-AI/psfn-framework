@@ -2,8 +2,8 @@ import { glob as fsGlob, open, readFile, writeFile } from 'node:fs/promises';
 import {
   normalizeWorkspaceRelativeGlob,
   resolveWorkspaceFsPathFromRoot,
-} from '../gateway/filesystem-paths.js';
-import { isInsideAllowedPaths } from '../gateway/policy.js';
+} from '../../gateway/filesystem-paths.js';
+import { isInsideAllowedPaths } from '../../gateway/policy.js';
 import type {
   FilesystemEditOptions,
   FilesystemEditResult,

@@ -1,8 +1,8 @@
-import { ArtifactLifecycleManager } from '../../../artifact-lifecycle/manager.js';
-import { loadSchedulerConfig } from '../../../config/scheduler-config.js';
-import type { MemoryStorePort } from '../../../memory/memory-store-port.js';
-import { ResearchLibraryStore } from '../../../research-library/store.js';
-import type { SubstrateConfig } from '../../../types.js';
+import { ArtifactLifecycleManager } from '../../../persistence/artifact-lifecycle/manager.js';
+import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import { ResearchLibraryStore } from '../../../faculties/memory/research-library/store.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type {
   AdminArtifactLifecycleService,
 } from './types.js';

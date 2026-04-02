@@ -4,9 +4,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, utimesSync, 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import * as sqliteVec from 'sqlite-vec';
-import { MemoryStore } from '../memory/store.js';
-import { resolveArtifactLifecycleAuditPath, resolveManagedWorkspaceTempDir } from '../persistence/layout.js';
-import { ResearchLibraryStore } from '../research-library/store.js';
+import { MemoryStore } from '../../faculties/memory/store.js';
+import { resolveArtifactLifecycleAuditPath, resolveManagedWorkspaceTempDir } from '../layout.js';
+import { ResearchLibraryStore } from '../../faculties/memory/research-library/store.js';
 import { ArtifactLifecycleManager } from './manager.js';
 
 describe('ArtifactLifecycleManager', () => {
@@ -34,7 +34,7 @@ describe('ArtifactLifecycleManager', () => {
     rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('cleans stale scratchpad and managed temporary artifacts while skipping promoted files', () => {
+  it('cleans stale scratchpad and managed temporary artifacts while skipping promoted files', async () => {
     const now = Date.UTC(2026, 3, 1, 12, 0, 0);
     const staleScratchpadTime = now - (20 * 24 * 60 * 60 * 1000);
     memoryStore.addScratchpadEntry('stale note', { id: 'sp-stale', now: staleScratchpadTime });
@@ -84,7 +84,7 @@ describe('ArtifactLifecycleManager', () => {
     expect(status.generatedMedia.promotedExemptionCount).toBe(1);
     expect(status.workspaceTemp?.stalePreview.map(entry => entry.relativePath)).toEqual(['old.txt']);
 
-    const result = manager.runCleanup(now);
+    const result = await manager.runCleanup(now);
     expect(result.deletedScratchpadEntryIds).toEqual(['sp-stale']);
     expect(result.deletedGeneratedMediaPaths).toEqual([staleGenerated]);
     expect(result.deletedWorkspaceTempPaths).toEqual([staleWorkspace]);

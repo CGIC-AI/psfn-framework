@@ -1,6 +1,7 @@
-import type { SubagentWorkerLane } from '../agent/worker-lanes.js';
-import type { SessionEntry } from '../session/types.js';
-import type { GatewayRoutingEnvelope, SubstrateMessage, WyomingRoutingMetadata } from '../types.js';
+import type { SubagentWorkerLane } from '../../core/agent/worker-lanes.js';
+import type { SessionEntry } from '../../core/session/types.js';
+import type { SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
+import type { GatewayRoutingEnvelope } from '../../shared/routing/envelope.js';
 
 export type SubagentTaskLifecycleState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 

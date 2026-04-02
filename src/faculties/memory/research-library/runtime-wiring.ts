@@ -1,5 +1,5 @@
-import type { ToolRegistrar } from '../agent/tool-registrar.js';
-import type { MemoryStorePort } from '../memory/memory-store-port.js';
+import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
+import type { MemoryStorePort } from '../memory-store-port.js';
 import { ResearchLibraryStore } from './store.js';
 import { createResearchLibraryTool } from './tools.js';
 

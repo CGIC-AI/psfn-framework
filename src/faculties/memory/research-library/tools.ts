@@ -1,9 +1,9 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { MemoryStorePort } from '../memory/memory-store-port.js';
-import { withCapabilityRequirement } from '../capabilities/requirements.js';
-import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import type { MemoryStorePort } from '../memory-store-port.js';
+import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
+import { textResult, textResultWithError } from '../../../core/tools/results.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { ResearchLibraryStore } from './store.js';
 
 type ResearchLibraryAction = 'list' | 'read' | 'import_text' | 'import_file' | 'promote_scratchpad';
@@ -137,7 +137,7 @@ export function createResearchLibraryTool(
           }
           case 'promote_scratchpad': {
             const scratchpadId = requireTrimmed(params.scratchpadId, 'scratchpadId');
-            const entry = memoryStore.getScratchpadEntry(scratchpadId);
+            const entry = await memoryStore.getScratchpadEntry(scratchpadId);
             if (!entry) {
               throw new Error(`Scratchpad entry not found: ${scratchpadId}`);
             }

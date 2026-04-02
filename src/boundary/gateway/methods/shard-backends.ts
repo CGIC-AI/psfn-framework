@@ -7,7 +7,7 @@ import type {
 import { GatewayErrors } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
-import { normalizeCapabilityTier } from '../../capabilities/tiers.js';
+import { normalizeCapabilityTier } from '../../../system/capabilities/tiers.js';
 
 const AUTONOMOUS_SHARD_BACKEND_TIERS = new Set(['autonomous', 'custom']);
 

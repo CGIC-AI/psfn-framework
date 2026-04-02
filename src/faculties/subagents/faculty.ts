@@ -2,28 +2,33 @@ import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type {
   CapabilityTier,
-  GatewayRoutingEnvelope,
   ShardToolsetConfig,
-  ShardLineage,
   SubstrateConfig,
-  SubstrateMessage,
-  WyomingRoutingMetadata,
-} from '../types.js';
-import type { EventBus } from '../event-bus.js';
-import type { EmbeddingService, LLMProvider, MemoryProvider } from '../agent/contracts.js';
-import { SubstrateAgent } from '../agent/substrate-agent.js';
+} from '../../system/config/runtime-config-contracts.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import type {
+  EmbeddingProviderPort as EmbeddingService,
+  LLMProviderPort as LLMProvider,
+  MemoryProvider,
+} from '../../core/agent/contracts.js';
+import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import {
   SUBAGENT_WORKER_LANE,
   createWorkerExecutionPolicy,
-} from '../agent/worker-lanes.js';
-import type { RuntimeMode } from '../agent/tool-wiring-validator.js';
-import { normalizeCapabilityTier } from '../capabilities/tiers.js';
-import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
-import { createGatewayRoutingEnvelope } from '../routing/envelope.js';
-import type { SessionStore } from '../session/store.js';
-import { SessionManager } from '../session/manager.js';
-import { inferSessionChannelType } from '../session/session-id.js';
-import { toErrorMessage } from '../utils/errors.js';
+} from '../../core/agent/worker-lanes.js';
+import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
+import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
+import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
+import {
+  createGatewayRoutingEnvelope,
+  type GatewayRoutingEnvelope,
+  type ShardLineage,
+} from '../../shared/routing/envelope.js';
+import type { SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
+import type { SessionStore } from '../../persistence/sessions/store.js';
+import { SessionManager } from '../../core/session/manager.js';
+import { inferSessionChannelType } from '../../core/session/session-id.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type {

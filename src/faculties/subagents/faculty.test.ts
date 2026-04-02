@@ -3,17 +3,17 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Agent } from '@mariozechner/pi-agent-core';
-import { EventBus } from '../event-bus.js';
-import { SessionStore } from '../session/store.js';
-import type { LLMProvider } from '../agent/contracts.js';
-import { SUBAGENT_WORKER_LANE } from '../agent/worker-lanes.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { SessionStore } from '../../persistence/sessions/store.js';
+import type { LLMProviderPort as LLMProvider } from '../../core/agent/contracts.js';
+import { SUBAGENT_WORKER_LANE } from '../../core/agent/worker-lanes.js';
 import type {
   CanonicalModelRegistry,
   LLMResponse,
   ModelRegistryEntry,
   ModelSlot,
-  SubstrateConfig,
-} from '../types.js';
+} from '../../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { SubagentFaculty } from './faculty.js';
 
 let mockSubagentContent = 'subagent response';

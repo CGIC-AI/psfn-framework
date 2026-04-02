@@ -2,12 +2,22 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
 import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
-import { resolveToolRequiredCapabilities } from '../../../system/capabilities/requirements.js';
-import type { CorrelationMetadata, SubstrateMessage } from '../../../shared/contracts/runtime.js';
-import { textResultWithError } from '../../tools/results.js';
+import {
+  resolveToolRequiredCapabilities,
+  withCapabilityRequirement,
+} from '../../../system/capabilities/requirements.js';
+import { buildAutonomousActionMemoryContext } from '../../../faculties/memory/types.js';
+import type { MemoryWriter } from '../../../faculties/memory/writer.js';
+import type {
+  CorrelationMetadata,
+  SubstrateMessage,
+} from '../../../shared/contracts/runtime.js';
+import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type {
   AdaptiveToolActivationSource,
   AdaptiveToolDecisionTelemetry,
+  AdaptiveToolRuntimeState,
   AdaptiveToolSnapshotSkip,
 } from '../adaptive-tools-telemetry.js';
 import {
@@ -21,6 +31,7 @@ import {
   type ExtendedToolAutoloadPolicy,
   type ExtendedToolTurnClass,
 } from '../extended-tool-autoload-policy.js';
+import type { PromotedToolMutationResult } from './tool-orchestration-runtime.js';
 
 export interface ExtendedToolActivationResult {
   requestedTools: string[];
@@ -41,6 +52,16 @@ export interface AutoloadTurnOutcome {
   skipped: AdaptiveToolSnapshotSkip[];
 }
 
+export interface ToolSearchResultEntry {
+  name: string;
+  description: string;
+  scope: 'extended';
+  turnClass: ExtendedToolTurnClass;
+  status: 'active' | 'available' | 'background_only';
+  healthStatus?: RuntimeServiceHealthStatus;
+  activationHint: string;
+}
+
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;
 
 interface ActivateExtendedToolsParams {
@@ -57,6 +78,94 @@ interface ActivateExtendedToolsParams {
     purpose: string,
   ) => Partial<CorrelationMetadata>;
   applyActiveToolsToAgent: () => void;
+}
+
+function normalizeToolSearchQuery(query: unknown): string {
+  return typeof query === 'string' ? query.trim().toLowerCase() : '';
+}
+
+function scoreToolSearchMatch(
+  tool: AgentTool<any>,
+  query: string,
+): number {
+  if (!query) return 0;
+
+  const name = tool.name.toLowerCase();
+  const description = tool.description.toLowerCase();
+  const tokens = query.split(/\s+/).filter(Boolean);
+
+  if (name === query) return 100;
+  if (name.startsWith(query)) return 90;
+  if (name.includes(query)) return 80;
+  if (description.includes(query)) return 70;
+
+  let tokenScore = 0;
+  for (const token of tokens) {
+    if (name.includes(token)) {
+      tokenScore = Math.max(tokenScore, 60);
+    }
+    if (description.includes(token)) {
+      tokenScore = Math.max(tokenScore, 50);
+    }
+  }
+
+  return tokenScore;
+}
+
+function resolveToolSearchStatus(
+  toolName: string,
+  runtimeState: AdaptiveToolRuntimeState,
+  turnClass: ExtendedToolTurnClass,
+): ToolSearchResultEntry['status'] {
+  if (runtimeState.activeTools.some(tool => tool.toolName === toolName)) {
+    return 'active';
+  }
+  if (turnClass !== 'overlay') {
+    return 'background_only';
+  }
+  return 'available';
+}
+
+function buildToolSearchActivationHint(status: ToolSearchResultEntry['status']): string {
+  if (status === 'active') {
+    return 'Already active in the current runtime.';
+  }
+  if (status === 'background_only') {
+    return 'Discoverable, but not callable in-turn.';
+  }
+  return 'Use toolset with action="activate" to activate this tool when you need it.';
+}
+
+export function resolveToolHealthMarker(
+  status: RuntimeServiceHealthStatus | undefined,
+): 'o' | '!' | 'x' | null {
+  switch (status) {
+    case 'healthy':
+      return 'o';
+    case 'degraded':
+      return '!';
+    case 'unavailable':
+    case 'not_applicable':
+      return 'x';
+    default:
+      return null;
+  }
+}
+
+export function formatToolNameWithHealth(
+  name: string,
+  status: RuntimeServiceHealthStatus | undefined,
+): string {
+  const marker = resolveToolHealthMarker(status);
+  return marker ? `${name} (${marker})` : name;
+}
+
+export function formatToolHealthLegend(): string {
+  return 'Health markers: o=healthy, !=degraded, x=unavailable.';
+}
+
+function formatToolSearchLine(entry: ToolSearchResultEntry): string {
+  return `- ${formatToolNameWithHealth(entry.name, entry.healthStatus)} [${entry.status}, ${entry.turnClass}] - ${entry.description} ${entry.activationHint}`;
 }
 
 export function activateExtendedToolsForTurn(params: ActivateExtendedToolsParams): ExtendedToolActivationResult {
@@ -113,12 +222,23 @@ export function activateExtendedToolsForTurn(params: ActivateExtendedToolsParams
   };
 }
 
-interface LoadToolsToolRuntime {
+type ToolsetAction = 'list' | 'activate' | 'pin' | 'unpin';
+
+interface ToolsetToolRuntime {
   getExtendedTools: () => readonly AgentTool<any>[];
   getExtendedToolAutoloadPolicy: () => ExtendedToolAutoloadPolicy | null;
+  getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
   getActiveTurnCorrelation: () => CorrelationMetadata | null;
   getActiveTurnTaskKind: () => string | null;
   getActiveTurnIntent: () => string | null;
+  getPromotedExtendedToolsLimit: () => number;
+  getPromotedExtendedTools: () => readonly string[];
+  setPromotedExtendedTools: (next: readonly string[]) => string[];
+  persistPromotedExtendedTools: (next: readonly string[]) => string | null;
+  addPromotedExtendedTool: (toolName: string) => PromotedToolMutationResult;
+  removePromotedExtendedTool: (toolName: string) => PromotedToolMutationResult;
+  getMemoryWriter?: () => Pick<MemoryWriter, 'write'> | undefined;
+  applyActiveToolsToAgent: () => void;
   activateExtendedTools: (
     toolNames: readonly string[],
     options?: ExtendedToolActivationOptions,
@@ -132,13 +252,310 @@ interface LoadToolsToolRuntime {
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
 }
 
-export function createLoadToolsTool(runtime: LoadToolsToolRuntime): AgentTool<any> {
+function toolsetResult(
+  payload: Record<string, unknown>,
+  options: {
+    isError?: boolean;
+    deferredToolHandoff?: DeferredToolHandoffIntent;
+  } = {},
+): AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }> {
   return {
-    name: 'load_tools',
-    label: 'load_tools',
-    description: 'Load extended tool schemas by name. Call with tool names from the tool directory in your runtime context.',
+    content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+    details: {
+      isError: options.isError || undefined,
+      ...(options.deferredToolHandoff ? { deferredToolHandoff: options.deferredToolHandoff } : {}),
+    },
+  };
+}
+
+function formatPinnedToolList(toolNames: readonly string[]): string {
+  if (toolNames.length === 0) return 'none';
+  return toolNames.map(name => `"${name}"`).join(', ');
+}
+
+function buildToolsetPinMutationSummary(input: {
+  action: 'pin' | 'unpin';
+  toolName: string;
+  after: readonly string[];
+  reason?: string;
+}): string {
+  const actionText = input.action === 'pin'
+    ? `Pinned extended tool "${input.toolName}".`
+    : `Unpinned extended tool "${input.toolName}".`;
+  const reasonText = input.reason?.trim()
+    ? ` Reason: ${input.reason.trim()}.`
+    : '';
+  return `${actionText} Pinned tools now: ${formatPinnedToolList(input.after)}.${reasonText}`;
+}
+
+async function recordToolsetPinMutationMemory(input: {
+  memoryWriter: Pick<MemoryWriter, 'write'>;
+  action: 'pin' | 'unpin';
+  toolName: string;
+  before: readonly string[];
+  after: readonly string[];
+  reason?: string;
+}): Promise<void> {
+  const provenance = buildAutonomousActionMemoryContext({
+    toolName: 'toolset',
+    action: input.action,
+    reason: input.reason,
+    timestampMs: Date.now(),
+  });
+  await input.memoryWriter.write({
+    text: buildToolsetPinMutationSummary({
+      action: input.action,
+      toolName: input.toolName,
+      after: input.after,
+      reason: input.reason,
+    }),
+    type: 'episodic',
+    importance: 0.82,
+    salience: 0.8,
+    confidence: 0.9,
+    emotionalValence: 0,
+    retentionClass: 'durable',
+    tags: [...provenance.tags, 'toolset', 'promoted_tools'],
+    sourceRef: provenance.sourceRef,
+    provenanceRefs: provenance.provenanceRefs,
+    scopeRef: provenance.scopeRef,
+    scopeTags: [...provenance.scopeTags, 'toolset', 'promoted_tools'],
+  });
+}
+
+function normalizeToolsetAction(action: unknown): ToolsetAction | null {
+  if (typeof action !== 'string') return null;
+  const normalized = action.trim().toLowerCase();
+  if (normalized === 'list' || normalized === 'activate' || normalized === 'pin' || normalized === 'unpin') {
+    return normalized;
+  }
+  return null;
+}
+
+function toolsetCapabilityRequirement(params: Record<string, unknown>): CapabilityToken | null {
+  const action = normalizeToolsetAction(params.action);
+  if (action === 'list') return 'identity.read';
+  if (action === 'pin' || action === 'unpin') return 'identity.write.runtime';
+  return null;
+}
+
+async function maybeRecordToolsetMutationMemory(input: {
+  runtime: ToolsetToolRuntime;
+  action: 'pin' | 'unpin';
+  toolName: string;
+  before: readonly string[];
+  after: readonly string[];
+  reason?: string;
+}): Promise<string | null> {
+  const memoryWriter = input.runtime.getMemoryWriter?.();
+  if (!memoryWriter) return null;
+  try {
+    await recordToolsetPinMutationMemory({
+      memoryWriter,
+      action: input.action,
+      toolName: input.toolName,
+      before: input.before,
+      after: input.after,
+      reason: input.reason,
+    });
+    return null;
+  } catch (error) {
+    const rollbackError = input.runtime.persistPromotedExtendedTools(input.before);
+    input.runtime.setPromotedExtendedTools(input.before);
+    input.runtime.applyActiveToolsToAgent();
+    return `Failed to persist autonomous-action memory for toolset ${input.action}; rolled back change. ${toErrorMessage(error)}`
+      + (rollbackError ? ` Rollback persistence failed: ${rollbackError}` : '');
+  }
+}
+
+function createToolsetListPayload(runtime: ToolsetToolRuntime): Record<string, unknown> {
+  const state = runtime.getAdaptiveToolRuntimeState();
+  return {
+    action: 'list',
+    maxPinnedTools: runtime.getPromotedExtendedToolsLimit(),
+    pinnedTools: [...state.promotedToolsConfigured],
+    activePinnedTools: [...state.promotedToolsActive],
+    activeTools: state.activeTools.map(entry => ({ ...entry })),
+    loadedTools: state.loadedExtendedTools.map(entry => ({ ...entry })),
+    availableExtendedTools: [...state.extendedTools],
+    nextStep: 'Use tool_search to discover non-default tools, then use toolset action="activate" for this runtime or action="pin"/"unpin" across turns.',
+  };
+}
+
+async function executeToolsetActivateAction(
+  runtime: ToolsetToolRuntime,
+  executeParams: {
+    tools?: string[];
+    intendedAction?: string;
+    deferUntilTurnBoundary?: boolean;
+    maxRetries?: number;
+  },
+): Promise<AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }>> {
+  const requestedTools = normalizeToolNameList(executeParams.tools ?? []);
+  if (requestedTools.length === 0) {
+    return toolsetResult({
+      action: 'activate',
+      message: 'Provide at least one extended tool name in "tools".',
+    }, { isError: true });
+  }
+  const policy = runtime.getExtendedToolAutoloadPolicy();
+  const maxPreloadCount = policy?.maxPreloadCount;
+  const sameTurnMax = typeof maxPreloadCount === 'number' && Number.isFinite(maxPreloadCount)
+    ? Math.max(0, Math.floor(maxPreloadCount))
+    : DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX;
+  const sameTurnSelection = selectBoundedOverlayCandidates(
+    requestedTools,
+    runtime.getExtendedTools().map(tool => tool.name),
+    sameTurnMax,
+  );
+  const overlayEligible = sameTurnSelection.selected;
+  const backgroundOnlySkipped = sameTurnSelection.skipped
+    .filter(entry => entry.reason === 'not_overlay_eligible')
+    .map(entry => entry.toolName);
+  const budgetSkipped = sameTurnSelection.skipped
+    .filter(entry => entry.reason === 'budget_exhausted')
+    .map(entry => entry.toolName);
+  const unavailableSkipped = sameTurnSelection.skipped
+    .filter(entry => entry.reason === 'not_registered')
+    .map(entry => entry.toolName);
+  const invalidSkipped = sameTurnSelection.skipped
+    .filter(entry => entry.reason === 'invalid_metadata')
+    .map(entry => entry.toolName);
+  const duplicateSkipped = sameTurnSelection.skipped
+    .filter(entry => entry.reason === 'duplicate_candidate')
+    .map(entry => entry.toolName);
+
+  for (const entry of sameTurnSelection.skipped) {
+    const reason = entry.reason === 'not_overlay_eligible'
+      ? 'background_only'
+      : entry.reason;
+    runtime.emitAdaptiveToolDecision({
+      ...runtime.withAdaptiveCorrelation(runtime.getActiveTurnCorrelation() ?? undefined, 'agent.tools.adaptive.decision'),
+      toolName: entry.toolName,
+      source: 'extended_loaded',
+      decision: 'skipped',
+      reason,
+      taskKind: runtime.getActiveTurnTaskKind(),
+      intent: runtime.getActiveTurnIntent(),
+    });
+  }
+
+  const activation = runtime.activateExtendedTools(overlayEligible, {
+    source: 'extended_loaded',
+    correlation: runtime.getActiveTurnCorrelation() ?? undefined,
+    taskKind: runtime.getActiveTurnTaskKind(),
+    intent: runtime.getActiveTurnIntent(),
+  });
+  const activatedCount = activation.activatedTools.length + activation.alreadyActiveTools.length;
+  if (activatedCount > 0 || sameTurnSelection.skipped.length > 0 || activation.missingTools.length > 0) {
+    const handoffTools = [...new Set([
+      ...activation.activatedTools,
+      ...activation.alreadyActiveTools,
+      ...backgroundOnlySkipped,
+      ...budgetSkipped,
+    ])];
+    const activeCorrelation = runtime.getActiveTurnCorrelation();
+    const deferredSessionId = activeCorrelation?.channelId
+      ? runtime.resolveSessionChannelId(activeCorrelation.channelId)
+      : undefined;
+    const deferredToolHandoff = executeParams.deferUntilTurnBoundary
+      ? normalizeDeferredToolHandoffIntent({
+        toolNames: handoffTools,
+        intendedAction: executeParams.intendedAction,
+        maxRetries: executeParams.maxRetries,
+        ...(deferredSessionId ? { sessionId: deferredSessionId } : {}),
+      })
+      : null;
+    let deferredContinuationStatus = 'not_requested';
+    if (deferredToolHandoff) {
+      deferredContinuationStatus = 'queued';
+      for (const toolName of deferredToolHandoff.toolNames) {
+        runtime.emitAdaptiveToolDecision({
+          ...runtime.withAdaptiveCorrelation(undefined, 'agent.tools.adaptive.decision'),
+          toolName,
+          source: 'deferred',
+          decision: 'queued',
+          reason: 'defer_until_turn_boundary',
+        });
+      }
+    } else if (executeParams.deferUntilTurnBoundary) {
+      deferredContinuationStatus = 'skipped_missing_intended_action';
+      for (const toolName of handoffTools) {
+        runtime.emitAdaptiveToolDecision({
+          ...runtime.withAdaptiveCorrelation(undefined, 'agent.tools.adaptive.decision'),
+          toolName,
+          source: 'deferred',
+          decision: 'skipped',
+          reason: 'missing_intended_action',
+        });
+      }
+    }
+
+    runtime.emitTelemetry('agent.tools.same_turn_activation', {
+      ...runtime.withAdaptiveCorrelation(runtime.getActiveTurnCorrelation() ?? undefined, 'agent.tools.same_turn_activation'),
+      timestamp: Date.now(),
+      requestedTools,
+      overlayEligible,
+      activatedTools: activation.activatedTools,
+      alreadyActiveTools: activation.alreadyActiveTools,
+      missingTools: activation.missingTools,
+      skippedBackgroundOnly: backgroundOnlySkipped,
+      skippedBudget: budgetSkipped,
+      skippedUnavailable: unavailableSkipped,
+      skippedInvalid: invalidSkipped,
+      skippedDuplicate: duplicateSkipped,
+      sameTurnOverlaySelection: sameTurnSelection,
+      taskKind: runtime.getActiveTurnTaskKind(),
+      intent: runtime.getActiveTurnIntent(),
+    });
+
+    return toolsetResult({
+      action: 'activate',
+      requestedTools,
+      activatedTools: activation.activatedTools,
+      alreadyActiveTools: activation.alreadyActiveTools,
+      missingTools: activation.missingTools,
+      unavailableTools: unavailableSkipped,
+      backgroundOnlyTools: backgroundOnlySkipped,
+      skippedBySameTurnBudget: budgetSkipped,
+      ignoredInvalidToolNames: invalidSkipped,
+      ignoredDuplicateToolNames: duplicateSkipped,
+      deferredContinuationStatus,
+      nextStep: 'Use toolset action="pin" if an overlay tool should stay active across turns.',
+    }, {
+      deferredToolHandoff: deferredToolHandoff ?? undefined,
+    });
+  }
+  return toolsetResult({
+    action: 'activate',
+    message: `No matching tools found. Available: ${runtime.getExtendedTools().map(t => t.name).join(', ')}`,
+  }, { isError: true });
+}
+
+export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
+  return withCapabilityRequirement({
+    name: 'toolset',
+    label: 'toolset',
+    description:
+      'List active non-default tools, activate overlay tools for the current runtime, and pin or unpin eligible tools across turns.',
     parameters: Type.Object({
-      tools: Type.Array(Type.String(), { description: 'Names of extended tools to load' }),
+      action: Type.Union([
+        Type.Literal('list'),
+        Type.Literal('activate'),
+        Type.Literal('pin'),
+        Type.Literal('unpin'),
+      ], {
+        description: 'Control action: list, activate, pin, or unpin.',
+      }),
+      tool: Type.Optional(Type.String({
+        description: 'Single tool name for pin or unpin actions.',
+      })),
+      tools: Type.Optional(Type.Array(Type.String(), {
+        description: 'Tool names to activate for the current runtime.',
+      })),
+      reason: Type.Optional(Type.String({
+        description: 'Optional reason for pin or unpin actions.',
+      })),
       intendedAction: Type.Optional(
         Type.String({
           description:
@@ -148,7 +565,7 @@ export function createLoadToolsTool(runtime: LoadToolsToolRuntime): AgentTool<an
       deferUntilTurnBoundary: Type.Optional(
         Type.Boolean({
           description:
-            'Set true when this tool load was discovered late and the intended action should continue post-reply.',
+            'Set true when activation was discovered late and the intended action should continue post-reply.',
         }),
       ),
       maxRetries: Type.Optional(
@@ -162,169 +579,200 @@ export function createLoadToolsTool(runtime: LoadToolsToolRuntime): AgentTool<an
     execute: async (
       _toolCallId: string,
       executeParams: {
-        tools: string[];
+        action: ToolsetAction;
+        tool?: string;
+        tools?: string[];
+        reason?: string;
         intendedAction?: string;
         deferUntilTurnBoundary?: boolean;
         maxRetries?: number;
       },
     ): Promise<AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }>> => {
-      const requestedTools = normalizeToolNameList(executeParams.tools);
-      const policy = runtime.getExtendedToolAutoloadPolicy();
-      const maxPreloadCount = policy?.maxPreloadCount;
-      const sameTurnMax = typeof maxPreloadCount === 'number' && Number.isFinite(maxPreloadCount)
-        ? Math.max(0, Math.floor(maxPreloadCount))
-        : DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX;
-      const sameTurnSelection = selectBoundedOverlayCandidates(
-        requestedTools,
-        runtime.getExtendedTools().map(tool => tool.name),
-        sameTurnMax,
-      );
-      const overlayEligible = sameTurnSelection.selected;
-      const backgroundOnlySkipped = sameTurnSelection.skipped
-        .filter(entry => entry.reason === 'not_overlay_eligible')
-        .map(entry => entry.toolName);
-      const budgetSkipped = sameTurnSelection.skipped
-        .filter(entry => entry.reason === 'budget_exhausted')
-        .map(entry => entry.toolName);
-      const unavailableSkipped = sameTurnSelection.skipped
-        .filter(entry => entry.reason === 'not_registered')
-        .map(entry => entry.toolName);
-      const invalidSkipped = sameTurnSelection.skipped
-        .filter(entry => entry.reason === 'invalid_metadata')
-        .map(entry => entry.toolName);
-      const duplicateSkipped = sameTurnSelection.skipped
-        .filter(entry => entry.reason === 'duplicate_candidate')
-        .map(entry => entry.toolName);
-
-      for (const entry of sameTurnSelection.skipped) {
-        const reason = entry.reason === 'not_overlay_eligible'
-          ? 'background_only'
-          : entry.reason;
-        runtime.emitAdaptiveToolDecision({
-          ...runtime.withAdaptiveCorrelation(runtime.getActiveTurnCorrelation() ?? undefined, 'agent.tools.adaptive.decision'),
-          toolName: entry.toolName,
-          source: 'extended_loaded',
-          decision: 'skipped',
-          reason,
-          taskKind: runtime.getActiveTurnTaskKind(),
-          intent: runtime.getActiveTurnIntent(),
-        });
+      const action = normalizeToolsetAction(executeParams.action);
+      if (!action) {
+        return toolsetResult({
+          action: executeParams.action,
+          message: 'Unknown toolset action. Use list, activate, pin, or unpin.',
+        }, { isError: true });
       }
 
-      const activation = runtime.activateExtendedTools(overlayEligible, {
-        source: 'extended_loaded',
-        correlation: runtime.getActiveTurnCorrelation() ?? undefined,
-        taskKind: runtime.getActiveTurnTaskKind(),
-        intent: runtime.getActiveTurnIntent(),
+      if (action === 'list') {
+        return toolsetResult(createToolsetListPayload(runtime));
+      }
+
+      if (action === 'activate') {
+        return executeToolsetActivateAction(runtime, executeParams);
+      }
+
+      const toolName = typeof executeParams.tool === 'string' ? executeParams.tool.trim() : '';
+      if (!toolName) {
+        return toolsetResult({
+          action,
+          message: `Provide a non-empty "tool" for toolset action "${action}".`,
+        }, { isError: true });
+      }
+
+      const before = [...runtime.getPromotedExtendedTools()];
+      const result = action === 'pin'
+        ? runtime.addPromotedExtendedTool(toolName)
+        : runtime.removePromotedExtendedTool(toolName);
+      if (result.ok && result.changed) {
+        const memoryError = await maybeRecordToolsetMutationMemory({
+          runtime,
+          action,
+          toolName,
+          before,
+          after: result.promotedTools,
+          reason: executeParams.reason,
+        });
+        if (memoryError) {
+          return toolsetResult({
+            action,
+            tool: toolName,
+            message: memoryError,
+            pinnedTools: before,
+          }, { isError: true });
+        }
+      }
+
+      return toolsetResult({
+        action,
+        tool: toolName,
+        ok: result.ok,
+        changed: result.changed,
+        maxPinnedTools: runtime.getPromotedExtendedToolsLimit(),
+        pinnedTools: result.promotedTools,
+        message: result.message,
+        ...(result.errorCode ? { errorCode: result.errorCode } : {}),
+        ...(result.requiredTokens ? { requiredTokens: result.requiredTokens } : {}),
+        ...(result.missingTokens ? { missingTokens: result.missingTokens } : {}),
+      }, {
+        isError: !result.ok,
       });
-      const activatedCount = activation.activatedTools.length + activation.alreadyActiveTools.length;
-      if (activatedCount > 0 || sameTurnSelection.skipped.length > 0 || activation.missingTools.length > 0) {
-        const details: { deferredToolHandoff?: DeferredToolHandoffIntent } = {};
-        const contentLines: string[] = [];
-        if (activation.activatedTools.length > 0) {
-          contentLines.push(
-            `Loaded ${activation.activatedTools.length} tools: ${activation.activatedTools.join(', ')}`,
-          );
-        }
-        if (activation.alreadyActiveTools.length > 0) {
-          contentLines.push(
-            `Already active: ${activation.alreadyActiveTools.join(', ')}`,
-          );
-        }
+    },
+  }, toolsetCapabilityRequirement);
+}
 
-        if (activation.missingTools.length > 0) {
-          contentLines.push(`Missing tools: ${activation.missingTools.join(', ')}`);
-        }
-        if (unavailableSkipped.length > 0) {
-          contentLines.push(`Unavailable tools: ${unavailableSkipped.join(', ')}`);
-        }
-        if (backgroundOnlySkipped.length > 0) {
-          contentLines.push(
-            `Background-only tools not activated in-turn: ${backgroundOnlySkipped.join(', ')}`,
-          );
-        }
-        if (budgetSkipped.length > 0) {
-          contentLines.push(
-            `Skipped by same-turn overlay budget (${sameTurnSelection.maxCount}): ${budgetSkipped.join(', ')}`,
-          );
-        }
-        if (invalidSkipped.length > 0) {
-          contentLines.push(`Ignored invalid tool names: ${invalidSkipped.join(', ')}`);
-        }
-        if (duplicateSkipped.length > 0) {
-          contentLines.push(`Ignored duplicate tool names: ${duplicateSkipped.join(', ')}`);
-        }
+interface SearchToolsToolRuntime {
+  getExtendedTools: () => readonly AgentTool<any>[];
+  getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
+  getToolHealthStatusByName: () => ReadonlyMap<string, RuntimeServiceHealthStatus>;
+  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
+  emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
+}
 
-        const handoffTools = [...new Set([
-          ...activation.activatedTools,
-          ...activation.alreadyActiveTools,
-          ...backgroundOnlySkipped,
-          ...budgetSkipped,
-        ])];
-        const activeCorrelation = runtime.getActiveTurnCorrelation();
-        const deferredSessionId = activeCorrelation?.channelId
-          ? runtime.resolveSessionChannelId(activeCorrelation.channelId)
-          : undefined;
-        const deferredToolHandoff = executeParams.deferUntilTurnBoundary
-          ? normalizeDeferredToolHandoffIntent({
-            toolNames: handoffTools,
-            intendedAction: executeParams.intendedAction,
-            maxRetries: executeParams.maxRetries,
-            ...(deferredSessionId ? { sessionId: deferredSessionId } : {}),
-          })
-          : null;
-        if (deferredToolHandoff) {
-          details.deferredToolHandoff = deferredToolHandoff;
-          contentLines.push('Queued deferred continuation intent for post-turn execution.');
-          for (const toolName of deferredToolHandoff.toolNames) {
-            runtime.emitAdaptiveToolDecision({
-              ...runtime.withAdaptiveCorrelation(undefined, 'agent.tools.adaptive.decision'),
-              toolName,
-              source: 'deferred',
-              decision: 'queued',
-              reason: 'defer_until_turn_boundary',
-            });
+export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool<any> {
+  return {
+    name: 'tool_search',
+    label: 'tool_search',
+    description: 'Search the non-default tool catalog by name or description so you can choose the right tool family before activating it.',
+    parameters: Type.Object({
+      query: Type.Optional(
+        Type.String({
+          description: 'Optional search terms for the non-default tool catalog.',
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Number({
+          description: 'Optional maximum number of results to return.',
+          minimum: 1,
+          maximum: 20,
+        }),
+      ),
+    }),
+    execute: async (
+      _toolCallId: string,
+      executeParams: {
+        query?: string;
+        limit?: number;
+      },
+    ): Promise<AgentToolResult<{ isError?: boolean; toolSearch?: { query: string; totalMatches: number; matches: ToolSearchResultEntry[] } }>> => {
+      const query = normalizeToolSearchQuery(executeParams.query);
+      const maxResults = Number.isFinite(executeParams.limit)
+        ? Math.max(1, Math.min(20, Math.floor(executeParams.limit ?? 0)))
+        : 8;
+      const runtimeState = runtime.getAdaptiveToolRuntimeState();
+      const toolHealthStatusByName = runtime.getToolHealthStatusByName();
+      const extendedTools = [...runtime.getExtendedTools()];
+      const rankedMatches = extendedTools
+        .map((tool) => {
+          const turnClass = runtime.classifyExtendedToolForTurn(tool.name);
+          const status = resolveToolSearchStatus(tool.name, runtimeState, turnClass);
+          const score = scoreToolSearchMatch(tool, query);
+          return {
+            tool,
+            turnClass,
+            status,
+            score,
+          };
+        })
+        .filter((entry) => {
+          if (!query) return true;
+          return entry.score > 0;
+        })
+        .sort((left, right) => {
+          if (right.score !== left.score) return right.score - left.score;
+          if (left.status !== right.status) {
+            const weight: Record<ToolSearchResultEntry['status'], number> = {
+              active: 0,
+              available: 1,
+              background_only: 2,
+            };
+            return weight[left.status] - weight[right.status];
           }
-        } else if (executeParams.deferUntilTurnBoundary) {
-          contentLines.push('Deferred continuation skipped: provide a non-empty intendedAction.');
-          for (const toolName of handoffTools) {
-            runtime.emitAdaptiveToolDecision({
-              ...runtime.withAdaptiveCorrelation(undefined, 'agent.tools.adaptive.decision'),
-              toolName,
-              source: 'deferred',
-              decision: 'skipped',
-              reason: 'missing_intended_action',
-            });
+          if (left.turnClass !== right.turnClass) {
+            return left.turnClass.localeCompare(right.turnClass);
           }
-        }
+          return left.tool.name.localeCompare(right.tool.name);
+        })
+        .slice(0, maxResults)
+        .map((entry) => ({
+          name: entry.tool.name,
+          description: entry.tool.description,
+          scope: 'extended' as const,
+          turnClass: entry.turnClass,
+          status: entry.status,
+          healthStatus: toolHealthStatusByName.get(entry.tool.name),
+          activationHint: buildToolSearchActivationHint(entry.status),
+        }));
 
-        runtime.emitTelemetry('agent.tools.same_turn_activation', {
-          ...runtime.withAdaptiveCorrelation(runtime.getActiveTurnCorrelation() ?? undefined, 'agent.tools.same_turn_activation'),
-          timestamp: Date.now(),
-          requestedTools,
-          overlayEligible,
-          activatedTools: activation.activatedTools,
-          alreadyActiveTools: activation.alreadyActiveTools,
-          missingTools: activation.missingTools,
-          skippedBackgroundOnly: backgroundOnlySkipped,
-          skippedBudget: budgetSkipped,
-          skippedUnavailable: unavailableSkipped,
-          skippedInvalid: invalidSkipped,
-          skippedDuplicate: duplicateSkipped,
-          sameTurnOverlaySelection: sameTurnSelection,
-          taskKind: runtime.getActiveTurnTaskKind(),
-          intent: runtime.getActiveTurnIntent(),
-        });
+      const totalMatches = query
+        ? extendedTools.filter(tool => scoreToolSearchMatch(tool, query) > 0).length
+        : extendedTools.length;
+      const contentLines = [
+        query
+          ? `Tool search results for "${query}" (${rankedMatches.length} of ${totalMatches} extended tools):`
+          : `Tool search results for the non-default tool catalog (${rankedMatches.length} of ${totalMatches} extended tools):`,
+        ...(rankedMatches.length > 0
+          ? rankedMatches.map(formatToolSearchLine)
+          : [query
+            ? `No extended tools matched "${query}". Try broader search terms or omit the query to browse the full non-default catalog.`
+            : 'No extended tools are currently registered.']),
+        'Use tool_search to discover non-default tools, then use toolset to activate or pin overlay tools.',
+      ];
 
-        return {
-          content: [{ type: 'text', text: contentLines.join('\n') }],
-          details,
-        };
-      }
-      return textResultWithError(
-        `No matching tools found. Available: ${runtime.getExtendedTools().map(t => t.name).join(', ')}`,
-        true,
-      );
+      runtime.emitTelemetry('agent.tools.discovery', {
+        timestamp: Date.now(),
+        query: query || null,
+        limit: maxResults,
+        totalMatches,
+        matchedTools: rankedMatches.map(match => ({
+          name: match.name,
+          status: match.status,
+          turnClass: match.turnClass,
+        })),
+      });
+
+      return {
+        content: [{ type: 'text', text: contentLines.join('\n') }],
+        details: {
+          toolSearch: {
+            query,
+            totalMatches,
+            matches: rankedMatches,
+          },
+        },
+      };
     },
   };
 }

@@ -7,17 +7,17 @@ import {
   statSync,
 } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { createComponentLogger } from '../logger.js';
-import type { ArtifactLifecyclePolicyConfig } from '../config/scheduler-config.js';
-import type { ScratchpadEntry } from '../memory/store.js';
-import type { MemoryStorePort } from '../memory/memory-store-port.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import type { ArtifactLifecyclePolicyConfig } from '../../system/config/scheduler-config.js';
+import type { ScratchpadEntry } from '../../faculties/memory/store.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import {
   resolveArtifactLifecycleAuditPath,
   resolveGeneratedImagesDir,
   resolveManagedWorkspaceTempDir,
-} from '../persistence/layout.js';
-import { appendJsonLine } from '../persistence/jsonl.js';
-import { ResearchLibraryStore } from '../research-library/store.js';
+} from '../layout.js';
+import { appendJsonLine } from '../jsonl.js';
+import { ResearchLibraryStore } from '../../faculties/memory/research-library/store.js';
 
 const log = createComponentLogger('ArtifactLifecycleManager');
 const MAX_RECENT_RUNS = 20;
@@ -145,7 +145,7 @@ export class ArtifactLifecycleManager {
     };
   }
 
-  runCleanup(now: number = Date.now()): ArtifactLifecycleCleanupResult {
+  async runCleanup(now: number = Date.now()): Promise<ArtifactLifecycleCleanupResult> {
     const promotedSourcePaths = this.collectPromotedSourcePaths();
     const staleScratchpadEntries = this.collectStaleScratchpadEntries(now);
     const generatedMediaCandidates = this.collectStaleFileCandidates({
@@ -165,7 +165,7 @@ export class ArtifactLifecycleManager {
 
     const deletedScratchpadEntryIds: string[] = [];
     for (const entry of staleScratchpadEntries) {
-      if (this.deps.memoryStore.removeScratchpadEntry(entry.id)) {
+      if (await this.deps.memoryStore.removeScratchpadEntry(entry.id)) {
         deletedScratchpadEntryIds.push(entry.id);
       }
     }

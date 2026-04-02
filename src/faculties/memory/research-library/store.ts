@@ -15,14 +15,14 @@ import {
   relative,
   resolve,
 } from 'node:path';
-import { createComponentLogger } from '../logger.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import {
   resolveGeneratedImagesDir,
   resolveResearchLibraryDir,
   resolveResearchLibraryEntriesDir,
   resolveResearchLibraryEntryDir,
-} from '../persistence/layout.js';
-import { writeJsonAtomic } from '../utils/fs.js';
+} from '../../../persistence/layout.js';
+import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import type {
   ResearchLibraryEntryDetail,
   ResearchLibraryEntryManifest,

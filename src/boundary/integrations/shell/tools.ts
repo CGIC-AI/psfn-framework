@@ -1,10 +1,10 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import { withCapabilityRequirement } from '../capabilities/requirements.js';
-import { tagToolWithReversibility } from '../capabilities/safeguards.js';
+import { withCapabilityRequirement } from '../../../system/capabilities/requirements.js';
+import { tagToolWithReversibility } from '../../../system/capabilities/safeguards.js';
 import type { ShellOperations } from './ops.js';
-import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { textResult, textResultWithError } from '../../../core/tools/results.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 type ShellAction = 'exec';
 

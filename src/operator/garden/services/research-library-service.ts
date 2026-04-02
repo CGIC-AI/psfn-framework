@@ -1,4 +1,4 @@
-import { ResearchLibraryStore } from '../../../research-library/store.js';
+import { ResearchLibraryStore } from '../../../faculties/memory/research-library/store.js';
 import type {
   AdminResearchLibraryData,
   AdminResearchLibraryService,

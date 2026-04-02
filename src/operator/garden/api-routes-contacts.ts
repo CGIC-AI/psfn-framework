@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendJson } from '../http/primitives.js';
+import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl } from './request-url.js';
 import {
@@ -151,12 +151,18 @@ export function buildAdminContactRoutes(options: {
       method: 'GET',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }) => {
-        const detail = contactsService.getContactDetail(id);
-        if (!detail) {
-          sendJson(res, 404, { error: 'Contact not found' });
-          return;
-        }
-        sendJson(res, 200, detail, ADMIN_DYNAMIC_JSON_HEADERS);
+        contactsService.getContactDetail(id).then(
+          (detail) => {
+            if (!detail) {
+              sendJson(res, 404, { error: 'Contact not found' });
+              return;
+            }
+            sendJson(res, 200, detail, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          (error) => {
+            sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+          },
+        );
       },
     },
     {

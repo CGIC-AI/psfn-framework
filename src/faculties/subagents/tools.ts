@@ -1,9 +1,9 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import { withCapabilityRequirement } from '../capabilities/requirements.js';
+import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import type { SubagentControlPort } from './port.js';
-import { textResult, textResultWithError } from '../tools/results.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { textResult, textResultWithError } from '../../core/tools/results.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 type SubagentToolAction = 'spawn' | 'message' | 'wait' | 'cancel' | 'status';
 

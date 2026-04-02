@@ -21,7 +21,7 @@ import {
   editWorkspaceFile,
   readTextFile,
   searchWorkspaceFiles,
-} from '../../filesystem/workspace-ops.js';
+} from '../../integrations/filesystem/workspace-ops.js';
 
 function resolveReadRoot(runtime: GatewayMethodRuntime): string {
   const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);

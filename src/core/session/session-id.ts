@@ -1,4 +1,4 @@
-import { CHANNEL_TYPES, type ChannelType } from '../types.js';
+import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 

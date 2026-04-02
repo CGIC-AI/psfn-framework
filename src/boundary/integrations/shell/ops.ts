@@ -1,4 +1,4 @@
-import type { ShellExecResult } from '../gateway/protocol.js';
+import type { ShellExecResult } from '../../gateway/protocol.js';
 
 export interface ShellExecOptions {
   cwd?: string;

@@ -27,8 +27,8 @@ import type {
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
-import type { ShardManager } from '../../shards/manager.js';
-import type { SubagentFaculty } from '../../subagents/faculty.js';
+import type { ShardManager } from '../../faculties/shards/manager.js';
+import type { SubagentFaculty } from '../../faculties/subagents/faculty.js';
 import type { ConfirmationQueueAdminApi } from './types.js';
 import { GARDEN_PREFIX } from './server-request-routing.js';
 import { sendJson, sendRedirect, sendText } from '../../channels/backplane/http/primitives.js';

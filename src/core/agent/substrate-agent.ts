@@ -378,8 +378,9 @@ export class SubstrateAgent {
     // Persistent event bridge: pi-agent-core events → EventBus
     this.bridge = createEventBridge(this.agent, eventBus);
 
-    // Register the load_tools meta-tool as a core tool
-    this.registerTool(this.toolRuntimeFacade.createLoadToolsTool(), 'core');
+    // Register the core discovery and non-default tool control tools.
+    this.registerTool(this.toolRuntimeFacade.createToolSearchTool(), 'core');
+    this.registerTool(this.toolRuntimeFacade.createToolsetTool(), 'core');
 
     // Eagerly try to resolve the model, but don't throw if it fails
     // (e.g. in tests with fake model names). Deferred to handleMessage if needed.

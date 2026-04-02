@@ -78,6 +78,22 @@ export function createLiteLLMModel(
   });
 }
 
+export function createModel(
+  baseUrl: string,
+  modelId: string,
+  maxTokens?: number,
+  contextWindow?: number,
+): Model<'openai-completions'> {
+  return createOpenAICompatibleEndpointModel({
+    baseUrl,
+    modelId,
+    provider: 'litellm',
+    routeLabel: 'LiteLLM',
+    maxTokens,
+    contextWindow,
+  });
+}
+
 function supportsOpenAIDeveloperRole(model: Model<any>): boolean {
   const provider = model.provider.trim().toLowerCase();
   const baseUrl = typeof model.baseUrl === 'string' ? model.baseUrl.toLowerCase() : '';

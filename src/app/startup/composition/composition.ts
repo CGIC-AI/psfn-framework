@@ -43,11 +43,7 @@ import {
 import { createBoundedSubagentLaunchTool } from '../../../faculties/shards/tools.js';
 import { createThinkTool } from '../../../core/tools/think/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
-import {
-  createCoreMemoryAppendTool,
-  createCoreMemoryReplaceTool,
-  createMemoryRethinkTool,
-} from '../../../faculties/core-memory/tools.js';
+import { createOrientTool } from '../../../faculties/core-memory/tools.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/think/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
@@ -235,9 +231,7 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
     new CoreMemoryStore(resolveCoreMemoryPath(companionDataDir)),
   );
   options.sessionManager.setCoreMemoryProvider(store);
-  options.agentLoop.registerTool(createCoreMemoryAppendTool(store));
-  options.agentLoop.registerTool(createCoreMemoryReplaceTool(store));
-  options.agentLoop.registerTool(createMemoryRethinkTool(store));
+  options.agentLoop.registerTool(createOrientTool(store));
   return store;
 }
 

@@ -21,6 +21,34 @@ export interface ModelRuntimeLogger {
   warn(message: string, payload: Record<string, unknown>): void;
 }
 
+interface WorkerExecutionPolicy {
+  lane: string;
+  profileClass: string;
+  modelPurpose: ModelPurpose;
+  failClosed: boolean;
+}
+
+function normalizeWorkerExecutionPolicy(
+  policy: WorkerExecutionPolicy | undefined,
+): WorkerExecutionPolicy | null {
+  if (!policy) return null;
+  return {
+    lane: policy.lane,
+    profileClass: policy.profileClass,
+    modelPurpose: policy.modelPurpose,
+    failClosed: policy.failClosed === true,
+  };
+}
+
+export function resolveTurnWorkerExecutionPolicy(
+  message?: SubstrateMessage,
+): WorkerExecutionPolicy | null {
+  const routing = message?.routing as (SubstrateMessage['routing'] & {
+    workerExecution?: WorkerExecutionPolicy;
+  }) | undefined;
+  return normalizeWorkerExecutionPolicy(routing?.workerExecution);
+}
+
 export function getModelSignatureForPurpose(
   config: CoreSubstrateConfig,
   purpose: ModelPurpose,
@@ -37,6 +65,10 @@ export function getModelSignatureForPurpose(
 export function resolveTurnModelPurpose(
   message?: SubstrateMessage,
 ): ModelPurpose {
+  const workerExecution = resolveTurnWorkerExecutionPolicy(message);
+  if (workerExecution) {
+    return workerExecution.modelPurpose;
+  }
   const channelId = message?.channelId ?? '';
   if (
     channelId === 'internal:heartbeat'
@@ -67,6 +99,12 @@ export function normalizeTurnModelOverride(
   };
 }
 
+export function requiresFailClosedWorkerModelResolution(
+  message?: SubstrateMessage,
+): boolean {
+  return resolveTurnWorkerExecutionPolicy(message)?.failClosed === true;
+}
+
 export function getTurnModelSignature(
   config: CoreSubstrateConfig,
   message?: SubstrateMessage,
@@ -93,6 +131,7 @@ export function refreshModelFromConfig(
   params: RefreshModelFromConfigParams,
 ): ModelRuntimeState {
   const override = normalizeTurnModelOverride(params.message);
+  const workerExecution = resolveTurnWorkerExecutionPolicy(params.message);
   const purpose = override ? null : resolveTurnModelPurpose(params.message);
   const nextSignature = getTurnModelSignature(params.config, params.message);
 
@@ -117,6 +156,9 @@ export function refreshModelFromConfig(
       reason: params.reason,
       model: resolved.id,
       override: Boolean(override),
+      ...(workerExecution
+        ? { workerLane: workerExecution.lane, workerProfileClass: workerExecution.profileClass }
+        : {}),
       ...(purpose ? { purpose } : {}),
     });
     return {
@@ -125,6 +167,16 @@ export function refreshModelFromConfig(
     };
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
+    if (requiresFailClosedWorkerModelResolution(params.message)) {
+      params.logger.warn('Worker model refresh failed; aborting turn', {
+        reason: params.reason,
+        error: err.message,
+        workerLane: workerExecution?.lane,
+        workerProfileClass: workerExecution?.profileClass,
+        ...(purpose ? { purpose } : {}),
+      });
+      throw err;
+    }
     params.logger.warn('Model refresh failed; keeping previous chat model', {
       reason: params.reason,
       error: err.message,

@@ -359,12 +359,81 @@ describe('AdminPromptsDataService', () => {
     }));
 
     expect(blockedResult.ok).toBe(false);
-    expect(blockedResult.message).toContain('not companion-editable');
+    expect(blockedResult.message).toContain('session.current_messages');
+    expect(blockedResult.message).toContain('provider-managed');
     expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.context')).toBe(
       'Companion runtime context override.',
     );
     expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.persona_adaptation')).toBe(
       'Companion personality override.',
+    );
+  });
+
+  it('fails closed when runtime block save omits a required editable block that would remain empty', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+    );
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const result = service.saveRuntimePromptBlocks(JSON.stringify({
+      blocks: [
+        {
+          id: 'runtime.context',
+          content: 'Companion runtime context override.',
+        },
+      ],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('runtime.persona_adaptation');
+    expect(result.message).toContain('Persona Adaptation');
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.context')).toBe('');
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.persona_adaptation')).toBe('');
+  });
+
+  it('fails closed when clearing a required editable runtime block with blank content', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+    );
+    promptRuntimeLayoutStore.setEditableBlockContents({
+      'runtime.persona_adaptation': 'Companion personality override.',
+      'runtime.context': 'Companion runtime context override.',
+    }, 'admin');
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const result = service.saveRuntimePromptBlocks(JSON.stringify({
+      blocks: [
+        {
+          id: 'runtime.persona_adaptation',
+          content: '   ',
+        },
+      ],
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('runtime.persona_adaptation');
+    expect(result.message).toContain('required and cannot be blank');
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.persona_adaptation')).toBe(
+      'Companion personality override.',
+    );
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.context')).toBe(
+      'Companion runtime context override.',
     );
   });
 

@@ -14,6 +14,7 @@ import {
   orderPromptRuntimeSystemPromptSections,
   PromptRuntimeLayoutStore,
   renderPromptRuntimeTokens,
+  validatePromptRuntimeEditableBlockContents,
 } from './prompt-runtime.js';
 
 let tempDir: string | null = null;
@@ -68,6 +69,26 @@ describe('runtime prompt block schema', () => {
       'constitution.immutable_human_safety_amendments',
       'foundation.card_backed_sections',
       'persona.card_backed_identity',
+    ]);
+  });
+
+  it('reports missing and empty required companion-editable runtime blocks distinctly', () => {
+    const result = validatePromptRuntimeEditableBlockContents({
+      'runtime.persona_adaptation': '   ',
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      {
+        id: 'runtime.persona_adaptation',
+        label: 'Persona Adaptation',
+        reason: 'empty',
+      },
+      {
+        id: 'runtime.context',
+        label: 'Runtime Context',
+        reason: 'missing',
+      },
     ]);
   });
 });

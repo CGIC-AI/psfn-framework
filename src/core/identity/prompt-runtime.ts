@@ -262,6 +262,17 @@ export type PromptRuntimeEditableBlockId =
   | 'runtime.persona_adaptation'
   | 'runtime.context';
 
+export interface PromptRuntimeEditableBlockValidationIssue {
+  id: PromptRuntimeEditableBlockId;
+  label: string;
+  reason: 'missing' | 'empty';
+}
+
+export interface PromptRuntimeEditableBlockValidationResult {
+  ok: boolean;
+  issues: PromptRuntimeEditableBlockValidationIssue[];
+}
+
 const PROMPT_RUNTIME_LAYOUT_VERSION = 1;
 
 const REQUIRED_RUNTIME_AWARE_SCHEMA: PromptRuntimeBlockSchema = Object.freeze({
@@ -568,6 +579,42 @@ export function isPromptRuntimeBlockCompanionEditable(
 ): boolean {
   const block = resolvePromptRuntimeBlockDefinition(blockOrId);
   return block?.companionEditable === true && !block.schema.immutable;
+}
+
+export function validatePromptRuntimeEditableBlockContents(
+  contentByBlockId: Partial<Record<PromptRuntimeEditableBlockId, string>>,
+): PromptRuntimeEditableBlockValidationResult {
+  const issues: PromptRuntimeEditableBlockValidationIssue[] = [];
+
+  for (const block of PROMPT_RUNTIME_BLOCKS) {
+    if (block.companionEditable !== true || !block.schema.required) {
+      continue;
+    }
+
+    const editableId = block.id as PromptRuntimeEditableBlockId;
+    const content = contentByBlockId[editableId];
+    if (content == null) {
+      issues.push({
+        id: editableId,
+        label: block.label,
+        reason: 'missing',
+      });
+      continue;
+    }
+
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      issues.push({
+        id: editableId,
+        label: block.label,
+        reason: 'empty',
+      });
+    }
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
 }
 
 export class PromptRuntimeLayoutStore {

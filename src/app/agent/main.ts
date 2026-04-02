@@ -325,7 +325,7 @@ async function main(): Promise<void> {
 
   // ── Admin transport (optional) ──
 
-  const adminServer = await startOptionalAdminTransportServer({
+  const adminTransport = await startOptionalAdminTransportServer({
     adminPort,
     apiHost,
     apiPort,
@@ -348,7 +348,7 @@ async function main(): Promise<void> {
       agentLoop,
     },
   });
-  if (adminServer) {
+  if (adminTransport) {
     log.info('Garden admin transport listening', {
       adminPort,
     });
@@ -394,7 +394,7 @@ async function main(): Promise<void> {
     disposeApiBackend();
     await controlPlane.stopFn();
   };
-  shutdownTargets.adminServer = adminServer;
+  shutdownTargets.adminTransport = adminTransport;
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };

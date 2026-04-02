@@ -1,71 +1,30 @@
-import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
-import {
-  createApiServerChannelAdapterFactoryEntry,
-  createOpenHomeChannelAdapterFactoryEntry,
-  requireChannelAdapter,
-} from '../startup/composition/channel-runtime.js';
 import {
   CachedActiveHealthProbe,
   resolveActiveHealthProbeConfig,
   toActiveProbeMeta,
 } from '../../channels/api/active-health-probe.js';
-import { resolveApiCorsAllowedOrigins } from '../../channels/api/http-policy.js';
-import type { ApiServer, ApiServerConfig } from '../../channels/api/server.js';
-import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
-import {
-  buildExternalChannelProfiles,
-  type RuntimeChannelsConfig,
-} from '../../channels/backplane/config.js';
-import { ChannelAdapterRegistry } from '../../channels/backplane/registry-port.js';
-import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
-import type { EventBus } from '../../shared/event-bus.js';
-import { createEventBusSensorIngestPort } from '../../shared/telemetry/sensor-ingest-port.js';
-import { createComponentLogger } from '../../shared/logger.js';
-import { parseOptionalPositiveIntEnv, parsePositiveIntEnv } from '../../shared/utils/env.js';
-import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
-import type { SessionManager } from '../../core/session/manager.js';
+import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
-import {
-  buildChannelAdapterFactoryManifest,
-  loadChannelAdaptersFromManifest,
-} from '../startup/support/channel-lifecycle.js';
-import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
-
-const log = createComponentLogger('Agent');
-const DEFAULT_API_REQUEST_TIMEOUT_MS = 90_000;
-const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
+import type { ApiServerConfig } from '../../channels/api/server.js';
 
 export interface AgentApiSurfaceBindings {
   apiHost?: string;
   apiPort?: number;
-  adminHost?: string;
   adminPort?: number;
 }
 
-export interface StartOptionalApiServerOptions extends AgentApiSurfaceBindings {
-  config: SubstrateConfig;
-  env?: NodeJS.ProcessEnv;
-  channelsConfig: RuntimeChannelsConfig;
-  agentLoop: SubstrateAgent;
-  eventBus: EventBus;
-  eligibilityGate: EligibilityGate;
-  sessionManager: SessionManager;
-  contactStore: ContactStorePort;
-  memoryStore: MemoryStorePort;
-  gateway: GatewayClient;
-  scheduler: Scheduler;
-  runtimeStatusMeta: RuntimeStatusMetadata;
-}
-
 export function buildApiHealthChecks(
-  options: Pick<
-    StartOptionalApiServerOptions,
-    'config' | 'memoryStore' | 'gateway' | 'scheduler' | 'runtimeStatusMeta'
-  >,
+  options: {
+    config: SubstrateConfig;
+    memoryStore: MemoryStorePort;
+    gateway: GatewayClient;
+    scheduler: Scheduler;
+    runtimeStatusMeta: RuntimeStatusMetadata;
+  },
   activeProbeConfig: ReturnType<typeof resolveActiveHealthProbeConfig>,
 ): NonNullable<ApiServerConfig['healthChecks']> {
   const llmActiveProbe = new CachedActiveHealthProbe(activeProbeConfig);
@@ -164,9 +123,7 @@ export function buildApiHealthChecks(
       const probeResult = await embeddingsActiveProbe.run(async (signal) => {
         const vector = await options.gateway.embed('health probe', { signal });
         if (vector.length !== options.gateway.dims) {
-          throw new Error(
-            `Embedding probe dimension mismatch: expected ${options.gateway.dims}, got ${vector.length}`,
-          );
+          throw new Error(`Embedding probe dimension mismatch: expected ${options.gateway.dims}, got ${vector.length}`);
         }
       });
       const meta = {
@@ -189,11 +146,11 @@ export function buildApiHealthChecks(
     },
     scheduler: () => {
       const taskCount = options.scheduler.taskCount;
-      const hasHeartbeatTask = Boolean(options.scheduler.getTask('heartbeat'));
-      if (!hasHeartbeatTask) {
+      const hasHealthcheckTask = Boolean(options.scheduler.getTask('healthcheck'));
+      if (!hasHealthcheckTask) {
         return {
           status: 'degraded',
-          detail: 'Heartbeat task is not registered',
+          detail: 'Healthcheck task is not registered',
           meta: { taskCount, ...options.runtimeStatusMeta },
         };
       }
@@ -211,76 +168,6 @@ export function resolveAgentApiSurfaceBindings(
   return {
     apiHost: env.API_HOST || undefined,
     apiPort: parseOptionalPositiveIntEnv(env.API_PORT),
-    adminHost: env.ADMIN_HOST || undefined,
     adminPort: parseOptionalPositiveIntEnv(env.ADMIN_PORT),
   };
-}
-
-export async function startOptionalApiServer(
-  options: StartOptionalApiServerOptions,
-): Promise<ApiServer | undefined> {
-  if (!options.apiPort) {
-    return undefined;
-  }
-
-  const env = options.env ?? process.env;
-  const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
-  const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
-    explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
-    adminHost: options.adminHost,
-    adminPort: options.adminPort,
-  });
-  const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
-    agentLoop: options.agentLoop,
-    eventBus: options.eventBus,
-    config: options.config,
-    eligibilityGate: options.eligibilityGate,
-  });
-  const voiceWebSocketPath = voiceWebSocketRuntime
-    ? undefined
-    : DISABLED_VOICE_WEBSOCKET_PATH;
-  if (!voiceWebSocketRuntime) {
-    log.info('API voice websocket runtime gated off: STT/TTS runtime is not fully wired');
-  }
-
-  const activeProbeConfig = resolveActiveHealthProbeConfig(env);
-  const apiChannelRegistry = new ChannelAdapterRegistry();
-  const apiChannelManifest = buildChannelAdapterFactoryManifest([
-    createOpenHomeChannelAdapterFactoryEntry(),
-    createApiServerChannelAdapterFactoryEntry({
-      port: options.apiPort,
-      host: options.apiHost,
-      agentLoop: options.agentLoop,
-      eventBus: options.eventBus,
-      sessionManager: options.sessionManager,
-      companionId: options.config.companionId,
-      contactStore: options.contactStore,
-      apiKey: env.API_KEY || undefined,
-      adminToken: env.ADMIN_TOKEN || undefined,
-      allowInsecureWithoutAuth,
-      corsAllowedOrigins,
-      modelName: env.API_MODEL_NAME,
-      externalChannelProfiles: buildExternalChannelProfiles(options.channelsConfig),
-      sensorIngest: createEventBusSensorIngestPort(options.eventBus),
-      requestTimeoutMs: parsePositiveIntEnv(
-        env.API_REQUEST_TIMEOUT_MS,
-        DEFAULT_API_REQUEST_TIMEOUT_MS,
-      ),
-      voiceWebSocketPath,
-      voiceWebSocketRuntime,
-      healthChecks: buildApiHealthChecks(options, activeProbeConfig),
-    }),
-  ]);
-  await loadChannelAdaptersFromManifest(
-    apiChannelRegistry,
-    apiChannelManifest,
-    (registry) => options.agentLoop.setChannelRegistry(registry),
-    log,
-    options.eligibilityGate,
-  );
-
-  const apiServer = requireChannelAdapter<ApiServer>(apiChannelRegistry, 'api');
-  await apiServer.start();
-  log.info(`API server listening on port ${options.apiPort}`);
-  return apiServer;
 }

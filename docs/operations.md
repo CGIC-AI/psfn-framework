@@ -9,12 +9,14 @@ npm run split
 npm run yolo
 npm run gateway
 npm run agent
+npm run operator
 npm run agent:docker          # Production profile (network_mode: "none")
 npm run agent:docker:continuous # Continuous/dev profile (isolated internal network)
 ```
 
-- `split` is the standard gateway + agent launcher.
+- `split` is the standard gateway + agent + operator launcher.
 - `yolo` keeps the split runtime but broadens gateway `fs.read` scope across the codebase.
+- `operator` runs only the Garden operator surface when you want it separate from the launcher.
 - `agent:docker` is the production profile (`network_mode: "none"`).
 - `agent:docker:continuous` is the continuous/dev profile on an isolated internal network.
 - Use `npm run verify:agent-docker-isolation` after changing compose files or operator docs.
@@ -160,4 +162,4 @@ Check these first:
 - SQLite integrity and embedding-dimension warnings
 - backup and migration manifests under the runtime backup root
 
-If behavior seems inconsistent with old docs, prefer the split-runtime entrypoints and the contracts in `src/persistence/layout.ts` and `src/system/settings/contracts.ts`.
+If behavior seems inconsistent with old docs, prefer the split-runtime topology: gateway owns the public API edge, operator owns Garden HTTP/UI, and agent owns the companion loop plus private admin transport.

@@ -1,6 +1,6 @@
 # Setup
 
-PSFN now boots through the split runtime. `src/app/startup/index.ts` is disabled and exits fail-closed; use `npm run split`, `npm run gateway`, or `npm run agent`.
+PSFN now boots through the split runtime. `src/app/startup/index.ts` is disabled and exits fail-closed; use `npm run split` for the full gateway + agent + operator stack, or launch `npm run gateway`, `npm run agent`, and `npm run operator` individually.
 
 ## Prerequisites
 
@@ -67,7 +67,7 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
    DATABASE_PATH=./data/companion.db
    ```
 
-2. Start the split runtime:
+2. Start the split runtime (gateway + agent + operator):
 
    ```bash
    npm run split
@@ -103,16 +103,17 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 ## Common Launch Commands
 
 ```bash
-npm run split        # gateway + agent launcher
+npm run split        # gateway + agent + operator launcher
 npm run yolo         # split runtime with broader fs.read policy
 npm run gateway      # gateway only
-npm run agent        # agent only
+npm run agent        # agent only (companion loop + private admin transport)
+npm run operator     # Garden operator surface only
 npm run agent:docker # production containerized agent
 ```
 
 ## Optional Surface Wiring
 
-### Admin + API
+### Garden operator surface + public API
 
 ```dotenv
 ADMIN_HOST=127.0.0.1
@@ -122,6 +123,9 @@ ADMIN_TOKEN=...
 API_HOST=127.0.0.1
 API_PORT=3000
 API_KEY=...
+
+# optional private agent/operator transport override
+ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
 ```
 
 ### Discord voice

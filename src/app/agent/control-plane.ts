@@ -25,7 +25,7 @@ const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
 
 export interface AgentControlPlaneShutdownTargets {
   apiServer?: ApiServer;
-  adminServer?: Lifecycle;
+  adminTransport?: Lifecycle;
 }
 
 export interface BuildAgentControlPlaneOptions {

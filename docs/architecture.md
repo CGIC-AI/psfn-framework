@@ -5,8 +5,9 @@ This is the current runtime shape. For the component graph, start with [`docs/ar
 ## Canonical Runtime Model
 
 - `src/app/startup/index.ts` is disabled and exits fail-closed.
-- `src/app/gateway/main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, and gateway-backed tool execution.
-- `src/app/agent/main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop.
+- `src/app/gateway/main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, gateway-backed tool execution, and the public OpenAI-compatible API edge.
+- `src/app/operator/main.ts` is the operator-plane process. It hosts Garden HTTP/UI and proxies admin traffic over the private admin transport.
+- `src/app/agent/main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop plus the private admin transport.
 
 ## Composition Layer
 
@@ -34,7 +35,7 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - `GatewayServer` exposes JSON-RPC over the NDJSON Unix socket.
 - `LLMClient` and embedding creation happen on the gateway side so provider secrets stay out of the agent.
 - Gateway policy resolves filesystem scope, URL policy, SSRF checks, and approval-gated actions.
-- Optional operator surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
+- Optional operator-facing support surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
 - Discord, Telegram, and Wyoming host-facing adapters are started from the gateway side when enabled.
 
 ## Agent Responsibilities
@@ -44,7 +45,7 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - loads config, owner-file state, and trust policy
 - initializes SQLite-backed companion data
 - loads the character card and prompt registry
-- composes `SessionManager`, `SubstrateAgent`, `MemoryStore`, `MemoryRetriever`, `MemoryExtractor`, `Scheduler`, and admin/API servers
+- composes `SessionManager`, `SubstrateAgent`, `MemoryStore`, `MemoryRetriever`, `MemoryExtractor`, `Scheduler`, the gateway-routed API backend, and the private admin transport
 - wires contacts, values, skills, safeguards, core memory, shards, think tools, image tools, and post-turn actions
 
 The agent talks to the gateway through `GatewayClient`, which acts as the LLM and embeddings provider inside the isolated process.
@@ -82,7 +83,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 ### Channels and voice
 
 - Channel adapters are manifest-driven and loaded through `src/app/startup/support/channel-lifecycle.ts`.
-- Current runtime surfaces include Discord, Telegram, the OpenAI-compatible API, Garden admin, Wyoming, and PSFN/OpenHome-related adapter entries.
+- Current runtime surfaces include Discord, Telegram, the gateway-hosted OpenAI-compatible API, the operator-hosted Garden surface, Wyoming, and PSFN/OpenHome-related adapter entries.
 - Voice connectors are plugin-style STT/TTS adapters resolved from runtime settings and capability eligibility.
 
 ### Scheduler and background work

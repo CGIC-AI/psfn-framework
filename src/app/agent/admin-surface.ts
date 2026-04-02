@@ -73,13 +73,13 @@ export async function startOptionalAdminTransportServer(
     adaptiveToolsStateProvider: options.coreRuntime.agentLoop,
     toolHealthProvider: createGatewayAdminToolHealthProvider(options.gateway),
   });
-  const adminServer = new GardenAdminTransportServer({
+  const adminTransport = new GardenAdminTransportServer({
     socketPath: resolveAdminTransportSocketPath(env),
     eventBus: options.eventBus,
     config: options.config,
     services,
   });
-  await adminServer.init();
-  await adminServer.start();
-  return adminServer;
+  await adminTransport.init();
+  await adminTransport.start();
+  return adminTransport;
 }

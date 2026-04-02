@@ -14,6 +14,7 @@ Shared runtime construction is concentrated in:
 
 - `src/bootstrap/composition.ts`
 - `src/bootstrap/parity.ts`
+- `src/scheduler/heartbeat-runtime.ts`
 - `src/bootstrap/post-turn-actions.ts`
 - `src/bootstrap/channel-runtime.ts`
 
@@ -26,6 +27,8 @@ Those helpers keep the supported split entrypoints aligned on core wiring:
 - shard and think tooling
 - heartbeat/scheduler wiring
 - channel adapter manifests
+
+`src/bootstrap/parity.ts` now owns the small shared prompt/settings/session/bootstrap helpers. Heartbeat and reflection runtime ownership lives in `src/scheduler/heartbeat-runtime.ts` and its focused helper modules.
 
 ## Gateway Responsibilities
 

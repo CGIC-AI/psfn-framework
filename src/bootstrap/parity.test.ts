@@ -22,7 +22,6 @@ import {
 import {
   wireFilesystemToolsRuntime,
   wireExtendedToolAutoloadPolicy,
-  wireHeartbeatRuntime,
   wirePromptRuntime,
   wireSessionToolsRuntime,
   wireSettingsRuntime,
@@ -31,6 +30,7 @@ import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../agent/deferred-tool-handoff.js';
 import { PendingFollowUpStore } from '../intention/pending-follow-ups.js';
 import { CareReminderStore } from '../intention/care-reminders.js';
+import { wireHeartbeatRuntime } from '../scheduler/heartbeat-runtime.js';
 
 function createInternalStateNarrativeFixture() {
   const internalState = new InternalStateComputer().computeState({

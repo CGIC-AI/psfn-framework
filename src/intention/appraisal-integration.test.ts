@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
-import { wireHeartbeatRuntime } from '../bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from '../bootstrap/post-turn-actions.js';
 import { EventBus } from '../event-bus.js';
 import { createIntentionAppraisalHooks, wireIntentionRuntime } from './runtime-wiring.js';
 import { Scheduler } from '../scheduler/scheduler.js';
+import { wireHeartbeatRuntime } from '../scheduler/heartbeat-runtime.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import type { AgentResponse, SubstrateMessage } from '../types.js';
 

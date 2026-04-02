@@ -9,6 +9,7 @@ This document is the compact contract for how the live runtime is supposed to be
    - `src/agent-main.ts`
    - `src/bootstrap/composition.ts`
    - `src/bootstrap/parity.ts`
+   - `src/scheduler/heartbeat-runtime.ts`
    - `src/lifecycle/runtime-mode.ts`
 2. Config and persistence contracts
    - `src/types.ts`

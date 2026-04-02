@@ -105,9 +105,9 @@ import {
   wireSessionToolsRuntime,
   buildCharacterPromptVariablesProvider,
   buildReplConfig,
-  wireHeartbeatRuntime,
 } from './bootstrap/parity.js';
 import { wirePostTurnActionRuntime } from './bootstrap/post-turn-actions.js';
+import { wireHeartbeatRuntime } from './scheduler/heartbeat-runtime.js';
 import { CapabilityRuntime } from './capabilities/runtime.js';
 import {
   createEligibilityGate,

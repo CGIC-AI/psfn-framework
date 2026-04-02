@@ -16,7 +16,8 @@ graph TB
   %% ═══════════════════════════════════════════════
   subgraph Bootstrap["Bootstrap & Composition"]
     COMP["composition.ts<br/><i>composeIdentity, composeSubstrateAgent,<br/>composeSessionRuntime, wireMemoryRuntime,<br/>wireShardAndThinkRuntime, wireSelfModelRuntime</i>"]
-    PARITY["parity.ts<br/><i>wirePromptRuntime, wireHeartbeatRuntime,<br/>wireSettingsRuntime, wireSessionToolsRuntime,<br/>wireFilesystemToolsRuntime, wireContactRuntime</i>"]
+    PARITY["parity.ts<br/><i>wirePromptRuntime, wireSettingsRuntime,<br/>wireSessionToolsRuntime,<br/>wireFilesystemToolsRuntime</i>"]
+    HBRUNTIME["scheduler/heartbeat-runtime.ts<br/><i>wireHeartbeatRuntime,<br/>reflection template runtime,<br/>post-turn integration</i>"]
     POSTACT["post-turn-actions.ts<br/><i>deferred action queue + dispatch</i>"]
     CHANRT["channel-runtime.ts<br/><i>Discord / Telegram / OpenHome / API factory entries</i>"]
   end
@@ -28,15 +29,15 @@ graph TB
   AGM --> GWC
   AGM --> COMP
   AGM --> PARITY
+  AGM --> HBRUNTIME
   COMP --> SMAN
   COMP --> SA
   COMP --> MRET
   COMP --> MEXT
   COMP --> SMGR
   PARITY --> PLSTORE
-  PARITY --> HBEAT
-  PARITY --> SKILLS
-  PARITY --> VALUES
+  HBRUNTIME --> HBEAT
+  HBRUNTIME --> VALUES
   POSTACT --> SA
 
   %% ═══════════════════════════════════════════════

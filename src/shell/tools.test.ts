@@ -25,12 +25,14 @@ describe('createShellTool', () => {
       cwd: '/workspace',
       timeout_ms: 500,
       max_output_chars: 1024,
+      env_vars: ['OPENAI_API_KEY'],
     });
 
     expect(ops.exec).toHaveBeenCalledWith('node', ['-v'], {
       cwd: '/workspace',
       timeoutMs: 500,
       maxOutputChars: 1024,
+      envVars: ['OPENAI_API_KEY'],
     });
     expect((result.content[0] as any).text).toContain('"action": "exec"');
     expect((result.content[0] as any).text).toContain('"exit_code": 0');

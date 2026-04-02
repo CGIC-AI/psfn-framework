@@ -26,6 +26,7 @@ export interface ShellCapabilities {
       cwd?: string;
       timeoutMs?: number;
       maxOutputChars?: number;
+      envVars?: string[];
     },
   ) => Promise<ShellExecCapabilityResult>;
 }
@@ -33,6 +34,18 @@ export interface ShellCapabilities {
 interface CreateShellCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
   budgetRef?: SandboxBudgetRef;
+}
+
+function normalizeEnvVars(envVars: unknown): { value: string[] } | { error: string } {
+  if (envVars === undefined) return { value: [] };
+  if (!Array.isArray(envVars)) return { error: 'envVars must be an array of strings' };
+  if (envVars.some(raw => typeof raw !== 'string')) {
+    return { error: 'envVars must be an array of strings' };
+  }
+
+  return {
+    value: [...new Set(envVars.map(raw => raw.trim()).filter(Boolean))],
+  };
 }
 
 function normalizeArgs(args: unknown): { value: string[] } | { error: string } {
@@ -174,6 +187,22 @@ export function createShellCapabilities(
 
     const timeoutMs = normalizeBoundedInteger(execOptions?.timeoutMs, MAX_TIMEOUT_MS);
     const maxOutputChars = normalizeBoundedInteger(execOptions?.maxOutputChars, MAX_OUTPUT_CHARS);
+    const normalizedEnvVars = normalizeEnvVars(execOptions?.envVars);
+    if ('error' in normalizedEnvVars) {
+      return {
+        ok: false,
+        error: normalizedEnvVars.error,
+        command: normalizedCommand,
+        args: normalizedArgs.value,
+        cwd: normalizedCwd ?? '',
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+        truncated: false,
+        durationMs: 0,
+      };
+    }
 
     try {
       const result = await options.gatewayCaps.shellExec(
@@ -183,6 +212,7 @@ export function createShellCapabilities(
           ...(normalizedCwd ? { cwd: normalizedCwd } : {}),
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           ...(maxOutputChars !== undefined ? { maxOutputChars } : {}),
+          ...(normalizedEnvVars.value.length > 0 ? { envVars: normalizedEnvVars.value } : {}),
         },
       );
       return {

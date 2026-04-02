@@ -16,6 +16,9 @@ const DEFAULT_MAX_OUTPUT_CHARS_CAP = 100_000;
 const MAX_COMMAND_LENGTH = 256;
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
+const MAX_ENV_VARS = 32;
+const MAX_ENV_VAR_NAME_LENGTH = 128;
+const ENV_VAR_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 interface NormalizedShellAllowlist {
   names: Set<string>;
@@ -99,6 +102,22 @@ function normalizeAllowlist(values: readonly string[] | undefined): NormalizedSh
   return { names, canonicalPaths };
 }
 
+function normalizeEnvAllowlist(values: readonly string[] | undefined): Set<string> {
+  const names = new Set<string>();
+  if (!values || values.length === 0) {
+    return names;
+  }
+
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      names.add(trimmed);
+    }
+  }
+
+  return names;
+}
+
 function resolveCommand(command: unknown): string {
   if (typeof command !== 'string') return '';
   return command.trim();
@@ -136,6 +155,87 @@ function resolveArgs(raw: unknown): string[] {
     args.push(item);
   }
   return args;
+}
+
+function resolveRequestedEnvVars(raw: unknown): string[] {
+  if (raw === undefined) {
+    return [];
+  }
+  if (!Array.isArray(raw)) {
+    throw new JSONRPCErrorException(
+      'shell.exec envVars must be an array of strings',
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+  if (raw.length > MAX_ENV_VARS) {
+    throw new JSONRPCErrorException(
+      `shell.exec envVars exceed max length (${MAX_ENV_VARS})`,
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+
+  const envVars = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== 'string') {
+      throw new JSONRPCErrorException(
+        'shell.exec envVars must be an array of strings',
+        GatewayErrors.POLICY_DENIED,
+      );
+    }
+    const trimmed = item.trim();
+    if (
+      trimmed.length === 0
+      || trimmed.length > MAX_ENV_VAR_NAME_LENGTH
+      || !ENV_VAR_NAME_PATTERN.test(trimmed)
+    ) {
+      throw new JSONRPCErrorException(
+        'shell.exec envVars entries must be valid environment variable names',
+        GatewayErrors.POLICY_DENIED,
+      );
+    }
+    envVars.add(trimmed);
+  }
+  return [...envVars];
+}
+
+function buildShellExecutionEnv(
+  requestedEnvVars: readonly string[],
+  policy: ShellExecPolicyConfig,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  const pathValue = process.env.PATH;
+  if (pathValue && pathValue.trim().length > 0) {
+    env.PATH = pathValue;
+  }
+
+  if (process.platform === 'win32') {
+    const systemRoot = process.env.SystemRoot;
+    const comSpec = process.env.ComSpec;
+    const pathext = process.env.PATHEXT;
+    if (systemRoot && systemRoot.trim().length > 0) env.SystemRoot = systemRoot;
+    if (comSpec && comSpec.trim().length > 0) env.ComSpec = comSpec;
+    if (pathext && pathext.trim().length > 0) env.PATHEXT = pathext;
+  }
+
+  if (requestedEnvVars.length === 0) {
+    return env;
+  }
+
+  const allowlist = normalizeEnvAllowlist(policy.envAllowlist);
+  for (const name of requestedEnvVars) {
+    if (!allowlist.has(name)) {
+      throw new JSONRPCErrorException(
+        `shell.exec env var not allowlisted: ${name}`,
+        GatewayErrors.POLICY_DENIED,
+      );
+    }
+    const value = process.env[name];
+    if (typeof value === 'string' && value.length > 0) {
+      env[name] = value;
+    }
+  }
+
+  return env;
 }
 
 function resolveWorkingDirectory(
@@ -248,12 +348,14 @@ async function runCommandBounded(
   command: string,
   args: string[],
   cwd: string,
+  env: NodeJS.ProcessEnv,
   limits: { timeoutMs: number; maxOutputChars: number },
 ): Promise<ShellExecResult> {
   const startedAt = Date.now();
   return await new Promise<ShellExecResult>((resolveResult, rejectResult) => {
     const child = spawn(command, args, {
       cwd,
+      env,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -322,11 +424,13 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       const command = resolveCommand(params.command);
       assertCommandAllowed(command, policy.allowlist ?? []);
       const args = resolveArgs(params.args);
+      const requestedEnvVars = resolveRequestedEnvVars(params.envVars);
       const cwd = resolveWorkingDirectory(params.cwd, runtime, policy);
+      const env = buildShellExecutionEnv(requestedEnvVars, policy);
       const limits = resolveBoundedExecutionPolicy(params, policy);
 
       try {
-        return await runCommandBounded(command, args, cwd, limits);
+        return await runCommandBounded(command, args, cwd, env, limits);
       } catch (error) {
         throw new JSONRPCErrorException(
           `shell.exec failed: ${toErrorMessage(error)}`,
@@ -340,6 +444,7 @@ const shellDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       cwd: params.cwd,
       timeoutMs: params.timeoutMs,
       maxOutputChars: params.maxOutputChars,
+      envVarCount: Array.isArray(params.envVars) ? params.envVars.length : 0,
     }),
     approvalAction: 'shell.exec',
     approvalScope: (params: ShellExecParams) => params.command,

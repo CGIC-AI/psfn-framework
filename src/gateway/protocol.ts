@@ -246,6 +246,7 @@ export interface ShellExecParams {
   cwd?: string;
   timeoutMs?: number;
   maxOutputChars?: number;
+  envVars?: string[];
 }
 
 export type ShardBackendRequestBackend = 'container' | 'orchestrated';

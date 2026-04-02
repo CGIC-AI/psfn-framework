@@ -499,6 +499,7 @@ async function main(): Promise<void> {
   const confirmationNtfyTopic = process.env.CONFIRMATION_NTFY_TOPIC?.trim() || undefined;
   const shellExecEnabled = parseBooleanEnvWithFallback(process.env.SHELL_EXEC_ENABLED, false);
   const shellExecAllowlist = parseEnvList(process.env.SHELL_EXEC_ALLOWLIST, { separators: [','] });
+  const shellExecEnvAllowlist = parseEnvList(process.env.SHELL_EXEC_ENV_ALLOWLIST, { separators: [','] });
   const shellExecAllowedCwd = parseEnvList(process.env.SHELL_EXEC_ALLOWED_CWD, { separators: [','] });
   const shellExecDefaultTimeoutMs = parsePositiveIntEnv(
     process.env.SHELL_EXEC_DEFAULT_TIMEOUT_MS,
@@ -705,6 +706,7 @@ async function main(): Promise<void> {
       shellExec: {
         enabled: shellExecEnabled,
         ...(shellExecAllowlist ? { allowlist: shellExecAllowlist } : {}),
+        ...(shellExecEnvAllowlist ? { envAllowlist: shellExecEnvAllowlist } : {}),
         ...(shellExecAllowedCwd ? { allowedCwd: shellExecAllowedCwd } : {}),
         defaultTimeoutMs: shellExecDefaultTimeoutMs,
         maxTimeoutMs: shellExecMaxTimeoutMs,

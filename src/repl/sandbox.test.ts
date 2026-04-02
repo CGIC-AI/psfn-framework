@@ -389,13 +389,13 @@ describe('REPLSandbox', () => {
     const sandbox = new REPLSandbox(nullDeps(llm));
 
     const result = await sandbox.execute(
-      'const r = await shell_exec("node", ["-v"]); print(r.ok, r.stdout);',
+      'const r = await shell_exec("node", ["-v"], { envVars: ["OPENAI_API_KEY"] }); print(r.ok, r.stdout);',
       5000,
       8192,
     );
 
     expect(result.output).toContain('true v22.0.0');
-    expect((llm as any).shellExec).toHaveBeenCalledWith('node', ['-v'], {});
+    expect((llm as any).shellExec).toHaveBeenCalledWith('node', ['-v'], { envVars: ['OPENAI_API_KEY'] });
   });
 
   it('omits shell_exec helper for non-autonomous capability tiers', async () => {

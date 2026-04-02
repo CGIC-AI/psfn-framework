@@ -4,6 +4,7 @@ export interface ShellExecOptions {
   cwd?: string;
   timeoutMs?: number;
   maxOutputChars?: number;
+  envVars?: string[];
 }
 
 export interface ShellOperations {

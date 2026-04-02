@@ -60,7 +60,7 @@ export type GatewayREPLCapabilities = {
   shellExec?: (
     command: string,
     args?: string[],
-    options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number },
+    options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number; envVars?: string[] },
   ) => Promise<ShellExecView>;
 };
 

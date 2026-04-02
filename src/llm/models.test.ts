@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createLiteLLMModel, createModel } from './models.js';
+import { createLiteLLMModel, createOpenAICompatibleEndpointModel } from './models.js';
 import { normalizeContent } from './client.js';
 
 describe('createLiteLLMModel', () => {
@@ -49,29 +49,49 @@ describe('createLiteLLMModel', () => {
   });
 });
 
-describe('createModel', () => {
+describe('createOpenAICompatibleEndpointModel', () => {
   it('uses caller-provided token and context values', () => {
-    const model = createModel('http://localhost:4000/v1', 'z-ai/glm-5', 16_384, 128_000);
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'http://localhost:4000/v1',
+      modelId: 'z-ai/glm-5',
+      provider: 'local_endpoint',
+      routeLabel: 'local endpoint',
+      maxTokens: 16_384,
+      contextWindow: 128_000,
+    });
 
     expect(model.id).toBe('z-ai/glm-5');
+    expect(model.provider).toBe('local_endpoint');
+    expect(model.name).toBe('z-ai/glm-5 (via local endpoint)');
     expect(model.maxTokens).toBe(16_384);
     expect(model.contextWindow).toBe(128_000);
   });
 
   it('allows maxTokens override without model-specific fallback table', () => {
-    const model = createModel('http://localhost:4000/v1', 'z-ai/glm-5', 8192, 128_000);
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'http://localhost:4000/v1',
+      modelId: 'z-ai/glm-5',
+      provider: 'openrouter',
+      maxTokens: 8192,
+      contextWindow: 128_000,
+    });
 
     expect(model.maxTokens).toBe(8_192);
     expect(model.contextWindow).toBe(128_000);
   });
 
   it('retains generic defaults when caller omits explicit routing metadata', () => {
-    const model = createModel('http://localhost:4000/v1', 'some/new-model', undefined, undefined);
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: 'http://localhost:4000/v1',
+      modelId: 'some/new-model',
+      provider: 'local_endpoint',
+    });
 
     expect(model.id).toBe('some/new-model');
     expect(model.api).toBe('openai-completions');
     expect(model.contextWindow).toBe(128_000);
     expect(model.maxTokens).toBe(4096);
+    expect(model.provider).toBe('local_endpoint');
   });
 });
 

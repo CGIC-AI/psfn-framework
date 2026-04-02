@@ -1,15 +1,19 @@
-// ── LiteLLM Model Factory ──
-// Creates pi-ai Model objects pointing at a LiteLLM proxy.
-// When LITELLM_BASE_URL is set, LLMClient uses these instead of getModel().
+// ── Routed Endpoint Model Factory ──
+// Creates pi-ai Model objects for OpenAI-compatible routed endpoints.
+// LiteLLM is one supported backend, not the generic abstraction itself.
 
 import { getModels, getProviders } from '@mariozechner/pi-ai';
 import type { Api, KnownProvider, Model } from '@mariozechner/pi-ai';
 
-export interface LiteLLMModelConfig {
-  /** LiteLLM proxy base URL, e.g. http://localhost:4000/v1 */
+export interface OpenAICompatibleEndpointModelConfig {
+  /** OpenAI-compatible base URL, e.g. http://localhost:4000/v1 */
   baseUrl: string;
-  /** Model ID as known to LiteLLM (e.g. z-ai/glm-5) */
+  /** Model ID as expected by the routed endpoint */
   modelId: string;
+  /** Logical provider identifier for routing and telemetry */
+  provider: string;
+  /** Human-readable route label for operator and test clarity */
+  routeLabel?: string;
   /** Context window size in tokens */
   contextWindow?: number;
   /** Max output tokens */
@@ -31,15 +35,17 @@ export function resolveRegisteredModel(provider: string, modelId: string): Model
 }
 
 /**
- * Create a pi-ai Model that routes through LiteLLM proxy.
- * The proxy handles real API keys — the agent only needs a virtual key.
+ * Create a pi-ai Model that routes through an OpenAI-compatible endpoint.
  */
-export function createLiteLLMModel(config: LiteLLMModelConfig): Model<'openai-completions'> {
+export function createOpenAICompatibleEndpointModel(
+  config: OpenAICompatibleEndpointModelConfig,
+ ): Model<'openai-completions'> {
+  const routeLabel = config.routeLabel?.trim() || 'routed endpoint';
   return {
     id: config.modelId,
-    name: `${config.modelId} (via LiteLLM)`,
+    name: `${config.modelId} (via ${routeLabel})`,
     api: 'openai-completions',
-    provider: 'litellm',
+    provider: config.provider,
     baseUrl: config.baseUrl,
     reasoning: config.reasoning ?? false,
     input: ['text'],
@@ -55,18 +61,15 @@ export function createLiteLLMModel(config: LiteLLMModelConfig): Model<'openai-co
 }
 
 /**
- * Create a LiteLLM model using caller-provided routing metadata.
+ * Create a pi-ai Model that routes through LiteLLM.
+ * LiteLLM handles the upstream provider credentials behind a virtual key.
  */
-export function createModel(
-  baseUrl: string,
-  modelId: string,
-  maxTokens?: number,
-  contextWindow?: number,
+export function createLiteLLMModel(
+  config: Omit<OpenAICompatibleEndpointModelConfig, 'provider' | 'routeLabel'>,
 ): Model<'openai-completions'> {
-  return createLiteLLMModel({
-    baseUrl,
-    modelId,
-    contextWindow,
-    maxTokens,
+  return createOpenAICompatibleEndpointModel({
+    ...config,
+    provider: 'litellm',
+    routeLabel: 'LiteLLM',
   });
 }

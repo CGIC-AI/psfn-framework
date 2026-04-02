@@ -136,6 +136,20 @@ function formatRelativeElapsed(now: Date, then: Date): string {
   return `${deltaDays} day${deltaDays === 1 ? '' : 's'} ago`;
 }
 
+function formatElapsedDaysHours(now: Date, then: Date): string {
+  const deltaMs = Math.max(0, now.getTime() - then.getTime());
+  const totalHours = Math.floor(deltaMs / 3_600_000);
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  if (days > 0 && hours > 0) {
+    return `${days} day${days === 1 ? '' : 's'} ${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+  if (days > 0) return `${days} day${days === 1 ? '' : 's'}`;
+  if (hours > 0) return `${hours} hour${hours === 1 ? '' : 's'}`;
+  const minutes = Math.max(1, Math.floor(deltaMs / 60_000));
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
 function unwrapPromptSectionBody(section: string | null | undefined): string {
   if (!section) return '';
   return unwrapSingleWrappedPromptSection(section)?.content ?? section.trim();
@@ -299,6 +313,7 @@ export function buildDynamicPromptTemplateVariables(input: {
   const responseStyle = input.responseStyle ?? 'concise';
   const now = input.now ?? new Date();
   const emotionAppraisalChain = input.emotionAppraisalChain ?? [];
+  const responseStyleName = responseStyle === 'expressive' ? 'Expressive' : 'Concise';
   const {
     core: coreCount,
     promoted: promotedCount,
@@ -396,12 +411,17 @@ export function buildDynamicPromptTemplateVariables(input: {
   return {
     active_timezone: resolveActiveTimezone(),
     runtime_current_datetime_human: formatPromptRuntimeDateTime(now),
+    runtime_current_datetime_iso: formatActiveDateTimeIso(now),
     runtime_current_weekday: formatPromptRuntimeWeekday(now),
     runtime_current_date_human: formatPromptRuntimeDate(now),
     runtime_current_time_human: formatPromptRuntimeTime(now),
     runtime_last_message_received_human: lastMessageReceivedHuman,
     runtime_last_message_received_at_iso: lastMessageReceivedAt ? formatActiveDateTimeIso(lastMessageReceivedAt) : '',
+    runtime_last_message_received_weekday: lastMessageReceivedAt ? formatPromptRuntimeWeekday(lastMessageReceivedAt) : '',
+    runtime_last_message_received_date_human: lastMessageReceivedAt ? formatPromptRuntimeDate(lastMessageReceivedAt) : '',
+    runtime_last_message_received_time_human: lastMessageReceivedAt ? formatPromptRuntimeTime(lastMessageReceivedAt) : '',
     runtime_last_message_received_ago: lastMessageReceivedAt ? formatRelativeElapsed(now, lastMessageReceivedAt) : '',
+    runtime_last_message_received_days_hours: lastMessageReceivedAt ? formatElapsedDaysHours(now, lastMessageReceivedAt) : '',
     runtime_internal_turn_context: isInternalJournalChannel(input.message.channelId)
       ? `This is an internal ${input.taskKind ?? 'background'} turn.`
       : '',
@@ -409,10 +429,20 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_channel_type: isInternalJournalChannel(input.message.channelId) ? '' : (input.channelType ?? 'unknown'),
     runtime_capability_tier: input.capabilityTier,
     runtime_tooling_summary: `Tooling: ${activeToolSummary}`,
+    runtime_tooling_active_count: String(activeCount),
+    runtime_tooling_core_count: String(coreCount),
+    runtime_tooling_promoted_count: String(promotedCount),
+    runtime_tooling_loaded_count: String(extendedLoadedCount),
+    runtime_tooling_autoload_count: String(autoloadCount),
+    runtime_tooling_deferred_count: String(deferredCount),
+    runtime_tooling_available_extended_count: String(extendedCount),
     runtime_trust_guidance: trustGuidance,
     runtime_emotional_affect_body: affectBody,
     runtime_metacognitive_persona_guidance_body: metacognitiveBody,
+    runtime_response_style: responseStyle,
+    runtime_response_style_name: responseStyleName,
     runtime_response_style_guidance: getResponseStylePromptGuidance(responseStyle),
+    runtime_response_style_guidance_body: getResponseStylePromptGuidance(responseStyle),
     runtime_internal_state_body: internalStateBody,
     runtime_emotion_appraisal_body: emotionAppraisalBody,
     runtime_open_threads_body: openThreadsBody,

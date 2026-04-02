@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import {
+  buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,
   buildRuntimeContext,
   getPersonaAdaptation,
@@ -517,6 +518,54 @@ describe('runtime subject identity', () => {
 
     expect(runtimeContext).toContain('<companion_runtime_context>');
     expect(runtimeContext).toContain('Companion runtime context override.');
+  });
+
+  it('exposes granular runtime prompt variables for editable prompt-owned phrasing', () => {
+    const variables = buildDynamicPromptTemplateVariables({
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord_text',
+        authorId: 'alex',
+        authorName: 'Alex',
+        content: 'hey',
+      }),
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'expressive',
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 1,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 5,
+      },
+      extendedTools: [{ name: 'generate_image', description: 'Generate an image.' }] as any,
+      loadedExtended: new Map([['generate_image', { source: 'autoload' }]]),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(['selfie_create']),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
+      config: {},
+    });
+
+    expect(variables.runtime_current_datetime_iso).toBe('2026-03-18T09:30:00.000-04:00');
+    expect(variables.runtime_last_message_received_weekday).toBe('Monday');
+    expect(variables.runtime_last_message_received_date_human).toBe('March 16, 2026');
+    expect(variables.runtime_last_message_received_time_human).toBe('5:15 AM');
+    expect(variables.runtime_last_message_received_days_hours).toBe('2 days 4 hours');
+    expect(variables.runtime_response_style_name).toBe('Expressive');
+    expect(variables.runtime_response_style_guidance_body).toBe(variables.runtime_response_style_guidance);
+    expect(variables.runtime_tooling_active_count).toBe('5');
+    expect(variables.runtime_tooling_available_extended_count).toBe('1');
   });
 
   it('uses persisted conversation-channel privacy and records it on activity', async () => {

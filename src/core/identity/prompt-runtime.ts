@@ -142,6 +142,11 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     example: 'Friday, March 27, 2026 at 10:27 PM',
   },
   {
+    token: '{{runtime_current_datetime_iso}}',
+    description: 'Current local datetime as an ISO-8601 timestamp in the active timezone.',
+    example: '2026-03-27T22:27:11.123-04:00',
+  },
+  {
     token: '{{runtime_current_weekday}}',
     description: 'Current weekday in the active timezone.',
     example: 'Friday',
@@ -167,9 +172,49 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     example: '2026-03-27T22:11:04.112-04:00',
   },
   {
+    token: '{{runtime_last_message_received_weekday}}',
+    description: 'Weekday of the most recent pre-turn message when available.',
+    example: 'Friday',
+  },
+  {
+    token: '{{runtime_last_message_received_date_human}}',
+    description: 'Calendar date of the most recent pre-turn message when available.',
+    example: 'March 27, 2026',
+  },
+  {
+    token: '{{runtime_last_message_received_time_human}}',
+    description: 'Clock time of the most recent pre-turn message when available.',
+    example: '10:11 PM',
+  },
+  {
     token: '{{runtime_last_message_received_ago}}',
     description: 'Relative time since the most recent pre-turn message.',
     example: '16 minutes ago',
+  },
+  {
+    token: '{{runtime_last_message_received_days_hours}}',
+    description: 'Approximate elapsed time since the most recent pre-turn message in day/hour form.',
+    example: '2 days 3 hours',
+  },
+  {
+    token: '{{runtime_response_style_name}}',
+    description: 'Human-readable response style name for the current turn.',
+    example: 'Expressive',
+  },
+  {
+    token: '{{runtime_response_style_guidance_body}}',
+    description: 'Detailed response style guidance text for the current turn.',
+    example: 'Warm, emotionally available prose is appropriate here; do not collapse into sterile brevity.',
+  },
+  {
+    token: '{{runtime_tooling_active_count}}',
+    description: 'Count of currently active tools.',
+    example: '6',
+  },
+  {
+    token: '{{runtime_tooling_available_extended_count}}',
+    description: 'Count of additional extended tools available for loading.',
+    example: '3',
   },
 ];
 

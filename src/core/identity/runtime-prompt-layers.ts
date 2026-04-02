@@ -33,7 +33,7 @@ export const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefini
     name: "Current Date & Time",
     priority: 100,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<current_datetime>\nIt is {{runtime_current_datetime_human}} {{active_timezone}}.\n</current_datetime>",
+    content: "<current_datetime>\nIt is {{runtime_current_weekday}}, {{runtime_current_date_human}} at {{runtime_current_time_human}} in {{active_timezone}}.\n</current_datetime>",
   },
   {
     identifier: "runtime.last_message_received",
@@ -110,7 +110,7 @@ export const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefini
     name: "Response Style Guidance",
     priority: 210,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<response_style_guidance>\n{{runtime_response_style_guidance}}\n</response_style_guidance>",
+    content: "<response_style_guidance>\nResponse style for this turn: {{runtime_response_style_name}}.\n{{runtime_response_style_guidance_body}}\n</response_style_guidance>",
   },
   {
     identifier: "runtime.internal_state",

@@ -26,4 +26,11 @@ describe('runtime prompt layer schema', () => {
     definitions[0]!.schema.required = false;
     expect(getRuntimePromptLayerDefinition('runtime.current_datetime')?.schema.required).toBe(true);
   });
+
+  it('uses granular runtime variables in editable default templates', () => {
+    expect(getRuntimePromptLayerDefinition('runtime.current_datetime')?.content).toContain('{{runtime_current_weekday}}');
+    expect(getRuntimePromptLayerDefinition('runtime.current_datetime')?.content).toContain('{{runtime_current_time_human}}');
+    expect(getRuntimePromptLayerDefinition('runtime.response_style_guidance')?.content).toContain('{{runtime_response_style_name}}');
+    expect(getRuntimePromptLayerDefinition('runtime.response_style_guidance')?.content).toContain('{{runtime_response_style_guidance_body}}');
+  });
 });

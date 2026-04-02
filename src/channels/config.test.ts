@@ -40,6 +40,34 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('throws when channels.json has a non-object root', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify(['telegram']));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'Failed to load channels config',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when channels.json.channels is not an object', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        channels: ['telegram'],
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.channels must be an object',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('throws when channels.json references a missing env token', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {
@@ -346,6 +374,26 @@ describe('loadRuntimeChannelsConfig', () => {
 
       const config = loadRuntimeChannelsConfig(dataDir, {});
       expect(config.telegram.webhook.path).toBe('/telegram/callback');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('throws when channels.json.telegram.webhook.path is not a string', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        telegram: {
+          enabled: false,
+          webhook: {
+            path: 1234,
+          },
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.telegram.webhook.path must be a string',
+      );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

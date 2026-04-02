@@ -140,11 +140,6 @@ function parseTelegramMode(value: unknown): TelegramMode | undefined {
   return value;
 }
 
-function parseString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  return value.trim();
-}
-
 function parseConfiguredString(value: unknown, fieldName: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string') {
@@ -211,11 +206,28 @@ function parseOverrideStringArray(value: unknown): string[] {
     .filter(entry => entry.length > 0);
 }
 
-function parseWebhookPath(value: unknown, fallback: string): string {
-  const parsed = parseString(value) ?? fallback;
-  const normalized = parsed.trim();
-  if (!normalized) return fallback;
+function normalizeWebhookPath(value: string): string {
+  const normalized = value.trim();
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
+function parseConfiguredWebhookPath(value: unknown, fieldName: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`${fieldName} must be a string`);
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error(`${fieldName} must not be empty`);
+  }
+  return normalizeWebhookPath(normalized);
+}
+
+function parseOptionalWebhookPath(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim();
+  if (!normalized) return fallback;
+  return normalizeWebhookPath(normalized);
 }
 
 function deriveWebhookPathFromUrl(webhookUrl: string): string | undefined {
@@ -381,11 +393,15 @@ export function loadRuntimeChannelsConfig(
   const webhookPort = parseConfiguredPositiveInteger(env.TELEGRAM_WEBHOOK_PORT, 'TELEGRAM_WEBHOOK_PORT')
     ?? parseConfiguredPositiveInteger(webhookConfig.port, 'channels.json.telegram.webhook.port')
     ?? DEFAULT_TELEGRAM_WEBHOOK_PORT;
+  const webhookPathFromFile = parseConfiguredWebhookPath(
+    webhookConfig.path,
+    'channels.json.telegram.webhook.path',
+  );
   const webhookPathFallback = deriveWebhookPathFromUrl(webhookUrl)
     ?? DEFAULT_TELEGRAM_CHANNEL_CONFIG.webhook.path;
-  const webhookPath = parseWebhookPath(
-    env.TELEGRAM_WEBHOOK_PATH ?? webhookConfig.path,
-    webhookPathFallback,
+  const webhookPath = parseOptionalWebhookPath(
+    env.TELEGRAM_WEBHOOK_PATH,
+    webhookPathFromFile ?? webhookPathFallback,
   );
 
   if (enabled && mode === 'webhook') {

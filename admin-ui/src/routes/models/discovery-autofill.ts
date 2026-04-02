@@ -24,6 +24,19 @@ export interface DiscoveryAutofillValues {
   supportsReasoning?: boolean;
 }
 
+export interface DiscoveryBackfillTarget {
+  identity: {
+    provider?: string;
+    source: {
+      type?: string;
+      label?: string;
+    };
+  };
+  capabilities?: Record<string, unknown>;
+  tuning?: Record<string, unknown>;
+  cost?: Record<string, unknown>;
+}
+
 const PER_TOKEN_TO_PER_MILLION = 1_000_000;
 const LOOKUP_WRAPPER_PREFIXES = new Set(['openrouter', 'litellm', 'proxy']);
 const PROVIDER_INFRA_HINTS = new Set(['proxy', 'litellm', 'router']);
@@ -34,6 +47,10 @@ function normalizeString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizeLookupKey(value: unknown): string | undefined {
@@ -55,6 +72,10 @@ function normalizePrice(value: unknown): number | undefined {
 
 function normalizeTrue(value: unknown): boolean | undefined {
   return value === true ? true : undefined;
+}
+
+function hasFiniteNumber(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 function providerPrefixFromModelId(modelId: string): string | undefined {
@@ -234,6 +255,93 @@ export function deriveDiscoveryAutofill(model: DiscoveryAutofillSource): Discove
     ...(normalizeTrue(model.supportsVision) ? { supportsVision: true } : {}),
     ...(normalizeTrue(model.supportsReasoning) ? { supportsReasoning: true } : {}),
   };
+}
+
+export function backfillDiscoveredMetadata(
+  entry: DiscoveryBackfillTarget,
+  discovered: DiscoveryAutofillSource,
+): boolean {
+  const autofill = deriveDiscoveryAutofill(discovered);
+  let changed = false;
+
+  if (autofill.provider && !normalizeString(entry.identity.provider)) {
+    entry.identity.provider = autofill.provider;
+    changed = true;
+  }
+
+  if (autofill.sourceType && !normalizeString(entry.identity.source.type)) {
+    entry.identity.source.type = autofill.sourceType;
+    changed = true;
+  }
+
+  if (!normalizeString(entry.identity.source.label)) {
+    const sourceLabel = normalizeString(entry.identity.source.type) ?? autofill.sourceType;
+    if (sourceLabel) {
+      entry.identity.source.label = sourceLabel;
+      changed = true;
+    }
+  }
+
+  const capabilities = isRecord(entry.capabilities) ? { ...entry.capabilities } : undefined;
+  let nextCapabilities = capabilities;
+  const ensureCapabilities = (): Record<string, unknown> => {
+    if (!nextCapabilities) nextCapabilities = {};
+    return nextCapabilities;
+  };
+
+  if (autofill.contextWindow !== undefined && normalizePositiveInteger(nextCapabilities?.contextWindow) === undefined) {
+    ensureCapabilities().contextWindow = autofill.contextWindow;
+    changed = true;
+  }
+  if (autofill.maxOutputTokens !== undefined && normalizePositiveInteger(nextCapabilities?.maxOutputTokens) === undefined) {
+    ensureCapabilities().maxOutputTokens = autofill.maxOutputTokens;
+    changed = true;
+  }
+  if (autofill.supportsVision === true && typeof nextCapabilities?.supportsVision !== 'boolean') {
+    ensureCapabilities().supportsVision = true;
+    changed = true;
+  }
+  if (autofill.supportsReasoning === true && typeof nextCapabilities?.supportsReasoning !== 'boolean') {
+    ensureCapabilities().supportsReasoning = true;
+    changed = true;
+  }
+  if (nextCapabilities) {
+    entry.capabilities = nextCapabilities;
+  }
+
+  const tuning = isRecord(entry.tuning) ? { ...entry.tuning } : undefined;
+  let nextTuning = tuning;
+  const ensureTuning = (): Record<string, unknown> => {
+    if (!nextTuning) nextTuning = {};
+    return nextTuning;
+  };
+  if (autofill.maxOutputTokens !== undefined && normalizePositiveInteger(nextTuning?.maxOutputTokens) === undefined) {
+    ensureTuning().maxOutputTokens = autofill.maxOutputTokens;
+    changed = true;
+  }
+  if (nextTuning) {
+    entry.tuning = nextTuning;
+  }
+
+  const cost = isRecord(entry.cost) ? { ...entry.cost } : undefined;
+  let nextCost = cost;
+  const ensureCost = (): Record<string, unknown> => {
+    if (!nextCost) nextCost = {};
+    return nextCost;
+  };
+  if (autofill.inputPer1MUsd !== undefined && !hasFiniteNumber(nextCost?.inputPer1MUsd)) {
+    ensureCost().inputPer1MUsd = autofill.inputPer1MUsd;
+    changed = true;
+  }
+  if (autofill.outputPer1MUsd !== undefined && !hasFiniteNumber(nextCost?.outputPer1MUsd)) {
+    ensureCost().outputPer1MUsd = autofill.outputPer1MUsd;
+    changed = true;
+  }
+  if (nextCost) {
+    entry.cost = nextCost;
+  }
+
+  return changed;
 }
 
 export function buildUniqueModelId(preferredId: string, existingIds: ReadonlySet<string>): string {

@@ -1,4 +1,11 @@
 export type SkillSource = 'companion' | 'bundled' | 'extra' | 'custom';
+export type SkillOwnership = 'companion' | 'deployment';
+
+export interface ManagedSkillOwnership {
+  owner: 'companion';
+  managedRoot: string;
+  configPath: string;
+}
 
 export interface SkillRequirementSpec {
   binaries: string[];

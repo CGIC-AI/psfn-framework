@@ -2,6 +2,7 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { Type } from '@sinclair/typebox';
 import { textResult, textResultWithError } from '../tools/results.js';
 import type { SkillsRuntime } from './runtime.js';
+import type { SkillOwnership, SkillSource } from './types.js';
 import { toErrorMessage } from '../utils/errors.js';
 
 const SKILL_TOOL_ACTION_NAMES = [
@@ -23,6 +24,17 @@ const SKILL_TOOL_ACTION_HELP = [
 
 type SkillToolActionName = (typeof SKILL_TOOL_ACTION_NAMES)[number];
 type SkillToolAction = 'list' | 'view' | 'create' | 'update';
+
+function resolveSkillOwnership(source: SkillSource): SkillOwnership {
+  switch (source) {
+    case 'companion':
+    case 'custom':
+      return 'companion';
+    case 'bundled':
+    case 'extra':
+      return 'deployment';
+  }
+}
 
 interface SkillListParams {
   includeSkipped?: boolean;
@@ -82,6 +94,7 @@ function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams):
     generatedAt: snapshot.generatedAt,
     signature: snapshot.signature,
     configEnabled: snapshot.configEnabled,
+    managedOwnership: runtime.getManagedOwnership(),
     budget: snapshot.budget,
     scannedFiles: snapshot.scannedFiles,
     loadedSkills: snapshot.loadedSkills,
@@ -97,6 +110,7 @@ function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams):
       version: skill.version ?? null,
       always: skill.always,
       source: skill.source,
+      ownership: resolveSkillOwnership(skill.source),
       path: skill.relativePath,
       requires: skill.requires,
     })),
@@ -108,6 +122,7 @@ function buildSkillListPayload(runtime: SkillsRuntime, params: SkillListParams):
       createdAt: entry.createdAt ?? null,
       updatedAt: entry.updatedAt ?? null,
       source: entry.source,
+      ownership: resolveSkillOwnership(entry.source),
       path: entry.relativePath,
       inPromptIndex: includedNames.has(entry.name),
       eligible: eligibility.eligible,
@@ -145,6 +160,7 @@ function buildSkillViewPayload(runtime: SkillsRuntime, name: string): Record<str
     createdAt: entry.createdAt ?? null,
     updatedAt: entry.updatedAt ?? null,
     source: entry.source,
+    ownership: resolveSkillOwnership(entry.source),
     path: entry.relativePath,
     always: entry.always,
     requires: entry.requires,
@@ -242,6 +258,7 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
               version: created.version,
               createdAt: created.createdAt,
               updatedAt: created.updatedAt,
+              ownership: 'companion',
               path: created.relativePath,
             }, null, 2));
           }
@@ -269,6 +286,7 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
               version: updated.version,
               createdAt: updated.createdAt,
               updatedAt: updated.updatedAt,
+              ownership: 'companion',
               path: updated.relativePath,
             }, null, 2));
           }

@@ -24,14 +24,14 @@ function readText(result: { content: Array<{ text?: string }> }): string {
 describe('skills tools', () => {
   it('supports create, view, update, and list through the unified skill tool', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-'));
-    const dataDir = join(root, 'data');
+    const companionDataDir = join(root, 'companion-data');
     const seedDir = join(root, 'config');
-    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
     writeSeedConfig(seedDir);
 
     try {
       const runtime = new SkillsRuntime({
-        dataDir,
+        dataDir: companionDataDir,
         seedDir,
         repoRoot: root,
         isBinaryAvailable: () => true,
@@ -51,11 +51,13 @@ describe('skills tools', () => {
       const createdPayload = JSON.parse(readText(createResult)) as {
         action: string;
         version: number;
+        ownership: string;
         path: string;
       };
       expect(createdPayload.action).toBe('created');
       expect(createdPayload.version).toBe(1);
-      expect(createdPayload.path).toContain('data/skills/ops/incident-runbook/SKILL.md');
+      expect(createdPayload.ownership).toBe('companion');
+      expect(createdPayload.path).toContain('companion-data/skills/ops/incident-runbook/SKILL.md');
 
       const viewCreated = await skillTool.execute('call-2', {
         action: 'skill_view',
@@ -65,9 +67,11 @@ describe('skills tools', () => {
         name: string;
         content: string;
         category: string;
+        ownership: string;
       };
       expect(createdViewPayload.name).toBe('incident-runbook');
       expect(createdViewPayload.category).toBe('ops');
+      expect(createdViewPayload.ownership).toBe('companion');
       expect(createdViewPayload.content).toContain('Gather logs');
 
       const updateResult = await skillTool.execute('call-3', {
@@ -86,18 +90,28 @@ describe('skills tools', () => {
         includeSkipped: false,
       });
       const listPayload = JSON.parse(readText(listResult)) as {
+        managedOwnership: { owner: string; managedRoot: string; configPath: string };
         categories: Array<{ category: string; total: number; included: number }>;
-        includedInPrompt: Array<{ name: string }>;
-        skills: Array<{ name: string; inPromptIndex: boolean }>;
+        includedInPrompt: Array<{ name: string; ownership: string }>;
+        skills: Array<{ name: string; inPromptIndex: boolean; ownership: string }>;
       };
+      expect(listPayload.managedOwnership).toEqual({
+        owner: 'companion',
+        managedRoot: 'companion-data/skills',
+        configPath: 'companion-data/skills.json',
+      });
       expect(listPayload.categories).toContainEqual({
         category: 'ops',
         total: 1,
         included: 1,
       });
-      expect(listPayload.includedInPrompt.some(skill => skill.name === 'incident-runbook')).toBe(true);
+      expect(listPayload.includedInPrompt.some(skill => (
+        skill.name === 'incident-runbook'
+        && skill.ownership === 'companion'
+      ))).toBe(true);
       const managedSkill = listPayload.skills.find(skill => skill.name === 'incident-runbook');
       expect(managedSkill?.inPromptIndex).toBe(true);
+      expect(managedSkill?.ownership).toBe('companion');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -105,14 +119,14 @@ describe('skills tools', () => {
 
   it('returns explicit errors for invalid actions, invalid names, and missing skills', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-errors-'));
-    const dataDir = join(root, 'data');
+    const companionDataDir = join(root, 'companion-data');
     const seedDir = join(root, 'config');
-    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
     writeSeedConfig(seedDir);
 
     try {
       const runtime = new SkillsRuntime({
-        dataDir,
+        dataDir: companionDataDir,
         seedDir,
         repoRoot: root,
       });

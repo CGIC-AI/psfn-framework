@@ -1,0 +1,32 @@
+[
+  {
+    "description": "Scaffold placeholder. Replace with scenario-derived eval cases before scoring providers.",
+    "vars": {
+      "id": "scaffold-placeholder",
+      "category": "scaffold",
+      "prompt_text": "Replace this placeholder with a prompt sourced from a real scenario record.",
+      "expected_emotion_labels": [
+        "placeholder"
+      ],
+      "expected_vad_range": {
+        "valence": {
+          "min": 0,
+          "max": 0
+        },
+        "arousal": {
+          "min": 0,
+          "max": 0
+        },
+        "dominance": {
+          "min": 0,
+          "max": 0
+        }
+      },
+      "ground_truth_source": "placeholder"
+    },
+    "metadata": {
+      "scaffold_only": true
+    },
+    "assert": []
+  }
+]

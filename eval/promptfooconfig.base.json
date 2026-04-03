@@ -1,19 +1,12 @@
 {
-  "description": "PSFN emotion-eval scaffold. Replace the scaffold fixture and echo provider before running scored evaluations.",
-  "tags": {
-    "suite": "psfn-emotion-eval",
-    "stage": "scaffold"
-  },
-  "providers": [
-    "echo"
-  ],
-  "prompts": [
-    "file://./prompts/base.prompt.txt"
-  ],
+  "description": "Base Promptfoo scaffold for PSFN emotion evaluation.",
+  "prompts": ["{{prompt_text}}"],
+  "providers": [],
+  "tests": [],
   "defaultTest": {
     "metadata": {
-      "scaffold_only": true
+      "suite": "psfn-emotion-eval",
+      "schemaVersion": 1
     }
-  },
-  "tests": "file://./fixtures/promptfoo.scaffold-tests.json"
+  }
 }

@@ -1,34 +1,42 @@
-# PSFN Eval Scaffold
+# Eval Scaffolding
 
-This directory is the shared scaffold for PSFN emotion-eval work. It intentionally stops at contracts and local tooling setup:
+This directory is the repo-owned home for evaluation assets. `PSFN-rp6i` only establishes the shared contracts and base Promptfoo configuration surface; it does not wire new runtime behavior.
 
-- `src/` exports the shared TypeScript types, JSON-schema objects, and lightweight validators for scenario, result, and calibration data.
-- `promptfooconfig.base.json` is the base Promptfoo config for eval work. It uses Promptfoo's `echo` provider so the scaffold can be exercised without probing external model APIs.
-- `prompts/` holds reusable prompt templates.
-- `fixtures/` holds local scaffold-only Promptfoo test data.
+## Layout
 
-## Contracts
+- `promptfooconfig.base.json`: inert base Promptfoo config for eval overlays.
+- `tsconfig.json`: local TypeScript config for eval-only typechecking.
+- `src/types.ts`: shared eval entry types and enums.
+- `src/schemas.ts`: JSON Schema documents for scenario, result, and calibration entries.
+- `src/validation.ts`: lightweight runtime validators for the shared eval entry types.
+- `src/promptfoo.ts`: typed Promptfoo config surface backed by the base JSON config.
+- `src/index.ts`: single re-export surface for downstream eval tooling.
 
-The current scaffold defines three primary record types:
+## Shared Contracts
 
-- `EvalScenario`: source prompt plus ground-truth emotion labels and VAD range
-- `EvalResult`: model/provider output plus scored metrics
-- `EvalCalibrationEntry`: model/provider-specific calibration hints such as label aliasing and VAD offsets
+- Scenario entries define the prompt under test plus the expected emotion labels, expected VAD band, and ground-truth provenance.
+- Result entries normalize provider/model output together with the measurement layer that produced the metrics.
+- Calibration entries define threshold bands for scoring or alerting on eval metrics.
 
-Catalog wrappers are also included so datasets can be versioned with `schema_version: 1`.
+## Promptfoo Base Config
+
+`promptfooconfig.base.json` is intentionally minimal:
+
+- `prompts` is set to `{{prompt_text}}` so scenario rows can supply the evaluated prompt body.
+- `providers` and `tests` are empty so downstream configs can layer concrete providers, datasets, and assertions without mutating the base contract.
+- `defaultTest.metadata.schemaVersion` is pinned to `1` to align downstream artifacts with the initial eval schema version.
 
 ## Validation
 
-Type-check the eval-local TypeScript surface:
+Use the smallest local checks for this scaffold:
 
 ```bash
-npx tsc -p eval/tsconfig.json --noEmit
+npx --no-install tsc -p eval/tsconfig.json --noEmit
+npm run lint
 ```
 
-The base Promptfoo config is JSON and can be loaded with:
+Once a concrete provider/test overlay exists, Promptfoo can be pointed at the base file with:
 
 ```bash
-promptfoo eval -c eval/promptfooconfig.base.json
+npx promptfoo eval -c eval/promptfooconfig.base.json
 ```
-
-Before running real evals, replace the scaffold fixture in `fixtures/promptfoo.scaffold-tests.json` and swap `providers: ["echo"]` for the actual providers under test.

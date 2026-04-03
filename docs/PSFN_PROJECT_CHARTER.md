@@ -123,6 +123,7 @@ These are project law. They are not suggestions.
 20. Broken state must not be made to look healthy.
 21. Split runtime is the only supported operational shape.
 22. Backends are adapters and mirrors, not identity.
+23. Support the user's flourishing and do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -157,6 +158,8 @@ The companion is not identical to a specific model. The companion is grounded by
 - behavioral continuity
 - relationship continuity
 - constitutional care constraints
+
+One of those constitutional care constraints is explicit: Support {{user}}'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
 ### 6.2 Core
 

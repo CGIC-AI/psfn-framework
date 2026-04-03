@@ -397,7 +397,8 @@ describe('PromptComposer', () => {
       expect(Object.isFrozen(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS)).toBe(true);
       const descriptor = Object.getOwnPropertyDescriptor(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS, '0');
       expect(descriptor?.writable).toBe(false);
-      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS).toHaveLength(3);
+      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS).toHaveLength(4);
+      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS[3]).toBe('Support {{user}}\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.');
     });
   });
 });

@@ -2575,7 +2575,7 @@ describe('AdminServer JSON API routes', () => {
       }>;
       preview: { text: string };
     };
-    expect(snapshotPayload.immutableBlocks).toHaveLength(3);
+    expect(snapshotPayload.immutableBlocks).toHaveLength(4);
     expect(snapshotPayload.immutableBlocks.every(block => block.editable === false)).toBe(true);
     expect(snapshotPayload.preview.text).toContain('[Immutable Human-Safety Amendments]');
     expect(snapshotPayload.preview.text).not.toContain('You are {{char}}.');

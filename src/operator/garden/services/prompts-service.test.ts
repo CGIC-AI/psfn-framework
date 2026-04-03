@@ -127,8 +127,8 @@ describe('AdminPromptsDataService', () => {
     const snapshot = service.getConstitutionSnapshot();
     expect(snapshot).not.toBeNull();
     const nonNullSnapshot = snapshot!;
-    expect(nonNullSnapshot.immutableBlocks).toHaveLength(3);
-    expect(nonNullSnapshot.immutableBlocks.map(block => block.editable)).toEqual([false, false, false]);
+    expect(nonNullSnapshot.immutableBlocks).toHaveLength(4);
+    expect(nonNullSnapshot.immutableBlocks.map(block => block.editable)).toEqual([false, false, false, false]);
     expect(nonNullSnapshot.companionLayer?.editable).toBe(false);
     expect(nonNullSnapshot.mutableLayers).toHaveLength(0);
     expect(nonNullSnapshot.preview.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);

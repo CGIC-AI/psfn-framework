@@ -4,12 +4,12 @@ This matrix is the operator-facing VRAM guide for the checked-in local dense eva
 
 | Target | Backend | Q4 / default path | Q5 | Q6 | 64k context note |
 | --- | --- | --- | --- | --- | --- |
-| `Qwen/Qwen3-8B` | llama.cpp | ~6-8 GB weights + KV cache | ~7-9 GB + KV cache | ~8-10 GB + KV cache | Comfortable on a single 4090 if KV pressure stays bounded. |
-| `Qwen/Qwen3-8B` | vLLM | n/a | n/a | `bf16` ~18-24 GB | Fits on one 4090 with conservative batch size. |
-| `Qwen/Qwen3-14B` | llama.cpp | ~10-14 GB weights + KV cache | ~12-16 GB + KV cache | ~14-18 GB + KV cache | Single-card possible for narrow runs; dual-card safer once KV grows. |
-| `Qwen/Qwen3-14B` | vLLM | n/a | n/a | `bf16` ~32-40 GB | Dual 4090 tensor-parallel profile is the intended path. |
-| `Qwen/Qwen2.5-14B-Instruct` | llama.cpp | ~10-14 GB weights + KV cache | ~12-16 GB + KV cache | ~14-18 GB + KV cache | Native GGUF context is smaller than dense HF; extend carefully. |
-| `Qwen/Qwen2.5-14B-Instruct` | vLLM | n/a | n/a | `bf16` ~32-40 GB | Dual-card tensor-parallel profile is the intended dense path. |
+| `Qwen/Qwen3.5-9B` | llama.cpp | ~7-9 GB weights + KV cache | ~8-10 GB + KV cache | ~9-11 GB + KV cache | Comfortable on a single 4090 if KV pressure stays bounded. |
+| `Qwen/Qwen3.5-9B` | vLLM | n/a | n/a | `bf16` ~18-24 GB | The intended hidden-state verification target once the Python stack exists. |
+| `Qwen/Qwen3.5-27B` | llama.cpp | ~18-22 GB weights + KV cache | ~21-25 GB + KV cache | ~24-28 GB + KV cache | Dual 4090 recommended once context or batch size grows. |
+| `Qwen/Qwen3.5-27B` | vLLM | n/a | n/a | `bf16` ~48-60 GB | Treat as a dual-card or quantized serving path. |
+| `google/gemma-4-31B-it` | llama.cpp | ~20-24 GB weights + KV cache | ~24-28 GB + KV cache | ~28-32 GB + KV cache | Requires a locally mirrored GGUF file; single-card runs are tight. |
+| `google/gemma-4-31B-it` | vLLM | n/a | n/a | `bf16` ~56-70 GB | Multi-GPU or quantized path; not currently verifiable on this machine. |
 
 Guidance:
 - Default to `Q4_K_M` for broad logprob sweeps.

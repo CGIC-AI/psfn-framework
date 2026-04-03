@@ -5,6 +5,7 @@ This directory is the repo-owned home for evaluation assets. `PSFN-rp6i` only es
 ## Layout
 
 - `promptfooconfig.base.json`: inert base Promptfoo config for eval overlays.
+- `local/`: local dense-model launch profiles, probe scripts, and setup notes for repo-owned eval targets.
 - `tsconfig.json`: local TypeScript config for eval-only typechecking.
 - `src/types.ts`: shared eval entry types and enums.
 - `src/schemas.ts`: JSON Schema documents for scenario, result, and calibration entries.

@@ -35,6 +35,7 @@
     "session:repair:integrity": "tsx src/app/maintenance/session-integrity-repair.ts",
     "migrate:embeddings": "tsx src/app/maintenance/migrate-embeddings.ts",
     "prefetch:hf-models": "tsx scripts/prefetch-hf-models.ts",
+    "eval:discover:logprobs": "tsx eval/discovery/probe-logprobs.ts",
     "migrate:persistence-layout": "tsx src/app/maintenance/migrate-persistence-layout.ts",
     "import-character": "tsx src/app/maintenance/import-character.ts",
     "e2e": "tsx src/app/e2e/e2e-test.ts",

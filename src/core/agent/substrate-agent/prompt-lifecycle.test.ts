@@ -1,11 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPromptContextSectionCacheability,
+  buildStaticPromptSettingsHash,
   captureTurnPromptSnapshot,
 } from './prompt-lifecycle.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
 
 describe('prompt-lifecycle cacheability', () => {
+  it('builds a stable settings hash regardless of variable order or now_iso churn', () => {
+    const baseline = buildStaticPromptSettingsHash({
+      user: 'Vega',
+      char: 'Purrsephone',
+      active_timezone: 'America/New_York',
+      now_iso: '2026-04-04T10:00:00.000-04:00',
+    });
+    const reordered = buildStaticPromptSettingsHash({
+      now_iso: '2026-04-04T10:30:00.000-04:00',
+      active_timezone: 'America/New_York',
+      char: 'Purrsephone',
+      user: 'Vega',
+    });
+    const changedStableSetting = buildStaticPromptSettingsHash({
+      user: 'Vega',
+      char: 'Purrsephone',
+      active_timezone: 'UTC',
+      now_iso: '2026-04-04T10:00:00.000-04:00',
+    });
+
+    expect(reordered).toBe(baseline);
+    expect(changedStableSetting).not.toBe(baseline);
+  });
+
   it('annotates template sections with cacheability classes and breakers', () => {
     const promptComposer = {
       composeSplit: () => ({

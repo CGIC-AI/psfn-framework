@@ -395,7 +395,10 @@ export function resolveActiveTools(
     }
   }
 
-  const snapshotTools: AdaptiveToolSnapshotTool[] = [...activeByName.values()]
+  const orderedActiveEntries = [...activeByName.values()]
+    .sort((left, right) => left.tool.name.localeCompare(right.tool.name));
+
+  const snapshotTools: AdaptiveToolSnapshotTool[] = orderedActiveEntries
     .map((entry) => ({
       toolName: entry.tool.name,
       source: entry.source,
@@ -418,7 +421,7 @@ export function resolveActiveTools(
   }
 
   return {
-    tools: [...activeByName.values()].map(entry => entry.tool),
+    tools: orderedActiveEntries.map(entry => entry.tool),
     snapshotTools,
     promotedSkipped: mergeAdaptiveSkips(params.promotedResolution.skipped, params.additionalSkipped ?? []),
     counts,

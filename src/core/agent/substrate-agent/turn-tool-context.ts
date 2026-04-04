@@ -42,7 +42,9 @@ export function readActiveTurnToolSchemas(agent: unknown): ToolSchema[] {
     if (!schema) continue;
     deduped.set(schema.name, schema);
   }
-  return [...deduped.values()].map(cloneToolSchema);
+  return [...deduped.values()]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(cloneToolSchema);
 }
 
 export function matchesAdaptiveToolSnapshotForTurn(

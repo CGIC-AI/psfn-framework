@@ -3674,12 +3674,12 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(toolNames).toContain('issue_close');
     expect(toolNames).not.toContain('issue_sync');
 
-    const createIndex = toolNames.indexOf('issue_create');
-    const updateIndex = toolNames.indexOf('issue_update');
-    const closeIndex = toolNames.indexOf('issue_close');
-    expect(createIndex).toBeGreaterThanOrEqual(0);
-    expect(updateIndex).toBeGreaterThan(createIndex);
-    expect(closeIndex).toBeGreaterThan(updateIndex);
+    const overlayToolNames = toolNames.filter((name) => [
+      'issue_close',
+      'issue_create',
+      'issue_update',
+    ].includes(name));
+    expect(overlayToolNames).toEqual(['issue_close', 'issue_create', 'issue_update']);
   });
 
   it('falls back cleanly when autoload candidates are unavailable', async () => {

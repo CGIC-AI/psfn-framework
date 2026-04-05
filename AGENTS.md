@@ -274,9 +274,13 @@ Required sequence:
    ```bash
    bd export > .beads/issues.jsonl
    ```
-7. Verify the branch is up to date with origin.
-8. Clean up orchestration handles.
-9. Hand off with tests run, remaining risks, and any open beads.
+7. When a sprint or implementation wave is completed, run a Fallow pass and review high-signal findings:
+   ```bash
+   npx -y fallow --format json > /tmp/fallow-report.json
+   ```
+8. Verify the branch is up to date with origin.
+9. Clean up orchestration handles.
+10. Hand off with tests run, remaining risks, and any open beads.
 
 Rules:
 
@@ -284,4 +288,5 @@ Rules:
 - If push fails, resolve it and retry.
 - Keep bead state aligned with the shipped git state.
 - If a sprint or implementation wave closes tracked work, refresh `.beads/issues.jsonl` from the final bead database state before handoff.
+- Treat Fallow as sprint or implementation-wave wrap-up hygiene, not a mandatory per-change gate.
 - Do not close a worker bead before its worktree has a passing `npm run lint` result.

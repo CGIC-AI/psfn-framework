@@ -1,21 +1,20 @@
-
 import { AudioPlayerStatus, createAudioResource, entersState } from '@discordjs/voice';
 import prism from 'prism-media';
 import { Readable } from 'node:stream';
-import type { SubstrateMessage } from '../../types.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import {
   buildFallbackOrder,
   runWithVoiceStageBudget,
   selectFallbackCandidate,
-} from '../../voice/policy/reliability.js';
+} from '../../primitives/voice/policy/reliability.js';
 import {
   validatePcmAudio,
   validateTranscriptText,
   validateTtsAudioChunk,
   validateTtsInputText,
-} from '../../voice/policy/security.js';
-import { toErrorMessage } from '../../utils/errors.js';
-import { createComponentLogger } from '../../logger.js';
+} from '../../primitives/voice/policy/security.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   CAPTURE_SILENCE_MS,
   MIN_PCM_BYTES,

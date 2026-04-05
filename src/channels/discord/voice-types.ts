@@ -1,14 +1,14 @@
 import type { AudioPlayer, VoiceConnection } from '@discordjs/voice';
 import type { Client, VoiceBasedChannel } from 'discord.js';
-import type { EligibilityGate } from '../../capabilities/eligibility.js';
-import type { EventBus } from '../../event-bus.js';
-import type { RuntimeVoiceTtsProvider } from '../../runtime/bootstrap-helpers.js';
-import type { SubstrateConfig } from '../../types.js';
-import type { StreamingSttConnector, SttStreamSession } from '../../voice/connectors/stt/index.js';
-import type { StreamingTtsConnector, TtsSynthesisSession } from '../../voice/connectors/tts/index.js';
-import type { VoiceReliabilityBudgets } from '../../voice/policy/reliability.js';
-import type { VoiceSecurityLimits } from '../../voice/policy/security.js';
-import type { MessageHandler } from '../types.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import type { RuntimeVoiceTtsProvider } from '../../app/startup/support/bootstrap-helpers.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { StreamingSttConnector, SttStreamSession } from '../../primitives/voice/connectors/stt/index.js';
+import type { StreamingTtsConnector, TtsSynthesisSession } from '../../primitives/voice/connectors/tts/index.js';
+import type { VoiceReliabilityBudgets } from '../../primitives/voice/policy/reliability.js';
+import type { VoiceSecurityLimits } from '../../primitives/voice/policy/security.js';
+import type { MessageHandler } from '../backplane/types.js';
 
 export const CAPTURE_SILENCE_MS = 1_200;
 export const MIN_PCM_BYTES = 32_000;

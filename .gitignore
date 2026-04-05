@@ -42,3 +42,6 @@ admin-ui/.svelte-kit/
 
 # Local Firecrawl cache/workdir
 .firecrawl/
+
+# Local Fallow cache/workdir
+.fallow/

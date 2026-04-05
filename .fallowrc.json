@@ -1,0 +1,63 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "entry": [
+    "src/index.ts",
+    "src/app/agent/main.ts",
+    "src/app/gateway/main.ts",
+    "src/app/operator/main.ts",
+    "admin-ui/src/routes/+layout.svelte",
+    "admin-ui/src/routes/+page.svelte",
+    "admin-ui/src/routes/**/+page.svelte",
+    "admin-ui/src/routes/**/+layout.svelte",
+    "admin-ui/src/routes/**/+error.svelte",
+    "admin-ui/src/routes/**/+page.ts",
+    "admin-ui/src/routes/**/+layout.ts",
+    "admin-ui/src/routes/**/+server.ts"
+  ],
+  "ignorePatterns": [
+    ".beads/**",
+    ".codex-*/**",
+    ".fallow/**",
+    ".firecrawl/**",
+    "worktrees/**"
+  ],
+  "workspaces": {
+    "patterns": [
+      "admin-ui"
+    ]
+  },
+  "ignoreDependencies": [
+    "@mariozechner/pi-web-ui",
+    "@sinclair/typebox",
+    "@snazzah/davey",
+    "@sveltejs/adapter-static",
+    "@sveltejs/kit",
+    "@tailwindcss/vite",
+    "sherpa-onnx-node",
+    "svelte",
+    "tailwindcss",
+    "vite"
+  ],
+  "dynamicallyLoaded": [
+    "admin-ui/src/routes/**/+page.svelte",
+    "admin-ui/src/routes/**/+layout.svelte",
+    "admin-ui/src/routes/**/+error.svelte",
+    "admin-ui/src/routes/**/+page.ts",
+    "admin-ui/src/routes/**/+layout.ts",
+    "admin-ui/src/routes/**/+server.ts"
+  ],
+  "rules": {
+    "unused-dependencies": "warn"
+  },
+  "overrides": [
+    {
+      "files": [
+        "admin-ui/src/**/*.{svelte,ts,js}"
+      ],
+      "rules": {
+        "unlisted-dependencies": "warn",
+        "unresolved-imports": "warn"
+      }
+    }
+  ]
+}

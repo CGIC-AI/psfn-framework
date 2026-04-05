@@ -1,72 +1,27 @@
+import type { DashboardStats } from '../../../../src/operator/garden/types.js';
+import type { ProvidersRuntimeConfig } from '../../../../src/system/config/providers-config.js';
+
+export type {
+  CredentialReference,
+  EnvCredentialReference,
+} from '../../../../src/boundary/custody/credential-vault.js';
+export type {
+  DashboardCostWindow,
+  DashboardCostWindowTotals,
+  DashboardCostWindowUsage,
+  DashboardSessionContextPressure,
+  DashboardStats,
+  ThinkTraceStepView,
+  ThinkTraceView,
+} from '../../../../src/operator/garden/types.js';
+export type {
+  CanonicalProviderRegistry,
+  CanonicalProviderType,
+  ProviderRegistryEntry,
+} from '../../../../src/shared/contracts/runtime.js';
+export type { ProvidersRuntimeConfig } from '../../../../src/system/config/providers-config.js';
+
 // Dashboard
-export type DashboardCostWindow = 'today' | 'week' | 'month';
-
-export interface DashboardCostWindowUsage {
-  turns: number;
-  llmCalls: number;
-  toolCalls: number;
-  estimatedCostUsd: number;
-}
-
-export interface DashboardCostWindowTotals {
-  today: DashboardCostWindowUsage;
-  week: DashboardCostWindowUsage;
-  month: DashboardCostWindowUsage;
-}
-
-export interface DashboardSessionContextPressure {
-  sessionId: string | null;
-  utilizationPct: number;
-  hasTelemetry: boolean;
-}
-
-export interface DashboardStats {
-  memoryTotal: number;
-  memoryByType: Record<string, number>;
-  avgSalience: number;
-  sessionCount: number;
-  schedulerTasks: number;
-  activeShards: number;
-  sessionUsage: {
-    turns: number;
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens: number;
-    llmCalls: number;
-    toolCalls: number;
-    activeSessionContextPressure: DashboardSessionContextPressure;
-    estimatedCostUsd: number;
-    costWindows: {
-      selected: DashboardCostWindow;
-      byWindow: DashboardCostWindowTotals;
-    };
-  };
-  recentThinkTraces: ThinkTraceView[];
-}
-
-export interface ThinkTraceStepView {
-  iteration: number;
-  inputTokens: number;
-  outputTokens: number;
-  cumulativeTokens: number;
-  durationMs: number;
-  code: string;
-  output: string;
-  error: string | null;
-  variablesChanged: string[];
-}
-
-export interface ThinkTraceView {
-  timestamp: number;
-  task: string;
-  iterations: number;
-  totalTokens: number;
-  durationMs: number;
-  truncated: boolean;
-  budgetStop: string | null;
-  steps: ThinkTraceStepView[];
-}
-
 export interface AdminDashboardData {
   stats: DashboardStats;
 }
@@ -712,47 +667,6 @@ export interface SettingsContractData {
   schemaVersion: number;
   subsystems: Record<string, SettingsContractSubsystem>;
   fields: Record<string, SettingsContractField>;
-}
-
-export type CanonicalProviderType =
-  | 'litellm_proxy'
-  | 'openrouter'
-  | 'openai'
-  | 'anthropic'
-  | 'google'
-  | 'mistral'
-  | 'generic_openai';
-
-export interface EnvCredentialReference {
-  kind: 'env';
-  envName: string;
-}
-
-export type CredentialReference = EnvCredentialReference;
-
-export interface ProviderRegistryEntry {
-  id: string;
-  type: CanonicalProviderType;
-  enabled: boolean;
-  label?: string;
-  apiBaseUrl?: string;
-  modelsApiUrl?: string;
-  apiKeyRef?: CredentialReference;
-  metadata?: Record<string, unknown>;
-}
-
-export interface CanonicalProviderRegistry {
-  schemaVersion: 1;
-  providers: ProviderRegistryEntry[];
-}
-
-export interface ProvidersRuntimeConfig {
-  registry: CanonicalProviderRegistry;
-  litellmBaseUrl?: string;
-  litellmApiKeyRef?: CredentialReference;
-  openRouterApiBaseUrl?: string;
-  openRouterModelsApiUrl?: string;
-  openRouterApiKeyRef?: CredentialReference;
 }
 
 export interface AdminSettingsData {

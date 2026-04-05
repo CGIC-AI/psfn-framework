@@ -1,61 +1,21 @@
-export type RuntimeServiceHealthStatus =
-  | 'healthy'
-  | 'degraded'
-  | 'unavailable'
-  | 'not_applicable';
+import type { AdaptiveToolRuntimeState } from '../../../../src/core/agent/adaptive-tools-telemetry.js';
+import type { RuntimeToolCatalogSnapshot } from '../../../../src/core/agent/tool-catalog.js';
+import type {
+  RuntimeServiceHealth,
+  RuntimeServiceHealthStatus,
+} from '../../../../src/operator/tool-health/types.js';
 
-export type RuntimeServiceId = 'gateway' | 'vault' | 'ntfy';
-
-export interface RuntimeServiceFailure {
-  message: string;
-  at: number;
-  scope?: string;
-}
-
-export interface RuntimeServiceHealth {
-  serviceId: RuntimeServiceId;
-  status: RuntimeServiceHealthStatus;
-  detail: string;
-  checkedAt: number;
-  availableActions?: string[];
-  lastFailure?: RuntimeServiceFailure;
-}
-
-export interface RuntimeToolCatalogEntry {
-  name: string;
-  description: string;
-  scope: 'core' | 'extended';
-}
-
-export interface RuntimeToolCatalogSnapshot {
-  generatedAt: number;
-  tools: RuntimeToolCatalogEntry[];
-}
-
-export interface AdaptiveToolRuntimeState {
-  generatedAt: number;
-  coreTools: string[];
-  extendedTools: string[];
-  promotedToolsConfigured: string[];
-  promotedToolsActive: string[];
-  promotedToolsSkipped: Array<{
-    toolName: string;
-    source: string;
-    reason: string;
-    missingTokens?: string[];
-  }>;
-  loadedExtendedTools: Array<{
-    toolName: string;
-    source: string;
-    activatedAt: number;
-    lastActivatedAt: number;
-  }>;
-  activeTools: Array<{
-    toolName: string;
-    source: string;
-  }>;
-  lastSnapshot: unknown | null;
-}
+export type { AdaptiveToolRuntimeState } from '../../../../src/core/agent/adaptive-tools-telemetry.js';
+export type {
+  RuntimeToolCatalogEntry,
+  RuntimeToolCatalogSnapshot,
+} from '../../../../src/core/agent/tool-catalog.js';
+export type {
+  RuntimeServiceFailure,
+  RuntimeServiceHealth,
+  RuntimeServiceHealthStatus,
+  RuntimeServiceId,
+} from '../../../../src/operator/tool-health/types.js';
 
 export interface AdminToolFailureEvent {
   toolName: string;

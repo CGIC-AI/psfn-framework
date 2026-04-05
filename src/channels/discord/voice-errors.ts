@@ -1,4 +1,4 @@
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { StructuredVoiceError, VoiceTurnErrorStage } from './voice-types.js';
 import { UNKNOWN_VOICE_ERROR_CODE } from './voice-types.js';
 

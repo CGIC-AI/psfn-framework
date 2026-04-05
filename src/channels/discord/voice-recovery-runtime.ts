@@ -1,5 +1,5 @@
-import { createComponentLogger } from '../../logger.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type {
   VoiceConnectionRecoveryTrigger,
   VoiceRecoveryRuntimeContext,

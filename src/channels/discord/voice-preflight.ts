@@ -1,14 +1,14 @@
 import prism from 'prism-media';
-import { createComponentLogger } from '../../logger.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
   resolveRuntimeVoiceTtsProviderOrder,
-} from '../../runtime/bootstrap-helpers.js';
-import type { SubstrateConfig } from '../../types.js';
-import type { EligibilityGate } from '../../capabilities/eligibility.js';
-import type { StreamingTtsConnector, StreamingTtsProvider } from '../../voice/connectors/tts/index.js';
-import { toErrorMessage } from '../../utils/errors.js';
+} from '../../app/startup/support/bootstrap-helpers.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
+import type { StreamingTtsConnector, StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { OpusAvailabilityResult, VoicePreflightResult } from './voice-types.js';
 
 const log = createComponentLogger('DiscordVoice');

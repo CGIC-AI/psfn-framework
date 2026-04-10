@@ -283,7 +283,9 @@ describe('PromptComposer', () => {
       expect(existsSync(lastKnownGoodPath)).toBe(true);
 
       writeFileSync(layersPath, '{broken-json', 'utf-8');
-      const restartedStore = new PromptLayerStore(layersPath, historyPath);
+      const restartedStore = new PromptLayerStore(layersPath, historyPath, {
+        throwOnLoadError: false,
+      });
       const restartedComposer = new PromptComposer(restartedStore, undefined, lastKnownGoodPath);
       const fallback = restartedComposer.compose({ channelType: 'api' });
 

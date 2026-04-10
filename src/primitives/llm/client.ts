@@ -28,7 +28,10 @@ import {
   extractTextContent,
   toPiTools,
 } from './conversion.js';
-import { contextMessagesToPiMessages } from './message-conversion.js';
+import {
+  contextMessagesToPiMessages,
+  mergeSystemContextIntoSystemPrompt,
+} from './message-conversion.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
@@ -625,7 +628,7 @@ export class LLMClient {
 
   private buildPiContext(context: LLMContext): PiContext {
     return {
-      systemPrompt: context.systemPrompt,
+      systemPrompt: mergeSystemContextIntoSystemPrompt(context.systemPrompt, context.messages),
       messages: contextMessagesToPiMessages(context.messages),
       ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
     };

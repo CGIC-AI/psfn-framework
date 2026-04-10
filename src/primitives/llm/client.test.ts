@@ -420,6 +420,44 @@ describe('LLMClient provider observability', () => {
     });
   });
 
+  it('moves system context into provider system prompt observability instead of chat history', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.completeSimple.mockResolvedValue({
+      model: 'z-ai/glm-5',
+      usage: { input: 9, output: 4 },
+      stopReason: 'stop',
+      content: [{ type: 'text', text: 'done' }],
+    });
+
+    const response = await client.complete({
+      systemPrompt: 'System prompt',
+      messages: [
+        { role: 'user', content: 'Hi' },
+        { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
+        { role: 'assistant', content: 'I can keep that in mind.' },
+      ],
+    }, 'summary', { disableRetry: true });
+
+    expect(response.providerObservability).toMatchObject({
+      providerWireMessages: [
+        {
+          role: 'developer',
+          source: 'system_prompt',
+          content: [
+            'System prompt',
+            '<session_context>',
+            '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
+            '</session_context>',
+          ].join('\n\n'),
+        },
+        { role: 'user', source: 'message', content: 'Hi' },
+        { role: 'assistant', source: 'message', content: expect.stringContaining('I can keep that in mind.') },
+      ],
+    });
+    expect(response.providerObservability?.providerWireMessages.some(message => message.role === 'assistant'
+      && message.content.includes('Queue a private follow-up reminder.'))).toBe(false);
+  });
+
   it('preserves structured assistant and tool-result history when streaming through the transport path', async () => {
     const client = new LLMClient(makeConfig());
     mocks.streamSimple.mockImplementation(async function* () {

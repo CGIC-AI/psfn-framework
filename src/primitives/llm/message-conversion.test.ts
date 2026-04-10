@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { contextMessagesToPiMessages } from './message-conversion.js';
+import {
+  contextMessagesToPiMessages,
+  mergeSystemContextIntoSystemPrompt,
+} from './message-conversion.js';
 
 describe('contextMessagesToPiMessages', () => {
   it('maps user and assistant context messages to pi chat messages', () => {
@@ -25,28 +28,29 @@ describe('contextMessagesToPiMessages', () => {
     expect((result[1] as any).content).toEqual([{ type: 'text', text: 'world' }]);
   });
 
-  it('maps system context messages to assistant-side internal notes without discarding them', () => {
+  it('keeps system context out of authored chat history', () => {
     const result = contextMessagesToPiMessages([
       { role: 'system', content: '[SYSTEM: Scheduler] heartbeat prompt' },
     ], () => 1000);
 
-    expect(result).toEqual([{
-      role: 'assistant',
-      content: [{ type: 'text', text: '[SYSTEM: Scheduler] heartbeat prompt' }],
-      api: '',
-      provider: '',
-      model: '',
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'stop',
-      timestamp: 1000,
-    }]);
+    expect(result).toEqual([]);
+  });
+
+  it('merges system context into the system prompt instead of fabricating chat history', () => {
+    const systemPrompt = mergeSystemContextIntoSystemPrompt('Base instructions', [
+      { role: 'user', content: 'hello' },
+      { role: 'system', content: '[SYSTEM: Scheduler] heartbeat prompt' },
+      { role: 'assistant', content: 'world' },
+      { role: 'system', content: '[Tool result: search_logs] Returned 2 hits.' },
+    ]);
+
+    expect(systemPrompt).toBe([
+      'Base instructions',
+      '<session_context>',
+      '[SYSTEM: Scheduler] heartbeat prompt',
+      '[Tool result: search_logs] Returned 2 hits.',
+      '</session_context>',
+    ].join('\n\n'));
   });
 
   it('uses Date.now by default for each converted message', () => {
@@ -62,6 +66,21 @@ describe('contextMessagesToPiMessages', () => {
     expect((result[0] as any).timestamp).toBe(10);
     expect((result[1] as any).timestamp).toBe(11);
     expect(nowSpy).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
+  });
+
+  it('does not spend timestamps on filtered system context messages', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(77);
+
+    const result = contextMessagesToPiMessages([
+      { role: 'system', content: '[SYSTEM: Quiet Planner] hidden context' },
+      { role: 'user', content: 'visible partner message' },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect((result[0] as any).timestamp).toBe(77);
+    expect(nowSpy).toHaveBeenCalledTimes(1);
 
     nowSpy.mockRestore();
   });

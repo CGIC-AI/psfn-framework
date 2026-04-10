@@ -683,6 +683,67 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
   });
 
+  it('moves system context into the prompt system lane instead of assistant history in observability snapshots', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [
+        { role: 'user', content: 'Earlier user message' },
+        { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
+        { role: 'assistant', content: 'Earlier assistant reply' },
+      ],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+      staticPrefixTemplate: 'Static prefix template',
+      dynamicSuffixTemplate: 'Dynamic suffix template',
+      staticHash: 'static-hash',
+      versionPointer: 'prompt-v1',
+    }));
+    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
+    runtime.buildScratchpadContextBlock = vi.fn(() => '');
+    runtime.getPersonaAdaptation = vi.fn(() => null);
+
+    await handleMessageForTurn(runtime, createMessage('msg-system-context'));
+
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const mergedSystemPrompt = [
+      'Final system prompt',
+      '<session_context>',
+      '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
+      '</session_context>',
+    ].join('\n\n');
+    const providerWireMessages = (promptContext?.providerObservability as {
+      providerWireMessages?: Array<{ role: string; source: string; content: string }>;
+    } | undefined)?.providerWireMessages;
+
+    expect(promptContext?.messages).toEqual([
+      { role: 'user', content: 'Earlier user message' },
+      { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
+      { role: 'assistant', content: 'Earlier assistant reply' },
+    ]);
+    expect(promptContext?.finalSystemPrompt).toBe(mergedSystemPrompt);
+    expect(providerWireMessages).toEqual([
+      { role: 'system', source: 'system_prompt', content: mergedSystemPrompt },
+      { role: 'user', source: 'message', content: 'Earlier user message' },
+      { role: 'assistant', source: 'message', content: expect.stringContaining('Earlier assistant reply') },
+    ]);
+    expect(providerWireMessages?.some(message => message.role === 'assistant'
+      && message.content.includes('Queue a private follow-up reminder.'))).toBe(false);
+  });
+
   it('applies persisted runtime block order before session context assembly', async () => {
     const root = makeTempDir();
     const layoutStore = new PromptRuntimeLayoutStore(resolvePromptRuntimeLayoutPath(root));

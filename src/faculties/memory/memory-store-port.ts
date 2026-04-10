@@ -1,4 +1,4 @@
-import type { ScratchpadProvider } from '../../core/agent/contracts.js';
+import type { ScratchpadProvider } from '../../core/agent/scratchpad-port.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,

@@ -8,6 +8,7 @@ import type { ChannelMeta } from '../../system/trust/policy.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
 import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
 import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
+export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
 export interface LLMProviderPort {
   stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse>;
@@ -69,17 +70,4 @@ export interface MemoryProvider {
 
 export interface MemoryExtractor {
   maybeExtract(channelId: string, canonicalContactId?: string, turnId?: TurnID): Promise<void>;
-}
-
-export interface ScratchpadEntry {
-  id: string;
-  content: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface ScratchpadProvider {
-  // Narrow synchronous exemption: prompt assembly reads a local scratchpad view
-  // without crossing a runtime-selected backend boundary at call time.
-  listScratchpadEntries(limit?: number): ScratchpadEntry[];
 }

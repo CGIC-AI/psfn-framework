@@ -14,7 +14,7 @@ import type {
   HeartbeatAgent,
   HeartbeatRunTemplateResult,
   HeartbeatRuntimeOptions,
-} from './heartbeat-runtime.js';
+} from './heartbeat-runtime-contracts.js';
 import {
   resolveHeartbeatPolicyPath,
   resolveLegacyValuesJournalPath,

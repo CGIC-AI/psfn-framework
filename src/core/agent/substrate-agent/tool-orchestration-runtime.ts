@@ -3,7 +3,6 @@ import {
   evaluateToolCapabilityEligibility,
   type CapabilityAccess,
 } from '../../../system/capabilities/gate.js';
-import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import { PROMOTED_EXTENDED_TOOL_SLOTS_MAX, type SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -32,7 +31,11 @@ import type {
   ToolInterruptibility,
   WirableTool,
 } from '../tool-wiring-validator.js';
-import type { AutoloadTurnOutcome } from './adaptive-tools-runtime.js';
+import type {
+  AutoloadTurnOutcome,
+  PromotedToolMutationResult,
+} from './tool-runtime-contracts.js';
+export type { PromotedToolMutationResult } from './tool-runtime-contracts.js';
 
 export type PromotedToolMutationErrorCode =
   | 'invalid_name'
@@ -44,16 +47,6 @@ export type PromotedToolMutationErrorCode =
   | 'not_found'
   | 'invalid_slot'
   | 'persist_failed';
-
-export interface PromotedToolMutationResult {
-  ok: boolean;
-  changed: boolean;
-  promotedTools: string[];
-  message: string;
-  errorCode?: PromotedToolMutationErrorCode;
-  requiredTokens?: CapabilityToken[];
-  missingTokens?: CapabilityToken[];
-}
 
 export interface ActiveToolResolution {
   tools: AgentTool<any>[];

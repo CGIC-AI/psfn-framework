@@ -69,9 +69,9 @@ describe('buildTurnUserContent', () => {
     });
   });
 
-  it('routes pasted image urls through the dedicated reviewer path even without attachments', async () => {
+  it('does not treat pasted image urls as automatic current-turn vision input without attachments', async () => {
     const imageUrl = 'https://cdn.discordapp.com/attachments/a/b/current-photo.png?ex=fresh';
-    const { reviewer } = makeReviewer('A close-up portrait with blue eyes and white hair.');
+    const { reviewer, analyze } = makeReviewer('A close-up portrait with blue eyes and white hair.');
     const result = await buildTurnUserContent({
       message: makeMessage({
         content: imageUrl,
@@ -89,19 +89,18 @@ describe('buildTurnUserContent', () => {
     expect(hasVisionTurnInputs(makeMessage({
       content: imageUrl,
       attachments: [],
-    }))).toBe(true);
-    expect(result.content).toContain('Current image review: A close-up portrait with blue eyes and white hair.');
-    expect(result.content).not.toContain(imageUrl);
-    expect(result.content).not.toContain('User text:');
+    }))).toBe(false);
+    expect(result.content).toBe(imageUrl);
+    expect(result.currentTurnVisionReview).toBeUndefined();
+    expect(analyze).not.toHaveBeenCalled();
   });
 
-  it('strips current-turn image urls out of mixed semantic text before building response context', async () => {
-    const imageUrl = 'https://cdn.discordapp.com/attachments/a/b/current-photo.png?ex=fresh';
+  it('strips attachment urls out of mixed semantic text before building response context', async () => {
+    const imageUrl = 'https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768';
     const { reviewer } = makeReviewer();
     const result = await buildTurnUserContent({
       message: makeMessage({
         content: `ok love lets see if you can see ${imageUrl}`,
-        attachments: [],
       }),
       llmClient: {} as any,
       runtimeMode: 'gateway',

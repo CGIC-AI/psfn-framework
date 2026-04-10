@@ -24,7 +24,10 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
 ].join(' ');
 
 function formatResult(result: ImageGenerationResult): string {
-  return JSON.stringify(result, null, 2);
+  return JSON.stringify({
+    ...result,
+    images: result.images.map(({ localPath: _localPath, ...image }) => image),
+  }, null, 2);
 }
 
 function formatVisionReview(review: ImageVisionReview): string {
@@ -154,6 +157,7 @@ async function reviewGeneratedImages(
   reviewer: ImageVisionReviewer | undefined,
   input: {
     imageUrls: string[];
+    imageLocalPaths?: string[];
     prompt: string;
     mode: 'create' | 'edit';
   },
@@ -169,6 +173,7 @@ async function reviewGeneratedImages(
     return {
       visionReview: await reviewer.analyze({
         imageUrls: input.imageUrls,
+        ...(input.imageLocalPaths ? { imageLocalPaths: input.imageLocalPaths } : {}),
         prompt: input.prompt,
         mode: input.mode,
       }),
@@ -265,6 +270,7 @@ export function createImageCreateTool(
         });
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
+          imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
           prompt: params.prompt,
           mode: 'create',
         });
@@ -362,6 +368,7 @@ export function createImageEditTool(
         });
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
+          imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
           prompt: params.prompt,
           mode: 'edit',
         });

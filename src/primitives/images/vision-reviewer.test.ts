@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import { DefaultImageVisionReviewer } from './vision-reviewer.js';
 
@@ -57,7 +60,7 @@ describe('DefaultImageVisionReviewer', () => {
     expect(result.model).toBe('vision-model');
   });
 
-  it('fails closed when gateway fetch fails even for configured ComfyUI hosts', async () => {
+  it('routes configured ComfyUI output URLs through the local crawler lane and still fails closed on gateway denial', async () => {
     const binaryFetcher = vi.fn(async () => {
       throw new Error('gateway denied');
     });
@@ -84,6 +87,10 @@ describe('DefaultImageVisionReviewer', () => {
     })).rejects.toThrow('vision fetch failed for https://comfy.local.example.test/view?filename=review.png: gateway denied');
 
     expect(binaryFetcher).toHaveBeenCalledTimes(1);
+    expect(binaryFetcher).toHaveBeenCalledWith(
+      'https://comfy.local.example.test/view?filename=review.png',
+      { lane: 'local_crawler', maxBytes: 8 * 1024 * 1024 },
+    );
     expect(completeImpl).not.toHaveBeenCalled();
   });
 
@@ -133,5 +140,54 @@ describe('DefaultImageVisionReviewer', () => {
     expect(completeImpl).not.toHaveBeenCalled();
     expect(result.summary).toBe('Gateway review summary');
     expect(result.model).toBe('gateway-vision-model');
+  });
+
+  it('prefers a saved local image path over gateway fetch for generated outputs', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-vision-local-'));
+    const imagePath = join(tempDir, 'saved-output.png');
+    writeFileSync(imagePath, Buffer.from([1, 2, 3, 4]));
+
+    try {
+      const binaryFetcher = vi.fn(async () => ({
+        dataBase64: 'AQID',
+        mimeType: 'image/png',
+        sizeBytes: 3,
+      }));
+      const completeImpl = vi.fn(async (_model, context) => {
+        const message = context.messages[0] as {
+          content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+        };
+        expect(message.content[1]).toEqual({
+          type: 'image',
+          data: Buffer.from([1, 2, 3, 4]).toString('base64'),
+          mimeType: 'image/png',
+        });
+        return {
+          model: 'vision-model',
+          content: [{ type: 'text', text: 'The saved local image was reviewed directly.' }],
+        };
+      });
+
+      const reviewer = new DefaultImageVisionReviewer(
+        {
+          primaryProvider: 'openrouter',
+        } as any,
+        {
+          binaryFetcher,
+          completeImpl,
+        },
+      );
+
+      const result = await reviewer.analyze({
+        imageUrls: ['https://images.example.test/review.png'],
+        imageLocalPaths: [imagePath],
+        question: 'What is in this image?',
+      });
+
+      expect(binaryFetcher).not.toHaveBeenCalled();
+      expect(result.summary).toContain('reviewed directly');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

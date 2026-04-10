@@ -79,8 +79,16 @@ export function normalizeToolNameList(raw: unknown): string[] {
   }
   const deduped = new Set<string>();
   for (const entry of raw) {
-    if (typeof entry !== 'string') continue;
-    const trimmed = entry.trim();
+    const trimmed = typeof entry === 'string'
+      ? entry.trim()
+      : (
+        entry
+        && typeof entry === 'object'
+        && !Array.isArray(entry)
+        && typeof (entry as { name?: unknown }).name === 'string'
+          ? (entry as { name: string }).name.trim()
+          : ''
+      );
     if (!trimmed) continue;
     deduped.add(trimmed);
   }

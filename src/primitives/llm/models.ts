@@ -26,6 +26,8 @@ export interface OpenAICompatibleEndpointModelConfig {
   maxTokens?: number;
   /** Supports reasoning/thinking blocks */
   reasoning?: boolean;
+  /** Supports image input */
+  supportsVision?: boolean;
   /** OpenAI-compatible API shape to expose through pi-ai */
   api?: OpenAICompatibleApi;
   /** Format for reasoning parameter — required when reasoning: true */
@@ -56,7 +58,7 @@ export function createOpenAICompatibleEndpointModel(
     provider: config.provider,
     baseUrl: config.baseUrl,
     reasoning: config.reasoning ?? false,
-    input: ['text'],
+    input: config.supportsVision ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.contextWindow ?? 128_000,
     maxTokens: config.maxTokens ?? 4096,
@@ -88,6 +90,10 @@ export function createModel(
   maxTokens?: number,
   contextWindow?: number,
   api: OpenAICompatibleApi = 'openai-completions',
+  options: {
+    reasoning?: boolean;
+    supportsVision?: boolean;
+  } = {},
 ): Model<OpenAICompatibleApi> {
   return createOpenAICompatibleEndpointModel({
     baseUrl,
@@ -97,6 +103,8 @@ export function createModel(
     maxTokens,
     contextWindow,
     api,
+    reasoning: options.reasoning,
+    supportsVision: options.supportsVision,
   });
 }
 

@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { extname } from 'node:path';
 import {
   completeSimple,
   type Context as PiContext,
@@ -102,6 +104,38 @@ function validateFetchedImage(payload: {
   };
 }
 
+function inferMimeTypeFromLocalPath(localPath: string): string {
+  const extension = extname(localPath).trim().toLowerCase();
+  switch (extension) {
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.webp':
+      return 'image/webp';
+    case '.gif':
+      return 'image/gif';
+    case '.bmp':
+      return 'image/bmp';
+    case '.tif':
+    case '.tiff':
+      return 'image/tiff';
+    default:
+      return 'image/png';
+  }
+}
+
+function resolveConfiguredComfyOrigin(config: SubstrateConfig): string | null {
+  const baseUrl = config.comfyUiBaseUrl?.trim();
+  if (!baseUrl) return null;
+  try {
+    return new URL(baseUrl).origin;
+  } catch {
+    return null;
+  }
+}
+
 export class DefaultImageVisionReviewer implements ImageVisionReviewer {
   private readonly completeImpl: ImageVisionReviewerOptions['completeImpl'];
 
@@ -123,7 +157,16 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
 
     const model = resolveModel(this.config, 'vision');
     const question = normalizeQuestion(input);
-    const imageBlocks = await Promise.all(imageUrls.map((url) => this.resolveImageContent(url)));
+    const imageLocalPaths = (input.imageLocalPaths ?? [])
+      .map((value) => value.trim())
+      .slice(0, imageUrls.length);
+    const imageBlocks = await Promise.all(imageUrls.map((url, index) => {
+      const localPath = imageLocalPaths[index];
+      if (localPath) {
+        return this.resolveLocalImageContent(localPath);
+      }
+      return this.resolveImageContent(url);
+    }));
     const context = {
       systemPrompt: [
         'You are the companion\'s vision review path.',
@@ -196,12 +239,28 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
     }
 
     try {
+      const lane = parsedUrl.origin === resolveConfiguredComfyOrigin(this.config)
+        ? 'local_crawler'
+        : 'default';
       return validateFetchedImage(await binaryFetcher(url, {
-        lane: 'default',
+        lane,
         maxBytes: VISION_IMAGE_MAX_BYTES,
       }));
     } catch (error) {
       throw new Error(`vision fetch failed for ${url}: ${toErrorMessage(error)}`);
+    }
+  }
+
+  private async resolveLocalImageContent(localPath: string): Promise<ImageContent> {
+    try {
+      const bytes = await readFile(localPath);
+      return validateFetchedImage({
+        dataBase64: bytes.toString('base64'),
+        mimeType: inferMimeTypeFromLocalPath(localPath),
+        sizeBytes: bytes.byteLength,
+      });
+    } catch (error) {
+      throw new Error(`vision local file read failed for ${localPath}: ${toErrorMessage(error)}`);
     }
   }
 }

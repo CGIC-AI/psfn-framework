@@ -114,9 +114,7 @@ export function collectVisionAttachmentUrls(message?: SubstrateMessage): string[
 
 export function collectVisionTurnImageUrls(message?: SubstrateMessage): string[] {
   if (!message) return [];
-  const attachmentUrls = collectVisionAttachmentUrls(message);
-  const textUrls = collectVisionTextImageUrls(message.content, attachmentUrls);
-  return dedupeVisionUrls([...attachmentUrls, ...textUrls]);
+  return collectVisionAttachmentUrls(message);
 }
 
 export function hasVisionTurnInputs(message?: SubstrateMessage): boolean {
@@ -497,41 +495,10 @@ function buildVisionReviewFailureText(input: {
   return textParts.join('\n\n');
 }
 
-function collectVisionTextImageUrls(content: string, attachmentUrls: readonly string[]): string[] {
-  const normalizedAttachmentUrls = new Set(
-    attachmentUrls
-      .map(normalizeAttachmentUrlForTurnComparison)
-      .filter((url): url is string => url !== null),
-  );
-  const extractedUrls = extractHttpUrls(content);
-  const imageUrls = extractedUrls.filter((url) => {
-    const normalizedUrl = normalizeAttachmentUrlForTurnComparison(url);
-    if (normalizedUrl !== null && normalizedAttachmentUrls.has(normalizedUrl)) {
-      return true;
-    }
-    return inferImageMimeTypeFromAttachmentCandidate(url) !== null;
-  });
-  return dedupeVisionUrls(imageUrls);
-}
-
 function extractHttpUrls(content: string): string[] {
   return (content.match(HTTP_URL_PATTERN) ?? [])
     .map((value) => value.replace(/[),.!?]+$/u, '').trim())
     .filter((value) => value.length > 0);
-}
-
-function dedupeVisionUrls(urls: readonly string[]): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const url of urls) {
-    const trimmed = url.trim();
-    if (!trimmed) continue;
-    const normalized = normalizeAttachmentUrlForTurnComparison(trimmed) ?? trimmed;
-    if (seen.has(normalized)) continue;
-    seen.add(normalized);
-    deduped.push(trimmed);
-  }
-  return deduped;
 }
 
 function formatVisionAttachmentFailureSummary(

@@ -289,6 +289,7 @@ export class ToolRuntimeFacade {
       getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),
       getToolHealthStatusByName: () => this.getToolHealthStatusByName(),
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       emitTelemetry: (event, payload) => this.emitTelemetry(event, payload),
     });
   }

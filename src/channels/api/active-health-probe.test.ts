@@ -62,6 +62,16 @@ describe('CachedActiveHealthProbe', () => {
 });
 
 describe('resolveActiveHealthProbeConfig', () => {
+  it('defaults the active probe timeout to 10000ms', () => {
+    const config = resolveActiveHealthProbeConfig({});
+
+    expect(config).toEqual({
+      enabled: true,
+      timeoutMs: 10_000,
+      cacheTtlMs: 10_000,
+    });
+  });
+
   it('parses enabled/timeout/cache ttl env overrides', () => {
     const config = resolveActiveHealthProbeConfig({
       API_HEALTH_ACTIVE_PROBES: 'false',

@@ -286,12 +286,13 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 | **Adaptive control** | `tool_search`, `toolset` |
 | **Memory and orientation** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write`, `orient` |
 | **Contacts** | `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy` |
-| **Identity and direction** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_rollback`, `prompt_layer_toggle`, `identity_diff`, `identity_changelog`, `character_card_update`, `north_star_list`, `north_star_create`, `north_star_update`, `north_star_delete`, `north_star_reorder` |
+| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_rollback`, `prompt_layer_toggle`, `identity_diff`, `identity_changelog`, `character_card_update`, `north_star` |
 | **Filesystem and shell** | `fs_list`, `fs_read`, `shell` |
 | **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
 | **Sessions and continuity** | `session_search`, `session_grep`, `session_list`, `session_new`, `session_resume`, `start_focus`, `complete_focus` |
-| **Heartbeat and values** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task`, `values_list`, `values_add`, `values_update` |
+| **Heartbeat** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
+| **Values** | `values_list`, `values_add`, `values_update` |
 | **Images and skills** | `image_create`, `image_edit`, `image_analyze`, `skill` (`action=list|view|create|update`) |
 | **Subagents and shards** | `subagent`, `spawn_shard` |
 | **Operator and lifecycle** | `settings_get`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap`, `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`, `self_restart`, `self_rebuild`, `notify_operator` |

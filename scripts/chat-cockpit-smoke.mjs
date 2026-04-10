@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
 
 const DEFAULT_ADMIN_URL = 'http://127.0.0.1:3001';
-const DEFAULT_BOOTSTRAP_PATH = '/api/chat/bootstrap';
+const DEFAULT_BOOTSTRAP_PATH = '/api/admin/chat/bootstrap';
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_VOICE_TIMEOUT_MS = 8_000;
 
@@ -18,7 +18,7 @@ Usage:
 Options:
   --admin-url <url>        Admin server base URL (default: ${DEFAULT_ADMIN_URL})
   --api-base-url <url>     Base URL for API endpoint resolution (default: admin URL)
-  --admin-token <token>    Admin bearer token for /api/chat/bootstrap
+  --admin-token <token>    Admin bearer token for the bootstrap route
   --bootstrap-path <path>  Bootstrap path (default: ${DEFAULT_BOOTSTRAP_PATH})
   --message <text>         Prompt text for chat completion smoke
   --voice                  Enable optional websocket handshake check
@@ -136,8 +136,8 @@ function validateBootstrapPayload(payload) {
   ensureString(payload?.defaultSessionId, 'bootstrap.defaultSessionId');
   ensureString(payload?.defaultAuthorId, 'bootstrap.defaultAuthorId');
   ensureString(payload?.defaultAuthorName, 'bootstrap.defaultAuthorName');
-  ensureString(payload?.selectedIdentity?.channel, 'bootstrap.selectedIdentity.channel');
-  ensureString(payload?.selectedIdentity?.userId, 'bootstrap.selectedIdentity.userId');
+  ensureString(payload?.selectedTarget?.channel, 'bootstrap.selectedTarget.channel');
+  ensureString(payload?.selectedTarget?.canonicalContactId, 'bootstrap.selectedTarget.canonicalContactId');
   ensureString(payload?.api?.chatCompletionsUrl, 'bootstrap.api.chatCompletionsUrl');
   ensureString(payload?.api?.voiceWebSocketUrl, 'bootstrap.api.voiceWebSocketUrl');
 }

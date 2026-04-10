@@ -91,6 +91,23 @@ describe('MemoryStore', () => {
       expect(results.map(result => result.id)).toContain('m-offset-query');
     });
 
+    it('rejects inserted embeddings that do not match the configured store dimensions', () => {
+      expect(() => store.insertMemory(
+        makeMemory('m-bad-insert', 'Bad insert dimensions'),
+        new Float32Array(EMBEDDING_DIMS - 1),
+      )).toThrow(`SQLite memory embedding insert dimension mismatch: expected ${EMBEDDING_DIMS}, got ${EMBEDDING_DIMS - 1}`);
+    });
+
+    it('rejects query embeddings that do not match the configured store dimensions', () => {
+      store.insertMemory(makeMemory('m-good-query', 'Good query dimensions'), makeEmbedding(9));
+
+      expect(() => store.searchByEmbedding(
+        new Float32Array(EMBEDDING_DIMS - 1),
+        0.5,
+        10,
+      )).toThrow(`SQLite memory embedding search dimension mismatch: expected ${EMBEDDING_DIMS}, got ${EMBEDDING_DIMS - 1}`);
+    });
+
     it('filters by similarity threshold', () => {
       const emb1 = makeEmbedding(1);
       const emb2 = makeEmbedding(100); // Very different

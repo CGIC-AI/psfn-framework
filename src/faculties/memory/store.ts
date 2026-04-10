@@ -8,6 +8,7 @@ import {
 } from '../../persistence/sqlite-utils.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
 import type { MemoryJournal } from './journal.js';
 import type {
   ContactProfileArtifact,
@@ -84,6 +85,12 @@ const log = createComponentLogger('MemoryStore');
 
 function embeddingToBuffer(embedding: Float32Array): Buffer {
   return Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
+}
+
+function validateEmbeddingDimensions(embedding: Float32Array, expectedDims: number, operation: string): void {
+  if (embedding.length !== expectedDims) {
+    throw new Error(`SQLite memory embedding ${operation} dimension mismatch: expected ${expectedDims}, got ${embedding.length}`);
+  }
 }
 
 interface MemoryRow {
@@ -454,7 +461,7 @@ export class MemoryStore {
 
   constructor(
     db: Database.Database,
-    embeddingDims: number = 1024,
+    embeddingDims: number = DEFAULT_EMBEDDING_CONFIG.dims,
     options: MemoryStoreOptions = {},
   ) {
     this.db = db;
@@ -719,6 +726,8 @@ export class MemoryStore {
   // ── L2 Memories ──
 
   insertMemory(memory: PurrMemory, embedding: Float32Array): void {
+    validateEmbeddingDimensions(embedding, this.embeddingDims, 'insert');
+
     const insertMem = this.db.prepare(`
       INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence, formation_vad,
         salience, source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count, superseded_by, tags,
@@ -787,6 +796,8 @@ export class MemoryStore {
     limit: number,
     scopeQuery?: MemoryScopeQuery,
   ): Array<PurrMemory & { similarity: number }> {
+    validateEmbeddingDimensions(embedding, this.embeddingDims, 'search');
+
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const scopeSql = buildScopeQuerySql(normalizedScopeQuery);
     const stmt = this.db.prepare(`
@@ -981,6 +992,9 @@ export class MemoryStore {
     if (setClauses.length === 0) return;
     if (updates.text !== undefined && !(updates.embedding instanceof Float32Array)) {
       throw new Error('updateMemory requires embedding when text is updated');
+    }
+    if (updates.embedding instanceof Float32Array) {
+      validateEmbeddingDimensions(updates.embedding, this.embeddingDims, 'update');
     }
 
     const updateMem = this.db.prepare(

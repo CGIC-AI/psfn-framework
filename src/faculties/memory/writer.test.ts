@@ -810,6 +810,45 @@ describe('MemoryWriter', () => {
         db.close();
       }
     });
+
+    it('keeps the original memory active when patch replacement insert fails', async () => {
+      const db = new Database(':memory:');
+      sqliteVec.load(db);
+      const realStore = new MemoryStore(db, 4);
+
+      const existing = makeExistingMemory({
+        id: 'existing-patch-transactional',
+        text: 'Original patchable memory',
+      });
+      realStore.insertMemory(existing, makeEmbedding(1));
+
+      const embeddingService: EmbeddingProviderPort = {
+        embed: vi.fn(async () => makeEmbedding(2)),
+        embedBatch: vi.fn(async (texts: string[]) => texts.map(() => makeEmbedding(2))),
+        dims: 4,
+      };
+      const transactionalWriter = new MemoryWriter(realStore, embeddingService);
+      const insertSpy = vi.spyOn(realStore, 'insertMemory').mockImplementation((memory, embedding) => {
+        if (memory.id !== existing.id) {
+          throw new Error('simulated patch insert failure');
+        }
+        return MemoryStore.prototype.insertMemory.call(realStore, memory, embedding);
+      });
+
+      try {
+        await expect(transactionalWriter.patch({
+          memoryId: existing.id,
+          text: 'Replacement text that should fail',
+        })).rejects.toThrow('simulated patch insert failure');
+
+        const afterFailure = realStore.getById(existing.id);
+        expect(afterFailure?.supersededBy).toBeUndefined();
+        expect(afterFailure?.text).toBe('Original patchable memory');
+      } finally {
+        insertSpy.mockRestore();
+        db.close();
+      }
+    });
   });
 
   describe('patch()', () => {
@@ -1083,6 +1122,25 @@ describe('MemoryWriter', () => {
       const records: MemoryWriteOptions[] = [
         { text: 'Fallback one', type: 'semantic' },
         { text: 'Fallback two', type: 'semantic' },
+      ];
+
+      const result = await writer.importBatch(records);
+
+      expect(result.written).toBe(2);
+      expect(result.errors).toBe(0);
+      expect(embeddings.embed).toHaveBeenCalledTimes(2);
+    });
+
+    it('falls back to per-record embeddings when batch embeddings have the wrong dimensions', async () => {
+      (embeddings.embedBatch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([
+          new Float32Array(3),
+          new Float32Array(3),
+        ]);
+
+      const records: MemoryWriteOptions[] = [
+        { text: 'Fallback bad dims one', type: 'semantic' },
+        { text: 'Fallback bad dims two', type: 'semantic' },
       ];
 
       const result = await writer.importBatch(records);

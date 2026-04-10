@@ -454,6 +454,12 @@ describe('SessionManager', () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     const hiddenBody = 'forensic body that must never enter normal history';
+    mgr.recordUserMessage(
+      'api:role-envelope-preview',
+      'Please keep tomorrow afternoon in mind.',
+      'user-1',
+      'User',
+    );
     const entryId = mgr.recordAssistantMessage(
       'api:role-envelope-preview',
       'Queued a quiet follow-up reminder.',
@@ -490,6 +496,15 @@ describe('SessionManager', () => {
       promotedRef: 'turn_record_summary:env_preview_1',
     });
     expect(entry.metadata ?? '').not.toContain(hiddenBody);
+
+    const context = await mgr.buildContext('api:role-envelope-preview', 'System prompt', '');
+    const assembledContext = [context.systemPrompt, ...context.messages.map(message => message.content)].join('\n');
+
+    expect(context.messages).toContainEqual({
+      role: 'assistant',
+      content: 'Queued a quiet follow-up reminder.',
+    });
+    expect(assembledContext).not.toContain(hiddenBody);
 
     await expect(store.searchByKeywords('quiet follow-up', 10)).resolves.toHaveLength(1);
     await expect(store.searchByKeywords(hiddenBody, 10)).resolves.toHaveLength(0);
@@ -2019,6 +2034,35 @@ describe('SessionManager', () => {
         source: 'appendSystemNote',
       },
     });
+  });
+
+  it('keeps explicit system notes in the system-authored lane during context assembly', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+
+    mgr.recordUserMessage('api:main', 'Please keep tomorrow afternoon in view.', 'u1', 'User');
+    mgr.recordSystemMessage(
+      'api:main',
+      'Queued a private follow-up reminder.',
+      'quiet-planner',
+      'Quiet Planner',
+      undefined,
+      undefined,
+      {
+        turnId: createTurnId(),
+        requestId: 'system-lane-test',
+        sourceMessageId: 'system-lane-test',
+      },
+    );
+    mgr.recordAssistantMessage('api:main', 'I will keep an eye on tomorrow afternoon.');
+
+    const context = await mgr.buildContext('api:main', 'System prompt', '');
+
+    expect(context.messages).toEqual([
+      { role: 'user', content: 'Please keep tomorrow afternoon in view.' },
+      { role: 'system', content: '[SYSTEM: Quiet Planner] Queued a private follow-up reminder.' },
+      { role: 'assistant', content: 'I will keep an eye on tomorrow afternoon.' },
+    ]);
   });
 
   it('getRecentMessages filters internal system notes while persistence retains them', () => {

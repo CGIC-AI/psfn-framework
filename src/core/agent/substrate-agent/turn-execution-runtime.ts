@@ -17,7 +17,11 @@ import { collectGeneratedImageAttachments } from '../../../primitives/images/gen
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import { runWithVisionToolRequestContext } from '../../../primitives/images/request-context.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
-import { contextMessagesToPiMessages } from '../../../primitives/llm/message-conversion.js';
+import {
+  buildSystemContextPromptBlock,
+  contextMessagesToPiMessages,
+  mergeSystemContextIntoSystemPrompt,
+} from '../../../primitives/llm/message-conversion.js';
 import { countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../../persistence/layout.js';
@@ -940,12 +944,17 @@ export async function handleMessageForTurn(
         turnBudgetCharacteristics,
       ),
     );
+    const providerSystemPrompt = mergeSystemContextIntoSystemPrompt(
+      context.systemPrompt,
+      context.messages,
+    );
+    const systemContextPromptBlock = buildSystemContextPromptBlock(context.messages);
     contextMessageCount = context.messages.length;
     turnSnapshot.capturedAt = Date.now();
     const providerModel = runtime.agent.state.model;
     const providerSystemRole = resolveSystemRoleCapabilityMetadata(providerModel);
     const providerWireMessages = [];
-    if (context.systemPrompt) {
+    if (providerSystemPrompt) {
       providerWireMessages.push({
         role: providerSystemRole.transport === 'openai_developer'
           ? 'developer'
@@ -953,7 +962,7 @@ export async function handleMessageForTurn(
             ? 'system_instruction'
             : 'system',
         source: 'system_prompt',
-        content: context.systemPrompt,
+        content: providerSystemPrompt,
       });
     }
     for (const providerMessage of contextMessagesToPiMessages(context.messages)) {
@@ -972,7 +981,7 @@ export async function handleMessageForTurn(
       memoryContextBlock,
       scratchpadContext: scratchpadBlock,
       assembledPrompt: fullPrompt,
-      finalSystemPrompt: context.systemPrompt,
+      finalSystemPrompt: providerSystemPrompt,
       messages: context.messages.map(contextMessage => ({ ...contextMessage })),
       inputSections: buildPromptSectionTelemetryList([
         {
@@ -1002,13 +1011,26 @@ export async function handleMessageForTurn(
         },
       ]),
       runtimeContextSections: extractWrappedPromptSections(runtimeContext),
-      finalSystemSections: context.systemPromptSections ?? buildPromptSectionTelemetryList([
-        {
-          id: 'final_system_prompt',
-          title: 'Final System Prompt',
-          content: context.systemPrompt,
-        },
-      ]),
+      finalSystemSections: context.systemPromptSections
+        ? [
+          ...context.systemPromptSections,
+          ...(systemContextPromptBlock
+            ? [{
+              id: 'session_context',
+              title: 'Session Context',
+              content: systemContextPromptBlock,
+              charCount: systemContextPromptBlock.length,
+              tokenCount: countTokens(systemContextPromptBlock),
+            }]
+            : []),
+        ]
+        : buildPromptSectionTelemetryList([
+          {
+            id: 'final_system_prompt',
+            title: 'Final System Prompt',
+            content: providerSystemPrompt,
+          },
+        ]),
       providerObservability: {
         routeKind: providerModel.provider === 'litellm' ? 'configured_litellm_proxy' : 'registered_model',
         requestedProvider: providerModel.provider,
@@ -1025,8 +1047,8 @@ export async function handleMessageForTurn(
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: contextMessageCount,
-      systemPromptChars: context.systemPrompt.length,
-      systemPromptTokens: countTokens(context.systemPrompt),
+      systemPromptChars: providerSystemPrompt.length,
+      systemPromptTokens: countTokens(providerSystemPrompt),
       assembledPromptChars: fullPrompt.length,
       assembledPromptTokens: countTokens(fullPrompt),
       promptMode,
@@ -1093,7 +1115,7 @@ export async function handleMessageForTurn(
         await emitTurnSnapshot(turnSnapshot);
       }
     } else {
-      runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
+      runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(providerSystemPrompt));
       const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
       turnIntent = autoloadOutcome.intent;
       runtime.applyActiveToolsToAgentForTurn(

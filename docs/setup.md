@@ -108,7 +108,8 @@ npm run yolo         # split runtime with broader fs.read policy
 npm run gateway      # gateway only
 npm run agent        # agent only (companion loop + private admin transport)
 npm run operator     # Garden operator surface only
-npm run agent:docker # production containerized agent
+npm run agent:docker          # Production profile (network_mode: "none")
+npm run agent:docker:continuous # Continuous/dev profile (isolated internal network)
 ```
 
 ## Optional Surface Wiring
@@ -157,4 +158,5 @@ npm run lint
 npm run build
 npm run smoke:chat
 npm run verify:settings-contract
+npm run verify:agent-docker-isolation
 ```

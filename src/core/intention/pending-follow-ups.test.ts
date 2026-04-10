@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PendingFollowUpStore,
   evaluatePendingFollowUpWakeState,
+  filterPendingFollowUpsForActiveChannel,
 } from './pending-follow-ups.js';
 
 describe('PendingFollowUpStore', () => {
@@ -106,6 +107,47 @@ describe('PendingFollowUpStore', () => {
       contextSummary: 'They asked to revisit this after the next status update.',
       wakeConditions: ['next_user_turn', 'sustained_negative_mood'],
     });
+  });
+
+  it('filters pending follow-ups to the active session or thread', () => {
+    const db = new Database(':memory:');
+    let nextId = 0;
+    const store = new PendingFollowUpStore(db, {
+      idFactory: () => `follow-up-${++nextId}`,
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+    });
+
+    store.create({
+      content: 'Stay with session-a.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:principal-a:session-a',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+    });
+    store.create({
+      content: 'Do not leak from session-b.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:principal-a:session-b',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+    });
+
+    expect(
+      filterPendingFollowUpsForActiveChannel(
+        store.getPendingFollowUps('contact-a'),
+        'api:principal-a:session-a',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        content: 'Stay with session-a.',
+      }),
+    ]);
   });
 
   it('evaluates state-based wake conditions conservatively', () => {

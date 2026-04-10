@@ -1695,10 +1695,11 @@ export class ApiServer implements ChannelAdapterPort {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
     });
-    this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 
     const releaseChannel = await this.acquireChannel(channelId, req, res);
     if (!releaseChannel) return null;
+
+    this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 
     return { channelId, releaseChannel, substrateMsg };
   }

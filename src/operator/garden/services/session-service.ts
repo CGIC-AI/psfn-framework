@@ -1,7 +1,7 @@
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { sessionEntryToMessage } from '../../../core/agent/messages.js';
-import { parseCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
+import { resolveValidatedCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { CompactionSummary } from '../../../core/session/types.js';
@@ -25,6 +25,7 @@ import type {
 } from './types.js';
 import { getLinkedContactForSession } from './contact-session-linker.js';
 import { AdminSessionTurnObservabilityStore } from './session-turn-observability.js';
+import type { SessionEntry } from '../../../core/session/types.js';
 
 const DEFAULT_ADMIN_TURN_LIMIT = 50;
 
@@ -247,12 +248,15 @@ function buildContinuityProvenanceViews(
   turnId: string,
   currentChannelId: string,
   currentVisibility: ChannelVisibility,
-  continuityEntries: readonly { id: number; metadata?: string }[],
+  continuityEntries: readonly SessionEntry[],
 ): AdminContinuityProvenanceView[] {
   const provenance: AdminContinuityProvenanceView[] = [];
 
   for (const entry of continuityEntries) {
-    const continuity = parseCrossChannelContinuityProvenance(entry.metadata);
+    const continuity = resolveValidatedCrossChannelContinuityProvenance(
+      entry,
+      currentChannelId,
+    );
     if (!continuity) continue;
 
     const carriedAcrossChannels = continuity.sourceChannelId !== currentChannelId;

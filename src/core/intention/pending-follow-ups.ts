@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
+import { channelsShareActiveSessionThread } from '../session/cross-channel-continuity-port.js';
 
 export const PENDING_FOLLOW_UP_PRIORITIES = ['low', 'medium', 'high'] as const;
 export type PendingFollowUpPriority = typeof PENDING_FOLLOW_UP_PRIORITIES[number];
@@ -118,6 +119,21 @@ export function createPendingFollowUpStorePort(
     list: async (options) => await store.list(options),
     markActivated: async (id, options) => await store.markActivated(id, options),
   };
+}
+
+export function filterPendingFollowUpsForActiveChannel(
+  followUps: readonly PendingFollowUp[],
+  activeChannelId?: string,
+): PendingFollowUp[] {
+  const normalizedActiveChannelId = normalizeOptionalId(activeChannelId);
+  if (!normalizedActiveChannelId) {
+    return [...followUps];
+  }
+
+  return followUps.filter(followUp => channelsShareActiveSessionThread(
+    followUp.channelId,
+    normalizedActiveChannelId,
+  ));
 }
 
 export interface PendingFollowUpWakeContext {

@@ -57,9 +57,10 @@ export interface ToolSearchResultEntry {
   description: string;
   scope: 'extended';
   turnClass: ExtendedToolTurnClass;
-  status: 'active' | 'available' | 'background_only';
+  status: 'active' | 'available' | 'background_only' | 'capability_denied';
   healthStatus?: RuntimeServiceHealthStatus;
   activationHint: string;
+  missingTokens?: CapabilityToken[];
 }
 
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;
@@ -113,25 +114,42 @@ function scoreToolSearchMatch(
 }
 
 function resolveToolSearchStatus(
-  toolName: string,
+  tool: AgentTool<any>,
   runtimeState: AdaptiveToolRuntimeState,
   turnClass: ExtendedToolTurnClass,
-): ToolSearchResultEntry['status'] {
-  if (runtimeState.activeTools.some(tool => tool.toolName === toolName)) {
-    return 'active';
+  access: CapabilityAccess,
+): Pick<ToolSearchResultEntry, 'status' | 'missingTokens'> {
+  if (runtimeState.activeTools.some(entry => entry.toolName === tool.name)) {
+    return { status: 'active' };
   }
   if (turnClass !== 'overlay') {
-    return 'background_only';
+    return { status: 'background_only' };
   }
-  return 'available';
+
+  const missingTokens = resolveToolRequiredCapabilities(tool, {})
+    .filter(token => !access.has(token));
+  if (missingTokens.length > 0) {
+    return {
+      status: 'capability_denied',
+      missingTokens,
+    };
+  }
+
+  return { status: 'available' };
 }
 
-function buildToolSearchActivationHint(status: ToolSearchResultEntry['status']): string {
+function buildToolSearchActivationHint(
+  entry: Pick<ToolSearchResultEntry, 'status' | 'missingTokens'>,
+): string {
+  const status = entry.status;
   if (status === 'active') {
     return 'Already active in the current runtime.';
   }
   if (status === 'background_only') {
     return 'Discoverable, but not callable in-turn.';
+  }
+  if (status === 'capability_denied') {
+    return `Blocked by the current capability tier (missing: ${(entry.missingTokens ?? []).join(', ')}). Activate only when you need a real denied tool result.`;
   }
   return 'Use toolset with action="activate" to activate this tool when you need it.';
 }
@@ -550,8 +568,13 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
       tool: Type.Optional(Type.String({
         description: 'Single tool name for pin or unpin actions.',
       })),
-      tools: Type.Optional(Type.Array(Type.String(), {
-        description: 'Tool names to activate for the current runtime.',
+      tools: Type.Optional(Type.Array(Type.Union([
+        Type.String(),
+        Type.Object({
+          name: Type.String(),
+        }),
+      ]), {
+        description: 'Tool names to activate for the current runtime. Accepts plain names or { name } entries.',
       })),
       reason: Type.Optional(Type.String({
         description: 'Optional reason for pin or unpin actions.',
@@ -581,7 +604,7 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
       executeParams: {
         action: ToolsetAction;
         tool?: string;
-        tools?: string[];
+        tools?: unknown[];
         reason?: string;
         intendedAction?: string;
         deferUntilTurnBoundary?: boolean;
@@ -658,6 +681,7 @@ interface SearchToolsToolRuntime {
   getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
   getToolHealthStatusByName: () => ReadonlyMap<string, RuntimeServiceHealthStatus>;
   classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
+  resolveCapabilityAccess: () => CapabilityAccess;
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
 }
 
@@ -693,11 +717,12 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool
         : 8;
       const runtimeState = runtime.getAdaptiveToolRuntimeState();
       const toolHealthStatusByName = runtime.getToolHealthStatusByName();
+      const access = runtime.resolveCapabilityAccess();
       const extendedTools = [...runtime.getExtendedTools()];
       const rankedMatches = extendedTools
         .map((tool) => {
           const turnClass = runtime.classifyExtendedToolForTurn(tool.name);
-          const status = resolveToolSearchStatus(tool.name, runtimeState, turnClass);
+          const status = resolveToolSearchStatus(tool, runtimeState, turnClass, access);
           const score = scoreToolSearchMatch(tool, query);
           return {
             tool,
@@ -716,7 +741,8 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool
             const weight: Record<ToolSearchResultEntry['status'], number> = {
               active: 0,
               available: 1,
-              background_only: 2,
+              capability_denied: 2,
+              background_only: 3,
             };
             return weight[left.status] - weight[right.status];
           }
@@ -731,9 +757,10 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool
           description: entry.tool.description,
           scope: 'extended' as const,
           turnClass: entry.turnClass,
-          status: entry.status,
+          status: entry.status.status,
           healthStatus: toolHealthStatusByName.get(entry.tool.name),
           activationHint: buildToolSearchActivationHint(entry.status),
+          ...(entry.status.missingTokens ? { missingTokens: entry.status.missingTokens } : {}),
         }));
 
       const totalMatches = query
@@ -760,6 +787,7 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool
           name: match.name,
           status: match.status,
           turnClass: match.turnClass,
+          ...(match.missingTokens ? { missingTokens: match.missingTokens } : {}),
         })),
       });
 

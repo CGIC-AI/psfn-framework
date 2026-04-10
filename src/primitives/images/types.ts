@@ -80,6 +80,7 @@ export interface ImageResultAsset {
   url: string;
   contentType?: string;
   fileName?: string;
+  localPath?: string;
 }
 
 export interface ImageGenerationResult {
@@ -148,6 +149,7 @@ export interface ImageVisionReview {
 
 export interface ImageVisionReviewRequest {
   imageUrls: string[];
+  imageLocalPaths?: string[];
   question?: string;
   prompt?: string;
   mode?: ImageMode;

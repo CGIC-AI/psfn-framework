@@ -48,6 +48,7 @@ describe('image tools', () => {
           url: 'https://images.example.test/selfie.png',
           contentType: 'image/png',
           fileName: 'selfie.png',
+          localPath: '/tmp/selfie.png',
         }],
       })),
       edit: vi.fn(),
@@ -73,6 +74,7 @@ describe('image tools', () => {
     }));
     expect(reviewer.analyze).toHaveBeenCalledWith({
       imageUrls: ['https://images.example.test/selfie.png'],
+      imageLocalPaths: ['/tmp/selfie.png'],
       prompt: 'a cute mirror selfie of me in warm morning light',
       mode: 'create',
     });
@@ -94,6 +96,7 @@ describe('image tools', () => {
           url: 'https://images.example.test/selfie-explicit.png',
           contentType: 'image/png',
           fileName: 'selfie-explicit.png',
+          localPath: '/tmp/selfie-explicit.png',
         }],
       })),
       edit: vi.fn(),
@@ -120,6 +123,7 @@ describe('image tools', () => {
     }));
     expect(reviewer.analyze).toHaveBeenCalledWith({
       imageUrls: ['https://images.example.test/selfie-explicit.png'],
+      imageLocalPaths: ['/tmp/selfie-explicit.png'],
       prompt: 'a candid mirror selfie of me, soft morning light, cozy bedroom, natural expression',
       mode: 'create',
     });

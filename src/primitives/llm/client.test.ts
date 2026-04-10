@@ -419,6 +419,203 @@ describe('LLMClient provider observability', () => {
       ],
     });
   });
+
+  it('preserves structured assistant and tool-result history when streaming through the transport path', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        reason: 'stop',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 17, output: 9 },
+          content: [{ type: 'text', text: 'continued' }],
+        },
+      };
+    });
+
+    await client.stream({
+      systemPrompt: 'System prompt',
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'trace' },
+            { type: 'text', text: 'hello' },
+          ],
+          api: 'openai-completions',
+          provider: 'openrouter',
+          model: 'openrouter/moonshotai/kimi-k2.5',
+          usage: {
+            input: 11,
+            output: 7,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 18,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'stop',
+          timestamp: 1000,
+        } as any,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-1',
+          toolName: 'lookup',
+          content: [{ type: 'text', text: 'done' }],
+          isError: false,
+          timestamp: 1001,
+        } as any,
+        { role: 'user', content: 'continue' } as any,
+      ],
+    });
+
+    const piContext = mocks.streamSimple.mock.calls[0]?.[1] as { messages: any[] };
+    expect(piContext.messages[0]).toMatchObject({
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: [
+            { type: 'thinking', thinking: 'trace' },
+            { type: 'text', text: 'hello' },
+          ],
+        },
+      ],
+    });
+    expect(piContext.messages[1]).toMatchObject({
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: [{ type: 'text', text: 'done' }],
+        },
+      ],
+    });
+    expect(piContext.messages[2]).toMatchObject({
+      role: 'user',
+      content: 'continue',
+    });
+  });
+
+  it('prefers final done-message tool call arguments over streamed toolcall_end payloads', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'toolcall_end',
+        toolCall: {
+          id: 'call-1',
+          name: 'memory_write',
+          arguments: {
+            text: ': 561-09-3458\n+name: Marilyn Mack\nitemsOneDigit:  {',
+          },
+        },
+      };
+      yield {
+        type: 'done',
+        reason: 'toolUse',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 17, output: 9 },
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-1',
+              name: 'memory_write',
+              arguments: {
+                text: 'matrix-secret-2026-04-10T05-02-16-083Z',
+                type: 'semantic',
+                sensitivity: 'personal',
+              },
+            },
+          ],
+        },
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System prompt',
+      messages: [{ role: 'user', content: 'Store the secret' }],
+    });
+
+    expect(response.toolCalls).toEqual([
+      {
+        id: 'call-1',
+        name: 'memory_write',
+        input: {
+          text: 'matrix-secret-2026-04-10T05-02-16-083Z',
+          type: 'semantic',
+          sensitivity: 'personal',
+        },
+      },
+    ]);
+  });
+
+  it('drops duplicate streamed tool calls when the final done message contains only one tool call', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'toolcall_end',
+        toolCall: {
+          id: 'call-2',
+          name: 'values_update',
+          arguments: {
+            version: 9,
+            value: 'matrix-value-updated-1',
+            context: 'live shakedown revision',
+          },
+        },
+      };
+      yield {
+        type: 'toolcall_end',
+        toolCall: {
+          id: 'call-3',
+          name: 'values_update',
+          arguments: {
+            version: 9,
+            value: 'matrix-value-updated-1',
+            context: 'live shakedown revision',
+          },
+        },
+      };
+      yield {
+        type: 'done',
+        reason: 'toolUse',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 20, output: 11 },
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-2',
+              name: 'values_update',
+              arguments: {
+                version: 9,
+                value: 'matrix-value-updated-1',
+                context: 'live shakedown revision',
+              },
+            },
+          ],
+        },
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System prompt',
+      messages: [{ role: 'user', content: 'Update the values journal' }],
+    });
+
+    expect(response.toolCalls).toEqual([
+      {
+        id: 'call-2',
+        name: 'values_update',
+        input: {
+          version: 9,
+          value: 'matrix-value-updated-1',
+          context: 'live shakedown revision',
+        },
+      },
+    ]);
+  });
 });
 
 describe('LLMClient prompt caching', () => {
@@ -746,6 +943,51 @@ describe('LLMClient completion model hints', () => {
 
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
     expect(requestOptions.apiKey).toBe('vault-provider-key');
+  });
+
+  it('pins explicit model hints to a single candidate when requested', () => {
+    const baseConfig = makeConfig();
+    const baseRegistry = baseConfig.modelRegistry!;
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseRegistry,
+        models: [
+          ...baseRegistry.models,
+          {
+            id: 'chat-fallback',
+            rank: 500,
+            identity: {
+              provider: 'openrouter',
+              model: 'moonshotai/kimi-k2.5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 8192,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 8192,
+              contextWindow: 128_000,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+
+    const candidates = (client as any).resolveCandidates('chat', {
+      model: 'moonshotai/kimi-k2.5',
+      provider: 'openrouter',
+      pin: true,
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        provider: 'openrouter',
+        model: 'moonshotai/kimi-k2.5',
+      }),
+    ]);
   });
 });
 
@@ -1270,6 +1512,76 @@ describe('LLMClient correlation metadata', () => {
       outputTokens: 5,
     });
   });
+
+  it('preserves image input when a background completion is hinted through litellm to a vision-capable routed model', async () => {
+    const config = makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'background',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'background/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'background', primary: true }],
+            capabilities: { maxOutputTokens: 1024, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 1024 },
+          },
+          {
+            id: 'vision',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openrouter/google/gemini-3-flash-preview',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'vision', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 1_048_576,
+              supportsVision: true,
+            },
+            tuning: { maxOutputTokens: 4096 },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'cat' }],
+      model: 'openrouter/google/gemini-3-flash-preview',
+      usage: { input: 12, output: 3 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is in this image?' },
+            { type: 'image', data: 'YmFzZTY0', mimeType: 'image/jpeg' },
+          ],
+        }] as any,
+        modelHint: {
+          model: 'openrouter/google/gemini-3-flash-preview',
+          provider: 'litellm',
+          maxTokens: 4096,
+        },
+      } as any,
+      'background',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string; input: string[] };
+    expect(model.id).toBe('openrouter/google/gemini-3-flash-preview');
+    expect(model.input).toContain('image');
+  });
 });
 
 describe('LLMClient model budget gates and usage metering', () => {
@@ -1466,6 +1778,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         modelHint: expect.objectContaining({
           model: 'deepseek/deepseek-v3.2',
           provider: 'openrouter',
+          pin: true,
           maxTokens: 2048,
         }),
       }),
@@ -1512,6 +1825,7 @@ describe('LLMClient model budget gates and usage metering', () => {
         modelHint: expect.objectContaining({
           model: 'z-ai/glm-5',
           provider: 'openrouter',
+          pin: true,
           maxTokens: 4096,
         }),
       }),

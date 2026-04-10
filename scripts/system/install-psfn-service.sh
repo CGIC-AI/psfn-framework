@@ -10,19 +10,22 @@ SERVICE_GROUP="psfn"
 SERVICE_HOME="/var/lib/psfn"
 APP_ROOT="/var/lib/psfn/app"
 RUNTIME_ROOT="/var/lib/psfn/runtime"
-ENV_FILE="/etc/psfn/psfn.env"
 UNIT_FILE="/etc/systemd/system/psfn.service"
 SOURCE_REPO_ROOT="${REPO_ROOT_DEFAULT}"
 ENV_SOURCE="${REPO_ROOT_DEFAULT}/.env"
 LEGACY_DATA_DIR="${REPO_ROOT_DEFAULT}/data"
 ENV_SOURCE_EXPLICIT=0
 LEGACY_DATA_DIR_EXPLICIT=0
+ENV_FILE_EXPLICIT=0
 SERVICE_MODE="yolo"
 NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
 STAGING_ROOT=""
 DRY_RUN=0
 ENABLE_SERVICE=0
 MIGRATE_DATA=0
+DEPLOYMENT_CONFIG_DIR_REL="deployment/systemd"
+ENV_FILE=""
+REPO_OWNED_UNIT_FILE=""
 
 RUNTIME_SUBDIRS=(
   "system-data"
@@ -53,8 +56,8 @@ Options:
   --app-root <path>          Service-owned app checkout destination (default: ${APP_ROOT})
   --runtime-root <path>      Production runtime root (default: ${RUNTIME_ROOT})
   --env-source <path>        Source .env file to copy/filter (default: ${ENV_SOURCE})
-  --env-file <path>          Destination systemd env file (default: ${ENV_FILE})
-  --unit-file <path>         Destination systemd unit file (default: ${UNIT_FILE})
+  --env-file <path>          Authoritative env file path (default: <app-root>/${DEPLOYMENT_CONFIG_DIR_REL}/psfn.env)
+  --unit-file <path>         Thin systemd unit pointer path (default: ${UNIT_FILE})
   --legacy-data-dir <path>   Legacy shared data root for cutover (default: ${LEGACY_DATA_DIR})
   --node-bin <path>          Node binary to bundle into the app root (default: autodetect)
   --mode <split|yolo>        Runtime mode for the service (default: ${SERVICE_MODE})
@@ -113,8 +116,11 @@ resolve_paths() {
   SERVICE_HOME="$(stage_default_path "${SERVICE_HOME}" "/var/lib/psfn")"
   APP_ROOT="$(stage_default_path "${APP_ROOT}" "/var/lib/psfn/app")"
   RUNTIME_ROOT="$(stage_default_path "${RUNTIME_ROOT}" "/var/lib/psfn/runtime")"
-  ENV_FILE="$(stage_default_path "${ENV_FILE}" "/etc/psfn/psfn.env")"
   UNIT_FILE="$(stage_default_path "${UNIT_FILE}" "/etc/systemd/system/psfn.service")"
+  if [ "${ENV_FILE_EXPLICIT}" -eq 0 ]; then
+    ENV_FILE="${APP_ROOT}/${DEPLOYMENT_CONFIG_DIR_REL}/psfn.env"
+  fi
+  REPO_OWNED_UNIT_FILE="${APP_ROOT}/${DEPLOYMENT_CONFIG_DIR_REL}/psfn.service"
 }
 
 parse_args() {
@@ -151,6 +157,7 @@ parse_args() {
         ;;
       --env-file)
         ENV_FILE="$2"
+        ENV_FILE_EXPLICIT=1
         shift 2
         ;;
       --unit-file)
@@ -222,7 +229,6 @@ assert_node_bin() {
 }
 
 ensure_parent_dirs() {
-  mkdir -p "$(dirname "${ENV_FILE}")"
   mkdir -p "$(dirname "${UNIT_FILE}")"
   mkdir -p "${SERVICE_HOME}"
 }
@@ -367,6 +373,7 @@ render_unit_file() {
   local bundled_node_dir
   bundled_node_dir="$(dirname "${bundled_node_bin}")"
 
+  mkdir -p "$(dirname "${REPO_OWNED_UNIT_FILE}")"
   sed \
     -e "s/__APP_ROOT__/$(escape_sed_replacement "${APP_ROOT}")/g" \
     -e "s/__RUNTIME_ROOT__/$(escape_sed_replacement "${RUNTIME_ROOT}")/g" \
@@ -377,12 +384,16 @@ render_unit_file() {
     -e "s/__ENV_FILE__/$(escape_sed_replacement "${ENV_FILE}")/g" \
     -e "s/__NODE_BIN__/$(escape_sed_replacement "${bundled_node_bin}")/g" \
     -e "s/__NODE_PATH__/$(escape_sed_replacement "${bundled_node_dir}")/g" \
-    "${UNIT_TEMPLATE_PATH}" > "${UNIT_FILE}"
+    "${UNIT_TEMPLATE_PATH}" > "${REPO_OWNED_UNIT_FILE}"
 }
 
 validate_rendered_unit() {
   require_command systemd-analyze
-  systemd-analyze verify "${UNIT_FILE}"
+  systemd-analyze verify "${REPO_OWNED_UNIT_FILE}"
+}
+
+link_unit_file() {
+  ln -sfn "${REPO_OWNED_UNIT_FILE}" "${UNIT_FILE}"
 }
 
 run_cutover() {
@@ -408,9 +419,12 @@ apply_ownership() {
   fi
 
   chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${SERVICE_HOME}"
-  chown -R root:"${SERVICE_GROUP}" "$(dirname "${ENV_FILE}")"
+  chown root:"${SERVICE_GROUP}" "$(dirname "${ENV_FILE}")"
+  chown root:"${SERVICE_GROUP}" "$(dirname "${REPO_OWNED_UNIT_FILE}")"
   chown root:"${SERVICE_GROUP}" "${ENV_FILE}"
+  chown root:"${SERVICE_GROUP}" "${REPO_OWNED_UNIT_FILE}"
   chmod 0640 "${ENV_FILE}"
+  chmod 0644 "${REPO_OWNED_UNIT_FILE}"
 }
 
 enable_system_service() {
@@ -432,6 +446,7 @@ app_root=${APP_ROOT}
 runtime_root=${RUNTIME_ROOT}
 env_source=${ENV_SOURCE}
 env_file=${ENV_FILE}
+repo_owned_unit_file=${REPO_OWNED_UNIT_FILE}
 unit_file=${UNIT_FILE}
 node_bin=${NODE_BIN}
 service_mode=${SERVICE_MODE}
@@ -447,7 +462,7 @@ main() {
   parse_args "$@"
   resolve_paths
   assert_valid_mode
-  require_command sed grep mkdir install
+  require_command sed grep mkdir install ln
   assert_source_tree
   assert_node_bin
 
@@ -468,6 +483,7 @@ main() {
   create_runtime_dirs
   render_unit_file
   validate_rendered_unit
+  link_unit_file
   if [ "${MIGRATE_DATA}" -eq 1 ]; then
     run_cutover
   fi

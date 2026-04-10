@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createBeadsTool } from './tools.js';
 import type { BeadsOperations } from './ops.js';
+import {
+  createIssueCloseTool,
+  createIssueCreateTool,
+  createIssueReadyTool,
+  createIssueShowTool,
+  createIssueSyncTool,
+  createIssueUpdateTool,
+} from './tools.js';
 
 function createMockOps(): BeadsOperations {
   return {
@@ -13,97 +20,86 @@ function createMockOps(): BeadsOperations {
   };
 }
 
-describe('createBeadsTool', () => {
-  it('routes ready-style reads without an explicit action', async () => {
-    const ops = createMockOps();
-    const tool = createBeadsTool(ops);
+function resultText(result: { content: Array<{ text: string }> }): string {
+  return result.content.map((entry) => entry.text).join('');
+}
 
-    await tool.execute('call-1', { actor: 'agent-main' });
+describe('beads issue tools', () => {
+  it('routes ready reads through issue_ready', async () => {
+    const ops = createMockOps();
+    const tool = createIssueReadyTool(ops);
+
+    const result = await tool.execute('call-ready', { actor: 'agent-main' });
 
     expect(ops.ready).toHaveBeenCalledWith({ actor: 'agent-main' });
+    expect(JSON.parse(resultText(result))).toMatchObject({
+      actor: 'agent',
+      action: 'ready',
+      result: 'ok',
+    });
   });
 
-  it('accepts legacy issue_* aliases and preserves dispatch', async () => {
+  it('shows issue details through issue_show', async () => {
     const ops = createMockOps();
-    const emitLegacyAliasTelemetry = vi.fn();
-    const tool = createBeadsTool(ops, { emitLegacyAliasTelemetry });
+    const tool = createIssueShowTool(ops);
 
-    await tool.execute('call-2', { action: 'issue_show', id: 'PSFN-9' });
-    await tool.execute('call-3', { action: 'issue_create', title: 'Refactor beads surface' });
-    await tool.execute('call-4', { action: 'issue_update', id: 'PSFN-9', status: 'in_progress' });
-    await tool.execute('call-5', { action: 'issue_close', id: 'PSFN-9', reason: 'done' });
-    await tool.execute('call-6', { action: 'issue_sync', actor: 'agent-main' });
+    await tool.execute('call-show', { id: 'PSFN-9', actor: 'agent-main' });
 
-    expect(ops.show).toHaveBeenCalledWith({ id: 'PSFN-9', actor: undefined });
+    expect(ops.show).toHaveBeenCalledWith({ id: 'PSFN-9', actor: 'agent-main' });
+  });
+
+  it('creates, updates, and closes issues through the split tool surface', async () => {
+    const ops = createMockOps();
+
+    await createIssueCreateTool(ops).execute('call-create', {
+      title: 'Refactor beads surface',
+      issue_type: 'task',
+      priority: 2,
+      deps: ['discovered-from:PSFN-hkel.14'],
+      parent: 'PSFN-hkel',
+      actor: 'agent-main',
+    });
+    await createIssueUpdateTool(ops).execute('call-update', {
+      id: 'PSFN-9',
+      status: 'in_progress',
+      priority: 1,
+      actor: 'agent-main',
+    });
+    await createIssueCloseTool(ops).execute('call-close', {
+      id: 'PSFN-9',
+      reason: 'done',
+      actor: 'agent-main',
+    });
+
     expect(ops.create).toHaveBeenCalledWith({
       title: 'Refactor beads surface',
-      issueType: undefined,
-      priority: undefined,
-      deps: undefined,
-      parent: undefined,
-      actor: undefined,
+      issueType: 'task',
+      priority: 2,
+      deps: ['discovered-from:PSFN-hkel.14'],
+      parent: 'PSFN-hkel',
+      actor: 'agent-main',
     });
     expect(ops.update).toHaveBeenCalledWith({
       id: 'PSFN-9',
       status: 'in_progress',
-      priority: undefined,
-      actor: undefined,
-    });
-    expect(ops.close).toHaveBeenCalledWith({ id: 'PSFN-9', reason: 'done', actor: undefined });
-    expect(ops.sync).toHaveBeenCalledWith({ actor: 'agent-main' });
-    expect(emitLegacyAliasTelemetry).toHaveBeenNthCalledWith(1, {
-      toolName: 'beads',
-      alias: 'issue_show',
-      canonicalAction: 'show',
-      migrationSurface: 'beads',
-    });
-    expect(emitLegacyAliasTelemetry).toHaveBeenNthCalledWith(5, {
-      toolName: 'beads',
-      alias: 'issue_sync',
-      canonicalAction: 'sync',
-      migrationSurface: 'beads',
-    });
-  });
-
-  it('infers create, update, close, and show from unambiguous params', async () => {
-    const ops = createMockOps();
-    const tool = createBeadsTool(ops);
-
-    await tool.execute('call-create', { title: 'Create task', priority: 2 });
-    await tool.execute('call-update', { id: 'PSFN-11', priority: 1 });
-    await tool.execute('call-close', { id: 'PSFN-12', reason: 'Completed' });
-    await tool.execute('call-show', { id: 'PSFN-13' });
-
-    expect(ops.create).toHaveBeenCalledWith({
-      title: 'Create task',
-      issueType: undefined,
-      priority: 2,
-      deps: undefined,
-      parent: undefined,
-      actor: undefined,
-    });
-    expect(ops.update).toHaveBeenCalledWith({
-      id: 'PSFN-11',
-      status: undefined,
       priority: 1,
-      actor: undefined,
+      actor: 'agent-main',
     });
-    expect(ops.close).toHaveBeenCalledWith({ id: 'PSFN-12', reason: 'Completed', actor: undefined });
-    expect(ops.show).toHaveBeenCalledWith({ id: 'PSFN-13', actor: undefined });
+    expect(ops.close).toHaveBeenCalledWith({
+      id: 'PSFN-9',
+      reason: 'done',
+      actor: 'agent-main',
+    });
   });
 
-  it('fails closed for ambiguous calls', async () => {
+  it('surfaces canonical sync failures', async () => {
     const ops = createMockOps();
-    const tool = createBeadsTool(ops);
+    ops.sync = vi.fn().mockRejectedValue(new Error('bd unavailable'));
+    const tool = createIssueSyncTool(ops);
 
-    const result = await tool.execute('call-ambiguous', { id: 'PSFN-14', title: 'ambiguous' });
+    const result = await tool.execute('call-sync', { actor: 'agent-main' });
 
-    expect((result.content[0] as { text: string }).text).toContain('action is required');
-    expect(ops.ready).not.toHaveBeenCalled();
-    expect(ops.show).not.toHaveBeenCalled();
-    expect(ops.create).not.toHaveBeenCalled();
-    expect(ops.update).not.toHaveBeenCalled();
-    expect(ops.close).not.toHaveBeenCalled();
-    expect(ops.sync).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain('issue_sync failed: bd unavailable');
+    expect(result.details?.isError).toBe(true);
   });
 });

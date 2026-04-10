@@ -7,7 +7,7 @@ import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { ShardExecutionPort } from '../../../faculties/shards/port.js';
 
 describe('AdminDashboardDataService', () => {
-  it('reads shard status through the shard execution port', () => {
+  it('reads shard status through the shard execution port', async () => {
     const memoryStore = {
       getStats: () => ({
         total: 0,
@@ -75,7 +75,7 @@ describe('AdminDashboardDataService', () => {
       eventBus: new EventBus(),
     });
 
-    const dashboard = service.getDashboardData();
+    const dashboard = await service.getDashboardData();
     expect(dashboard.stats.activeShards).toBe(2);
     expect(shardManager.getActiveCount).toHaveBeenCalledTimes(1);
   });

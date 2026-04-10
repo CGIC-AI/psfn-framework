@@ -35,6 +35,7 @@ describe('Wyoming production wiring', () => {
     const handleAdapter = createWyomingHandleServiceAdapter({
       handleMessage,
       eventBus,
+      companionId: 'psfn-test',
     });
     const serviceRegistry = createWyomingServiceRegistry([handleAdapter]);
 
@@ -81,6 +82,7 @@ describe('Wyoming production wiring', () => {
         channelId: '',
         metadata: { model: '', inputTokens: 0, outputTokens: 0, durationMs: 0 },
       }),
+      companionId: 'psfn-test',
     });
     const registry = createWyomingServiceRegistry([handleAdapter]);
 
@@ -98,6 +100,7 @@ describe('Wyoming production wiring', () => {
         channelId: '',
         metadata: { model: '', inputTokens: 0, outputTokens: 0, durationMs: 0 },
       }),
+      companionId: 'psfn-test',
     });
 
     const mockSttConnector: StreamingSttConnector = {
@@ -158,6 +161,7 @@ describe('Wyoming production wiring', () => {
         channelId: 'test-ch',
         metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 0 },
       }),
+      companionId: 'psfn-test',
     });
 
     const mockSttConnector: StreamingSttConnector = {

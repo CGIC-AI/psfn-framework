@@ -50,6 +50,12 @@ describe('startup owner-file loaders', () => {
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
       salienceDecayIntervalMs: 123_000,
+      artifactLifecycle: {
+        scratchpadRetentionDays: 7,
+        generatedMediaRetentionDays: 30,
+        workspaceTempRetentionDays: 3,
+        cleanupBatchSize: 50,
+      },
     };
     saveSchedulerConfig(rootDir, scheduler);
 

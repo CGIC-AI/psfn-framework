@@ -200,7 +200,7 @@ describe('AdminSettingsDataService', () => {
       localApiKey: 'local-api-key',
       adminAuthToken: 'admin-token',
     } satisfies SubstrateConfig;
-    const service = new AdminSettingsDataService({ config });
+    const service = buildService(config);
 
     const settingsData = await service.getSettingsData();
 

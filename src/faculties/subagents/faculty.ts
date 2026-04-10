@@ -67,6 +67,11 @@ const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['spawn_shard', 'shard', 'load_tools
 const SUBAGENT_CONTROL_AUTHOR_ID = 'system:subagent-control';
 const SUBAGENT_CONTROL_AUTHOR_NAME = 'SubagentControl';
 
+function resolveMessageChannelType(channelId: string): 'api' | 'discord' | 'terminal' | 'telegram' | 'psfn-amica' {
+  const inferred = inferSessionChannelType(channelId);
+  return inferred && inferred !== 'subagent' ? inferred : 'api';
+}
+
 export interface SubagentToolCatalog {
   core: readonly AgentTool<any>[];
   extended: readonly AgentTool<any>[];
@@ -710,7 +715,7 @@ export class SubagentFaculty implements SubagentControlPort {
     return {
       id: `subagent-control-${randomUUID()}`,
       channelId,
-      channelType: inferSessionChannelType(channelId) ?? 'api',
+      channelType: resolveMessageChannelType(channelId),
       authorId: SUBAGENT_CONTROL_AUTHOR_ID,
       authorName: SUBAGENT_CONTROL_AUTHOR_NAME,
       content,
@@ -740,7 +745,7 @@ export class SubagentFaculty implements SubagentControlPort {
     return {
       id: subagentId,
       channelId: executionChannelId,
-      channelType: inferSessionChannelType(executionChannelId) ?? 'api',
+      channelType: resolveMessageChannelType(executionChannelId),
       authorId: 'system',
       authorName: 'SubagentFaculty',
       content: request.task,

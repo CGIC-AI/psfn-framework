@@ -64,29 +64,31 @@ describe('embedding providers', () => {
     vi.unstubAllGlobals();
   });
 
-  it('defaults to ollama when EMBEDDING_PROVIDER is unset', async () => {
+  it('defaults to the seeded transformers provider when EMBEDDING_PROVIDER is unset', async () => {
     delete process.env.EMBEDDING_PROVIDER;
-    process.env.OLLAMA_URL = 'http://localhost:11434';
-    process.env.EMBEDDING_MODEL = 'snowflake-arctic-embed2';
-    process.env.EMBEDDING_DIMS = '3';
-    fetchMock.mockResolvedValue(okJson({ embeddings: [[0.1, 0.2, 0.3]] }));
+    process.env.TRANSFORMERS_MODEL = 'seed-default-transformers';
+    process.env.TRANSFORMERS_EMBEDDING_DIMS = '2';
+    const tensorData = new Float32Array([0.1, 0.2]);
+    mockExtractor.mockResolvedValue({
+      data: tensorData,
+      dims: [1, 2],
+    });
+    mockPipeline.mockResolvedValue(mockExtractor);
 
     const provider = createEmbeddingProviderFromEnv();
 
-    expect(provider.kind).toBe('ollama');
-    expect(provider.dims).toBe(3);
+    expect(provider.kind).toBe('transformers');
+    expect(provider.dims).toBe(2);
 
     const embedding = await provider.embed('hello world');
-    expect(embedding).toEqual(new Float32Array([0.1, 0.2, 0.3]));
+    expect(embedding).toEqual(new Float32Array([0.1, 0.2]));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('http://localhost:11434/api/embed');
-    expect(init.method).toBe('POST');
-    expect(JSON.parse(String(init.body))).toEqual({
-      model: 'snowflake-arctic-embed2',
-      input: ['hello world'],
-    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockPipeline).toHaveBeenCalledWith(
+      'feature-extraction',
+      'seed-default-transformers',
+      expect.objectContaining({ dtype: 'fp32' }),
+    );
   });
 
   it('OllamaEmbeddingProvider embeds with explicit config', async () => {

@@ -31,7 +31,11 @@ import {
   type ExtendedToolAutoloadPolicy,
   type ExtendedToolTurnClass,
 } from '../extended-tool-autoload-policy.js';
-import type { PromotedToolMutationResult } from './tool-orchestration-runtime.js';
+import type {
+  AutoloadTurnOutcome,
+  PromotedToolMutationResult,
+} from './tool-runtime-contracts.js';
+export type { AutoloadTurnOutcome } from './tool-runtime-contracts.js';
 
 export interface ExtendedToolActivationResult {
   requestedTools: string[];
@@ -45,11 +49,6 @@ export interface ExtendedToolActivationOptions {
   correlation?: CorrelationMetadata;
   taskKind?: string | null;
   intent?: string | null;
-}
-
-export interface AutoloadTurnOutcome {
-  intent: string | null;
-  skipped: AdaptiveToolSnapshotSkip[];
 }
 
 export interface ToolSearchResultEntry {

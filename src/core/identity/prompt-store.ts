@@ -191,14 +191,20 @@ export interface PromptLayerUpdatePatch {
   metadata?: PromptLayerMetadataUpdate;
 }
 
+export interface PromptLayerStoreOptions {
+  throwOnLoadError?: boolean;
+}
+
 export class PromptLayerStore {
   private filePath: string;
   private historyPath: string;
   private layers: PromptLayer[] = [];
+  private readonly throwOnLoadError: boolean;
 
-  constructor(filePath: string, historyPath: string) {
+  constructor(filePath: string, historyPath: string, options: PromptLayerStoreOptions = {}) {
     this.filePath = filePath;
     this.historyPath = historyPath;
+    this.throwOnLoadError = options.throwOnLoadError !== false;
     this.load();
   }
 
@@ -213,6 +219,10 @@ export class PromptLayerStore {
       this.layers = parsed.map((layer, index) => validateStoredPromptLayer(layer, index));
     } catch (err) {
       log.error('Failed to load prompt layers', { error: String(err) });
+      if (!this.throwOnLoadError) {
+        this.layers = [];
+        return;
+      }
       throw new Error(`Failed to load prompt layers from ${this.filePath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }

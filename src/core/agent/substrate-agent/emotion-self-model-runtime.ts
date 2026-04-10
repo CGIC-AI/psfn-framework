@@ -3,7 +3,11 @@ import type { EmotionObserver, EmotionObserverResult } from '../../emotion/obser
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from '../../emotion/state.js';
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
 import type { ActiveConcern, ActiveConcernContextProvider } from '../../intention/concerns.js';
-import type { PendingFollowUp, PendingFollowUpContextProvider } from '../../intention/pending-follow-ups.js';
+import {
+  filterPendingFollowUpsForActiveChannel,
+  type PendingFollowUp,
+  type PendingFollowUpContextProvider,
+} from '../../intention/pending-follow-ups.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { SessionManager } from '../../session/manager.js';
@@ -154,7 +158,10 @@ export class EmotionSelfModelRuntime {
     sessionChannelId: string;
   }): Promise<InternalState> {
     const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
-    const pendingFollowUps = this.resolveInternalStatePendingFollowUps(input.canonicalContactKey);
+    const pendingFollowUps = this.resolveInternalStatePendingFollowUps(
+      input.canonicalContactKey,
+      input.sessionChannelId,
+    );
     const [contactEmotionalSnapshot, lastSeenDeltaSeconds] = await Promise.all([
       this.resolveContactEmotionalSnapshot(input.canonicalContactKey),
       this.resolveContactLastSeenDeltaSeconds(
@@ -326,14 +333,17 @@ export class EmotionSelfModelRuntime {
     return concerns;
   }
 
-  private resolveInternalStatePendingFollowUps(canonicalContactKey?: string): PendingFollowUp[] {
+  private resolveInternalStatePendingFollowUps(
+    canonicalContactKey?: string,
+    sessionChannelId?: string,
+  ): PendingFollowUp[] {
     const pendingFollowUpProvider = this.getPendingFollowUpProvider();
     if (!pendingFollowUpProvider) return [];
     const followUps = pendingFollowUpProvider.getPendingFollowUps(canonicalContactKey);
     if (!Array.isArray(followUps)) {
       throw new Error('Pending follow-up provider returned an invalid payload for InternalState computation');
     }
-    return followUps;
+    return filterPendingFollowUpsForActiveChannel(followUps, sessionChannelId);
   }
 
   private async resolveContactEmotionalSnapshot(canonicalContactKey?: string): Promise<EmotionalSnapshot | null> {

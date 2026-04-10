@@ -282,7 +282,7 @@ describe('WyomingRuntime', () => {
         services: [],
       },
       serviceRegistry: createWyomingServiceRegistry([
-        createWyomingHandleServiceAdapter({ handleMessage }),
+        createWyomingHandleServiceAdapter({ handleMessage, companionId: 'psfn-test' }),
       ]),
       emitFrame: async (_session, frame) => {
         emitted.push(frame);
@@ -336,6 +336,7 @@ describe('WyomingRuntime', () => {
               durationMs: 1,
             },
           })),
+          companionId: 'psfn-test',
         }),
       ]),
       emitFrame: async (_session, frame) => {

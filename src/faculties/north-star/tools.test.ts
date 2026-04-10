@@ -5,7 +5,13 @@ import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { NorthStarStore } from './store.js';
-import { createNorthStarTool } from './tools.js';
+import {
+  createNorthStarCreateTool,
+  createNorthStarDeleteTool,
+  createNorthStarListTool,
+  createNorthStarReorderTool,
+  createNorthStarUpdateTool,
+} from './tools.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -27,23 +33,25 @@ describe('north star tools', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('handles list, create, update, delete, and reorder actions through the unified north_star surface', async () => {
-    const tool = createNorthStarTool(store);
+  it('handles list, create, update, delete, and reorder actions through the split north_star surface', async () => {
+    const createTool = createNorthStarCreateTool(store);
+    const listTool = createNorthStarListTool(store);
+    const updateTool = createNorthStarUpdateTool(store);
+    const reorderTool = createNorthStarReorderTool(store);
+    const deleteTool = createNorthStarDeleteTool(store);
 
-    const firstCreate = JSON.parse(resultText(await tool.execute('create-1', {
-      action: 'create',
+    const firstCreate = JSON.parse(resultText(await createTool.execute('create-1', {
       title: 'Shared care',
       content: 'Preserve trust and care in decisions.',
       scope: 'shared',
     })));
-    const secondCreate = JSON.parse(resultText(await tool.execute('create-2', {
-      action: 'create',
+    const secondCreate = JSON.parse(resultText(await createTool.execute('create-2', {
       title: 'Companion work',
       content: 'Advance longer-term companion-owned projects.',
       scope: 'companion',
     })));
 
-    const listed = JSON.parse(resultText(await tool.execute('list', { action: 'list' }))) as {
+    const listed = JSON.parse(resultText(await listTool.execute('list', {}))) as {
       count: number;
       preview: string | null;
       items: Array<{ id: string }>;
@@ -53,8 +61,7 @@ describe('north star tools', () => {
 
     const firstId = firstCreate.item.id as string;
     const secondId = secondCreate.item.id as string;
-    const updated = JSON.parse(resultText(await tool.execute('update', {
-      action: 'update',
+    const updated = JSON.parse(resultText(await updateTool.execute('update', {
       item_id: firstId.slice(0, 8),
       enabled: false,
       title: 'Shared stewardship',
@@ -62,14 +69,12 @@ describe('north star tools', () => {
     expect(updated.item.enabled).toBe(false);
     expect(updated.item.title).toBe('Shared stewardship');
 
-    const reordered = JSON.parse(resultText(await tool.execute('reorder', {
-      action: 'reorder',
+    const reordered = JSON.parse(resultText(await reorderTool.execute('reorder', {
       item_ids: [secondId.slice(0, 8), firstId.slice(0, 8)],
     })));
     expect(reordered.items.map((item: { id: string }) => item.id)).toEqual([secondId, firstId]);
 
-    const deleted = JSON.parse(resultText(await tool.execute('delete', {
-      action: 'delete',
+    const deleted = JSON.parse(resultText(await deleteTool.execute('delete', {
       item_id: secondId.slice(0, 8),
     })));
     expect(deleted.action).toBe('deleted');

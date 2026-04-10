@@ -24,7 +24,7 @@ import {
   type GatewayRoutingEnvelope,
   type ShardLineage,
 } from '../../shared/routing/envelope.js';
-import type { SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
+import type { ChannelType, SubstrateMessage, WyomingRoutingMetadata } from '../../shared/contracts/runtime.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { inferSessionChannelType } from '../../core/session/session-id.js';
@@ -67,7 +67,7 @@ const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['spawn_shard', 'shard', 'load_tools
 const SUBAGENT_CONTROL_AUTHOR_ID = 'system:subagent-control';
 const SUBAGENT_CONTROL_AUTHOR_NAME = 'SubagentControl';
 
-function resolveMessageChannelType(channelId: string): 'api' | 'discord' | 'terminal' | 'telegram' | 'psfn-amica' {
+function resolveMessageChannelType(channelId: string): ChannelType {
   const inferred = inferSessionChannelType(channelId);
   return inferred && inferred !== 'subagent' ? inferred : 'api';
 }

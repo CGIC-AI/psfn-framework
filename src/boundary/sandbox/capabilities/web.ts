@@ -8,16 +8,9 @@ import {
 } from './common.js';
 
 export interface WebCapabilities {
-  web(
-    action: 'fetch' | 'browse',
-    target: string,
-    options?: { prompt?: string },
-  ): Promise<string>;
-  web(
-    action: 'search',
-    target: string,
-    options?: { maxUrls?: number },
-  ): Promise<Array<{ url: string; content: string }>>;
+  web_fetch: (url: string, prompt?: string) => Promise<string>;
+  crawler_fetch: (url: string, prompt?: string) => Promise<string>;
+  web_research: (query: string, maxUrls?: number) => Promise<Array<{ url: string; content: string }>>;
 }
 
 interface CreateWebCapabilitiesOptions {
@@ -103,52 +96,29 @@ export function createWebCapabilities(options: CreateWebCapabilitiesOptions): We
     return results;
   };
 
-  async function web(
-    action: 'fetch' | 'browse',
-    target: string,
-    options?: { prompt?: string },
-  ): Promise<string>;
-  async function web(
-    action: 'search',
-    target: string,
-    options?: { maxUrls?: number },
-  ): Promise<Array<{ url: string; content: string }>>;
-  async function web(
-    action: 'fetch' | 'browse' | 'search',
-    target: string,
-    options?: { prompt?: string; maxUrls?: number },
-  ): Promise<string | Array<{ url: string; content: string }>> {
-    switch (action) {
-      case 'fetch':
-        return await fetchViaLane(
-          target,
-          'default',
-          {
-            unavailable: 'Web fetch unavailable: requires gateway web.fetch policy and audit path',
-            missingTarget: 'Web fetch error: URL is required',
-            failurePrefix: 'Web fetch error',
-          },
-          options?.prompt,
-        );
-      case 'browse':
-        return await fetchViaLane(
-          target,
-          'local_crawler',
-          {
-            unavailable: 'Web browse unavailable: requires gateway web.fetch policy and audit path',
-            missingTarget: 'Web browse error: URL is required',
-            failurePrefix: 'Web browse error',
-          },
-          options?.prompt,
-        );
-      case 'search':
-        return await searchWeb(target, options?.maxUrls);
-      default:
-        return [`[Web error: unsupported action "${String(action)}"]`].join('');
-    }
-  }
-
   return {
-    web,
+    web_fetch: async (url: string, prompt?: string): Promise<string> => fetchViaLane(
+      url,
+      'default',
+      {
+        unavailable: 'Web fetch unavailable: requires gateway web.fetch policy and audit path',
+        missingTarget: 'Web fetch error: URL is required',
+        failurePrefix: 'Web fetch error',
+      },
+      prompt,
+    ),
+    crawler_fetch: async (url: string, prompt?: string): Promise<string> => fetchViaLane(
+      url,
+      'local_crawler',
+      {
+        unavailable: 'Web browse unavailable: requires gateway web.fetch policy and audit path',
+        missingTarget: 'Web browse error: URL is required',
+        failurePrefix: 'Web browse error',
+      },
+      prompt,
+    ),
+    web_research: async (query: string, maxUrls?: number): Promise<Array<{ url: string; content: string }>> => (
+      searchWeb(query, maxUrls)
+    ),
   };
 }

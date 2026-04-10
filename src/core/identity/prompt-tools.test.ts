@@ -162,6 +162,19 @@ describe('Prompt Layer Tools', () => {
       expect(text).toContain('Name: Test');
     });
 
+    it('accepts layer.id as an alias for layer_id', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Alias', content: 'alias content' });
+      const tool = gateToolWithCapabilities(
+        createPromptLayerGetTool(store),
+        () => accessForTier('nursery'),
+      );
+      const result = await tool.execute('alias', { layer: { id: layer.id.slice(0, 8) } });
+      const text = resultText(result);
+
+      expect(text).toContain('Name: Alias');
+      expect(text).toContain('alias content');
+    });
+
     it('returns not found for unknown id', async () => {
       const tool = gateToolWithCapabilities(
         createPromptLayerGetTool(store),
@@ -214,6 +227,26 @@ describe('Prompt Layer Tools', () => {
       });
       expect(resultText(tooNew)).toContain('newer than current version');
       expect(tooNew.details?.isError).toBe(true);
+    });
+
+    it('accepts to_version as an alias for version', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Alias Diff', content: 'line-a\nline-b' });
+      store.update(layer.id, 'line-a\nline-c', 'agent', {}, 'Alias diff rewrite');
+
+      const tool = gateToolWithCapabilities(
+        createIdentityDiffTool(store),
+        () => accessForTier('nursery'),
+      );
+      const result = await tool.execute('alias-diff', {
+        layer_id: layer.id,
+        to_version: 1,
+      });
+      const text = resultText(result);
+
+      expect(text).toContain('Identity diff for runtime/Alias Diff');
+      expect(text).toContain('Compared versions: v1 -> v2');
+      expect(text).toContain('- line-b');
+      expect(text).toContain('+ line-c');
     });
   });
 

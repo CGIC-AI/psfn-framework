@@ -477,7 +477,7 @@ export class MemoryRetriever implements MemoryProvider {
       ? await this.resolveEmotionalSnapshot(canonicalContactId)
       : undefined;
     const contactEmotionalMemories = canonicalContactId
-      ? this.collectContactEmotionalMemories(canonicalContactId)
+      ? await this.collectContactEmotionalMemories(canonicalContactId)
       : [];
 
     let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
@@ -503,7 +503,10 @@ export class MemoryRetriever implements MemoryProvider {
       }
     }
 
-    const proactiveCandidates = this.collectProactiveRecallCandidates(channelId, canonicalContactId).map(cloneMemory);
+    const proactiveCandidates = (await this.collectProactiveRecallCandidates(
+      channelId,
+      canonicalContactId,
+    )).map(cloneMemory);
     const retrievalCandidates = semanticCandidates.length > 0 ? semanticCandidates : lexicalCandidates;
     const {
       summary: withheldSummary,
@@ -609,13 +612,13 @@ export class MemoryRetriever implements MemoryProvider {
         : undefined;
     telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
     const contactEmotionalSource = turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
-      ?? (canonicalContactId ? this.collectContactEmotionalMemories(canonicalContactId) : []);
+      ?? (canonicalContactId ? await this.collectContactEmotionalMemories(canonicalContactId) : []);
     const proactiveSource = turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [];
     let withheldSummary = cloneMemoryWithheldSummary(turnSnapshot?.withheldSummary);
 
     const emptySelectedIds = new Set<string>();
     const fallbackEmotionalContinuity = canonicalContactId
-      ? this.collectEmotionalContinuityMemories(
+      ? await this.collectEmotionalContinuityMemories(
         canonicalContactId,
         effectiveTrust,
         channelVisibility,
@@ -993,7 +996,7 @@ export class MemoryRetriever implements MemoryProvider {
       });
       const selectedIds = new Set(selected.map(item => item.memory.id));
       const emotionalContinuityMemories = canonicalContactId
-        ? this.collectEmotionalContinuityMemories(
+        ? await this.collectEmotionalContinuityMemories(
           canonicalContactId,
           effectiveTrust,
           channelVisibility,
@@ -1089,7 +1092,7 @@ export class MemoryRetriever implements MemoryProvider {
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
     const candidates = turnSnapshot?.proactiveCandidates.map(cloneMemory)
-      ?? this.collectProactiveRecallCandidates(channelId, canonicalContactId);
+      ?? await this.collectProactiveRecallCandidates(channelId, canonicalContactId);
     if (candidates.length === 0) return '';
 
     const weighted = candidates
@@ -1334,7 +1337,7 @@ export class MemoryRetriever implements MemoryProvider {
     return 0.45;
   }
 
-  private collectEmotionalContinuityMemories(
+  private async collectEmotionalContinuityMemories(
     canonicalContactId: string,
     trustLevel: TrustLevel,
     channelVisibility: ChannelVisibility,
@@ -1342,8 +1345,8 @@ export class MemoryRetriever implements MemoryProvider {
     operatorApproval = false,
     channelMeta?: ChannelMeta,
     sourceOverride?: readonly PurrMemory[],
-  ): PurrMemory[] {
-    const source = (sourceOverride?.map(cloneMemory) ?? this.collectContactEmotionalMemories(canonicalContactId))
+  ): Promise<PurrMemory[]> {
+    const source = (sourceOverride?.map(cloneMemory) ?? await this.collectContactEmotionalMemories(canonicalContactId))
       .filter(memory => !isInternalMemoryArtifact(memory));
     if (source.length === 0) return [];
 
@@ -1361,30 +1364,30 @@ export class MemoryRetriever implements MemoryProvider {
       .slice(0, 3);
   }
 
-  private collectContactEmotionalMemories(canonicalContactId: string): PurrMemory[] {
-    return this.memoryStore
-      .getMemoriesByContact(canonicalContactId, 12)
+  private async collectContactEmotionalMemories(canonicalContactId: string): Promise<PurrMemory[]> {
+    return (await this.memoryStore
+      .getMemoriesByContact(canonicalContactId, 12))
       .filter(memory => !isInternalMemoryArtifact(memory));
   }
 
-  private collectProactiveRecallCandidates(
+  private async collectProactiveRecallCandidates(
     channelId: string,
     canonicalContactId?: string,
-  ): PurrMemory[] {
+  ): Promise<PurrMemory[]> {
     if (canonicalContactId) {
-      const byContact = this.memoryStore
-        .getMemoriesByContact(canonicalContactId, 24)
+      const byContact = (await this.memoryStore
+        .getMemoriesByContact(canonicalContactId, 24))
         .filter(memory => !isInternalMemoryArtifact(memory));
       if (byContact.length > 0) return byContact;
     }
 
-    const byChannel = this.memoryStore
-      .getMemoriesByChannel(channelId, 24)
+    const byChannel = (await this.memoryStore
+      .getMemoriesByChannel(channelId, 24))
       .filter(memory => !isInternalMemoryArtifact(memory));
     if (byChannel.length > 0) return byChannel;
 
-    return this.memoryStore
-      .getAllActiveMemories()
+    return (await this.memoryStore
+      .getAllActiveMemories())
       .filter(memory => !isInternalMemoryArtifact(memory))
       .sort((left, right) => right.lastAccessed - left.lastAccessed)
       .slice(0, 24);

@@ -84,6 +84,29 @@ describe('runRLMLoop', () => {
     expect(calls[0][1]).toBe('reasoning');
   });
 
+  it('awaits async memory stats when building prompt context', async () => {
+    const llm = sequentialLLM(['FINAL("done")']);
+    const getStats = vi.fn(async () => ({
+      total: 2,
+      byType: {
+        semantic: 2,
+      },
+      avgSalience: 0.5,
+    }));
+
+    const result = await runRLMLoop(
+      'Memory stats route test',
+      makeDeps(llm, {
+        memoryStore: {
+          getStats,
+        } as any,
+      }),
+    );
+
+    expect(result.answer).toBe('done');
+    expect(getStats).toHaveBeenCalledTimes(1);
+  });
+
   it('does not derive shell_exec from the llm provider without an explicit sandbox boundary', async () => {
     const llm = {
       ...sequentialLLM(['```repl\nFINAL(typeof shell_exec);\n```']),
@@ -213,6 +236,7 @@ describe('runRLMLoop', () => {
     expect(result.truncated).toBe(true);
     expect(result.iterations).toBe(3);
     expect(result.budgetStatus.exceeded).toBe('max iterations');
+    expect(result.answer).toBe('[Think loop stopped: max iterations]');
   });
 
   it('accumulates tokens across iterations', async () => {
@@ -314,6 +338,7 @@ describe('runRLMLoop', () => {
     expect(result.budgetStatus.totalTokens).toBeGreaterThanOrEqual(50);
     // Should have stopped after 2 iterations (2 * 30 = 60 >= 50)
     expect(result.iterations).toBe(2);
+    expect(result.answer).toBe('[Think loop stopped: token budget]');
   });
 
   it('budgetStatus tracks sub-queries from sandbox', async () => {
@@ -667,7 +692,7 @@ describe('runRLMLoop', () => {
     expect(result.truncated).toBe(true);
     expect(result.iterations).toBe(0);
     expect(result.budgetStatus.exceeded).toBe('wall time');
-    expect(result.answer).toBe('[No response generated]');
+    expect(result.answer).toBe('[Think loop stopped: wall time]');
   });
 
   it('enforces invocation rate limits across think calls', async () => {

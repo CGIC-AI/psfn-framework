@@ -1,6 +1,9 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { SubstrateMessage, ResponseStyle } from '../../../shared/contracts/runtime.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
+import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
+import { resolveToolRequiredCapabilities } from '../../../system/capabilities/requirements.js';
+import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelVisibility } from '../../../system/trust/types.js';
 import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } from '../../../system/trust/policy.js';
@@ -52,6 +55,12 @@ interface RuntimeContextActiveToolCounts {
   autoload: number;
   deferred: number;
   total: number;
+}
+
+interface ExtendedToolGuideEntry {
+  line: string;
+  blocked: boolean;
+  activatable: boolean;
 }
 
 export interface ResolvedAuthorContext {
@@ -116,6 +125,69 @@ function formatPromptRuntimeTime(now: Date): string {
     minute: '2-digit',
     hour12: true,
   }).format(now);
+}
+
+function buildExtendedToolGuide(input: {
+  capabilityTier: CapabilityTier;
+  extendedTools: AgentTool<any>[];
+  loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
+  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
+  promotedExtendedToolNames: Set<string>;
+}): {
+  lines: string[];
+  activatableCount: number;
+  blockedCount: number;
+} {
+  const grantedTokens = new Set<CapabilityToken>(resolveTierCapabilityTokens(input.capabilityTier));
+  const entries: ExtendedToolGuideEntry[] = input.extendedTools.map((tool) => {
+    const loaded = input.loadedExtended.get(tool.name);
+    const turnClass = input.classifyExtendedToolForTurn(tool.name);
+
+    if (turnClass !== 'overlay') {
+      return {
+        line: `- ${tool.name}: ${tool.description.split('.')[0]} (background-only; not callable in-turn)`,
+        blocked: false,
+        activatable: false,
+      };
+    }
+
+    const missingTokens = resolveToolRequiredCapabilities(tool, {})
+      .filter(token => !grantedTokens.has(token));
+    const blockedSuffix = missingTokens.length > 0
+      ? `; current tier blocks execution: ${missingTokens.join(', ')}`
+      : '';
+
+    let suffix = '(use toolset action="activate")';
+    let activatable = true;
+    if (input.promotedExtendedToolNames.has(tool.name)) {
+      suffix = `(promoted, always active${blockedSuffix})`;
+      activatable = false;
+    } else if (loaded?.source === 'autoload') {
+      suffix = `(autoload active${blockedSuffix})`;
+      activatable = false;
+    } else if (loaded?.source === 'deferred') {
+      suffix = `(deferred active${blockedSuffix})`;
+      activatable = false;
+    } else if (loaded?.source === 'extended_loaded') {
+      suffix = `(loaded active${blockedSuffix})`;
+      activatable = false;
+    } else if (missingTokens.length > 0) {
+      suffix = `(blocked by current tier: ${missingTokens.join(', ')})`;
+      activatable = false;
+    }
+
+    return {
+      line: `- ${tool.name}: ${tool.description.split('.')[0]} ${suffix}`.replace(/\s+\(/, ' ('),
+      blocked: missingTokens.length > 0,
+      activatable,
+    };
+  });
+
+  return {
+    lines: entries.map(entry => entry.line),
+    activatableCount: entries.filter(entry => entry.activatable).length,
+    blockedCount: entries.filter(entry => entry.blocked).length,
+  };
 }
 
 function formatPromptRuntimeWeekday(now: Date): string {
@@ -393,12 +465,24 @@ export function buildDynamicPromptTemplateVariables(input: {
     total: activeCount,
   } = input.activeToolCounts;
   const extendedCount = input.extendedTools.length;
+  const extendedToolGuide = buildExtendedToolGuide({
+    capabilityTier: input.capabilityTier,
+    extendedTools: input.extendedTools,
+    loadedExtended: input.loadedExtended,
+    classifyExtendedToolForTurn: input.classifyExtendedToolForTurn,
+    promotedExtendedToolNames: input.promotedExtendedToolNames,
+  });
   const activeToolSummary = `${activeCount} active now (${coreCount} core`
     + (promotedCount > 0 ? `, ${promotedCount} promoted` : '')
     + (extendedLoadedCount > 0 ? `, ${extendedLoadedCount} loaded` : '')
     + (autoloadCount > 0 ? `, ${autoloadCount} autoload` : '')
     + (deferredCount > 0 ? `, ${deferredCount} deferred` : '')
-    + `)${extendedCount > 0 ? `; ${extendedCount} more available via load_tools.` : '.'}`;
+    + `)${extendedCount > 0
+      ? `; ${extendedToolGuide.activatableCount} more activatable via toolset action="activate"`
+        + (extendedToolGuide.blockedCount > 0
+          ? `, ${extendedToolGuide.blockedCount} blocked by the current capability tier.`
+          : '.')
+      : '.'}`;
   const trustGuidance = resolveTrustGuidance(input.trustLevel);
 
   const affectBody = unwrapPromptSectionBody(buildEmotionalAffectSection({
@@ -436,24 +520,10 @@ export function buildDynamicPromptTemplateVariables(input: {
     : '';
   const extendedToolsBody = extendedCount > 0
     ? [
+      'Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.',
+      'If a non-default tool is not already active, activate it before you describe its outcome.',
       'Core tools are already active through the structured tool registry and are not duplicated here.',
-      ...input.extendedTools.map((tool) => {
-        const loaded = input.loadedExtended.get(tool.name);
-        const turnClass = input.classifyExtendedToolForTurn(tool.name);
-        let suffix = ' (use load_tools to activate)';
-        if (turnClass !== 'overlay') {
-          suffix = ' (background-only; not callable in-turn)';
-        } else if (input.promotedExtendedToolNames.has(tool.name)) {
-          suffix = ' (promoted, always active)';
-        } else if (loaded?.source === 'autoload') {
-          suffix = ' (autoload active)';
-        } else if (loaded?.source === 'deferred') {
-          suffix = ' (deferred active)';
-        } else if (loaded?.source === 'extended_loaded') {
-          suffix = ' (loaded active)';
-        }
-        return `- ${tool.name}: ${tool.description.split('.')[0]}${suffix}`;
-      }),
+      ...extendedToolGuide.lines,
     ].join('\n')
     : '';
   const lastMessageReceivedAt = (
@@ -560,6 +630,13 @@ export function buildRuntimeContext(input: {
   const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
   const responseStyleGuidance = getResponseStylePromptGuidance(responseStyle);
   const extendedCount = input.extendedTools.length;
+  const extendedToolGuide = buildExtendedToolGuide({
+    capabilityTier: input.capabilityTier,
+    extendedTools: input.extendedTools,
+    loadedExtended: input.loadedExtended,
+    classifyExtendedToolForTurn: input.classifyExtendedToolForTurn,
+    promotedExtendedToolNames: input.promotedExtendedToolNames,
+  });
   const {
     core: coreCount,
     promoted: promotedCount,
@@ -590,7 +667,14 @@ export function buildRuntimeContext(input: {
   }
   runtimeLines.push(`Current model: ${input.modelId}.`);
   runtimeLines.push(`Capability tier: ${input.capabilityTier}.`);
-  runtimeLines.push(`Tooling: ${activeToolSummary}${extendedCount > 0 ? `; ${extendedCount} more available via load_tools.` : '.'}`);
+  runtimeLines.push(
+    `Tooling: ${activeToolSummary}${extendedCount > 0
+      ? `; ${extendedToolGuide.activatableCount} more activatable via toolset action="activate"`
+        + (extendedToolGuide.blockedCount > 0
+          ? `, ${extendedToolGuide.blockedCount} blocked by the current capability tier.`
+          : '.')
+      : '.'}`,
+  );
 
   const sections: string[] = [
     wrapPromptSectionXml({
@@ -623,25 +707,11 @@ export function buildRuntimeContext(input: {
 
   if (extendedCount > 0) {
     const extendedToolLines = [
+      'Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.',
+      'If a non-default tool is not already active, activate it before you describe its outcome.',
       'Core tools are already active through the structured tool registry and are not duplicated here.',
     ];
-    for (const t of input.extendedTools) {
-      const loaded = input.loadedExtended.get(t.name);
-      const turnClass = input.classifyExtendedToolForTurn(t.name);
-      let suffix = ' (use load_tools to activate)';
-      if (turnClass !== 'overlay') {
-        suffix = ' (background-only; not callable in-turn)';
-      } else if (input.promotedExtendedToolNames.has(t.name)) {
-        suffix = ' (promoted, always active)';
-      } else if (loaded?.source === 'autoload') {
-        suffix = ' (autoload active)';
-      } else if (loaded?.source === 'deferred') {
-        suffix = ' (deferred active)';
-      } else if (loaded?.source === 'extended_loaded') {
-        suffix = ' (loaded active)';
-      }
-      extendedToolLines.push(`- ${t.name}: ${t.description.split('.')[0]}${suffix}`);
-    }
+    extendedToolLines.push(...extendedToolGuide.lines);
     sections.push(wrapPromptSectionXml({
       id: 'extended_tools',
       content: extendedToolLines.join('\n'),

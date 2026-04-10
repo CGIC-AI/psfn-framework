@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createRestartTool, createRebuildTool } from './lifecycle.js';
+import {
+  createRestartTool,
+  createRebuildTool,
+  DEFERRED_LIFECYCLE_ACTION_KIND,
+  inferDeferredLifecycleActions,
+  registerDeferredLifecycleRuntime,
+} from './lifecycle.js';
 import type { LifecycleNotifier } from '../../system/lifecycle/notifications.js';
 import { LifecycleRestartSafeguard } from '../../system/capabilities/safeguards.js';
 
@@ -217,5 +223,321 @@ describe('createRebuildTool', () => {
     expect(resultText(result)).toContain('reason is required');
     expect((result.details as any).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+  });
+});
+
+describe('deferred lifecycle execution', () => {
+  let mockNotifier: LifecycleNotifier;
+  let mockStopFn: ReturnType<typeof vi.fn>;
+  let runRestartCommand: ReturnType<typeof vi.fn>;
+  let runBuildCommand: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockNotifier = {
+      notifyPreRestart: vi.fn(async () => {}),
+      notifyReady: vi.fn(async () => {}),
+      notifyShutdown: vi.fn(async () => {}),
+    };
+    mockStopFn = vi.fn(async () => {});
+    runRestartCommand = vi.fn(async () => {});
+    runBuildCommand = vi.fn(async () => {});
+  });
+
+  it('queues restart work instead of stopping immediately in deferred mode', async () => {
+    const tool = createRestartTool(mockNotifier, mockStopFn, {
+      executionMode: 'deferred',
+      runRestartCommand,
+    });
+
+    const result = await tool.execute('call-deferred-restart', { reason: 'autonomy rerun' });
+
+    expect(resultText(result)).toContain('Restart queued');
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
+  });
+
+  it('infers deferred lifecycle actions from successful lifecycle tool results', () => {
+    const inferred = inferDeferredLifecycleActions({
+      message: {
+        id: 'message-1',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'restart please',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      response: {
+        content: 'Restart queued.',
+        channelId: 'api:test',
+        metadata: {
+          model: 'openrouter/moonshotai/kimi-k2.5',
+          inputTokens: 10,
+          outputTokens: 5,
+          durationMs: 25,
+        },
+      },
+      turnMessages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-restart',
+              name: 'self_restart',
+              arguments: { reason: 'autonomous shakedown restart' },
+            },
+            {
+              type: 'toolCall',
+              id: 'call-rebuild',
+              name: 'self_rebuild',
+              arguments: { reason: 'autonomous shakedown rebuild' },
+            },
+          ],
+        } as any,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-restart',
+          toolName: 'self_restart',
+          isError: false,
+          content: [{ type: 'text', text: 'Restart queued.' }],
+          details: {},
+        } as any,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-rebuild',
+          toolName: 'self_rebuild',
+          isError: false,
+          content: [{ type: 'text', text: 'Rebuild queued.' }],
+          details: {},
+        } as any,
+      ],
+      turnId: 'turn-1' as any,
+      completedAt: 1_700_000_000_100,
+    });
+
+    expect(inferred).toEqual([
+      {
+        kind: DEFERRED_LIFECYCLE_ACTION_KIND,
+        payload: {
+          operation: 'restart',
+          reason: 'autonomous shakedown restart',
+        },
+        dedupeKey: `${DEFERRED_LIFECYCLE_ACTION_KIND}:turn-1:restart`,
+      },
+      {
+        kind: DEFERRED_LIFECYCLE_ACTION_KIND,
+        payload: {
+          operation: 'rebuild',
+          reason: 'autonomous shakedown rebuild',
+        },
+        dedupeKey: `${DEFERRED_LIFECYCLE_ACTION_KIND}:turn-1:rebuild`,
+      },
+    ]);
+  });
+
+  it('infers deferred lifecycle actions from structured reason wrappers', () => {
+    const inferred = inferDeferredLifecycleActions({
+      message: {
+        id: 'message-structured-rebuild',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'rebuild please',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      response: {
+        content: 'Rebuild queued.',
+        channelId: 'api:test',
+        metadata: {
+          model: 'openrouter/moonshotai/kimi-k2.5',
+          inputTokens: 10,
+          outputTokens: 5,
+          durationMs: 25,
+        },
+      },
+      turnMessages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-rebuild-structured',
+              name: 'self_rebuild',
+              arguments: {
+                reason: {
+                  _type: 'rewind_marker',
+                  marker: 'autonomous shakedown rebuild',
+                },
+              },
+            },
+          ],
+        } as any,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-rebuild-structured',
+          toolName: 'self_rebuild',
+          isError: false,
+          content: [{ type: 'text', text: 'Rebuild queued.' }],
+          details: {},
+        } as any,
+      ],
+      turnId: 'turn-structured' as any,
+      completedAt: 1_700_000_000_100,
+    });
+
+    expect(inferred).toEqual([
+      {
+        kind: DEFERRED_LIFECYCLE_ACTION_KIND,
+        payload: {
+          operation: 'rebuild',
+          reason: 'autonomous shakedown rebuild',
+        },
+        dedupeKey: `${DEFERRED_LIFECYCLE_ACTION_KIND}:turn-structured:rebuild`,
+      },
+    ]);
+  });
+
+  it('infers deferred restart actions from primary_reason wrappers', () => {
+    const inferred = inferDeferredLifecycleActions({
+      message: {
+        id: 'message-structured-restart',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'restart please',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      response: {
+        content: 'Restart queued.',
+        channelId: 'api:test',
+        metadata: {
+          model: 'openrouter/moonshotai/kimi-k2.5',
+          inputTokens: 10,
+          outputTokens: 5,
+          durationMs: 25,
+        },
+      },
+      turnMessages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-restart-structured',
+              name: 'self_restart',
+              arguments: {
+                reason: {
+                  primary_reason: 'autonomous shakedown restart',
+                },
+              },
+            },
+          ],
+        } as any,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-restart-structured',
+          toolName: 'self_restart',
+          isError: false,
+          content: [{ type: 'text', text: 'Restart queued.' }],
+          details: {},
+        } as any,
+      ],
+      turnId: 'turn-structured-restart' as any,
+      completedAt: 1_700_000_000_100,
+    });
+
+    expect(inferred).toEqual([
+      {
+        kind: DEFERRED_LIFECYCLE_ACTION_KIND,
+        payload: {
+          operation: 'restart',
+          reason: 'autonomous shakedown restart',
+        },
+        dedupeKey: `${DEFERRED_LIFECYCLE_ACTION_KIND}:turn-structured-restart:restart`,
+      },
+    ]);
+  });
+
+  it('executes deferred restart actions through the post-turn handler', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const registerHandler = vi.fn((_kind, _handler) => {
+      return () => undefined;
+    });
+    const postTurnActions = {
+      registerHandler,
+      listQueued: () => [],
+    };
+    const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => undefined);
+
+    registerDeferredLifecycleRuntime({
+      agentLoop: { registerPostTurnActionInferer },
+      postTurnActions: postTurnActions as any,
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      runRestartCommand,
+      runBuildCommand,
+    });
+
+    const handler = registerHandler.mock.calls[0]?.[1] as (action: any) => Promise<void>;
+    await handler({
+      id: 'action-restart',
+      payload: {
+        operation: 'restart',
+        reason: 'autonomous shakedown restart',
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(registerPostTurnActionInferer).toHaveBeenCalledOnce();
+    expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('autonomous shakedown restart');
+    expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(runRestartCommand).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(0);
+
+    exitSpy.mockRestore();
+  });
+
+  it('notifies shutdown and aborts deferred rebuild restart when build fails', async () => {
+    runBuildCommand.mockImplementation(async () => {
+      throw new Error('build blew up');
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const registerHandler = vi.fn((_kind, _handler) => {
+      return () => undefined;
+    });
+
+    registerDeferredLifecycleRuntime({
+      agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
+      postTurnActions: {
+        registerHandler,
+        listQueued: () => [],
+      } as any,
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      runRestartCommand,
+      runBuildCommand,
+    });
+
+    const handler = registerHandler.mock.calls[0]?.[1] as (action: any) => Promise<void>;
+    await handler({
+      id: 'action-rebuild',
+      payload: {
+        operation: 'rebuild',
+        reason: 'autonomous shakedown rebuild',
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: autonomous shakedown rebuild');
+    expect(mockNotifier.notifyShutdown).toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    exitSpy.mockRestore();
   });
 });

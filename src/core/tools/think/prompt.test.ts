@@ -8,6 +8,7 @@ describe('buildRLMSystemPrompt', () => {
     expect(prompt).toContain('### Repository');
     expect(prompt).toContain('`await repo_status()`');
     expect(prompt).toContain('`await repo_diff(staged?)`');
+    expect(prompt).toContain('Surface that error verbatim instead of inventing placeholder branch or diff data.');
     expect(prompt).not.toContain('`await repo_apply_patch(filePath, content)`');
     expect(prompt).not.toContain('`await repo_commit(message, intent?, scope?)`');
     expect(prompt).toContain('Repository mutation is disabled in this sandbox.');

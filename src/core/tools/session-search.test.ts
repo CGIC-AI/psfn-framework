@@ -167,6 +167,50 @@ describe('session search tools', () => {
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
   });
 
+  it('session_search accepts keyword as an alias for query', async () => {
+    store.append({
+      channelId: 'api:alias-test',
+      role: 'assistant',
+      content: 'Matrix verification note for alias coverage.',
+      timestamp: 5_000,
+      channelVisibility: 'private',
+    });
+
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: 'Alias summary should not be used.',
+        toolCalls: [],
+        model: 'mock',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
+    } as any;
+    const tool = createSessionSearchTool(manager, llmProvider);
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: 'api:alias-search',
+        viewerTrustLevel: 'primary',
+        viewerChannelVisibility: 'private',
+      },
+      () => tool.execute('session-search-3', { keyword: 'Matrix verification' }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      totalHits: number;
+      hits: Array<{ channelId: string; snippet: string }>;
+    };
+
+    expect(payload.totalHits).toBe(1);
+    expect(payload.hits).toHaveLength(1);
+    expect(payload.hits[0]?.channelId).toBe('api:alias-test');
+    expect(payload.hits[0]?.snippet).toContain('Matrix');
+    expect(payload.hits[0]?.snippet).toContain('verification');
+    expect(llmProvider.complete).not.toHaveBeenCalled();
+  });
+
   it('session_grep filters raw journal hits by caller privacy and returns structured matches', async () => {
     const runRipgrep = vi.fn(async () => ({
       matches: [

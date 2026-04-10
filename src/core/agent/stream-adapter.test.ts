@@ -437,26 +437,16 @@ describe('createSubstrateStreamFn', () => {
       },
     });
 
-    streamAdapterMocks.streamSimple.mockImplementation((resolvedModel: { id: string }) => (
-      (async function* success() {
-        yield {
-          type: 'done',
-          reason: 'stop',
-          message: {
-            role: 'assistant',
-            content: [{ type: 'text', text: 'reasoned' }],
-            api: 'openai-completions',
-            provider: 'litellm',
-            model: resolvedModel.id,
-            usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 8, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: 'stop',
-            timestamp: Date.now(),
-          },
-        };
-      })()
-    ) as any);
+    streamAdapterMocks.transportStream.mockImplementation(async (context: LLMContext) => ({
+      content: 'reasoned',
+      toolCalls: [],
+      model: context.modelHint?.model ? `openrouter/${context.modelHint.model}` : 'openrouter/unknown',
+      inputTokens: 5,
+      outputTokens: 3,
+      stopReason: 'stop',
+    }));
 
-    const streamFn = createSubstrateStreamFn(config);
+    const streamFn = makeStreamFn(config);
     const mountedChatModel = resolveModel(config, 'chat');
     const events = await runWithRequestContext(
       {
@@ -477,10 +467,9 @@ describe('createSubstrateStreamFn', () => {
       },
     );
 
-    expect(events).toHaveLength(1);
-    expect((events[0] as { type: string }).type).toBe('done');
-    expect(streamAdapterMocks.streamSimple).toHaveBeenCalledTimes(1);
-    expect((streamAdapterMocks.streamSimple.mock.calls[0]?.[0] as { id: string }).id).toBe('reasoning-model');
+    expect((events.at(-1) as { type: string }).type).toBe('done');
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(1);
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint?.model).toBe('reasoning-model');
   });
 
   it('fails closed for tool-side reasoning streams when no reasoning candidate is configured', async () => {
@@ -505,7 +494,7 @@ describe('createSubstrateStreamFn', () => {
       },
     });
 
-    const streamFn = createSubstrateStreamFn(config);
+    const streamFn = makeStreamFn(config);
     const mountedChatModel = resolveModel(config, 'chat');
     await expect(runWithRequestContext(
       {
@@ -525,7 +514,7 @@ describe('createSubstrateStreamFn', () => {
         return await collectStreamEvents(stream as AsyncIterable<unknown>);
       },
     )).rejects.toThrow("No eligible model configured for purpose 'reasoning'");
-    expect(streamAdapterMocks.streamSimple).not.toHaveBeenCalled();
+    expect(streamAdapterMocks.transportStream).not.toHaveBeenCalled();
   });
 
   it('emits a terminal failure hook when all configured candidates fail', async () => {

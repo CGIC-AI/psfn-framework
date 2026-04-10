@@ -201,15 +201,25 @@ export function resolveJournalIntegrityChainCandidates(
   previousHmac: string | null,
 ): Array<string | null> {
   const nextCandidates: Array<string | null> = [];
-  if (!verification.verified) {
-    appendUniqueChainCandidate(nextCandidates, previousHmac);
-  }
-  if (typeof verification.observedHmac === 'string' && HEX_SHA256_PATTERN.test(verification.observedHmac)) {
+
+  if (verification.verified) {
     appendUniqueChainCandidate(nextCandidates, verification.observedHmac);
-  }
-  if (typeof verification.expectedHmac === 'string' && HEX_SHA256_PATTERN.test(verification.expectedHmac)) {
+  } else if (verification.reason === 'signature_mismatch' || verification.reason === 'unknown_key_version') {
+    // The stored HMAC is still the anchor that downstream entries were chained against.
+    appendUniqueChainCandidate(nextCandidates, verification.observedHmac);
+  } else if (
+    verification.reason === 'invalid_signature_format'
+    || verification.reason === 'signature_length_mismatch'
+    || verification.reason === 'missing_signature'
+  ) {
+    // The signature field itself is missing/corrupted, so the recomputed HMAC is our
+    // best chance to recover the original downstream chain without branching.
+    appendUniqueChainCandidate(nextCandidates, verification.expectedHmac);
+  } else {
+    appendUniqueChainCandidate(nextCandidates, verification.observedHmac);
     appendUniqueChainCandidate(nextCandidates, verification.expectedHmac);
   }
+
   if (nextCandidates.length === 0) {
     appendUniqueChainCandidate(nextCandidates, previousHmac);
   }

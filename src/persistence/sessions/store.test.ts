@@ -1516,6 +1516,55 @@ describe('SessionStore', () => {
     expect(fullEntries[3].content).toBe('Current image review: A catgirl sits on a server rack.');
   });
 
+  it('does not branch exponentially when replaying a run of mismatched signed entries', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const provider = {
+      sign: (entry: Parameters<typeof signJournalEntry>[0], previousHmac: string | null) => signJournalEntry(
+        entry,
+        keyring!,
+        previousHmac,
+      ),
+      verify: vi.fn((entry: Parameters<typeof verifyJournalEntryIntegrity>[0], previousHmac: string | null) => verifyJournalEntryIntegrity(
+        entry,
+        keyring!,
+        previousHmac,
+      )),
+    };
+
+    const signedStore = new SessionStore(dir, { integrityProvider: provider });
+    for (let index = 1; index <= 6; index += 1) {
+      signedStore.append({
+        channelId: 'api:mismatch-run',
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `signed message ${index}`,
+        timestamp: index * 1_000,
+      });
+    }
+
+    const file = readdirSync(dir).find(f => f.endsWith('.jsonl') && !f.startsWith('user_'));
+    expect(file).toBeDefined();
+    const filePath = join(dir, file!);
+    const lines = readFileSync(filePath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    for (let index = 0; index < lines.length - 1; index += 1) {
+      lines[index].content = `tampered message ${index + 1}`;
+    }
+    writeFileSync(filePath, lines.map(line => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
+
+    const reloaded = new SessionStore(dir, { integrityProvider: provider });
+    const entries = reloaded.getRecent('api:mismatch-run', 10);
+    expect(entries).toHaveLength(6);
+    expect(entries[0].content).toContain('<unverified_history>');
+    expect(entries[5].content).toBe('signed message 6');
+    expect(provider.verify).toHaveBeenCalledTimes(6);
+  });
+
   it('supports RPC-style integrity providers without direct keyring injection', () => {
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:provider-key',
@@ -1564,6 +1613,109 @@ describe('SessionStore', () => {
     const reloaded = new SessionStore(dir, { integrityProvider: provider });
     const entries = reloaded.getRecent('api:provider', 10);
     expect(entries.map(entry => entry.content)).toEqual(['hello', 'world']);
+  });
+
+  it('memoizes repeated tail reads for unchanged lightweight channels', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:provider-tail-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const verify = vi.fn((entry: Parameters<typeof verifyJournalEntryIntegrity>[0], previousHmac: string | null) => (
+      verifyJournalEntryIntegrity(entry, keyring!, previousHmac)
+    ));
+    const provider = {
+      sign: (entry: Parameters<typeof signJournalEntry>[0], previousHmac: string | null) => signJournalEntry(
+        entry,
+        keyring!,
+        previousHmac,
+      ),
+      verify,
+    };
+
+    const writer = new SessionStore(dir, { integrityProvider: provider });
+    writer.append({
+      channelId: 'api:provider-tail',
+      role: 'user',
+      content: 'one',
+      timestamp: 1_000,
+    });
+    writer.append({
+      channelId: 'api:provider-tail',
+      role: 'assistant',
+      content: 'two',
+      timestamp: 2_000,
+    });
+    writer.append({
+      channelId: 'api:provider-tail',
+      role: 'user',
+      content: 'three',
+      timestamp: 3_000,
+    });
+    writer.append({
+      channelId: 'api:provider-tail',
+      role: 'assistant',
+      content: 'four',
+      timestamp: 4_000,
+    });
+
+    const reloaded = new SessionStore(dir, { integrityProvider: provider });
+    expect(reloaded.getRecent('api:provider-tail', 2).map(entry => entry.content)).toEqual(['three', 'four']);
+    const verifyCallsAfterFirstRead = verify.mock.calls.length;
+    expect(verifyCallsAfterFirstRead).toBeGreaterThan(0);
+
+    expect(reloaded.getRecent('api:provider-tail', 2).map(entry => entry.content)).toEqual(['three', 'four']);
+    expect(verify).toHaveBeenCalledTimes(verifyCallsAfterFirstRead);
+  });
+
+  it('lists recent session activity from the index without re-verifying journal tails', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:provider-index-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const verify = vi.fn((entry: Parameters<typeof verifyJournalEntryIntegrity>[0], previousHmac: string | null) => (
+      verifyJournalEntryIntegrity(entry, keyring!, previousHmac)
+    ));
+    const provider = {
+      sign: (entry: Parameters<typeof signJournalEntry>[0], previousHmac: string | null) => signJournalEntry(
+        entry,
+        keyring!,
+        previousHmac,
+      ),
+      verify,
+    };
+
+    const writer = new SessionStore(dir, { integrityProvider: provider });
+    writer.append({
+      channelId: 'api:provider-index-a',
+      role: 'assistant',
+      content: 'Most recent session preview',
+      authorName: 'ARTEMIS',
+      timestamp: 2_000,
+    });
+    writer.append({
+      channelId: 'api:provider-index-b',
+      role: 'user',
+      content: 'Older session preview',
+      authorName: 'Operator',
+      timestamp: 1_000,
+    });
+
+    const reloaded = new SessionStore(dir, { integrityProvider: provider });
+    const sessions = reloaded.listSessionsByRecentActivity(10);
+
+    expect(sessions.map(session => session.sessionId)).toEqual([
+      'api:provider-index-a',
+      'api:provider-index-b',
+    ]);
+    expect(sessions[0]).toMatchObject({
+      lastActivityAt: 2_000,
+      lastRole: 'assistant',
+      lastAuthorName: 'ARTEMIS',
+      lastMessagePreview: 'Most recent session preview',
+    });
+    expect(verify).not.toHaveBeenCalled();
   });
 
   it('loads entries without unverified wrapping when no keyring is configured (integrity disabled)', () => {

@@ -16,6 +16,8 @@ import {
   IMPORT_MANIFEST_FILENAME,
   createKeyringIntegrityProvider,
   normalizeOptionalNonNegativeNumber,
+  normalizeOptionalSessionEntryRole,
+  normalizeOptionalString,
   sanitizeChannelId,
   unsanitizeChannelId,
   type ChannelCache,
@@ -69,6 +71,7 @@ import { resolveSessionEntryTurnContext } from '../../core/session/turn-provenan
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
 const log = createComponentLogger('SessionStore');
+const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
 export {
   sanitizeChannelId,
   unsanitizeChannelId,
@@ -109,6 +112,32 @@ function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CH
     return normalized;
   }
   return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
+function applyLastMessageMetadata(
+  cache: ChannelCache,
+  entry: Pick<SessionEntry, 'timestamp' | 'role' | 'authorName' | 'content'>,
+): void {
+  cache.lastMessageTimestamp = entry.timestamp;
+  cache.lastMessageRole = entry.role;
+  cache.lastMessageAuthorName = entry.authorName;
+  cache.lastMessagePreview = toMessagePreview(entry.content);
+}
+
+function clearLastMessageMetadata(cache: ChannelCache): void {
+  cache.lastMessageTimestamp = 0;
+  cache.lastMessageRole = null;
+  cache.lastMessageAuthorName = undefined;
+  cache.lastMessagePreview = '';
+}
+
+function syncLastMessageMetadataFromEntries(cache: ChannelCache): void {
+  const lastEntry = cache.entries.at(-1);
+  if (!lastEntry) {
+    clearLastMessageMetadata(cache);
+    return;
+  }
+  applyLastMessageMetadata(cache, lastEntry);
 }
 
 export class SessionStore implements TranscriptSearchPort {
@@ -285,13 +314,19 @@ export class SessionStore implements TranscriptSearchPort {
       resolvedPath: newPath,
       messageCount: 0,
       lastTimestamp: 0,
+      lastMessageTimestamp: 0,
+      lastMessageRole: null,
+      lastMessageAuthorName: undefined,
+      lastMessagePreview: '',
       fullyLoaded: true,
+      recentEntriesByLimit: new Map(),
     };
     this.channels.set(channelId, cache);
     this.upsertChannelIndex(channelId, snapshotIndexEntry(cache));
     return cache;
   }
   private writeJournalEntry(cache: ChannelCache, journal: JournalEntry): void {
+    cache.recentEntriesByLimit.clear();
     const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
     this.journalRuntime.writeJournalEntry({
       cache,
@@ -321,6 +356,55 @@ export class SessionStore implements TranscriptSearchPort {
   private syncTranscriptProjectionForChannel(channelId: string, entries: readonly SessionEntry[]): void {
     if (!this.transcriptProjection) return;
     this.transcriptProjection.replaceChannelEntries(channelId, entries);
+  }
+  private buildRecentEntriesFingerprint(cache: ChannelCache): string {
+    return [
+      cache.resolvedPath,
+      cache.messageCount,
+      cache.activeTurnTombstoneCount,
+      cache.nextId,
+      cache.lastTimestamp,
+      cache.lastExtractionCoveredUpTo,
+      cache.lastJournalEntry?.type ?? '',
+      cache.lastJournalEntry?.type === 'marker' ? (cache.lastJournalEntry.marker ?? '') : '',
+      cache.lastHmac ?? '',
+    ].join(':');
+  }
+  private syncLightweightCacheFromIndexEntry(cache: ChannelCache, indexEntry: ChannelIndexEntry): void {
+    if (cache.fullyLoaded) return;
+    const previousFingerprint = this.buildRecentEntriesFingerprint(cache);
+    cache.activeTurnTombstoneCount = normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0;
+    cache.nextId = (normalizeOptionalNonNegativeNumber(indexEntry.maxId) ?? 0) + 1;
+    cache.lastHmac = indexEntry.lastHmac ?? null;
+    cache.lastExtractionCoveredUpTo = normalizeOptionalNonNegativeNumber(indexEntry.lastExtractionCoveredUpTo) ?? 0;
+    cache.lastJournalEntry = rehydrateLastJournalEntry(cache.channelId, indexEntry);
+    cache.messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
+    cache.lastTimestamp = normalizeOptionalNonNegativeNumber(indexEntry.lastTimestamp) ?? 0;
+    cache.lastMessageTimestamp = normalizeOptionalNonNegativeNumber(indexEntry.lastMessageTimestamp) ?? 0;
+    cache.lastMessageRole = normalizeOptionalSessionEntryRole(indexEntry.lastMessageRole) ?? null;
+    cache.lastMessageAuthorName = normalizeOptionalString(indexEntry.lastMessageAuthorName);
+    cache.lastMessagePreview = normalizeOptionalString(indexEntry.lastMessagePreview) ?? '';
+    if (this.buildRecentEntriesFingerprint(cache) !== previousFingerprint) {
+      cache.recentEntriesByLimit.clear();
+    }
+  }
+  private readCachedRecentEntries(cache: ChannelCache, limit: number): SessionEntry[] | null {
+    const cached = cache.recentEntriesByLimit.get(limit);
+    if (!cached) return null;
+    if (cached.fingerprint !== this.buildRecentEntriesFingerprint(cache)) return null;
+    return [...cached.entries];
+  }
+  private writeCachedRecentEntries(cache: ChannelCache, limit: number, entries: SessionEntry[]): void {
+    if (cache.fullyLoaded) return;
+    cache.recentEntriesByLimit.set(limit, {
+      fingerprint: this.buildRecentEntriesFingerprint(cache),
+      entries: [...entries],
+    });
+    while (cache.recentEntriesByLimit.size > MAX_RECENT_ENTRY_CACHE_LIMITS) {
+      const oldestKey = cache.recentEntriesByLimit.keys().next().value;
+      if (oldestKey === undefined) break;
+      cache.recentEntriesByLimit.delete(oldestKey);
+    }
   }
   listLegacyImportManifests(filters: LegacyChatImportManifestFilter = {}): LegacyChatImportManifest[] {
     return listLegacyImportManifests(this.importManifestPath, filters);
@@ -369,12 +453,17 @@ export class SessionStore implements TranscriptSearchPort {
     const previousEntriesLength = cache.entries.length;
     const previousMessageCount = cache.messageCount;
     const previousLastTimestamp = cache.lastTimestamp;
+    const previousLastMessageTimestamp = cache.lastMessageTimestamp;
+    const previousLastMessageRole = cache.lastMessageRole;
+    const previousLastMessageAuthorName = cache.lastMessageAuthorName;
+    const previousLastMessagePreview = cache.lastMessagePreview;
     cache.nextId = id + 1;
     if (cache.fullyLoaded) {
       cache.entries.push(full);
     }
     cache.messageCount += 1;
     cache.lastTimestamp = entry.timestamp;
+    applyLastMessageMetadata(cache, entry);
     const journal = buildMessageJournalEntry(id, entry);
     try {
       this.writeJournalEntry(cache, journal);
@@ -382,6 +471,10 @@ export class SessionStore implements TranscriptSearchPort {
       cache.nextId = previousNextId;
       cache.messageCount = previousMessageCount;
       cache.lastTimestamp = previousLastTimestamp;
+      cache.lastMessageTimestamp = previousLastMessageTimestamp;
+      cache.lastMessageRole = previousLastMessageRole;
+      cache.lastMessageAuthorName = previousLastMessageAuthorName;
+      cache.lastMessagePreview = previousLastMessagePreview;
       if (cache.fullyLoaded) {
         cache.entries.length = previousEntriesLength;
       }
@@ -425,7 +518,7 @@ export class SessionStore implements TranscriptSearchPort {
   getRecent(channelId: string, limit: number): SessionEntry[] {
     if (limit <= 0) return [];
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const cached = this.channels.get(sessionId);
+    const cached = this.channels.get(sessionId) ?? this.loadExistingChannelCache(channelId);
     if (cached?.fullyLoaded) {
       if (cached.entries.length <= limit) return [...cached.entries];
       return cached.entries.slice(-limit);
@@ -445,6 +538,9 @@ export class SessionStore implements TranscriptSearchPort {
       : this.resolveExistingSession(channelId);
     if (!resolved) return [];
     const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
+    if (cached) {
+      this.syncLightweightCacheFromIndexEntry(cached, indexEntry);
+    }
     const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
     if (messageCount === 0) return [];
     if ((normalizeOptionalNonNegativeNumber(indexEntry.activeTurnTombstoneCount) ?? 0) > 0) {
@@ -459,7 +555,15 @@ export class SessionStore implements TranscriptSearchPort {
       if (full.entries.length <= limit) return [...full.entries];
       return full.entries.slice(-limit);
     }
-    return this.readRecentEntriesFromTail(resolved.channelId, resolved.filePath, limit);
+    const recentCacheHit = cached ? this.readCachedRecentEntries(cached, limit) : null;
+    if (recentCacheHit) {
+      return recentCacheHit;
+    }
+    const recentEntries = this.readRecentEntriesFromTail(resolved.channelId, resolved.filePath, limit);
+    if (cached) {
+      this.writeCachedRecentEntries(cached, limit, recentEntries);
+    }
+    return recentEntries;
   }
   getLastEntry(channelId: string): SessionEntry | undefined {
     const entries = this.getRecent(channelId, 1);
@@ -495,19 +599,36 @@ export class SessionStore implements TranscriptSearchPort {
   }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    const messageCount = this.count(channelId);
-    if (messageCount <= 0) return null;
-    const lastEntry = this.getLastEntry(channelId);
-    if (!lastEntry || !Number.isFinite(lastEntry.timestamp) || lastEntry.timestamp <= 0) return null;
+    const cached = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    if (cached && cached.messageCount > 0 && cached.lastMessageTimestamp > 0 && cached.lastMessageRole) {
+      return {
+        sessionId,
+        channelId: cached.channelId,
+        channelType: inferSessionChannelType(cached.channelId),
+        lastActivityAt: cached.lastMessageTimestamp,
+        messageCount: cached.messageCount,
+        lastRole: cached.lastMessageRole,
+        lastAuthorName: cached.lastMessageAuthorName,
+        lastMessagePreview: cached.lastMessagePreview,
+      };
+    }
+
+    const resolved = this.resolveExistingSession(channelId);
+    if (!resolved) return null;
+    const indexEntry = this.ensureChannelIndexEntry(resolved.sessionId, resolved.channelId, resolved.filePath);
+    const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
+    const lastActivityAt = normalizeOptionalNonNegativeNumber(indexEntry.lastMessageTimestamp) ?? 0;
+    const lastRole = normalizeOptionalSessionEntryRole(indexEntry.lastMessageRole);
+    if (messageCount <= 0 || lastActivityAt <= 0 || !lastRole) return null;
     return {
       sessionId,
-      channelId: lastEntry.channelId,
-      channelType: inferSessionChannelType(lastEntry.channelId),
-      lastActivityAt: lastEntry.timestamp,
+      channelId: resolved.channelId,
+      channelType: inferSessionChannelType(resolved.channelId),
+      lastActivityAt,
       messageCount,
-      lastRole: lastEntry.role,
-      lastAuthorName: lastEntry.authorName,
-      lastMessagePreview: toMessagePreview(lastEntry.content),
+      lastRole,
+      lastAuthorName: normalizeOptionalString(indexEntry.lastMessageAuthorName),
+      lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
     };
   }
   listSessionsByRecentActivity(limit = 20): SessionActivitySummary[] {
@@ -646,6 +767,7 @@ export class SessionStore implements TranscriptSearchPort {
       full.entries = this.applyTurnTombstonesToEntries(full.entries, full.turnTombstones);
       full.messageCount = full.entries.length;
       full.activeTurnTombstoneCount = full.turnTombstones.size;
+      syncLastMessageMetadataFromEntries(full);
       this.upsertChannelIndex(channelId, snapshotIndexEntry(full));
       this.syncTranscriptProjectionForChannel(channelId, full.entries);
     }

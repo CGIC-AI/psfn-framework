@@ -41,7 +41,12 @@ describe('SessionJournalRuntime', () => {
       resolvedPath: filePath,
       messageCount: 0,
       lastTimestamp: 0,
+      lastMessageTimestamp: 0,
+      lastMessageRole: null,
+      lastMessageAuthorName: undefined,
+      lastMessagePreview: '',
       fullyLoaded: true,
+      recentEntriesByLimit: new Map(),
     } satisfies ChannelCache;
     const upsertChannelIndex = vi.fn();
     const entry: Omit<SessionEntry, 'id'> = {
@@ -98,7 +103,12 @@ describe('SessionJournalRuntime', () => {
       resolvedPath: filePath,
       messageCount: 0,
       lastTimestamp: 0,
+      lastMessageTimestamp: 0,
+      lastMessageRole: null,
+      lastMessageAuthorName: undefined,
+      lastMessagePreview: '',
       fullyLoaded: true,
+      recentEntriesByLimit: new Map(),
     } satisfies ChannelCache;
 
     runtime.writeJournalEntry({

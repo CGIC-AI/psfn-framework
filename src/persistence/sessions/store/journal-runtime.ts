@@ -210,7 +210,12 @@ export class SessionJournalRuntime {
       resolvedPath: filePath,
       messageCount: 0,
       lastTimestamp: 0,
+      lastMessageTimestamp: 0,
+      lastMessageRole: null,
+      lastMessageAuthorName: undefined,
+      lastMessagePreview: '',
       fullyLoaded: true,
+      recentEntriesByLimit: new Map(),
     };
 
     if (!existsSync(filePath)) return cache;
@@ -244,6 +249,21 @@ export class SessionJournalRuntime {
     if (cache.turnTombstones.size > 0) {
       cache.entries = applyTurnTombstonesToSessionEntries(cache.entries, cache.turnTombstones);
       cache.messageCount = cache.entries.length;
+    }
+    const lastMessage = cache.entries.at(-1);
+    if (lastMessage) {
+      cache.lastMessageTimestamp = lastMessage.timestamp;
+      cache.lastMessageRole = lastMessage.role;
+      cache.lastMessageAuthorName = lastMessage.authorName;
+      const normalizedPreview = lastMessage.content.replace(/\s+/g, ' ').trim();
+      cache.lastMessagePreview = normalizedPreview.length > 120
+        ? `${normalizedPreview.slice(0, 117)}...`
+        : normalizedPreview;
+    } else {
+      cache.lastMessageTimestamp = 0;
+      cache.lastMessageRole = null;
+      cache.lastMessageAuthorName = undefined;
+      cache.lastMessagePreview = '';
     }
     cache.activeTurnTombstoneCount = cache.turnTombstones.size;
     return cache;

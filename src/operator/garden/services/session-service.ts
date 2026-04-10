@@ -168,19 +168,19 @@ export class AdminSessionDataService implements AdminSessionService {
 
   async listSessions(): Promise<AdminSessionListData> {
     const channels = this.deps.sessionStore.listChannels();
+    const activityBySessionId = new Map(
+      this.deps.sessionStore
+        .listSessionsByRecentActivity(Number.MAX_SAFE_INTEGER)
+        .map(summary => [summary.sessionId, summary]),
+    );
     const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
     return {
       channels: await Promise.all(channels.map(async (channel) => {
-        const lastEntry = this.deps.sessionStore.getLastEntry(channel.sessionId);
-        const lastActivityAt = lastEntry
-          ? (typeof lastEntry.timestamp === 'number'
-            ? lastEntry.timestamp
-            : Date.parse(String(lastEntry.timestamp)))
-          : undefined;
+        const sessionActivity = activityBySessionId.get(channel.sessionId);
         const channelWithActivity = (
-          typeof lastActivityAt === 'number' && Number.isFinite(lastActivityAt)
+          typeof sessionActivity?.lastActivityAt === 'number' && Number.isFinite(sessionActivity.lastActivityAt)
         )
-          ? { ...channel, lastActivityAt }
+          ? { ...channel, lastActivityAt: sessionActivity.lastActivityAt }
           : channel;
 
         const linkedContact = await getLinkedContactForSession({

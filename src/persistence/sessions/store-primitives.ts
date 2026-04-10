@@ -1,4 +1,4 @@
-import type { JournalEntry, JournalMarkerType } from '../../core/session/types.js';
+import type { JournalEntry, JournalMarkerType, SessionEntryRole } from '../../core/session/types.js';
 import {
   signJournalEntry,
   verifyJournalEntryIntegrity,
@@ -33,7 +33,17 @@ export interface ChannelCache {
   resolvedPath: string;
   messageCount: number;
   lastTimestamp: number;
+  lastMessageTimestamp: number;
+  lastMessageRole: SessionEntryRole | null;
+  lastMessageAuthorName?: string;
+  lastMessagePreview: string;
   fullyLoaded: boolean;
+  recentEntriesByLimit: Map<number, CachedRecentEntries>;
+}
+
+export interface CachedRecentEntries {
+  fingerprint: string;
+  entries: import('../../core/session/types.js').SessionEntry[];
 }
 
 export interface ChannelIndexEntry {
@@ -42,6 +52,10 @@ export interface ChannelIndexEntry {
   messageCount?: number;
   activeTurnTombstoneCount?: number;
   lastTimestamp?: number;
+  lastMessageTimestamp?: number;
+  lastMessageRole?: SessionEntryRole | null;
+  lastMessageAuthorName?: string;
+  lastMessagePreview?: string;
   maxId?: number;
   lastHmac?: string | null;
   lastExtractionCoveredUpTo?: number;
@@ -146,6 +160,14 @@ export function normalizeOptionalHmac(value: unknown): string | null | undefined
 
 export function normalizeOptionalJournalType(value: unknown): JournalEntry['type'] | undefined {
   if (value === 'message' || value === 'compaction' || value === 'marker' || value === 'tombstone') {
+    return value;
+  }
+  return undefined;
+}
+
+export function normalizeOptionalSessionEntryRole(value: unknown): SessionEntryRole | null | undefined {
+  if (value == null) return null;
+  if (value === 'user' || value === 'assistant' || value === 'system' || value === 'tool') {
     return value;
   }
   return undefined;
@@ -265,6 +287,10 @@ export function channelIndexEntryEquals(left: ChannelIndexEntry | undefined, rig
     && left.messageCount === right.messageCount
     && left.activeTurnTombstoneCount === right.activeTurnTombstoneCount
     && left.lastTimestamp === right.lastTimestamp
+    && left.lastMessageTimestamp === right.lastMessageTimestamp
+    && left.lastMessageRole === right.lastMessageRole
+    && left.lastMessageAuthorName === right.lastMessageAuthorName
+    && left.lastMessagePreview === right.lastMessagePreview
     && left.maxId === right.maxId
     && left.lastHmac === right.lastHmac
     && left.lastExtractionCoveredUpTo === right.lastExtractionCoveredUpTo

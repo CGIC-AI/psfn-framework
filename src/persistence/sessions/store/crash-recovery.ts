@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   buildGracefulShutdownMarkerJournalEntry,
   journalToMarkerEntry,
+  journalToSessionEntry,
   journalToTurnTombstoneEntry,
 } from '../../journals/journal-utils.js';
 import type { JournalEntry } from '../../../core/session/types.js';
@@ -20,6 +21,17 @@ export function isGracefulShutdownEntry(entry: JournalEntry | null): boolean {
 export function applyJournalState(cache: ChannelCache, entry: JournalEntry): void {
   cache.lastJournalEntry = entry;
   cache.lastTimestamp = entry.timestamp;
+
+  const message = journalToSessionEntry(entry);
+  if (message) {
+    cache.lastMessageTimestamp = message.timestamp;
+    cache.lastMessageRole = message.role;
+    cache.lastMessageAuthorName = message.authorName;
+    cache.lastMessagePreview = message.content.replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (cache.lastMessagePreview.length === 120 && message.content.replace(/\s+/g, ' ').trim().length > 120) {
+      cache.lastMessagePreview = `${cache.lastMessagePreview.slice(0, 117)}...`;
+    }
+  }
 
   const marker = journalToMarkerEntry(entry);
   if (marker?.marker === 'extraction' && typeof marker.coveredUpTo === 'number') {

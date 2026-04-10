@@ -414,7 +414,7 @@ describe('journal utils', () => {
     expect(wrapped).toContain('signature_mismatch');
   });
 
-  it('preserves both previous and recomputed chain candidates when a signature field is corrupted', () => {
+  it('prefers the recomputed chain candidate when a signature field is corrupted', () => {
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:test-key',
       activeVersion: 'v1',
@@ -441,8 +441,37 @@ describe('journal utils', () => {
     expect(verification.reason).toBe('invalid_signature_format');
     expect(verification.expectedHmac).toMatch(/^[a-f0-9]{64}$/i);
     expect(resolveJournalIntegrityChainCandidates(verification, first._hmac ?? null)).toEqual([
-      first._hmac ?? null,
       verification.expectedHmac ?? null,
+    ]);
+  });
+
+  it('follows the observed stored HMAC after a content tamper to avoid branch explosion', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:test-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+
+    const first = signJournalEntry(buildMessageJournalEntry(1, {
+      channelId: 'ch1',
+      role: 'user',
+      content: 'anchor',
+      timestamp: 1,
+    }), keyring!, null);
+    const second = signJournalEntry(buildMessageJournalEntry(2, {
+      channelId: 'ch1',
+      role: 'assistant',
+      content: 'bridge',
+      timestamp: 2,
+    }), keyring!, first._hmac ?? null);
+
+    second.content = 'tampered bridge';
+
+    const verification = verifyJournalEntryIntegrity(second, keyring!, first._hmac ?? null);
+    expect(verification.verified).toBe(false);
+    expect(verification.reason).toBe('signature_mismatch');
+    expect(resolveJournalIntegrityChainCandidates(verification, first._hmac ?? null)).toEqual([
+      second._hmac ?? null,
     ]);
   });
 

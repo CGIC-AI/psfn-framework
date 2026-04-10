@@ -15,6 +15,7 @@ import type {
 import {
   cloneAdaptiveToolSnapshotTelemetry,
   cloneContextMessage,
+  clonePromptSectionCacheability,
   cloneProviderObservability,
   cloneOrientationSnapshot,
   cloneTurnPromptResponseSnapshot,
@@ -197,6 +198,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
       ? {
         prompt: {
           ...snapshot.prompt,
+          ...(snapshot.prompt.sectionCacheability
+            ? { sectionCacheability: snapshot.prompt.sectionCacheability.map(clonePromptSectionCacheability) }
+            : {}),
         },
       }
       : {}),
@@ -213,6 +217,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
             : {}),
           ...(snapshot.promptContext.response
             ? { response: cloneTurnPromptResponseSnapshot(snapshot.promptContext.response) }
+            : {}),
+          ...(snapshot.promptContext.sectionCacheability
+            ? { sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
             : {}),
         },
       }
@@ -283,7 +290,16 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
 export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnapshotRecord {
   return {
     ...snapshot,
-    ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
+    ...(snapshot.prompt
+      ? {
+        prompt: {
+          ...snapshot.prompt,
+          ...(snapshot.prompt.sectionCacheability
+            ? { sectionCacheability: snapshot.prompt.sectionCacheability.map(clonePromptSectionCacheability) }
+            : {}),
+        },
+      }
+      : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
@@ -297,6 +313,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
             : {}),
           ...(snapshot.promptContext.response
             ? { response: cloneTurnPromptResponseSnapshot(snapshot.promptContext.response) }
+            : {}),
+          ...(snapshot.promptContext.sectionCacheability
+            ? { sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
             : {}),
         },
       }

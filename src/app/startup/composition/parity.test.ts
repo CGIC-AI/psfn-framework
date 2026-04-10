@@ -20,6 +20,7 @@ import {
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
 import { DEFERRED_TOOL_HANDOFF_ACTION_KIND } from '../../../core/agent/deferred-tool-handoff.js';
 import {
+  resolveHeartbeatPolicyPath,
   resolveReflectionJournalPath,
   resolveReflectionMetacognitionJournalPath,
   resolveValuesJournalPath,
@@ -307,7 +308,7 @@ describe('wireHeartbeatRuntime', () => {
   });
 
   it('registers reflection tasks using template cadence', () => {
-    const store = new HeartbeatPolicyStore(join(tempDir, 'heartbeat-policy.json'));
+    const store = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = store.load();
     const musing = policy.templates.find(template => template.id === 'musing');
     if (!musing) {
@@ -463,7 +464,7 @@ describe('wireHeartbeatRuntime', () => {
   });
 
   it('runs deliberation mode and persists journal telemetry metadata', async () => {
-    const store = new HeartbeatPolicyStore(join(tempDir, 'heartbeat-policy.json'));
+    const store = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = store.load();
     const values = policy.templates.find(template => template.id === 'values-reflection');
     if (!values) {
@@ -742,7 +743,7 @@ describe('wireHeartbeatRuntime', () => {
         new AbortController().signal,
       );
       const runText = runResult.content.map((part: { text: string }) => part.text).join('');
-      expect(runText).toContain('Queued reflection template');
+      expect(runText).toContain('Queued manual reflection run "Musing" (musing) for post-turn execution.');
 
       const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:'));
       expect(deferredTask).toBeDefined();
@@ -845,7 +846,7 @@ describe('wireHeartbeatRuntime', () => {
       new AbortController().signal,
     );
     const runText = runResult.content.map((part: { text: string }) => part.text).join('');
-    expect(runText).toContain('Queued reflection template');
+    expect(runText).toContain('Queued manual reflection run "Musing" (musing) for post-turn execution.');
     expect((runResult.details as { deferredAction?: { kind?: string } }).deferredAction?.kind)
       .toBe('heartbeat.run_template');
 

@@ -344,6 +344,16 @@ function computeNoveltyFromSimilarities(similarities: readonly number[]): number
   return clampUnit(1 - maxSimilarity, 1);
 }
 
+function validateEmbeddingDimensions(
+  embedding: Float32Array,
+  expectedDims: number,
+  operation: string,
+): void {
+  if (embedding.length !== expectedDims) {
+    throw new Error(`Memory writer ${operation} embedding dimension mismatch: expected ${expectedDims}, got ${embedding.length}`);
+  }
+}
+
 type MemoryWritePolicyDecision =
   | {
     accepted: true;
@@ -403,6 +413,12 @@ export class MemoryWriter {
     private embeddingService: EmbeddingProviderPort,
   ) {}
 
+  private validateEmbedding(embedding: Float32Array, operation: string): void {
+    if (Number.isFinite(this.embeddingService.dims) && this.embeddingService.dims > 0) {
+      validateEmbeddingDimensions(embedding, this.embeddingService.dims, operation);
+    }
+  }
+
   /**
    * Write a single memory with dedup/contradiction handling.
    *
@@ -420,6 +436,8 @@ export class MemoryWriter {
     opts: MemoryWriteOptions,
     embedding: Float32Array,
   ): Promise<WriteResult> {
+    this.validateEmbedding(embedding, 'write');
+
     const {
       text,
       type,
@@ -722,6 +740,7 @@ export class MemoryWriter {
     const targetSalience = clampUnit(salience ?? importance, importance);
 
     const embedding = await this.embeddingService.embed(text);
+    this.validateEmbedding(embedding, 'upsert');
 
     // Find similar memories of the same type at the dedup threshold
     const similar = await this.memoryStore.searchByEmbedding(
@@ -938,6 +957,7 @@ export class MemoryWriter {
     let embedding: Float32Array | undefined;
     if (updates.text !== undefined) {
       embedding = await this.embeddingService.embed(updates.text);
+      this.validateEmbedding(embedding, 'patchMemory');
       updates.embedding = embedding;
     }
 
@@ -1019,6 +1039,7 @@ export class MemoryWriter {
     const replacementId = uuidv4();
     const now = Date.now();
     const embedding = await this.embeddingService.embed(nextText);
+    this.validateEmbedding(embedding, 'patch');
     const replacementRetention = applyRetentionSemantics({
       type: existing.type,
       importance: opts.importance ?? existing.importance,
@@ -1061,12 +1082,12 @@ export class MemoryWriter {
       deleteReason: undefined,
     };
 
-    await this.memoryStore.runInTransaction(async () => {
-      await this.memoryStore.updateMemory(existing.id, {
+    await this.memoryStore.runInTransaction(() => {
+      this.memoryStore.updateMemory(existing.id, {
         supersededBy: replacementId,
         provenanceRefs: sourceProvenanceRefs,
       });
-      await this.memoryStore.insertMemory(replacementMemory, embedding);
+      this.memoryStore.insertMemory(replacementMemory, embedding);
     });
 
     return {
@@ -1195,6 +1216,9 @@ export class MemoryWriter {
         const embedded = await this.embeddingService.embedBatch(chunk.map(record => record.text));
         if (embedded.length !== chunk.length) {
           throw new Error(`Expected ${chunk.length} embeddings, received ${embedded.length}`);
+        }
+        for (const embedding of embedded) {
+          this.validateEmbedding(embedding, 'importBatch');
         }
         embeddedChunks.push(embedded);
       }

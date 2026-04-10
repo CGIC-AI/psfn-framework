@@ -12,6 +12,7 @@ import type { SessionHmacKeyring } from '../journals/journal-utils.js';
 import {
   parseJournalText,
   readJournalFirstEntry,
+  resolveJournalIntegrityChainCandidates,
   signJournalEntry,
   verifyJournalEntryIntegrity,
 } from '../journals/journal-utils.js';
@@ -66,15 +67,26 @@ function rewriteJournalFile(
 
   const originalEntries = parsed.entries;
   let modifiedEntries = 0;
-  let previousObservedHmac: string | null = null;
+  let previousHmacCandidates: Array<string | null> = [null];
   for (const entry of originalEntries) {
-    const verification = verifyJournalEntryIntegrity(entry, keyring, previousObservedHmac);
-    if (!verification.verified) {
+    let verified = false;
+    const candidateList = previousHmacCandidates.length > 0 ? previousHmacCandidates : [null];
+    const nextCandidates: Array<string | null> = [];
+    for (const previousHmac of candidateList) {
+      const verification = verifyJournalEntryIntegrity(entry, keyring, previousHmac);
+      if (verification.verified) {
+        verified = true;
+      }
+      for (const candidate of resolveJournalIntegrityChainCandidates(verification, previousHmac)) {
+        if (!nextCandidates.some(existing => existing === candidate)) {
+          nextCandidates.push(candidate);
+        }
+      }
+    }
+    if (!verified) {
       modifiedEntries += 1;
     }
-    if (typeof entry._hmac === 'string') {
-      previousObservedHmac = entry._hmac;
-    }
+    previousHmacCandidates = nextCandidates.length > 0 ? nextCandidates : [null];
   }
   if (modifiedEntries <= 0) return 0;
 

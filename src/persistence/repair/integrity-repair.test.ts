@@ -220,4 +220,95 @@ describe('runSessionIntegrityRepair', () => {
     expect(entries.map(entry => entry.content)).toEqual(['original first', 'tampered second']);
     expect(entries.some(entry => entry.content.includes('<unverified_history>'))).toBe(false);
   });
+
+  it('repairs only the corrupted signature entry when later image turns remain valid', () => {
+    const harness = createHarness();
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:repair-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+
+    const filePath = join(harness.sessionsDir, '20260325_api-vision_user_000004.jsonl');
+    const first = signJournalEntry(
+      buildMessageJournalEntry(1, {
+        channelId: 'api:vision',
+        role: 'user',
+        content: 'before the image turn',
+        timestamp: 1000,
+      }),
+      keyring!,
+      null,
+    );
+    const second = signJournalEntry(
+      buildMessageJournalEntry(2, {
+        channelId: 'api:vision',
+        role: 'assistant',
+        content: 'bridge entry',
+        timestamp: 2000,
+      }),
+      keyring!,
+      first._hmac ?? null,
+    );
+    const third = signJournalEntry(
+      buildMessageJournalEntry(3, {
+        channelId: 'api:vision',
+        role: 'user',
+        content: 'what is in the image?',
+        timestamp: 3000,
+      }),
+      keyring!,
+      second._hmac ?? null,
+    );
+    const fourth = signJournalEntry(
+      buildMessageJournalEntry(4, {
+        channelId: 'api:vision',
+        role: 'assistant',
+        content: 'Current image review: A catgirl sits on a server rack.',
+        timestamp: 4000,
+      }),
+      keyring!,
+      third._hmac ?? null,
+    );
+
+    writeJournal(filePath, [
+      first,
+      { ...second, _hmac: 'not-a-real-hmac' },
+      third,
+      fourth,
+    ]);
+
+    const beforeRepair = new SessionStore(harness.sessionsDir, {
+      integrityKeyring: keyring,
+      disableSearchIndex: true,
+    });
+    expect(beforeRepair.getRecent('api:vision', 10).map(entry => entry.content)).toEqual([
+      'before the image turn',
+      expect.stringContaining('<unverified_history>'),
+      'what is in the image?',
+      'Current image review: A catgirl sits on a server rack.',
+    ]);
+
+    const report = runSessionIntegrityRepair({
+      sessionsDir: harness.sessionsDir,
+      backupDir: harness.backupDir,
+      keyring: keyring!,
+      repoRoot: harness.root,
+    });
+    expect(report.journal.modifiedFiles).toBe(1);
+    expect(report.journal.modifiedEntries).toBe(1);
+
+    const store = new SessionStore(harness.sessionsDir, {
+      integrityKeyring: keyring,
+      disableSearchIndex: true,
+    });
+    const entries = store.getRecent('api:vision', 10);
+    expect(entries.map(entry => entry.content)).toEqual([
+      'before the image turn',
+      'bridge entry',
+      'what is in the image?',
+      'Current image review: A catgirl sits on a server rack.',
+    ]);
+    expect(entries.some(entry => entry.content.includes('<unverified_history>'))).toBe(false);
+  });
 });

@@ -1460,6 +1460,62 @@ describe('SessionStore', () => {
     expect(entries[1].content).not.toContain('<unverified_history>');
   });
 
+  it('does not cascade a bad middle signature into later image-review turns', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    signedStore.append({
+      channelId: 'api:vision-tail',
+      role: 'user',
+      content: 'before the image turn',
+      timestamp: 1000,
+    });
+    signedStore.append({
+      channelId: 'api:vision-tail',
+      role: 'assistant',
+      content: 'this signature will be corrupted',
+      timestamp: 2000,
+    });
+    signedStore.append({
+      channelId: 'api:vision-tail',
+      role: 'user',
+      content: 'what is in the image?',
+      timestamp: 3000,
+    });
+    signedStore.append({
+      channelId: 'api:vision-tail',
+      role: 'assistant',
+      content: 'Current image review: A catgirl sits on a server rack.',
+      timestamp: 4000,
+    });
+
+    const file = readdirSync(dir).find(f => f.endsWith('.jsonl') && !f.startsWith('user_'));
+    expect(file).toBeDefined();
+    const filePath = join(dir, file!);
+    const lines = readFileSync(filePath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[1]._hmac = 'not-a-real-hmac';
+    writeFileSync(filePath, lines.map(line => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    const tailEntries = reloaded.getRecent('api:vision-tail', 2);
+    expect(tailEntries).toHaveLength(2);
+    expect(tailEntries[0].content).toBe('what is in the image?');
+    expect(tailEntries[0].content).not.toContain('<unverified_history>');
+    expect(tailEntries[1].content).toBe('Current image review: A catgirl sits on a server rack.');
+    expect(tailEntries[1].content).not.toContain('<unverified_history>');
+
+    const fullEntries = reloaded.getRecent('api:vision-tail', 10);
+    expect(fullEntries).toHaveLength(4);
+    expect(fullEntries[1].content).toContain('<unverified_history>');
+    expect(fullEntries[2].content).toBe('what is in the image?');
+    expect(fullEntries[3].content).toBe('Current image review: A catgirl sits on a server rack.');
+  });
+
   it('supports RPC-style integrity providers without direct keyring injection', () => {
     const keyring = buildSessionHmacKeyring({
       serializedKeys: 'v1:provider-key',

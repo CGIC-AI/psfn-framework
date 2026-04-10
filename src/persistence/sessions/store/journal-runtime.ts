@@ -7,6 +7,7 @@ import {
   journalToCompactionSummary,
   journalToSessionEntry,
   type JournalIntegrityVerificationResult,
+  resolveJournalIntegrityChainCandidates,
   wrapUnverifiedHistory,
 } from '../../journals/journal-utils.js';
 import type { JournalEntry, SessionEntry } from '../../../core/session/types.js';
@@ -26,6 +27,15 @@ import {
 } from '../../journals/journal/port.js';
 
 const log = createComponentLogger('SessionStore');
+
+function appendUniqueHmacCandidate(
+  target: Array<string | null>,
+  candidate: string | null | undefined,
+): void {
+  if (candidate === undefined) return;
+  if (target.some(existing => existing === candidate)) return;
+  target.push(candidate);
+}
 
 function applyTurnTombstonesToSessionEntries(
   entries: readonly SessionEntry[],
@@ -82,37 +92,87 @@ export class SessionJournalRuntime {
     return this.archivePort.resolveArchivePath(handle);
   }
 
-  verifyAndNormalizeEntry(entry: JournalEntry, previousHmac: string | null): JournalEntry {
-    if (!this.integrityProvider) return entry;
-
-    let verification: JournalIntegrityVerificationResult;
-    try {
-      verification = this.integrityProvider.verify(entry, previousHmac);
-    } catch (error) {
-      throw new Error(
-        `Session integrity verification failed: ${toErrorMessage(error)}`,
-      );
+  verifyAndNormalizeEntry(
+    entry: JournalEntry,
+    previousHmacCandidates: readonly (string | null)[],
+  ): {
+    entry: JournalEntry;
+    nextHmacCandidates: Array<string | null>;
+    verified: boolean;
+  } {
+    if (!this.integrityProvider) {
+      return {
+        entry,
+        nextHmacCandidates: typeof entry._hmac === 'string'
+          ? [entry._hmac]
+          : [...previousHmacCandidates],
+        verified: true,
+      };
     }
 
-    if (verification.verified) {
-      return entry;
+    const candidateList = previousHmacCandidates.length > 0 ? previousHmacCandidates : [null];
+    const verificationResults: JournalIntegrityVerificationResult[] = [];
+
+    for (const previousHmac of candidateList) {
+      let verification: JournalIntegrityVerificationResult;
+      try {
+        verification = this.integrityProvider.verify(entry, previousHmac);
+      } catch (error) {
+        throw new Error(
+          `Session integrity verification failed: ${toErrorMessage(error)}`,
+        );
+      }
+
+      verificationResults.push(verification);
+      if (verification.verified) {
+        return {
+          entry,
+          nextHmacCandidates: resolveJournalIntegrityChainCandidates(verification, previousHmac),
+          verified: true,
+        };
+      }
+    }
+
+    const fallbackVerification = verificationResults[0] ?? {
+      verified: false,
+      observedHmac: typeof entry._hmac === 'string' ? entry._hmac : null,
+      reason: 'missing_signature',
+    } satisfies JournalIntegrityVerificationResult;
+    const nextHmacCandidates: Array<string | null> = [];
+    for (let index = 0; index < verificationResults.length; index++) {
+      const previousHmac = candidateList[index] ?? null;
+      for (const candidate of resolveJournalIntegrityChainCandidates(verificationResults[index], previousHmac)) {
+        appendUniqueHmacCandidate(nextHmacCandidates, candidate);
+      }
     }
 
     if (entry.type === 'message' && typeof entry.content === 'string') {
       return {
-        ...entry,
-        content: wrapUnverifiedHistory(entry.content, verification.reason),
+        entry: {
+          ...entry,
+          content: wrapUnverifiedHistory(entry.content, fallbackVerification.reason),
+        },
+        nextHmacCandidates,
+        verified: false,
       };
     }
 
     if (entry.type === 'compaction' && typeof entry.summary === 'string') {
       return {
-        ...entry,
-        summary: wrapUnverifiedHistory(entry.summary, verification.reason),
+        entry: {
+          ...entry,
+          summary: wrapUnverifiedHistory(entry.summary, fallbackVerification.reason),
+        },
+        nextHmacCandidates,
+        verified: false,
       };
     }
 
-    return entry;
+    return {
+      entry,
+      nextHmacCandidates,
+      verified: false,
+    };
   }
 
   warnAboutQuarantinedEntries(
@@ -160,27 +220,27 @@ export class SessionJournalRuntime {
       this.warnAboutQuarantinedEntries(archive.channelId, archive, quarantined.length, entries.length);
     }
 
-    let previousHmac: string | null = null;
+    let previousHmacCandidates: Array<string | null> = [null];
     for (const rawEntry of entries) {
-      const entry = this.verifyAndNormalizeEntry(rawEntry, previousHmac);
-      previousHmac = typeof rawEntry._hmac === 'string' ? rawEntry._hmac : previousHmac;
-      applyJournalState(cache, entry);
+      const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
+      previousHmacCandidates = normalized.nextHmacCandidates;
+      applyJournalState(cache, normalized.entry);
 
-      const message = journalToSessionEntry(entry);
+      const message = journalToSessionEntry(normalized.entry);
       if (message) {
         cache.entries.push(message);
         cache.messageCount += 1;
         continue;
       }
 
-      const compaction = journalToCompactionSummary(entry);
+      const compaction = journalToCompactionSummary(normalized.entry);
       if (compaction) {
         cache.compactions.push(compaction);
       }
     }
 
     cache.nextId = maxId + 1;
-    cache.lastHmac = previousHmac;
+    cache.lastHmac = previousHmacCandidates[0] ?? null;
     if (cache.turnTombstones.size > 0) {
       cache.entries = applyTurnTombstonesToSessionEntries(cache.entries, cache.turnTombstones);
       cache.messageCount = cache.entries.length;
@@ -297,22 +357,32 @@ export class SessionJournalRuntime {
     if (messageIndexes.length === 0) return [];
 
     const oldestMessageIndex = messageIndexes[Math.max(0, messageIndexes.length - limit)];
-    let previousHmac: string | null = null;
+    let previousHmacCandidates: Array<string | null> = [null];
     if (oldestMessageIndex > 0) {
       const boundaryEntry = tail.entries[oldestMessageIndex - 1];
-      previousHmac = typeof boundaryEntry._hmac === 'string' ? boundaryEntry._hmac : null;
+      previousHmacCandidates = typeof boundaryEntry._hmac === 'string'
+        ? [boundaryEntry._hmac]
+        : [null];
     }
 
     const messages: SessionEntry[] = [];
+    let verificationFailed = false;
     for (let index = oldestMessageIndex; index < tail.entries.length; index++) {
       const rawEntry = tail.entries[index];
-      const entry = this.verifyAndNormalizeEntry(rawEntry, previousHmac);
-      previousHmac = typeof rawEntry._hmac === 'string' ? rawEntry._hmac : previousHmac;
+      const normalized = this.verifyAndNormalizeEntry(rawEntry, previousHmacCandidates);
+      previousHmacCandidates = normalized.nextHmacCandidates;
+      verificationFailed = verificationFailed || !normalized.verified;
 
-      const message = journalToSessionEntry(entry);
+      const message = journalToSessionEntry(normalized.entry);
       if (message) {
         messages.push(message);
       }
+    }
+
+    if (verificationFailed && oldestMessageIndex > 0) {
+      const loaded = this.loadChannel(archive);
+      if (loaded.entries.length <= limit) return [...loaded.entries];
+      return loaded.entries.slice(-limit);
     }
 
     if (messages.length <= limit) return messages;

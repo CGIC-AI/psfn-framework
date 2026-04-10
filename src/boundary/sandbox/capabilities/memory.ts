@@ -3,6 +3,7 @@ import type { EmbeddingProviderPort, LLMProviderPort } from '../../../core/agent
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { MemoryType, MemoryRedactionOperation } from '../../../faculties/memory/types.js';
+import type { SessionSearchHit } from '../../../persistence/sessions/transcript-projection-port.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_MEMORY_REDACTION_OPERATIONS,
@@ -69,6 +70,35 @@ interface CreateMemoryCapabilitiesOptions {
   memoryStore: MemoryStorePort | null;
   sessionManager: SessionManager | null;
   pushEvidence: (entry: ThinkEvidence) => void;
+}
+
+function resolveTranscriptSearchPort(
+  sessionManager: SessionManager | null,
+): {
+  searchByKeywords: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
+} | null {
+  if (!sessionManager) {
+    return null;
+  }
+
+  const candidate = sessionManager as SessionManager & {
+    searchByKeywords?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
+    searchTranscripts?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
+  };
+
+  if (typeof candidate.searchByKeywords === 'function') {
+    return {
+      searchByKeywords: candidate.searchByKeywords.bind(sessionManager),
+    };
+  }
+
+  if (typeof candidate.searchTranscripts === 'function') {
+    return {
+      searchByKeywords: candidate.searchTranscripts.bind(sessionManager),
+    };
+  }
+
+  return null;
 }
 
 function nextReplInvocationId(): string {
@@ -358,7 +388,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
   ): Promise<SessionSearchResult> => {
     const normalizedQuery = toTrimmedString(query);
     const result = await runSessionSearch({
-      sessionManager: options.sessionManager,
+      transcriptSearch: resolveTranscriptSearchPort(options.sessionManager),
       llmProvider: options.llmProvider,
       query: normalizedQuery,
       limit,

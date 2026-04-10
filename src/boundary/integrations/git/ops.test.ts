@@ -34,6 +34,7 @@ function createGitOps(overrides?: Partial<GitOpsConfig>): GitOps {
       maxCount: 50_000,
     },
     execTimeoutMs: 30_000,
+    companionId: 'companion-test',
     ...overrides,
   });
 }

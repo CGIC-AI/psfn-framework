@@ -28,6 +28,63 @@ describe('contextMessagesToPiMessages', () => {
     expect((result[1] as any).content).toEqual([{ type: 'text', text: 'world' }]);
   });
 
+  it('preserves structured assistant and tool-result messages as legal pi-ai history', () => {
+    const result = contextMessagesToPiMessages([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'trace', thinkingSignature: 'sig-1' },
+          { type: 'text', text: 'world' },
+          { type: 'toolCall', id: 'call-1', name: 'lookup', arguments: { q: 'test' } },
+        ],
+        api: 'openai-completions',
+        provider: 'openrouter',
+        model: 'openrouter/moonshotai/kimi-k2.5',
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 3,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'toolUse',
+        timestamp: 1000,
+      } as any,
+      {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'lookup',
+        content: [{ type: 'text', text: 'done' }],
+        isError: false,
+        timestamp: 1001,
+      } as any,
+    ], () => 9999);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'trace', thinkingSignature: 'sig-1' },
+        { type: 'text', text: 'world' },
+        { type: 'toolCall', id: 'call-1', name: 'lookup', arguments: { q: 'test' } },
+      ],
+      api: 'openai-completions',
+      provider: 'openrouter',
+      model: 'openrouter/moonshotai/kimi-k2.5',
+      stopReason: 'toolUse',
+      timestamp: 1000,
+    });
+    expect(result[1]).toMatchObject({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'lookup',
+      content: [{ type: 'text', text: 'done' }],
+      isError: false,
+      timestamp: 1001,
+    });
+  });
+
   it('keeps system context out of authored chat history', () => {
     const result = contextMessagesToPiMessages([
       { role: 'system', content: '[SYSTEM: Scheduler] heartbeat prompt' },

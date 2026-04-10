@@ -92,15 +92,23 @@ export class CachedActiveHealthProbe {
     const startedAt = Date.now();
     const controller = new AbortController();
     let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      const timeoutError = new Error(`timeout after ${this.timeoutMs}ms`);
-      timeoutError.name = 'AbortError';
-      controller.abort(timeoutError);
-    }, this.timeoutMs);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        const timeoutError = new Error(`timeout after ${this.timeoutMs}ms`);
+        timeoutError.name = 'AbortError';
+        controller.abort(timeoutError);
+        reject(timeoutError);
+      }, this.timeoutMs);
+      timeout.unref();
+      controller.signal.addEventListener('abort', () => clearTimeout(timeout), { once: true });
+    });
 
     try {
-      const details = await task(controller.signal);
+      const details = await Promise.race([
+        Promise.resolve().then(() => task(controller.signal)),
+        timeoutPromise,
+      ]);
       return {
         ok: true,
         checkedAt: new Date().toISOString(),
@@ -114,8 +122,6 @@ export class CachedActiveHealthProbe {
         checkedAt: new Date().toISOString(),
         latencyMs: Math.max(0, Date.now() - startedAt),
       };
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }

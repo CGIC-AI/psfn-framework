@@ -45,6 +45,22 @@ describe('CachedActiveHealthProbe', () => {
     expect(result.cached).toBe(false);
   });
 
+  it('returns timeout reason even when the probe ignores abort signals', async () => {
+    const timeoutMs = 25;
+    const probe = new CachedActiveHealthProbe({
+      timeoutMs,
+      cacheTtlMs: 0,
+    });
+
+    const result = await probe.run(
+      async () => await new Promise(() => {}),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain(`timeout after ${timeoutMs}ms`);
+    expect(result.cached).toBe(false);
+  });
+
   it('returns upstream failure reason when probe throws', async () => {
     const probe = new CachedActiveHealthProbe({
       timeoutMs: 100,

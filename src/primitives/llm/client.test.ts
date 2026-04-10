@@ -512,20 +512,24 @@ describe('LLMClient provider observability', () => {
       role: 'assistant',
       content: [
         {
+          type: 'thinking',
+          thinking: 'trace',
+        },
+        {
           type: 'text',
-          text: [
-            { type: 'thinking', thinking: 'trace' },
-            { type: 'text', text: 'hello' },
-          ],
+          text: 'hello',
         },
       ],
     });
     expect(piContext.messages[1]).toMatchObject({
-      role: 'assistant',
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'lookup',
+      isError: false,
       content: [
         {
           type: 'text',
-          text: [{ type: 'text', text: 'done' }],
+          text: 'done',
         },
       ],
     });

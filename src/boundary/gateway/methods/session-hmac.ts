@@ -5,10 +5,11 @@ import {
   type SessionHmacVerifyResult,
 } from '../protocol.js';
 import { signJournalEntry, verifyJournalEntryIntegrity } from '../../../persistence/journals/journal-utils.js';
-import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
-import { registerAuditedDescriptors } from './register.js';
+import type { GatewayMethodRuntime } from './types.js';
 
-const sessionHmacDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
+// Session integrity RPCs are internal, high-frequency plumbing. Auditing every verify
+// self-amplifies transcript reads into gateway audit churn, so these stay off the audit path.
+const sessionHmacDescriptors = [
   {
     name: 'session.hmac.sign',
     handler: async (params: SessionHmacSignParams, runtime): Promise<SessionHmacSignResult> => {
@@ -16,26 +17,20 @@ const sessionHmacDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         entry: signJournalEntry(params.entry, runtime.sessionHmacKeyring, params.previousHmac),
       };
     },
-    summary: (p: SessionHmacSignParams) => ({
-      type: p.entry.type,
-      channelId: p.entry.channelId,
-      id: p.entry.id,
-    }),
   },
   {
     name: 'session.hmac.verify',
     handler: async (params: SessionHmacVerifyParams, runtime): Promise<SessionHmacVerifyResult> => {
       return verifyJournalEntryIntegrity(params.entry, runtime.sessionHmacKeyring, params.previousHmac);
     },
-    summary: (p: SessionHmacVerifyParams) => ({
-      type: p.entry.type,
-      channelId: p.entry.channelId,
-      id: p.entry.id,
-      keyVersion: p.entry._hmacKeyVersion,
-    }),
   },
 ];
 
 export function registerSessionHmacMethods(runtime: GatewayMethodRuntime): void {
-  registerAuditedDescriptors(runtime, sessionHmacDescriptors);
+  for (const descriptor of sessionHmacDescriptors) {
+    runtime.target.addMethod(
+      descriptor.name,
+      (params: unknown) => descriptor.handler(params as never, runtime),
+    );
+  }
 }

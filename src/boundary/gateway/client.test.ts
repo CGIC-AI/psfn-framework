@@ -755,6 +755,38 @@ describe('GatewayClient session integrity RPC', () => {
       timestamp: 1_000,
     }, null)).toThrow('requires a gateway socket path');
   });
+
+  it('memoizes repeated sync session integrity verification for unchanged entries', () => {
+    client = new GatewayClient(conn.conn, 1024, {
+      sessionIntegritySocketPath: '/tmp/test-gateway.sock',
+    });
+    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+      .mockReturnValue({
+        verified: true,
+        observedHmac: 'a'.repeat(64),
+      });
+    const provider = client.createSessionIntegrityProvider();
+    const entry = {
+      type: 'message' as const,
+      id: 1,
+      channelId: 'api:test',
+      role: 'user' as const,
+      content: 'hello',
+      timestamp: 1_000,
+      _hmac: 'a'.repeat(64),
+      _hmacKeyVersion: 'v1',
+    };
+
+    expect(provider.verify(entry, null)).toEqual({
+      verified: true,
+      observedHmac: 'a'.repeat(64),
+    });
+    expect(provider.verify(entry, null)).toEqual({
+      verified: true,
+      observedHmac: 'a'.repeat(64),
+    });
+    expect(requestSessionIntegritySync).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('GatewayClient git RPC wrappers', () => {

@@ -24,6 +24,7 @@ import {
   resolveNorthStarPath,
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
+import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
@@ -79,6 +80,7 @@ export function createInProcessGardenAdminContract(
     defaultContextWindow: options.config.defaultContextWindow,
   });
   const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  const resolveLastActiveSessionId = () => readLastActiveSession(companionDataDir)?.sessionId ?? null;
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
   });
@@ -95,6 +97,7 @@ export function createInProcessGardenAdminContract(
       scheduler: options.scheduler,
       shardManager: options.shardManager,
       eventBus: options.eventBus,
+      resolveLastActiveSessionId,
     }),
     adaptiveTools: new AdminAdaptiveToolsDataService({
       eventBus: options.eventBus,
@@ -148,7 +151,7 @@ export function createInProcessGardenAdminContract(
       apiHost: options.apiHost,
       apiPort: options.apiPort,
       config: options.config,
-      resolveGlobalDefaultSessionId: () => options.sessionStore.getLatestSessionByTimestamp()?.sessionId ?? null,
+      resolveGlobalDefaultSessionId: resolveLastActiveSessionId,
     }),
   };
 }

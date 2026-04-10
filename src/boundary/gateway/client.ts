@@ -431,6 +431,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       const result = await this.rpcInstance.request('llm.chat', {
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
+        ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         stream: !!callbacks?.onText,
@@ -502,6 +503,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       {
         model,
         provider,
+        ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         purpose,
@@ -1387,6 +1389,7 @@ function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMMode
   if (!modelHint) return undefined;
   const model = normalizeCorrelationText(modelHint.model);
   const provider = normalizeCorrelationText(modelHint.provider)?.toLowerCase();
+  const pin = typeof modelHint.pin === 'boolean' ? modelHint.pin : undefined;
   const maxTokens = toPositiveInteger(modelHint.maxTokens);
   const contextWindow = toPositiveInteger(modelHint.contextWindow);
   const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
@@ -1401,6 +1404,7 @@ function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMMode
   if (
     !model
     && !provider
+    && pin === undefined
     && maxTokens === undefined
     && contextWindow === undefined
     && thinkingEnabled === undefined
@@ -1416,6 +1420,7 @@ function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMMode
   return {
     ...(model ? { model } : {}),
     ...(provider ? { provider } : {}),
+    ...(pin !== undefined ? { pin } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),

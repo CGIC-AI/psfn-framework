@@ -2,7 +2,7 @@ import type { ApiHealthSubsystemStatus } from './types.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 
 const DEFAULT_ACTIVE_PROBES_ENABLED = true;
-const DEFAULT_ACTIVE_PROBE_TIMEOUT_MS = 2_000;
+const DEFAULT_ACTIVE_PROBE_TIMEOUT_MS = 10_000;
 const DEFAULT_ACTIVE_PROBE_CACHE_TTL_MS = 10_000;
 
 export interface ActiveHealthProbeConfig {
@@ -17,9 +17,12 @@ export interface ActiveHealthProbeResult {
   latencyMs: number;
   cached: boolean;
   reason?: string;
+  details?: Record<string, unknown>;
 }
 
-export type ActiveHealthProbeTask = (signal: AbortSignal) => Promise<void>;
+export type ActiveHealthProbeTask = (
+  signal: AbortSignal,
+) => Promise<Record<string, unknown> | void>;
 
 export function resolveActiveHealthProbeConfig(
   env: NodeJS.ProcessEnv,
@@ -97,11 +100,12 @@ export class CachedActiveHealthProbe {
     }, this.timeoutMs);
 
     try {
-      await task(controller.signal);
+      const details = await task(controller.signal);
       return {
         ok: true,
         checkedAt: new Date().toISOString(),
         latencyMs: Math.max(0, Date.now() - startedAt),
+        ...(details ? { details } : {}),
       };
     } catch (error) {
       return {
@@ -129,6 +133,7 @@ export function toActiveProbeMeta(
         probeCheckedAt: probeResult.checkedAt,
         probeLatencyMs: probeResult.latencyMs,
         probeCached: probeResult.cached,
+        ...(probeResult.details ?? {}),
       }
       : {}),
   };

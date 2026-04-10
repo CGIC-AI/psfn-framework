@@ -6,6 +6,7 @@ import {
 import type { GatewayClient } from '../../boundary/gateway/client.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
+import type { LLMProviderObservability, ModelSlot } from '../../shared/contracts/runtime.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
@@ -43,10 +44,13 @@ export function buildApiHealthChecks(
       };
     },
     llm: async () => {
-      const configured = Boolean(options.config.primaryModel && options.config.primaryProvider);
+      const probeRoute = resolveReasoningProbeRoute(options.config);
+      const configured = Boolean(probeRoute.model && probeRoute.provider);
       const baseMeta = {
-        provider: options.config.primaryProvider,
-        model: options.config.primaryModel,
+        provider: probeRoute.provider,
+        model: probeRoute.model,
+        probePurpose: 'reasoning',
+        probeSlot: probeRoute.slot,
         ...toActiveProbeMeta(activeProbeConfig),
         ...options.runtimeStatusMeta,
       };
@@ -67,7 +71,7 @@ export function buildApiHealthChecks(
       }
 
       const probeResult = await llmActiveProbe.run(async (signal) => {
-        await options.gateway.complete(
+        const response = await options.gateway.complete(
           {
             systemPrompt: 'You are a health check. Respond with exactly: OK',
             messages: [{ role: 'user', content: 'health probe' }],
@@ -75,6 +79,7 @@ export function buildApiHealthChecks(
           'reasoning',
           { signal },
         );
+        return buildResolvedProbeRouteMeta(response.model, response.providerObservability);
       });
       const meta = {
         ...baseMeta,
@@ -146,19 +151,72 @@ export function buildApiHealthChecks(
     },
     scheduler: () => {
       const taskCount = options.scheduler.taskCount;
-      const hasHealthcheckTask = Boolean(options.scheduler.getTask('healthcheck'));
-      if (!hasHealthcheckTask) {
+      const hasHeartbeatTask = Boolean(options.scheduler.getTask('heartbeat'));
+      if (taskCount === 0) {
         return {
           status: 'degraded',
-          detail: 'Healthcheck task is not registered',
-          meta: { taskCount, ...options.runtimeStatusMeta },
+          detail: 'No scheduler tasks are registered',
+          meta: { taskCount, heartbeatTaskRegistered: hasHeartbeatTask, ...options.runtimeStatusMeta },
         };
       }
       return {
         status: 'healthy',
-        meta: { taskCount, ...options.runtimeStatusMeta },
+        meta: { taskCount, heartbeatTaskRegistered: hasHeartbeatTask, ...options.runtimeStatusMeta },
       };
     },
+  };
+}
+
+function resolveReasoningProbeRoute(config: SubstrateConfig): {
+  slot: 'reasoning' | 'chat' | 'primary';
+  provider?: string;
+  model?: string;
+} {
+  const reasoningSlot = config.modelRoster.reasoning;
+  if (isConfiguredModelSlot(reasoningSlot)) {
+    return {
+      slot: 'reasoning',
+      provider: reasoningSlot.provider,
+      model: reasoningSlot.model,
+    };
+  }
+
+  const chatSlot = config.modelRoster.chat;
+  if (isConfiguredModelSlot(chatSlot)) {
+    return {
+      slot: 'chat',
+      provider: chatSlot.provider,
+      model: chatSlot.model,
+    };
+  }
+
+  return {
+    slot: 'primary',
+    provider: config.primaryProvider,
+    model: config.primaryModel,
+  };
+}
+
+function isConfiguredModelSlot(slot: ModelSlot | undefined): slot is ModelSlot {
+  return Boolean(slot?.provider && slot.model);
+}
+
+function buildResolvedProbeRouteMeta(
+  responseModel: string,
+  providerObservability?: LLMProviderObservability,
+): Record<string, unknown> {
+  if (!providerObservability) {
+    return { responseModel };
+  }
+
+  return {
+    responseModel,
+    requestedProvider: providerObservability.requestedProvider,
+    requestedModel: providerObservability.requestedModel,
+    resolvedProvider: providerObservability.backendProvider,
+    resolvedModel: providerObservability.backendModel,
+    resolvedBackendApi: providerObservability.backendApi,
+    resolvedRouteKind: providerObservability.routeKind,
   };
 }
 

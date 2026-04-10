@@ -49,6 +49,7 @@ export interface GatewayCorrelationParams {
 export interface LLMChatParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
+  pin?: boolean;
   messages: ContextMessage[];
   systemPrompt: string;
   stream?: boolean;
@@ -67,6 +68,7 @@ export interface LLMChatParams extends GatewayCorrelationParams {
 export interface LLMCompleteParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
+  pin?: boolean;
   messages: ContextMessage[];
   systemPrompt: string;
   purpose: CompletionPurpose;

@@ -214,6 +214,30 @@ describe('GatewayClient streaming', () => {
     });
   });
 
+  it('preserves pin hints on llm.chat RPC requests', async () => {
+    void client.stream(
+      {
+        systemPrompt: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+        modelHint: {
+          model: 'openrouter/deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          pin: true,
+          maxTokens: 128,
+        },
+      },
+      { onText: () => {} },
+    );
+
+    const req = conn.sent[0] as { params: Record<string, unknown> };
+    expect(req.params).toMatchObject({
+      model: 'openrouter/deepseek/deepseek-v3.2',
+      provider: 'openrouter',
+      pin: true,
+      maxTokens: 128,
+    });
+  });
+
   it('cleans up chunk handler after stream error', async () => {
     const chunks: string[] = [];
 

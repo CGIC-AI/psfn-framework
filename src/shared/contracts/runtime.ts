@@ -97,6 +97,7 @@ export interface ModelControlKnobs {
 export interface LLMModelHint extends ModelControlKnobs {
   model?: string;
   provider?: string;
+  pin?: boolean;
 }
 
 export interface MessageModelOverride extends ModelControlKnobs {

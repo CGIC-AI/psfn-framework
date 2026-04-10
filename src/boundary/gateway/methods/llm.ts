@@ -272,6 +272,7 @@ function extractModelHintFromParams(
 ): LLMModelHint | undefined {
   const model = normalizePurpose(params.model);
   const provider = normalizePurpose(params.provider)?.toLowerCase();
+  const pin = typeof params.pin === 'boolean' ? params.pin : undefined;
   const maxTokens = toPositiveInteger(params.maxTokens);
   const contextWindow = toPositiveInteger(params.contextWindow);
   const thinkingEnabled = typeof params.thinkingEnabled === 'boolean'
@@ -286,6 +287,7 @@ function extractModelHintFromParams(
   if (
     !model
     && !provider
+    && pin === undefined
     && maxTokens === undefined
     && contextWindow === undefined
     && thinkingEnabled === undefined
@@ -301,6 +303,7 @@ function extractModelHintFromParams(
   return {
     ...(model ? { model } : {}),
     ...(provider ? { provider } : {}),
+    ...(pin !== undefined ? { pin } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),

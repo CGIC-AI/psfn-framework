@@ -151,6 +151,7 @@ describe('registerLLMMethods', () => {
     await harness.invoke('llm.chat', {
       model: 'openrouter:z-ai/glm-5',
       provider: 'openrouter',
+      pin: true,
       messages: [{ role: 'user', content: 'hello' }],
       systemPrompt: 'system',
       maxTokens: 321,
@@ -169,6 +170,7 @@ describe('registerLLMMethods', () => {
     expect(firstCall.modelHint).toEqual({
       model: 'openrouter:z-ai/glm-5',
       provider: 'openrouter',
+      pin: true,
       maxTokens: 321,
       contextWindow: 99999,
       thinkingEnabled: true,
@@ -206,6 +208,7 @@ describe('registerLLMMethods', () => {
     await harness.invoke('llm.complete', {
       model: 'z-ai/glm-5',
       provider: 'openrouter',
+      pin: true,
       messages: [{ role: 'user', content: 'summarize' }],
       systemPrompt: 'system',
       purpose: 'summary',
@@ -225,6 +228,7 @@ describe('registerLLMMethods', () => {
     expect(firstCall.modelHint).toEqual({
       model: 'z-ai/glm-5',
       provider: 'openrouter',
+      pin: true,
       maxTokens: 222,
       contextWindow: 120000,
       thinkingEnabled: false,

@@ -101,10 +101,27 @@ function formatFetchProviderError(err: unknown): string {
   return `Fetch failed: ${details}`;
 }
 
-function toLane(value: unknown): UrlPolicyLane {
+function parseLane(value: unknown): UrlPolicyLane | null {
+  if (value === undefined || value === null || value === '' || value === 'default') return 'default';
   if (value === 'local_crawler') return 'local_crawler';
   if (value === 'discovery') return 'discovery';
-  return 'default';
+  return null;
+}
+
+function describeLane(value: unknown): string {
+  const lane = parseLane(value);
+  return lane ?? `invalid:${String(value)}`;
+}
+
+function requireLane(value: unknown): UrlPolicyLane {
+  const lane = parseLane(value);
+  if (!lane) {
+    throw new JSONRPCErrorException(
+      `Unsupported web lane: ${String(value)}`,
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+  return lane;
 }
 
 function normalizeBinaryMaxBytes(value: unknown): number {
@@ -496,7 +513,7 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'web.fetch',
     handler: async (params: WebFetchParams, runtime) => {
-      const lane = toLane(params.lane);
+      const lane = requireLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const dnsResolver = resolveDnsResolver(runtime);
 
@@ -536,14 +553,14 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       }
       return { content: result.content, sanitized: result.sanitized };
     },
-    summary: (p: WebFetchParams) => ({ url: p.url, lane: toLane(p.lane) }),
+    summary: (p: WebFetchParams) => ({ url: p.url, lane: describeLane(p.lane) }),
     approvalAction: 'fetch',
-    approvalScope: (p: WebFetchParams) => `${toLane(p.lane)}:${p.url}`,
+    approvalScope: (p: WebFetchParams) => `${describeLane(p.lane)}:${p.url}`,
   },
   {
     name: 'web.fetch_binary',
     handler: async (params: WebFetchBinaryParams, runtime) => {
-      const lane = toLane(params.lane);
+      const lane = requireLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const maxBytes = normalizeBinaryMaxBytes(params.maxBytes);
       const dnsResolver = resolveDnsResolver(runtime);
@@ -608,16 +625,16 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     },
     summary: (p: WebFetchBinaryParams) => ({
       url: p.url,
-      lane: toLane(p.lane),
+      lane: describeLane(p.lane),
       maxBytes: normalizeBinaryMaxBytes(p.maxBytes),
     }),
     approvalAction: 'fetch',
-    approvalScope: (p: WebFetchBinaryParams) => `${toLane(p.lane)}:${p.url}`,
+    approvalScope: (p: WebFetchBinaryParams) => `${describeLane(p.lane)}:${p.url}`,
   },
   {
     name: 'web.request_binary',
     handler: async (params: WebRequestBinaryParams, runtime) => {
-      const lane = toLane(params.lane);
+      const lane = requireLane(params.lane);
       const urlPolicyConfig = resolveUrlPolicyConfig(runtime);
       const maxBytes = normalizeBinaryMaxBytes(params.maxBytes);
       const dnsResolver = resolveDnsResolver(runtime);
@@ -682,12 +699,12 @@ const webDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     },
     summary: (p: WebRequestBinaryParams) => ({
       url: p.url,
-      lane: toLane(p.lane),
+      lane: describeLane(p.lane),
       method: normalizeRequestMethod(p.method),
       maxBytes: normalizeBinaryMaxBytes(p.maxBytes),
     }),
     approvalAction: 'fetch',
-    approvalScope: (p: WebRequestBinaryParams) => `${toLane(p.lane)}:${normalizeRequestMethod(p.method)}:${p.url}`,
+    approvalScope: (p: WebRequestBinaryParams) => `${describeLane(p.lane)}:${normalizeRequestMethod(p.method)}:${p.url}`,
   },
 ];
 

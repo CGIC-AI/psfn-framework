@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Pool, PoolClient, QueryResult } from 'pg';
 import { createDefaultSQLiteSessionAdapters } from '../../persistence/sessions/sqlite-adapters.js';
 import { createDefaultPostgresSessionAdapters } from '../../persistence/sessions/postgres-adapters.js';
+import { resolveSessionsDir } from '../../persistence/layout.js';
 import { runTranscriptProjectionRepairCommand } from './transcript-projection-repair.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
@@ -155,7 +156,7 @@ describe('runTranscriptProjectionRepairCommand', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-cli-sqlite-'));
     dirs.push(root);
     const dataDir = join(root, 'data');
-    const sessionsDir = join(dataDir, 'sessions');
+    const sessionsDir = resolveSessionsDir(dataDir);
     const adapters = createDefaultSQLiteSessionAdapters(sessionsDir);
 
     adapters.sessionArchivePort.writeImportedSession({
@@ -200,7 +201,7 @@ describe('runTranscriptProjectionRepairCommand', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-cli-postgres-'));
     dirs.push(root);
     const dataDir = join(root, 'data');
-    const sessionsDir = join(dataDir, 'sessions');
+    const sessionsDir = resolveSessionsDir(dataDir);
     const pool = new FakePostgresPool();
     const postgresUrl = 'postgres://unused';
 
@@ -261,7 +262,7 @@ describe('runTranscriptProjectionRepairCommand', () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-cli-disabled-'));
     dirs.push(root);
     const dataDir = join(root, 'data');
-    const sessionsDir = join(dataDir, 'sessions');
+    const sessionsDir = resolveSessionsDir(dataDir);
     const config: SubstrateConfig = {
       dataDir,
       persistenceBackend: 'sqlite',

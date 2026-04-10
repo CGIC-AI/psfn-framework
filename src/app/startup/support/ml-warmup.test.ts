@@ -143,13 +143,13 @@ describe('runtime ML warmup', () => {
       textEmotionModel: 'SamLowe/roberta-base-go_emotions-onnx',
       logger,
     })).rejects.toThrow(
-      'text emotion classifier warmup failed: classifier warmup failed; embedding service startup warmup failed: gateway embeddings offline',
+      'text emotion classifier warmup failed: classifier warmup failed; embedding provider startup warmup failed: gateway embeddings offline',
     );
 
     expect(logger.error).toHaveBeenCalledWith(
       'ML service preload failed',
       expect.objectContaining({
-        error: 'text emotion classifier warmup failed: classifier warmup failed; embedding service startup warmup failed: gateway embeddings offline',
+        error: 'text emotion classifier warmup failed: classifier warmup failed; embedding provider startup warmup failed: gateway embeddings offline',
         embeddingProvider: 'api',
       }),
     );

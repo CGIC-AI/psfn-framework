@@ -15,7 +15,11 @@ import { loadSettings, saveSettings } from '../../../system/settings.js';
 import { saveModelsConfig } from '../../../system/config/models-config.js';
 import { loadCapabilityTierConfig } from '../../../system/config/capability-tier-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
-import { loadSchedulerConfig, saveSchedulerConfig } from '../../../system/config/scheduler-config.js';
+import {
+  loadSchedulerConfig,
+  loadSchedulerSeedDefaults,
+  saveSchedulerConfig,
+} from '../../../system/config/scheduler-config.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -1029,6 +1033,7 @@ describe('hydrateCanonicalStartupConfig', () => {
       65_536,
     ));
     saveSchedulerConfig(systemDataDir, {
+      ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
       salienceDecayIntervalMs: 123_000,
@@ -1089,6 +1094,7 @@ describe('hydrateCanonicalStartupConfig', () => {
       131_072,
     ));
     saveSchedulerConfig(systemDataDir, {
+      ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 7_000,
       salienceDecayIntervalMs: 222_000,

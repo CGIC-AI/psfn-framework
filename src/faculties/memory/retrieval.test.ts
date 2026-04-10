@@ -1361,6 +1361,53 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).not.toContain('User likes black coffee.');
   });
 
+  it('supports async contact-memory lookups for retrieval and proactive recall', async () => {
+    const emotionalMemory = makeMemory({
+      id: 'emo-async',
+      text: 'User felt relieved after finishing the migration.',
+      type: 'emotional',
+      emotionalValence: 0.72,
+      sensitivity: 'public',
+      similarity: 0.2,
+    });
+    const store = makeMockStore([]);
+    (store.getMemoriesByContact as ReturnType<typeof vi.fn>).mockResolvedValue([emotionalMemory]);
+    (store.getMemoriesByChannel as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (store.getAllActiveMemories as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, {
+      retrievalLimit: 20,
+      proactiveRecallProbability: 1,
+      proactiveRecallMinTurnsBetween: 0,
+    });
+
+    const randomSpy = vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.1);
+    try {
+      const result = await retriever.retrieve(
+        'how have things been lately?',
+        'api:test',
+        'primary',
+        undefined,
+        'contact-1',
+      );
+      const proactive = await retriever.retrieveProactiveRecall(
+        'api:test',
+        'primary',
+        undefined,
+        'contact-1',
+      );
+
+      expect(result).toContain('Cross-session emotional continuity:');
+      expect(result).toContain(emotionalMemory.text);
+      expect(proactive).toContain('Spontaneous recall:');
+      expect(proactive).toContain(emotionalMemory.text);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
   it('surfaces spontaneous recall weighted by emotional significance and last-access recency', async () => {
     const now = Date.now();
     const lowWeightMemory = makeMemory({

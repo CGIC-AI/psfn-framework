@@ -38,6 +38,7 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('MemoryWriter');
+const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
 
 export interface MemoryWriteOptions {
   text: string;
@@ -58,6 +59,7 @@ export interface MemoryWriteOptions {
   contactId?: string;
   scopeRef?: MemoryScopeRef;
   scopeTags?: string[];
+  extractedAt?: number;
 }
 
 export interface WriteResult {
@@ -81,12 +83,21 @@ export interface MemoryPatchOptions {
   sourceRef?: string;
   sourceType?: MemorySourceType;
   provenance?: MemoryProvenance;
+  requestedBy?: string;
+  referencePath?: string;
 }
 
 export interface MemoryPatchResult {
   memory: PurrMemory;
   patchEventId: string;
   updatedFields: string[];
+}
+
+export interface MemoryCorrectionResult {
+  sourceMemory: PurrMemory;
+  replacementMemory: PurrMemory;
+  reason?: string;
+  reviewReferencePath?: string;
 }
 
 export interface BatchImportResult {
@@ -183,6 +194,10 @@ function applyRetentionSemantics(input: {
 function normalizeSourceRef(sourceRef: string | undefined, fallback: string): string {
   const trimmed = sourceRef?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : fallback;
+}
+
+function normalizeExactDuplicateText(text: string): string {
+  return text.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function normalizeSourceContext(input: {
@@ -424,6 +439,7 @@ export class MemoryWriter {
       contactId,
       scopeRef,
       scopeTags,
+      extractedAt,
     } = opts;
 
     // Validate type
@@ -465,6 +481,7 @@ export class MemoryWriter {
         !contactId
         || d.contactId === contactId
       ) && shouldConsiderDuplicateForScope(d, normalizedScopeRef)
+      && normalizeExactDuplicateText(d.text) === normalizeExactDuplicateText(text)
     ));
     if (sameTypeDups.length > 0) {
       // Duplicate found -- bump access count and salience
@@ -610,7 +627,7 @@ export class MemoryWriter {
     const didSupersede = supersededMemories.length > 0;
 
     // 3. Insert new memory
-    const now = Date.now();
+    const now = Number.isFinite(extractedAt) ? Number(extractedAt) : Date.now();
     const memory: PurrMemory = {
       id: uuidv4(),
       text,
@@ -678,6 +695,7 @@ export class MemoryWriter {
       contactId,
       scopeRef,
       scopeTags,
+      extractedAt,
     } = opts;
 
     if (!VALID_MEMORY_TYPES.includes(type)) {
@@ -765,7 +783,7 @@ export class MemoryWriter {
     const didSupersede = supersededMemories.length > 0;
 
     // Always insert the new memory
-    const now = Date.now();
+    const now = Number.isFinite(extractedAt) ? Number(extractedAt) : Date.now();
     const memory: PurrMemory = {
       id: uuidv4(),
       text,
@@ -970,6 +988,99 @@ export class MemoryWriter {
     };
   }
 
+  async patch(opts: MemoryPatchOptions): Promise<MemoryCorrectionResult | null> {
+    const memoryId = opts.memoryId.trim();
+    if (!memoryId) {
+      throw new Error('memoryId is required');
+    }
+
+    const existing = await this.memoryStore.getById(memoryId);
+    if (!existing || existing.deletedAt !== undefined) {
+      return null;
+    }
+
+    const nextText = opts.text?.trim();
+    if (!nextText) {
+      throw new Error('patch text is required');
+    }
+    if (nextText === existing.text) {
+      throw new Error('patch text must change the memory');
+    }
+
+    const auditContext = normalizeSourceContext({
+      sourceRef: opts.sourceRef,
+      sourceType: opts.sourceType,
+      provenance: opts.provenance,
+      fallbackRef: 'tool:memory_patch',
+    });
+    const reason = opts.reason?.trim() || undefined;
+    const reviewReferencePath = opts.referencePath?.trim() || undefined;
+    const referenceRef = reviewReferencePath ? `reference:${reviewReferencePath}` : undefined;
+    const replacementId = uuidv4();
+    const now = Date.now();
+    const embedding = await this.embeddingService.embed(nextText);
+    const replacementRetention = applyRetentionSemantics({
+      type: existing.type,
+      importance: opts.importance ?? existing.importance,
+      tags: [...existing.tags, 'corrected'],
+      retentionClass: existing.retentionClass,
+    });
+    const replacementProvenanceRefs = normalizeProvenanceRefs([
+      `memory:${existing.id}`,
+      ...(existing.provenanceRefs ?? []),
+      `supersedes:${existing.id}`,
+      ...(referenceRef ? [referenceRef] : []),
+    ]);
+    const sourceProvenanceRefs = normalizeProvenanceRefs([
+      ...(existing.provenanceRefs ?? []),
+      `superseded_by:${replacementId}`,
+      ...(referenceRef ? [referenceRef] : []),
+    ]);
+    const replacementMemory: PurrMemory = {
+      ...existing,
+      id: replacementId,
+      text: nextText,
+      importance: opts.importance ?? existing.importance,
+      confidence: opts.confidence ?? existing.confidence,
+      emotionalValence: opts.emotionalValence ?? existing.emotionalValence,
+      formationVAD: opts.clearFormationVAD
+        ? undefined
+        : normalizeFormationVAD(opts.formationVAD) ?? existing.formationVAD,
+      sourceRef: auditContext.sourceRef,
+      sourceType: auditContext.sourceType,
+      ...(auditContext.provenance ? { provenance: auditContext.provenance } : {}),
+      extractedAt: now,
+      lastAccessed: now,
+      accessCount: 1,
+      tags: replacementRetention.tags,
+      provenanceRefs: replacementProvenanceRefs,
+      retentionClass: replacementRetention.retentionClass,
+      supersededBy: undefined,
+      deletedAt: undefined,
+      deletedBy: undefined,
+      deleteReason: undefined,
+    };
+
+    await this.memoryStore.runInTransaction(async () => {
+      await this.memoryStore.updateMemory(existing.id, {
+        supersededBy: replacementId,
+        provenanceRefs: sourceProvenanceRefs,
+      });
+      await this.memoryStore.insertMemory(replacementMemory, embedding);
+    });
+
+    return {
+      sourceMemory: {
+        ...existing,
+        supersededBy: replacementId,
+        provenanceRefs: sourceProvenanceRefs,
+      },
+      replacementMemory,
+      reason,
+      reviewReferencePath,
+    };
+  }
+
   async redact(opts: MemoryRedactionOptions): Promise<MemoryRedactionResult | null> {
     const memoryId = opts.memoryId.trim();
     if (!memoryId) {
@@ -1078,11 +1189,16 @@ export class MemoryWriter {
 
     let batchEmbeddings: Float32Array[] | null = null;
     try {
-      const embedded = await this.embeddingService.embedBatch(records.map(record => record.text));
-      if (embedded.length !== records.length) {
-        throw new Error(`Expected ${records.length} embeddings, received ${embedded.length}`);
+      const embeddedChunks: Float32Array[][] = [];
+      for (let start = 0; start < records.length; start += IMPORT_BATCH_EMBED_CHUNK_SIZE) {
+        const chunk = records.slice(start, start + IMPORT_BATCH_EMBED_CHUNK_SIZE);
+        const embedded = await this.embeddingService.embedBatch(chunk.map(record => record.text));
+        if (embedded.length !== chunk.length) {
+          throw new Error(`Expected ${chunk.length} embeddings, received ${embedded.length}`);
+        }
+        embeddedChunks.push(embedded);
       }
-      batchEmbeddings = embedded;
+      batchEmbeddings = embeddedChunks.flat();
     } catch (error) {
       log.warn('Batch embedding failed during import; falling back to per-record embedding', {
         error: String(error),

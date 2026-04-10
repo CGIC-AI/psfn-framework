@@ -7,6 +7,7 @@ import {
   type MemoryBulkUpdatePatch,
   type MemoryDeleteVersion,
   type MemoryLink,
+  type MemoryPatchEvent,
   type MemorySearchResult,
   type MemorySoftDeleteOptions,
   type MemoryStorePort,
@@ -17,6 +18,7 @@ import {
   type ScratchpadEntry,
   type ScratchpadEntryCreateOptions,
   type ScratchpadEntryReplaceOptions,
+  createMemoryStorePort,
 } from './memory-store-port.js';
 import { MemoryRetriever } from './retrieval.js';
 import { MemoryWriter } from './writer.js';
@@ -37,6 +39,7 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
   private readonly linkedMemories: MemoryLink[] = [];
   private readonly profiles = new Map<string, ContactProfileArtifact>();
   private readonly scratchpad = new Map<string, ScratchpadEntry>();
+  private readonly patchEvents: MemoryPatchEvent[] = [];
 
   insertMemory(memory: PurrMemory): void {
     this.memories.set(memory.id, { ...memory });
@@ -75,6 +78,15 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
     this.memories.set(id, {
       ...current,
       ...updates,
+    });
+  }
+
+  recordPatchEvent(event: MemoryPatchEvent): void {
+    this.patchEvents.push({
+      ...event,
+      patch: { ...event.patch },
+      previousValues: { ...event.previousValues },
+      nextValues: { ...event.nextValues },
     });
   }
 
@@ -295,6 +307,15 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
   listScratchpadEntries(limit = 64): ScratchpadEntry[] {
     return [...this.scratchpad.values()].slice(0, limit).map(entry => ({ ...entry }));
   }
+
+  getPatchEvents(): MemoryPatchEvent[] {
+    return this.patchEvents.map((event) => ({
+      ...event,
+      patch: { ...event.patch },
+      previousValues: { ...event.previousValues },
+      nextValues: { ...event.nextValues },
+    }));
+  }
 }
 
 describe('MemoryStorePort', () => {
@@ -317,5 +338,31 @@ describe('MemoryStorePort', () => {
     expect(write.action).toBe('created');
     expect(await store.countActiveMemories()).toBe(1);
     expect(retrieved).toContain('V prefers oolong tea in the morning');
+  });
+
+  it('delegates transaction and patch event APIs through createMemoryStorePort', async () => {
+    const backend = new InMemoryMemoryStorePort();
+    const port = createMemoryStorePort(backend);
+    const patchEvent: MemoryPatchEvent = {
+      id: 'patch-1',
+      memoryId: 'memory-1',
+      sourceRef: 'source:tool:memory_patch|invocation:call-1',
+      sourceType: 'tool_write',
+      provenance: {
+        toolName: 'memory_patch',
+        toolCallId: 'call-1',
+      },
+      reason: 'test patch',
+      patch: { text: 'after' },
+      previousValues: { text: 'before' },
+      nextValues: { text: 'after' },
+      createdAt: 123,
+    };
+
+    const value = await port.runInTransaction(() => 7);
+    await port.recordPatchEvent(patchEvent);
+
+    expect(value).toBe(7);
+    expect(backend.getPatchEvents()).toEqual([patchEvent]);
   });
 });

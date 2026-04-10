@@ -246,9 +246,10 @@ describe('MemoryWriter', () => {
       ).rejects.toThrow('Invalid memory type: invalid');
     });
 
-    it('deduplicates when embedding similarity exceeds type threshold', async () => {
+    it('deduplicates only when normalized text also matches', async () => {
       const existing = makeExistingMemory({
         type: 'semantic',
+        text: 'An existing memory',
         salience: 0.6,
         accessCount: 3,
       });
@@ -257,7 +258,7 @@ describe('MemoryWriter', () => {
       store.searchByEmbedding.mockReturnValueOnce([existing]);
 
       const result = await writer.write({
-        text: 'An existing memory (rephrased)',
+        text: '  an   existing memory  ',
         type: 'semantic',
       });
 
@@ -297,6 +298,7 @@ describe('MemoryWriter', () => {
     it('merges provenance references when deduplicating', async () => {
       const existing = makeExistingMemory({
         type: 'semantic',
+        text: 'An existing memory',
         salience: 0.62,
         sourceRef: 'seed:memory',
         provenanceRefs: ['legacy:old#1'],
@@ -304,7 +306,7 @@ describe('MemoryWriter', () => {
       store.searchByEmbedding.mockReturnValueOnce([existing]);
 
       const result = await writer.write({
-        text: 'An existing memory with new source',
+        text: 'an existing memory',
         type: 'semantic',
         salience: 0.9,
         sourceRef: 'legacy:new#2',
@@ -345,6 +347,7 @@ describe('MemoryWriter', () => {
     it('upgrades duplicate memory tags when durable write deduplicates', async () => {
       const existing = makeExistingMemory({
         type: 'relational',
+        text: 'V is my partner',
         tags: ['relationship'],
       });
 
@@ -383,6 +386,27 @@ describe('MemoryWriter', () => {
 
       expect(result.action).toBe('created');
       expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('does not treat embedding-near distinct text as an exact duplicate', async () => {
+      const existing = makeExistingMemory({
+        type: 'semantic',
+        text: 'matrix-secret-2026-04-09T23-43-16-199Z',
+        confidence: 0.95,
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+      store.searchByEmbedding.mockReturnValueOnce([existing]);
+
+      const result = await writer.write({
+        text: 'matrix-secret-2026-04-09T23-51-42-300Z',
+        type: 'semantic',
+      });
+
+      expect(result.action).toBe('created');
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.insertMemory).toHaveBeenCalledOnce();
+      expect(result.memory.text).toBe('matrix-secret-2026-04-09T23-51-42-300Z');
     });
 
     it('supersedes old memory when new one has higher confidence', async () => {
@@ -584,12 +608,13 @@ describe('MemoryWriter', () => {
     it('preserves explicit consent deny when deduplicating', async () => {
       const existing = makeExistingMemory({
         type: 'semantic',
+        text: 'An existing memory',
         consentFlags: {},
       });
       store.searchByEmbedding.mockReturnValueOnce([existing]);
 
       const result = await writer.write({
-        text: 'An existing memory with deny',
+        text: 'an existing memory',
         type: 'semantic',
         consentFlags: { allowRecall: false },
       });
@@ -807,7 +832,7 @@ describe('MemoryWriter', () => {
         requestedBy: 'admin:api',
         sourceRef: 'admin:memory_patch',
         reason: 'privacy correction',
-        referencePath: 'companion_docs/privacy-boundary-reference.md',
+        referencePath: 'companion/docs/privacy-boundary-reference.md',
       });
 
       expect(embeddings.embed).toHaveBeenCalledWith(
@@ -819,7 +844,7 @@ describe('MemoryWriter', () => {
         provenanceRefs: expect.arrayContaining([
           'memory:privacy-cluster',
           'superseded_by:' + result?.replacementMemory.id,
-          'reference:companion_docs/privacy-boundary-reference.md',
+          'reference:companion/docs/privacy-boundary-reference.md',
         ]),
       }));
       expect(store.insertMemory).toHaveBeenCalledWith(expect.objectContaining({
@@ -829,11 +854,11 @@ describe('MemoryWriter', () => {
         provenanceRefs: expect.arrayContaining([
           'memory:privacy-fear-1',
           'supersedes:privacy-fear-1',
-          'reference:companion_docs/privacy-boundary-reference.md',
+          'reference:companion/docs/privacy-boundary-reference.md',
         ]),
       }), expect.any(Float32Array));
       expect(result).toEqual(expect.objectContaining({
-        reviewReferencePath: 'companion_docs/privacy-boundary-reference.md',
+        reviewReferencePath: 'companion/docs/privacy-boundary-reference.md',
         reason: 'privacy correction',
       }));
       expect(result?.sourceMemory.supersededBy).toBe(result?.replacementMemory.id);
@@ -999,7 +1024,7 @@ describe('MemoryWriter', () => {
     });
 
     it('returns correct counts for mixed outcomes', async () => {
-      const existingMemory = makeExistingMemory({ type: 'semantic' });
+      const existingMemory = makeExistingMemory({ type: 'semantic', text: 'Duplicate fact' });
 
       // Record 1: no duplicates found → created
       store.searchByEmbedding.mockReturnValueOnce([]); // dedup

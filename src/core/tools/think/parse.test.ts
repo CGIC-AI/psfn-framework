@@ -26,9 +26,9 @@ describe('extractCodeBlock', () => {
     expect(extractCodeBlock('Just some text')).toBeNull();
   });
 
-  it('extracts only the first code block', () => {
+  it('extracts the last code block when multiple are present', () => {
     const text = '```repl\nfirst\n```\n\n```repl\nsecond\n```';
-    expect(extractCodeBlock(text)).toBe('first');
+    expect(extractCodeBlock(text)).toBe('second');
   });
 });
 
@@ -60,6 +60,10 @@ describe('detectFinalInText', () => {
 
   it('handles multiline answers', () => {
     expect(detectFinalInText('FINAL("line1\nline2")')).toBe('line1\nline2');
+  });
+
+  it('detects FINAL with raw structured payloads', () => {
+    expect(detectFinalInText('FINAL({"answer":"ok","count":2})')).toBe('{"answer":"ok","count":2}');
   });
 });
 

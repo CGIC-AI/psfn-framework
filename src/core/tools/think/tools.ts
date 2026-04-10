@@ -18,7 +18,8 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
       'tool_search/toolset before think when the active stack is missing the needed capability. Use think ' +
       'only when those direct tools are still insufficient for multi-step reasoning, synthesis, or pattern ' +
       'analysis; not for routine file lookup, simple reads, basic inspection, or routine state changes. ' +
-      'Runs an iterative code sandbox that can query memories and sub-LMs.',
+      'Pass only the task or question to analyze; the tool manages its own scratchpad. Runs an iterative ' +
+      'code sandbox that can query memories and sub-LMs.',
     label: 'think',
     parameters: Type.Object({
       task: Type.String({ description: 'The analytical task or question to reason through' }),
@@ -112,10 +113,11 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
           `${evidenceCount > 0 ? `, ${evidenceCount} evidence` : ''}` +
           `${result.truncated ? ', truncated' : ''}` +
           `${result.budgetStatus.exceeded ? `, stopped: ${result.budgetStatus.exceeded}` : ''}]`;
+        const isError = result.truncated || result.budgetStatus.exceeded !== null;
 
         return {
           content: [{ type: 'text', text: `${header}\n\n${result.answer}` }] satisfies TextContent[],
-          details: {},
+          details: { isError: isError || undefined },
         };
       } catch (error) {
         return textResultWithError(`[Think error: ${toErrorMessage(error)}]`, true);

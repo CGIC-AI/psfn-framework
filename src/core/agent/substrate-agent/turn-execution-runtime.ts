@@ -98,6 +98,7 @@ import {
   buildPromptSectionTelemetryList,
   extractWrappedPromptSections,
 } from '../../identity/prompt-sections.js';
+import { sanitizePersistedReasoningText } from './turn-records.js';
 
 const log = createComponentLogger('SubstrateAgent');
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
@@ -325,8 +326,11 @@ export interface TurnExecutionRuntime {
     completedAt: number;
     userSessionEntryId: number | null;
     assistantSessionEntryId: number | null;
-    response: AgentResponse;
+    response?: AgentResponse;
+    model?: string;
+    assistantMessageContent?: string;
     turnMessages: AgentMessage[];
+    status?: TurnRecord['status'];
     promptMode: MessagePromptOverrideMode;
     promptText: string;
     contextMessageCount: number;
@@ -444,7 +448,7 @@ function readAssistantReasoning(message: AssistantMessage | null): string | unde
     .map(block => block.thinking?.trim() ?? '')
     .filter(block => block.length > 0)
     .join('\n\n');
-  return reasoning.length > 0 ? reasoning : undefined;
+  return sanitizePersistedReasoningText(reasoning);
 }
 
 function countAssistantToolCalls(message: AssistantMessage | null): number | undefined {
@@ -655,13 +659,26 @@ export async function handleMessageForTurn(
       continuitySubjectKey,
     );
   const emotionSessionId = runtime.resolveSessionChannelId(message.channelId);
+  const trustLevel = authorContext.trustLevel;
+  const speakerRole = authorContext.speakerRole;
+  const canonicalContactKey = authorContext.canonicalContactKey;
+  let promptMode: MessagePromptOverrideMode = 'default';
+  let fullPrompt = '';
+  let contextMessageCount = 0;
+  let memoryContextChars = 0;
+  let turnSnapshot: TurnSnapshot | undefined;
+  let turnMessages: AgentMessage[] = [];
+  let responseModel = runtime.agent.state.model.id;
+  let assistantSessionEntryId: number | null = null;
+  let internalStateSnapshotRef: string | undefined;
+  let turnStartMessageIndex: number | null = null;
 
   try {
-    const trustLevel = authorContext.trustLevel;
     const channelType = runtime.resolveChannelType(message);
     const memoryProvider = runtime.memoryProvider as ProactiveMemoryProvider | null;
     const bypassMemoryForVisionTurn = hasVisionTurnInputs(message);
     runtime.ensureModel(message);
+    responseModel = runtime.agent.state.model.id;
     const promptSnapshot = runtime.captureTurnPromptSnapshot({ channelType, taskKind });
     const sessionContextSnapshot = typeof (runtime.sessionManager as SessionManager & {
       captureTurnContextSnapshot?: SessionManager['captureTurnContextSnapshot'];
@@ -692,7 +709,7 @@ export async function handleMessageForTurn(
         : Promise.resolve(undefined),
     ]);
     const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
-    const turnSnapshot: TurnSnapshot = {
+    turnSnapshot = {
       turnId,
       requestId,
       channelId: message.channelId,
@@ -750,11 +767,12 @@ export async function handleMessageForTurn(
       .map(section => section.trim())
       .filter(section => section.length > 0)
       .join('\n\n');
+    memoryContextChars = memoryContextBlock.length;
     const scratchpadBlock = runtime.buildScratchpadContextBlock();
     emitObservedTurnStage('memory', {
       durationMs: Date.now() - memoryStageStart,
       hasMemoryProvider: memoryProvider != null,
-      memoryChars: memoryContextBlock.length,
+      memoryChars: memoryContextChars,
       proactiveRecallChars: proactiveRecallBlock.length,
       proactiveRecallIncluded: proactiveRecallBlock.length > 0,
       memoryBypassedForVisionTurn: bypassMemoryForVisionTurn,
@@ -764,6 +782,7 @@ export async function handleMessageForTurn(
 
     const runtimeNow = new Date();
     const promptOverride = runtime.normalizeTurnPromptOverride(message);
+    promptMode = promptOverride.mode;
     const responseStyle = runtime.resolveResponseStyle(message, channelType, channelMeta);
     const templateVariables = runtime.buildPromptTemplateVariables(
       message,
@@ -831,7 +850,6 @@ export async function handleMessageForTurn(
       preTurnMetacognitiveFlags,
       emotionAppraisalChain,
     );
-    let fullPrompt = '';
     let renderedStaticPrefix = '';
     let renderedDynamicSuffix = '';
 
@@ -922,6 +940,7 @@ export async function handleMessageForTurn(
         turnBudgetCharacteristics,
       ),
     );
+    contextMessageCount = context.messages.length;
     turnSnapshot.capturedAt = Date.now();
     const providerModel = runtime.agent.state.model;
     const providerSystemRole = resolveSystemRoleCapabilityMetadata(providerModel);
@@ -1005,12 +1024,12 @@ export async function handleMessageForTurn(
     await emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
-      contextMessages: context.messages.length,
+      contextMessages: contextMessageCount,
       systemPromptChars: context.systemPrompt.length,
       systemPromptTokens: countTokens(context.systemPrompt),
       assembledPromptChars: fullPrompt.length,
       assembledPromptTokens: countTokens(fullPrompt),
-      promptMode: promptOverride.mode,
+      promptMode,
       ...(turnSnapshot.sessionContext?.orientation
         ? {
           orientationFired: turnSnapshot.sessionContext.orientation.fired,
@@ -1024,9 +1043,7 @@ export async function handleMessageForTurn(
 
     const promptStageStart = Date.now();
     let firstTokenAt: number;
-    let turnMessages: AgentMessage[] = [];
     let turnUsage: TurnUsage;
-    let responseModel: string;
     let responseText: string;
     let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
     let turnIntent: string | null = null;
@@ -1104,7 +1121,7 @@ export async function handleMessageForTurn(
       const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
       const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
       runtime.agent.replaceMessages(historyMessages);
-      const turnStartMessageIndex = runtime.agent.state.messages.length;
+      turnStartMessageIndex = runtime.agent.state.messages.length;
 
       let streamFirstTokenAt: number | null = null;
       const streamTelemetryBus = runtime.eventBus as unknown as {
@@ -1332,7 +1349,6 @@ export async function handleMessageForTurn(
     }
     let safeResponseText = responseText;
     let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
-    let assistantSessionEntryId: number | null = null;
 
     if (channelVisibility === 'broadcast') {
       const visibilityScope = broadcastVisibilityScope ?? 'public_only';
@@ -1380,8 +1396,8 @@ export async function handleMessageForTurn(
         risky: classification.risky,
         signals: classification.signals,
         provenanceRefs,
-        contextMessageCount: context.messages.length,
-        memoryContextChars: memoryContextBlock.length,
+        contextMessageCount,
+        memoryContextChars,
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'broadcast.provenance'),
       };
       runtime.emitTelemetry('broadcast.provenance', provenancePayload);
@@ -1391,13 +1407,13 @@ export async function handleMessageForTurn(
     const internalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
       message,
       responseText,
-      trustLevel: authorContext.trustLevel,
-      canonicalContactKey: authorContext.canonicalContactKey,
+      trustLevel,
+      canonicalContactKey,
       emotionSnapshot,
       toolCallCount: turnUsage.toolCalls,
       sessionChannelId: emotionSessionId,
     });
-    const internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
+    internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
     const metacognitiveFlags = runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
       internalState,
       responseText,
@@ -1416,7 +1432,7 @@ export async function handleMessageForTurn(
       turnId,
       requestId,
       turnMessages,
-      authorContext.trustLevel,
+      trustLevel,
     );
     const responseAttachments = await collectGeneratedImageAttachments({
       turnMessages,
@@ -1429,7 +1445,7 @@ export async function handleMessageForTurn(
         turnId,
         requestId,
         safeResponseText,
-        authorContext.trustLevel,
+        trustLevel,
         continuitySubjectKey,
         emotionSnapshot,
       );
@@ -1467,7 +1483,7 @@ export async function handleMessageForTurn(
       turnId,
       completedAt,
       contextManifest: context.manifest,
-      ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
+      ...(canonicalContactKey ? { canonicalContactKey } : {}),
     });
     const completionSignal = deferredContinuationId && turnCallType === 'background'
       ? runtime.queueBackgroundContinuationCompletion(
@@ -1500,13 +1516,13 @@ export async function handleMessageForTurn(
         assistantSessionEntryId,
         response: agentResponse,
         turnMessages,
-        promptMode: promptOverride.mode,
+        promptMode,
         promptText: fullPrompt,
-        contextMessageCount: context.messages.length,
-        memoryContextChars: memoryContextBlock.length,
-        trustLevel: authorContext.trustLevel,
-        speakerRole: authorContext.speakerRole,
-        canonicalContactKey: authorContext.canonicalContactKey,
+        contextMessageCount,
+        memoryContextChars,
+        trustLevel,
+        speakerRole,
+        canonicalContactKey,
         retrievalProvenanceRefs,
         turnSnapshot,
         turnObservability: {
@@ -1627,6 +1643,50 @@ export async function handleMessageForTurn(
     return agentResponse;
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
+    const observedFailureTurnMessages = turnMessages.length > 0
+      ? turnMessages
+      : turnStartMessageIndex == null
+        ? []
+        : runtime.agent.state.messages.slice(turnStartMessageIndex);
+    let assistantMessageContent: string | undefined;
+    try {
+      const extracted = runtime.extractResponseText().trim();
+      if (extracted.length > 0) {
+        assistantMessageContent = extracted;
+      }
+    } catch {
+      assistantMessageContent = undefined;
+    }
+    runtime.sessionManager.recordTurn(
+      runtime.buildTurnRecord({
+        message,
+        turnId,
+        requestId,
+        startedAt: startTime,
+        completedAt: Date.now(),
+        userSessionEntryId,
+        assistantSessionEntryId,
+        ...(assistantMessageContent ? { assistantMessageContent } : {}),
+        turnMessages: observedFailureTurnMessages,
+        status: 'failed',
+        model: runtime.agent.state.model.id,
+        promptMode,
+        promptText: fullPrompt,
+        contextMessageCount,
+        memoryContextChars,
+        trustLevel,
+        speakerRole,
+        canonicalContactKey,
+        retrievalProvenanceRefs,
+        ...(turnSnapshot ? { turnSnapshot } : {}),
+        turnObservability: {
+          stages: observedTurnStages,
+          retrievals: observedTurnRetrievals,
+          ...(observedTurnSnapshot ? { snapshot: observedTurnSnapshot } : {}),
+        },
+        ...(internalStateSnapshotRef ? { internalStateSnapshotRef } : {}),
+      }),
+    );
     await runtime.eventBus.emit('agent.error', {
       message,
       error: err,

@@ -735,6 +735,119 @@ describe('handleMessageForTurn compaction scheduling', () => {
   });
 });
 
+describe('handleMessageForTurn failure persistence', () => {
+  it('records a failed turn with observed tool calls when execution aborts after tool side effects', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    const buildTurnRecord = vi.fn((input: Parameters<TurnExecutionRuntime['buildTurnRecord']>[0]) => ({
+      schemaVersion: 1 as const,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      channelId: input.message.channelId,
+      channelType: input.message.channelType,
+      startedAt: input.startedAt,
+      completedAt: input.completedAt,
+      status: input.status ?? 'completed',
+      userMessage: {
+        role: input.speakerRole,
+        content: input.message.content,
+        timestamp: input.message.timestamp.getTime(),
+      },
+      ...(input.assistantMessageContent
+        ? {
+          assistantMessage: {
+            role: 'assistant' as const,
+            content: input.assistantMessageContent,
+            timestamp: input.completedAt,
+          },
+        }
+        : {}),
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: {
+        model: input.model ?? input.response?.metadata.model ?? 'test-model',
+      },
+      provenanceRefs: [],
+    }));
+    runtime.buildTurnRecord = buildTurnRecord as unknown as TurnExecutionRuntime['buildTurnRecord'];
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        api: 'openai-responses',
+        provider: 'openrouter',
+        model: 'openrouter/moonshotai/kimi-k2.5',
+        usage: {
+          input: 120,
+          output: 15,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 135,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        stopReason: 'toolUse',
+        timestamp: 1_700_000_100_100,
+        content: [
+          { type: 'thinking', thinking: 'Need the memory tool first.' },
+          {
+            type: 'toolCall',
+            id: 'call-2',
+            name: 'memory_write',
+            arguments: { text: 'secret value' },
+            thoughtSignature: 'sig-2',
+          },
+        ],
+      });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'toolResult',
+        toolCallId: 'call-2',
+        toolName: 'memory_write',
+        isError: false,
+        timestamp: 1_700_000_100_180,
+        content: [{ type: 'text', text: 'Memory stored.' }],
+        details: { memoryId: 'memory-2' },
+      });
+      throw new Error('Request aborted');
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-failed-turn'))).rejects.toThrow('Request aborted');
+
+    expect(buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      model: 'test-model',
+      assistantSessionEntryId: null,
+      turnMessages: expect.arrayContaining([
+        expect.objectContaining({ role: 'assistant' }),
+        expect.objectContaining({ role: 'toolResult', toolName: 'memory_write' }),
+      ]),
+    }));
+    expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+    }));
+  });
+});
+
 describe('handleMessageForTurn pre-response concurrency', () => {
   it('starts emotion observation and memory snapshot capture in parallel, and waits for both before retrieval', async () => {
     const eventBus = new EventBus();

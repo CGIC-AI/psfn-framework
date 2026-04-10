@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   createPromotedToolsAddTool,
+  createSettingsGetTool,
   createPromotedToolsListTool,
   createPromotedToolsRemoveTool,
   createPromotedToolsSwapTool,
-  executeSystemReadAction,
 } from './settings-tools.js';
 import type { SubstrateConfig } from './config/runtime-config-contracts.js';
 
@@ -52,9 +52,11 @@ function readText(result: { content: Array<{ text?: string }> }): string {
   return result.content[0]?.text ?? '';
 }
 
-describe('executeSystemReadAction', () => {
+describe('settings_get tool', () => {
   it('returns a single key value', async () => {
-    const result = executeSystemReadAction(makeConfig(), { key: 'thinkMaxSubQueries' });
+    const result = await createSettingsGetTool(makeConfig()).execute('call-single', {
+      key: 'thinkMaxSubQueries',
+    });
     const payload = JSON.parse(readText(result));
 
     expect(payload.mode).toBe('single');
@@ -64,7 +66,7 @@ describe('executeSystemReadAction', () => {
   });
 
   it('returns discoverable key list mode', async () => {
-    const result = executeSystemReadAction(makeConfig(), { list: true });
+    const result = await createSettingsGetTool(makeConfig()).execute('call-list', { list: true });
     const payload = JSON.parse(readText(result));
 
     expect(payload.mode).toBe('list');
@@ -73,7 +75,7 @@ describe('executeSystemReadAction', () => {
   });
 
   it('returns subset for keys mode', async () => {
-    const result = executeSystemReadAction(makeConfig(), {
+    const result = await createSettingsGetTool(makeConfig()).execute('call-subset', {
       keys: ['primaryModel', 'retryMaxAttempts'],
     });
     const payload = JSON.parse(readText(result));
@@ -85,7 +87,9 @@ describe('executeSystemReadAction', () => {
   });
 
   it('returns clear error for unknown keys', async () => {
-    const result = executeSystemReadAction(makeConfig(), { key: 'discordToken' });
+    const result = await createSettingsGetTool(makeConfig()).execute('call-error', {
+      key: 'discordToken',
+    });
 
     expect(readText(result)).toContain('Unknown setting key');
     expect(result.details.isError).toBe(true);

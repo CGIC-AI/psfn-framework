@@ -2442,9 +2442,13 @@ describe('AdminServer JSON API routes', () => {
     expect(foundationPatchRes.status).toBe(200);
 
     const editableLayer = promptStore.create({
-      type: 'runtime',
-      name: 'API Editable Runtime Layer',
+      type: 'base',
+      name: 'API Editable Base Layer',
+      identifier: 'alternate-base',
+      role: 'system',
+      promptOrder: 1,
       content: 'Original API prompt content',
+      updatedBy: 'admin',
     });
     const layerId = editableLayer.id;
     const promptDetailRes = await request(port, 'GET', `/api/admin/prompts/${layerId}`, undefined, authHeaders);
@@ -2496,51 +2500,35 @@ describe('AdminServer JSON API routes', () => {
     expect(postPriorityDiffPayload.oldContent).toContain('Updated API prompt content');
     expect(postPriorityDiffPayload.newContent).toContain('Updated API prompt content');
 
-    const createPromptA = await request(
-      port,
-      'POST',
-      '/api/admin/prompts',
-      JSON.stringify({ name: 'Runtime Layer A', type: 'runtime', content: 'runtime-a', priority: 25 }),
-      authHeaders,
-    );
-    expect(createPromptA.status).toBe(201);
-
-    const createPromptB = await request(
-      port,
-      'POST',
-      '/api/admin/prompts',
-      JSON.stringify({ name: 'Runtime Layer B', type: 'runtime', content: 'runtime-b', priority: 26 }),
-      authHeaders,
-    );
-    expect(createPromptB.status).toBe(201);
-    const runtimeLayerAId = promptStore.getAll().find(layer => layer.name === 'Runtime Layer A')?.id;
-    const runtimeLayerBId = promptStore.getAll().find(layer => layer.name === 'Runtime Layer B')?.id;
-    expect(runtimeLayerAId).toBeTruthy();
-    expect(runtimeLayerBId).toBeTruthy();
-
     const promptsBeforeReorderRes = await request(port, 'GET', '/api/admin/prompts', undefined, authHeaders);
     expect(promptsBeforeReorderRes.status).toBe(200);
-    const promptsBeforeReorderPayload = JSON.parse(promptsBeforeReorderRes.body) as { layers: Array<{ id: string }> };
-    const reorderedLayerIds = promptsBeforeReorderPayload.layers.map(layer => layer.id);
-    const [movedLayerId] = reorderedLayerIds.splice(reorderedLayerIds.length - 1, 1);
-    if (movedLayerId) reorderedLayerIds.unshift(movedLayerId);
+    const promptsBeforeReorderPayload = JSON.parse(promptsBeforeReorderRes.body) as {
+      runtimeBlocks: Array<{ id: string; placement: string }>;
+    };
+    const reorderedRuntimeBlockIds = promptsBeforeReorderPayload.runtimeBlocks
+      .filter(block => block.placement === 'system_prompt')
+      .map(block => block.id);
+    const [movedRuntimeBlockId] = reorderedRuntimeBlockIds.splice(reorderedRuntimeBlockIds.length - 1, 1);
+    if (movedRuntimeBlockId) reorderedRuntimeBlockIds.unshift(movedRuntimeBlockId);
 
     const reorderRes = await request(
       port,
       'POST',
       '/api/admin/prompts/reorder',
-      JSON.stringify({ layerIds: reorderedLayerIds }),
+      JSON.stringify({ runtimeBlockIds: reorderedRuntimeBlockIds }),
       authHeaders,
     );
     expect(reorderRes.status).toBe(200);
 
-    const runtimeLayersAfterReorder = promptStore.getAll()
-      .filter(layer => layer.type === 'runtime')
-      .sort((left, right) => left.priority - right.priority)
-      .map(layer => ({ id: layer.id, promptOrder: layer.promptOrder }));
-    const runtimeOrderIds = runtimeLayersAfterReorder.map(layer => layer.id);
-    expect(runtimeOrderIds.indexOf(runtimeLayerBId!)).toBeLessThan(runtimeOrderIds.indexOf(runtimeLayerAId!));
-    expect(promptStore.getById(runtimeLayerBId!)?.promptOrder).toBeLessThan(promptStore.getById(runtimeLayerAId!)?.promptOrder ?? Number.MAX_SAFE_INTEGER);
+    const promptsAfterReorderRes = await request(port, 'GET', '/api/admin/prompts', undefined, authHeaders);
+    expect(promptsAfterReorderRes.status).toBe(200);
+    const promptsAfterReorderPayload = JSON.parse(promptsAfterReorderRes.body) as {
+      runtimeBlocks: Array<{ id: string; placement: string }>;
+    };
+    const runtimeOrderIds = promptsAfterReorderPayload.runtimeBlocks
+      .filter(block => block.placement === 'system_prompt')
+      .map(block => block.id);
+    expect(runtimeOrderIds[0]).toBe(movedRuntimeBlockId);
     expect(promptStore.getById(layerId)?.content).toContain('Updated API prompt content');
 
     const missingPrompt = await request(port, 'GET', '/api/admin/prompts/missing-layer', undefined, authHeaders);
@@ -3252,6 +3240,12 @@ describe('AdminServer JSON API routes', () => {
       tickIntervalMs: 1500,
       heartbeatIntervalMs: 9000,
       salienceDecayIntervalMs: 12000,
+      artifactLifecycle: {
+        scratchpadRetentionDays: 14,
+        generatedMediaRetentionDays: 30,
+        workspaceTempRetentionDays: 14,
+        cleanupBatchSize: 128,
+      },
     });
     const expectedSkills = saveSkillsConfig(tempDir, {
       enabled: true,

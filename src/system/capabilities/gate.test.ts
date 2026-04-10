@@ -452,7 +452,7 @@ describe('capability tool gating', () => {
   });
 
   it('evaluates toolset capability requirements by action', async () => {
-    const toolsetModule = await import('../agent/substrate-agent/adaptive-tools-runtime.js');
+    const toolsetModule = await import('../../core/agent/substrate-agent/adaptive-tools-runtime.js');
     const toolset = toolsetModule.createToolsetTool({
       getExtendedTools: () => [],
       getExtendedToolAutoloadPolicy: () => null,

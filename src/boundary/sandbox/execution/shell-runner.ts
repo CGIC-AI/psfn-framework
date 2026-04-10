@@ -13,7 +13,6 @@ const MAX_COMMAND_LENGTH = 256;
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
 const SANDBOX_CHILD_ENV_ALLOWLIST = [
-  'HOME',
   'LANG',
   'LC_ALL',
   'LC_CTYPE',
@@ -91,6 +90,8 @@ function resolveExecutableFromPath(command: string): string | null {
 }
 
 function buildSandboxChildEnv(
+  requestedEnvVars: readonly string[],
+  envAllowlist: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const nextEnv: NodeJS.ProcessEnv = {};
@@ -100,7 +101,40 @@ function buildSandboxChildEnv(
       nextEnv[key] = value;
     }
   }
+
+  const allowedEnvNames = new Set(envAllowlist.map((value) => value.trim()).filter(Boolean));
+  for (const envVar of requestedEnvVars) {
+    const trimmed = envVar.trim();
+    if (!trimmed) continue;
+    if (!allowedEnvNames.has(trimmed)) {
+      throw new ShellExecPolicyError(`shell.exec env var not allowlisted: ${trimmed}`);
+    }
+    const value = env[trimmed];
+    if (typeof value === 'string') {
+      nextEnv[trimmed] = value;
+    }
+  }
+
   return nextEnv;
+}
+
+function resolveRequestedEnvVars(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new ShellExecPolicyError('shell.exec envVars must be an array of strings');
+  }
+  const requested: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== 'string') {
+      throw new ShellExecPolicyError('shell.exec envVars must be an array of strings');
+    }
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.includes('\0')) {
+      throw new ShellExecPolicyError('shell.exec envVars entries must be non-empty strings');
+    }
+    requested.push(trimmed);
+  }
+  return requested;
 }
 
 function normalizeAllowlist(values: readonly string[] | undefined): NormalizedShellAllowlist {
@@ -250,9 +284,9 @@ async function runCommandBounded(
   args: string[],
   cwd: string,
   limits: { timeoutMs: number; maxOutputChars: number },
+  childEnv: NodeJS.ProcessEnv,
 ): Promise<ShellExecResult> {
   const startedAt = Date.now();
-  const childEnv = buildSandboxChildEnv();
   return await new Promise<ShellExecResult>((resolveResult, rejectResult) => {
     const child = spawn(command, args, {
       cwd,
@@ -333,5 +367,7 @@ export async function executeShellCommandWithPolicy(
   const args = resolveArgs(params.args);
   const cwd = resolveWorkingDirectory(params.cwd, workspacePath, policy);
   const limits = resolveBoundedExecutionPolicy(params, policy);
-  return await runCommandBounded(command, args, cwd, limits);
+  const requestedEnvVars = resolveRequestedEnvVars((params as { envVars?: unknown }).envVars);
+  const childEnv = buildSandboxChildEnv(requestedEnvVars, policy.envAllowlist ?? []);
+  return await runCommandBounded(command, args, cwd, limits, childEnv);
 }

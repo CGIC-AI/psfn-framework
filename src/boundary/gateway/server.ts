@@ -8,6 +8,7 @@ import {
   JSONRPCServerAndClient,
 } from 'json-rpc-2.0';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -94,6 +95,7 @@ export interface GatewayServerOptions {
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
   wyomingShardRouting: WyomingShardRoutingConfig;
+  companionId?: string;
 }
 
 export class GatewayServer {
@@ -378,6 +380,7 @@ export class GatewayServer {
       message,
       options,
       wyomingShardRouting: this.wyomingShardRouting,
+      companionId: this.options.companionId ?? DEFAULT_COMPANION_ID,
       nextRequestCounter: () => ++this.streamRequestCounter,
     });
   }

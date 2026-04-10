@@ -97,6 +97,31 @@ const VAULT_ACTION_BY_METHOD: Readonly<Record<string, VaultPolicyAction>> = {
   'vault.daily': 'daily',
 };
 
+function normalizeWebLane(value: unknown): UrlPolicyLane | null {
+  if (value === undefined || value === null || value === '' || value === 'default') return 'default';
+  if (value === 'local_crawler') return 'local_crawler';
+  if (value === 'discovery') return 'discovery';
+  return null;
+}
+
+function shellAllowlistIncludesCommand(allowlist: readonly string[] | undefined, command: string): boolean {
+  if (!allowlist || allowlist.length === 0) return false;
+  const expected = command.trim().toLowerCase();
+  if (!expected) return false;
+  return allowlist.some((entry) => {
+    const trimmed = entry.trim().toLowerCase();
+    return trimmed === expected || basename(trimmed) === expected;
+  });
+}
+
+function isPositiveIntegerInRange(value: unknown, min: number, max: number): boolean {
+  return typeof value === 'number'
+    && Number.isFinite(value)
+    && Math.floor(value) === value
+    && value >= min
+    && value <= max;
+}
+
 /** Check whether a resolved path falls inside any of the allowed prefixes */
 export function isInsideAllowedPaths(resolvedPath: string, allowedPrefixes: string[]): boolean {
   for (const prefix of allowedPrefixes) {
@@ -222,16 +247,16 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       return 'ALLOW';
 
     case 'web.fetch':
-    case 'web.fetch_binary': {
+    case 'web.fetch_binary':
+    case 'web.request_binary': {
       // Synchronous URL policy check so the audit log reflects the real decision
       const url = (params as Record<string, unknown>).url as string | undefined;
       const laneValue = (params as Record<string, unknown>).lane;
-      const lane: UrlPolicyLane = laneValue === 'local_crawler'
-        ? 'local_crawler'
-        : laneValue === 'discovery'
-          ? 'discovery'
-          : 'default';
+      const lane = normalizeWebLane(laneValue);
       if (!url || typeof url !== 'string') {
+        return 'DENY';
+      }
+      if (!lane) {
         return 'DENY';
       }
       if (!policyConfig.urlPolicy) {
@@ -246,6 +271,21 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
 
     case 'shell.exec': {
       if (!policyConfig.shellExec?.enabled) {
+        return 'DENY';
+      }
+      return 'ALLOW';
+    }
+
+    case 'shard.backend.request': {
+      const backend = (params as Record<string, unknown>).backend;
+      if (backend !== 'container' && backend !== 'orchestrated') {
+        return 'DENY';
+      }
+      if (!policyConfig.shellExec?.enabled) {
+        return 'DENY';
+      }
+      const requiredCommand = backend === 'container' ? 'docker' : 'kubectl';
+      if (!shellAllowlistIncludesCommand(policyConfig.shellExec.allowlist, requiredCommand)) {
         return 'DENY';
       }
       return 'ALLOW';
@@ -369,6 +409,67 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
           Math.floor(maxEntries) < 1 ||
           maxEntries > 500
         ) {
+          return 'DENY';
+        }
+      }
+
+      return 'ALLOW';
+    }
+
+    case 'fs.search': {
+      const query = (params as Record<string, unknown>).query;
+      const glob = (params as Record<string, unknown>).glob;
+      const contextLines = (params as Record<string, unknown>).contextLines;
+      const maxMatches = (params as Record<string, unknown>).maxMatches;
+      const maxFiles = (params as Record<string, unknown>).maxFiles;
+      const maxBytesPerFile = (params as Record<string, unknown>).maxBytesPerFile;
+
+      if (typeof query !== 'string' || query.trim().length === 0) {
+        return 'DENY';
+      }
+      if (glob !== undefined && (typeof glob !== 'string' || !normalizeWorkspaceRelativeGlob(glob))) {
+        return 'DENY';
+      }
+      if (contextLines !== undefined && !isPositiveIntegerInRange(contextLines, 0, 2)) {
+        return 'DENY';
+      }
+      if (maxMatches !== undefined && !isPositiveIntegerInRange(maxMatches, 1, 500)) {
+        return 'DENY';
+      }
+      if (maxFiles !== undefined && !isPositiveIntegerInRange(maxFiles, 1, 500)) {
+        return 'DENY';
+      }
+      if (maxBytesPerFile !== undefined && !isPositiveIntegerInRange(maxBytesPerFile, 1, 1_000_000)) {
+        return 'DENY';
+      }
+      return 'ALLOW';
+    }
+
+    case 'fs.edit': {
+      const path = (params as Record<string, unknown>).path;
+      if (typeof path !== 'string' || path.trim().length === 0) {
+        return 'DENY';
+      }
+
+      const workspaceRoot = resolveWorkspaceRoot(policyConfig.workspacePath);
+      const normalizedPath = resolveWorkspaceFsPathFromRoot(path, workspaceRoot);
+      if (!isInsideAllowedPaths(normalizedPath, [workspaceRoot])) {
+        return 'NEEDS_APPROVAL';
+      }
+
+      const canonical = resolveCanonicalPath(normalizedPath, true);
+      if (canonical === null) {
+        return 'DENY';
+      }
+      if (!isInsideAllowedPaths(canonical, [workspaceRoot])) {
+        return 'DENY';
+      }
+
+      if (policyConfig.protectedWritePaths) {
+        const protectedPrefixes = policyConfig.protectedWritePaths.map((blockedPath) =>
+          resolveWorkspaceFsPathFromRoot(blockedPath, workspaceRoot),
+        );
+        if (isInsideAllowedPaths(canonical, protectedPrefixes)) {
           return 'DENY';
         }
       }

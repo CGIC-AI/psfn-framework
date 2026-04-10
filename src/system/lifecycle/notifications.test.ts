@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { resolveLastActiveSessionPath } from '../../persistence/layout.js';
 import {
   DiscordLifecycleNotifier,
   readLastActiveSession,
@@ -270,7 +271,7 @@ describe('Last-active channel tracking', () => {
 
   it('stores timestamp with channel', async () => {
     writeLastActiveChannel(tempDir, 'timestamped-channel');
-    const lastActivePath = join(tempDir, 'last_active_channel.json');
+    const lastActivePath = resolveLastActiveSessionPath(tempDir);
     await waitForFile(lastActivePath);
     const raw = readFileSync(lastActivePath, 'utf-8');
     const data = JSON.parse(raw);
@@ -295,7 +296,8 @@ describe('Last-active channel tracking', () => {
   });
 
   it('throws when persisted last-active session state is malformed', () => {
-    const lastActivePath = join(tempDir, 'last_active_channel.json');
+    const lastActivePath = resolveLastActiveSessionPath(tempDir);
+    mkdirSync(dirname(lastActivePath), { recursive: true });
     writeFileSync(lastActivePath, '{"channelId":', 'utf-8');
 
     expect(() => readLastActiveSession(tempDir)).toThrow(

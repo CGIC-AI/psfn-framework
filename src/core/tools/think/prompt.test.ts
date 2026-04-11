@@ -14,6 +14,10 @@ describe('buildRLMSystemPrompt', () => {
     expect(prompt).toContain('Repository mutation is disabled in this sandbox.');
     expect(prompt).not.toContain('`await write_file(path, content)`');
     expect(prompt).toContain('Workspace writes are disabled in this sandbox.');
+    expect(prompt).toContain('`await web("fetch", url, { prompt? })`');
+    expect(prompt).toContain('`await web("browse", url, { prompt? })`');
+    expect(prompt).toContain('`await web("search", query, { maxUrls? })`');
+    expect(prompt).toContain('Session continuity lookup still belongs to `session_search`');
   });
 
   it('can render mutable repository helpers for explicitly writable sandboxes', () => {

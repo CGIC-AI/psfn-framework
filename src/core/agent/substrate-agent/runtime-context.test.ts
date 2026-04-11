@@ -743,7 +743,7 @@ describe('runtime subject identity', () => {
       channelType: 'api',
       authorId: 'user-1',
       authorName: 'User',
-      content: 'Try web_fetch and notify_operator.',
+      content: 'Try web and notify_operator.',
     });
 
     const runtimeContext = buildRuntimeContext({
@@ -766,7 +766,7 @@ describe('runtime subject identity', () => {
       },
       extendedTools: [
         {
-          name: 'web_fetch',
+          name: 'web',
           description: 'Fetch a web page.',
           parameters: {} as any,
           execute: () => { throw new Error('not used'); },

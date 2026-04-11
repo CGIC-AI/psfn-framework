@@ -148,6 +148,7 @@ export function cloneToolWiringMeta(meta: ToolWiringMeta | undefined): ToolWirin
 export type GatewayToolMetadataCoverage = Readonly<Record<string, readonly string[]>>;
 
 export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage = Object.freeze({
+  web: Object.freeze(['web.fetch']),
   web_fetch: Object.freeze(['web.fetch']),
   fs: Object.freeze(['fs.read', 'fs.list', 'fs.search', 'fs.write', 'fs.edit']),
   fs_read: Object.freeze(['fs.read']),

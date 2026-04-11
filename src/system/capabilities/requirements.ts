@@ -165,6 +165,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   settings_get: 'identity.read',
   spawn_subagent: 'shard.spawn',
   think: 'repl.execute',
+  web: 'external.web',
   web_fetch: 'external.web',
   vault_write: 'identity.write.runtime',
   vault_read: 'identity.read',

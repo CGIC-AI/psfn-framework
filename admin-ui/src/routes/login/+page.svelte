@@ -9,9 +9,14 @@
   let loading = $state(false);
   const companionName = $derived(getCompanionName());
 
+  function resolveGardenRootPath(): string {
+    return base || '/';
+  }
+
   async function handleSubmit(e: Event) {
     e.preventDefault();
-    if (!tokenInput.trim()) {
+    const token = tokenInput.trim();
+    if (!token) {
       error = 'Please enter a token.';
       return;
     }
@@ -20,23 +25,34 @@
     error = '';
 
     try {
-      const res = await fetch('/api/admin/dashboard', {
+      const body = new URLSearchParams({ token });
+      const res = await fetch('/login', {
+        method: 'POST',
         headers: {
-          Authorization: `Bearer ${tokenInput.trim()}`,
-          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'text/html',
         },
+        credentials: 'include',
+        body: body.toString(),
       });
 
-      if (res.ok) {
-        setToken(tokenInput.trim());
-        goto(`${base}`);
+      if (res.redirected) {
+        setToken(token);
+        if (typeof window !== 'undefined') {
+          window.location.assign(resolveGardenRootPath());
+        } else {
+          await goto(resolveGardenRootPath(), { replaceState: true });
+        }
       } else if (res.status === 401 || res.status === 403) {
         error = 'Invalid token. Please try again.';
       } else {
-        error = `Server error (${res.status}). Is the admin server running?`;
+        const bodyText = await res.text().catch(() => '');
+        error = /invalid token/i.test(bodyText)
+          ? 'Invalid token. Please try again.'
+          : `Server error (${res.status}). Could not complete sign-in.`;
       }
     } catch {
-      error = 'Could not connect to the admin server. Is it running on port 3001?';
+      error = 'Could not connect to the operator surface.';
     } finally {
       loading = false;
     }
@@ -63,7 +79,7 @@
           id="token"
           type="password"
           bind:value={tokenInput}
-          placeholder="Enter ADMIN_TOKEN..."
+          placeholder="Enter admin token..."
           class="w-full px-4 py-2.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
                  placeholder:text-shadow-500 focus:outline-none focus:border-gold-400 focus:ring-2
                  focus:ring-gold-200 transition-colors"
@@ -85,15 +101,11 @@
                disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         {#if loading}
-          Authenticating...
+          Signing in...
         {:else}
-          Enter the Garden
+          Sign in
         {/if}
       </button>
     </form>
-
-    <p class="text-center text-sm text-shadow-600 mt-6">
-      Token is configured via <code class="px-1.5 py-0.5 bg-bark-200 rounded text-shadow-800">ADMIN_TOKEN</code> env var
-    </p>
   </div>
 </div>

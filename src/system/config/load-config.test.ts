@@ -189,6 +189,9 @@ describe('loadConfig path defaults', () => {
     process.env.SESSION_MIRROR_ACTIVE_WINDOW_MS = '3000';
     process.env.SESSION_MIRROR_CHANNEL_OVERRIDES = 'discord=false';
     process.env.CONTINUITY_MESSAGE_LIMIT = '77';
+    process.env.THINK_MAX_TOKENS = '999999';
+    process.env.THINK_MAX_WALL_TIME_MS = '999999';
+    process.env.THINK_MAX_SUB_QUERIES = '99';
     process.env.DISCORD_VOICE_ENABLED = 'true';
     process.env.DISCORD_VOICE_GUILD_ID = 'env-guild';
     process.env.DISCORD_VOICE_USER_ID = 'env-user';
@@ -219,6 +222,9 @@ describe('loadConfig path defaults', () => {
     expect(config.sessionMirrorMaxChars).toBe(220);
     expect(config.sessionMirrorActiveWindowMs).toBe(1_800_000);
     expect(config.sessionMirrorChannelOverrides).toEqual({});
+    expect(config.thinkMaxTokens).toBe(76_000);
+    expect(config.thinkMaxWallTimeMs).toBe(180_000);
+    expect(config.thinkMaxSubQueries).toBe(12);
     expect(config.deepgramModel).toBe('nova-3');
     expect(config.deepgramSttEndpoint).toBe('wss://api.deepgram.com/v1/listen');
     expect(config.deepgramListenEndpoint).toBe('https://api.deepgram.com/v1/listen');

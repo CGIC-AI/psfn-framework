@@ -153,7 +153,9 @@ export class LLMClient {
   }
 
   private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
-    const modelId = candidate.model;
+    const modelId = this.shouldNormalizeProxyModelId(candidate)
+      ? normalizeProxyModelId(candidate.provider, candidate.model)
+      : candidate.model;
     const routedModelOptions = {
       reasoning: candidate.supportsReasoning ?? candidate.thinkingEnabled ?? false,
       supportsVision: candidate.supportsVision ?? false,
@@ -262,12 +264,15 @@ export class LLMClient {
     candidate: RoutingCandidate,
     correlation: ResolvedCorrelationMetadata | undefined,
   ): LLMContext {
+    const hintModel = this.shouldNormalizeProxyModelId(candidate)
+      ? normalizeProxyModelId(candidate.provider, candidate.model)
+      : candidate.model;
     return {
       systemPrompt: context.systemPrompt,
       messages: context.messages,
       ...(context.tools?.length ? { tools: context.tools } : {}),
       modelHint: {
-        model: candidate.model,
+        model: hintModel,
         provider: candidate.provider,
         pin: true,
         maxTokens: candidate.maxTokens,
@@ -282,6 +287,10 @@ export class LLMClient {
       },
       ...(correlation ? { correlation } : {}),
     };
+  }
+
+  private shouldNormalizeProxyModelId(candidate: RoutingCandidate): boolean {
+    return !!candidate.requestBaseUrl || this.litellmBaseUrl !== null;
   }
 
   private resolveReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {
@@ -1190,6 +1199,17 @@ function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[] {
         : {},
     }];
   });
+}
+
+function normalizeProxyModelId(provider: string, modelId: string): string {
+  const normalizedProvider = provider.trim().toLowerCase();
+  const normalizedModelId = modelId.trim();
+  if (!normalizedModelId) return normalizedModelId;
+  if (normalizedProvider !== 'openrouter') return normalizedModelId;
+  if (normalizedModelId.startsWith('openrouter/')) return normalizedModelId;
+  return normalizedModelId.includes('/')
+    ? `openrouter/${normalizedModelId}`
+    : normalizedModelId;
 }
 
 // ── Content normalization ──

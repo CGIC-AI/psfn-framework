@@ -216,7 +216,7 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 - For a large multi-bead initiative, create a dedicated integration branch and keep parallel work scoped to that branch until the effort is validated.
 - Create each worktree from the integration branch and merge each completed stream back into the integration branch, not directly into the protected release branch.
 - Keep the release branch stable while the parallel effort is in flight. Merge the integration branch into the release branch only after the user or operator finishes the required manual verification.
-- For this repo, put parallel worktrees under `/home/vega/ai/dev/worktrees/psfn-framework` unless the user explicitly asks for a repo-local `worktrees/` directory instead.
+- For this repo, put parallel worktrees under `$HOME/ai/dev/worktrees/psfn-framework` unless the user explicitly asks for a repo-local `worktrees/` directory instead.
 - Do not scatter PSFN worktrees under sibling project-storage paths such as `/mnt/samesung/ai/psfn-worktrees`.
 
 ### Standard parallel loop

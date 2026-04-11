@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { loadConfig } from '../../system/config/load-config.js';
+import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
@@ -17,7 +18,7 @@ const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
 ensureActiveTimezone();
 
 async function main(): Promise<void> {
-  const config = loadConfig();
+  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
   const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (!adminPort) {
     throw new Error('ADMIN_PORT is required for the operator Garden surface');

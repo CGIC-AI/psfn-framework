@@ -259,9 +259,9 @@
   let profileSynthesisMinSourceMemories = $state(2);
 
   // ── Think Tool ──
-  let thinkMaxTokens = $state(50000);
-  let thinkMaxWallTimeMs = $state(120000);
-  let thinkMaxSubQueries = $state(10);
+  let thinkMaxTokens = $state(76000);
+  let thinkMaxWallTimeMs = $state(180000);
+  let thinkMaxSubQueries = $state(12);
 
   // ── Raw editor states ──
   let modelsJson = $state('');
@@ -793,9 +793,9 @@
     profileSynthesisMinSourceMemories = Number(config.profileSynthesisMinSourceMemories ?? 2);
 
     // Think Tool
-    thinkMaxTokens = Number(config.thinkMaxTokens ?? 50000);
-    thinkMaxWallTimeMs = Number(config.thinkMaxWallTimeMs ?? 120000);
-    thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 10);
+    thinkMaxTokens = Number(config.thinkMaxTokens ?? 76000);
+    thinkMaxWallTimeMs = Number(config.thinkMaxWallTimeMs ?? 180000);
+    thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 12);
 
     // Voice / TTS
     const providerSelection = resolveVoiceProviderSelection(config);

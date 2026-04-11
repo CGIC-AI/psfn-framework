@@ -741,7 +741,7 @@ describe('LLMClient prompt caching', () => {
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string; api: string };
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { cacheRetention?: string; sessionId?: string };
-    expect(model.id).toBe('summary/cached');
+    expect(model.id).toBe('openrouter/summary/cached');
     expect(model.api).toBe('openai-responses');
     expect(requestOptions).toMatchObject({
       cacheRetention: 'long',
@@ -876,7 +876,7 @@ describe('LLMClient completion model hints', () => {
 
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
-    expect(model.id).toBe('anthropic/claude-3.7-sonnet');
+    expect(model.id).toBe('openrouter/anthropic/claude-3.7-sonnet');
   });
 
   it('honors max-token model hints even without explicit model overrides', async () => {
@@ -985,6 +985,29 @@ describe('LLMClient completion model hints', () => {
 
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
     expect(requestOptions.apiKey).toBe('vault-provider-key');
+  });
+
+  it('normalizes openrouter model ids for LiteLLM-backed routing', async () => {
+    const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'provider-config response' }],
+      model: 'openrouter/z-ai/glm-5',
+      usage: { input: 12, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'summary',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
+    expect(model.id).toBe('openrouter/z-ai/glm-5');
   });
 
   it('pins explicit model hints to a single candidate when requested', () => {
@@ -1538,7 +1561,7 @@ describe('LLMClient correlation metadata', () => {
 
     expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string };
-    expect(model.id).toBe('memory/model');
+    expect(model.id).toBe('openrouter/memory/model');
     const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
     expect(requestOptions.maxTokens).toBe(1536);
 
@@ -1730,7 +1753,7 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(response.content).toBe('ok');
     expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
     const selectedModel = mocks.streamSimple.mock.calls[0]?.[0] as { id: string };
-    expect(selectedModel.id).toBe('openai/gpt-4.1-mini');
+    expect(selectedModel.id).toBe('openrouter/openai/gpt-4.1-mini');
     expect(blockedEvents).toHaveLength(1);
     expect(blockedEvents[0]).toMatchObject({
       reason: 'daily_budget_exceeded',

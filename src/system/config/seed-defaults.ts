@@ -35,6 +35,9 @@ export interface RuntimeSettingsSeedDefaults {
   sessionMirrorActiveWindowMs: number;
   sessionMirrorChannelOverrides: Record<string, boolean>;
   continuityMessageLimit: number;
+  thinkMaxTokens: number;
+  thinkMaxWallTimeMs: number;
+  thinkMaxSubQueries: number;
   voiceEnabled: boolean;
   voiceTargetGuildId: string;
   voiceTargetUserId: string;
@@ -266,6 +269,9 @@ function parseRuntimeSettingsDefaults(seedDir: string): RuntimeSettingsSeedDefau
       root.continuityMessageLimit,
       `${settingsSeedPath}.continuityMessageLimit`,
     ),
+    thinkMaxTokens: asPositiveInteger(root.thinkMaxTokens, `${settingsSeedPath}.thinkMaxTokens`),
+    thinkMaxWallTimeMs: asPositiveInteger(root.thinkMaxWallTimeMs, `${settingsSeedPath}.thinkMaxWallTimeMs`),
+    thinkMaxSubQueries: asPositiveInteger(root.thinkMaxSubQueries, `${settingsSeedPath}.thinkMaxSubQueries`),
     voiceEnabled: asBoolean(root.voiceEnabled, `${settingsSeedPath}.voiceEnabled`),
     voiceTargetGuildId: asString(root.voiceTargetGuildId, `${settingsSeedPath}.voiceTargetGuildId`),
     voiceTargetUserId: asString(root.voiceTargetUserId, `${settingsSeedPath}.voiceTargetUserId`),

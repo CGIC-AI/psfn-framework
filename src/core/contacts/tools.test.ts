@@ -83,6 +83,18 @@ describe('contact tools', () => {
       expect(resultText(result)).toContain('Alias works');
     });
 
+    it('keeps legacy list aliases working through the unified tool', async () => {
+      store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-legacy-list-alias', {
+        action: 'contact_list',
+      });
+
+      expect(resultText(result)).toContain('Contacts (1)');
+      expect(resultText(result)).toContain('Grace [trusted/friend]');
+    });
+
     it('fails closed when mutation-shaped params are supplied without an action', async () => {
       const contact = store.upsert({ displayName: 'Needs Action' });
       const tool = createContactTool(store);

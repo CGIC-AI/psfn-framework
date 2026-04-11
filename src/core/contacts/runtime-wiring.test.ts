@@ -13,7 +13,7 @@ class FakeTarget implements ContactRuntimeTarget {
 }
 
 describe('wireContactRuntime', () => {
-  it('injects ContactStore and registers all contact tools', async () => {
+  it('injects ContactStore and registers the unified contact surface without legacy core aliases', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
 
@@ -23,8 +23,6 @@ describe('wireContactRuntime', () => {
     expect(target.tools.map(t => t.name).sort()).toEqual([
       'contact',
       'contact_link_identity',
-      'contact_list',
-      'contact_lookup',
       'contact_note',
       'contact_set_channel_privacy',
       'contact_set_trust',

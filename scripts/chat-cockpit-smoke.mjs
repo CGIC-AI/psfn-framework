@@ -74,7 +74,7 @@ function parseArgs(argv) {
     adminUrl: process.env.ADMIN_URL || DEFAULT_ADMIN_URL,
     apiBaseUrl: process.env.API_BASE_URL || '',
     adminToken: process.env.ADMIN_TOKEN || readEnvValue(liveEnvPath, 'ADMIN_TOKEN'),
-    apiKey: process.env.API_KEY || '',
+    apiKey: process.env.API_KEY || readEnvValue(liveEnvPath, 'API_KEY'),
     bootstrapPath: DEFAULT_BOOTSTRAP_PATH,
     message: 'Smoke ping from chat cockpit.',
     enableVoice: false,

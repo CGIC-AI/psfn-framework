@@ -101,6 +101,13 @@ if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
   echo "[${MODE_LABEL}] YOLO mode active: gateway fs.read can access full codebase paths; fs.write remains workspace-scoped."
 fi
 
+echo "[${MODE_LABEL}] verifying startup owner files..."
+if [ -x "./node_modules/.bin/tsx" ]; then
+  ./node_modules/.bin/tsx scripts/verify-startup-owner-files.ts
+else
+  npm run verify:startup-owner-files
+fi
+
 DEFAULT_SOCKET_PATH="/run/psfn/gateway.sock"
 SOCKET_SUFFIX="$(basename "${ROOT_DIR}" | tr -cs 'A-Za-z0-9._-' '-')"
 FALLBACK_SOCKET_PATH="${XDG_RUNTIME_DIR:-/tmp}/psfn-gateway-${SOCKET_SUFFIX}/gateway.sock"

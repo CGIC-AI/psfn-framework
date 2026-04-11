@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { saveSettings } from '../settings.js';
@@ -15,6 +15,7 @@ import {
   loadStartupRuntimeSettingsOwnerFile,
   loadStartupTrustPolicyOwnerFile,
   loadStartupSchedulerOwnerFile,
+  verifyStartupOwnerFiles,
 } from './startup-owner-files.js';
 
 describe('startup owner-file loaders', () => {
@@ -87,5 +88,34 @@ describe('startup owner-file loaders', () => {
     expect(trustPolicyConfig).toEqual(trustPolicy);
     expect(loadStartupSchedulerOwnerFile(rootDir, seedDir)).toEqual(scheduler);
     expect(loadStartupCapabilityTierOwnerFile(rootDir, seedDir)).toEqual(capabilityTier);
+  });
+
+  it('reports stale scheduler drift before split startup begins', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-drift-'));
+    const seedDir = join(process.cwd(), 'config');
+    mkdirSync(rootDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    writeFileSync(
+      join(rootDir, 'scheduler.json'),
+      `${JSON.stringify({
+        tickIntervalMs: 2_000,
+        heartbeatIntervalMs: 8_000,
+        salienceDecayIntervalMs: 123_000,
+      }, null, 2)}\n`,
+      'utf-8',
+    );
+
+    const result = verifyStartupOwnerFiles({
+      dataDir: rootDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('scheduler.json');
+    expect(result.errors[0]).toContain('artifactLifecycle must be an object');
+    expect(result.errors[0]).toContain('Remove or repair it so it can be reseeded');
   });
 });

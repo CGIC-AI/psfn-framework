@@ -38,6 +38,7 @@ import { GatewayImageOps } from '../../primitives/images/gateway-ops.js';
 import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
 import { registerWebTools } from '../../boundary/integrations/web/runtime-wiring.js';
 import { GatewayWebFetchOps } from '../../boundary/integrations/web/gateway-ops.js';
+import { createWebSearchQueryJson } from '../../boundary/integrations/web/search.js';
 import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
@@ -170,7 +171,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
   });
-  registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), { gatewayMode: true });
+  registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {
+    gatewayMode: true,
+    searchQueryJson: createWebSearchQueryJson(llmProvider),
+  });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),

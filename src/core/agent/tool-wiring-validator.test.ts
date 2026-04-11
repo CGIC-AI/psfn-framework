@@ -175,6 +175,23 @@ describe('validateToolWiring', () => {
     expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('git.commit');
   });
 
+  it('requires gateway metadata coverage for the unified web tool', () => {
+    const tools = [
+      makeTool('web'),
+    ];
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools,
+      gatewayClientMethods: new Set(['webFetch']),
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+    expect(report.totalTools).toBe(1);
+    expect(report.validTools).toBe(0);
+    expect(report.invalidTools).toHaveLength(1);
+    expect(report.invalidTools[0].toolName).toBe('web');
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('web.fetch');
+  });
+
   it('flags gateway-dependent tools with partial metadata coverage', () => {
     const tools = [
       makeTool('repo_commit', {

@@ -9,7 +9,7 @@ function createMockTarget(): WebRuntimeTarget & { registerTool: ReturnType<typeo
 }
 
 describe('web runtime wiring', () => {
-  it('registers web_fetch as a core tool', () => {
+  it('registers web as a core tool', () => {
     const target = createMockTarget();
     const ops = {
       fetch: vi.fn(async () => 'content'),
@@ -17,7 +17,7 @@ describe('web runtime wiring', () => {
 
     registerWebTools(target, ops);
 
-    expect(target.registerTool.mock.calls.map((call: any[]) => call[0].name)).toEqual(['web_fetch']);
+    expect(target.registerTool.mock.calls.map((call: any[]) => call[0].name)).toEqual(['web']);
     expect(target.registerTool.mock.calls[0][1]).toBe('core');
   });
 

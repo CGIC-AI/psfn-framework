@@ -107,6 +107,50 @@ describe('collectGeneratedImageAttachments', () => {
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-two'));
   });
 
+  it('uses structured unified media tool details when available', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
+    tempDirs.push(companionDataDir);
+
+    const attachments = await collectGeneratedImageAttachments({
+      companionDataDir,
+      turnMessages: [
+        {
+          role: 'toolResult',
+          toolName: 'media',
+          content: [{ type: 'text', text: 'not-json' }],
+          details: {
+            mediaResult: {
+              provider: 'fal',
+              mode: 'edit',
+              requestId: 'req-789',
+              fallbackUsed: false,
+              images: [
+                {
+                  url: 'https://images.example.test/purr-3.png',
+                  contentType: 'image/png',
+                  fileName: 'purr-3.png',
+                },
+              ],
+            },
+          },
+        } as any,
+      ],
+      fetchImpl: async () => (
+        new Response(Buffer.from('png-three'), {
+          status: 200,
+          headers: {
+            'content-type': 'image/png',
+          },
+        })
+      ) as Response,
+    });
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.url).toBe('https://images.example.test/purr-3.png');
+    expect(attachments[0]?.name).toBe('purr-3.png');
+    expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-three'));
+  });
+
   it('ignores non-image tool results and malformed payloads', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
     tempDirs.push(companionDataDir);

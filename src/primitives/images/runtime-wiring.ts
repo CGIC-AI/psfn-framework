@@ -4,7 +4,7 @@ import type { ToolWiringMeta, WirableTool } from '../../core/agent/tool-wiring-v
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ImageOperations } from './ops.js';
 import { ImageService } from './service.js';
-import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createSelfieTool } from './tools.js';
+import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createMediaTool, createSelfieTool } from './tools.js';
 import {
   DefaultImageVisionReviewer,
   type ImageVisionReviewerOptions,
@@ -26,6 +26,8 @@ function resolveRequiredGatewayMethods(
   includeVisionReview: boolean,
 ): string[] {
   switch (toolName) {
+    case 'media':
+      return ['image.create', 'image.edit', 'web.fetch_binary'];
     case 'image_create':
     case 'selfie_create':
       return includeVisionReview
@@ -53,6 +55,7 @@ export function registerImageTools(
   options?: RegisterImagesToolsOptions,
 ): void {
   const tools: AgentTool<any>[] = [
+    createMediaTool(ops, options?.reviewer),
     createImageCreateTool(ops, options?.reviewer),
     createSelfieTool(ops, options?.reviewer),
     createImageEditTool(ops, options?.reviewer),

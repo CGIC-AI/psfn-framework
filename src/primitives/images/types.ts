@@ -100,6 +100,13 @@ export interface MediaToolResultDetails {
   visionReviewError?: string;
 }
 
+export interface ImageToolResultDetails {
+  isError?: boolean;
+  imageResult?: ImageGenerationResult;
+  visionReview?: ImageVisionReview;
+  visionReviewError?: string;
+}
+
 export interface ImageCreateParams {
   prompt: string;
   provider?: ImageProviderPreference;

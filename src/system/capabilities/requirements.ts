@@ -103,6 +103,7 @@ function resolveUnifiedToolRequirement(
 }
 
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
+  contact: ['identity.read', 'identity.write.runtime'],
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
   contact_note: 'identity.write.runtime',
@@ -149,6 +150,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   issue_update: 'issue.write',
   issue_close: 'issue.close',
   issue_sync: 'issue.close',
+  media: 'external.web',
   image_create: 'external.web',
   image_edit: 'external.web',
   image_analyze: 'external.web',

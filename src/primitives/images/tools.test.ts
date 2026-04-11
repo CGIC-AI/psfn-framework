@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
-import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createSelfieTool } from './tools.js';
-import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer } from './types.js';
+import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createMediaTool, createSelfieTool } from './tools.js';
+import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer, type MediaToolResultDetails } from './types.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -21,7 +21,99 @@ function readAspectRatios(tool: ReturnType<typeof createImageCreateTool> | Retur
     .filter((value): value is string => typeof value === 'string');
 }
 
+function readActions(tool: ReturnType<typeof createMediaTool>): string[] {
+  const schema = (tool.parameters as {
+    properties?: Record<string, { anyOf?: Array<{ const?: string }> }>;
+  }).properties?.action;
+  return (schema?.anyOf ?? [])
+    .map((entry) => entry.const)
+    .filter((value): value is string => typeof value === 'string');
+}
+
 describe('image tools', () => {
+  it('exposes generate, edit, and analyze actions on the unified media surface', () => {
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    });
+
+    expect(readActions(tool)).toEqual(['generate', 'edit', 'analyze']);
+  });
+
+  it('returns generated media results plus an in-turn vision review from the unified media tool', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal',
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-media-1',
+        images: [{
+          url: 'https://images.example.test/media-selfie.png',
+          contentType: 'image/png',
+          fileName: 'media-selfie.png',
+          localPath: '/tmp/media-selfie.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'Describe the generated image.',
+        summary: 'The portrait reads as consistent and well lit.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+
+    const tool = createMediaTool(ops, reviewer);
+    const result = await tool.execute('tool-call-media-generate', {
+      action: 'generate',
+      prompt: 'a cinematic portrait in warm morning light',
+      aspect_ratio: '3:4',
+    }) as AgentToolResult<MediaToolResultDetails>;
+
+    expect(ops.create).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'a cinematic portrait in warm morning light',
+      aspectRatio: '3:4',
+    }));
+    expect(reviewer.analyze).toHaveBeenCalledWith({
+      imageUrls: ['https://images.example.test/media-selfie.png'],
+      imageLocalPaths: ['/tmp/media-selfie.png'],
+      prompt: 'a cinematic portrait in warm morning light',
+      mode: 'create',
+    });
+    expect(result.details.mediaResult?.requestId).toBe('req-media-1');
+    expect(result.details.visionReview?.summary).toContain('consistent');
+  });
+
+  it('analyzes images through the unified media tool', async () => {
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'What is in this image?',
+        summary: 'A cozy desk setup.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
+    const result = await tool.execute('tool-call-media-analyze', {
+      action: 'analyze',
+      input_urls: ['https://images.example.test/review.png'],
+      question: 'What is in this image?',
+    }) as AgentToolResult<MediaToolResultDetails>;
+
+    expect(reviewer.analyze).toHaveBeenCalledWith({
+      imageUrls: ['https://images.example.test/review.png'],
+      question: 'What is in this image?',
+    });
+    expect(result.details.visionReview?.summary).toContain('cozy desk setup');
+  });
+
   it('constrains aspect_ratio to the supported preset list for create and edit', () => {
     const createTool = createImageCreateTool({
       create: vi.fn(),

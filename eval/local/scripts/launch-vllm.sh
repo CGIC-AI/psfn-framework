@@ -18,7 +18,8 @@ require_profile_field PORT
 require_profile_field MODEL_CACHE
 require_profile_field MAX_MODEL_LEN
 
-MODEL_CACHE_ABS=$(resolve_repo_path "$MODEL_CACHE")
+prepare_hf_cache "$MODEL_CACHE"
+MODEL_CACHE_ABS="$PREPARED_HF_MODEL_CACHE"
 
 CMD=(
   vllm

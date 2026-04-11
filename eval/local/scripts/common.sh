@@ -25,6 +25,23 @@ resolve_repo_path() {
   printf '%s/%s\n' "$REPO_ROOT" "$candidate"
 }
 
+prepare_hf_cache() {
+  local model_cache="${1:-}"
+  local model_cache_abs
+  model_cache_abs=$(resolve_repo_path "$model_cache")
+  local hf_home_path="${HF_HOME_DIR:-${model_cache_abs}/hf-home}"
+  local hf_hub_cache_path="${HF_HUB_CACHE_DIR:-${hf_home_path}/hub}"
+
+  export HF_HOME="$hf_home_path"
+  export HF_HUB_CACHE="$hf_hub_cache_path"
+  export HUGGINGFACE_HUB_CACHE="$hf_hub_cache_path"
+  unset TRANSFORMERS_CACHE
+
+  mkdir -p "$model_cache_abs" "$HF_HOME" "$HF_HUB_CACHE"
+  PREPARED_HF_MODEL_CACHE="$model_cache_abs"
+  export PREPARED_HF_MODEL_CACHE
+}
+
 list_profiles() {
   find "$PROFILE_DIR" -maxdepth 1 -type f -name '*.env' -printf '%f\n' \
     | sed 's/\.env$//' \

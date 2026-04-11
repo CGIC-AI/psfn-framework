@@ -18,7 +18,8 @@ require_profile_field MODEL_CACHE
 require_profile_field TENSOR_PARALLEL_SIZE
 require_profile_field MAX_MODEL_LEN
 
-MODEL_CACHE_ABS=$(resolve_repo_path "$MODEL_CACHE")
+prepare_hf_cache "$MODEL_CACHE"
+MODEL_CACHE_ABS="$PREPARED_HF_MODEL_CACHE"
 export MODEL_CACHE_ABS
 mkdir -p "$MODEL_CACHE_ABS"
 

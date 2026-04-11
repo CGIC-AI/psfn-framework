@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  createMemoryTool,
   createMemoryWriteTool,
   createMemoryImportTool,
   createMemoryPatchTool,
   createMemoryRedactTool,
   createMemoryDeleteTool,
+  createScratchpadTool,
   createUndoMemoryDeleteTool,
   createScratchpadReadTool,
   createScratchpadWriteTool,
@@ -71,6 +73,243 @@ function mockWriter(): {
     })),
   };
 }
+
+describe('createMemoryTool', () => {
+  let writer: ReturnType<typeof mockWriter>;
+
+  function makeUnifiedDeleteVersion(overrides: Partial<MemoryDeleteVersion> = {}): MemoryDeleteVersion {
+    return {
+      deleteId: 'del-1',
+      memoryId: 'mem-1',
+      snapshot: makeMemory({ id: 'mem-1' }),
+      deletedAt: Date.now(),
+      deletedBy: 'tool:memory|action:delete',
+      ...overrides,
+    };
+  }
+
+  function mockUnifiedStore(): {
+    searchByText: ReturnType<typeof vi.fn>;
+    softDeleteMemory: ReturnType<typeof vi.fn>;
+    undoSoftDelete: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      searchByText: vi.fn(),
+      softDeleteMemory: vi.fn(),
+      undoSoftDelete: vi.fn(),
+    };
+  }
+
+  beforeEach(() => {
+    writer = mockWriter();
+  });
+
+  it('returns a unified memory tool contract', () => {
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, mockUnifiedStore() as unknown as MemoryStorePort);
+
+    expect(tool.name).toBe('memory');
+    expect(tool.label).toBe('memory');
+    expect(tool.description).toContain('Unified long-term memory tool');
+    expect(tool.parameters).toBeDefined();
+  });
+
+  it('writes through action=write with unified provenance', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    await tool.execute('memory-call-1', {
+      action: 'write',
+      text: '  V enjoys precise APIs  ',
+      type: 'semantic',
+      importance: 0.7,
+      tags: 'Identity, Preference',
+    });
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'V enjoys precise APIs',
+      type: 'semantic',
+      importance: 0.7,
+      tags: ['identity', 'preference'],
+      sourceRef: 'source:tool:memory|action:write|invocation:memory-call-1',
+      sourceType: 'tool_write',
+      provenance: {
+        toolName: 'memory',
+        toolCallId: 'memory-call-1',
+      },
+    }));
+  });
+
+  it('searches through action=search and formats results', async () => {
+    const store = mockUnifiedStore();
+    store.searchByText.mockResolvedValue([
+      { ...makeMemory({ id: 'mem-search-1', text: 'V likes direct answers', sensitivity: 'public' }), similarity: 0.82 },
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-2', {
+      action: 'search',
+      query: 'direct answers',
+      limit: 2,
+    });
+
+    expect(store.searchByText).toHaveBeenCalledWith('direct answers', 2);
+    expect(resultText(result as any)).toContain('Memory search results (1)');
+    expect(resultText(result as any)).toContain('mem-search-1');
+    expect(resultText(result as any)).toContain('similarity=0.82');
+  });
+
+  it('imports through action=import with unified provenance qualifiers', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    await tool.execute('memory-call-3', {
+      action: 'import',
+      source: 'backup',
+      records: [{ text: 'Imported fact', type: 'semantic', tags: 'archive' }],
+    });
+
+    expect(writer.importBatch).toHaveBeenCalledWith([
+      expect.objectContaining({
+        text: 'Imported fact',
+        sourceRef: 'source:tool:memory|action:import|import_source:backup|invocation:memory-call-3',
+        sourceType: 'tool_write',
+        provenance: {
+          toolName: 'memory',
+          toolCallId: 'memory-call-3',
+        },
+        tags: ['archive'],
+      }),
+    ]);
+  });
+
+  it('redacts through action=redact with unified requestedBy/sourceRef', async () => {
+    const store = mockUnifiedStore();
+    const redact = vi.fn().mockResolvedValue({
+      operation: 'deleted',
+      behavior: 'delete',
+      sourceMemoryId: 'mem-7',
+      deleteId: 'del-7',
+    } satisfies MemoryRedactionResult);
+    const tool = createMemoryTool(
+      { ...writer, redact } as unknown as MemoryWriter,
+      store as unknown as MemoryStorePort,
+    );
+
+    const result = await tool.execute('memory-call-4', {
+      action: 'redact',
+      memory_id: 'mem-7',
+      operation: 'delete',
+      reason: 'consent revoked',
+    });
+
+    expect(redact).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: 'mem-7',
+      operation: 'delete',
+      reason: 'consent revoked',
+      requestedBy: 'source:tool:memory|action:redact|invocation:memory-call-4',
+      sourceRef: 'source:tool:memory|action:redact|invocation:memory-call-4',
+    }));
+    expect(resultText(result as any)).toContain('redacted via delete');
+  });
+
+  it('deletes and restores through unified actions', async () => {
+    const store = mockUnifiedStore();
+    store.softDeleteMemory.mockResolvedValue(makeUnifiedDeleteVersion({
+      deleteId: 'del-unified',
+      deletedBy: 'tool:memory|action:delete',
+    }));
+    store.undoSoftDelete.mockResolvedValue(makeUnifiedDeleteVersion({
+      deleteId: 'del-unified',
+      restoredBy: 'tool:memory|action:restore',
+      restoredAt: Date.now(),
+    }));
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const deleted = await tool.execute('memory-call-5', {
+      action: 'delete',
+      memory_id: 'mem-1',
+      reason: 'cleanup',
+    });
+    expect(store.softDeleteMemory).toHaveBeenCalledWith('mem-1', {
+      deletedBy: 'tool:memory|action:delete',
+      reason: 'cleanup',
+    });
+    expect(resultText(deleted as any)).toContain('Memory soft-deleted');
+
+    const restored = await tool.execute('memory-call-6', {
+      action: 'restore',
+      delete_id: 'del-unified',
+    });
+    expect(store.undoSoftDelete).toHaveBeenCalledWith('del-unified', {
+      restoredBy: 'tool:memory|action:restore',
+    });
+    expect(resultText(restored as any)).toContain('Memory restored');
+  });
+
+  it('accepts shard provenance overrides for unified write/import/redact actions', async () => {
+    const store = mockUnifiedStore();
+    const redact = vi.fn().mockResolvedValue({
+      operation: 'deleted',
+      behavior: 'delete',
+      sourceMemoryId: 'mem-8',
+      deleteId: 'del-8',
+    } satisfies MemoryRedactionResult);
+    const tool = createMemoryTool(
+      { ...writer, redact } as unknown as MemoryWriter,
+      store as unknown as MemoryStorePort,
+    );
+
+    await tool.execute('memory-call-7', {
+      action: 'write',
+      text: 'Shard write',
+      type: 'semantic',
+      __psfnShardSource: 'shard:shard-1',
+    } as any);
+    await tool.execute('memory-call-8', {
+      action: 'import',
+      records: [{ text: 'Shard import', type: 'semantic' }],
+      __psfnShardSource: 'shard:shard-1',
+    } as any);
+    await tool.execute('memory-call-9', {
+      action: 'redact',
+      memory_id: 'mem-8',
+      __psfnShardSource: 'shard:shard-1',
+    } as any);
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRef: 'source:shard:shard-1|tool:memory|action:write|invocation:memory-call-7',
+      sourceType: 'shard',
+      provenance: {
+        toolName: 'memory',
+        toolCallId: 'memory-call-7',
+        shardId: 'shard-1',
+        actor: 'shard',
+      },
+    }));
+    expect(writer.importBatch).toHaveBeenCalledWith([
+      expect.objectContaining({
+        sourceRef: 'source:shard:shard-1|tool:memory|action:import|import_source:import|invocation:memory-call-8',
+        sourceType: 'shard',
+      }),
+    ]);
+    expect(redact).toHaveBeenCalledWith(expect.objectContaining({
+      sourceRef: 'source:shard:shard-1|tool:memory|action:redact|invocation:memory-call-9',
+    }));
+  });
+
+  it('fails closed on invalid or incomplete actions', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const missingQuery = await tool.execute('memory-call-10', { action: 'search' } as any);
+    expect(resultText(missingQuery as any)).toContain('query is required for action=search');
+    expect((missingQuery.details as any).isError).toBe(true);
+
+    const badAction = await tool.execute('memory-call-11', { action: 'purge' } as any);
+    expect(resultText(badAction as any)).toContain('invalid action');
+    expect((badAction.details as any).isError).toBe(true);
+  });
+});
 
 describe('createMemoryWriteTool', () => {
   let writer: ReturnType<typeof mockWriter>;
@@ -850,15 +1089,64 @@ describe('scratchpad tools', () => {
     listScratchpadEntries: ReturnType<typeof vi.fn>;
     addScratchpadEntry: ReturnType<typeof vi.fn>;
     replaceScratchpadEntry: ReturnType<typeof vi.fn>;
+    appendScratchpadEntry: ReturnType<typeof vi.fn>;
     removeScratchpadEntry: ReturnType<typeof vi.fn>;
   } {
     return {
       listScratchpadEntries: vi.fn(),
       addScratchpadEntry: vi.fn(),
       replaceScratchpadEntry: vi.fn(),
+      appendScratchpadEntry: vi.fn(),
       removeScratchpadEntry: vi.fn(),
     };
   }
+
+  it('scratchpad unified tool defaults to list and supports append', async () => {
+    const store = mockScratchpadStore();
+    store.listScratchpadEntries.mockReturnValue([
+      {
+        id: 'sp-1',
+        content: 'Working note',
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_100_000,
+      },
+    ]);
+    store.appendScratchpadEntry.mockResolvedValue({
+      id: 'sp-1',
+      content: 'Working note\nextra detail',
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_200_000,
+    });
+    const tool = createScratchpadTool(store as unknown as MemoryStorePort);
+
+    const listed = await tool.execute('scratchpad-list', { action: 'list' });
+    expect(resultText(listed as any)).toContain('ephemeral long-context workspace');
+    expect(store.listScratchpadEntries).toHaveBeenCalledWith(20);
+
+    const appended = await tool.execute('scratchpad-append', {
+      action: 'append',
+      id: 'sp-1',
+      content: 'extra detail',
+    });
+    expect(resultText(appended as any)).toContain('Scratchpad entry appended');
+    expect(store.appendScratchpadEntry).toHaveBeenCalledWith('sp-1', 'extra detail');
+  });
+
+  it('scratchpad unified tool validates required action params', async () => {
+    const store = mockScratchpadStore();
+    const tool = createScratchpadTool(store as unknown as MemoryStorePort);
+
+    const missingAddContent = await tool.execute('scratchpad-add', { action: 'add' } as any);
+    expect(resultText(missingAddContent as any)).toContain('content is required for action=add');
+    expect((missingAddContent.details as any).isError).toBe(true);
+
+    const missingAppendId = await tool.execute('scratchpad-append', {
+      action: 'append',
+      content: 'x',
+    } as any);
+    expect(resultText(missingAppendId as any)).toContain('id is required for action=append');
+    expect((missingAppendId.details as any).isError).toBe(true);
+  });
 
   it('scratchpad_read returns empty-state message', async () => {
     const store = mockScratchpadStore();

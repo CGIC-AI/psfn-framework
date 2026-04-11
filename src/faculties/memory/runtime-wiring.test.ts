@@ -14,6 +14,8 @@ describe('registerMemoryTools', () => {
     );
 
     expect(registerTool.mock.calls).toEqual(expect.arrayContaining([
+      [expect.objectContaining({ name: 'memory' }), 'core'],
+      [expect.objectContaining({ name: 'scratchpad' }), 'core'],
       [expect.objectContaining({ name: 'memory_write' }), 'core'],
       [expect.objectContaining({ name: 'scratchpad_read' }), 'core'],
       [expect.objectContaining({ name: 'scratchpad_write' }), 'extended'],

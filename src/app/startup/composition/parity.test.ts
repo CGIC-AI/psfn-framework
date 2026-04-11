@@ -72,7 +72,7 @@ describe('wireSessionToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers session search/list tools in core and session mutations in extended', async () => {
+  it('registers unified session plus split session tools during the migration window', async () => {
     const target = {
       registerTool: vi.fn(),
     };
@@ -108,9 +108,10 @@ describe('wireSessionToolsRuntime', () => {
     wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(8);
     expect(calls.map(([tool]) => tool.name).sort()).toEqual([
       'complete_focus',
+      'session',
       'session_grep',
       'session_list',
       'session_new',
@@ -118,12 +119,13 @@ describe('wireSessionToolsRuntime', () => {
       'session_search',
       'start_focus',
     ]);
+    expect(calls.find(([tool]) => tool.name === 'session')?.[1]).toBe('core');
     expect(calls.find(([tool]) => tool.name === 'session_list')?.[1]).toBe('core');
     expect(calls.find(([tool]) => tool.name === 'session_search')?.[1]).toBe('core');
     expect(calls.find(([tool]) => tool.name === 'session_grep')?.[1]).toBe('core');
     expect(
       calls
-        .filter(([tool]) => !['session_list', 'session_search', 'session_grep'].includes(tool.name))
+        .filter(([tool]) => !['session', 'session_list', 'session_search', 'session_grep'].includes(tool.name))
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
 

@@ -30,7 +30,12 @@ import {
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { CoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
-import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../../../core/tools/session.js';
+import {
+  createSessionListTool,
+  createSessionNewTool,
+  createSessionResumeTool,
+  createSessionTool,
+} from '../../../core/tools/session.js';
 import { createSessionGrepTool, createSessionSearchTool } from '../../../core/tools/session-search.js';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
 import { createCompleteFocusTool, createStartFocusTool } from '../../../core/tools/focus.js';
@@ -374,6 +379,19 @@ export function wireSessionToolsRuntime(
   dataDir: string,
   llmProvider: LLMProviderPort,
 ): void {
+  target.registerTool(createSessionTool({
+    manager: sessionManager,
+    llmProvider,
+    sessionsDir: resolveSessionsDir(dataDir),
+    dataDir,
+    setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
+    seedSession: (sessionId) => {
+      sessionManager.appendSystemNote(
+        sessionId,
+        'Session initialized via session_new.',
+      );
+    },
+  }), 'core');
   target.registerTool(createSessionSearchTool(sessionManager, llmProvider), 'core');
   target.registerTool(createSessionGrepTool({
     sessionsDir: resolveSessionsDir(dataDir),

@@ -981,6 +981,31 @@ class PostgresMemoryStore implements MemoryStorePort {
     return updated;
   }
 
+  async appendScratchpadEntry(
+    id: string,
+    content: string,
+    options: ScratchpadEntryReplaceOptions = {},
+  ): Promise<ScratchpadEntry | null> {
+    const normalizedId = id.trim();
+    if (!normalizedId) return null;
+    const existing = this.scratchpadEntries.get(normalizedId);
+    if (!existing) return null;
+    const appendix = content.trim();
+    if (!appendix) {
+      throw new Error('Scratchpad content is required');
+    }
+
+    const separator = existing.content.length > 0 ? '\n' : '';
+    const updated = {
+      ...existing,
+      content: `${existing.content}${separator}${appendix}`,
+      updatedAt: options.now ?? Date.now(),
+    };
+    await this.persist(() => this.upsertScratchpadEntry(updated));
+    this.scratchpadEntries.set(normalizedId, updated);
+    return updated;
+  }
+
   async removeScratchpadEntry(id: string): Promise<boolean> {
     const normalizedId = id.trim();
     if (!normalizedId) return false;

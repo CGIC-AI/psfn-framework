@@ -2,11 +2,13 @@ import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import type { MemoryWriter } from './writer.js';
 import {
+  createMemoryTool,
   createMemoryDeleteTool,
   createMemoryImportTool,
   createMemoryPatchTool,
   createMemoryRedactTool,
   createMemoryWriteTool,
+  createScratchpadTool,
   createScratchpadReadTool,
   createScratchpadWriteTool,
   createUndoMemoryDeleteTool,
@@ -23,6 +25,8 @@ export function registerMemoryTools(
     memoryStore: MemoryStorePort;
   },
 ): void {
+  target.registerTool(createMemoryTool(options.writer, options.memoryStore), 'core');
+  target.registerTool(createScratchpadTool(options.memoryStore), 'core');
   target.registerTool(createMemoryWriteTool(options.writer), 'core');
   target.registerTool(createScratchpadReadTool(options.memoryStore), 'core');
   target.registerTool(createMemoryImportTool(options.writer), 'extended');

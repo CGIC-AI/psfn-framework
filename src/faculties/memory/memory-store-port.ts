@@ -219,6 +219,11 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
     content: string,
     options?: ScratchpadEntryReplaceOptions,
   ): Awaitable<ScratchpadEntry | null>;
+  appendScratchpadEntry(
+    id: string,
+    content: string,
+    options?: ScratchpadEntryReplaceOptions,
+  ): Awaitable<ScratchpadEntry | null>;
   removeScratchpadEntry(id: string): Awaitable<boolean>;
   getScratchpadEntry(id: string): Awaitable<ScratchpadEntry | undefined>;
 }
@@ -266,6 +271,11 @@ export interface MemoryStorePort extends ScratchpadProvider {
   listContactProfiles(): Promise<ContactProfileArtifact[]>;
   addScratchpadEntry(content: string, options?: ScratchpadEntryCreateOptions): Promise<ScratchpadAddResult>;
   replaceScratchpadEntry(
+    id: string,
+    content: string,
+    options?: ScratchpadEntryReplaceOptions,
+  ): Promise<ScratchpadEntry | null>;
+  appendScratchpadEntry(
     id: string,
     content: string,
     options?: ScratchpadEntryReplaceOptions,
@@ -339,6 +349,9 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     addScratchpadEntry: async (content, options) => await store.addScratchpadEntry(content, options),
     replaceScratchpadEntry: async (id, content, options) => (
       await store.replaceScratchpadEntry(id, content, options)
+    ),
+    appendScratchpadEntry: async (id, content, options) => (
+      await store.appendScratchpadEntry(id, content, options)
     ),
     removeScratchpadEntry: async (id) => await store.removeScratchpadEntry(id),
     getScratchpadEntry: async (id) => await store.getScratchpadEntry(id),

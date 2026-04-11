@@ -49,16 +49,19 @@ Already unified top-level direct tools in the current runtime:
 - `shell`
 - `skill`
 - `orient`
+- `memory`
+- `scratchpad`
+- `session`
 - `subagent`
 
 Still-split first-party direct tools in the current runtime:
 
-- memory and scratchpad: `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write`
+- memory and scratchpad legacy aliases: `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write`
 - filesystem: `fs_list`, `fs_read`
 - contacts: `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy`
 - identity and direction: `prompt_layer_*`, `identity_diff`, `identity_changelog`, `character_card_update`, `north_star_*`
 - repository: `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`
-- sessions: `session_search`, `session_grep`, `session_list`, `session_new`, `session_resume`, `start_focus`, `complete_focus`
+- session legacy aliases: `session_search`, `session_grep`, `session_list`, `session_new`, `session_resume`, `start_focus`, `complete_focus`
 - heartbeat and values: `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task`, `values_list`, `values_add`, `values_update`
 - vault: `vault_write`, `vault_read`, `vault_search`, `vault_daily`
 - beads: `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`
@@ -70,6 +73,7 @@ Important current-state notes:
 
 - `load_tools` is no longer a live runtime control tool. Tool discovery and activation now run through `tool_search` and `toolset`.
 - `session_search` and `session_grep` are direct runtime tools on this branch, not `think`-only helpers.
+- Unified `memory`, `scratchpad`, and `session` are live direct tools on this branch, while their legacy split aliases remain registered during migration.
 - A unified `schedule` tool exists in code, but the stabilized agent entrypoint still wires the split heartbeat/scheduling tools through `src/app/startup/composition/parity.ts`.
 
 ## Target Identity Surface

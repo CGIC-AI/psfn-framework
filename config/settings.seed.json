@@ -62,6 +62,8 @@
   "voiceTargetGuildId": "",
   "voiceTargetUserId": "",
   "voiceReadyCueText": "",
+  "sttProvider": "disabled",
+  "ttsProvider": "disabled",
   "deepgramModel": "nova-3",
   "deepgramSttEndpoint": "wss://api.deepgram.com/v1/listen",
   "deepgramListenEndpoint": "https://api.deepgram.com/v1/listen",

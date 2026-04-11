@@ -123,9 +123,13 @@ describe('resolveRuntimeVoiceSttProvider', () => {
     expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'disabled' } as any)).toBe('disabled');
   });
 
-  it('defaults to disabled when provider is not explicitly configured', () => {
-    expect(resolveRuntimeVoiceSttProvider({ deepgramApiKey: 'key' } as any)).toBe('disabled');
-    expect(resolveRuntimeVoiceSttProvider({} as any)).toBe('disabled');
+  it('throws when provider selection is not explicitly configured', () => {
+    expect(() => resolveRuntimeVoiceSttProvider({ deepgramApiKey: 'key' } as any)).toThrow(
+      'Missing runtime voice STT provider selection: set "sttProvider" in settings.json to "disabled" or a registered STT provider id',
+    );
+    expect(() => resolveRuntimeVoiceSttProvider({} as any)).toThrow(
+      'Missing runtime voice STT provider selection: set "sttProvider" in settings.json to "disabled" or a registered STT provider id',
+    );
   });
 
   it('throws for unsupported configured providers instead of falling back', () => {
@@ -165,9 +169,13 @@ describe('resolveRuntimeVoiceTtsProvider', () => {
     expect(resolveRuntimeVoiceTtsProvider({ ttsProvider: 'disabled' } as any)).toBe('disabled');
   });
 
-  it('defaults to disabled when provider is not explicitly configured', () => {
-    expect(resolveRuntimeVoiceTtsProvider({ elevenLabsApiKey: 'elevenlabs-key' } as any)).toBe('disabled');
-    expect(resolveRuntimeVoiceTtsProvider({} as any)).toBe('disabled');
+  it('throws when provider selection is not explicitly configured', () => {
+    expect(() => resolveRuntimeVoiceTtsProvider({ elevenLabsApiKey: 'elevenlabs-key' } as any)).toThrow(
+      'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+    );
+    expect(() => resolveRuntimeVoiceTtsProvider({} as any)).toThrow(
+      'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+    );
   });
 
   it('throws for unsupported configured providers instead of falling back', () => {
@@ -201,8 +209,10 @@ describe('resolveRuntimeVoiceTtsProvider', () => {
 });
 
 describe('resolveRuntimeVoiceProviderGate', () => {
-  it('keeps voice disabled until providers are explicitly selected', () => {
+  it('keeps voice disabled when providers are explicitly set to disabled', () => {
     const gate = resolveRuntimeVoiceProviderGate({
+      sttProvider: 'disabled',
+      ttsProvider: 'disabled',
       deepgramApiKey: 'deepgram-key',
       elevenLabsApiKey: 'elevenlabs-key',
     } as any);
@@ -214,8 +224,25 @@ describe('resolveRuntimeVoiceProviderGate', () => {
     });
   });
 
+  it('throws when provider selections are missing even if credentials exist', () => {
+    expect(() => resolveRuntimeVoiceProviderGate({
+      deepgramApiKey: 'deepgram-key',
+      elevenLabsApiKey: 'elevenlabs-key',
+    } as any)).toThrow(
+      'Missing runtime voice STT provider selection: set "sttProvider" in settings.json to "disabled" or a registered STT provider id',
+    );
+
+    expect(() => resolveRuntimeVoiceProviderGate({
+      sttProvider: 'disabled',
+      elevenLabsApiKey: 'elevenlabs-key',
+    } as any)).toThrow(
+      'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+    );
+  });
+
   it('requires explicit echo URL/voice by default', () => {
     const gate = resolveRuntimeVoiceProviderGate({
+      sttProvider: 'disabled',
       deepgramApiKey: 'deepgram-key',
       ttsProvider: 'echo',
       echoTtsUrl: '',
@@ -232,6 +259,7 @@ describe('resolveRuntimeVoiceProviderGate', () => {
   it('can allow echo defaults for websocket runtime gating', () => {
     const gate = resolveRuntimeVoiceProviderGate(
       {
+        sttProvider: 'disabled',
         deepgramApiKey: 'deepgram-key',
         ttsProvider: 'echo',
       } as any,
@@ -248,6 +276,7 @@ describe('resolveRuntimeVoiceProviderGate', () => {
   it('can require explicit elevenlabs voice id when needed', () => {
     const strictGate = resolveRuntimeVoiceProviderGate(
       {
+        sttProvider: 'disabled',
         deepgramApiKey: 'deepgram-key',
         ttsProvider: 'elevenlabs',
         elevenLabsApiKey: 'elevenlabs-key',
@@ -259,6 +288,7 @@ describe('resolveRuntimeVoiceProviderGate', () => {
 
     const relaxedGate = resolveRuntimeVoiceProviderGate(
       {
+        sttProvider: 'disabled',
         deepgramApiKey: 'deepgram-key',
         ttsProvider: 'elevenlabs',
         elevenLabsApiKey: 'elevenlabs-key',
@@ -306,12 +336,15 @@ describe('resolveRuntimeVoiceProviderGate', () => {
     try {
       const enabledGate = resolveRuntimeVoiceProviderGate({
         sttProvider: 'plugin-test',
+        ttsProvider: 'disabled',
         pluginSttToken: 'plugin-key',
       } as any);
       expect(enabledGate.sttEnabled).toBe(true);
       expect(enabledGate.sttProvider).toBe('plugin-test');
 
       const defaultGate = resolveRuntimeVoiceProviderGate({
+        sttProvider: 'disabled',
+        ttsProvider: 'disabled',
         pluginSttToken: 'plugin-key',
       } as any);
       expect(defaultGate.sttEnabled).toBe(false);
@@ -319,6 +352,7 @@ describe('resolveRuntimeVoiceProviderGate', () => {
 
       const disabledGate = resolveRuntimeVoiceProviderGate({
         sttProvider: 'plugin-test',
+        ttsProvider: 'disabled',
       } as any);
       expect(disabledGate.sttEnabled).toBe(false);
     } finally {
@@ -343,6 +377,7 @@ describe('resolveRuntimeVoiceProviderGate', () => {
 
     try {
       const enabledGate = resolveRuntimeVoiceProviderGate({
+        sttProvider: 'disabled',
         ttsProvider: 'plugin-test',
         pluginTtsToken: 'plugin-key',
       } as any);
@@ -350,6 +385,8 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       expect(enabledGate.ttsProvider).toBe('plugin-test');
 
       const defaultGate = resolveRuntimeVoiceProviderGate({
+        sttProvider: 'disabled',
+        ttsProvider: 'disabled',
         pluginTtsToken: 'plugin-key',
         elevenLabsApiKey: '',
       } as any);
@@ -357,6 +394,7 @@ describe('resolveRuntimeVoiceProviderGate', () => {
       expect(defaultGate.ttsProvider).toBe('disabled');
 
       const disabledGate = resolveRuntimeVoiceProviderGate({
+        sttProvider: 'disabled',
         ttsProvider: 'plugin-test',
       } as any);
       expect(disabledGate.ttsEnabled).toBe(false);
@@ -367,8 +405,10 @@ describe('resolveRuntimeVoiceProviderGate', () => {
 });
 
 describe('createRuntimeVoiceSttConnector', () => {
-  it('returns null when the resolved provider is disabled or unconfigured', () => {
-    expect(createRuntimeVoiceSttConnector({} as any)).toBeNull();
+  it('throws when provider selection is missing and returns null when explicitly disabled', () => {
+    expect(() => createRuntimeVoiceSttConnector({} as any)).toThrow(
+      'Missing runtime voice STT provider selection: set "sttProvider" in settings.json to "disabled" or a registered STT provider id',
+    );
     expect(createRuntimeVoiceSttConnector({
       sttProvider: 'disabled',
       deepgramApiKey: 'deepgram-key',
@@ -597,8 +637,10 @@ describe('createRuntimeVoiceSttConnector', () => {
 });
 
 describe('createRuntimeVoiceTtsConnector', () => {
-  it('returns null when the resolved provider is disabled or unconfigured', () => {
-    expect(createRuntimeVoiceTtsConnector({} as any)).toBeNull();
+  it('throws when provider selection is missing and returns null when explicitly disabled', () => {
+    expect(() => createRuntimeVoiceTtsConnector({} as any)).toThrow(
+      'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+    );
     expect(createRuntimeVoiceTtsConnector({
       ttsProvider: 'disabled',
       elevenLabsApiKey: 'elevenlabs-key',
@@ -845,11 +887,21 @@ describe('resolveRuntimeVoiceTtsProviderOrder', () => {
     }
   });
 
-  it('returns an empty provider order when no provider is explicitly configured', () => {
+  it('returns an empty provider order when the provider is explicitly disabled', () => {
     expect(resolveRuntimeVoiceTtsProviderOrder({
+      ttsProvider: 'disabled',
       elevenLabsApiKey: 'elevenlabs-key',
       elevenLabsVoiceId: 'voice-id',
     } as any)).toEqual([]);
+  });
+
+  it('throws when provider selection is missing', () => {
+    expect(() => resolveRuntimeVoiceTtsProviderOrder({
+      elevenLabsApiKey: 'elevenlabs-key',
+      elevenLabsVoiceId: 'voice-id',
+    } as any)).toThrow(
+      'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+    );
   });
 });
 

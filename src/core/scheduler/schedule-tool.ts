@@ -604,7 +604,7 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
             }
             const followUpId = normalizeNonEmptyString(params.follow_up_id, 'follow_up_id');
             const activationReason = normalizeOptionalString(params.activation_reason);
-            const activated = options.pendingFollowUpStore.markActivated(
+            const activated = await options.pendingFollowUpStore.markActivated(
               followUpId,
               activationReason ? { activationReason } : {},
             );

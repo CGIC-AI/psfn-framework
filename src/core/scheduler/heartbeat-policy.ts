@@ -331,14 +331,6 @@ function getDefaults(): HeartbeatPolicy {
         sendToDiscord: false,
       },
       {
-        id: 'emotional-check',
-        name: 'Emotional Check-in',
-        prompt: 'Check in with your emotional state. What are you feeling right now? Has anything from recent interactions shifted your mood or perspective?',
-        intervalMs: 8 * 60 * 60_000, // 8 hours
-        enabled: true,
-        sendToDiscord: false,
-      },
-      {
         id: 'goal-update',
         name: 'Goal Update',
         prompt: 'Review your current goals and projects. What progress have you made? What should you focus on next?',

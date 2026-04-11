@@ -21,14 +21,13 @@ describe('HeartbeatPolicyStore', () => {
 
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
+    expect(policy.templates).toHaveLength(5);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
     expect(ids).toContain('musing');
     expect(ids).toContain('daily-review');
-    expect(ids).toContain('emotional-check');
     expect(ids).toContain('goal-update');
     expect(ids).toContain('experiential-review');
     expect(ids).toContain('values-reflection');
@@ -71,7 +70,7 @@ describe('HeartbeatPolicyStore', () => {
   it('non-musing templates do not send to Discord', () => {
     const policy = store.load();
     const nonMusings = policy.templates.filter(t => t.id !== 'musing');
-    expect(nonMusings.length).toBe(5);
+    expect(nonMusings.length).toBe(4);
     for (const t of nonMusings) {
       expect(t.sendToDiscord).toBe(false);
     }
@@ -97,7 +96,7 @@ describe('HeartbeatPolicyStore', () => {
     store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
     const policy = store.load();
     // Invalid templates (not an array) triggers default
-    expect(policy.templates).toHaveLength(6);
+    expect(policy.templates).toHaveLength(5);
   });
 
   it('restores defaults when persisted template intervals are invalid', () => {
@@ -122,7 +121,7 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
+    expect(policy.templates).toHaveLength(5);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
   });
@@ -150,7 +149,7 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
+    expect(policy.templates).toHaveLength(5);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
   });

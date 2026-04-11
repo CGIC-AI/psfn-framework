@@ -27,13 +27,25 @@ function resolveUnifiedToolRequirement(
 
   switch (toolName) {
     case 'system':
+      if (action === 'read' || action === 'settings_get' || action === null) return 'identity.read';
       if (action === 'restart' || action === 'self_restart') return 'lifecycle.restart';
       if (action === 'rebuild' || action === 'self_rebuild') return 'lifecycle.rebuild';
-      return ['lifecycle.restart', 'lifecycle.rebuild'];
+      return ['identity.read', 'lifecycle.restart', 'lifecycle.rebuild'];
+    case 'identity':
+      if (action === 'list_layers' || action === 'get_layer' || action === 'diff_layer' || action === 'history' || action === null) {
+        return 'identity.read';
+      }
+      if (action === 'update_persona') return 'identity.write.runtime';
+      if (action === 'update_layer' || action === 'rollback_layer' || action === 'toggle_layer' || action === 'commit_stage' || action === 'cancel_stage') {
+        return ['identity.write.runtime', 'identity.write.base', 'identity.write.operator'];
+      }
+      return ['identity.read', 'identity.write.runtime', 'identity.write.base', 'identity.write.operator'];
     case 'memory':
       if (action === 'delete' || action === 'restore' || action === 'redact') return 'memory.delete';
       if (action === 'search' || action === 'list' || action === 'read' || action === 'get') return 'identity.read';
-      if (action === 'write' || action === 'add' || action === 'patch' || action === 'import') return 'memory.write';
+      if (action === 'write' || action === 'memory_write' || action === 'add' || action === 'patch' || action === 'import') {
+        return 'memory.write';
+      }
       return ['identity.read', 'memory.write', 'memory.delete'];
     case 'north_star':
       if (action === 'list' || action === 'read' || action === 'get') return 'identity.read';
@@ -44,11 +56,23 @@ function resolveUnifiedToolRequirement(
     case 'shell':
       return 'repl.execute';
     case 'scratchpad':
-      if (action === 'list' || action === 'read' || action === 'get') return 'identity.read';
+      if (action === 'list' || action === 'read' || action === 'get' || action === 'scratchpad_read') return 'identity.read';
       if (action === 'add' || action === 'write' || action === 'update' || action === 'delete' || action === 'clear') {
         return 'memory.write';
       }
       return ['identity.read', 'memory.write'];
+    case 'orient':
+      if (action === 'values_list' || action === 'list_concerns') return 'identity.read';
+      if (
+        action === 'append'
+        || action === 'replace'
+        || action === 'reorient'
+        || action === 'create_concern'
+        || action === 'resolve_concern'
+      ) {
+        return 'identity.write.runtime';
+      }
+      return ['identity.read', 'identity.write.runtime'];
     case 'session':
       if (action === 'list' || action === 'search' || action === 'read' || action === 'grep' || action === 'session_grep') {
         return 'identity.read';
@@ -80,7 +104,14 @@ function resolveUnifiedToolRequirement(
       if (action === 'read' || action === 'list' || action === 'search' || action === null) return 'git.read';
       return ['git.read', 'git.write'];
     case 'repo':
-      if (action === 'patch' || action === 'commit' || action === 'create_branch' || action === 'open_pr') {
+      if (
+        action === 'patch'
+        || action === 'branch'
+        || action === 'create_branch'
+        || action === 'commit'
+        || action === 'publish'
+        || action === 'open_pr'
+      ) {
         return 'git.write';
       }
       if (action === 'inspect' || action === 'status' || action === 'diff' || action === null) return 'git.read';
@@ -90,12 +121,24 @@ function resolveUnifiedToolRequirement(
       if (action === 'create' || action === 'update') return 'issue.write';
       if (action === 'close' || action === 'sync') return 'issue.close';
       return ['issue.read', 'issue.write', 'issue.close'];
+    case 'notify':
+      if (action === 'brief' || action === 'notify_operator' || action === 'approval_request') return 'external.web';
+      if (action === 'send') {
+        const channel = typeof params.delivery_channel === 'string'
+          ? params.delivery_channel.trim()
+          : '';
+        if (channel === 'discord') return 'external.discord';
+        if (channel === 'email') return 'external.email';
+        return ['external.discord', 'external.email'];
+      }
+      return ['external.web', 'external.discord', 'external.email'];
     default:
       return null;
   }
 }
 
 const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> = {
+  contact: ['identity.read', 'identity.write.runtime'],
   contact_list: 'identity.read',
   contact_lookup: 'identity.read',
   contact_note: 'identity.write.runtime',
@@ -142,6 +185,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   issue_update: 'issue.write',
   issue_close: 'issue.close',
   issue_sync: 'issue.close',
+  media: 'external.web',
   image_create: 'external.web',
   image_edit: 'external.web',
   image_analyze: 'external.web',
@@ -156,6 +200,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   settings_get: 'identity.read',
   spawn_subagent: 'shard.spawn',
   think: 'repl.execute',
+  web: 'external.web',
   web_fetch: 'external.web',
   vault_write: 'identity.write.runtime',
   vault_read: 'identity.read',

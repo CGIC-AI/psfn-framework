@@ -359,6 +359,7 @@ async function main(): Promise<void> {
   const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
     dataDir: pathSnapshot.companionDataDir,
+    config,
     eventBus,
     gateway,
     unregisterGatewayDisconnect,
@@ -427,6 +428,7 @@ async function main(): Promise<void> {
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
+      pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
       coreMemoryStore,
       postTurnActions,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,

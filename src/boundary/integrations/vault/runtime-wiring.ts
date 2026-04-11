@@ -5,24 +5,18 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { WirableTool, ToolWiringMeta } from '../../../core/agent/tool-wiring-validator.js';
 import { VaultOps, type VaultOpsConfig, type VaultOperations } from './ops.js';
-import {
-  createVaultWriteTool,
-  createVaultReadTool,
-  createVaultSearchTool,
-  createVaultDailyTool,
-} from './tools.js';
+import { createVaultTool } from './tools.js';
 
 export interface VaultRuntimeTarget {
   registerTool: ToolRegistrar;
 }
 
-/** Gateway RPC methods required by each vault tool */
-const VAULT_TOOL_GATEWAY_METHODS: Record<string, string[]> = {
-  vault_write: ['vault.write'],
-  vault_read: ['vault.read'],
-  vault_search: ['vault.search'],
-  vault_daily: ['vault.daily'],
-};
+const VAULT_TOOL_GATEWAY_METHODS = [
+  'vault.write',
+  'vault.read',
+  'vault.search',
+  'vault.daily',
+] as const;
 
 function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTool {
   const wirable = tool as WirableTool;
@@ -43,21 +37,12 @@ export function registerVaultTools(
   vaultOps: VaultOperations,
   options?: RegisterVaultToolsOptions,
 ): void {
-  const tools: AgentTool<any>[] = [
-    createVaultWriteTool(vaultOps),
-    createVaultReadTool(vaultOps),
-    createVaultSearchTool(vaultOps),
-    createVaultDailyTool(vaultOps),
-  ];
-
-  for (const tool of tools) {
-    const methods = options?.gatewayMode ? VAULT_TOOL_GATEWAY_METHODS[tool.name] : undefined;
-    attachWiringMeta(tool, {
-      ...(methods ? { requiredGatewayMethods: methods } : {}),
-      requiredServices: ['vault'],
-    });
-    target.registerTool(tool, 'extended');
-  }
+  const tool = createVaultTool(vaultOps);
+  attachWiringMeta(tool, {
+    ...(options?.gatewayMode ? { requiredGatewayMethods: [...VAULT_TOOL_GATEWAY_METHODS] } : {}),
+    requiredServices: ['vault'],
+  });
+  target.registerTool(tool, 'extended');
 }
 
 export function wireVaultRuntime(

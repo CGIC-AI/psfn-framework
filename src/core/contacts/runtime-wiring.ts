@@ -4,9 +4,8 @@ import type { ContactStorePort } from './contact-store-port.js';
 import type { ChannelPrivacyLevel } from './types.js';
 import { createSQLiteContactStore } from './sqlite-adapter.js';
 import {
+  createContactTool,
   createContactLinkIdentityTool,
-  createContactListTool,
-  createContactLookupTool,
   createContactNoteTool,
   createContactSetChannelPrivacyTool,
   createContactSetTrustTool,
@@ -52,12 +51,11 @@ export async function registerContactRuntime(
     }
   }
 
+  target.registerTool(createContactTool(contactStore));
   target.registerTool(createContactSetTrustTool(contactStore), 'extended');
   target.registerTool(createContactSetChannelPrivacyTool(contactStore), 'extended');
   target.registerTool(createContactNoteTool(contactStore), 'extended');
   target.registerTool(createContactLinkIdentityTool(contactStore), 'extended');
-  target.registerTool(createContactLookupTool(contactStore));
-  target.registerTool(createContactListTool(contactStore));
 
   return contactStore;
 }

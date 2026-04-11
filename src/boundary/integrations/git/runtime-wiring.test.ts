@@ -3,7 +3,6 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { wireGitRuntime, type GitRuntimeTarget } from './runtime-wiring.js';
 
-// Mock child_process so GitOps doesn't try to run real git commands
 vi.mock('node:child_process', () => ({
   execSync: vi.fn().mockReturnValue(''),
 }));
@@ -27,38 +26,23 @@ class FakeTarget implements GitRuntimeTarget {
 }
 
 describe('wireGitRuntime', () => {
-  it('registers git read tools as core and git write tools as extended', () => {
+  it('registers the unified repo tool as core', () => {
     const target = new FakeTarget();
+    const registerTool = vi.spyOn(target, 'registerTool');
+
     wireGitRuntime(target, {
       repoRoot: '/test',
       allowedPaths: ['src/'],
     });
 
-    expect(target.tools.map(t => t.name).sort()).toEqual([
-      'repo_apply_patch',
-      'repo_commit',
-      'repo_create_branch',
-      'repo_diff',
-      'repo_open_pr',
-      'repo_status',
+    expect(target.tools.map(t => t.name)).toEqual(['repo']);
+    expect(registerTool.mock.calls.map(([tool, category]) => [tool.name, category])).toEqual([
+      ['repo', 'core'],
     ]);
-    const registerTool = vi.spyOn(target, 'registerTool');
-    wireGitRuntime(target, {
-      repoRoot: '/test',
-      allowedPaths: ['src/'],
-    });
-    const categories = registerTool.mock.calls.map(([tool, category]) => [tool.name, category]);
-    expect(categories).toEqual(expect.arrayContaining([
-      ['repo_status', 'core'],
-      ['repo_diff', 'core'],
-      ['repo_apply_patch', 'extended'],
-      ['repo_commit', 'extended'],
-    ]));
   });
 
-  it('can register parent-agent read-only git inspection tools only', () => {
+  it('supports read_only registration for parent-agent runtime use', async () => {
     const target = new FakeTarget();
-    const registerTool = vi.spyOn(target, 'registerTool');
 
     wireGitRuntime(target, {
       repoRoot: '/test',
@@ -67,14 +51,14 @@ describe('wireGitRuntime', () => {
       access: 'read_only',
     });
 
-    expect(target.tools.map(t => t.name).sort()).toEqual([
-      'repo_diff',
-      'repo_status',
-    ]);
-    expect(registerTool.mock.calls.map(([tool, category]) => [tool.name, category])).toEqual([
-      ['repo_status', 'core'],
-      ['repo_diff', 'core'],
-    ]);
+    expect(target.tools.map(t => t.name)).toEqual(['repo']);
+    const result = await target.tools[0].execute('call', {
+      action: 'patch',
+      file_path: 'src/x.ts',
+      content: 'x',
+    });
+    expect((result.content[0] as { text: string }).text).toContain('read_only mode');
+    expect(result.details?.isError).toBe(true);
   });
 
   it('returns a GitOps instance', () => {

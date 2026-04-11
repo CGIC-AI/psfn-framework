@@ -87,6 +87,25 @@ describe('capability tool gating', () => {
     expect((denied.content[0] as any).text).toContain('lifecycle.restart');
   });
 
+  it('gates unified system read actions by identity.read', async () => {
+    const system = createTool('system');
+    const deniedGated = gateToolWithCapabilities(
+      system.tool,
+      () => accessForTier('custom', ['lifecycle.restart']),
+    );
+    const denied = await deniedGated.execute('call-system-read-denied', { action: 'read', list: true });
+
+    expect(system.executeSpy).not.toHaveBeenCalled();
+    expect((denied.content[0] as any).text).toContain('identity.read');
+
+    const allowedGated = gateToolWithCapabilities(
+      system.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    await allowedGated.execute('call-system-read-allowed', { action: 'read', list: true });
+    expect(system.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('gates memory_delete by memory.delete capability token', async () => {
     const memoryDelete = createTool('memory_delete');
     const nurseryGated = gateToolWithCapabilities(

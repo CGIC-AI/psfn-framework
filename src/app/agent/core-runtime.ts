@@ -38,6 +38,7 @@ import { GatewayImageOps } from '../../primitives/images/gateway-ops.js';
 import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
 import { registerWebTools } from '../../boundary/integrations/web/runtime-wiring.js';
 import { GatewayWebFetchOps } from '../../boundary/integrations/web/gateway-ops.js';
+import { createWebSearchQueryJson } from '../../boundary/integrations/web/search.js';
 import {
   createIntentionAppraisalHooks,
   createIntentionBehavioralPatternHooks,
@@ -170,7 +171,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
   });
-  registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), { gatewayMode: true });
+  registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {
+    gatewayMode: true,
+    searchQueryJson: createWebSearchQueryJson(llmProvider),
+  });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
@@ -186,6 +190,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     pathSnapshot.companionDataDir,
     composeSystemPromptTemplate(),
     {
+      cardStore: cardVersionStore,
+      confirmationQueue: cardProposalQueue,
       identityCoolingOff,
       getCapabilityTier: () => capabilityRuntime.getTier(),
     },
@@ -194,13 +200,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getCapabilityTier: () => capabilityRuntime.getTier(),
     confirmationQueue: cardProposalQueue,
   });
-  wireSettingsRuntime(agentLoop, config);
+  wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
   wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway);
-  const coreMemoryStore = wireCoreMemoryRuntime({
-    agentLoop,
-    sessionManager,
-    config,
-  });
   const contactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
     ...(primaryTelegramUserId
@@ -239,6 +240,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       behavioralPatternProvider: null,
     });
   }
+  const coreMemoryStore = wireCoreMemoryRuntime({
+    agentLoop,
+    sessionManager,
+    config,
+    concernStore: intentionRuntime.concernStore,
+  });
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,

@@ -707,6 +707,14 @@ describe('SubstrateAgent.registerTool', () => {
     } as any, 'extended');
 
     agent.registerTool({
+      name: 'subagent',
+      label: 'subagent',
+      description: 'unified bounded subagent control surface',
+      parameters: { type: 'object' as const, properties: {} },
+      execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+    } as any, 'core');
+
+    agent.registerTool({
       name: 'memory_write',
       label: 'memory_write',
       description: 'stateful write tool',
@@ -725,6 +733,7 @@ describe('SubstrateAgent.registerTool', () => {
     const catalog = agent.getToolCatalog();
     const repoStatus = [...catalog.extended].find(tool => tool.name === 'repo_status') as any;
     const spawnSubagent = [...catalog.extended].find(tool => tool.name === 'spawn_subagent') as any;
+    const subagent = [...catalog.core].find(tool => tool.name === 'subagent') as any;
     const memoryWrite = [...catalog.core].find(tool => tool.name === 'memory_write') as any;
     const scheduleTask = [...catalog.extended].find(tool => tool.name === 'schedule_task') as any;
 
@@ -739,6 +748,16 @@ describe('SubstrateAgent.registerTool', () => {
       },
     });
     expect(spawnSubagent?.wiringMeta?.concurrency).toMatchObject({
+      class: 'spawn_subagent',
+      exclusivityKeyPolicy: 'none',
+      maxParallel: 5,
+      interruptibility: 'non_interruptible',
+      eligibility: {
+        foreground: true,
+        background: true,
+      },
+    });
+    expect(subagent?.wiringMeta?.concurrency).toMatchObject({
       class: 'spawn_subagent',
       exclusivityKeyPolicy: 'none',
       maxParallel: 5,
@@ -3661,10 +3680,7 @@ describe('SubstrateAgent.handleMessage', () => {
       config,
     );
 
-    agent.registerTool(makeExtendedProbeTool('issue_create'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('issue_update'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('issue_close'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('issue_sync'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
 
     const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
 
@@ -3676,17 +3692,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toContain('issue_create');
-    expect(toolNames).toContain('issue_update');
-    expect(toolNames).toContain('issue_close');
-    expect(toolNames).not.toContain('issue_sync');
-
-    const overlayToolNames = toolNames.filter((name) => [
-      'issue_close',
-      'issue_create',
-      'issue_update',
-    ].includes(name));
-    expect(overlayToolNames).toEqual(['issue_close', 'issue_create', 'issue_update']);
+    expect(toolNames).toContain('beads');
   });
 
   it('falls back cleanly when autoload candidates are unavailable', async () => {
@@ -3732,7 +3738,7 @@ describe('SubstrateAgent.handleMessage', () => {
     agent.registerTool(makeExtendedProbeTool('heartbeat_update_policy'), 'extended');
     agent.registerTool(makeExtendedProbeTool('heartbeat_run_template'), 'extended');
     agent.registerTool(makeExtendedProbeTool('schedule_task'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('issue_sync'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
 
     const autoloadSummaries: any[] = [];
     const autoloadSkips: any[] = [];

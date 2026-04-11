@@ -31,14 +31,9 @@ describe('registerBeadsTools', () => {
 
   it('registers split beads tools with core and extended categories', () => {
     registerBeadsTools(target, createMockOps());
-    expect(target.registerTool).toHaveBeenCalledTimes(6);
+    expect(target.registerTool).toHaveBeenCalledTimes(1);
     expect(target.registerTool.mock.calls).toEqual([
-      [expect.objectContaining({ name: 'issue_ready' }), 'core'],
-      [expect.objectContaining({ name: 'issue_show' }), 'core'],
-      [expect.objectContaining({ name: 'issue_create' }), 'extended'],
-      [expect.objectContaining({ name: 'issue_update' }), 'extended'],
-      [expect.objectContaining({ name: 'issue_close' }), 'extended'],
-      [expect.objectContaining({ name: 'issue_sync' }), 'extended'],
+      [expect.objectContaining({ name: 'beads' }), 'extended'],
     ]);
   });
 
@@ -53,12 +48,7 @@ describe('registerBeadsTools', () => {
     );
 
     expect(methodsByTool).toEqual(new Map([
-      ['issue_ready', ['beads.ready']],
-      ['issue_show', ['beads.show']],
-      ['issue_create', ['beads.create']],
-      ['issue_update', ['beads.update']],
-      ['issue_close', ['beads.close']],
-      ['issue_sync', ['beads.sync']],
+      ['beads', ['beads.ready', 'beads.show', 'beads.create', 'beads.update', 'beads.close', 'beads.sync']],
     ]));
   });
 });

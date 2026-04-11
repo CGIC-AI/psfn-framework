@@ -64,6 +64,8 @@ describe('resolveClientMethod', () => {
     expect(resolveClientMethod('git.open_pr')).toBe('gitOpenPR');
     expect(resolveClientMethod('beads.ready')).toBe('beadsReady');
     expect(resolveClientMethod('beads.create')).toBe('beadsCreate');
+    expect(resolveClientMethod('fs.search')).toBe('fsSearch');
+    expect(resolveClientMethod('fs.edit')).toBe('fsEdit');
     expect(resolveClientMethod('image.create')).toBe('imageCreate');
     expect(resolveClientMethod('image.edit')).toBe('imageEdit');
     expect(resolveClientMethod('llm.chat')).toBe('stream');
@@ -173,6 +175,23 @@ describe('validateToolWiring', () => {
     expect(report.invalidTools).toHaveLength(1);
     expect(report.invalidTools[0].toolName).toBe('repo_commit');
     expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('git.commit');
+  });
+
+  it('requires gateway metadata coverage for the unified web tool', () => {
+    const tools = [
+      makeTool('web'),
+    ];
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools,
+      gatewayClientMethods: new Set(['webFetch']),
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+    expect(report.totalTools).toBe(1);
+    expect(report.validTools).toBe(0);
+    expect(report.invalidTools).toHaveLength(1);
+    expect(report.invalidTools[0].toolName).toBe('web');
+    expect(report.invalidTools[0].missingGatewayMetadataCoverage[0]).toContain('web.fetch');
   });
 
   it('flags gateway-dependent tools with partial metadata coverage', () => {
@@ -393,6 +412,47 @@ describe('validateAndLogToolWiring', () => {
 });
 
 describe('production tools validation', () => {
+  it('unified fs and repo tools pass validation in gateway mode with full client', () => {
+    const tools = [
+      makeTool('fs', {
+        requiredGatewayMethods: ['fs.read', 'fs.list', 'fs.search', 'fs.write', 'fs.edit'],
+      }),
+      makeTool('repo', {
+        requiredGatewayMethods: [
+          'git.status',
+          'git.diff',
+          'git.apply_patch',
+          'git.commit',
+          'git.create_branch',
+          'git.open_pr',
+        ],
+      }),
+    ];
+
+    const fullClientMethods = new Set([
+      'fsRead',
+      'fsList',
+      'fsSearch',
+      'fsWrite',
+      'fsEdit',
+      'gitStatus',
+      'gitDiff',
+      'gitApplyPatch',
+      'gitCommit',
+      'gitCreateBranch',
+      'gitOpenPR',
+    ]);
+
+    const report = validateToolWiring({
+      mode: 'gateway',
+      tools,
+      gatewayClientMethods: fullClientMethods,
+      requiredGatewayMetadataCoverage: DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
+    });
+
+    expect(report.invalidTools).toHaveLength(0);
+  });
+
   it('all git tools pass validation in parity mode', () => {
     // In parity mode, git tools use GitOps directly and do not depend on gateway transport
     const gitTools = [
@@ -489,6 +549,8 @@ describe('extractGatewayMethods with GatewayClient shape', () => {
       fsRead(): void { /* noop */ }
       fsWrite(): void { /* noop */ }
       fsList(): void { /* noop */ }
+      fsSearch(): void { /* noop */ }
+      fsEdit(): void { /* noop */ }
       gitStatus(): void { /* noop */ }
       gitDiff(): void { /* noop */ }
       gitCreateBranch(): void { /* noop */ }
@@ -524,5 +586,7 @@ describe('extractGatewayMethods with GatewayClient shape', () => {
     expect(methods.has('stream')).toBe(true);
     expect(methods.has('complete')).toBe(true);
     expect(methods.has('embed')).toBe(true);
+    expect(methods.has('fsSearch')).toBe(true);
+    expect(methods.has('fsEdit')).toBe(true);
   });
 });

@@ -12,6 +12,7 @@ import { IdentityCoolingOffManager } from '../../system/capabilities/safeguards.
 import { PromptLayerStore } from './prompt-store.js';
 import { CARD_BACKED_FOUNDATION_PROMPT_MESSAGE } from './canonical-foundation.js';
 import {
+  createIdentityTool,
   createPromptLayerListTool,
   createPromptLayerGetTool,
   createIdentityDiffTool,
@@ -77,6 +78,37 @@ describe('Prompt Layer Tools', () => {
 
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  describe('identity', () => {
+    it('defaults empty-argument calls to list_layers', async () => {
+      const tool = gateToolWithCapabilities(
+        createIdentityTool(store),
+        () => accessForTier('nursery'),
+      );
+      const result = await tool.execute('identity-default-list', {});
+
+      expect(resultText(result)).toBe('No prompt layers configured.');
+    });
+
+    it('fails closed on ambiguous cross-surface parameters', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'original' });
+      const tool = gateToolWithCapabilities(
+        createIdentityTool(store),
+        () => accessForTier('nursery'),
+      );
+
+      const result = await tool.execute('identity-ambiguous', {
+        action: 'update_layer',
+        layer_id: layer.id,
+        content: 'updated',
+        personality: 'Conflicting persona field',
+      });
+
+      expect(resultText(result)).toContain('does not accept persona mutation fields');
+      expect(result.details?.isError).toBe(true);
+      expect(store.getById(layer.id)?.content).toBe('original');
+    });
   });
 
   describe('prompt_layer_list', () => {

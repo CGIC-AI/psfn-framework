@@ -72,7 +72,7 @@ describe('wireSessionToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers session search/list tools in core and session mutations in extended', async () => {
+  it('registers the unified session surface without split list/search/grep aliases', async () => {
     const target = {
       registerTool: vi.fn(),
     };
@@ -108,22 +108,18 @@ describe('wireSessionToolsRuntime', () => {
     wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls).toHaveLength(7);
+    expect(calls).toHaveLength(5);
     expect(calls.map(([tool]) => tool.name).sort()).toEqual([
       'complete_focus',
-      'session_grep',
-      'session_list',
+      'session',
       'session_new',
       'session_resume',
-      'session_search',
       'start_focus',
     ]);
-    expect(calls.find(([tool]) => tool.name === 'session_list')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'session_search')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'session_grep')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'session')?.[1]).toBe('core');
     expect(
       calls
-        .filter(([tool]) => !['session_list', 'session_search', 'session_grep'].includes(tool.name))
+        .filter(([tool]) => tool.name !== 'session')
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
 
@@ -152,7 +148,7 @@ describe('wireSessionToolsRuntime', () => {
 });
 
 describe('wireSettingsRuntime', () => {
-  it('registers settings_get as core and promoted-tool helpers as extended', () => {
+  it('registers system as core and promoted-tool helpers as extended', () => {
     const target = {
       registerTool: vi.fn(),
       getPromotedExtendedToolsLimit: () => 4,
@@ -185,12 +181,12 @@ describe('wireSettingsRuntime', () => {
       'promoted_tools_list',
       'promoted_tools_remove',
       'promoted_tools_swap',
-      'settings_get',
+      'system',
     ]);
-    expect(calls.find(([tool]) => tool.name === 'settings_get')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'system')?.[1]).toBe('core');
     expect(
       calls
-        .filter(([tool]) => tool.name !== 'settings_get')
+        .filter(([tool]) => tool.name !== 'system')
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
   });
@@ -207,7 +203,7 @@ describe('wirePromptRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers read-only prompt tools in core and prompt mutations in extended', () => {
+  it('registers unified identity as core and north_star as extended', () => {
     const target = {
       promptComposer: null,
       registerTool: vi.fn(),
@@ -216,29 +212,9 @@ describe('wirePromptRuntime', () => {
     wirePromptRuntime(target as any, tempDir, 'Base prompt');
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.find(([tool]) => tool.name === 'prompt_layer_list')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'prompt_layer_get')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'identity_diff')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'north_star_list')?.[1]).toBe('core');
-    expect(
-      calls
-        .filter(([tool]) => !['prompt_layer_list', 'prompt_layer_get', 'identity_diff', 'north_star_list'].includes(tool.name))
-        .every(([, category]) => category === 'extended'),
-    ).toBe(true);
-    expect(calls.map(([tool]) => tool.name)).toEqual(expect.arrayContaining([
-      'prompt_layer_list',
-      'prompt_layer_get',
-      'identity_diff',
-      'identity_changelog',
-      'prompt_layer_update',
-      'prompt_layer_rollback',
-      'prompt_layer_toggle',
-      'north_star_list',
-      'north_star_create',
-      'north_star_update',
-      'north_star_delete',
-      'north_star_reorder',
-    ]));
+    expect(calls.map(([tool]) => tool.name)).toEqual(['identity', 'north_star']);
+    expect(calls.find(([tool]) => tool.name === 'identity')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'north_star')?.[1]).toBe('extended');
   });
 });
 
@@ -253,7 +229,7 @@ describe('wireFilesystemToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers fs_list and fs_read as core tools', () => {
+  it('registers fs as a core tool', () => {
     const target = {
       registerTool: vi.fn(),
     };
@@ -261,7 +237,7 @@ describe('wireFilesystemToolsRuntime', () => {
     wireFilesystemToolsRuntime(target as any, tempDir);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.map(([tool]) => tool.name).sort()).toEqual(['fs_list', 'fs_read']);
+    expect(calls.map(([tool]) => tool.name)).toEqual(['fs']);
     expect(calls.every(([, category]) => category === 'core')).toBe(true);
   });
 });
@@ -345,7 +321,47 @@ describe('wireHeartbeatRuntime', () => {
     expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
   });
 
-  it('registers values_list in core and values mutations in extended tools', () => {
+  it('registers schedule as the canonical core surface and keeps legacy heartbeat policy access compatible', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'reflection output' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+      undefined,
+      { eventBus },
+    );
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    expect(calls.find(([tool]) => tool.name === 'schedule')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'heartbeat_get_policy')?.[1]).toBe('extended');
+
+    const scheduleTool = calls.find(([tool]) => tool.name === 'schedule')?.[0] as {
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }>;
+    };
+    const result = await scheduleTool.execute('call-schedule-list-templates', { action: 'get_policy' });
+    const text = result.content[0]?.text ?? '';
+
+    expect(text).toContain('Heartbeat Policy');
+    expect(text).toContain('Templates:');
+  });
+
+  it('keeps values mutations extended while values_list moves behind orient', () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -371,12 +387,8 @@ describe('wireHeartbeatRuntime', () => {
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     const names = calls.map(([tool]) => tool.name);
-    expect(names).toEqual(expect.arrayContaining([
-      'values_list',
-      'values_add',
-      'values_update',
-    ]));
-    expect(calls.find(([tool]) => tool.name === 'values_list')?.[1]).toBe('core');
+    expect(names).not.toContain('values_list');
+    expect(names).toEqual(expect.arrayContaining(['values_add', 'values_update']));
     expect(
       calls
         .filter(([tool]) => ['values_add', 'values_update'].includes(tool.name))

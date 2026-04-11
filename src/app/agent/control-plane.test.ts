@@ -13,18 +13,18 @@ describe('agent control plane', () => {
   it('agent-main delegates operator surfaces to the extracted helper', () => {
     const agentMainSource = readSource('main.ts');
     expect(agentMainSource).toContain('buildAgentControlPlane(');
-    expect(agentMainSource).not.toContain('createRestartTool(');
-    expect(agentMainSource).not.toContain('createRebuildTool(');
-    expect(agentMainSource).not.toContain('createNotifyOperatorTool(');
+    expect(agentMainSource).not.toContain('createSystemTool(');
+    expect(agentMainSource).not.toContain('createNotifyTool(');
     expect(agentMainSource).not.toContain('createDiscordLifecycleNotifier(');
   });
 
   it('control-plane owns lifecycle notifier, tools, and shutdown sequencing', () => {
     const controlPlaneSource = readSource('control-plane.ts');
     expect(controlPlaneSource).toContain('createDiscordLifecycleNotifier');
-    expect(controlPlaneSource).toContain('createRestartTool(');
-    expect(controlPlaneSource).toContain('createRebuildTool(');
-    expect(controlPlaneSource).toContain('createNotifyOperatorTool(');
+    expect(controlPlaneSource).toContain('createSystemTool(');
+    expect(controlPlaneSource).toContain('createNotifyDispatcher(');
+    expect(controlPlaneSource).toContain('createNotifyTool(');
+    expect(controlPlaneSource).toContain('createGatewayDiscordNotifySender(');
     expect(controlPlaneSource).toContain('runShutdownSequence(');
     expect(controlPlaneSource).toContain('resolveRuntimeCommandInvocation');
     expect(controlPlaneSource).toContain("gateway.shellExec('npm', ['run', 'build']");

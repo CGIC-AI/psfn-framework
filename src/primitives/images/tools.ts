@@ -5,6 +5,8 @@ import type { ImageOperations } from './ops.js';
 import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
+import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
   FAL_CREATE_MODELS,
   FAL_EDIT_MODELS,
@@ -12,6 +14,7 @@ import {
   IMAGE_PROVIDER_PREFERENCE_VALUES,
   type ImageAspectRatio,
   type ImageGenerationResult,
+  type MediaToolResultDetails,
   type ImageToolResultDetails,
   type ImageVisionReview,
   type ImageVisionReviewer,
@@ -22,6 +25,36 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Common values: 1:1 square, 3:4 portrait, 9:16 story, 4:3 landscape, 16:9 wide.',
   'Use only one of the supported presets.',
 ].join(' ');
+const MEDIA_ACTION_VALUES = ['generate', 'edit', 'analyze'] as const;
+
+type MediaAction = typeof MEDIA_ACTION_VALUES[number];
+
+interface MediaToolParams {
+  action: MediaAction;
+  prompt?: string;
+  input_urls?: string[];
+  question?: string;
+  provider?: 'auto' | 'fal' | 'comfyui';
+  model?: string;
+  num_images?: number;
+  width?: number;
+  height?: number;
+  aspect_ratio?: ImageAspectRatio;
+  resolution?: string;
+  image_size?: string;
+  background?: string;
+  output_format?: string;
+  mask_image_url?: string;
+  input_fidelity?: string;
+  seed?: number;
+  guidance_scale?: number;
+  num_inference_steps?: number;
+  acceleration?: string;
+  enable_prompt_expansion?: boolean;
+  enable_safety_checker?: boolean;
+  negative_prompt?: string;
+  use_turbo?: boolean;
+}
 
 function formatResult(result: ImageGenerationResult): string {
   return JSON.stringify({
@@ -183,6 +216,244 @@ async function reviewGeneratedImages(
       visionReviewError: toErrorMessage(error),
     };
   }
+}
+
+function buildMediaResultDetails(
+  result: ImageGenerationResult,
+  review?: ImageVisionReview,
+  reviewError?: string,
+): MediaToolResultDetails {
+  return {
+    mediaResult: result,
+    ...(review ? { visionReview: review } : {}),
+    ...(reviewError ? { visionReviewError: reviewError } : {}),
+  };
+}
+
+function normalizePrompt(prompt: string | undefined): string | null {
+  const normalized = prompt?.trim() ?? '';
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeInputUrls(inputUrls: readonly string[] | undefined): string[] {
+  return (inputUrls ?? [])
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .slice(0, 4);
+}
+
+async function executeMediaGenerate(
+  ops: ImageOperations,
+  reviewer: ImageVisionReviewer | undefined,
+  params: MediaToolParams,
+): Promise<AgentToolResult<MediaToolResultDetails>> {
+  const prompt = normalizePrompt(params.prompt);
+  if (!prompt) {
+    return textResultWithError('media action "generate" requires a non-empty prompt', true);
+  }
+
+  try {
+    const result = await ops.create({
+      prompt,
+      provider: params.provider,
+      model: params.model as typeof FAL_CREATE_MODELS[number] | undefined,
+      numImages: params.num_images,
+      width: params.width,
+      height: params.height,
+      aspectRatio: params.aspect_ratio,
+      resolution: params.resolution,
+      imageSize: params.image_size,
+      background: params.background,
+      outputFormat: params.output_format,
+      seed: params.seed,
+      guidanceScale: params.guidance_scale,
+      numInferenceSteps: params.num_inference_steps,
+      acceleration: params.acceleration,
+      enablePromptExpansion: params.enable_prompt_expansion,
+      enableSafetyChecker: params.enable_safety_checker,
+      negativePrompt: params.negative_prompt,
+      useTurbo: params.use_turbo,
+    });
+    const review = await reviewGeneratedImages(reviewer, {
+      imageUrls: result.images.map((image) => image.url),
+      imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
+      prompt,
+      mode: 'create',
+    });
+    return {
+      content: buildToolContent(result, review.visionReview, review.visionReviewError),
+      details: buildMediaResultDetails(result, review.visionReview, review.visionReviewError),
+    };
+  } catch (error) {
+    return textResultWithError(`media generate failed: ${toErrorMessage(error)}`, true);
+  }
+}
+
+async function executeMediaEdit(
+  ops: ImageOperations,
+  reviewer: ImageVisionReviewer | undefined,
+  params: MediaToolParams,
+): Promise<AgentToolResult<MediaToolResultDetails>> {
+  const prompt = normalizePrompt(params.prompt);
+  if (!prompt) {
+    return textResultWithError('media action "edit" requires a non-empty prompt', true);
+  }
+
+  const inputUrls = normalizeInputUrls(params.input_urls);
+  if (inputUrls.length === 0) {
+    return textResultWithError('media action "edit" requires at least one input URL', true);
+  }
+
+  try {
+    const result = await ops.edit({
+      prompt,
+      imageUrls: inputUrls,
+      provider: params.provider,
+      model: params.model as typeof FAL_EDIT_MODELS[number] | undefined,
+      numImages: params.num_images,
+      width: params.width,
+      height: params.height,
+      aspectRatio: params.aspect_ratio,
+      resolution: params.resolution,
+      imageSize: params.image_size,
+      background: params.background,
+      outputFormat: params.output_format,
+      maskImageUrl: params.mask_image_url,
+      inputFidelity: params.input_fidelity,
+      seed: params.seed,
+    });
+    const review = await reviewGeneratedImages(reviewer, {
+      imageUrls: result.images.map((image) => image.url),
+      imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
+      prompt,
+      mode: 'edit',
+    });
+    return {
+      content: buildToolContent(result, review.visionReview, review.visionReviewError),
+      details: buildMediaResultDetails(result, review.visionReview, review.visionReviewError),
+    };
+  } catch (error) {
+    return textResultWithError(`media edit failed: ${toErrorMessage(error)}`, true);
+  }
+}
+
+async function executeMediaAnalyze(
+  reviewer: ImageVisionReviewer | undefined,
+  params: MediaToolParams,
+): Promise<AgentToolResult<MediaToolResultDetails>> {
+  if (!reviewer) {
+    return textResultWithError('media action "analyze" is not available in this runtime', true);
+  }
+
+  const inputUrls = normalizeInputUrls(params.input_urls);
+  if (inputUrls.length === 0) {
+    return textResultWithError('media action "analyze" requires at least one input URL', true);
+  }
+
+  try {
+    const currentTurnVisionReviewFallback = resolveCurrentTurnVisionReviewFallback(
+      inputUrls,
+      params.question,
+    );
+    if (currentTurnVisionReviewFallback) {
+      return {
+        content: [{
+          type: 'text',
+          text: formatVisionReview(currentTurnVisionReviewFallback),
+        }] satisfies TextContent[],
+        details: { visionReview: currentTurnVisionReviewFallback },
+      };
+    }
+
+    const mismatchedCurrentTurnUrlNotice = resolveMismatchedCurrentTurnUrlNotice(inputUrls);
+    if (mismatchedCurrentTurnUrlNotice) {
+      return {
+        content: [{ type: 'text', text: mismatchedCurrentTurnUrlNotice }] satisfies TextContent[],
+        details: { visionReviewError: mismatchedCurrentTurnUrlNotice },
+      };
+    }
+
+    const visionReview = await reviewer.analyze({
+      imageUrls: inputUrls,
+      question: params.question,
+    });
+    return {
+      content: [{ type: 'text', text: formatVisionReview(visionReview) }] satisfies TextContent[],
+      details: { visionReview },
+    };
+  } catch (error) {
+    return textResultWithError(`media analyze failed: ${toErrorMessage(error)}`, true);
+  }
+}
+
+export function createMediaTool(
+  ops: ImageOperations,
+  reviewer?: ImageVisionReviewer,
+): AgentTool<any> {
+  const tool: AgentTool<any> = {
+    name: 'media',
+    label: 'media',
+    description:
+      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new image outputs, action="edit" to transform existing inputs, and action="analyze" to inspect visible contents. For selfies or self-portraits, use the dedicated selfie_create tool so appearance context is only loaded behind that explicit gate. Current implementation is image-backed.',
+    parameters: Type.Object({
+      action: Type.Union(
+        MEDIA_ACTION_VALUES.map((value) => Type.Literal(value)),
+        {
+          description: 'Select whether to generate new media, edit existing inputs, or analyze visible contents.',
+        },
+      ),
+      prompt: Type.Optional(Type.String({
+        description: 'Instruction text for generate or edit actions.',
+      })),
+      input_urls: Type.Optional(Type.Array(Type.String(), {
+        minItems: 1,
+        maxItems: 4,
+        description: 'Source media URLs for edit or analyze. Current implementation expects image URLs.',
+      })),
+      question: Type.Optional(Type.String({
+        description: 'Optional analysis question. If omitted, the tool returns a concise visible-contents review.',
+      })),
+      provider: providerPreferenceSchema(),
+      model: Type.Optional(Type.String({
+        description: 'Optional provider model override.',
+      })),
+      num_images: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+      width: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
+      height: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
+      aspect_ratio: aspectRatioSchema(),
+      resolution: Type.Optional(Type.String()),
+      image_size: Type.Optional(Type.String()),
+      background: Type.Optional(Type.String()),
+      output_format: Type.Optional(Type.String()),
+      mask_image_url: Type.Optional(Type.String()),
+      input_fidelity: Type.Optional(Type.String()),
+      seed: Type.Optional(Type.Integer({ minimum: 0 })),
+      guidance_scale: Type.Optional(Type.Number()),
+      num_inference_steps: Type.Optional(Type.Integer({ minimum: 1 })),
+      acceleration: Type.Optional(Type.String()),
+      enable_prompt_expansion: Type.Optional(Type.Boolean()),
+      enable_safety_checker: Type.Optional(Type.Boolean()),
+      negative_prompt: Type.Optional(Type.String()),
+      use_turbo: Type.Optional(Type.Boolean()),
+    }),
+    execute: async (
+      _toolCallId: string,
+      params: MediaToolParams,
+    ): Promise<AgentToolResult<MediaToolResultDetails>> => {
+      switch (params.action) {
+        case 'generate':
+          return await executeMediaGenerate(ops, reviewer, params);
+        case 'edit':
+          return await executeMediaEdit(ops, reviewer, params);
+        case 'analyze':
+          return await executeMediaAnalyze(reviewer, params);
+        default:
+          return textResultWithError(`Unsupported media action: ${String(params.action)}`, true);
+      }
+    },
+  };
+
+  return tagToolWithReversibility(withCapabilityRequirement(tool, 'external.web'), 'irreversible');
 }
 
 export function createImageCreateTool(

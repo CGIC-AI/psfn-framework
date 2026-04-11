@@ -139,12 +139,12 @@ describe('values tools', () => {
 });
 
 describe('values docs parity', () => {
-  it('documents exactly the values_* tool surface claimed by runtime wiring', () => {
+  it('documents orient as the direct values-read surface while values mutations stay explicit', () => {
     const readme = readFileSync(new URL('../../../README.md', import.meta.url), 'utf-8');
     const valuesRow = readme.split('\n').find(line => line.includes('| **Values** |'));
 
     expect(valuesRow).toBeDefined();
     const tools = [...(valuesRow ?? '').matchAll(/`([^`]+)`/g)].map(match => match[1]);
-    expect(tools).toEqual(['values_list', 'values_add', 'values_update']);
+    expect(tools).toEqual(['orient', 'values_add', 'values_update']);
   });
 });

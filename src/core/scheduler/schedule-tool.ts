@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import { withCapabilityRequirement, type CapabilityRequirement } from '../capabilities/requirements.js';
-import { tagToolWithReversibility } from '../capabilities/safeguards.js';
+import { withCapabilityRequirement, type CapabilityRequirement } from '../../system/capabilities/requirements.js';
+import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
   CARE_REMINDER_CLASSIFICATIONS,
   CARE_REMINDER_KINDS,
@@ -13,26 +13,20 @@ import {
   type CareReminderStore,
 } from '../intention/care-reminders.js';
 import {
-  buildCareReminderCheckpointSummary,
-  buildCareReminderWakeReturnSummary,
-  buildPendingFollowUpCheckpointSummary,
-  buildPendingFollowUpWakeReturnSummary,
-} from '../intention/runtime-wiring.js';
-import {
   PENDING_FOLLOW_UP_PRIORITIES,
   PENDING_FOLLOW_UP_TIMINGS,
   PENDING_FOLLOW_UP_WAKE_CONDITIONS,
   type PendingFollowUp,
   type PendingFollowUpPriority,
   type PendingFollowUpTiming,
-  type PendingFollowUpStore,
+  type PendingFollowUpStorePort,
   type PendingFollowUpWakeCondition,
 } from '../intention/pending-follow-ups.js';
-import type { ChannelType, PostTurnActionCandidate } from '../types.js';
-import type { MessageSender } from '../lifecycle/notifications.js';
+import type { ChannelType, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
+import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import type { LegacyAliasTelemetryCallback } from '../tools/legacy-alias-telemetry.js';
-import { toErrorMessage } from '../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { Scheduler } from './scheduler.js';
 import type { HeartbeatPolicyStore, ReflectionDeliberationConfig } from './heartbeat-policy.js';
 import {
@@ -41,7 +35,7 @@ import {
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from './heartbeat-tools.js';
-import type { MemoryWriter } from '../memory/writer.js';
+import type { MemoryWriter } from '../../faculties/memory/writer.js';
 
 const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
@@ -146,7 +140,7 @@ export interface ScheduleToolOptions {
   heartbeatChannelId?: string;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   pendingFollowUpStore?: Pick<
-    PendingFollowUpStore,
+    PendingFollowUpStorePort,
     'create' | 'list' | 'markActivated'
   > | null;
   careReminderStore?: Pick<
@@ -311,6 +305,23 @@ function mapPlannedTask(task: ReturnType<Scheduler['listTasks']>[number]) {
     runAt,
     intervalMs: task.intervalMs,
   };
+}
+
+function buildCareReminderCheckpointSummary(reminder: CareReminder): string {
+  return `${reminder.title} (${reminder.classification}) due ${reminder.dueAt}`;
+}
+
+function buildCareReminderWakeReturnSummary(reminder: CareReminder): string {
+  return `Return to ${reminder.channelType}:${reminder.channelId} for ${reminder.kind} reminder "${reminder.title}".`;
+}
+
+function buildPendingFollowUpCheckpointSummary(followUp: PendingFollowUp): string {
+  const due = followUp.dueAt ? ` due ${followUp.dueAt}` : '';
+  return `${followUp.priority} ${followUp.timing} follow-up${due}: ${followUp.content}`;
+}
+
+function buildPendingFollowUpWakeReturnSummary(followUp: PendingFollowUp): string {
+  return `Resume in ${followUp.channelType}:${followUp.channelId} and surface follow-up "${followUp.content}".`;
 }
 
 function mapReminder(reminder: CareReminder) {
@@ -593,7 +604,7 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
             }
             const followUpId = normalizeNonEmptyString(params.follow_up_id, 'follow_up_id');
             const activationReason = normalizeOptionalString(params.activation_reason);
-            const activated = options.pendingFollowUpStore.markActivated(
+            const activated = await options.pendingFollowUpStore.markActivated(
               followUpId,
               activationReason ? { activationReason } : {},
             );

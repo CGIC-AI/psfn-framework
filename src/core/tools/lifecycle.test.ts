@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  createSystemTool,
   createRestartTool,
   createRebuildTool,
   DEFERRED_LIFECYCLE_ACTION_KIND,
@@ -8,10 +9,51 @@ import {
 } from './lifecycle.js';
 import type { LifecycleNotifier } from '../../system/lifecycle/notifications.js';
 import { LifecycleRestartSafeguard } from '../../system/capabilities/safeguards.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content.map(c => c.text).join('');
+}
+
+function makeConfig(): SubstrateConfig {
+  return {
+    primaryModel: 'z-ai/glm-5',
+    primaryProvider: 'openrouter',
+    extractionModel: 'deepseek/deepseek-v3.2',
+    extractionProvider: 'openrouter',
+    discordToken: 'secret-token',
+    discordBotId: '123',
+    characterCardPath: '',
+    dataDir: './data',
+    databasePath: '',
+    sessionMessageLimit: 30,
+    memoryRetrievalLimit: 15,
+    extractionInterval: 5,
+    primaryMaxTokens: 16384,
+    extractionMaxTokens: 8192,
+    maintenanceIntervalMs: 300_000,
+    defaultContextWindow: 128_000,
+    extractionThresholdPct: 30,
+    compactionThresholdPct: 70,
+    compactionEmotionalSalienceThresholdPct: 75,
+    modelRoster: {
+      chat: {
+        model: 'z-ai/glm-5',
+        provider: 'openrouter',
+        maxTokens: 16384,
+        contextWindow: 128_000,
+      },
+      background: {
+        model: 'deepseek/deepseek-v3.2',
+        provider: 'openrouter',
+        maxTokens: 8192,
+      },
+    },
+    thinkMaxSubQueries: 9,
+    retryMaxAttempts: 3,
+    retryBaseDelayMs: 2000,
+  };
 }
 
 describe('createRestartTool', () => {
@@ -223,6 +265,66 @@ describe('createRebuildTool', () => {
     expect(resultText(result)).toContain('reason is required');
     expect((result.details as any).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSystemTool', () => {
+  let mockNotifier: LifecycleNotifier;
+  let mockStopFn: ReturnType<typeof vi.fn>;
+  let runRestartCommand: ReturnType<typeof vi.fn>;
+  let runBuildCommand: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    mockNotifier = {
+      notifyPreRestart: vi.fn(async () => {}),
+      notifyReady: vi.fn(async () => {}),
+      notifyShutdown: vi.fn(async () => {}),
+    };
+    mockStopFn = vi.fn(async () => {});
+    runRestartCommand = vi.fn(async () => {});
+    runBuildCommand = vi.fn(async () => {});
+  });
+
+  it('reads runtime settings through action=read and defaults to read behavior', async () => {
+    const tool = createSystemTool(makeConfig());
+
+    const single = await tool.execute('system-read-single', { action: 'read', key: 'thinkMaxSubQueries' });
+    expect(JSON.parse(resultText(single)).value).toBe(9);
+
+    const listed = await tool.execute('system-read-default', { list: true });
+    expect(JSON.parse(resultText(listed)).mode).toBe('list');
+  });
+
+  it('delegates restart and rebuild actions through the current lifecycle runtime', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
+
+    const tool = createSystemTool(makeConfig(), {
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      runRestartCommand,
+      runBuildCommand,
+    });
+
+    const restart = await tool.execute('system-restart', { action: 'restart', reason: 'apply config' });
+    expect(resultText(restart)).toContain('Restart initiated');
+    expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('apply config');
+
+    const rebuild = await tool.execute('system-rebuild', { action: 'rebuild', reason: 'refresh build' });
+    expect(resultText(rebuild)).toContain('Rebuild initiated');
+    expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: refresh build');
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('fails closed when lifecycle actions are unavailable in this runtime', async () => {
+    const tool = createSystemTool(makeConfig());
+    const result = await tool.execute('system-no-runtime', { action: 'restart', reason: 'no runtime hooks' });
+
+    expect(resultText(result)).toContain('system action=restart is not available');
+    expect((result.details as any).isError).toBe(true);
   });
 });
 
@@ -458,6 +560,67 @@ describe('deferred lifecycle execution', () => {
           reason: 'autonomous shakedown restart',
         },
         dedupeKey: `${DEFERRED_LIFECYCLE_ACTION_KIND}:turn-structured-restart:restart`,
+      },
+    ]);
+  });
+
+  it('infers deferred lifecycle actions from unified system tool results', () => {
+    const inferred = inferDeferredLifecycleActions({
+      message: {
+        id: 'message-system-restart',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'restart please',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      response: {
+        content: 'Restart queued.',
+        channelId: 'api:test',
+        metadata: {
+          model: 'openrouter/moonshotai/kimi-k2.5',
+          inputTokens: 10,
+          outputTokens: 5,
+          durationMs: 25,
+        },
+      },
+      turnMessages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-system-restart',
+              name: 'system',
+              arguments: {
+                action: 'restart',
+                reason: { primary_reason: 'autonomous shakedown restart' },
+              },
+            },
+          ],
+        } as any,
+        {
+          role: 'toolResult',
+          toolCallId: 'call-system-restart',
+          toolName: 'system',
+          isError: false,
+          content: [{ type: 'text', text: 'Restart queued.' }],
+          details: {},
+        } as any,
+      ],
+      turnId: 'turn-system-restart' as any,
+      completedAt: 1_700_000_000_100,
+    });
+
+    expect(inferred).toEqual([
+      {
+        kind: DEFERRED_LIFECYCLE_ACTION_KIND,
+        payload: {
+          operation: 'restart',
+          reason: 'autonomous shakedown restart',
+        },
+        dedupeKey: `${DEFERRED_LIFECYCLE_ACTION_KIND}:turn-system-restart:restart`,
       },
     ]);
   });

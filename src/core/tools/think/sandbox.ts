@@ -172,6 +172,7 @@ export class REPLSandbox {
       repo_diff: repo.repo_diff,
       read_file: toolchain.read_file,
       list_files: toolchain.list_files,
+      web: web.web,
       web_fetch: web.web_fetch,
       crawler_fetch: web.crawler_fetch,
       web_research: web.web_research,

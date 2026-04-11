@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 const DEFAULT_ADMIN_URL = 'http://127.0.0.1:10154';
 const DEFAULT_BOOTSTRAP_PATH = '/api/admin/chat/bootstrap';
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_VOICE_TIMEOUT_MS = 8_000;
-const DEFAULT_LIVE_ENV_PATH = '/mnt/samesung/ai/psfn-live/.env';
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_LIVE_ENV_PATH = resolve(SCRIPT_DIR, '..', '.env');
 
 function printUsage() {
   console.log(`Chat Cockpit Smoke Harness

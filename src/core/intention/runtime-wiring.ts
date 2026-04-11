@@ -24,11 +24,6 @@ import {
   createSQLiteIntentionRuntimeStores,
   type SQLiteIntentionRuntimeStores,
 } from './sqlite-adapters.js';
-import {
-  createCreateConcernTool,
-  createListConcernsTool,
-  createResolveConcernTool,
-} from './tools.js';
 
 const RECENT_RESOLVED_CONCERN_WINDOW_MS = 6 * 60 * 60 * 1_000;
 const RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT = 3;
@@ -370,9 +365,6 @@ export function wireIntentionRuntimeStores(
     });
   }
 
-  target.registerTool(createCreateConcernTool(concernStore));
-  target.registerTool(createListConcernsTool(concernStore));
-  target.registerTool(createResolveConcernTool(concernStore));
   return {
     concernStore,
     pendingFollowUpStore,

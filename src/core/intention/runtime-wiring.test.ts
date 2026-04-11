@@ -30,7 +30,7 @@ class FakeTarget implements IntentionRuntimeTarget {
 }
 
 describe('wireIntentionRuntime', () => {
-  it('injects concern + behavioral stores and registers concern tools', () => {
+  it('injects concern + behavioral stores without registering separate concern tools', () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();
 
@@ -42,22 +42,8 @@ describe('wireIntentionRuntime', () => {
     expect(runtime.concernStore).not.toBe(target.activeConcernProvider);
     expect(runtime.pendingFollowUpStore).not.toBe(target.pendingFollowUpProvider);
     expect(runtime.behavioralPatternTracker).not.toBe(target.behavioralPatternProvider);
-    expect(target.tools.map(tool => tool.name).sort()).toEqual([
-      'create_concern',
-      'list_concerns',
-      'resolve_concern',
-    ]);
-    const createTool = target.tools.find(tool => tool.name === 'create_concern') as any;
-    const listTool = target.tools.find(tool => tool.name === 'list_concerns') as any;
-    const resolveTool = target.tools.find(tool => tool.name === 'resolve_concern') as any;
-    expect(createTool).toBeDefined();
-    expect(listTool).toBeDefined();
-    expect(resolveTool).toBeDefined();
-    expect(target.registrations).toEqual(expect.arrayContaining([
-      { name: 'create_concern', category: 'core' },
-      { name: 'list_concerns', category: 'core' },
-      { name: 'resolve_concern', category: 'core' },
-    ]));
+    expect(target.tools).toHaveLength(0);
+    expect(target.registrations).toHaveLength(0);
     expect(target.intentionHooks).toHaveLength(1);
   });
 

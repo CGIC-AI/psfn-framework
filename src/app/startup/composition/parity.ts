@@ -24,14 +24,16 @@ import {
   createPromotedToolsListTool,
   createPromotedToolsRemoveTool,
   createPromotedToolsSwapTool,
-  createSettingsGetTool,
   type PromotedExtendedToolsManager,
 } from '../../../system/settings-tools.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { CoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
-import { createSessionListTool, createSessionNewTool, createSessionResumeTool } from '../../../core/tools/session.js';
-import { createSessionGrepTool, createSessionSearchTool } from '../../../core/tools/session-search.js';
+import {
+  createSessionNewTool,
+  createSessionResumeTool,
+  createSessionTool,
+} from '../../../core/tools/session.js';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
 import { createCompleteFocusTool, createStartFocusTool } from '../../../core/tools/focus.js';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
@@ -41,28 +43,16 @@ import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { DeliberationResult } from '../../../primitives/llm/deliberation.js';
 import {
-  createPersonaUpdateTool,
-  type PersonaUpdateToolOptions,
   type CharacterCardVersionStore,
 } from '../../../core/identity/card-versioning.js';
 import { buildCharacterPromptTemplateVariables } from '../../../core/identity/loader.js';
 import {
-  createPromptLayerListTool,
-  createPromptLayerGetTool,
-  createIdentityDiffTool,
-  createIdentityChangelogTool,
-  createPromptLayerUpdateTool,
-  createPromptLayerRollbackTool,
-  createPromptLayerToggleTool,
-  type PromptLayerUpdateToolOptions,
+  createIdentityTool,
+  type IdentityToolOptions,
 } from '../../../core/identity/prompt-tools.js';
 import { NorthStarStore } from '../../../faculties/north-star/store.js';
 import {
-  createNorthStarCreateTool,
-  createNorthStarDeleteTool,
-  createNorthStarListTool,
-  createNorthStarReorderTool,
-  createNorthStarUpdateTool,
+  createNorthStarTool,
 } from '../../../faculties/north-star/tools.js';
 import { HeartbeatPolicyStore } from '../../../core/scheduler/heartbeat-policy.js';
 import {
@@ -71,13 +61,13 @@ import {
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from '../../../core/scheduler/heartbeat-tools.js';
+import { createScheduleTool } from '../../../core/scheduler/schedule-tool.js';
 import type { ReflectionTemplate } from '../../../core/scheduler/heartbeat-policy.js';
 import type { MemoryWriter } from '../../../faculties/memory/writer.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import type { ValuesDeliberationMetadata } from '../../../faculties/values/store.js';
 import {
   createValuesAddTool,
-  createValuesListTool,
   createValuesUpdateTool,
 } from '../../../faculties/values/tools.js';
 import {
@@ -125,6 +115,8 @@ import {
   type ActiveConcernSnapshot,
   type IntentionActionDecision,
 } from '../../../core/intention/appraisal.js';
+import type { PendingFollowUpStorePort } from '../../../core/intention/pending-follow-ups.js';
+import type { CareReminderStore } from '../../../core/intention/care-reminders.js';
 import { MotivationBridge } from '../../../core/intention/motivation.js';
 import {
   buildInternalStateSnapshotRef,
@@ -132,6 +124,8 @@ import {
   serializeInternalState,
   type InternalState,
 } from '../../../core/self-model/state.js';
+import { createSystemTool } from '../../../core/tools/lifecycle.js';
+import { createLegacyAliasTelemetryEmitter } from '../../../core/tools/legacy-alias-telemetry.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
@@ -213,6 +207,8 @@ interface HeartbeatRuntimeOptions {
     emotionSnapshot: EmotionStateSnapshot;
     observedAtMs?: number;
   }) => Promise<void> | void;
+  pendingFollowUpStore?: PendingFollowUpStorePort | null;
+  careReminderStore?: CareReminderStore | null;
   coreMemoryStore?: Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
   intentionAppraisalEnabled?: boolean;
@@ -272,7 +268,7 @@ export function wirePromptRuntime(
   target: PromptRuntimeTarget,
   dataDir: string,
   baseSystemPrompt: string,
-  options: PromptLayerUpdateToolOptions = {},
+  options: IdentityToolOptions = {},
 ): PromptLayerStore {
   const promptStore = new PromptLayerStore(
     resolvePromptLayersPath(dataDir),
@@ -295,29 +291,18 @@ export function wirePromptRuntime(
       northStarLayerProvider: () => northStarStore.buildPromptLayer(),
     },
   );
-  target.registerTool(createPromptLayerListTool(promptStore), 'core');
-  target.registerTool(createPromptLayerGetTool(promptStore), 'core');
-  target.registerTool(createIdentityDiffTool(promptStore), 'core');
-  target.registerTool(createNorthStarListTool(northStarStore), 'core');
-  target.registerTool(createIdentityChangelogTool(promptStore), 'extended');
-  target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
-  target.registerTool(createPromptLayerRollbackTool(promptStore, options), 'extended');
-  target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
-  target.registerTool(createNorthStarCreateTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarUpdateTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarDeleteTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarReorderTool(northStarStore), 'extended');
+  target.registerTool(createIdentityTool(promptStore, options), 'core');
+  target.registerTool(createNorthStarTool(northStarStore), 'extended');
 
   log.info(`Prompt stack enabled (${promptStore.count} layers)`);
   return promptStore;
 }
 
 export function wireCharacterCardRuntime(
-  target: CharacterCardRuntimeTarget,
+  _target: CharacterCardRuntimeTarget,
   cardStore: CharacterCardVersionStore,
-  options: PersonaUpdateToolOptions = {},
+  _options: { confirmationQueue?: unknown; getCapabilityTier?: () => CapabilityTier } = {},
 ): void {
-  target.registerTool(createPersonaUpdateTool(cardStore, options), 'extended');
   const snapshot = cardStore.getCurrent();
   log.info(`Persona tooling enabled (v${snapshot.version})`);
 }
@@ -357,8 +342,13 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
 export function wireSettingsRuntime(
   target: ToolRegistrarTarget,
   config: SubstrateConfig,
+  options: {
+    registerSystemTool?: boolean;
+  } = {},
 ): void {
-  target.registerTool(createSettingsGetTool(config), 'core');
+  if (options.registerSystemTool !== false) {
+    target.registerTool(createSystemTool(config), 'core');
+  }
   if (!hasPromotedToolsManager(target)) {
     return;
   }
@@ -374,9 +364,18 @@ export function wireSessionToolsRuntime(
   dataDir: string,
   llmProvider: LLMProviderPort,
 ): void {
-  target.registerTool(createSessionSearchTool(sessionManager, llmProvider), 'core');
-  target.registerTool(createSessionGrepTool({
+  target.registerTool(createSessionTool({
+    manager: sessionManager,
+    llmProvider,
     sessionsDir: resolveSessionsDir(dataDir),
+    dataDir,
+    setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
+    seedSession: (sessionId) => {
+      sessionManager.appendSystemNote(
+        sessionId,
+        'Session initialized via session_new.',
+      );
+    },
   }), 'core');
   target.registerTool(createSessionNewTool({
     dataDir,
@@ -388,7 +387,6 @@ export function wireSessionToolsRuntime(
       );
     },
   }), 'extended');
-  target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'core');
   target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
   target.registerTool(createStartFocusTool(sessionManager), 'extended');
   target.registerTool(createCompleteFocusTool(sessionManager, llmProvider), 'extended');
@@ -1638,11 +1636,25 @@ export function wireHeartbeatRuntime(
   syncReflectionTasks();
 
   // Register tools
-  target.registerTool(createHeartbeatGetPolicyTool(store), 'core');
+  target.registerTool(createScheduleTool({
+    scheduler,
+    agentLoop,
+    sender,
+    heartbeatPolicyStore: store,
+    syncReflectionTasks,
+    runTemplate: runTemplateNow,
+    heartbeatChannelId,
+    memoryWriter: runtimeOptions.memoryWriter,
+    pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
+    careReminderStore: runtimeOptions.careReminderStore ?? null,
+    emitLegacyAliasTelemetry: runtimeOptions.eventBus
+      ? createLegacyAliasTelemetryEmitter(runtimeOptions.eventBus)
+      : undefined,
+  }), 'core');
+  target.registerTool(createHeartbeatGetPolicyTool(store), 'extended');
   target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
   target.registerTool(createHeartbeatRunTemplateTool(store, runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
-  target.registerTool(createValuesListTool(valuesJournal), 'core');
   target.registerTool(createValuesAddTool(valuesJournal), 'extended');
   target.registerTool(createValuesUpdateTool(valuesJournal), 'extended');
 

@@ -285,7 +285,6 @@ export function createHeartbeatTemplateRuntime(
     prompt: string,
     context: ReflectionInternalStateContext | null,
     substrateContext: ReflectionSubstratePromptContext | null,
-    appearanceContext?: string,
   ): string => {
     const sections: string[] = [prompt];
     if (context) {
@@ -315,9 +314,6 @@ export function createHeartbeatTemplateRuntime(
     }
     if (substrateContext) {
       sections.push(substrateContext.promptBlock);
-    }
-    if (appearanceContext) {
-      sections.push(`Appearance context:\n${appearanceContext}`);
     }
     return sections.join('\n\n');
   };
@@ -491,31 +487,6 @@ export function createHeartbeatTemplateRuntime(
     return { reflection: trimmed, silent: false };
   };
 
-  const resolveDeliberationAppearanceContext = (): string | undefined => {
-    const provider = runtimeOptions.characterPromptVariablesProvider;
-    if (!provider) return undefined;
-    try {
-      const variables = provider();
-      const candidates = [
-        variables['character.visual_description'],
-        variables.visual_description,
-        variables.extensions_visual_description,
-      ];
-      for (const candidate of candidates) {
-        if (typeof candidate !== 'string') continue;
-        const trimmed = candidate.trim();
-        if (trimmed.length > 0) {
-          return trimmed;
-        }
-      }
-    } catch (error) {
-      log.warn('Failed to resolve appearance context for deliberation heartbeat', {
-        error: String(error),
-      });
-    }
-    return undefined;
-  };
-
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
@@ -567,13 +538,11 @@ export function createHeartbeatTemplateRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
     const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
-    const appearanceContext = shouldUseDeliberation(template) ? resolveDeliberationAppearanceContext() : undefined;
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
     const reflectionPrompt = formatNarrativePromptInput(
       template.prompt,
       internalStateContext,
       reflectionSubstrateContext,
-      appearanceContext,
     );
     let reflectionText = '';
     let silentInterval = false;

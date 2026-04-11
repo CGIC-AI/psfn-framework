@@ -7,6 +7,7 @@ import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../core/identity/prom
 import { composeDefaultFoundationTemplate } from '../../../core/identity/foundation-sections.js';
 import { createPromptStatePort } from '../../../core/identity/prompt-state-port.js';
 import { PromptRuntimeLayoutStore } from '../../../core/identity/prompt-runtime.js';
+import { getRuntimePromptLayerDefinitions } from '../../../core/identity/runtime-prompt-layers.js';
 import { NorthStarStore } from '../../../faculties/north-star/store.js';
 import { AdminPromptsDataService } from './prompts-service.js';
 
@@ -15,6 +16,24 @@ let tempDir: string | null = null;
 function makeTempDir(): string {
   tempDir = mkdtempSync(join(tmpdir(), 'psfn-prompts-service-'));
   return tempDir;
+}
+
+function seedRuntimePromptLayers(promptStore: PromptLayerStore): Map<string, string> {
+  const layerIds = new Map<string, string>();
+  for (const definition of getRuntimePromptLayerDefinitions()) {
+    const layer = promptStore.create({
+      type: 'runtime',
+      name: definition.name,
+      identifier: definition.identifier,
+      role: 'system',
+      promptOrder: definition.priority,
+      priority: definition.priority,
+      content: definition.content,
+      updatedBy: 'system',
+    });
+    layerIds.set(definition.identifier, layer.id);
+  }
+  return layerIds;
 }
 
 afterEach(() => {
@@ -98,6 +117,84 @@ describe('AdminPromptsDataService', () => {
     }));
     expect(toggleResult.ok).toBe(true);
     expect(promptStore.getById(editableBase.id)?.enabled).toBe(false);
+  });
+
+  it('fails closed when saving a runtime layer would clear a required runtime prompt block', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const runtimeLayerIds = seedRuntimePromptLayers(promptStore);
+
+    const service = new AdminPromptsDataService({ promptStore });
+    const currentDatetimeLayerId = runtimeLayerIds.get('runtime.current_datetime');
+    expect(currentDatetimeLayerId).toBeTruthy();
+    const before = promptStore.getById(currentDatetimeLayerId!);
+
+    const result = service.updatePromptLayer(JSON.stringify({
+      layerId: currentDatetimeLayerId,
+      content: '   ',
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('runtime.current_datetime');
+    expect(result.message).toContain('Current Date & Time');
+    expect(promptStore.getById(currentDatetimeLayerId!)?.content).toBe(before?.content);
+  });
+
+  it('allows optional runtime prompt layers to be omitted by disabling them', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const runtimeLayerIds = seedRuntimePromptLayers(promptStore);
+
+    const service = new AdminPromptsDataService({ promptStore });
+    const optionalLayerId = runtimeLayerIds.get('runtime.appearance_context');
+    expect(optionalLayerId).toBeTruthy();
+
+    const result = service.togglePromptLayer(JSON.stringify({
+      layerId: optionalLayerId,
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(promptStore.getById(optionalLayerId!)?.enabled).toBe(false);
+  });
+
+  it('fails closed when rollback would restore invalid required runtime prompt coverage', () => {
+    const root = makeTempDir();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const runtimeLayerIds = seedRuntimePromptLayers(promptStore);
+    const currentDatetimeLayerId = runtimeLayerIds.get('runtime.current_datetime');
+    expect(currentDatetimeLayerId).toBeTruthy();
+
+    promptStore.update(
+      currentDatetimeLayerId!,
+      { content: '' },
+      'test',
+      'blank runtime layer',
+    );
+    promptStore.update(
+      currentDatetimeLayerId!,
+      { content: '<current_datetime>Recovered runtime coverage.</current_datetime>' },
+      'test',
+      'restore runtime layer',
+    );
+
+    const service = new AdminPromptsDataService({ promptStore });
+    const result = service.rollbackPromptLayer(JSON.stringify({
+      layerId: currentDatetimeLayerId,
+      version: 2,
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('runtime.current_datetime');
+    expect(promptStore.getById(currentDatetimeLayerId!)?.content).toContain('Recovered runtime coverage.');
   });
 
   it('returns constitution snapshot with immutable and mutable boundaries plus preview output', () => {
@@ -261,6 +358,10 @@ describe('AdminPromptsDataService', () => {
     const blockedResult = service.saveRuntimePromptBlocks(JSON.stringify({
       blocks: [
         {
+          id: 'runtime.persona_adaptation',
+          content: 'Should not persist.',
+        },
+        {
           id: 'session.current_messages',
           content: 'forbidden edit',
         },
@@ -272,6 +373,9 @@ describe('AdminPromptsDataService', () => {
     expect(blockedResult.message).toContain('provider-managed');
     expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.context')).toBe(
       'Companion runtime context override.',
+    );
+    expect(promptRuntimeLayoutStore.getEditableBlockContent('runtime.persona_adaptation')).toBe(
+      'Companion personality override.',
     );
   });
 

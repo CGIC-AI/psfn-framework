@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionManager } from '../session/manager.js';
 import {
   readLastActiveSession,
@@ -10,11 +11,51 @@ import {
 import { inferSessionChannelType } from '../session/session-id.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResult, textResultWithError } from './results.js';
+import { createCompleteFocusTool, createStartFocusTool } from './focus.js';
+import {
+  createSessionGrepTool,
+  createSessionSearchTool,
+  type SessionGrepToolOptions,
+} from './session-search.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 const DEFAULT_SESSION_PREFIX = 'api:session';
 const DEFAULT_SESSION_LIST_LIMIT = 20;
 const MAX_SESSION_LIST_LIMIT = 100;
+const SESSION_TOOL_ACTION_NAMES = [
+  'list',
+  'session_list',
+  'new',
+  'session_new',
+  'resume',
+  'session_resume',
+  'search',
+  'session_search',
+  'grep',
+  'session_grep',
+  'start_focus',
+  'focus_start',
+  'complete_focus',
+  'focus_complete',
+] as const;
+const SESSION_TOOL_ACTION_HELP = [
+  'list',
+  'new',
+  'resume',
+  'search',
+  'grep',
+  'start_focus',
+  'complete_focus',
+].join(', ');
+type SessionToolActionName = (typeof SESSION_TOOL_ACTION_NAMES)[number];
+type SessionToolAction =
+  | 'list'
+  | 'new'
+  | 'resume'
+  | 'search'
+  | 'grep'
+  | 'start_focus'
+  | 'complete_focus';
 
 interface SessionToolOptions {
   dataDir: string;
@@ -25,6 +66,13 @@ export interface SessionNewToolOptions extends SessionToolOptions {
   idFactory?: (timestamp: number) => string;
   seedSession?: (sessionId: string) => void;
   setActiveSession?: (sessionId: string) => void;
+}
+
+export interface UnifiedSessionToolOptions extends SessionNewToolOptions {
+  manager: SessionManager;
+  llmProvider: LLMProviderPort;
+  sessionsDir: string;
+  runRipgrep?: SessionGrepToolOptions['runRipgrep'];
 }
 
 type SessionToolManager = Pick<
@@ -43,6 +91,20 @@ interface ResolvedPreviousSession {
 
 interface SessionNewParams {
   metadata?: Record<string, unknown>;
+}
+
+interface SessionToolParams extends SessionNewParams {
+  action?: SessionToolActionName;
+  limit?: number;
+  sessionId?: string;
+  query?: string;
+  summarize?: boolean;
+  pattern?: string;
+  mode?: 'literal' | 'regex';
+  caseSensitive?: boolean;
+  channelId?: string;
+  scope?: string;
+  conclusion?: string;
 }
 
 interface SessionNewDetails {
@@ -153,6 +215,47 @@ function rejectBackgroundSessionMutation(action: 'session_new' | 'session_resume
     `${action} is unavailable during background continuation execution. Start a foreground turn to switch sessions.`,
     true,
   );
+}
+
+function normalizeSessionAction(params: SessionToolParams): SessionToolAction {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    const hasNonListParams = Object.entries(params).some(([key, value]) => (
+      key !== 'action'
+      && key !== 'limit'
+      && value !== undefined
+    ));
+    if (!hasNonListParams) {
+      return 'list';
+    }
+    throw new Error(`action is required unless using the default list behavior (${SESSION_TOOL_ACTION_HELP})`);
+  }
+
+  switch (rawAction) {
+    case 'list':
+    case 'session_list':
+      return 'list';
+    case 'new':
+    case 'session_new':
+      return 'new';
+    case 'resume':
+    case 'session_resume':
+      return 'resume';
+    case 'search':
+    case 'session_search':
+      return 'search';
+    case 'grep':
+    case 'session_grep':
+      return 'grep';
+    case 'start_focus':
+    case 'focus_start':
+      return 'start_focus';
+    case 'complete_focus':
+    case 'focus_complete':
+      return 'complete_focus';
+    default:
+      throw new Error(`action must be one of: ${SESSION_TOOL_ACTION_HELP}`);
+  }
 }
 
 export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<any> {
@@ -314,6 +417,130 @@ export function createSessionResumeTool(
           lastMessagePreview: target.lastMessagePreview,
         },
       }, null, 2));
+    },
+  };
+}
+
+export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool<any> {
+  const sessionSearchTool = createSessionSearchTool(options.manager, options.llmProvider);
+  const sessionGrepTool = createSessionGrepTool({
+    sessionsDir: options.sessionsDir,
+    ...(options.runRipgrep ? { runRipgrep: options.runRipgrep } : {}),
+  });
+  const sessionNewTool = createSessionNewTool(options);
+  const sessionListTool = createSessionListTool(options.manager, options);
+  const sessionResumeTool = createSessionResumeTool(options.manager, options);
+  const startFocusTool = createStartFocusTool(options.manager);
+  const completeFocusTool = createCompleteFocusTool(options.manager, options.llmProvider);
+
+  return {
+    name: 'session',
+    label: 'session',
+    description:
+      'Unified session continuity surface for list/search/grep/new/resume and focus workflow actions. '
+      + `Use action=${SESSION_TOOL_ACTION_HELP}. Legacy action aliases remain available during migration.`,
+    parameters: Type.Object({
+      action: Type.Optional(Type.Union(SESSION_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
+        description:
+          'Session action. Defaults to list when omitted and no action-specific parameters are provided.',
+      })),
+      limit: Type.Optional(Type.Integer({
+        minimum: 1,
+        maximum: MAX_SESSION_LIST_LIMIT,
+        description: 'Optional result limit for list/search/grep actions.',
+      })),
+      sessionId: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Session ID for action=resume.',
+      })),
+      query: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Transcript query for action=search.',
+      })),
+      summarize: Type.Optional(Type.Boolean({
+        description: 'When true, action=search adds a short synthesis over the visible hits.',
+      })),
+      pattern: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Literal text or regex pattern for action=grep.',
+      })),
+      mode: Type.Optional(Type.Union([
+        Type.Literal('literal'),
+        Type.Literal('regex'),
+      ], {
+        description: 'Match mode for action=grep. Defaults to literal.',
+      })),
+      caseSensitive: Type.Optional(Type.Boolean({
+        description: 'Case-sensitive match flag for action=grep.',
+      })),
+      metadata: Type.Optional(Type.Record(
+        Type.String(),
+        Type.Unknown(),
+        {
+          description: 'Optional metadata for action=new.',
+        },
+      )),
+      channelId: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Optional exact channel/session scope filter or focus target channel.',
+      })),
+      scope: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Focus scope for action=start_focus.',
+      })),
+      conclusion: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Optional completion notes for action=complete_focus.',
+      })),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: SessionToolParams,
+      signal?: AbortSignal,
+    ): Promise<AgentToolResult<Record<string, unknown>>> => {
+      try {
+        switch (normalizeSessionAction(params)) {
+          case 'list':
+            return sessionListTool.execute(toolCallId, {
+              ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
+            }, signal);
+          case 'new':
+            return sessionNewTool.execute(toolCallId, {
+              ...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
+            }, signal);
+          case 'resume':
+            return sessionResumeTool.execute(toolCallId, {
+              sessionId: typeof params.sessionId === 'string' ? params.sessionId : '',
+            }, signal);
+          case 'search':
+            return sessionSearchTool.execute(toolCallId, {
+              query: typeof params.query === 'string' ? params.query : '',
+              ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
+              ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
+              ...(typeof params.summarize === 'boolean' ? { summarize: params.summarize } : {}),
+            }, signal);
+          case 'grep':
+            return sessionGrepTool.execute(toolCallId, {
+              pattern: typeof params.pattern === 'string' ? params.pattern : '',
+              ...(typeof params.mode === 'string' ? { mode: params.mode } : {}),
+              ...(typeof params.caseSensitive === 'boolean' ? { caseSensitive: params.caseSensitive } : {}),
+              ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
+              ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
+            }, signal);
+          case 'start_focus':
+            return startFocusTool.execute(toolCallId, {
+              scope: typeof params.scope === 'string' ? params.scope : '',
+              ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
+            }, signal);
+          case 'complete_focus':
+            return completeFocusTool.execute(toolCallId, {
+              ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
+              ...(typeof params.conclusion === 'string' ? { conclusion: params.conclusion } : {}),
+            }, signal);
+        }
+      } catch (error) {
+        return textResultWithError(`session failed: ${toErrorMessage(error)}.`, true);
+      }
     },
   };
 }

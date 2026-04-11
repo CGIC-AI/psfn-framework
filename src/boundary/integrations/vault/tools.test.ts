@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { VaultOperations } from './ops.js';
-import {
-  createVaultDailyTool,
-  createVaultReadTool,
-  createVaultSearchTool,
-  createVaultWriteTool,
-} from './tools.js';
+import { createVaultTool } from './tools.js';
 
 function createMockOps(): VaultOperations & {
   write: ReturnType<typeof vi.fn>;
@@ -26,27 +21,28 @@ function extractText(result: { content: Array<{ text: string }> }): string {
 }
 
 describe('vault tools', () => {
-  it('reads a note through vault_read and truncates long content', async () => {
+  it('reads a note through action=read and truncates long content', async () => {
     const ops = createMockOps();
     ops.read
       .mockResolvedValueOnce({ name: 'My Note', content: '# Hello\nWorld' })
       .mockResolvedValueOnce({ name: 'Long', content: 'x'.repeat(15_000) });
-    const tool = createVaultReadTool(ops);
+    const tool = createVaultTool(ops);
 
-    const result = await tool.execute('call-read', { name: 'My Note' });
-    const truncated = await tool.execute('call-read-long', { name: 'Long' });
+    const result = await tool.execute('call-read', { action: 'read', name: 'My Note' });
+    const truncated = await tool.execute('call-read-long', { action: 'vault_read', name: 'Long' });
 
     expect(extractText(result)).toContain('=== My Note ===');
     expect(extractText(result)).toContain('# Hello\nWorld');
     expect(extractText(truncated)).toContain('... (truncated)');
   });
 
-  it('writes notes through vault_write', async () => {
+  it('writes notes through action=write', async () => {
     const ops = createMockOps();
     ops.write.mockResolvedValue({ name: 'Entry', folder: 'Journal/', mode: 'create' });
-    const tool = createVaultWriteTool(ops);
+    const tool = createVaultTool(ops);
 
     const result = await tool.execute('call-write', {
+      action: 'write',
       name: 'Entry',
       content: 'Content',
       folder: 'Journal/',
@@ -60,7 +56,7 @@ describe('vault tools', () => {
     });
   });
 
-  it('formats search results through vault_search', async () => {
+  it('formats search results through action=search', async () => {
     const ops = createMockOps();
     ops.search.mockResolvedValue({
       query: 'test',
@@ -69,9 +65,9 @@ describe('vault tools', () => {
         { path: 'b.md' },
       ],
     });
-    const tool = createVaultSearchTool(ops);
+    const tool = createVaultTool(ops);
 
-    const result = await tool.execute('call-search', { query: 'test', limit: 5 });
+    const result = await tool.execute('call-search', { action: 'search', query: 'test', limit: 5 });
 
     expect(ops.search).toHaveBeenCalledWith('test', 5);
     expect(extractText(result)).toContain('2 results');
@@ -80,15 +76,15 @@ describe('vault tools', () => {
     expect(extractText(result)).toContain('2. b.md');
   });
 
-  it('reads and appends daily notes through vault_daily', async () => {
+  it('reads and appends daily notes through action=daily', async () => {
     const ops = createMockOps();
     ops.daily
       .mockResolvedValueOnce({ date: '2026-03-02', content: 'Today stuff', mode: 'read' })
       .mockResolvedValueOnce({ date: '2026-03-02', mode: 'append' });
-    const tool = createVaultDailyTool(ops);
+    const tool = createVaultTool(ops);
 
-    const readResult = await tool.execute('call-daily-read', {});
-    const appendResult = await tool.execute('call-daily-append', { content: 'New thought' });
+    const readResult = await tool.execute('call-daily-read', { action: 'daily' });
+    const appendResult = await tool.execute('call-daily-append', { action: 'vault_daily', content: 'New thought' });
 
     expect(extractText(readResult)).toContain('Daily Note (2026-03-02)');
     expect(extractText(readResult)).toContain('Today stuff');
@@ -96,15 +92,16 @@ describe('vault tools', () => {
     expect(ops.daily).toHaveBeenLastCalledWith({ content: 'New thought' });
   });
 
-  it('returns action-specific failures from the split tools', async () => {
+  it('returns action-specific failures from the unified tool', async () => {
     const ops = createMockOps();
     ops.write.mockRejectedValue(new Error('Obsidian desktop app is not running'));
-    const result = await createVaultWriteTool(ops).execute('call-write-error', {
+    const result = await createVaultTool(ops).execute('call-write-error', {
+      action: 'write',
       name: 'Note',
       content: 'x',
     });
 
-    expect(extractText(result)).toContain('vault_write failed: Obsidian desktop app is not running');
+    expect(extractText(result)).toContain('vault failed for action=write: Obsidian desktop app is not running');
     expect(result.details.isError).toBe(true);
   });
 });

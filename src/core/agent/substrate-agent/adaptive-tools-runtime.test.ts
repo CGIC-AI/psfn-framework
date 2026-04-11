@@ -54,7 +54,7 @@ describe('createToolSearchTool', () => {
     const toolSearch = createToolSearchTool({
       getExtendedTools: () => [
         {
-          name: 'notify_operator',
+          name: 'notify',
           description: 'Send a lightweight notification.',
           parameters: {} as any,
           execute: vi.fn(),
@@ -63,7 +63,7 @@ describe('createToolSearchTool', () => {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1,
         coreTools: ['tool_search', 'toolset'],
-        extendedTools: ['notify_operator'],
+        extendedTools: ['notify'],
         promotedToolsConfigured: [],
         promotedToolsActive: [],
         promotedToolsSkipped: [],
@@ -81,16 +81,16 @@ describe('createToolSearchTool', () => {
       emitTelemetry: () => undefined,
     });
 
-    const result = await (toolSearch as any).execute('tool-search-2', { query: 'notify_operator', limit: 5 });
+    const result = await (toolSearch as any).execute('tool-search-2', { query: 'notify', limit: 5 });
     const text = result.content?.[0]?.text as string;
     const match = result.details?.toolSearch?.matches?.[0];
 
     expect(text).toContain('capability_denied');
-    expect(text).toContain('missing: external.web');
+    expect(text).toContain('missing: external.web, external.discord, external.email');
     expect(match).toMatchObject({
-      name: 'notify_operator',
+      name: 'notify',
       status: 'capability_denied',
-      missingTokens: ['external.web'],
+      missingTokens: ['external.web', 'external.discord', 'external.email'],
     });
   });
 });

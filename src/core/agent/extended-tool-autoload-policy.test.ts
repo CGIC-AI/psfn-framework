@@ -58,10 +58,8 @@ describe('extended-tool-autoload-policy', () => {
     const policy = createDefaultExtendedToolAutoloadPolicy(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
     const devCandidates = policy.getCandidatesForIntent('dev');
     expect(devCandidates).toEqual(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.dev);
-    expect(devCandidates.slice(0, policy.maxPreloadCount)).toHaveLength(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
-    expect(devCandidates[0]).toBe('issue_create');
-    expect(devCandidates[1]).toBe('issue_update');
-    expect(devCandidates[2]).toBe('issue_close');
+    expect(devCandidates.slice(0, policy.maxPreloadCount)).toHaveLength(1);
+    expect(devCandidates[0]).toBe('beads');
   });
 
   it('supports disabling preloads by setting max count to zero', () => {
@@ -80,13 +78,10 @@ describe('extended-tool-autoload-policy', () => {
 
   it('keeps north_star as a single semantic memory-overlay candidate', () => {
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory).toEqual(expect.arrayContaining([
-      'vault_write',
-      'vault_read',
-      'vault_search',
-      'vault_daily',
+      'vault',
       'north_star',
     ]));
-    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'vault_write')).toHaveLength(1);
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'vault')).toHaveLength(1);
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'north_star')).toHaveLength(1);
   });
 
@@ -99,15 +94,15 @@ describe('extended-tool-autoload-policy', () => {
 
   it('selects bounded overlay tools deterministically from registered candidates', () => {
     const selection = selectBoundedOverlayCandidates(
-      ['issue_create', 'issue_update', 'issue_close', 'issue_sync'],
-      ['issue_create', 'issue_update', 'issue_close', 'issue_sync'],
+      ['beads', 'repo_apply_patch', 'repo_commit', 'repo_open_pr'],
+      ['beads', 'repo_apply_patch', 'repo_commit', 'repo_open_pr'],
       3,
     );
     expect(selection.maxCount).toBe(3);
-    expect(selection.selected).toEqual(['issue_create', 'issue_update', 'issue_close']);
+    expect(selection.selected).toEqual(['beads', 'repo_apply_patch', 'repo_commit']);
     expect(selection.skipped).toEqual([
       {
-        toolName: 'issue_sync',
+        toolName: 'repo_open_pr',
         reason: 'budget_exhausted',
       },
     ]);
@@ -162,10 +157,10 @@ describe('extended-tool-autoload-policy', () => {
       'heartbeat_update_policy',
       'heartbeat_run_template',
       'schedule_task',
-      'issue_sync',
+      'beads',
     ]);
     expect(selection.maxCount).toBe(2);
-    expect(selection.selected).toEqual(['heartbeat_update_policy', 'issue_sync']);
+    expect(selection.selected).toEqual(['heartbeat_update_policy', 'beads']);
     expect(selection.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({
         toolName: 'heartbeat_run_template',

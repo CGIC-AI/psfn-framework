@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,8 +11,10 @@ const DEFAULT_ADMIN_URL = 'http://127.0.0.1:10154';
 const DEFAULT_BOOTSTRAP_PATH = '/api/admin/chat/bootstrap';
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_VOICE_TIMEOUT_MS = 8_000;
+const DEFAULT_REPORT_PATH = process.env.PSFN_SMOKE_REPORT_PATH || '';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_LIVE_ENV_PATH = resolve(SCRIPT_DIR, '..', '.env');
+let activeReportPath = DEFAULT_REPORT_PATH;
 
 function printUsage() {
   console.log(`Chat Cockpit Smoke Harness
@@ -26,6 +28,7 @@ Options:
   --admin-token <token>    Admin bearer token for the bootstrap route
   --api-key <key>          API bearer token for chat completions when bootstrap does not expose one
   --bootstrap-path <path>  Bootstrap path (default: ${DEFAULT_BOOTSTRAP_PATH})
+  --report-path <path>     Write a JSON report artifact to this path
   --message <text>         Prompt text for chat completion smoke
   --voice                  Enable optional websocket handshake check
   --timeout-ms <ms>        HTTP timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS})
@@ -79,6 +82,7 @@ function parseArgs(argv) {
     adminToken: process.env.ADMIN_TOKEN || readEnvValue(liveEnvPath, 'ADMIN_TOKEN'),
     apiKey: process.env.API_KEY || readEnvValue(liveEnvPath, 'API_KEY'),
     bootstrapPath: DEFAULT_BOOTSTRAP_PATH,
+    reportPath: DEFAULT_REPORT_PATH,
     message: 'Smoke ping from chat cockpit.',
     enableVoice: false,
     timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -107,6 +111,9 @@ function parseArgs(argv) {
         break;
       case '--bootstrap-path':
         options.bootstrapPath = ensureString(argv[++i], '--bootstrap-path');
+        break;
+      case '--report-path':
+        options.reportPath = ensureString(argv[++i], '--report-path');
         break;
       case '--message':
         options.message = ensureString(argv[++i], '--message');
@@ -168,6 +175,39 @@ function createAuthHeaders(apiKey) {
     headers.Authorization = `Bearer ${apiKey.trim()}`;
   }
   return headers;
+}
+
+function writeJsonReport(reportPath, report) {
+  if (typeof reportPath !== 'string' || reportPath.trim().length === 0) {
+    return;
+  }
+  const resolvedPath = reportPath.trim();
+  mkdirSync(dirname(resolvedPath), { recursive: true });
+  writeFileSync(resolvedPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+}
+
+function summarizeBootstrap(payload) {
+  return {
+    canonicalContactId: payload?.canonicalContactId ?? null,
+    defaultSessionId: payload?.defaultSessionId ?? null,
+    defaultAuthorId: payload?.defaultAuthorId ?? null,
+    defaultAuthorName: payload?.defaultAuthorName ?? null,
+    selectedTarget: payload?.selectedTarget
+      ? {
+        channel: payload.selectedTarget.channel ?? null,
+        canonicalContactId: payload.selectedTarget.canonicalContactId ?? null,
+      }
+      : null,
+    api: {
+      chatCompletionsUrl: payload?.api?.chatCompletionsUrl ?? null,
+      voiceWebSocketUrl: payload?.api?.voiceWebSocketUrl ?? null,
+      hasBootstrapApiKey: typeof payload?.api?.apiKey === 'string' && payload.api.apiKey.trim().length > 0,
+    },
+    runtime: {
+      modelId: payload?.runtime?.model?.id ?? null,
+      modelLabel: payload?.runtime?.model?.label ?? null,
+    },
+  };
 }
 
 function resolveUrl(rawUrl, baseUrl) {
@@ -241,6 +281,12 @@ async function runChatCompletionCheck(options, bootstrap) {
   }
 
   pass(`Chat completion returned assistant content: ${content.slice(0, 120)}`);
+  return {
+    chatCompletionsUrl,
+    contentPreview: content.slice(0, 200),
+    model: payload?.model ?? null,
+    usage: payload?.usage ?? null,
+  };
 }
 
 async function waitForWebSocketOpen(ws, timeoutMs) {
@@ -323,6 +369,11 @@ async function runVoiceHandshakeCheck(options, bootstrap) {
     }));
     await waitForSessionStartAck(ws, sessionId, options.voiceTimeoutMs);
     pass('Voice websocket accepted session.start and returned ack');
+    return {
+      voiceWebSocketUrl: voiceUrl.toString(),
+      sessionId,
+      ack: 'session.start',
+    };
   } finally {
     if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
       ws.close();
@@ -332,22 +383,60 @@ async function runVoiceHandshakeCheck(options, bootstrap) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  activeReportPath = options.reportPath || DEFAULT_REPORT_PATH;
   const bootstrap = await runBootstrapCheck(options);
-  await runChatCompletionCheck(options, bootstrap);
+  const chat = await runChatCompletionCheck(options, bootstrap);
+  let voice = {
+    voiceWebSocketUrl: null,
+    sessionId: null,
+    ack: null,
+    skipped: true,
+  };
 
   if (options.enableVoice) {
-    await runVoiceHandshakeCheck(options, bootstrap);
+    voice = {
+      ...(await runVoiceHandshakeCheck(options, bootstrap)),
+      skipped: false,
+    };
   } else {
     info('Skipping optional voice websocket check (pass --voice to enable)');
   }
 
+  const report = {
+    status: 'ok',
+    checkedAt: new Date().toISOString(),
+    adminUrl: options.adminUrl,
+    apiBaseUrl: options.apiBaseUrl || options.adminUrl,
+    bootstrapPath: options.bootstrapPath,
+    bootstrap: summarizeBootstrap(bootstrap),
+    chat,
+    voice,
+    voiceEnabled: options.enableVoice,
+    timeoutMs: options.timeoutMs,
+    voiceTimeoutMs: options.voiceTimeoutMs,
+  };
+
+  writeJsonReport(options.reportPath, report);
+  if (options.reportPath) {
+    pass(`JSON report written to ${options.reportPath}`);
+  }
   pass('Chat cockpit smoke harness completed');
+  return report;
 }
 
 try {
   await main();
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (activeReportPath) {
+    writeJsonReport(activeReportPath, {
+      status: 'failed',
+      checkedAt: new Date().toISOString(),
+      error: {
+        message,
+      },
+    });
+  }
   fail(message);
   process.exit(1);
 }

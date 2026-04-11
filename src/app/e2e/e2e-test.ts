@@ -12,7 +12,6 @@ import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { LLMClient } from '../../primitives/llm/client.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/think/types.js';
@@ -27,6 +26,7 @@ import {
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
+import { createScriptedE2ELLMProvider } from './test-llm-provider.js';
 
 // ── Test utilities ──
 
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     const companionName = card.data.name.trim() || 'Companion';
 
     // Core components
-    const llmClient = new LLMClient(config);
+    const llmClient = createScriptedE2ELLMProvider();
     const sessionComposition = composeSessionRuntime({ config, sessionsDir });
     const { sessionStore, sessionManager } = sessionComposition;
 
@@ -137,6 +137,9 @@ async function main(): Promise<void> {
     await eventBus.emit('system.ready', {});
 
     console.log(`Channel: ${CHANNEL}`);
+    console.log(`Runtime root: ${rootDir}`);
+    console.log(`System data dir: ${runtime.systemDataDir}`);
+    console.log(`Companion data dir: ${runtime.companionDataDir}`);
     console.log(`Sessions dir: ${sessionsDir}`);
     console.log(`Database: ${databasePath}`);
     console.log(`Primary model: ${config.primaryModel}`);

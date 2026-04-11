@@ -147,6 +147,11 @@ npm run verify:repository-hygiene
 npm run verify:agent-docker-isolation
 ```
 
+- `npm run smoke:chat` exercises the split-runtime admin bootstrap and chat completion path; set `PSFN_SMOKE_REPORT_PATH=/tmp/psfn-smoke-report.json` to capture a JSON artifact with the bootstrap, chat, and optional voice checks.
+- `npm run verify:startup-owner-files` is the canonical startup preflight for the split-runtime owner-file contract; `npm run e2e` assumes that preflight has already passed.
+- `npm run e2e` uses the isolated split-runtime harness under `src/app/e2e/e2e-test.ts`, with scripted local LLM responses so it does not consume ambient repo owner files or external model credentials.
+- `npm run e2e:voice` exercises the isolated voice round-trip harness on the split runtime.
+
 For Discord voice specifically:
 
 ```bash

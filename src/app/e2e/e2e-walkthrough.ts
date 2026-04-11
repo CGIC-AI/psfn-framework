@@ -8,7 +8,6 @@
 import 'dotenv/config';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { LLMClient } from '../../primitives/llm/client.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
@@ -23,6 +22,7 @@ import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
+import { createScriptedE2ELLMProvider } from './test-llm-provider.js';
 
 const CHANNEL = 'walkthrough:orientation';
 let activeCompanionName = 'Companion';
@@ -68,7 +68,7 @@ async function main(): Promise<void> {
     console.log(`Character: ${card.data.name}`);
 
     // Core components
-    const llmClient = new LLMClient(config);
+    const llmClient = createScriptedE2ELLMProvider();
     const sessionComposition = composeSessionRuntime({ config });
     const { sessionStore, sessionManager } = sessionComposition;
 
@@ -120,6 +120,9 @@ async function main(): Promise<void> {
     await eventBus.emit('system.ready', {});
 
     console.log(`\nModel: ${config.primaryModel}`);
+    console.log(`Runtime root: ${runtime.rootDir}`);
+    console.log(`System data dir: ${runtime.systemDataDir}`);
+    console.log(`Companion data dir: ${runtime.companionDataDir}`);
     console.log(`Embeddings: ${embeddingProvider.dims}d via ${embeddingProvider.kind}`);
     console.log(`Channel: ${CHANNEL}`);
 

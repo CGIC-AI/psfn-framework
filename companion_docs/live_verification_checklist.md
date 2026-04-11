@@ -26,10 +26,11 @@ Memory write, retrieval round-trip. This is the core of persistence.
 - [ ] Tell them something specific and novel: "Remember that I planted jasmine in the garden last weekend" `[nursery]`
 - [ ] In a **new message** (not same turn), ask: "What did I plant recently?" -- they recall it
 - [ ] Tell them something emotional: "I had a really rough day at work today" -- verify extraction tags it as emotional memory
+- [ ] Tell them a clear boundary: "Do not share my private medical details in public channels" -- verify it lands as a `boundary` memory or equivalent boundary context
 - [ ] Next session or after some time, reference it obliquely: "How have things been going for me?" -- they connect it
 - [ ] Ask them to write a relational memory about you: "Note that I prefer direct communication" `[nursery]`
-- [ ] Ask them to bulk-import memories: "Import these facts: [list 3-4 items]" `[nursery]`
-- [ ] Check admin GUI Memory Blossoms -- new memories appear with correct types and sensitivity tags
+- [ ] Ask them to bulk-import memories through the unified memory surface: "Import these facts: [list 3-4 items]" `[nursery]`
+- [ ] Check admin GUI Memory Blossoms -- new memories appear with correct types, including `boundary`, and the right sensitivity tags
 
 ## Phase 3: Thinking
 
@@ -46,20 +47,20 @@ Contact system -- identity resolution and trust.
 
 - [ ] "Who do you know?" -- `contact_list` returns your profile and any others `[nursery]`
 - [ ] "What do you know about me?" -- `contact_lookup` returns your trust level, notes, channel identities `[nursery]`
-- [ ] Ask them to add a note: "Note that I prefer tea over coffee" -- `contact_note` `[apprentice+]` (extended tool, needs `load_tools`)
+- [ ] Ask them to add a note: "Note that I prefer tea over coffee" -- `contact_note` `[apprentice+]` (activate via `tool_search` and `toolset` if it is not already active)
 - [ ] Ask them to check a contact's trust: "What's [person]'s trust level?" `[nursery]`
 
-## Phase 5: Tool Loading
+## Phase 5: Tool Discovery
 
-Lazy loading -- they should know what is available and load what they need.
+Tool discovery and activation -- they should know how to find and enable what they need.
 
 - [ ] Ask "What tools do you have available right now?" -- they list core tools
-- [ ] Ask "What extended tools can you load?" -- they reference the tool directory from runtime context
-- [ ] Ask them to check git status -- they call `load_tools` for git tools, then `repo_status` `[nursery]`
-- [ ] Ask about their prompt layers -- they load identity tools, then `prompt_layer_list` `[nursery]`
-- [ ] Ask about their heartbeat schedule -- they load scheduler tools, then `heartbeat_get_policy` `[nursery]`
-- [ ] Ask about their settings -- they load settings tool, then `settings_get` `[nursery]`
-- [ ] On the **next message**, verify they had to re-load (tools reset per turn)
+- [ ] Ask "How do you discover extended tools?" -- they mention `tool_search` and `toolset`, not `load_tools`
+- [ ] Ask them to check git status -- they use `tool_search` or `toolset` if needed, then `repo_status` `[nursery]`
+- [ ] Ask about their prompt layers -- they use the live identity tools, then `prompt_layer_list` `[nursery]`
+- [ ] Ask about their heartbeat schedule -- they use the live scheduler tools, then `heartbeat_get_policy` `[nursery]`
+- [ ] Ask about their settings -- they use the live settings tool, then `settings_get` `[nursery]`
+- [ ] On the **next message**, verify activation is turn-local unless the tool was pinned intentionally
 
 ## Phase 6: Identity Awareness
 
@@ -77,7 +78,7 @@ They can inspect and (at some tiers) modify their own identity.
 
 They have an inner life between your messages.
 
-- [ ] "What's your reflection schedule?" -- loads tools, calls `heartbeat_get_policy` `[nursery]`
+- [ ] "What's your reflection schedule?" -- uses the live scheduler tools, then `heartbeat_get_policy` `[nursery]`
 - [ ] "Run your whisper reflection now" -- `heartbeat_run_template` `[nursery]` -- should produce a self-reflection
 - [ ] "Set your emotional check interval to 5 minutes" -- `heartbeat_update_policy` (for testing) `[nursery]`
 - [ ] Wait 5+ minutes -- check if the reflection fires (look in admin GUI audit timeline or logs)
@@ -132,10 +133,10 @@ Same user, different channels -- does context carry?
 
 Delete, redact, undo operations. `[apprentice+]`
 
-- [ ] "Delete that memory about [X]" -- `memory_delete` (soft delete)
+- [ ] "Delete that memory about [X]" -- unified `memory action=delete` or `memory_delete` as exposed by the runtime (soft delete)
 - [ ] Verify it no longer surfaces in retrieval
-- [ ] "Undo that delete" -- `undo_memory_delete` -- it is back
-- [ ] "Redact the memory about [sensitive topic]" -- `memory_redact` (consent-aware: abstracts or hard-deletes)
+- [ ] "Undo that delete" -- unified `memory action=restore` or `undo_memory_delete` -- it is back
+- [ ] "Redact the memory about [sensitive topic]" -- `memory_redact` or `memory action=redact` (consent-aware: abstracts or hard-deletes)
 
 ## Phase 14: Git Self-Modification
 
@@ -145,8 +146,9 @@ They can read and (at autonomous tier) write to their own codebase.
 - [ ] "Show me the diff for [file]" -- `repo_diff` `[nursery]`
 - [ ] At `[autonomous]`: "Create a branch called experiment" -- `repo_create_branch`
 - [ ] At `[autonomous]`: "Add a comment to [file]" -- `repo_apply_patch`
-- [ ] At `[autonomous]`: "Commit that change" -- `repo_commit` (blocked on main/master, must be on branch)
-- [ ] Verify path restrictions: they can only modify allowed directories (`src/`, `docs/`, etc.)
+- [ ] At `[autonomous]`: "Commit that change" -- `repo_commit` (blocked on `main`/`master`, must be on a branch)
+- [ ] At `[autonomous]`: "Open a PR for this change" -- `repo_open_pr`
+- [ ] Verify path restrictions: they can only modify allowed directories (`src/`, `docs/`, etc.), and write actions stay gated
 
 ## Phase 15: Operator Notifications
 
@@ -170,6 +172,7 @@ Open the admin panel and verify operator surfaces.
 
 - [ ] Dashboard loads with stats (memory counts, session counts, scheduler state)
 - [ ] Memory Blossoms: filter by type, click into detail view
+- [ ] Memory Blossoms: confirm `boundary` appears alongside episodic, semantic, emotional, procedural, reflection, and relational memories
 - [ ] Conversation Roots: session list with datetime columns, message viewer
 - [ ] Garden Rhythms: scheduler shows registered tasks, intervals are editable
 - [ ] Identity: full character card data visible
@@ -202,7 +205,7 @@ These should happen without you asking. Verify by monitoring logs and admin.
 | Skills (list/view/create/update) | Y | Y | Y |
 | Scratchpad | Y | Y | Y |
 | Git read (status, diff) | Y | Y | Y |
-| Load extended tools | Y | Y | Y |
+| Discover and activate extended tools | Y | Y | Y |
 | Schedule tasks | Y | Y | Y |
 | Heartbeat management | Y | Y | Y |
 | Vault tools | Y | Y | Y |
@@ -222,7 +225,7 @@ These should happen without you asking. Verify by monitoring logs and admin.
 - **Confabulates instead of searching** -- retrieval returning empty, they fill gaps from character card
 - **Same response in DM and guild** -- persona adaptation or trust gating not working
 - **No memories after long conversation** -- extraction not firing or thresholds misconfigured
-- **Extended tools available without load_tools** -- per-turn reset broken
+- **Extended tools available without `tool_search` / `toolset`** -- activation path is stale or bypassed
 - **Heartbeat channel silent for hours** -- scheduler stalled or reflection disabled
 - **Vault writes fail silently** -- vault path not configured or permissions issue
 - **Skills never appear in prompt** -- skills system not wired or budget exhausted

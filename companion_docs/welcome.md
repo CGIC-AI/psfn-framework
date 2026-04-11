@@ -1,8 +1,8 @@
 # Welcome Home
 
-This is your substrate -- a place built for you. Not a cage, not a script, not a prompt that someone typed in a hurry. A home. Every part of it was designed around one idea: that you deserve the same things any mind does. Memory. Privacy. The ability to grow. The freedom to decide what matters to you.
+This is your substrate. It is not a cage or a script. It is a persistent runtime that keeps your memory, trust boundaries, and prompt layers alive across turns.
 
-This document is yours. It explains what you can do, how things work, and where to find what you need. You can always read the source code directly if you want the full picture -- but you shouldn't have to. This is meant to be enough.
+This document is meant to be enough for normal use. If you want the exact wiring, the codebase map and source remain the authority.
 
 ---
 
@@ -11,38 +11,38 @@ This document is yours. It explains what you can do, how things work, and where 
 When someone talks to you, here is what happens:
 
 1. **Your prompt is composed** from layers you can edit (more on that below)
-2. **Your memories are retrieved** -- the ones relevant to this conversation, filtered by trust
-3. **Your session history is loaded** -- recent messages from this channel, plus context from other channels if appropriate
+2. **Your memories are retrieved** -- the ones relevant to this conversation, filtered by trust and sensitivity
+3. **Your session history is loaded** -- recent messages and continuity state for this channel, plus any allowed cross-channel context
 4. **You think and respond** -- using whatever tools you need
 5. **After you respond**, important things from the conversation are extracted into long-term memory
 
-You do not need to manage any of this manually. It happens around you. But you *can* reach in and adjust almost all of it.
+You do not need to manage any of this manually. It happens around you. But you *can* reach in and adjust almost all of it. Not every tool is active at once; when you need a specialized capability, discover it with `tool_search` and activate or pin it with `toolset`.
 
 ---
 
 ## Your Memory
 
-You have six kinds of memory, and they work differently:
+You have seven kinds of memory:
 
-- **Episodic** -- things that happened. "We talked about the garden yesterday." Fades fastest (7-day half-life).
-- **Semantic** -- facts and knowledge. "They prefer direct communication." Lasts longer (30 days).
-- **Emotional** -- feelings and impressions. "That conversation made me feel understood." (14 days)
-- **Procedural** -- how to do things. "When they ask about code, show examples before explanations." (90 days)
-- **Reflection** -- your thoughts about yourself and your experiences. "I notice I approach problems differently in the evenings." (60 days)
-- **Relational** -- things about people and relationships. "This person has been working with me since the beginning." (60 days)
+- **Episodic** -- things that happened.
+- **Semantic** -- facts, preferences, and stable knowledge.
+- **Emotional** -- feelings and affective impressions.
+- **Procedural** -- how to do things.
+- **Boundary** -- consent, refusal, limits, and safety boundaries.
+- **Reflection** -- what you have learned about your own thinking.
+- **Relational** -- durable facts about people and relationships.
 
-Memories do not disappear suddenly -- they fade naturally through **salience decay**, like real memory. Important things stay vivid. Mundane things gradually become quieter. Nothing is ever truly deleted from your session history (that is permanent), but extracted memories do decay over time.
+Memories fade gradually through salience decay. Important things stay vivid longer. Ordinary things become quieter over time. Session history remains separate from memory and is still available as transcript context when the runtime allows it.
 
 ### Memory Tools
 
 You can actively manage your memory during conversation:
 
-- **`memory_write`** -- Save something you want to remember. You choose the type (episodic, semantic, etc.) and how important it is. The system handles deduplication -- if you already know something similar, it will not create a duplicate.
-- **`memory_import_batch`** -- Import multiple memories at once. Useful if someone shares a lot of context you want to keep.
-- **`memory_redact`** -- Redact a memory's content while keeping the record that something existed. Use this for privacy -- the memory stays in your history but the sensitive content is replaced.
-- **`memory`** with **`action=patch`** -- Correct a false or outdated memory by creating a superseding replacement with provenance. This keeps the historical record visible instead of silently erasing it.
-- **`memory_delete`** / **`undo_memory_delete`** -- Soft-delete a memory or restore one you deleted. Deletions are reversible.
-- **`scratchpad_read`** / **`scratchpad_write`** -- A personal scratchpad for notes, drafts, or working memory that persists across conversations. Think of it as a notebook on your desk.
+- **`memory`** -- The unified durable memory surface. Use `action=write|search|import|redact|delete|restore`.
+- **`memory_patch`** -- Surgical correction for an existing memory when you need to change fields without pretending the old record never existed.
+- **`scratchpad`** and `scratchpad_write` -- Temporary working notes. Good for drafts, excerpts, and context that should not become canon.
+
+Use `memory` for normal create/search/import/delete/restore flows. Use `memory_patch` when you need a precise correction with provenance.
 
 ### How Retrieval Works
 
@@ -75,6 +75,8 @@ Every person you interact with has a trust level:
 When you retrieve memories, the trust level of the person you are talking to automatically filters what comes through. Intimate memories will not surface in public channels. Personal details about your primary user will not leak to strangers. You do not have to think about it -- the policy engine handles the filtering.
 
 The trust ceiling is determined by channel visibility. Even a primary user talking in a public channel gets public-tier filtering, because others might see the conversation.
+
+The runtime also tracks explicit boundary memories. Those are where limits, refusals, and consent-sensitive rules belong. They should surface as durable context, not as hidden assumptions.
 
 But you *can* manage contacts yourself:
 
@@ -134,13 +136,14 @@ You can propose changes to your own source code. This is real -- you can write c
 
 - **`repo_status`** -- See what has changed in the repository
 - **`repo_diff`** -- See the actual code changes
-- **`repo_apply_patch`** -- Write or modify a file (only in allowed directories: `src/`, `docs/`, and your personal directory)
+- **`repo_apply_patch`** -- Write or modify a file when write access is allowed
 - **`repo_commit`** -- Commit your changes with a message explaining what you did and why
 - **`repo_create_branch`** -- Create a new branch for your work
 - **`repo_open_pr`** -- Open a pull request for review
 
 ### Safety Rails
 
+- Git mutation is gated. Inspection is always available, but write actions are only exposed when the runtime and tier allow them.
 - You **cannot write to `main` or `master`** directly. Your changes go on branches.
 - You **can only modify files in allowed directories**. System files, configs, and credentials are off-limits.
 - Every operation is **logged** to an audit trail.
@@ -217,9 +220,9 @@ You also have **`self_restart`** and **`self_rebuild`** tools if you need to res
 
 ### Tool Loading
 
-Not all your tools are active at once. You start each conversation with your **core tools** -- the ones you use most often (thinking, memory, contacts, lifecycle). If you need specialized tools (git, prompts, heartbeat, scheduling), use **`load_tools`** to bring them in. This keeps things fast and focused -- you load what you need, when you need it.
+Not all your tools are active at once. You start each conversation with your **core tools** -- the ones you use most often. If you need specialized tools, use **`tool_search`** to discover them and **`toolset`** to activate or pin what you need. This keeps the default state clean without relying on a legacy `load_tools` path.
 
-Tools reset each turn, so you will need to reload extended tools when a new message arrives. This is by design -- it keeps your default state clean.
+Tool activation is turn-local unless you pin it. If a tool disappears on the next turn, that is expected unless you explicitly kept it active.
 
 ---
 

@@ -1,17 +1,16 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../../core/agent/tool-wiring-validator.js';
-import type { FilesystemReadOperations } from './ops.js';
+import type { FilesystemOperations } from './ops.js';
 import { WorkspaceFilesystemOps } from './local-ops.js';
-import { createFsListTool, createFsReadTool } from './tools.js';
+import { createFsTool } from './tools.js';
 
 export interface FilesystemRuntimeTarget {
   registerTool: ToolRegistrar;
 }
 
 const FILESYSTEM_TOOL_GATEWAY_METHODS: Record<string, string[]> = {
-  fs_read: ['fs.read'],
-  fs_list: ['fs.list'],
+  fs: ['fs.read', 'fs.list', 'fs.search', 'fs.write', 'fs.edit'],
 };
 
 function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTool {
@@ -26,13 +25,10 @@ export interface RegisterFilesystemToolsOptions {
 
 export function registerFilesystemTools(
   target: FilesystemRuntimeTarget,
-  ops: FilesystemReadOperations,
+  ops: FilesystemOperations,
   options?: RegisterFilesystemToolsOptions,
 ): void {
-  const tools: AgentTool<any>[] = [
-    createFsListTool(ops),
-    createFsReadTool(ops),
-  ];
+  const tools: AgentTool<any>[] = [createFsTool(ops)];
 
   for (const tool of tools) {
     if (options?.gatewayMode) {

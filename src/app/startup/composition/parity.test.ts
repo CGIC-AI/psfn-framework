@@ -253,7 +253,7 @@ describe('wireFilesystemToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers fs_list and fs_read as core tools', () => {
+  it('registers fs as a core tool', () => {
     const target = {
       registerTool: vi.fn(),
     };
@@ -261,7 +261,7 @@ describe('wireFilesystemToolsRuntime', () => {
     wireFilesystemToolsRuntime(target as any, tempDir);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.map(([tool]) => tool.name).sort()).toEqual(['fs_list', 'fs_read']);
+    expect(calls.map(([tool]) => tool.name)).toEqual(['fs']);
     expect(calls.every(([, category]) => category === 'core')).toBe(true);
   });
 });

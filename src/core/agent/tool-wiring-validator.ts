@@ -149,9 +149,18 @@ export type GatewayToolMetadataCoverage = Readonly<Record<string, readonly strin
 
 export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage = Object.freeze({
   web_fetch: Object.freeze(['web.fetch']),
+  fs: Object.freeze(['fs.read', 'fs.list', 'fs.search', 'fs.write', 'fs.edit']),
   fs_read: Object.freeze(['fs.read']),
   fs_list: Object.freeze(['fs.list']),
   notify_operator: Object.freeze(['notify.ntfy']),
+  repo: Object.freeze([
+    'git.status',
+    'git.diff',
+    'git.apply_patch',
+    'git.commit',
+    'git.create_branch',
+    'git.open_pr',
+  ]),
   repo_status: Object.freeze(['git.status']),
   repo_diff: Object.freeze(['git.diff']),
   repo_apply_patch: Object.freeze(['git.apply_patch']),
@@ -246,6 +255,8 @@ const RPC_TO_CLIENT_METHOD: Record<string, string> = {
   'fs.read': 'fsRead',
   'fs.write': 'fsWrite',
   'fs.list': 'fsList',
+  'fs.search': 'fsSearch',
+  'fs.edit': 'fsEdit',
   'notify.ntfy': 'notifyNtfy',
   'session.hmac.sign': 'sessionHmacSign',
   'session.hmac.verify': 'sessionHmacVerify',

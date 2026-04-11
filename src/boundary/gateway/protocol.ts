@@ -126,6 +126,7 @@ export interface WebRequestBinaryParams extends WebFetchBinaryParams {
 
 export interface FsReadParams {
   path: string;
+  maxBytes?: number;
 }
 
 export interface FsWriteParams {
@@ -141,7 +142,7 @@ export interface FsListParams {
 export interface FsSearchParams {
   query: string;
   glob?: string;
-  mode?: 'literal' | 'regexp';
+  mode?: 'literal' | 'regex';
   maxMatches?: number;
   maxFiles?: number;
   maxBytesPerFile?: number;
@@ -445,6 +446,7 @@ export interface WebRequestBinaryResult extends WebFetchBinaryResult {
 
 export interface FsReadResult {
   content: string;
+  truncated: boolean;
 }
 
 export interface FsWriteResult {
@@ -467,7 +469,10 @@ export interface FsSearchMatch {
 export interface FsSearchResult {
   query: string;
   glob: string;
+  mode: 'literal' | 'regex';
+  scannedFiles: number;
   hitLimit: boolean;
+  truncatedFiles: string[];
   matches: FsSearchMatch[];
 }
 

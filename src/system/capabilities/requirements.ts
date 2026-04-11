@@ -80,7 +80,14 @@ function resolveUnifiedToolRequirement(
       if (action === 'read' || action === 'list' || action === 'search' || action === null) return 'git.read';
       return ['git.read', 'git.write'];
     case 'repo':
-      if (action === 'patch' || action === 'commit' || action === 'create_branch' || action === 'open_pr') {
+      if (
+        action === 'patch'
+        || action === 'branch'
+        || action === 'create_branch'
+        || action === 'commit'
+        || action === 'publish'
+        || action === 'open_pr'
+      ) {
         return 'git.write';
       }
       if (action === 'inspect' || action === 'status' || action === 'diff' || action === null) return 'git.read';

@@ -1,6 +1,6 @@
 # Setup
 
-PSFN now boots through the split runtime. `src/app/startup/index.ts` is disabled and exits fail-closed; use `npm run split` for the full gateway + agent + operator stack, or launch `npm run gateway`, `npm run agent`, and `npm run operator` individually.
+PSFN boots through the split runtime. The legacy `src/app/startup/index.ts` entrypoint is disabled and exits fail-closed; use `npm run split` for the full gateway + agent + operator stack, or launch `npm run gateway`, `npm run agent`, and `npm run operator` individually.
 
 ## Prerequisites
 
@@ -90,7 +90,7 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 ### Continuous / local
 
 - Default mode when `PSFN_RUNTIME_LAYOUT_MODE` is unset.
-- Uses the legacy shared root (`DATA_DIR`, default `./data`) for system and companion data.
+- Uses the legacy shared root (`DATA_DIR`, default `./data`) for both system and companion data.
 - Good for local development and smoke testing.
 
 ### Production / split roots

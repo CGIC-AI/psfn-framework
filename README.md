@@ -18,8 +18,8 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ## Features
 
 ### Core
-- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and adaptive tool discovery/activation (`tool_search`, `toolset`, promotion, bounded autoload) built on [pi-agent-core](https://github.com/nickvdyck/pi-ai)
-- **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
+- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and adaptive tool discovery/activation through `tool_search` and `toolset` built on [pi-agent-core](https://github.com/nickvdyck/pi-ai)
+- **Memory System** — 7 memory types (episodic, semantic, emotional, procedural, boundary, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
 - **Pluggable Embeddings** — Runtime-configured embeddings in `settings.json`: local `@huggingface/transformers`, Ollama, or any OpenAI-compatible embeddings API
 - **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
 - **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots (including vision)
@@ -37,7 +37,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 
 ### Self-Modification
 - **Layered Prompt Stack** — 5-layer editable prompt system (base→operator→runtime→channel→task) with versioning, rollback, and admin UI
-- **Git Tools** — 6 agent-accessible tools for self-modifying source code with path allowlists, protected branch blocking, audit trail
+- **Git Tools** — 6 agent-accessible repo inspection and guarded mutation tools for the read-only parent runtime, with path allowlists, protected branch blocking, and audit trail
 - **RLM+REPL Sandbox** — Code execution via `think` tool with sub-LM calls, memory queries, variable persistence
 - **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks
 - **Obsidian Vault** — 4 agent tools (`vault_write`, `vault_read`, `vault_search`, `vault_daily`) for reading and writing Obsidian notes, with auto-publish for heartbeat reflections
@@ -258,7 +258,7 @@ Gateway (host)                    Agent (container, --network=none)
 |-------|---------|
 | **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token budgeting, editable settings, lifecycle, bidirectional gateway RPC |
 | **REPL Sandbox** | RLM-style code execution, sub-LM calls, context-as-object |
-| **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec), 6 memory types, writer, tools |
+| **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec), 7 memory types, writer, tools |
 | **Trust & Privacy** | Honne/tatemae: 4-tier trust, 4-tier sensitivity, 5-layer policy, contact store, channel visibility, persona adaptation |
 | **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
 | **Git Self-Modification** | GitOps service, 6 tools (status, diff, patch, commit, branch, PR), path allowlist, audit log |
@@ -277,7 +277,7 @@ Gateway (host)                    Agent (container, --network=none)
 
 ### Agent Tools
 
-Your companion has access to a mixed direct-tool surface during conversation. `tool_search` and `toolset` are the canonical always-on discovery/control path for non-default overlays. Some domains are already unified (`shell`, `skill`, `orient`, `subagent`), while others still ship as split first-party tools on this stabilized branch. See [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and the current-to-target mapping.
+Your companion has access to a mixed direct-tool surface during conversation. `tool_search` and `toolset` are the canonical always-on discovery/control path for non-default overlays. Some domains are already unified (`shell`, `skill`, `orient`, `subagent`), while others still ship as split first-party tools on this stabilized branch. The parent-agent repo surface is intentionally `read_only` here, so repository mutation must come back through the guarded gateway path or another explicitly enabled flow. See [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and the current-to-target mapping.
 
 Skills are reusable workflow guidance, not world-execution tools. The runtime manages them through the unified `skill` surface while execution stays on the tool families below.
 

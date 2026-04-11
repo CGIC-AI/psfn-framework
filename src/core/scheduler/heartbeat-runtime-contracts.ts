@@ -21,7 +21,7 @@ import type {
   ActiveConcernSnapshot,
   IntentionActionDecision,
 } from '../intention/appraisal.js';
-import type { PendingFollowUp, PendingFollowUpStore } from '../intention/pending-follow-ups.js';
+import type { PendingFollowUp, PendingFollowUpStorePort } from '../intention/pending-follow-ups.js';
 import type { CareReminderStore } from '../intention/care-reminders.js';
 import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import type { InternalState } from '../self-model/state.js';
@@ -123,7 +123,7 @@ export interface HeartbeatRuntimeOptions {
     authorName: string;
     nextDueAt?: string;
   } | undefined;
-  pendingFollowUpStore?: PendingFollowUpStore | null;
+  pendingFollowUpStore?: PendingFollowUpStorePort | null;
   careReminderStore?: CareReminderStore | null;
   onBehavioralPatternOutcome?: (input: {
     channelId: string;

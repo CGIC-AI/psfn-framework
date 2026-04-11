@@ -59,7 +59,6 @@ export function wireHeartbeatRuntime(
     runtimeOptions,
   });
 
-  target.registerTool(createHeartbeatGetPolicyTool(templateRuntime.policyStore), 'core');
   target.registerTool(createScheduleTool({
     scheduler,
     agentLoop,
@@ -73,6 +72,7 @@ export function wireHeartbeatRuntime(
     careReminderStore: runtimeOptions.careReminderStore ?? null,
     emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(runtimeOptions.eventBus),
   }), 'core');
+  target.registerTool(createHeartbeatGetPolicyTool(templateRuntime.policyStore), 'extended');
   target.registerTool(createHeartbeatUpdatePolicyTool(templateRuntime.policyStore, templateRuntime.syncReflectionTasks, {
     memoryWriter: runtimeOptions.memoryWriter,
     reflectionStore: runtimeOptions.reflectionStore,

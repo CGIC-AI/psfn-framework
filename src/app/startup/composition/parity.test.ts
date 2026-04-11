@@ -321,6 +321,46 @@ describe('wireHeartbeatRuntime', () => {
     expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
   });
 
+  it('registers schedule as the canonical core surface and keeps legacy heartbeat policy access compatible', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const target = {
+      registerTool: vi.fn(),
+    };
+    const agentLoop = {
+      handleMessage: vi.fn().mockResolvedValue({ content: 'reflection output' }),
+    };
+    const sender = {
+      send: vi.fn().mockResolvedValue(undefined),
+    };
+
+    wireHeartbeatRuntime(
+      target,
+      scheduler,
+      agentLoop,
+      sender,
+      tempDir,
+      undefined,
+      { eventBus },
+    );
+
+    const calls = target.registerTool.mock.calls as Array<[any, string]>;
+    expect(calls.find(([tool]) => tool.name === 'schedule')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'heartbeat_get_policy')?.[1]).toBe('extended');
+
+    const scheduleTool = calls.find(([tool]) => tool.name === 'schedule')?.[0] as {
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }>;
+    };
+    const result = await scheduleTool.execute('call-schedule-list-templates', { action: 'get_policy' });
+    const text = result.content[0]?.text ?? '';
+
+    expect(text).toContain('Heartbeat Policy');
+    expect(text).toContain('Templates:');
+  });
+
   it('keeps values mutations extended while values_list moves behind orient', () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {

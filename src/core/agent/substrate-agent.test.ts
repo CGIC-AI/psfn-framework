@@ -707,6 +707,14 @@ describe('SubstrateAgent.registerTool', () => {
     } as any, 'extended');
 
     agent.registerTool({
+      name: 'subagent',
+      label: 'subagent',
+      description: 'unified bounded subagent control surface',
+      parameters: { type: 'object' as const, properties: {} },
+      execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+    } as any, 'core');
+
+    agent.registerTool({
       name: 'memory_write',
       label: 'memory_write',
       description: 'stateful write tool',
@@ -725,6 +733,7 @@ describe('SubstrateAgent.registerTool', () => {
     const catalog = agent.getToolCatalog();
     const repoStatus = [...catalog.extended].find(tool => tool.name === 'repo_status') as any;
     const spawnSubagent = [...catalog.extended].find(tool => tool.name === 'spawn_subagent') as any;
+    const subagent = [...catalog.core].find(tool => tool.name === 'subagent') as any;
     const memoryWrite = [...catalog.core].find(tool => tool.name === 'memory_write') as any;
     const scheduleTask = [...catalog.extended].find(tool => tool.name === 'schedule_task') as any;
 
@@ -739,6 +748,16 @@ describe('SubstrateAgent.registerTool', () => {
       },
     });
     expect(spawnSubagent?.wiringMeta?.concurrency).toMatchObject({
+      class: 'spawn_subagent',
+      exclusivityKeyPolicy: 'none',
+      maxParallel: 5,
+      interruptibility: 'non_interruptible',
+      eligibility: {
+        foreground: true,
+        background: true,
+      },
+    });
+    expect(subagent?.wiringMeta?.concurrency).toMatchObject({
       class: 'spawn_subagent',
       exclusivityKeyPolicy: 'none',
       maxParallel: 5,

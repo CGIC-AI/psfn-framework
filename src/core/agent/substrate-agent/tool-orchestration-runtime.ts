@@ -91,6 +91,7 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
 type AdaptiveDecisionPayload = Omit<AdaptiveToolDecisionTelemetry, 'timestamp'>;
 
 export function inferToolConcurrencyClass(toolName: string): ToolConcurrencyClass {
+  if (toolName === 'subagent') return 'spawn_subagent';
   if (isBoundedSubagentLaunchToolName(toolName)) return 'spawn_subagent';
   if (PARALLEL_READ_ONLY_TOOL_NAMES.has(toolName)) return 'read_only';
   return 'exclusive';
@@ -162,7 +163,7 @@ export function withToolConcurrencyMetadata(
     concurrency.exclusivityKeyPolicy = 'none';
     delete concurrency.exclusivityKey;
     if (concurrency.maxParallel === undefined) {
-      concurrency.maxParallel = isBoundedSubagentLaunchToolName(tool.name)
+      concurrency.maxParallel = concurrency.class === 'spawn_subagent'
         ? DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL
         : DEFAULT_PARALLEL_READ_MAX;
     }

@@ -41,6 +41,8 @@ import {
   type ShardExecutionPort,
 } from '../../../faculties/shards/port.js';
 import { createBoundedSubagentLaunchTool } from '../../../faculties/shards/tools.js';
+import { SubagentFaculty } from '../../../faculties/subagents/faculty.js';
+import { createSubagentTool } from '../../../faculties/subagents/tools.js';
 import { createThinkTool } from '../../../core/tools/think/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
@@ -356,8 +358,21 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
       ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
       : undefined,
   });
+  const subagentFaculty = new SubagentFaculty({
+    eventBus: options.eventBus,
+    llmProvider: options.llmProvider,
+    sessionStore: options.sessionStore,
+    embeddingService: options.embeddingService,
+    memoryProvider: options.agentLoop.memoryProvider,
+    config: options.config,
+    parentSystemPrompt: options.parentSystemPrompt,
+    toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
+    auditTrail: options.shardAuditTrail ?? undefined,
+    runtimeMode: options.runtimeMode,
+  });
   const shardExecutionPort = createShardExecutionPort(shardManager);
-  options.agentLoop.registerTool(createBoundedSubagentLaunchTool(shardManager));
+  options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');
+  options.agentLoop.registerTool(createBoundedSubagentLaunchTool(shardManager), 'extended');
 
   options.agentLoop.registerTool(createThinkTool({
     llmProvider: options.llmProvider,

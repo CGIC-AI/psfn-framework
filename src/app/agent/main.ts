@@ -428,6 +428,7 @@ async function main(): Promise<void> {
       onIntentionFollowUpDecision: intentionAppraisalHooks.onIntentionFollowUpDecision,
       onIntentionFollowUpActivated: intentionAppraisalHooks.onIntentionFollowUpActivated,
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
+      pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
       coreMemoryStore,
       postTurnActions,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,

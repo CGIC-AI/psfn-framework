@@ -44,6 +44,7 @@ import { createBoundedSubagentLaunchTool } from '../../../faculties/shards/tools
 import { createThinkTool } from '../../../core/tools/think/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
+import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/think/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
@@ -57,13 +58,16 @@ import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { RuntimeMode } from '../../../core/agent/tool-wiring-validator.js';
+import type { ConcernStorePort } from '../../../core/intention/concerns.js';
 import {
   migrateLegacyPersistenceLayout,
   resolveConfiguredCompanionDataDir,
   resolveCoreMemoryPath,
   resolveContinuityDir,
+  resolveLegacyValuesJournalPath,
   resolveShardSessionMemorySyncAuditPath,
   resolveSessionsDir,
+  resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
 import { createDefaultSQLiteSessionAdapters } from '../../../persistence/sessions/sqlite-adapters.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
@@ -223,6 +227,7 @@ export interface CoreMemoryRuntimeOptions {
   agentLoop: SubstrateAgent;
   sessionManager: SessionManager;
   config: SubstrateConfig;
+  concernStore?: ConcernStorePort | null;
 }
 
 export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMemoryStorePort {
@@ -230,8 +235,14 @@ export function wireCoreMemoryRuntime(options: CoreMemoryRuntimeOptions): CoreMe
   const store = createCoreMemoryStorePort(
     new CoreMemoryStore(resolveCoreMemoryPath(companionDataDir)),
   );
+  const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
+    legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
+  });
   options.sessionManager.setCoreMemoryProvider(store);
-  options.agentLoop.registerTool(createOrientTool(store));
+  options.agentLoop.registerTool(createOrientTool(store, {
+    valuesJournal,
+    concernStore: options.concernStore ?? null,
+  }));
   return store;
 }
 

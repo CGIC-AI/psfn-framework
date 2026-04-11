@@ -43,7 +43,9 @@ function resolveUnifiedToolRequirement(
     case 'memory':
       if (action === 'delete' || action === 'restore' || action === 'redact') return 'memory.delete';
       if (action === 'search' || action === 'list' || action === 'read' || action === 'get') return 'identity.read';
-      if (action === 'write' || action === 'add' || action === 'patch' || action === 'import') return 'memory.write';
+      if (action === 'write' || action === 'memory_write' || action === 'add' || action === 'patch' || action === 'import') {
+        return 'memory.write';
+      }
       return ['identity.read', 'memory.write', 'memory.delete'];
     case 'north_star':
       if (action === 'list' || action === 'read' || action === 'get') return 'identity.read';
@@ -54,11 +56,23 @@ function resolveUnifiedToolRequirement(
     case 'shell':
       return 'repl.execute';
     case 'scratchpad':
-      if (action === 'list' || action === 'read' || action === 'get') return 'identity.read';
+      if (action === 'list' || action === 'read' || action === 'get' || action === 'scratchpad_read') return 'identity.read';
       if (action === 'add' || action === 'write' || action === 'update' || action === 'delete' || action === 'clear') {
         return 'memory.write';
       }
       return ['identity.read', 'memory.write'];
+    case 'orient':
+      if (action === 'values_list' || action === 'list_concerns') return 'identity.read';
+      if (
+        action === 'append'
+        || action === 'replace'
+        || action === 'reorient'
+        || action === 'create_concern'
+        || action === 'resolve_concern'
+      ) {
+        return 'identity.write.runtime';
+      }
+      return ['identity.read', 'identity.write.runtime'];
     case 'session':
       if (action === 'list' || action === 'search' || action === 'read' || action === 'grep' || action === 'session_grep') {
         return 'identity.read';

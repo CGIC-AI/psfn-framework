@@ -12,7 +12,7 @@ const VALUES_ADD_TEMPLATE_NAME = 'Values Tool';
 const VALUES_UPDATE_TEMPLATE_ID = 'values-tool-update';
 const VALUES_UPDATE_TEMPLATE_NAME = 'Values Tool Update';
 
-interface ValuesListParams {
+export interface ValuesListParams {
   limit?: number;
 }
 

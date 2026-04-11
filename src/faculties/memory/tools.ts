@@ -28,6 +28,7 @@ const MEMORY_SEARCH_DEFAULT_LIMIT = 5;
 const MEMORY_SEARCH_MAX_LIMIT = 20;
 const MEMORY_TOOL_ACTIONS = [
   'write',
+  'memory_write',
   'search',
   'import',
   'redact',
@@ -35,8 +36,8 @@ const MEMORY_TOOL_ACTIONS = [
   'restore',
 ] as const;
 type MemoryToolAction = (typeof MEMORY_TOOL_ACTIONS)[number];
-type ScratchpadToolAction = 'list' | 'add' | 'replace' | 'append' | 'remove';
-const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'add', 'replace', 'append', 'remove'];
+type ScratchpadToolAction = 'list' | 'scratchpad_read' | 'add' | 'replace' | 'append' | 'remove';
+const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'scratchpad_read', 'add', 'replace', 'append', 'remove'];
 
 function errorMessage(error: unknown): string {
   return toErrorMessage(error);
@@ -750,6 +751,7 @@ export function createMemoryTool(
         }
 
         switch (action) {
+          case 'memory_write':
           case 'write': {
             const text = normalizedParams.text?.trim();
             const type = normalizedParams.type;
@@ -983,6 +985,7 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): AgentTool<an
         }
 
         switch (action) {
+          case 'scratchpad_read':
           case 'list': {
             const limit = params.limit === undefined
               ? SCRATCHPAD_DEFAULT_LIMIT

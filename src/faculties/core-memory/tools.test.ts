@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createOrientTool,
 } from './tools.js';
+import { ActiveConcernStore, createConcernStorePort } from '../../core/intention/concerns.js';
+import { ValuesJournalStore } from '../values/store.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
@@ -38,6 +44,16 @@ function makeSnapshot(overrides?: Partial<CoreMemorySnapshot>): CoreMemorySnapsh
 }
 
 describe('orient tool', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'orient-tool-'));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
   it('appends to the requested orientation block', async () => {
     const store = {
       append: vi.fn<(
@@ -158,5 +174,92 @@ describe('orient tool', () => {
     expect(resultText(result)).toContain('Error updating orientation');
     expect(resultText(result)).toContain('disk full');
     expect(result.details?.isError).toBe(true);
+  });
+
+  it('routes values_list through orient when values support is wired', async () => {
+    const valuesJournal = new ValuesJournalStore(join(tempDir, 'notes', 'values.jsonl'));
+    valuesJournal.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P1',
+      reflection: 'R1',
+      createdAt: '2026-03-01T00:00:00.000Z',
+    });
+    valuesJournal.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P2',
+      reflection: 'R2',
+      createdAt: '2026-03-01T01:00:00.000Z',
+    });
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, {
+      valuesJournal,
+    });
+
+    const result = await tool.execute('call-values-list', {
+      action: 'values_list',
+      limit: 1,
+    });
+    const payload = JSON.parse(resultText(result)) as {
+      limit: number;
+      count: number;
+      entries: Array<{ version: number }>;
+    };
+
+    expect(payload.limit).toBe(1);
+    expect(payload.count).toBe(1);
+    expect(payload.entries[0]?.version).toBe(2);
+  });
+
+  it('routes concern lifecycle actions through orient when concern support is wired', async () => {
+    const db = new Database(':memory:');
+    const concernStore = createConcernStorePort(new ActiveConcernStore(db));
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, {
+      concernStore,
+    });
+
+    const createdResult = await tool.execute('call-concern-create', {
+      action: 'create_concern',
+      text: 'Follow up tomorrow.',
+      priority: 'high',
+      contactId: 'contact-a',
+    });
+    const createdPayload = JSON.parse(resultText(createdResult)) as {
+      created: boolean;
+      concern: { id: string; text: string; priority: string; contactId?: string };
+    };
+    expect(createdPayload.created).toBe(true);
+    expect(createdPayload.concern.text).toBe('Follow up tomorrow.');
+
+    const listedResult = await tool.execute('call-concern-list', {
+      action: 'list_concerns',
+      contactId: 'contact-a',
+    });
+    const listedPayload = JSON.parse(resultText(listedResult)) as {
+      count: number;
+      concerns: Array<{ id: string }>;
+    };
+    expect(listedPayload.count).toBe(1);
+    expect(listedPayload.concerns[0]?.id).toBe(createdPayload.concern.id);
+
+    const resolvedResult = await tool.execute('call-concern-resolve', {
+      action: 'resolve_concern',
+      concernId: createdPayload.concern.id,
+      outcome: 'Handled in orient.',
+    });
+    const resolvedPayload = JSON.parse(resultText(resolvedResult)) as {
+      resolved: boolean;
+      concern: { resolutionOutcome?: string };
+    };
+    expect(resolvedPayload.resolved).toBe(true);
+    expect(resolvedPayload.concern.resolutionOutcome).toBe('Handled in orient.');
   });
 });
